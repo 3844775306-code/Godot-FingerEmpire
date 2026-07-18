@@ -262,7 +262,7 @@ func _create_visual():
 	# 还原你原本的颜色
 	var mat = StandardMaterial3D.new()
 	# 从 battle_manager 获取玩家颜色（联机模式按玩家着色）
-	var color = Color.BLUE if team == RTSConfig.Team.BLUE else Color.RED
+	var color = Color(0.3, 0.5, 1.0) if team == RTSConfig.Team.BLUE else Color(1.0, 0.25, 0.2)
 	if is_inside_tree() and owner_peer_id != -1:
 		var bm2 = get_tree().get_first_node_in_group("battle_manager")
 		if bm2 and bm2.has_method("get_player_colors"):

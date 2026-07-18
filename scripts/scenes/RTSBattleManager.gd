@@ -177,8 +177,11 @@ var team_nations: Dictionary = {
 }
 
 
-# 玩家颜色映射 — 联机时由 OnlineBattleManager._init_2v2 填充实际 peer_id
-var _player_colors: Dictionary = {}
+# 玩家颜色映射 — 联机时由 OnlineBattleManager 填充实际 peer_id
+var _player_colors: Dictionary = {
+	1: Color(0.2, 0.6, 1.0),   # 蓝方玩家（单机默认）
+	3: Color(1.0, 0.3, 0.2),   # 红方AI（单机默认）
+}
 func get_player_colors() -> Dictionary:
 	return _player_colors
 
