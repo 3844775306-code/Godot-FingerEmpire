@@ -334,21 +334,24 @@ func decide(_delta):
 				_process_line_military()
 
 	elif phase == Phase.DEVELOPMENT:
-		_ensure_merchants()
-		_ai_hunt_animals(_delta)
-		_check_hunt_cleanup()
-		_manage_shipyards()
+		# 军事生产优先
+		_process_line_military()
+		_process_line_military()
+		# 建筑和升级
 		_process_line_1()
 		_process_line_3()
+		# 商人和官员
 		var _did_merchant = _try_produce_merchants_or_officials()
 		if not _did_merchant and randf() < 0.5:
 			_process_line_upgrade()
-		# 始终尝试军事生产
-		_process_line_military()
+		# 其他
+		_manage_shipyards()
+		_ensure_merchants()
+		_ai_hunt_animals(_delta)
+		_check_hunt_cleanup()
 		_process_line_5()
 		_ai_garrison_officials()
 		update_tactic(_delta)
-
 	if OS.is_debug_build():
 		update_debug_label()
 

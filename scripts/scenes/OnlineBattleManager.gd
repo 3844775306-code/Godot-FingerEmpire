@@ -287,7 +287,7 @@ func _init_2v2():
 			team = RTSConfig.Team.BLUE
 
 		var slot = red_assigned if team == RTSConfig.Team.RED else blue_assigned
-			var color = _pick_player_color()   # 从颜色池随机分配
+		var color = _pick_player_color()   # 从颜色池随机分配
 		var nation = pending_nations.get(peers[i], 0)
 
 		player_info[peers[i]] = {
@@ -379,17 +379,23 @@ func _create_ai_player(peer_id: int, team: int, slot: int):
 	ai_controller.my_team = team
 	add_child(ai_controller)
 # 根据队伍和槽位为 AI 分配一个独特颜色（避免与人类玩家重复）
-	var _color_used_count: int = 0
+var _color_used_count: int = 0
 
-	func _pick_player_color() -> Color:
-		var c = RTSConfig.COLOR_POOL[_color_used_count % RTSConfig.COLOR_POOL.size()]
-		_color_used_count += 1
-		return c
+	func get_player_colors() -> Dictionary:
+		var colors = {}
+		for pid in player_info.keys():
+			colors[pid] = player_info[pid].color
+		return colors
 
-	func _get_ai_color(team: int, slot: int) -> Color:
-		var idx = _color_used_count
-		_color_used_count += 1
-		return RTSConfig.COLOR_POOL[idx % RTSConfig.COLOR_POOL.size()]
+func _pick_player_color() -> Color:
+	var c = RTSConfig.COLOR_POOL[_color_used_count % RTSConfig.COLOR_POOL.size()]
+	_color_used_count += 1
+	return c
+
+func _get_ai_color(team: int, slot: int) -> Color:
+	var idx = _color_used_count
+	_color_used_count += 1
+	return RTSConfig.COLOR_POOL[idx % RTSConfig.COLOR_POOL.size()]
 func _get_ai_castle_pos(team: int, slot: int) -> Vector3:
 	var map = $Map
 	if not map: return Vector3.ZERO
@@ -1023,6 +1029,7 @@ func build_snapshot_for_team(team: int) -> Dictionary:
 
 	for entity in entities.get_children():
 		if not (entity is GameEntity): continue
+			if entity.health <= 0: continue
 		var snap = _serialize_entity(entity)
 		var id = snap["id"]
 		current_entities[id] = snap
@@ -1061,6 +1068,12 @@ func build_snapshot_for_team(team: int) -> Dictionary:
 			if visible:
 				delta.append(snap)
 
+
+	# 确保已死亡的实体被加入dead_ids
+	for entity in entities.get_children():
+		if entity is GameEntity and entity.health <= 0:
+			dead.append(entity.get_instance_id())
+
 	var last_cache = last_snapshot_cache.get(team, {})
 	for id in last_cache.keys():
 		if not current_entities.has(id):
@@ -1077,8 +1090,8 @@ func build_snapshot_for_team(team: int) -> Dictionary:
 		"enemy_nation": team_nations.get(RTSConfig.Team.RED if team == RTSConfig.Team.BLUE else RTSConfig.Team.BLUE, -1),
 		"gather_counts": team_gather_counts.get(team, {"gold":0, "wood":0, "stone":0, "food":0, "oil":0}),
 		"income_rate": team_income_rates.get(team, {"gold":0.0, "wood":0.0, "stone":0.0, "food":0.0, "oil":0.0}),
-		"alerts": _get_and_clear_alerts(team)
-			"game_time": game_time,
+		"alerts": _get_and_clear_alerts(team),
+		"game_time": game_time,
 	}
 
 func _broadcast_1v1():
@@ -1235,6 +1248,7 @@ func build_snapshot_for_player(peer_id: int) -> Dictionary:
 	var is_full = _is_full_snapshot(snapshot_key)
 	for entity in entities.get_children():
 		if not (entity is GameEntity): continue
+			if entity.health <= 0: continue
 		var snap = _serialize_entity(entity)
 		var id = snap["id"]
 

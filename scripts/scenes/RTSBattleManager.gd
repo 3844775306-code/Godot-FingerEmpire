@@ -2,10 +2,10 @@ class_name RTSBattleManager
 extends Node3D
 var previous_emulate_mouse: bool
 # ==================== 资源 ====================
-var player_resources: Dictionary = {"gold": 10000, "wood": 10000, "stone": 10000, "food": 10000, "oil": 0}
-var enemy_resources: Dictionary = {"gold": 10000, "wood": 10000, "stone": 10000, "food": 10000, "oil": 0}
-var player_resource_limits: Dictionary = {"gold": 50000, "wood": 50000, "stone": 50000, "food": 50000, "oil": 0}
-var enemy_resource_limits: Dictionary = {"gold": 50000, "wood": 50000, "stone": 50000, "food": 50000, "oil": 0}
+var player_resources: Dictionary = {"gold": 100, "wood": 100, "stone": 100 ,"food": 100, "oil": 0}
+var enemy_resources: Dictionary = {"gold": 100, "wood": 100, "stone": 100, "food": 100, "oil": 0}
+var player_resource_limits: Dictionary = {"gold": 500, "wood": 500, "stone": 500, "food": 500, "oil": 0}
+var enemy_resource_limits: Dictionary = {"gold": 500, "wood": 500, "stone": 500, "food": 500, "oil": 0}
 var is_online: bool = false
 var team_building_levels: Dictionary = {}  # team -> {building_id: level}
 var build_touch_active: bool = false   # 是否正在拖拽建造
@@ -673,10 +673,10 @@ func update_resource_limits(team: int):
 			elif e.entity_id == 22 and e.build_timer <= 0: warehouse += e.building_data.get("storage_bonus", 0)
 			elif e.entity_id == 23: shipyard += 1
 
-	limits.gold = 50000 + castle*300 + warehouse
-	limits.wood = 50000 + castle*300 + warehouse
-	limits.stone = 50000 + castle*300 + warehouse
-	limits.food = 50000 + castle*300 + warehouse
+	limits.gold = 500 + castle*300 + warehouse
+	limits.wood = 500 + castle*300 + warehouse
+	limits.stone = 500 + castle*300 + warehouse
+	limits.food = 500 + castle*300 + warehouse
 	limits.oil = shipyard * 700
 
 func add_resource(type: String, amount: int, team: int):

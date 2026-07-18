@@ -15,7 +15,7 @@ var _garrison_marker: MeshInstance3D = null
 
 func start_construction(time: float, data: Dictionary):
 	building_data = data
-	max_build_time = data["max_health"] / 7500.0
+	max_build_time = data["max_health"] / 75.0
 	build_timer = max_build_time
 	max_health = 10
 	health = 10
@@ -332,7 +332,7 @@ func perform_upgrade(bm: RTSBattleManager) -> bool:
 	# Start upgrade timer (time = total cost / 20 seconds)
 	var total_cost = 0
 	for k in cost: total_cost += cost[k]
-	max_upgrade_time = max(total_cost / 20.0, 5.0)*0.01
+	max_upgrade_time = max(total_cost / 20.0, 5.0)
 	upgrade_timer = max_upgrade_time
 	return true
 

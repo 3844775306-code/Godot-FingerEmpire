@@ -12,6 +12,8 @@ var entity_snapshots: Array = []
 var player_team: int = 1
 var camera: Camera3D = null
 
+var _player_colors: Dictionary = {}
+
 # 纹理缓存 — 避免每帧 22500 次 draw_rect 调用
 var _terrain_tex: ImageTexture = null
 var _tex_dirty: bool = true
@@ -29,6 +31,11 @@ func _ready():
 	custom_minimum_size = Vector2(MINIMAP_SIZE, MINIMAP_SIZE)
 	mouse_filter = MOUSE_FILTER_STOP
 	camera = get_viewport().get_camera_3d()
+	# 获取玩家颜色映射（联机模式）
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if bm and bm.has_method("get_player_colors"):
+		_player_colors = bm.get_player_colors()
+
 	set_process(true)
 
 func add_alert(world_pos: Vector3):
@@ -133,7 +140,16 @@ func _draw():
 			show = visible_grid[gx][gz] if gx < visible_grid.size() and gz < visible_grid[gx].size() else false
 		if not show: continue
 
-		var dot_color = Color(0.0, 0.886, 1.0, 1.0) if ent["team"] == player_team else Color(1.0, 0.33, 0.264, 1.0) if ent["team"] == RTSConfig.Team.RED else Color.YELLOW
+		var owner = ent.get("owner_peer_id", -1)
+		var dot_color: Color
+		if owner != -1 and _player_colors.has(owner):
+			dot_color = _player_colors[owner]
+		elif ent["team"] == player_team:
+			dot_color = Color(0.0, 0.886, 1.0, 1.0)
+		elif ent["team"] == RTSConfig.Team.RED:
+			dot_color = Color(1.0, 0.33, 0.264, 1.0)
+		else:
+			dot_color = Color.YELLOW
 		var pos = Vector2(gx * cell, gz * cell)
 		draw_rect(Rect2(pos - Vector2(1, 1), Vector2(3, 3)), dot_color)
 
