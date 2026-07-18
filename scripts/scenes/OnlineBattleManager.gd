@@ -1316,8 +1316,10 @@ func build_snapshot_for_player(peer_id: int) -> Dictionary:
 
 	var current_all_ids = {}
 	for entity in entities.get_children():
-		if entity is GameEntity:
+		if entity is GameEntity and entity.health > 0:
 			current_all_ids[entity.get_instance_id()] = true
+		elif entity is GameEntity and entity.health <= 0:
+			dead.append(entity.get_instance_id())
 
 	var last_ids = player_last_snapshot_ids.get(peer_id, [])
 	var dead = []
@@ -1340,7 +1342,7 @@ func build_snapshot_for_player(peer_id: int) -> Dictionary:
 		"gather_counts": {peer_id: team_gather_counts.get(peer_id, {"gold":0, "wood":0, "stone":0, "food":0, "oil":0})},
 		"income_rate": {peer_id: team_income_rates.get(peer_id, {"gold":0.0, "wood":0.0, "stone":0.0, "food":0.0, "oil":0.0})},
 		"player_info": player_info,
-		"alerts": _get_and_clear_alerts(peer_id)
+		"alerts": _get_and_clear_alerts(team)
 	}
 
 func _1v1_set_group(team: int, data: Dictionary):
