@@ -52,6 +52,14 @@ func _get_bm():
 		_bm = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
 	return _bm
 
+# 直接设置实体颜色（仿客户端机制）
+func apply_color(c: Color):
+	for child in get_children():
+		if child is MeshInstance3D:
+			var mat = child.get_surface_override_material(0)
+			if not mat: mat = StandardMaterial3D.new(); child.set_surface_override_material(0, mat)
+			mat.albedo_color = c
+
 	# 原有属性赋值...
 
 func _ready():

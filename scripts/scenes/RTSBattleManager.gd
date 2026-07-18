@@ -623,8 +623,11 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 
 	cfg["level"] = level
 	cfg["team"] = team
-	entities.add_child(entity)  # 先加入场景树，让 _create_visual 能访问 get_tree()
+	entities.add_child(entity)
 	entity.setup(cfg)
+	# 直接应用玩家颜色（仿客户端机制：_player_colors[owner_peer_id]）
+	if entity.owner_peer_id != -1 and _player_colors.has(entity.owner_peer_id):
+		entity.apply_color(_player_colors[entity.owner_peer_id])
 	entity.global_position = pos
 	mark_entity_cache_dirty()
 
