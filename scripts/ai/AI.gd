@@ -20,7 +20,7 @@ var production_step: int = 0
 
 var wanted_buildings: Array = [20, 21, 23, 25, 42, 26, 24, 29, 41, 52, 53]
 var wanted_units: Array = [11,12,15,16,17,18,35,36,37,38,39,40,13,43,44,45,46,47,48,49,50]
-var target_army_count: int = 12
+var target_army_count: int = 7
 var target_house_count: int = 8
 var desired_worker_count: int = 8
 
@@ -28,6 +28,8 @@ var cached_shipyard_pos: Vector3 = Vector3.ZERO
 var defense_line_built: bool = false
 var defense_check_timer: float = 0.0
 const DEFENSE_CHECK_INTERVAL: float = 120.0
+	var _upgrade_cycle_timer: float = 20.0   # 每20秒切换
+	var _in_upgrade_cycle: bool = true     # 前20秒为升级周期
 var wall_positions: Array = []
 var tower_positions: Array = []
 var current_tactic: int = LateTactic.NONE
@@ -36,6 +38,7 @@ var last_tactic_time: float = -999.0
 var nation = -1
 
 var _ai_income_timer: float = 10.0
+	var _last_delta: float = 2.0
 var _ai_res_snapshot: Dictionary = {}
 var _ai_res_income: Dictionary = {}
 var _ai_income_rate: Dictionary = {"gold":0,"wood":0,"stone":0,"food":0,"oil":0}
@@ -306,6 +309,7 @@ func _process(delta):
 
 # ═══ Decide ═══
 func decide(_delta):
+	_last_delta = _delta
 	if not battle: return
 	if battle is OnlineBattleManager and my_peer_id != -1:
 		battle.update_player_limits(my_peer_id)
@@ -352,16 +356,21 @@ func decide(_delta):
 				_process_line_military()
 
 	elif phase == Phase.DEVELOPMENT:
-		# 军事生产优先
-		_process_line_military()
+		
 		
 		# 建筑和升级
-		_process_line_1()
-		_process_line_3()
+		if not _should_skip_for_upgrade_cycle():
+			_process_line_1()
+		
 		# 商人和官员
 		var _did_merchant = _try_produce_merchants_or_officials()
 		if not _did_merchant and randf() < 0.5:
 			_process_line_upgrade()
+		# 军事生产优先
+		if not _should_skip_for_upgrade_cycle():
+			_process_line_military()
+		if not _should_skip_for_upgrade_cycle():
+			_process_line_military()
 		# 其他
 		_manage_shipyards()
 		_ensure_merchants()
@@ -369,6 +378,7 @@ func decide(_delta):
 		_check_hunt_cleanup()
 		_process_line_5()
 		_ai_garrison_officials()
+		_process_line_3()
 		update_tactic(_delta)
 	if OS.is_debug_build():
 		update_debug_label()
@@ -718,6 +728,9 @@ func _check_hunt_cleanup():
 				e.current_target = null; e.current_order = ""
 				if e.entity_id == 10: e._find_nearest_resource()
 		_hunt_target = null
+			# 猎杀完成后快速寻找新目标（若猎人不足3）
+			if active_hunters < 3:
+				_hunt_timer = 5.0
 
 # ═══ Tactics ═══
 func update_tactic(_delta):
@@ -1031,6 +1044,20 @@ func _find_most_officiated_s() -> Building:
 	return best
 
 # ═══ Production lines ═══
+	# 升级周期：development阶段每20秒切换一次
+	func _should_skip_for_upgrade_cycle() -> bool:
+		if phase != Phase.DEVELOPMENT: return false
+		_upgrade_cycle_timer -= _get_delta()
+		if _upgrade_cycle_timer <= 0:
+			_upgrade_cycle_timer = 20.0
+			_in_upgrade_cycle = not _in_upgrade_cycle
+		return _in_upgrade_cycle and _any_building_can_upgrade()
+	
+	func _any_building_can_upgrade() -> bool:
+		for b_id in wanted_buildings:
+			if _should_build_or_upgrade(b_id) and can_afford_upgrade(b_id):
+				return true
+		return false
 func _process_line_1():
 	_ai_expand_territory()
 	for b_id in wanted_buildings:
