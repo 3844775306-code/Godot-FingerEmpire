@@ -61,8 +61,7 @@ var pending_delta: Array = []
 	
 var player_colors: Dictionary = {}   # peer_id -> Color
 func set_all_player_colors(colors: Dictionary):
-	player_colors.clear()
-	for k in colors: player_colors[k] = colors[k]  # 原地更新，保持引用
+	player_colors = colors.duplicate()
 	print("[ClientRenderer] 收到全局颜色映射，包含 %d 个玩家" % player_colors.size())
 # 新增方法
 func set_player_info(peer_id: int, team: int, slot: int, color: Color):
@@ -255,7 +254,7 @@ func _process_snapshot(data: Dictionary):
 		gather_counts = gather_counts.get(my_peer_id, {})
 		income_rate = income_rate.get(my_peer_id, {})
 	if has_node("UI/HUD") and not my_res.is_empty():
-		$UI/HUD.update_data(my_res, my_pop, my_limits, gather_counts, income_rate, data.get("game_time", 0.0))
+		$UI/HUD.update_data(my_res, my_pop, my_limits, gather_counts, income_rate)
 
 	# ---- InfoPanel 资源 ----
 	if has_node("UI/InfoPanel"):
@@ -278,17 +277,10 @@ func _process_snapshot(data: Dictionary):
 	if data.has("alerts"):
 		var alerts = data["alerts"]
 		if alerts is Array and alerts.size() > 0:
-		print("[Alert] got %d alerts" % alerts.size())
-			print("[Client Alert] 收到 %d 条警报" % alerts.size())
 			var hud = get_node_or_null("UI/HUD")
-			if not hud:
-				print("[Client Alert] HUD 节点未找到！")
 			for alert in alerts:
-				print("[Client Alert] msg=%s color=%s" % [alert["msg"], alert.get("color", "?")])
 				if hud and hud.has_method("show_alert_message"):
 					hud.show_alert_message(alert["msg"], alert.get("color", Color(1.0, 0.2, 0.1)))
-				elif hud:
-					print("[Client Alert] HUD 没有 show_alert_message 方法！")
 
 	if data.has("bullets"):
 		var server_ids = {}
@@ -362,14 +354,6 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 		entity_color = Color(1.0, 0.25, 0.2)   # 红队基础色
 	else:
 		entity_color = Color(0.7, 0.7, 0.7)    # 中立灰色
-
-	# 动物覆盖色
-	var eid = info.get("entity_id", 0)
-	match eid:
-		60: entity_color = Color(0.55, 0.35, 0.2)
-		61: entity_color = Color(0.95, 0.75, 0.8)
-		62: entity_color = Color(0.9, 0.9, 0.85)
-		63: entity_color = Color(0.5, 0.7, 0.85)
 
 	# 模型
 	var mesh: MeshInstance3D

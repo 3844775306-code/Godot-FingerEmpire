@@ -260,7 +260,7 @@ func _update_unit_stats():
 	# 构建军队显示（排除农民、采集船、官员）
 	var military_total = 0
 	for uid in unit_counts.keys():
-		if uid != 10 and uid != 14 and uid not in [43, 44, 45, 46, 47, 48, 49, 50, 51]:
+		if uid != 10 and uid != 14 and uid not in [46, 47, 48, 49, 50]:
 			military_total += unit_counts[uid]
 
 	var military_lines = []
@@ -566,14 +566,12 @@ func _ready():
 
 	# FPS + 游戏时间显示
 	_fps_label = Label.new()
-	_fps_label.position = Vector2(1100, 8)
-	_fps_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_fps_label.position = Vector2(10, 600)
 	_fps_label.add_theme_font_size_override("font_size", 16)
 	_fps_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
 	add_child(_fps_label)
 	_game_time_label = Label.new()
-	_game_time_label.position = Vector2(1100, 28)
-	_game_time_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_game_time_label.position = Vector2(10, 620)
 	_game_time_label.add_theme_font_size_override("font_size", 16)
 	_game_time_label.add_theme_color_override("font_color", Color.WHITE)
 	add_child(_game_time_label)
@@ -582,18 +580,13 @@ func _ready():
 	add_to_group("client_hud")
 
 
-func update_data(resources: Dictionary, population: Dictionary, limits: Dictionary, gather_counts: Dictionary = {}, income_rate: Dictionary = {}, game_time: float = -1.0):
+func update_data(resources: Dictionary, population: Dictionary, limits: Dictionary, gather_counts: Dictionary = {}, income_rate: Dictionary = {}):
 	gold_label.text = "%d/%d" % [resources.get("gold", 0), limits.get("gold", 0)]
 	wood_label.text = "%d/%d" % [resources.get("wood", 0), limits.get("wood", 0)]
 	stone_label.text = "%d/%d" % [resources.get("stone", 0), limits.get("stone", 0)]
 	food_label.text = "%d/%d" % [resources.get("food", 0), limits.get("food", 0)]
 	oil_label.text = "%d/%d" % [resources.get("oil", 0), limits.get("oil", 0)]
 	pop_label.text = "%d/%d" % [population.get("current", 0), population.get("max", 0)]
-	# 游戏时间
-	if game_time >= 0 and _game_time_label:
-		var m = int(game_time / 60)
-		var s = int(game_time) % 60
-		pass # game_time from server (unused; client uses local timer)
 
 	# Display server-computed gather counts and income rates
 	var rn = {"gold": "黄金", "wood": "木材", "stone": "石头", "food": "食物", "oil": "石油"}
@@ -617,15 +610,7 @@ var _fps_label: Label = null
 var _game_time_label: Label = null
 var _fps_update_timer: float = 0.5
 
-var _client_time_acc: float = 0.0
-
 func _process(delta):
-	# 本地计时
-	_client_time_acc += delta
-	var t_min = int(_client_time_acc / 60)
-	var t_sec = int(_client_time_acc) % 60
-	if _game_time_label:
-		_game_time_label.text = "%02d:%02d" % [t_min, t_sec]
 	# 每秒更新一次单位统计
 	_unit_stats_timer -= delta
 	if _unit_stats_timer <= 0:
@@ -636,7 +621,7 @@ func _process(delta):
 	_fps_update_timer -= delta
 	if _fps_update_timer <= 0 and _fps_label:
 		_fps_update_timer = 0.5
-		_fps_label.text = "FPS: %.0f  |  %02d:%02d" % [Engine.get_frames_per_second(), t_min, t_sec]
+		_fps_label.text = "FPS: %.0f" % Engine.get_frames_per_second()
 
 	# 警报消息计时
 	if _alert_label and _alert_timer > 0:
