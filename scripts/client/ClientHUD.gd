@@ -593,7 +593,7 @@ func update_data(resources: Dictionary, population: Dictionary, limits: Dictiona
 	if game_time >= 0 and _game_time_label:
 		var m = int(game_time / 60)
 		var s = int(game_time) % 60
-		_game_time_val = game_time
+		pass # game_time from server (unused; client uses local timer)
 
 	# Display server-computed gather counts and income rates
 	var rn = {"gold": "黄金", "wood": "木材", "stone": "石头", "food": "食物", "oil": "石油"}

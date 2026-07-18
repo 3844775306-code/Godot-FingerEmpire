@@ -239,6 +239,16 @@ func analyze_enemy_composition() -> Dictionary:
 				comp[uid] = comp.get(uid, 0) + 1
 	return comp
 
+# 检查是否有建筑能生产指定单位
+func _can_produce_unit(unit_id: int) -> bool:
+	for entity in battle.entities.get_children():
+		if entity is Building and entity.health > 0 and entity.build_timer <= 0:
+			if not entity_belongs_to_me(entity): continue
+			for prod in entity.production_list:
+				if prod.unit_id == unit_id:
+					return true
+	return false
+
 func get_counter_priority() -> Array:
 	var enemy_comp = analyze_enemy_composition()
 	var scores = {}
@@ -249,7 +259,15 @@ func get_counter_priority() -> Array:
 				scores[u_id] += enemy_comp[enemy_id]
 	var list = scores.keys()
 	list.sort_custom(func(a, b): return scores[a] > scores[b])
-	return list
+	# 过滤掉没有生产建筑的兵种
+	var filtered: Array = []
+	for u_id in list:
+		if _can_produce_unit(u_id) or u_id == 10:  # 农民总是可以
+			filtered.append(u_id)
+	# 确保基础步兵在列表中（城堡可生产）
+	if filtered.is_empty() and _can_produce_unit(11):
+		filtered.append(11)
+	return filtered
 
 # ═══ Init ═══
 func _ready():
@@ -1045,7 +1063,7 @@ func _try_produce_merchants_or_officials() -> bool:
 
 func _process_line_military():
 	var priority = get_counter_priority()
-			if randf() < 0.1: print("[AI diag] military check: afford=%s can_train=%s priority=%s" % [can_afford(priority[0]) if priority.size()>0 else "n/a", _can_train_unit(), priority.slice(0,3)])
+	if randf() < 0.1: print("[AI diag] military check: afford=%s can_train=%s priority=%s" % [can_afford(priority[0]) if priority.size()>0 else "n/a", _can_train_unit(), priority.slice(0,3)])
 	for u_id in priority:
 		if count_unit(u_id) < target_army_count and can_afford(u_id) and _can_train_unit():
 			print("[AI diag] produce military: %s (count=%d, target=%d)" % [EntityDatabase.get_config(u_id).get("name","?"), count_unit(u_id), target_army_count])
