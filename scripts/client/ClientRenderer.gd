@@ -274,6 +274,7 @@ func _process_snapshot(data: Dictionary):
 
 	# ---- 子弹 ----
 	# ---- 服务器警报 ----
+	if Engine.get_process_frames() % 30 == 0: print("[AlertRx] snapshot has alerts: %s size=%d" % [str(data.has("alerts")), data.get("alerts", []).size()])
 	if data.has("alerts"):
 		var alerts = data["alerts"]
 		if alerts is Array and alerts.size() > 0:
