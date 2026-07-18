@@ -149,12 +149,13 @@ func _create_visual():
 	add_child(mesh)
 	var mat = StandardMaterial3D.new()
 	# 从 battle_manager 获取玩家颜色（联机模式按玩家着色）
-	var bm2 = get_tree().get_first_node_in_group("battle_manager")
 	var color = Color.BLUE if team == RTSConfig.Team.BLUE else Color.RED
-	if owner_peer_id != -1 and bm2 and bm2.has_method("get_player_colors"):
-		var pc = bm2.get_player_colors()
-		if pc.has(owner_peer_id):
-			color = pc[owner_peer_id]
+	if is_inside_tree() and owner_peer_id != -1:
+		var bm2 = get_tree().get_first_node_in_group("battle_manager")
+		if bm2 and bm2.has_method("get_player_colors"):
+			var pc = bm2.get_player_colors()
+			if pc.has(owner_peer_id):
+				color = pc[owner_peer_id]
 	# 动物仿真颜色
 	if _animal_type == "cow":
 		color = Color(0.55, 0.35, 0.2)      # 棕色

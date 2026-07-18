@@ -262,12 +262,13 @@ func _create_visual():
 	# 还原你原本的颜色
 	var mat = StandardMaterial3D.new()
 	# 从 battle_manager 获取玩家颜色（联机模式按玩家着色）
-	var bm2 = get_tree().get_first_node_in_group("battle_manager")
 	var color = Color.BLUE if team == RTSConfig.Team.BLUE else Color.RED
-	if owner_peer_id != -1 and bm2 and bm2.has_method("get_player_colors"):
-		var pc = bm2.get_player_colors()
-		if pc.has(owner_peer_id):
-			color = pc[owner_peer_id]
+	if is_inside_tree() and owner_peer_id != -1:
+		var bm2 = get_tree().get_first_node_in_group("battle_manager")
+		if bm2 and bm2.has_method("get_player_colors"):
+			var pc = bm2.get_player_colors()
+			if pc.has(owner_peer_id):
+				color = pc[owner_peer_id]
 	mat.albedo_color = color
 	mesh.set_surface_override_material(0, mat)
 	mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
