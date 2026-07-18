@@ -147,7 +147,7 @@ func _finish_construction():
 		if owner_peer_id == -1:
 			bm.update_resource_limits(team)
 		else:
-			bm.update_player_limits(owner_peer_id)
+			bm.has_method("update_player_limits") and bm.update_player_limits(owner_peer_id)
 			
 			bm.update_player_population(owner_peer_id)
 
