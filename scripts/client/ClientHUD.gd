@@ -260,7 +260,7 @@ func _update_unit_stats():
 	# 构建军队显示（排除农民、采集船、官员）
 	var military_total = 0
 	for uid in unit_counts.keys():
-		if uid != 10 and uid != 14 and uid not in [46, 47, 48, 49, 50]:
+		if uid != 10 and uid != 14 and uid not in [43, 44, 45, 46, 47, 48, 49, 50, 51]:
 			military_total += unit_counts[uid]
 
 	var military_lines = []
@@ -636,7 +636,7 @@ func _process(delta):
 	_fps_update_timer -= delta
 	if _fps_update_timer <= 0 and _fps_label:
 		_fps_update_timer = 0.5
-		_fps_label.text = "FPS: %.0f  |  %02d:%02d" % [Engine.get_frames_per_second(), _client_time_min, _client_time_sec]
+		_fps_label.text = "FPS: %.0f  |  %02d:%02d" % [Engine.get_frames_per_second(), t_min, t_sec]
 
 	# 警报消息计时
 	if _alert_label and _alert_timer > 0:

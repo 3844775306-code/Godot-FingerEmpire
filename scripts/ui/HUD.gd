@@ -236,7 +236,7 @@ func _update_unit_stats():
 	# 军队统计（排除农民、采集船、官员）
 	var military_total = 0
 	for uid in unit_counts.keys():
-		if uid != 10 and uid != 14 and uid not in [46, 47, 48, 49, 50]:
+		if uid != 10 and uid != 14 and uid not in [43, 44, 45, 46, 47, 48, 49, 50, 51]:
 			military_total += unit_counts[uid]
 
 	var military_lines = []
@@ -349,7 +349,7 @@ func _on_retreat_all_pressed():
 
 func _order_all_units(order_type: String, destination: Vector3):
 	for unit in get_tree().get_nodes_in_group("entities"):
-		if unit is Army and unit.team == RTSConfig.Team.BLUE and unit.target_type > 0 and unit.entity_id not in [46,47,48,50]:
+		if unit is Army and unit.team == RTSConfig.Team.BLUE and unit.target_type > 0 and unit.entity_id not in [43,44,45,46,47,48,49,50,51]:
 			match order_type:
 				"attack":
 					unit.attack_move_to(destination)

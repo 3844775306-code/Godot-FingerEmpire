@@ -270,8 +270,8 @@ func _update_selection_visuals():
 func _create_ring_for_entity(id):
 	var node = renderer.entity_nodes.get(id)
 	if not node: return
-	if not node.has_meta("snapshot_info"): continue
-			var info = node.get_meta("snapshot_info")
+	if not node.has_meta("snapshot_info"): return
+	var info = node.get_meta("snapshot_info")
 	if not info: return
 	var radius = info.get("body_radius", 0.5)
 	var ring = MeshInstance3D.new()
@@ -367,7 +367,7 @@ func _get_entity_info(id: int) -> Dictionary:
 	if not renderer: return {}
 	for node in renderer.entity_nodes.values():
 		if not node.has_meta("snapshot_info"): continue
-			var info = node.get_meta("snapshot_info")
+		var info = node.get_meta("snapshot_info")
 		if info and info["id"] == id:
 			return info
 	return {}
@@ -468,7 +468,7 @@ func _confirm_placement():
 	var no_enemy_nearby = true
 	for node in renderer.entity_nodes.values():
 		if not node.has_meta("snapshot_info"): continue
-			var info = node.get_meta("snapshot_info")
+		var info = node.get_meta("snapshot_info")
 		if info and info["team"] != renderer.player_team and info["team"] != RTSConfig.Team.NEUTRAL and info["health"] > 0:
 			if node.global_position.distance_to(pos) < 10.0:
 				no_enemy_nearby = false; break

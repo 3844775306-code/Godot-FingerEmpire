@@ -14,6 +14,8 @@ var camera: Camera3D = null
 
 var _player_colors: Dictionary = {}
 
+var _player_colors: Dictionary = {}
+
 # 纹理缓存 — 避免每帧 22500 次 draw_rect 调用
 var _terrain_tex: ImageTexture = null
 var _tex_dirty: bool = true

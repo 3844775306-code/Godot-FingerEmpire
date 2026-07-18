@@ -140,7 +140,7 @@ func count_military(peer: int) -> int:
 		if entity is Army and entity.health > 0:
 			if my_peer_id != -1 and entity.owner_peer_id != peer: continue
 			if my_peer_id == -1 and entity.team != peer: continue
-			if entity.entity_id != 10 and entity.entity_id != 14 and entity.entity_id not in [46,47,48,50]:
+			if entity.entity_id != 10 and entity.entity_id != 14 and entity.entity_id not in [43,44,45,46,47,48,49,50,51]:
 				total += 1
 	return total
 
@@ -149,7 +149,7 @@ func count_military_by_team(tm: int) -> int:
 	for entity in battle.entities.get_children():
 		if entity is Army and entity.health > 0:
 			if entity.team != tm: continue
-			if entity.entity_id != 10 and entity.entity_id != 14 and entity.entity_id not in [46,47,48,50]:
+			if entity.entity_id != 10 and entity.entity_id != 14 and entity.entity_id not in [43,44,45,46,47,48,49,50,51]:
 				total += 1
 	return total
 
@@ -336,7 +336,7 @@ func decide(_delta):
 	elif phase == Phase.DEVELOPMENT:
 		# 军事生产优先
 		_process_line_military()
-		_process_line_military()
+		
 		# 建筑和升级
 		_process_line_1()
 		_process_line_3()
@@ -407,7 +407,7 @@ func allocate_workers():
 	for w in workers:
 		if w.current_order != "deliver": non_delivering.append(w)
 
-	if workers.size() < desired_worker_count:
+	if workers.size() < 8:
 		if can_afford(10) and _can_train_unit(): produce_unit(10)
 		for w in non_delivering:
 			var target = find_best_resource_for_worker(w, {"food": 100})
@@ -1045,8 +1045,10 @@ func _try_produce_merchants_or_officials() -> bool:
 
 func _process_line_military():
 	var priority = get_counter_priority()
+			if randf() < 0.1: print("[AI diag] military check: afford=%s can_train=%s priority=%s" % [can_afford(priority[0]) if priority.size()>0 else "n/a", _can_train_unit(), priority.slice(0,3)])
 	for u_id in priority:
 		if count_unit(u_id) < target_army_count and can_afford(u_id) and _can_train_unit():
+			print("[AI diag] produce military: %s (count=%d, target=%d)" % [EntityDatabase.get_config(u_id).get("name","?"), count_unit(u_id), target_army_count])
 			produce_unit(u_id); return
 
 func _process_line_3():
