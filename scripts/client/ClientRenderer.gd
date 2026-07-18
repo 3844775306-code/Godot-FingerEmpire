@@ -1,1096 +1,1454 @@
-class_name ClientRenderer
-extends Node3D
-var last_applied_seq = -1
-# ==================== 玩家信息 ====================
-var player_team: int = -1          # 1v1 模式队伍 (BLUE=0, RED=1)
-var my_peer_id: int = -1           # 2v2 模式标识（当前未用）
-var my_color: Color = Color.WHITE
+class_name OnlineBattleManager
+extends RTSBattleManager
 
-# ==================== 实体节点池 ====================
-var entity_nodes: Dictionary = {}   # instance_id -> Node3D
+# ==================== 模式与玩家管理 ====================
+var game_mode: int = NetworkManager.GameMode.ONEvONE
 
-# ==================== 战争迷雾 ====================
-var local_explored_grid: Array = []
-var local_visible_grid: Array = []
+# 1v1 专用
+var player_teams: Dictionary = {}         # peer_id -> team
 
-# ==================== 血条池 ====================
-var unit_bars: Dictionary = {}
 
-# ==================== 缓存数据 ====================
-var last_resources: Dictionary = {}
-var last_limits: Dictionary = {}
-var last_population: Dictionary = {"current": 0, "max": 0}
+# 2v2 专用
+var player_info: Dictionary = {}          # peer_id -> { "team": int, "slot": int, "alive": bool, "color": Color, "nation": int }
+var player_castles: Dictionary = {}       # peer_id -> Building
+   # peer_id -> { "gold": int, "wood": int, ... }
+var player_population: Dictionary = {}    # peer_id -> { "current": int, "max": int }
+# 删除原来的：var player_resource_limits: Dictionary = {}
+# 新增
+var player_limits_dict: Dictionary = {}   # 用于 2v2，key = peer_id  # peer_id -> { "gold": int, ... }
+# 国家选择暂存
+var pending_nations: Dictionary = {}      # peer_id -> nation
 
-# ==================== 建造预览 ====================
-var placement_mode: bool = false
-var placement_building_id: int = -1
-var placement_preview: MeshInstance3D
+# 游戏状态
+var has_game_started: bool = false
+var snapshot_seq = 0
+var player_last_snapshot_ids: Dictionary = {}   # peer_id -> Array[int]  # peer_id -> Array[int]
+var player_all_visible_ids: Dictionary = {}     # peer_id -> Dictionary (所有可见实体ID，用于死亡检测)
+# 快照系统
+var snapshot_timer: float = 0.0
+const SNAPSHOT_INTERVAL: float = 0.1
+var broadcast_enabled: bool = false
+var last_snapshot_cache: Dictionary = {}
+var team_explored_resources: Dictionary = {}
+var team_gather_paused: Dictionary = {}
+var _mp_shift_held: bool = false
 
-# ==================== 定时器 ====================
-var health_bar_timer: float = 0.0
-const HEALTH_BAR_INTERVAL: float = 0.05  # 20Hz，血条丝滑跟随
+# ==================== 警报系统（服务器→客户端） ====================
+var _pending_client_alerts: Dictionary = {}   # peer_id or team -> Array of {msg, color}
 
-# 客户端诊断
-var _diag_snap_age: float = 999.0
-var _diag_snap_count: int = 0
-var _diag_last_snap_time: int = 0
-var fog_timer: float = 0.0
-var minimap_timer: float = 0.0
-var _stale_cleanup_timer: float = 30.0
-var _snapshot_cooldown: int = 0
-var heavy_work_index: int = 0            # 轮转索引，每帧只做一个重任务
-var first_fog_done: bool = false          # 首帧标志，确保初始化立即执行所有任务
-var fog_cycle_active: bool = false        # 增量迷雾计算进行中
-var fog_units_queue: Array = []           # 待处理的单位队列
-var fog_batch_size: int = 5               # 每帧处理的单位数量
+func _queue_client_alert(target_key, msg: String, color: Color = Color(1.0, 0.2, 0.1)):
+	if not _pending_client_alerts.has(target_key):
+		_pending_client_alerts[target_key] = []
+	_pending_client_alerts[target_key].append({"msg": msg, "color": color})
 
-var last_snapshot_time = 0
-	
-@onready var entities_container: Node3D = $Entities
-# 新增变量（放在类顶部）
+func _get_and_clear_alerts(target_key) -> Array:
+	var alerts = _pending_client_alerts.get(target_key, [])
+	_pending_client_alerts[target_key] = []
+	return alerts
 
-var my_team: int = -1
+# Override: queue alerts for clients in online mode
+func _show_hud_alert(msg: String, color: Color = Color(1.0, 0.2, 0.1), _target_team: int = -1):
+	super._show_hud_alert(msg, color)
+	if _target_team >= 0:
+		# Entity-specific alert: only for the owner's team
+		_queue_client_alert(_target_team, msg, color)
+	else:
+		# Global alert: all players
+		_queue_client_alert(RTSConfig.Team.BLUE, msg, color)
+		_queue_client_alert(RTSConfig.Team.RED, msg, color)
 
-var stale_snapshot: bool = false
+# ==================== 采集统计（服务器端统一计算） ====================
+var team_gather_counts: Dictionary = {}     # team 或 peer_id -> {"gold":0, "wood":0, ...}
+var team_res_snapshots: Dictionary = {}     # 用于计算收入速率的资源快照
+var team_income_rates: Dictionary = {}      # team 或 peer_id -> {"gold":0.0, ...}
+var _gather_stat_timer: float = 0.0
+var _income_calc_timer: float = 0.0
 
-var latest_snapshot: Dictionary = {}    # 必须初始化为空字典
-var snapshot_processing: bool = false
-var pending_delta: Array = []
+func get_mp_shift() -> bool:
+	return _mp_shift_held
 
-	# 如果有最新快照待处理，且当前不忙，则开始处理
-	
-var player_colors: Dictionary = {}   # peer_id -> Color
-func set_all_player_colors(colors: Dictionary):
-	player_colors.clear()
-	for k in colors: player_colors[k] = colors[k]  # 原地更新，保持引用
-	print("[ClientRenderer] 收到全局颜色映射，包含 %d 个玩家" % player_colors.size())
-# 新增方法
-func set_player_info(peer_id: int, team: int, slot: int, color: Color):
-	my_peer_id = peer_id
-	my_team = team
-	player_team = team          # 兼容1v1代码
-	my_color = color
-	
-	print("[ClientRenderer] 2v2玩家信息：peer_id=%d, team=%d, color=%s" % [peer_id, team, color])
-# ==================== 初始化 ====================
-func _ready():
-	add_to_group("client_renderer")
-	_init_fog_grids()
 
-	# 建造预览体
-	placement_preview = MeshInstance3D.new()
-	var box = BoxMesh.new()
-	box.size = Vector3(2, 1.5, 2)
-	placement_preview.mesh = box
-	var mat = StandardMaterial3D.new()
-	mat.albedo_color = Color(0, 1, 0, 0.5)
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.render_priority = 10          # 提高渲染优先级
-	mat.no_depth_test = true          # 禁用深度测试，确保不被遮挡
-	placement_preview.material_override = mat
-	placement_preview.visible = false
-	placement_preview.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	placement_preview.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
-	add_child(placement_preview)
 
-	# 将预览体移到所有子节点的最上层（在场景树中）
-	move_child(placement_preview, get_child_count() - 1)
-
-	# 选择信号 → InfoPanel
-	if $ClientInput:
-		$ClientInput.selection_changed.connect(func(ids: Array):
-			var panel = $UI/InfoPanel as ClientInfoPanel
-			if panel:
-				if ids.size() == 1:
-					panel.update_info(ids[0])
-				
-				elif ids.size() > 1:
-					panel.show_multi_selection(ids)
-				else:
-					panel.visible = false
-			)
-
-		# 建造请求信号
-		$ClientInput.build_requested.connect(func(wpos: Vector3):
-			var menu = $UI/BuildMenu as ClientBuildMenu
-			if menu:
-				var cam = get_viewport().get_camera_3d()
-				if cam:
-					menu.popup_at(wpos, cam.unproject_position(wpos))
-		)
-
-	# 建造菜单发射“放置开始”信号
-	if $UI/BuildMenu:
-		$UI/BuildMenu.build_placement_started.connect(func(bid: int):
-			placement_mode = true
-			placement_building_id = bid
-			var cfg = EntityDatabase.get_config(bid)
-			if not cfg.is_empty():
-				var r = cfg.get("body_radius", 1.0)
-				var b = placement_preview.mesh as BoxMesh
-				if b: b.size = Vector3(r*2, r*1.5, r*2)
-			placement_preview.visible = true
-		)
-
-# ==================== 外部接口 ====================
-func set_player_team(team: int):
-	player_team = team
-	print("客户端队伍设置为：", team)
-
-func set_castle_pos(pos: Vector3):
-	await get_tree().process_frame
-	var cam = get_viewport().get_camera_3d()
-	if cam:
-		cam.global_position = Vector3(pos.x, cam.global_position.y, pos.z)
-
-func get_population() -> Dictionary:
-	return last_population
-
-func get_player_resource(res_name: String) -> int:
-	return last_resources.get(res_name, 0)
-
-func get_player_castle_level() -> int:
-	var max_lv = 1
-	for n in entity_nodes.values():
-		if not is_instance_valid(n) or not n.has_meta("snapshot_info"):
-			continue
-		var info = n.get_meta("snapshot_info")
-		if info.get("type") == 1 and info.get("entity_id") == 20 and info.get("team") == player_team:
-			var lv = info.get("upgrade_level", 1)
-			if lv > max_lv:
-				max_lv = lv
-	return max_lv
-
-func get_entity_info(id: int) -> Dictionary:
-	var node = entity_nodes.get(id)
-	if node and node.has_meta("snapshot_info"):
-		return node.get_meta("snapshot_info")
+func get_resources_for(owner_id: int) -> Dictionary:
+	if player_resources.has(owner_id):
+		return player_resources[owner_id]
+	if owner_id == -1:
+		return enemy_resources
+	if player_teams.has(owner_id):
+		var team = player_teams[owner_id]
+		if team == RTSConfig.Team.BLUE:
+			return player_resources.get(1, {})
+		return enemy_resources
+	if player_info.has(owner_id):
+		return player_resources.get(owner_id, {})
 	return {}
 
-func get_entity_config(entity_id: int) -> Dictionary:
-	return EntityDatabase.get_config(entity_id)
-
-func apply_snapshot(data: Dictionary):
-	var now = Time.get_ticks_msec()
-	var seq = data.get("seq", -1)
-	if seq <= last_applied_seq:
-		return   # 丢弃过时快照
-	if last_applied_seq != -1 and data.get("seq") == last_applied_seq + 1:
-		pass #print("连续收到")
-	else:
-		pass #print("跳号或重传: 期望 ", last_applied_seq+1, " 收到 ", data.get("seq"))
-	last_applied_seq = seq
-	_diag_snap_count += 1
-	_diag_last_snap_time = now
-	_diag_snap_age = 0.0
-	last_snapshot_time = now
-	if player_team == -1:
-		return
-	# 丢弃未处理的旧快照，只保留最新
-	if snapshot_processing:
-		pending_delta.clear()
-	latest_snapshot = data
-	snapshot_processing = true
-
-# 安全快照处理包装器——崩溃循环由 _process 层面的计数器处理
-var _snapshot_fail_count: int = 0
-func _safe_process_snapshot(data: Dictionary) -> bool:
-	if data.is_empty():
-		return false
-	if not data.has('delta') and not data.has('entities'):
-		return false
-	_process_snapshot(data)
+func deduct_resources_for(owner_id: int, cost: Dictionary) -> bool:
+	var res = get_resources_for(owner_id)
+	if res.is_empty(): return false
+	for k in cost:
+		if res.get(k, 0) < cost[k]: return false
+	for k in cost:
+		res[k] -= cost[k]
 	return true
 
-func _process_snapshot(data: Dictionary):
-	# 缓存人口
-	last_population = data.get("population", last_population)
+func add_resource_for(owner_id: int, type: String, amount: int):
+	var res = get_resources_for(owner_id)
+	if res.has(type):
+		var lim = 99999
+		if player_limits_dict.has(owner_id):
+			lim = player_limits_dict[owner_id].get(type, 99999)
+		res[type] = min(res[type] + amount, lim)
+
+func update_player_limits(peer_id: int):
+	if not player_limits_dict.has(peer_id):
+		player_limits_dict[peer_id] = {"gold":500, "wood":500, "stone":500, "food":500, "oil":0}
+	var limits = player_limits_dict[peer_id]
+	var castle = 0
+	var warehouse_bonus = 0
+	var shipyard = 0
+	for entity in entities.get_children():
+		if entity is Building and entity.health > 0 and entity.owner_peer_id == peer_id and entity.team == player_info[peer_id].team:
+			if entity.entity_id == 20: castle += 1
+			elif entity.entity_id == 22 and entity.build_timer <= 0: warehouse_bonus += entity.building_data.get("storage_bonus", 0)
+			elif entity.entity_id == 23: shipyard += 1
+	limits["gold"] = 500 + castle*300 + warehouse_bonus
+	limits["wood"] = 500 + castle*300 + warehouse_bonus
+	limits["stone"] = 500 + castle*300 + warehouse_bonus
+	limits["food"] = 500 + castle*300 + warehouse_bonus
+	limits["oil"] = shipyard * 700
+# 增加指定玩家的资源
+func add_player_resource(peer_id: int, type: String, amount: int):
+	if not player_resources.has(peer_id):
+		player_resources[peer_id] = {"gold":100, "wood":100, "stone":100, "food":100, "oil":0}
+	var res = player_resources[peer_id]
+	var limits = player_limits_dict.get(peer_id, {})
+	if res.has(type):
+		res[type] = min(res[type] + amount, limits.get(type, 99999))
+
+# 交付资源（玩家农民返回城堡/仓库时调用）
+func deliver_player_resources(peer_id: int, cargo: Dictionary):
+	for type in cargo:
+		add_player_resource(peer_id, type, cargo[type])
+
+# 减少玩家资源
+func deduct_player_resources(peer_id: int, cost: Dictionary) -> bool:
+
+	if not player_resources.has(peer_id): return false
+
+	var res = player_resources[peer_id]
+
+	# Check all resources are sufficient first to prevent negative values
+	for type in cost:
+		if res.get(type, 0) < cost[type]:
+			return false
+
+	# All sufficient, deduct
+	for type in cost:
+		res[type] -= cost[type]
+	return true
+
+# 增加指定玩家人口
+func increase_player_population(peer_id: int, amount: int = 1):
+	if player_population.has(peer_id):
+		player_population[peer_id]["current"] += amount
+
+# 减少指定玩家人口
+func decrease_player_population(peer_id: int, amount: int = 1):
+	if player_population.has(peer_id):
+		player_population[peer_id]["current"] = max(0, player_population[peer_id]["current"] - amount)
+
+# 检查该玩家是否可以训练单位（人口未满）
+func can_player_train(peer_id: int) -> bool:
+	if not player_population.has(peer_id): return false
+	var pop = player_population[peer_id]
+	return pop["current"] < pop["max"]*2
+func update_player_population(peer_id: int):
+	if not player_population.has(peer_id):
+		player_population[peer_id] = {"current": 0, "max": 20} # 初始城堡20人口
+	var max_pop = 0
+	var info = player_info[peer_id]
+	for entity in entities.get_children():
+		if entity is Building and entity.owner_peer_id == peer_id and entity.health > 0:
+			if entity.entity_id == 20: max_pop += 20
+			elif entity.entity_id == 28: max_pop += 10
+	if info:
+		max_pop += NationBonuses.get_population_bonus(team_nations[info.team])
+	player_population[peer_id]["max"] = max_pop
+# ==================== 生命周期 ====================
+func _ready():
+	game_mode = NetworkManager.selected_mode
+
+	if game_mode == NetworkManager.GameMode.ONEvONE:
+		RTSConfig.MAP_SIZE = 100
+		
+	else:
+		RTSConfig.MAP_SIZE = 150
 	
-	# ---- 实体更新 ----
-	if data.has("delta"):
-		for ent in data["delta"]:
-			_update_single_entity(ent)
-	elif data.has("entities"):
-		for ent in data["entities"]:
-			_update_single_entity(ent)
+	is_online = true
+	super._ready()                         # 父类 _ready 因 is_online=true 不会生成实体
+	add_to_group("online_battle_manager")
+	#set_process_input(false)
 
-	# 删除死亡实体
-	if data.has("dead_ids"):
-		for id in data["dead_ids"]:
-			if entity_nodes.has(id):
-				entity_nodes[id].queue_free()
-				entity_nodes.erase(id)
-			_remove_all_bars(id)
-
-			if has_meta("_wp_markers"):
-				var all_wp = get_meta("_wp_markers")
-				if all_wp.has(id):
-					for m in all_wp[id]:
-						if is_instance_valid(m): m.queue_free()
-					all_wp.erase(id)
-	var my_res = {}
-	var my_limits = {}
-	var my_pop = last_population
-
-	if data.has("player_resources") and my_peer_id != -1:
-		my_res = data["player_resources"].get(my_peer_id, {})
-		my_pop = data.get("player_population", {}).get(my_peer_id, {"current":0,"max":0})
-		my_limits = data.get("player_limits", {}).get(my_peer_id, {})
-	elif data.has("resources"):
-		my_res = data["resources"]["player"] if player_team == RTSConfig.Team.BLUE else data["resources"]["enemy"]
-		my_pop = data["population"]
-		my_limits = data.get("limits", {}).get("player" if player_team == RTSConfig.Team.BLUE else "enemy", {})
-
-	# 保存最新资源
-	last_resources = my_res
-	last_limits = my_limits
-	last_population = my_pop
-
-	# ---- HUD 更新 ----
-	var gather_counts = data.get("gather_counts", {})
-	var income_rate = data.get("income_rate", {})
-	# Unwrap peer_id-keyed data for 2v2 mode
-	if my_peer_id != -1:
-		gather_counts = gather_counts.get(my_peer_id, {})
-		income_rate = income_rate.get(my_peer_id, {})
-	if has_node("UI/HUD") and not my_res.is_empty():
-		$UI/HUD.update_data(my_res, my_pop, my_limits, gather_counts, income_rate, data.get("game_time", 0.0))
-
-	# ---- InfoPanel 资源 ----
-	if has_node("UI/InfoPanel"):
-		$UI/InfoPanel.set_resources(my_res, my_limits, my_pop)
-
-	# ---- 国家信息 ----
-	if has_node("UI/HUD"):
-		if data.has("nation"):
-			var my_nation = data["nation"] if player_team == RTSConfig.Team.BLUE else data.get("enemy_nation", -1)
-			var enemy_nation = data.get("enemy_nation", -1) if player_team == RTSConfig.Team.BLUE else data["nation"]
-			$UI/HUD.set_nations(my_nation, enemy_nation)
-		elif data.has("team_nations") and my_team != -1:
-			var my_team_nation = data["team_nations"].get(my_team, -1)
-			var enemy_team = RTSConfig.Team.RED if my_team == RTSConfig.Team.BLUE else RTSConfig.Team.BLUE
-			var enemy_nation = data["team_nations"].get(enemy_team, -1)
-			$UI/HUD.set_nations(my_team_nation, enemy_nation)
-
-	# ---- 子弹 ----
-	# ---- 服务器警报 ----
-	if data.has("alerts"):
-		var alerts = data["alerts"]
-		if alerts is Array and alerts.size() > 0:
-			print("[Client Alert] 收到 %d 条警报" % alerts.size())
-			var hud = get_node_or_null("UI/HUD")
-			if not hud:
-				print("[Client Alert] HUD 节点未找到！")
-			for alert in alerts:
-				print("[Client Alert] msg=%s color=%s" % [alert["msg"], alert.get("color", "?")])
-				if hud and hud.has_method("show_alert_message"):
-					hud.show_alert_message(alert["msg"], alert.get("color", Color(1.0, 0.2, 0.1)))
-				elif hud:
-					print("[Client Alert] HUD 没有 show_alert_message 方法！")
-
-	if data.has("bullets"):
-		var server_ids = {}
-		for b in data["bullets"]:
-			if not b.has("id") or not b.has("x"): continue
-			var id = b["id"]
-			server_ids[id] = true
-			var node = entity_nodes.get(id)
-			if not node:
-				node = _create_bullet_node(b)
-				entity_nodes[id] = node
-			node.global_position = Vector3(b["x"], b["y"], b["z"])
-			node.visible = true
-
-		for id in entity_nodes.keys():
-			var n = entity_nodes[id]
-			if n.has_meta("is_bullet") and not server_ids.has(id):
-				n.queue_free()
-				entity_nodes.erase(id)
-# ==================== 实体创建与更新 ====================
-func _update_single_entity(info: Dictionary):
-	if not info.has("id") or not info.has("x") or not info.has("z"):
-		return
-	var id = info["id"]
-	var node = entity_nodes.get(id)
-	if not node:
-		node = _create_entity_node(info)
-		entity_nodes[id] = node
-	node.global_position = Vector3(info["x"], info["y"], info["z"])
-	node.visible = _should_entity_be_visible(info)
-	node.set_meta("snapshot_info", info)
-	# Update waypoint markers if present
-	_update_waypoint_markers(node, info)
-
-# 在 ClientRenderer.gd 类顶部确保存在以下变量
-  # peer_id -> Color
-
-# ---------- 替换原有的 _create_entity_node ----------
-func _create_entity_node(info: Dictionary) -> Node3D:
-	if not info.has("body_radius") or not info.has("type") or not info.has("team"):
-		return Node3D.new()
-	var entity = Node3D.new()
-	var body = StaticBody3D.new()
-	body.collision_layer = 1
-	body.collision_mask = 0
-	body.name = "ClickableBody"
-	body.set_meta("entity_root", entity)
-	entity.add_child(body)
-
-	var col_shape = CollisionShape3D.new()
-	var r = info["body_radius"]
-	if info["type"] == 1:
-		var box = BoxShape3D.new()
-		box.size = Vector3(r*2, r*1.5, r*2)
-		col_shape.shape = box
+	game_mode = NetworkManager.selected_mode
+	if game_mode == NetworkManager.GameMode.ONEvONE:
+		RTSConfig.MAP_SIZE = 100
+		await _init_1v1()
 	else:
-		var sphere = SphereShape3D.new()
-		sphere.radius = r
-		col_shape.shape = sphere
-	body.add_child(col_shape)
+		RTSConfig.MAP_SIZE = 150
+		await _init_2v2()
 
-	# 获取实体颜色：统一使用 player_colors 按 owner_peer_id 着色
-	var entity_color: Color
-	var owner_id = info.get("owner_peer_id", -1)
+# ---------- 1v1 初始化 ----------
+func _init_1v1():
+	# 等待 2 名玩家
+	while multiplayer.get_peers().size() < 2:
+		await get_tree().process_frame
 
-	if owner_id != -1 and player_colors.has(owner_id):
-		entity_color = player_colors[owner_id]
-	elif info["team"] == RTSConfig.Team.BLUE:
-		entity_color = Color(0.3, 0.5, 1.0)   # 蓝队基础色
-	elif info["team"] == RTSConfig.Team.RED:
-		entity_color = Color(1.0, 0.25, 0.2)   # 红队基础色
-	else:
-		entity_color = Color(0.7, 0.7, 0.7)    # 中立灰色
+	var peers = multiplayer.get_peers()
+	peers.sort()
+	for i in range(peers.size()):
+		var team = RTSConfig.Team.BLUE if i == 0 else RTSConfig.Team.RED
+		player_teams[peers[i]] = team
+		# 如果暂存了国家
+		if pending_nations.has(peers[i]):
+			team_nations[team] = pending_nations[peers[i]]
+			pending_nations.erase(peers[i])
 
-	# 动物覆盖色
-	var eid = info.get("entity_id", 0)
-	match eid:
-		60: entity_color = Color(0.55, 0.35, 0.2)
-		61: entity_color = Color(0.95, 0.75, 0.8)
-		62: entity_color = Color(0.9, 0.9, 0.85)
-		63: entity_color = Color(0.5, 0.7, 0.85)
-
-	# 模型
-	var mesh: MeshInstance3D
-	match info["type"]:
-		0: # 资源
-			mesh = MeshInstance3D.new()
-			mesh.mesh = SphereMesh.new()
-			mesh.mesh.radius = r
-			var mat = StandardMaterial3D.new()
-			match info["entity_id"]:
-				0: mat.albedo_color = Color.YELLOW
-				1: mat.albedo_color = Color(0.3,0.8,0.2)
-				2: mat.albedo_color = Color.GRAY
-				3: mat.albedo_color = Color.SADDLE_BROWN
-				4: mat.albedo_color = Color.BLACK
-			mesh.material_override = mat
-		1: # 建筑
-			mesh = MeshInstance3D.new()
-			var box = BoxMesh.new()
-			box.size = Vector3(r*2, r*1.5, r*2)
-			mesh.mesh = box
-			var mat = StandardMaterial3D.new()
-			mat.albedo_color = entity_color
-			mesh.material_override = mat
-		2: # 军队
-			mesh = MeshInstance3D.new()
-			var cap = CapsuleMesh.new()
-			cap.radius = r*0.8
-			cap.height = r*2.5
-			mesh.mesh = cap
-			var mat = StandardMaterial3D.new()
-			mat.albedo_color = entity_color
-			mesh.material_override = mat
-	if mesh:
-		entity.add_child(mesh)
-
-	# 存储 owner_peer_id 元数据，供后续使用
-	entity.set_meta("owner_peer_id", owner_id)
-	entities_container.add_child(entity)
-	return entity
-
-# ---------- 替换原有的 _create_bullet_node ----------
-func _create_bullet_node(info: Dictionary) -> Node3D:
-	var n = Node3D.new()
-	n.set_meta("is_bullet", true)
-	var mesh = MeshInstance3D.new()
-	var s = SphereMesh.new()
-	s.radius = 0.2; s.height = 0.4
-	mesh.mesh = s
-	var mat = StandardMaterial3D.new()
-
-	# 子弹颜色也按玩家区分
-	var owner_id = info.get("owner_peer_id", -1)
-	if owner_id != -1 and player_colors.has(owner_id):
-		mat.albedo_color = player_colors[owner_id]
-	else:
-		mat.albedo_color = Color.RED if info["team"] == RTSConfig.Team.BLUE else Color.BLUE
-
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mesh.material_override = mat
-	n.add_child(mesh)
-	entities_container.add_child(n)
-	return n
-func on_map_size_changed():
-	_init_fog_grids()
-
-func _init_fog_grids():
-	local_explored_grid.clear()
-	local_visible_grid.clear()
-	for x in range(RTSConfig.MAP_SIZE):
-		var exp_col = []
-		var vis_col = []
-		for y in range(RTSConfig.MAP_SIZE):
-			exp_col.append(false)
-			vis_col.append(false)
-		local_explored_grid.append(exp_col)
-		local_visible_grid.append(vis_col)
-
-
+	# 发送地图数据
+	_send_map_data(peers)
+	# 通知队伍
+	for pid in peers:
+		NetworkManager._notify_team.rpc_id(pid, player_teams[pid])
+	# 等待国家选择
+	await _wait_for_nations_1v1()
+	# 开始游戏
+	has_game_started = true
 	
 
-	# 后续迷雾计算...
-# ==================== 战争迷雾 ====================
 
 
-func _start_fog_cycle():
-	# 尺寸检查
-	if local_explored_grid.size() != RTSConfig.MAP_SIZE or local_visible_grid.size() != RTSConfig.MAP_SIZE:
-		_init_fog_grids()
-	if local_explored_grid.size() > 0 and local_explored_grid[0].size() != RTSConfig.MAP_SIZE:
-		_init_fog_grids()
+	_init_entities_deferred()   # 父类的实体生成（会用到 team_nations）
+	set_process(true)
+	broadcast_enabled = true
+	# 发送城堡位置
+	await get_tree().process_frame
+	for pid in peers:
+		var team = player_teams[pid]
+		var castle = get_castle_by_team(team)
+		if castle:
+			NetworkManager.notify_castle_pos.rpc_id(pid, castle.global_position)
+# ---- 颜色调试 ----
+var _color_debug_done: bool = false
+func _debug_print_colors():
+	if _color_debug_done: return
+	_color_debug_done = true
+	print("[ColorDebug] ===== 玩家颜色分配 =====")
+	for pid in player_info.keys():
+		var info = player_info[pid]
+		print("[ColorDebug] peer=%d team=%s slot=%d color=%s" % [pid, "BLUE" if info.team == RTSConfig.Team.BLUE else "RED", info.slot, str(info.color)])
+	#print("[ColorDebug] all_player_colors dict: ", all_player_colors if "all_player_colors" in locals() else "(not built yet)")
+	print("[ColorDebug] =========================")
+func _wait_for_nations_1v1():
+	while true:
+		if team_nations[RTSConfig.Team.BLUE] != -1 and team_nations[RTSConfig.Team.RED] != -1:
+			return
+		await get_tree().process_frame
 
-	# 收集己方单位
-	fog_units_queue.clear()
-	for node in entity_nodes.values():
-		if not node.has_meta("snapshot_info"): continue
-		var info = node.get_meta("snapshot_info")
-		if not info or info.get("health", 0) <= 0: continue
-		var belongs = false
-		if my_team != -1:
-			belongs = (info["team"] == my_team)
-		elif player_team != -1:
-			belongs = (info["team"] == player_team)
-		if belongs:
-			fog_units_queue.append(node)
+# ---------- 2v2 初始化 ----------
+func _init_2v2():
+	
+	RTSConfig.MAP_SIZE = 150
 
-	# 清除本帧可见性（一次性操作）
-	var false_row = []
-	false_row.resize(RTSConfig.MAP_SIZE)
-	false_row.fill(false)
-	for x in range(RTSConfig.MAP_SIZE):
-		local_visible_grid[x] = false_row.duplicate()
+	# 完全重新生成地图（不依赖旧的 Map 节点状态）
+	# 立即移除旧地图节点（避免引用残留）
+	var old_map = $Map
+	if old_map:
+		remove_child(old_map)
+		old_map.queue_free() # 删除旧地图
+	var map_node = load("res://scripts/map/Ground.gd").new()
+	map_node.name = "Map"
+	add_child(map_node)
+	# 为新地图设置自定义种子（可选）
+	map_node.custom_seed = randi()
+	# 手动调用 _ready 来生成地形、城堡、资源
+	map_node._ready()
+	# 确保 terrain_grid 已经填充
+	print("[服务器] 2v2 地图已重建，尺寸:", RTSConfig.MAP_SIZE, " 地形网格大小:", map_node.terrain_grid.size())
+	# 计算所需人类玩家数量
+	
+	var red_slots_free = 2 - NetworkManager.red_ai_count
+	var blue_slots_free = 2 - NetworkManager.blue_ai_count
+	var required_humans = red_slots_free + blue_slots_free
 
-	if fog_units_queue.is_empty():
-		# 没有己方单位，直接完成
-		var map = get_node_or_null("Map")
-		if map and map.has_method("apply_fog") and not map.base_colors.is_empty():
-			map.apply_fog(local_explored_grid, local_visible_grid)
-	else:
-		fog_cycle_active = true
+	print("[2v2] 需要人类玩家数:", required_humans, " 红方AI:", NetworkManager.red_ai_count, " 蓝方AI:", NetworkManager.blue_ai_count)
 
-func _process_fog_batch() -> bool:
-	# 返回 true 表示本轮迷雾计算全部完成
-	if not fog_cycle_active:
-		return false
+	# 等待足够的人类玩家连接
+	while multiplayer.get_peers().size() < required_humans:
+		await get_tree().process_frame
 
-	var processed = 0
-	while fog_units_queue.size() > 0 and processed < fog_batch_size:
-		var node = fog_units_queue.pop_front()
-		if not is_instance_valid(node):
+	var peers = multiplayer.get_peers()
+	peers.sort()
+
+	var red_assigned = 0
+	var blue_assigned = 0
+
+	# ---------- 分配人类玩家到剩余空位 ----------
+	for i in range(peers.size()):
+		var team: int
+		if red_assigned < red_slots_free and (red_assigned <= blue_assigned or blue_assigned >= blue_slots_free):
+			team = RTSConfig.Team.RED
+		else:
+			team = RTSConfig.Team.BLUE
+
+		var slot = red_assigned if team == RTSConfig.Team.RED else blue_assigned
+		var color = _pick_player_color()   # 从颜色池随机分配
+		var nation = pending_nations.get(peers[i], 0)
+
+		player_info[peers[i]] = {
+			"team": team, "slot": slot, "alive": true,
+			"color": color, "nation": nation
+		}
+		player_resources[peers[i]] = { "gold": 100, "wood": 100, "stone": 100, "food": 100, "oil": 0 }
+		player_population[peers[i]] = { "current": 3, "max": 20 }
+
+		if team == RTSConfig.Team.RED:
+			red_assigned += 1
+		else:
+			blue_assigned += 1
+
+		print("[2v2] 分配人类 ", peers[i], " 到队伍 ", "红" if team == RTSConfig.Team.RED else "蓝", " 槽位", slot)
+
+	# ---------- 补充 AI 玩家（完全按照菜单设置的数量） ----------
+	# 红方 AI
+	for i in range(NetworkManager.red_ai_count):
+		if red_assigned >= 2: break   # 保险
+		var ai_id = _generate_ai_id(RTSConfig.Team.RED, red_assigned)
+		_create_ai_player(ai_id, RTSConfig.Team.RED, red_assigned)
+		red_assigned += 1
+		print("[2v2] 添加红方AI, peer_id=", ai_id, " slot=", red_assigned-1)
+
+	# 蓝方 AI
+	for i in range(NetworkManager.blue_ai_count):
+		if blue_assigned >= 2: break
+		var ai_id = _generate_ai_id(RTSConfig.Team.BLUE, blue_assigned)
+		_create_ai_player(ai_id, RTSConfig.Team.BLUE, blue_assigned)
+		blue_assigned += 1
+		print("[2v2] 添加蓝方AI, peer_id=", ai_id, " slot=", blue_assigned-1)
+
+	print("[2v2] 最终分配: 红方", red_assigned, "人, 蓝方", blue_assigned, "人")
+
+	# 广播颜色、地图、队伍信息等（保持不变）
+	var all_player_colors = {}
+	for pid in player_info.keys():
+		all_player_colors[pid] = player_info[pid].color
+	for pid in player_info.keys():
+		NetworkManager.notify_all_player_colors.rpc_id(pid, all_player_colors)
+
+	_send_map_data(player_info.keys())
+	for pid in player_info.keys():
+		var info = player_info[pid]
+		NetworkManager.notify_team_info.rpc_id(pid, pid, info.team, info.slot, info.color)
+
+	has_game_started = true
+	# ---- 颜色调试 ----
+	var _color_debug_done: bool = false
+
+
+
+	_init_all_castles_2v2()
+	_debug_print_colors()
+	set_process(true)
+	broadcast_enabled = true
+
+	await get_tree().process_frame
+	for pid in player_info.keys():
+		var castle = player_castles.get(pid)
+		if castle:
+			NetworkManager.notify_castle_pos.rpc_id(pid, castle.global_position)
+# 辅助函数
+func _count_human_players(team: int) -> int:
+	var count = 0
+	for pid in player_teams.keys():
+		if player_teams[pid] == team:
+			count += 1
+	return count
+
+func _generate_ai_id(team: int, index: int) -> int:
+	return 1000 + team * 10 + index
+
+func _create_ai_player(peer_id: int, team: int, slot: int):
+	var ai_nation = randi() % 5
+	player_info[peer_id] = {
+		"team": team,
+		"slot": slot,
+		"alive": true,
+		"color": _get_ai_color(team, slot),
+		"nation": ai_nation
+	}
+	player_resources[peer_id] = {
+		"gold": 100, "wood": 100, "stone": 100, "food": 100, "oil": 0
+	}
+	player_population[peer_id] = {"current": 3, "max": 30}
+	team_nations[team] = ai_nation
+
+	
+
+	# 附加 AI 控制器
+	var ai_controller = AIController.new()
+	ai_controller.my_peer_id = peer_id
+	ai_controller.my_team = team
+	add_child(ai_controller)
+# 根据队伍和槽位为 AI 分配一个独特颜色（避免与人类玩家重复）
+var _color_used_count: int = 0
+
+func get_player_colors() -> Dictionary:
+	var colors = {}
+	for pid in player_info.keys():
+		colors[pid] = player_info[pid].color
+	return colors
+
+func _pick_player_color() -> Color:
+	var c = RTSConfig.COLOR_POOL[_color_used_count % RTSConfig.COLOR_POOL.size()]
+	_color_used_count += 1
+	return c
+
+func _get_ai_color(team: int, slot: int) -> Color:
+	var idx = _color_used_count
+	_color_used_count += 1
+	return RTSConfig.COLOR_POOL[idx % RTSConfig.COLOR_POOL.size()]
+func _get_ai_castle_pos(team: int, slot: int) -> Vector3:
+	var map = $Map
+	if not map: return Vector3.ZERO
+
+	# 根据队伍使用预设的基准位置
+	var base_pos = map.player_castle_pos if team == RTSConfig.Team.BLUE else map.enemy_castle_pos
+	# 槽位偏移：槽0在基准左上方，槽1在基准右下方
+	var offset = Vector3(0, 0, 0)
+	if slot == 0:
+		offset = Vector3(-10, 0, -5)
+	elif slot == 1:
+		offset = Vector3(10, 0, 5)
+
+	var pos = base_pos + offset
+	# 确保位置在平原且没有建筑重叠
+	return find_valid_build_position(pos, 20)
+func find_valid_build_position(near_pos: Vector3, building_id: int) -> Vector3:
+	var cfg = EntityDatabase.get_config(building_id)
+	var radius = cfg.get("body_radius", 1.0)
+	for _try in range(20):
+		var angle = randf_range(0, TAU)
+		var dist = randf_range(3.0, 10.0)
+		var test_pos = near_pos + Vector3(cos(angle) * dist, 0, sin(angle) * dist)
+		# 地形检查：必须为平原（0）
+		if get_terrain_at(test_pos) != 0:
 			continue
-		var info = node.get_meta("snapshot_info")
-		if not info:
-			continue
-		var gx = int(info["x"] + RTSConfig.MAP_SIZE / 2)
-		var gz = int(info["z"] + RTSConfig.MAP_SIZE / 2)
-		var vision = info.get("vision_range", 12)
-		for dx in range(-vision, vision + 1):
-			for dz in range(-vision, vision + 1):
-				if dx*dx + dz*dz > vision*vision: continue
-				var nx = gx + dx
-				var nz = gz + dz
-				if nx >= 0 and nx < RTSConfig.MAP_SIZE and nz >= 0 and nz < RTSConfig.MAP_SIZE:
-					local_visible_grid[nx][nz] = true
-					local_explored_grid[nx][nz] = true
-		processed += 1
+		# 高度调整
+		var map = $Map
+		if map and map.has_method("get_height_at"):
+			test_pos.y = map.get_height_at(test_pos)
+		# 重叠检测
+		var overlap = false
+		for entity in entities.get_children():
+			if not (entity is GameEntity) or entity.health <= 0: continue
+			var d = test_pos.distance_to(entity.global_position) - (radius + entity.body_radius)
+			if d < 1.0:
+				overlap = true
+				break
+		if not overlap:
+			return test_pos
+	# 回退：返回原始位置，但至少在地形上可放置
+	near_pos.y = 0
+	return near_pos  # 20 是城堡的 ID
+func _wait_for_nations_2v2():
+	while true:
+		var all_ok = true
+		for pid in player_info.keys():
+			if player_info[pid].nation < 0:
+				all_ok = false
+				break
+		if all_ok: return
+		await get_tree().process_frame
 
-	if fog_units_queue.size() == 0:
-		# 全部完成，应用到地面纹理
-		fog_cycle_active = false
-		var map = get_node_or_null("Map")
-		if map and map.has_method("apply_fog") and not map.base_colors.is_empty():
-			map.apply_fog(local_explored_grid, local_visible_grid)
-		return true
-	return false
+# ---------- 地图发送 ----------
+func _send_map_data(peers: Array):
+	var terrain_copy = $Map.terrain_grid.duplicate(true)
+	var res_data = []
+	for r in $Map.resource_positions:
+		res_data.append({
+			"x": r["pos"].x, "y": r["pos"].y, "z": r["pos"].z,
+			"type": r["type"]
+		})
+	for pid in peers:
+		NetworkManager.receive_map_data.rpc_id(pid, terrain_copy, res_data)
 
-func _update_local_fog():
-	# 兼容旧接口：启动增量迷雾周期
-	_start_fog_cycle()
-func _update_waypoint_markers(node: Node3D, info: Dictionary):
-	# Only show waypoints for selected entities
-	var inp = get_node_or_null("ClientInput")
-	var is_selected = false
-	if inp and inp.has_method("get_client_selected_ids"):
-		is_selected = info["id"] in inp.get_client_selected_ids()
-	if not is_selected:
-		# Clear any existing markers for this entity
-		if has_meta("_wp_markers"):
-			var awp = get_meta("_wp_markers")
-			if awp.has(info["id"]):
-				for m in awp[info["id"]]:
-					if is_instance_valid(m): m.queue_free()
-				awp.erase(info["id"])
-		return
+# ---------- 2v2 城堡生成 ----------
+func _init_all_castles_2v2():
+	_debug_print_colors()
+	var map = $Map
+	if not map: return
 
-	# Track all waypoint markers globally (keyed by entity instance id)
-	if not has_meta("_wp_markers"):
-		set_meta("_wp_markers", {})
-	var all_wp = get_meta("_wp_markers")
-	var eid = info["id"]
+	var positions = map.get_four_castle_positions()   # 返回 [blue1, blue2, red1, red2]
+	var blue1 = positions[0]
+	var blue2 = positions[1]
+	var red1 = positions[2]
+	var red2 = positions[3]
 
-	# Clear previous markers for this entity
-	if all_wp.has(eid):
-		for m in all_wp[eid]:
-			if is_instance_valid(m): m.queue_free()
-		all_wp.erase(eid)
+	# 给每位玩家分配城堡
+	for pid in player_info.keys():
+		var info = player_info[pid]
+		var pos: Vector3
+		if info.team == RTSConfig.Team.BLUE:
+			pos = blue1 if info.slot == 0 else blue2
+		else:
+			pos = red1 if info.slot == 0 else red2
 
-	var wps = info.get("waypoints", [])
-	if wps.is_empty(): return
+		_create_player_castle(pid, info.team, pos)
 
-	var new_markers: Array = []
-	for i in range(wps.size()):
-		var wp = wps[i]
-		var world_pos = Vector3(wp["x"], wp.get("y", 0), wp["z"])
-		var is_loop = wp.get("is_loop", false)
+		# 生成3个初始农民
+		var peasant_cfg = EntityDatabase.get_config(10)
+		peasant_cfg["team"] = info.team
+		for i in range(3):
+			var spawn_pos = pos + Vector3(randf_range(-4,4), 0, randf_range(-4,4))
+			var cfg = peasant_cfg.duplicate()
+			cfg["owner_peer_id"] = pid
+			spawn_entity(cfg, info.team, spawn_pos, 1)
 
-		# Orange for loop waypoints, cyan for normal
-		var ring_color = Color(1.0, 0.55, 0.0, 0.9) if is_loop else Color(0, 1, 1, 0.8)
-		var pole_color = Color(1.0, 0.55, 0.0, 0.5) if is_loop else Color(0, 1, 1, 0.5)
+	# 资源点生成
+	for res in map.resource_positions:
+		var cfg = EntityDatabase.get_config(res.type)
+		if cfg: spawn_entity(cfg, RTSConfig.Team.NEUTRAL, res.pos)
 
-		# Vertical pole — world space, child of entities_container
-		var pole = MeshInstance3D.new()
-		var cyl = CylinderMesh.new()
-		cyl.top_radius = 0.08; cyl.bottom_radius = 0.08; cyl.height = 2.0
-		pole.mesh = cyl
-		pole.position = world_pos + Vector3(0, 1.0, 0)
-		var pole_mat = StandardMaterial3D.new()
-		pole_mat.albedo_color = pole_color
-		pole_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		pole_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		pole_mat.render_priority = 10
-		pole_mat.no_depth_test = true
-		pole.material_override = pole_mat
-		entities_container.add_child(pole)
-		new_markers.append(pole)
-
-		# Ring marker — world space, child of entities_container
-		var marker = MeshInstance3D.new()
-		var ring = TorusMesh.new()
-		ring.inner_radius = 0.5; ring.outer_radius = 0.7
-		marker.mesh = ring
-		marker.position = world_pos + Vector3(0, 2.0, 0)
-		var mat = StandardMaterial3D.new()
-		mat.albedo_color = ring_color
-		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		mat.render_priority = 10
-		mat.no_depth_test = true
-		marker.material_override = mat
-		entities_container.add_child(marker)
-		new_markers.append(marker)
-
-		# Ground dot at exact click position
-		var dot = MeshInstance3D.new()
-		var sphere = SphereMesh.new()
-		sphere.radius = 0.2; sphere.height = 0.4
-		dot.mesh = sphere
-		dot.position = world_pos + Vector3(0, 0.2, 0)
-		var dot_mat = StandardMaterial3D.new()
-		dot_mat.albedo_color = ring_color
-		dot_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		dot_mat.render_priority = 10
-		dot_mat.no_depth_test = true
-		dot.material_override = dot_mat
-		entities_container.add_child(dot)
-		new_markers.append(dot)
-
-		# Number label
-		var lbl = Label3D.new()
-		lbl.text = str(i + 1); lbl.font_size = 32
-		lbl.position = Vector3(0, 0.8, 0); lbl.modulate = Color(1.0, 0.55, 0.0) if is_loop else Color.CYAN
-		lbl.render_priority = 11
-		lbl.no_depth_test = true
-		marker.add_child(lbl)
-
-	all_wp[eid] = new_markers
-
-# Control-group label colors (same as HUD)
-# Helper: get control-group prefix string for label
-func _get_entity_group_prefix(eid: int) -> String:
-	var inp = get_node_or_null("ClientInput")
-	if not inp or not inp.has_method("get_entity_groups"): return ""
-	var groups = inp.get_entity_groups(eid)
-	if groups.is_empty(): return ""
-	var s = ""
-	for g in groups:
-		s += "T%d " % g
-	return s
-
-const GROUP_LABEL_COLORS = {
-	1: Color(1.0, 0.3, 0.2),   # Red
-	2: Color(0.2, 0.6, 1.0),   # Blue
-	3: Color(0.2, 1.0, 0.3),   # Green
-	4: Color(1.0, 1.0, 0.2),   # Yellow
-	5: Color(1.0, 0.5, 0.0),   # Orange
-	6: Color(0.7, 0.3, 1.0),   # Purple
-	7: Color(0.0, 1.0, 1.0),   # Cyan
-	8: Color(1.0, 0.4, 0.7),   # Pink
-	9: Color(0.5, 1.0, 0.5),   # Mint
-}
-
-# Helper: get color for entity label (by control group first, then owner/team)
-func _get_entity_label_color(info: Dictionary) -> Color:
-	var eid = info["id"]
-	var inp = get_node_or_null("ClientInput")
-	if inp and inp.has_method("get_entity_groups"):
-		var groups = inp.get_entity_groups(eid)
-		if groups.size() > 0 and GROUP_LABEL_COLORS.has(groups[0]):
-			return GROUP_LABEL_COLORS[groups[0]]
+	_init_fog_grid()
 	
-	
-	return Color.WHITE
+func _create_player_castle(peer_id: int, team: int, pos: Vector3):
+	var cfg = EntityDatabase.get_config(20)
+	cfg["team"] = team
+	cfg["produces"] = [{"unit_id": 10, "cooldown": 3.0, "queue_limit": 10}, {"unit_id": 19, "cooldown": 4.0, "queue_limit": 5}]
+	cfg["owner_peer_id"] = peer_id
+	var castle = spawn_entity(cfg, team, pos, 1)   # 移除了多余的 peer_id 参数
+	if castle:
+		castle.died.connect(_on_castle_died_2v2.bind(peer_id))
+		player_castles[peer_id] = castle
 
-func _should_entity_be_visible(ent: Dictionary) -> bool:
-	if ent["team"] == player_team:
-		return true
-	if ent["team"] == RTSConfig.Team.NEUTRAL:
-		var gx = int(ent["x"] + RTSConfig.MAP_SIZE/2)
-		var gz = int(ent["z"] + RTSConfig.MAP_SIZE/2)
-		if gx<0 or gx>=RTSConfig.MAP_SIZE or gz<0 or gz>=RTSConfig.MAP_SIZE: return false
-		return local_explored_grid[gx][gz]
-	# 敌方单位
-	var gx = int(ent["x"] + RTSConfig.MAP_SIZE/2)
-	var gz = int(ent["z"] + RTSConfig.MAP_SIZE/2)
-	if gx<0 or gx>=RTSConfig.MAP_SIZE or gz<0 or gz>=RTSConfig.MAP_SIZE: return false
-	return local_visible_grid[gx][gz]
-
-func _get_valid_entities() -> Array:
+func _get_team_players(team: int) -> Array:
 	var arr = []
-	for n in entity_nodes.values():
-		if n.has_meta("snapshot_info"):
-			arr.append(n)
+	for pid in player_info.keys():
+		if player_info[pid].team == team and player_info[pid].alive:
+			arr.append(pid)
 	return arr
+# ---------- 全局命令实现 ----------
 
-# ==================== 血条系统（与单机版风格一致） ====================
-# Periodic cleanup of entity nodes that no longer have valid server data
-func _cleanup_stale_entities():
-	var to_remove = []
-	for id in entity_nodes.keys():
-		var node = entity_nodes.get(id)
-		if not is_instance_valid(node):
-			to_remove.append(id)
-			continue
-		if not node.has_meta("snapshot_info"):
-			to_remove.append(id)
-	if to_remove.size() > 0:
-		for id in to_remove:
-			entity_nodes.erase(id)
-			_remove_all_bars(id)
-		print("[ClientRenderer] Cleaned up ", to_remove.size(), " stale entity nodes")
+func _stop_gather(team: int):
+	var paused = team_gather_paused.get(team, false)
+	team_gather_paused[team] = !paused
+	if not paused:                         # 暂停
+		for entity in entities.get_children():
+			if entity is Army and entity.team == team and entity.health > 0:
+				if entity.entity_id == 10 or entity.entity_id == 14:
+					entity.current_target = null
+					entity.current_order = ""
+					entity.astar_path.clear()
+					entity.is_attack_moving = false
+	else:                                   # 恢复
+		for entity in entities.get_children():
+			if entity is Army and entity.team == team and entity.health > 0:
+				if (entity.entity_id == 10 or entity.entity_id == 14) and entity.current_order == "":
+					entity._find_nearest_resource()
 
-func _update_health_bars():
-	var cam = get_viewport().get_camera_3d()
-	if not cam: return
-	var viewport_rect = get_viewport().get_visible_rect().grow(50)
+func _toggle_hold_position(team: int):
+	for entity in entities.get_children():
+		if entity is Army and entity.team == team and entity.health > 0:
+			if entity.entity_id not in [10, 14]:
+				entity.hold_position = !entity.hold_position
 
-	for id in entity_nodes.keys():
-		var node = entity_nodes.get(id)
-		if not is_instance_valid(node): continue
-		if not node.has_meta("snapshot_info"): continue
-		var info = node.get_meta("snapshot_info")
-		if not info: continue
-		if not info.has("health") or not info.has("type"): continue
-		if info["health"] <= 0: continue  # 已死亡实体不显示血条
-		var hp = info["health"]
-		var max_hp = info.get("max_health", hp)
-		if max_hp <= 0: max_hp = hp  # 防止除零
-		var type = info["type"]
-		var team = info.get("team", -1)
+func _rally(team: int, x: float, y: float, z: float):
+	var pos = Vector3(x, y, z)
+	for entity in entities.get_children():
+		if entity is Army and entity.team == team and entity.health > 0:
+			if entity.entity_id == 10 or entity.entity_id == 14: continue
+			entity.move_to(pos)
 
-		# 建造中
-		if type == 1 and info.get("build_timer", 0) > 0:
-			var bar = _get_or_create_health_bar(id)
-			var lab = _get_or_create_label(id)
-			bar.visible = true; lab.visible = true
-			bar.update_bar(info["build_timer"], info["max_build_time"], -1)
-			var nm2 = info["name"]
-			var _gpfx3 = _get_entity_group_prefix(info["id"])
-			lab.text = _gpfx3 + "%s (建造中)" % nm2
-			var _lbc3 = _get_entity_label_color(info)
-			lab.add_theme_color_override("font_color", _lbc3)
-			var world_pos = node.global_position + Vector3.UP * (info["body_radius"]*2 + 0.5)
-			var screen_pos = cam.unproject_position(world_pos)
-			if viewport_rect.has_point(screen_pos):
-				bar.position = screen_pos - Vector2(30, 5)
-				lab.position = bar.position + Vector2(0, -22)
-				lab.visible = true
+func _global_attack(team: int):
+	var target_team = RTSConfig.Team.RED if team == RTSConfig.Team.BLUE else RTSConfig.Team.BLUE
+	var target = get_castle_by_team(target_team)
+	if not target: return
+	for entity in entities.get_children():
+		if entity is Army and entity.team == team and entity.target_type > 0:
+			entity.attack_move_to(target.global_position)
+
+func _global_retreat(team: int):
+	var home = get_castle_by_team(team)
+	if not home: return
+	for entity in entities.get_children():
+		if entity is Army and entity.team == team and entity.target_type > 0:
+			entity.move_to(home.global_position + Vector3(randf_range(-3,3), 0, randf_range(-3,3)))
+
+# ---------- 命令处理（兼容两种模式） ----------
+func process_command(peer_id: int, data: Dictionary):
+	if game_mode == NetworkManager.GameMode.ONEvONE:
+		_process_1v1_command(peer_id, data)
+	else:
+		_process_2v2_command(peer_id, data)
+
+func _process_1v1_command(peer_id: int, data: Dictionary):
+	var team = player_teams.get(peer_id, -1)
+	if team == -1: return
+	match data["action"]:
+		"right_click":   _1v1_right_click(team, data)
+		"build":         _1v1_build(team, data)
+		"upgrade":       _1v1_upgrade(team, data)
+		"produce":       _1v1_produce(team, data)
+		"global_attack": _global_attack(team)
+		"global_retreat": _global_retreat(team)
+		"stop_gather":   _stop_gather(team)
+		"toggle_hold_position": _toggle_hold_position(team)
+		"rally":         _rally(team, data["pos_x"], data["pos_y"], data["pos_z"])
+		"set_group":     _1v1_set_group(team, data)
+		"recall_group":  _1v1_recall_group(team, data)
+		"demolish":      _1v1_demolish(team, data)
+		"set_garrison":  _set_garrison_for_team(team, data)
+		"clear_garrison": _clear_garrison_for_team(team, data)
+
+func _process_2v2_command(peer_id: int, data: Dictionary):
+	if not player_info.has(peer_id) or not player_info[peer_id].alive: return
+	match data["action"]:
+		"right_click":   _2v2_right_click(peer_id, data)
+		"build":         _2v2_build(peer_id, data)
+		"upgrade":       _2v2_upgrade(peer_id, data)
+		"produce":       _2v2_produce(peer_id, data)
+		"global_attack": _2v2_global_attack(peer_id)
+		"global_retreat": _2v2_global_retreat(peer_id)
+		"stop_gather":   _2v2_stop_gather(peer_id)
+		"toggle_hold_position": _2v2_toggle_hold(peer_id)
+		"rally":         _2v2_rally(peer_id, data["pos_x"], data["pos_y"], data["pos_z"])
+		"set_group":     _2v2_set_group(peer_id, data)
+		"demolish":      _2v2_demolish(peer_id, data)
+		"recall_group":  _2v2_recall_group(peer_id, data)
+		"set_garrison":  _2v2_set_garrison(peer_id, data)
+		"clear_garrison": _2v2_clear_garrison(peer_id, data)
+
+# ---------- 1v1 命令实现 ----------
+func _1v1_right_click(team: int, data: Dictionary):
+	#print("[Server] right_click from team ", team, " targets: ", data.get("selected_ids", []).size(), " pos: ", data.get("pos_x", 0))
+	var target_id = data.get("target_id", -1)
+	var pos = Vector3(data.get("pos_x",0), data.get("pos_y",0), data.get("pos_z",0))
+	var selected_ids = data.get("selected_ids", [])
+	var shift_held = data.get("shift_held", false)
+	var target: GameEntity = _find_entity_by_id(target_id) if target_id != -1 else null
+
+	for entity in entities.get_children():
+		if entity is Army and entity.team == team and entity.get_instance_id() in selected_ids:
+			if not is_instance_valid(entity): continue
+			if not shift_held:
+				entity._clear_command_queue()
+			entity._force_queue_next = shift_held
+			if target:
+				if target is WorldResource:
+					entity.gather_at(target)
+				elif target.team != entity.team:
+					entity.attack_target(target)
+				elif entity.entity_id >= 46 and entity.entity_id <= 50 and target is Building:
+					entity._garrison_target_id = target.get_instance_id()
+					entity.move_to(target.global_position)
+				else:
+					entity.move_to(target.global_position)
 			else:
-				bar.visible = false; lab.visible = false
-			continue
+				entity.move_to(pos)
 
-		# 生产中
-		# Upgrade progress (purple bar matching health bar style, above HP)
-		if info.get("upgrade_timer", 0) > 0:
-			var upbar = _get_or_create_upgrade_bar(id)
-			var uplab = _get_or_create_upgrade_label(id)
-			upbar.visible = true; uplab.visible = true
-			upbar.update_bar(info["upgrade_timer"], info["max_upgrade_time"], -1)
-			upbar.set_team_color(Color(0.6, 0.2, 0.8))
-			uplab.text = "升级中"
-			uplab.add_theme_color_override("font_color", Color(0.8, 0.4, 1.0))
-			var uwp = node.global_position + Vector3.UP * (info["body_radius"]*2 + 0.5)
-			var usp = cam.unproject_position(uwp)
-			if viewport_rect.has_point(usp):
-				upbar.position = usp - Vector2(30, 5) + Vector2(0, -20)
-				uplab.position = upbar.position + Vector2(0, -14)
-				uplab.visible = true
+func _1v1_build(team: int, data: Dictionary):
+	var building_id = data["building_id"]
+	var pos = Vector3(data["pos_x"], data["pos_y"], data["pos_z"])
+	var cfg = EntityDatabase.get_config(building_id)
+	if cfg.is_empty(): return
+	# Cannot build near enemies
+	for e in entities.get_children():
+		if e is GameEntity and e.team != team and e.team != RTSConfig.Team.NEUTRAL and e.health > 0:
+			if e.global_position.distance_to(pos) < 10.0: return
+	var res = player_resources if team == RTSConfig.Team.BLUE else enemy_resources
+	var cost = cfg.get("cost", {})
+	for r in cost.keys():
+		if res[r] < cost[r]: return
+	for r in cost.keys():
+		res[r] -= cost[r]
+	var b = spawn_entity(cfg, team, pos)
+	if b: b.start_construction(5.0, cfg)
+
+func _1v1_upgrade(team: int, data: Dictionary):
+	var building_id = data["building_id"]
+	var n = 999 if data.get("shift_held", false) else 1
+	# 升级已全局生效，只需升级目标建筑
+	for entity in entities.get_children():
+		if entity is Building and entity.team == team and entity.get_instance_id() == building_id:
+			for _i in range(n):
+				if not entity.can_upgrade() or not entity.perform_upgrade(self): break
+			break
+
+func _1v1_produce(team: int, data: Dictionary):
+	var building_id = data["building_id"]
+	var unit_id = data["unit_id"]
+	var n = 5 if data.get("shift_held", false) else 1
+	var tid = -1
+	for entity in entities.get_children():
+		if entity is Building and entity.team == team and entity.get_instance_id() == building_id:
+			tid = entity.entity_id; break
+	if data.get("ctrl_held", false) and tid != -1:
+		for entity in entities.get_children():
+			if entity is Building and entity.team == team and entity.entity_id == tid:
+				for _i in range(n):
+					if not entity.try_produce(unit_id): break
+	else:
+		for entity in entities.get_children():
+			if entity is Building and entity.team == team and entity.get_instance_id() == building_id:
+				for _i in range(n): entity.try_produce(unit_id); break
+
+# ---------- 2v2 命令实现 ----------
+func _2v2_right_click(peer_id: int, data: Dictionary):
+	var selected_ids = data.get("selected_ids", [])
+	var target_id = data.get("target_id", -1)
+	var pos = Vector3(data.get("pos_x",0), data.get("pos_y",0), data.get("pos_z",0))
+	var shift_held = data.get("shift_held", false)
+	var target: GameEntity = _find_entity_by_id(target_id) if target_id != -1 else null
+
+	for entity in entities.get_children():
+		if entity is Army and entity.get("owner_peer_id") == peer_id and entity.get_instance_id() in selected_ids:
+			if not is_instance_valid(entity): continue
+			if not shift_held:
+				entity._clear_command_queue()
+			entity._force_queue_next = shift_held
+			if target:
+				if target is WorldResource:
+					entity.gather_at(target)
+				elif target.get("team") != entity.team:
+					entity.attack_target(target)
+				elif entity.entity_id >= 46 and entity.entity_id <= 50 and target is Building:
+					entity._garrison_target_id = target.get_instance_id()
+					entity.move_to(target.global_position)
+				else:
+					entity.move_to(target.global_position)
 			else:
-				upbar.visible = false; uplab.visible = false
+				entity.move_to(pos)
+
+func _2v2_build(peer_id: int, data: Dictionary):
+	
+	
+	var building_id = data["building_id"]
+	var pos = Vector3(data["pos_x"], data["pos_y"], data["pos_z"])
+	var cfg = EntityDatabase.get_config(building_id)
+	if cfg.is_empty(): return
+	var cost = cfg.get("cost", {})
+	# Cannot build near enemies
+	for e in entities.get_children():
+		if e is GameEntity and e.team != player_info[peer_id].team and e.team != RTSConfig.Team.NEUTRAL and e.health > 0:
+			if e.global_position.distance_to(pos) < 10.0: return
+	# 人口检查（防御塔）
+	var is_defense = (building_id == 25 or building_id == 26)
+	if is_defense and not can_player_train(peer_id):
+		return
+	# 扣除个人资源
+	if not deduct_player_resources(peer_id, cost): return
+	cfg["owner_peer_id"] = peer_id
+	var b = spawn_entity(cfg, player_info[peer_id].team, pos, 1)
+	if b:
+		b.start_construction(5.0, cfg)
+		if is_defense:
+			increase_player_population(peer_id, 1)
+		update_player_limits(peer_id)
+		update_player_population(peer_id)
+
+func _2v2_upgrade(peer_id: int, data: Dictionary):
+	var building_id = data["building_id"]
+	var n = 999 if data.get("shift_held", false) else 1
+	# 升级已全局生效（2v2 按 peer_id 隔离），只需升级目标建筑
+	for entity in entities.get_children():
+		if entity is Building and entity.get_instance_id() == building_id and entity.owner_peer_id == peer_id:
+			for _i in range(n):
+				if not entity.can_upgrade() or not entity.perform_upgrade(self): break
+			break
+	update_player_limits(peer_id)
+	update_player_population(peer_id)
+
+func _2v2_produce(peer_id: int, data: Dictionary):
+	var building_id = data["building_id"]
+	var unit_id = data["unit_id"]
+	var n = 5 if data.get("shift_held", false) else 1
+	var tid = -1
+	for entity in entities.get_children():
+		if entity is Building and entity.owner_peer_id == peer_id and entity.get_instance_id() == building_id:
+			tid = entity.entity_id; break
+	if data.get("ctrl_held", false) and tid != -1:
+		for entity in entities.get_children():
+			if entity is Building and entity.owner_peer_id == peer_id and entity.entity_id == tid:
+				for _i in range(n):
+					if not entity.try_produce(unit_id): break
+	else:
+		for entity in entities.get_children():
+			if entity is Building and entity.owner_peer_id == peer_id and entity.get_instance_id() == building_id:
+				for _i in range(n): entity.try_produce(unit_id); break
+
+func _2v2_global_attack(peer_id: int):
+	var team = player_info[peer_id].team
+	var enemy_team = RTSConfig.Team.BLUE if team == RTSConfig.Team.RED else RTSConfig.Team.RED
+	var target = _get_first_alive_castle(enemy_team)
+	if not target: return
+	for entity in entities.get_children():
+		if entity is Army and entity.get("owner_peer_id") == peer_id and entity.target_type > 0:
+			entity.attack_move_to(target.global_position)
+
+func _2v2_global_retreat(peer_id: int):
+	var castle = player_castles.get(peer_id)
+	if not castle: return
+	for entity in entities.get_children():
+		if entity is Army and entity.get("owner_peer_id") == peer_id and entity.target_type > 0:
+			entity.move_to(castle.global_position + Vector3(randf_range(-3,3), 0, randf_range(-3,3)))
+
+func _2v2_stop_gather(peer_id: int):
+	var paused = team_gather_paused.get(peer_id, false)
+	team_gather_paused[peer_id] = !paused
+	for entity in entities.get_children():
+		if entity is Army and entity.get("owner_peer_id") == peer_id and entity.entity_id in [10,14]:
+			if not paused:
+				entity.current_target = null
+				entity.current_order = ""
+				entity.astar_path.clear()
+				entity.is_attack_moving = false
+			else:
+				if entity.current_order == "":
+					entity._find_nearest_resource()
+
+func _2v2_toggle_hold(peer_id: int):
+	for entity in entities.get_children():
+		if entity is Army and entity.get("owner_peer_id") == peer_id and entity.entity_id not in [10,14]:
+			entity.hold_position = !entity.hold_position
+
+func _2v2_rally(peer_id: int, x: float, y: float, z: float):
+	var pos = Vector3(x, y, z)
+	for entity in entities.get_children():
+		if entity is Army and entity.get("owner_peer_id") == peer_id and entity.entity_id not in [10,14]:
+			entity.move_to(pos)
+
+# ---------- 通用工具 ----------
+func _find_entity_by_id(id: int) -> GameEntity:
+	for entity in entities.get_children():
+		if entity.get_instance_id() == id:
+			return entity
+	return null
+
+func get_castle_by_team(team: int) -> Building:
+	for entity in entities.get_children():
+		if entity is Building and entity.entity_id == 20 and entity.team == team:
+			return entity
+	return null
+
+func _get_first_alive_castle(team: int) -> Building:
+	for pid in player_castles.keys():
+		if player_info[pid].team == team and player_info[pid].alive:
+			return player_castles[pid]
+	return null
+
+func get_team_nation(team: int) -> int:
+	return team_nations.get(team, -1)
+
+# ---------- 国家分配 RPC ----------
+func assign_nation(peer_id: int, nation: int):
+	if game_mode == NetworkManager.GameMode.ONEvONE:
+		if player_teams.has(peer_id):
+			team_nations[player_teams[peer_id]] = nation
 		else:
-			_hide_upgrade_bars(id)
-
-		if type == 1 and info.has("production_current_unit") and info["production_current_unit"] != -1:
-			var pbar = _get_or_create_prod_bar(id)
-			var plab = _get_or_create_prod_label(id)
-			pbar.visible = true; plab.visible = true
-			pbar.value = info["production_progress"]
-			var unit_cfg = EntityDatabase.get_config(info["production_current_unit"])
-			plab.text = "%s x%d" % [unit_cfg.get("name","?"), info["production_queue_size"]]
-			var world_pos = node.global_position + Vector3.UP * (info["body_radius"]*2 + 0.5)
-			var screen_pos = cam.unproject_position(world_pos)
-			if viewport_rect.has_point(screen_pos):
-				pbar.position = screen_pos - Vector2(30, 0) + Vector2(0, 6)
-				plab.position = pbar.position + Vector2(0, -12)
-				plab.visible = true
-			else:
-				pbar.visible = false; plab.visible = false
-
-			if hp < max_hp:
-				var bar = _get_or_create_health_bar(id)
-				bar.visible = true
-				bar.update_bar(hp, max_hp, team)
-				if viewport_rect.has_point(screen_pos):
-					bar.position = screen_pos - Vector2(30, 5) + Vector2(0, -22)
-				else: bar.visible = false
-			else:
-				if unit_bars.has(id) and unit_bars[id].bar: unit_bars[id].bar.visible = false
-			continue
-
-		# 普通实体
-		_hide_prod_bars(id)
-		var lab = _get_or_create_label(id)
-		var nm3 = info["name"]
-		var _gpfx1 = _get_entity_group_prefix(info["id"])
-		var _res_info2 = ""
-		if info.get("entity_id") in [10, 14]:
-			var _ord2 = info.get("order", "")
-			if _ord2 == "deliver": _res_info2 = "\n返回"
-			elif _ord2 == "gather": _res_info2 = "\n采集中"
-		lab.text = _gpfx1 + "%s Lv.%d%s" % [nm3, info.get("level", 1), _res_info2]
-
-		var _lbc = _get_entity_label_color(info)
-		lab.add_theme_color_override("font_color", _lbc)
-		var world_pos = node.global_position + Vector3.UP * (info["body_radius"]*2 + 0.5)
-		var screen_pos = cam.unproject_position(world_pos)
-
-		if hp < max_hp:
-			var bar = _get_or_create_health_bar(id)
-			bar.visible = true
-			bar.update_bar(hp, max_hp, team)
-			if viewport_rect.has_point(screen_pos):
-				bar.position = screen_pos - Vector2(30, 5)
-				lab.position = bar.position + Vector2(0, -22)
-				lab.visible = true
-				var _gpfx2 = _get_entity_group_prefix(info["id"])
-				var _res_info = ""
-				if info.get("entity_id") in [10, 14]:
-					var _ord = info.get("order", "")
-					if _ord == "deliver": _res_info = "\n返回"
-					elif _ord == "gather": _res_info = "\n采集中"
-				lab.text = _gpfx2 + "%s Lv.%d%s\n%d/%d" % [info["name"], info.get("level", 1), _res_info, hp, max_hp]
-
-				var _lbc4 = _get_entity_label_color(info)
-				lab.add_theme_color_override("font_color", _lbc4)
-			else:
-				bar.visible = false; lab.visible = false
+			pending_nations[peer_id] = nation
+	else:
+		if player_info.has(peer_id):
+			player_info[peer_id].nation = nation
+			team_nations[player_info[peer_id].team] = nation
 		else:
-			if unit_bars.has(id) and unit_bars[id].bar: unit_bars[id].bar.visible = false
-			if viewport_rect.has_point(screen_pos):
-				lab.position = screen_pos - Vector2(30, 15)
-				lab.visible = true
-			else: lab.visible = false
+			pending_nations[peer_id] = nation
 
-# ==================== 血条控件创建 ====================
-func _get_or_create_health_bar(id) -> HealthBarControl:
-	if not unit_bars.has(id):
-		unit_bars[id] = { "bar":null, "label":null, "prod_bar":null, "prod_label":null, "order_label":null }
-	if not unit_bars[id].bar:
-		var b = HealthBarControl.new()
-		b.custom_minimum_size = Vector2(60, 10)
-		add_child(b)
-		unit_bars[id].bar = b
-	return unit_bars[id].bar
+# ---------- 游戏结束 ----------
+func _on_castle_died_2v2(peer_id: int):
+	if not player_info.has(peer_id): return
+	player_info[peer_id].alive = false
+	var team = player_info[peer_id].team
+	# 整队检查
+	for pid in player_info.keys():
+		if player_info[pid].team == team and player_info[pid].alive:
+			return   # 还有存活，不结束
+	# 全队阵亡
+	game_over = true
+	var winner = RTSConfig.Team.BLUE if team == RTSConfig.Team.RED else RTSConfig.Team.RED
+	for pid in player_info.keys():
+		NetworkManager.notify_game_over.rpc_id(pid, winner)
 
-func _get_or_create_label(id) -> Label:
-	if not unit_bars.has(id):
-		unit_bars[id] = { "bar":null, "label":null, "prod_bar":null, "prod_label":null, "order_label":null }
-	if not unit_bars[id].label:
-		var l = Label.new()
-		l.add_theme_font_size_override("font_size", 20)
-		l.add_theme_color_override("font_color", Color.WHITE)
-		l.add_theme_color_override("font_outline_color", Color.BLACK)
-		l.add_theme_constant_override("outline_size", 1)
-		add_child(l)
-		unit_bars[id].label = l
-	return unit_bars[id].label
+# 1v1 的城堡死亡已在 RTSBattleManager 中通过 _on_castle_died 处理（游戏结束通知玩家）
 
-func _get_or_create_prod_bar(id) -> ProgressBar:
-	if not unit_bars.has(id):
-		unit_bars[id] = { "bar":null, "label":null, "prod_bar":null, "prod_label":null, "order_label":null }
-	if not unit_bars[id].prod_bar:
-		var p = ProgressBar.new()
-		p.custom_minimum_size = Vector2(60, 6)
-		p.max_value = 1.0
-		p.show_percentage = false
-		add_child(p)
-		unit_bars[id].prod_bar = p
-	return unit_bars[id].prod_bar
+# ---------- 快照广播 ----------
 
-func _get_or_create_prod_label(id) -> Label:
-	if not unit_bars.has(id):
-		unit_bars[id] = { "bar":null, "label":null, "prod_bar":null, "prod_label":null, "order_label":null, "upgrade_bar":null, "upgrade_label":null }
-	if not unit_bars[id].has("prod_label") or not unit_bars[id].prod_label:
-		var l = Label.new()
-		l.add_theme_font_size_override("font_size", 20)
-		l.add_theme_color_override("font_color", Color.WHITE)
-		add_child(l)
-		unit_bars[id].prod_label = l
-	return unit_bars[id].prod_label
+# ==================== 增量快照（Delta Compression） ====================
+# 每个玩家的实体状态哈希表，只发送变化的实体，大幅减少网络流量
+var _entity_state_hashes: Dictionary = {}   # key -> {entity_id: hash}
+var _full_snapshot_counters: Dictionary = {} # key -> counter
+const FULL_SNAPSHOT_EVERY: int = 30          # 每 30 个 delta (~3秒) 发一次全量基线
 
-func _get_or_create_upgrade_bar(id) -> HealthBarControl:
-	if not unit_bars.has(id):
-		unit_bars[id] = { "bar":null, "label":null, "prod_bar":null, "prod_label":null, "order_label":null, "upgrade_bar":null, "upgrade_label":null }
-	if not unit_bars[id].has("upgrade_bar") or not unit_bars[id].upgrade_bar:
-		var hb = HealthBarControl.new()
-		hb.custom_minimum_size = Vector2(60, 10)
-		add_child(hb)
-		unit_bars[id].upgrade_bar = hb
-	return unit_bars[id].upgrade_bar
+func _compute_entity_hash(entity: GameEntity) -> int:
+	# 只对会变化的字段计算哈希（静态属性不参与）
+	var s = "%d,%d,%d,%d,%d,%d,%s,%s,%d" % [
+		int(entity.global_position.x * 100),
+		int(entity.global_position.z * 100),
+		int(entity.health),
+		int(entity.max_health),
+		entity.level,
+		int(entity.attack),
+		entity.current_order,
+		str(entity.hold_position),
+		int(entity.owner_peer_id)
+	]
+	if entity is Building:
+		s += ",%d,%d,%d,%d" % [entity.upgrade_level, entity.production_queue.size(), int(entity.build_timer * 100), int(entity.production_timer * 100), int(entity.upgrade_timer * 100)]
+	if entity.current_target and is_instance_valid(entity.current_target):
+		s += ",%d" % entity.current_target.get_instance_id()
+	return s.hash()
 
-func _get_or_create_upgrade_label(id) -> Label:
-	if not unit_bars.has(id):
-		unit_bars[id] = { "bar":null, "label":null, "prod_bar":null, "prod_label":null, "order_label":null, "upgrade_bar":null, "upgrade_label":null }
-	if not unit_bars[id].has("upgrade_label") or not unit_bars[id].upgrade_label:
-		var l = Label.new()
-		l.add_theme_font_size_override("font_size", 12)
-		l.add_theme_color_override("font_color", Color(0.8, 0.4, 1.0))
-		add_child(l)
-		unit_bars[id].upgrade_label = l
-	return unit_bars[id].upgrade_label
+func _should_include_in_delta(snapshot_key, entity_id: int, new_hash: int) -> bool:
+	if not _entity_state_hashes.has(snapshot_key):
+		_entity_state_hashes[snapshot_key] = {}
+	var hashes = _entity_state_hashes[snapshot_key]
+	if not hashes.has(entity_id):
+		hashes[entity_id] = new_hash
+		return true  # 新实体，必须发送
+	if hashes[entity_id] != new_hash:
+		hashes[entity_id] = new_hash
+		return true  # 状态变化，需要发送
+	return false  # 无变化，跳过
 
-
-	if not unit_bars.has(id):
-		unit_bars[id] = { "bar":null, "label":null, "prod_bar":null, "prod_label":null, "order_label":null }
-	if not unit_bars[id].prod_label:
-		var l = Label.new()
-		l.add_theme_font_size_override("font_size", 20)
-		l.add_theme_color_override("font_color", Color.WHITE)
-		add_child(l)
-		unit_bars[id].prod_label = l
-	return unit_bars[id].prod_label
-
-func _hide_upgrade_bars(id):
-	if unit_bars.has(id):
-		if unit_bars[id].has("upgrade_bar") and unit_bars[id].upgrade_bar:
-			unit_bars[id].upgrade_bar.visible = false
-		if unit_bars[id].has("upgrade_label") and unit_bars[id].upgrade_label:
-			unit_bars[id].upgrade_label.visible = false
-
-func _hide_prod_bars(id):
-	if unit_bars.has(id):
-		if unit_bars[id].prod_bar: unit_bars[id].prod_bar.visible = false
-		if unit_bars[id].prod_label: unit_bars[id].prod_label.visible = false
-
-func _remove_all_bars(id):
-	if unit_bars.has(id):
-		var data = unit_bars[id]
-		if data.bar: data.bar.queue_free()
-		if data.label: data.label.queue_free()
-		if data.prod_bar: data.prod_bar.queue_free()
-		if data.prod_label: data.prod_label.queue_free()
-		if data.order_label: data.order_label.queue_free()
-		unit_bars.erase(id)
-
-# ==================== 小地图数据收集 ====================
-func _collect_entity_snapshots() -> Array:
-	var list = []
-	for node in entity_nodes.values():
-		if not node.has_meta("snapshot_info"): continue
-		var info = node.get_meta("snapshot_info")
-		if info.health > 0:
-			list.append(info)
-	return list
-const MAX_DELTA_PER_FRAME = 15
-# ==================== 地形与视野工具 ====================
-func is_in_player_vision(world_pos: Vector3) -> bool:
-	for node in entity_nodes.values():
-		var info = node.get_meta("snapshot_info", null)
-		if info and info["team"] == player_team and info["health"] > 0:
-			if node.global_position.distance_to(world_pos) <= info.get("vision_range", 12):
-				return true
+func _is_full_snapshot(snapshot_key) -> bool:
+	# 第一次快照一定是全量的（客户端还没有任何实体）
+	if not _full_snapshot_counters.has(snapshot_key):
+		_full_snapshot_counters[snapshot_key] = 0
+		return true
+	# 每 FULL_SNAPSHOT_EVERY 次返回 true，触发一次全量快照
+	_full_snapshot_counters[snapshot_key] += 1
+	if _full_snapshot_counters[snapshot_key] >= FULL_SNAPSHOT_EVERY:
+		_full_snapshot_counters[snapshot_key] = 0
+		return true
 	return false
 
-func get_terrain_at(pos: Vector3) -> int:
-	var map = get_node_or_null("Map")
-	if map and map.has_method("get_terrain"):
-		return map.get_terrain(int(pos.x + RTSConfig.MAP_SIZE/2), int(pos.z + RTSConfig.MAP_SIZE/2))
-	return -1
+func _cleanup_dead_entity_hashes(snapshot_key, alive_ids: Dictionary):
+	if not _entity_state_hashes.has(snapshot_key):
+		return
+	var hashes = _entity_state_hashes[snapshot_key]
+	var to_erase = []
+	for eid in hashes.keys():
+		if not alive_ids.has(eid):
+			to_erase.append(eid)
+	for eid in to_erase:
+		hashes.erase(eid)
 
-func get_terrain_at_grid(gx: int, gy: int) -> int:
-	var map = get_node_or_null("Map")
-	if map and map.has_method("get_terrain"):
-		return map.get_terrain(gx, gy)
-	return -1
+func _update_gather_stats(delta: float):
+	_gather_stat_timer -= delta
+	_income_calc_timer -= delta
 
-func get_terrain_height(world_pos: Vector3) -> float:
-	var map = get_node_or_null("Map")
-	if map and map.has_method("get_height_at"):
-		return map.get_height_at(world_pos)
-	return 0.0
-
-# ==================== 游戏结束面板 ====================
-func show_game_over(winner_team: int):
-	var existing = get_node_or_null("UI/GameOverPanel")
-	if existing: existing.queue_free()
-
-	var panel = Control.new()
-	panel.name = "GameOverPanel"
-	panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	panel.mouse_filter = Control.MOUSE_FILTER_STOP
-
-	var bg = ColorRect.new()
-	bg.color = Color(0, 0, 0, 0.7)
-	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	panel.add_child(bg)
-
-	var vbox = VBoxContainer.new()
-	vbox.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
-	vbox.custom_minimum_size = Vector2(300, 200)
-	vbox.add_theme_constant_override("separation", 20)
-	panel.add_child(vbox)
-
-	var res_lab = Label.new()
-	res_lab.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	res_lab.add_theme_font_size_override("font_size", 48)
-	if winner_team == player_team:
-		res_lab.text = "胜利！"
-		res_lab.add_theme_color_override("font_color", Color.GREEN)
-	else:
-		res_lab.text = "失败！"
-		res_lab.add_theme_color_override("font_color", Color.RED)
-	vbox.add_child(res_lab)
-
-	var btn_restart = Button.new()
-	btn_restart.text = "返回联机菜单"
-	btn_restart.custom_minimum_size = Vector2(200, 50)
-	btn_restart.pressed.connect(func(): get_tree().change_scene_to_file("res://scenes/online_menu.tscn"))
-	vbox.add_child(btn_restart)
-
-	var btn_quit = Button.new()
-	btn_quit.text = "返回主菜单"
-	btn_quit.custom_minimum_size = Vector2(200, 50)
-	btn_quit.pressed.connect(func(): get_tree().change_scene_to_file("res://scenes/main_menu.tscn"))
-	vbox.add_child(btn_quit)
-
-	var ui = get_node_or_null("UI")
-	if not ui: ui = get_tree().root
-	ui.add_child(panel)
-func _process(delta):
-	# 1. 快照处理 —— 始终优先（带崩溃循环保护）
-	if snapshot_processing and not latest_snapshot.is_empty():
-		if _snapshot_fail_count > 10:
-			# 连续失败太多次，丢弃当前快照并重置
-			latest_snapshot.clear()
-			snapshot_processing = false
-			_snapshot_fail_count = 0
-			_snapshot_cooldown = 30
-			print('[ClientRenderer] Too many snapshot failures, skipping. Cooldown 30 frames.')
-		elif _snapshot_cooldown > 0:
-			# 冷却期内丢弃快照，让系统恢复
-			latest_snapshot.clear()
-			snapshot_processing = false
-			_snapshot_cooldown -= 1
+	if _gather_stat_timer <= 0:
+		_gather_stat_timer = 1.0
+		var keys_to_track: Array = []
+		if game_mode == NetworkManager.GameMode.ONEvONE:
+			keys_to_track = [RTSConfig.Team.BLUE, RTSConfig.Team.RED]
 		else:
-			var snap = latest_snapshot.duplicate()
-			latest_snapshot.clear()
-			snapshot_processing = false
-			_snapshot_fail_count += 1
-			_safe_process_snapshot(snap)
-			_snapshot_fail_count = 0
+			keys_to_track = player_info.keys()
 
-	# 2. pending_delta 积压处理
-	if pending_delta.size() > 0:
-		var count = min(pending_delta.size(), MAX_DELTA_PER_FRAME)
-		for i in range(count):
-			_update_single_entity(pending_delta.pop_front())
+		for key in keys_to_track:
+			var counts = {"gold": 0, "wood": 0, "stone": 0, "food": 0, "oil": 0}
+			for entity in entities.get_children():
+				if not (entity is Army): continue
+				if entity.health <= 0: continue
+				if entity.entity_id not in [10, 14]: continue
+				if entity.current_order not in ["gather", "deliver"]: continue
 
-	# 3. 增量迷雾：每帧处理一批单位（不受交错调度限制）
-	if fog_cycle_active:
-		_process_fog_batch()
+				var belongs = false
+				if game_mode == NetworkManager.GameMode.ONEvONE:
+					belongs = (entity.team == key)
+				else:
+					belongs = (entity.owner_peer_id == key)
+				if not belongs: continue
 
-	# 4. 计时器更新
-	# 快照超时诊断
-	_diag_snap_age += delta
-	if _diag_snap_age > 2.0 and _diag_last_snap_time > 0:
-		print("[Client] ⚠️ 快照超时! %.1fs 未收到快照, seq=%d, 已收=%d" % [_diag_snap_age, last_applied_seq, _diag_snap_count])
-		_diag_snap_age = 0.0
+				var tgt = entity.current_target
+				if is_instance_valid(tgt) and tgt is WorldResource:
+					var rt = tgt.resource_type
+					if rt in counts:
+						counts[rt] += 1
 
-	health_bar_timer -= delta
-	fog_timer -= delta
-	minimap_timer -= delta
+			team_gather_counts[key] = counts
 
-	# 5. 启动新迷雾周期
-	if fog_timer <= 0 and not fog_cycle_active:
-		fog_timer = 2.0
-		_start_fog_cycle()
+		if _income_calc_timer <= 0:
+			_income_calc_timer = 10.0
+			if game_mode == NetworkManager.GameMode.ONEvONE:
+				var team_keys = [
+					{"key": RTSConfig.Team.BLUE, "res": player_resources},
+					{"key": RTSConfig.Team.RED, "res": enemy_resources},
+				]
+				for tk in team_keys:
+					var key = tk["key"]
+					var res = tk["res"]
+					if not team_res_snapshots.has(key):
+						team_res_snapshots[key] = res.duplicate()
+						team_income_rates[key] = {"gold": 0.0, "wood": 0.0, "stone": 0.0, "food": 0.0, "oil": 0.0}
+					else:
+						var rates = {}
+						var prev = team_res_snapshots[key]
+						for rk in ["gold", "wood", "stone", "food", "oil"]:
+							var cur = res.get(rk, 0)
+							var old = prev.get(rk, cur)
+							if cur > old:
+								rates[rk] = float(cur - old) / 10.0
+							else:
+								rates[rk] = 0.0
+							prev[rk] = cur
+						team_income_rates[key] = rates
+			else:
+				for key in player_info.keys():
+					var res = get_resources_for(key)
+					if not team_res_snapshots.has(key):
+						team_res_snapshots[key] = res.duplicate()
+						team_income_rates[key] = {"gold": 0.0, "wood": 0.0, "stone": 0.0, "food": 0.0, "oil": 0.0}
+					else:
+						var rates = {}
+						var prev = team_res_snapshots[key]
+						for rk in ["gold", "wood", "stone", "food", "oil"]:
+							var cur = res.get(rk, 0)
+							var old = prev.get(rk, cur)
+							if cur > old:
+								rates[rk] = float(cur - old) / 10.0
+							else:
+								rates[rk] = 0.0
+							prev[rk] = cur
+						team_income_rates[key] = rates
 
-	# 6. Periodic stale entity cleanup (every 30s)
-	_stale_cleanup_timer -= delta
-	if _stale_cleanup_timer <= 0:
-		_stale_cleanup_timer = 30.0
-		_cleanup_stale_entities()
+func _process(delta):
+	super._process(delta)    # 始终执行父类更新（迷雾、小地图、资源限制等）
+	if not broadcast_enabled: return
+	_update_gather_stats(delta)
+	snapshot_timer -= delta
+	if snapshot_timer <= 0:
+		snapshot_timer = SNAPSHOT_INTERVAL
+		broadcast_snapshot()
 
-	# 血条更新：高频率跟随（20Hz）
-	if health_bar_timer <= 0:
-		health_bar_timer = HEALTH_BAR_INTERVAL
-		_update_health_bars()
+func broadcast_snapshot():
+	if game_mode == NetworkManager.GameMode.ONEvONE:
+		_broadcast_1v1()
+	else:
+		_broadcast_2v2()
+# 1v1 视野裁剪快照
+func build_snapshot_for_team(team: int) -> Dictionary:
+	var current_entities = {}
+	var delta = []
+	var dead = []
 
-	# 小地图更新
-	if minimap_timer <= 0:
-		minimap_timer = 1.0
-		var minimap = get_node_or_null("UI/Minimap")
-		if minimap:
-			if minimap.terrain_colors.is_empty():
-				var minimap_map = get_node_or_null("Map")
-				if minimap_map and minimap_map.has_method("get_base_colors"):
-					minimap.terrain_colors = minimap_map.get_base_colors()
-			minimap.set_data(local_explored_grid, local_visible_grid, _collect_entity_snapshots())
+	var team_units: Array[GameEntity] = []
+	for entity in entities.get_children():
+		if entity is GameEntity and entity.team == team and entity.health > 0 and entity.vision_range > 0:
+			team_units.append(entity)
 
-# 7. 建造预览
-	if placement_mode:
-		var inp = $ClientInput
-		if inp and inp.has_method("get_last_world_pos"):
-			var pos = inp.get_last_world_pos()
-			placement_preview.global_position = pos
+	var snapshot_key = "team_%d" % team
+	var is_full = _is_full_snapshot(snapshot_key)
+
+	for entity in entities.get_children():
+		if not (entity is GameEntity): continue
+		if entity.health <= 0: continue
+		var snap = _serialize_entity(entity)
+		var id = snap["id"]
+		current_entities[id] = snap
+
+		# 增量压缩：只发送变化的实体
+		if not is_full:
+			var h = _compute_entity_hash(entity)
+			if not _should_include_in_delta(snapshot_key, id, h):
+				continue
+
+
+		if entity.team == team:
+			delta.append(snap)
+			continue
+
+		if entity is WorldResource:
+			if not team_explored_resources.has(team):
+				team_explored_resources[team] = {}
+			if team_explored_resources[team].has(id):
+				delta.append(snap)
+				continue
+			var visible = false
+			for unit in team_units:
+				if unit.global_position.distance_to(entity.global_position) <= unit.vision_range:
+					visible = true
+					break
+			if visible:
+				delta.append(snap)
+				team_explored_resources[team][id] = true
+		else:
+			var visible = false
+			for unit in team_units:
+				if unit.global_position.distance_to(entity.global_position) <= unit.vision_range:
+					visible = true
+					break
+			if visible:
+				delta.append(snap)
+
+
+	# 确保已死亡的实体被加入dead_ids
+	for entity in entities.get_children():
+		if entity is GameEntity and entity.health <= 0:
+			dead.append(entity.get_instance_id())
+
+	var last_cache = last_snapshot_cache.get(team, {})
+	for id in last_cache.keys():
+		if not current_entities.has(id):
+			dead.append(id)
+	last_snapshot_cache[team] = current_entities
+		if dead.size() > 0: print("[DeadDebug] Sending %d dead_ids for team %d" % [dead.size(), team])
+
+	return {
+		"delta": delta,
+		"dead_ids": dead,
+		"resources": {"player": player_resources, "enemy": enemy_resources},
+		"limits": {"player": player_resource_limits, "enemy": enemy_resource_limits},
+		"population": {"current": player_pop if team == RTSConfig.Team.BLUE else enemy_pop, "max": player_max_pop if team == RTSConfig.Team.BLUE else enemy_max_pop},
+		"nation": team_nations.get(team, -1),
+		"enemy_nation": team_nations.get(RTSConfig.Team.RED if team == RTSConfig.Team.BLUE else RTSConfig.Team.BLUE, -1),
+		"gather_counts": team_gather_counts.get(team, {"gold":0, "wood":0, "stone":0, "food":0, "oil":0}),
+		"income_rate": team_income_rates.get(team, {"gold":0.0, "wood":0.0, "stone":0.0, "food":0.0, "oil":0.0}),
+		"alerts": _get_and_clear_alerts(team),
+		"game_time": game_time,
+	}
+
+func _broadcast_1v1():
+	for pid in player_teams.keys():
+		var team = player_teams[pid]
+		var data = build_snapshot_for_team(team)   # 原有的视野裁剪快照
+		# 补充子弹
+		var bullets_data = []
+		for bullet in get_tree().get_nodes_in_group("bullets"):
+			if bullet is Bullet:
+				bullets_data.append({"id":bullet.get_instance_id(),"x":bullet.global_position.x,"y":bullet.global_position.y,"z":bullet.global_position.z,"team":bullet.team})
+		data["bullets"] = bullets_data
+		data["seq"] = snapshot_seq
+		snapshot_seq += 1
+		var bytes = var_to_bytes(data)
+		#print("快照大小: ", bytes.size(), " 字节")
+		NetworkManager._client_receive_snapshot.rpc_id(pid, data)
+func _serialize_entity(entity: GameEntity) -> Dictionary:
+	var data = {
+		"id": entity.get_instance_id(),
+		"type": entity.entity_type,
+		"team": entity.team,
+		"name": entity.get_display_name() if entity.has_method("get_display_name") else entity.display_name,
+		"level": entity.level,
+		"x": entity.global_position.x,
+		"y": entity.global_position.y,
+		"z": entity.global_position.z,
+		"health": entity.health,
+		"max_health": entity.max_health,
+		"attack": entity.attack,
+		"attack_speed": entity.attack_speed,
+		"attack_range": entity.attack_range,
+		"armor": entity.armor,
+		"speed": entity.speed,
+		"vision_range": entity.vision_range,
+		"target_type": entity.target_type,
+		"body_radius": entity.body_radius,
+		"damage_radius": entity.damage_radius,
+		"entity_id": entity.entity_id,
+		"order": entity.current_order if entity.current_order != "" else "idle",
+		"hold_position": entity.hold_position,
+		"owner_peer_id": entity.owner_peer_id,
+		"waypoints": _serialize_waypoints(entity)
+	}
+
+	# 建筑额外信息
+	if entity is Building:
+		data["upgrade_level"] = entity.upgrade_level
+		data["max_upgrade_level"] = entity.max_upgrade_level
+		data["can_upgrade"] = entity.can_upgrade()
+		data["get_upgrade_cost"] = entity.get_upgrade_cost()
+
+		var prods = []
+		for prod in entity.production_list:
+			var unit_cfg = EntityDatabase.get_config(prod.unit_id)
+			var base_cost = unit_cfg.get("cost", {})
+			var scaled = {}
+			for res in base_cost.keys():
+				scaled[res] = int(base_cost[res] * (1.0 + (entity.upgrade_level - 1) * 0.2))
+			prods.append({
+				"unit_id": prod.unit_id,
+				"cooldown": prod.cooldown,
+				"queue_limit": prod.queue_limit,
+				"current_cost": scaled
+			})
+		data["production_list"] = prods
+
+		# 建造进度
+		if entity.build_timer > 0:
+			data["build_timer"] = entity.build_timer
+			data["max_build_time"] = entity.max_build_time
+		else:
+			data["build_timer"] = 0
+			data["max_build_time"] = 0
+
+		# Upgrade progress
+		if entity.upgrade_timer > 0:
+			data["upgrade_timer"] = entity.upgrade_timer
+			data["max_upgrade_time"] = entity.max_upgrade_time
+		else:
+			data["upgrade_timer"] = 0
+			data["max_upgrade_time"] = 0
+
+		# 生产进度
+		if entity.production_queue.size() > 0:
+			data["production_current_unit"] = entity.production_queue[0]
+			var cd = entity.get_prod_cooldown(entity.production_queue[0])
+			data["production_progress"] = 1.0 - (entity.production_timer / cd) if cd > 0 else 0.0
+			data["production_queue_size"] = entity.production_queue.size()
+		else:
+			data["production_current_unit"] = -1
+			data["production_progress"] = 0.0
+			data["production_queue_size"] = 0
+
+	return data
+
+func _serialize_waypoints(entity: GameEntity) -> Array:
+	var wps = []
+	if entity is Army and entity.has_method("get_waypoint_positions"):
+		wps = entity.get_waypoint_positions()
+	var result = []
+	for wp in wps:
+		if wp is Dictionary:
+			result.append(wp.duplicate())
+		else:
+			result.append({"x": wp.x, "y": wp.y, "z": wp.z, "is_loop": false})
+	return result
+
+func _serialize_castles() -> Dictionary:
+	var dict = {}
+	for pid in player_castles.keys():
+		var castle = player_castles[pid]
+		if castle and is_instance_valid(castle):
+			dict[pid] = {
+				"health": castle.health,
+				"max_health": castle.max_health,
+				"x": castle.global_position.x,
+				"y": castle.global_position.y,
+				"z": castle.global_position.z
+			}
+	return dict
+func _broadcast_2v2():
+	for pid in player_info.keys():
+		if not player_info[pid].alive: continue
+		var data = build_snapshot_for_player(pid)
+		# 补充子弹（视野裁剪）
+		var bullets_data = []
+		for bullet in get_tree().get_nodes_in_group("bullets"):
+			if bullet is Bullet:
+				# 子弹如果不可见就不发送（可选）
+				bullets_data.append({
+					"id": bullet.get_instance_id(),
+					"x": bullet.global_position.x,
+					"y": bullet.global_position.y,
+					"z": bullet.global_position.z,
+					"team": bullet.team
+				})
+		data["bullets"] = bullets_data
+		data["seq"] = snapshot_seq
+		snapshot_seq += 1
+		var bytes = var_to_bytes(data)
+		#print("快照大小: ", bytes.size(), " 字节")
+		NetworkManager._client_receive_snapshot.rpc_id(pid, data)
+
+func build_snapshot_for_player(peer_id: int) -> Dictionary:
+	var team = player_info[peer_id].team
+	var team_units: Array[GameEntity] = []
+	for entity in entities.get_children():
+		if entity is GameEntity and entity.team == team and entity.health > 0 and entity.vision_range > 0:
+			team_units.append(entity)
+
+	var delta = []
+	var snapshot_key = "player_%d" % peer_id
+	var is_full = _is_full_snapshot(snapshot_key)
+	for entity in entities.get_children():
+		if not (entity is GameEntity): continue
+		if entity.health <= 0: continue
+		var snap = _serialize_entity(entity)
+		var id = snap["id"]
+
+		# 增量压缩：只发送变化的实体
+		if not is_full:
+			var h = _compute_entity_hash(entity)
+			if not _should_include_in_delta(snapshot_key, id, h):
+				continue
+
+
+		if snap.get("owner_peer_id", -1) == peer_id:
+			delta.append(snap)
+			continue
+
+		if entity is WorldResource:
+			if not team_explored_resources.has(team):
+				team_explored_resources[team] = {}
+			if team_explored_resources[team].has(id):
+				delta.append(snap)
+				continue
+			var visible = false
+			for unit in team_units:
+				if unit.global_position.distance_to(entity.global_position) <= unit.vision_range:
+					visible = true
+					break
+			if visible:
+				delta.append(snap)
+				team_explored_resources[team][id] = true
+		else:
+			var visible = false
+			for unit in team_units:
+				if unit.global_position.distance_to(entity.global_position) <= unit.vision_range:
+					visible = true
+					break
+			if visible:
+				delta.append(snap)
+
+	var current_all_ids = {}
+	for entity in entities.get_children():
+		if entity is GameEntity:
+			current_all_ids[entity.get_instance_id()] = true
+
+	var last_ids = player_last_snapshot_ids.get(peer_id, [])
+	var dead = []
+	for lid in last_ids:
+		if not current_all_ids.has(lid):
+			dead.append(lid)
+
+	player_last_snapshot_ids[peer_id] = []
+	for snap in delta:
+		player_last_snapshot_ids[peer_id].append(snap["id"])
+
+	return {
+		"delta": delta,
+		"dead_ids": dead,
+		"player_resources": { peer_id: player_resources[peer_id] },
+		"player_limits": { peer_id: player_limits_dict.get(peer_id, {}) },
+		"player_population": { peer_id: player_population[peer_id] },
+		"player_castles": _serialize_castles(),
+		"team_nations": team_nations,
+		"gather_counts": {peer_id: team_gather_counts.get(peer_id, {"gold":0, "wood":0, "stone":0, "food":0, "oil":0})},
+		"income_rate": {peer_id: team_income_rates.get(peer_id, {"gold":0.0, "wood":0.0, "stone":0.0, "food":0.0, "oil":0.0})},
+		"player_info": player_info,
+		"alerts": _get_and_clear_alerts(peer_id)
+	}
+
+func _1v1_set_group(team: int, data: Dictionary):
+	var sel = selection as SelectionManager
+	if not sel: return
+	var g = data.get("group", 0)
+	var ids = data.get("selected_ids", [])
+	# Populate selection from client's selected_ids
+	sel.selected_entities.clear()
+	for e in entities.get_children():
+		if e is GameEntity and e.team == team and e.get_instance_id() in ids:
+			sel.selected_entities.append(e)
+	if g == 0:
+		sel._clear_control_groups_for_selected()
+		print("[Server] Cleared groups for team ", team)
+	else:
+		sel._set_control_group(g)
+		print("[Server] Set group ", g, " with ", sel.selected_entities.size(), " units")
+
+func _1v1_demolish(team: int, data: Dictionary):
+	var building_id = data.get("building_id", -1)
+	if building_id == -1: return
+	for e in entities.get_children():
+		if e is Building and e.get_instance_id() == building_id and e.team == team and e.entity_id != 20:
+			var base_cfg = EntityDatabase.get_config(e.entity_id)
+			if not base_cfg.is_empty():
+				var cost = base_cfg.get("cost", {})
+				var res_dict = player_resources if team == RTSConfig.Team.BLUE else enemy_resources
+				for res in cost:
+					res_dict[res] += int(cost[res] * 0.5)
+			e.queue_free()
+			update_resource_limits(team)
+			update_population_limits()
+			return
+
+func _clear_garrison_for_team(team: int, _data: Dictionary):
+	for eid in _data.get("selected_ids", []):
+		for e in entities.get_children():
+			if e.get_instance_id() == eid and e.team == team:
+				if e is Army and e.has_method("_clear_garrison"):
+					e._clear_garrison()
+				elif e is Building:
+					e.garrison_point = Vector3.ZERO
+
+func _set_garrison_for_team(team: int, data: Dictionary):
+	var pos = Vector3(data.get("pos_x", 0), data.get("pos_y", 0), data.get("pos_z", 0))
+	for eid in data.get("selected_ids", []):
+		for e in entities.get_children():
+			if e.get_instance_id() == eid and e.team == team:
+				if e is Army and e.has_method("_is_military") and e._is_military():
+					e.set_garrison(pos)
+				elif e is Building:
+					e.garrison_point = pos
+
+func _2v2_demolish(peer_id: int, data: Dictionary):
+	var building_id = data.get("building_id", -1)
+	if building_id == -1: return
+	for e in entities.get_children():
+		if e is Building and e.get_instance_id() == building_id and e.owner_peer_id == peer_id and e.entity_id != 20:
+			var base_cfg = EntityDatabase.get_config(e.entity_id)
+			if not base_cfg.is_empty():
+				var cost = base_cfg.get("cost", {})
+				for res in cost:
+					add_player_resource(peer_id, res, int(cost[res] * 0.5))
+			e.queue_free()
+			update_player_limits(peer_id)
+			return
+
+func _2v2_clear_garrison(peer_id: int, _data: Dictionary):
+	for eid in _data.get("selected_ids", []):
+		for e in entities.get_children():
+			if e.get_instance_id() == eid and e.owner_peer_id == peer_id:
+				if e is Army and e.has_method("_clear_garrison"):
+					e._clear_garrison()
+				elif e is Building:
+					e.garrison_point = Vector3.ZERO
+
+func _2v2_set_garrison(peer_id: int, data: Dictionary):
+	var pos = Vector3(data.get("pos_x", 0), data.get("pos_y", 0), data.get("pos_z", 0))
+	for eid in data.get("selected_ids", []):
+		for e in entities.get_children():
+			if e.get_instance_id() == eid and e.owner_peer_id == peer_id:
+				if e is Army and e.has_method("_is_military") and e._is_military():
+					e.set_garrison(pos)
+				elif e is Building:
+					e.garrison_point = pos
+
+func _1v1_recall_group(_t: int, data: Dictionary):
+	var sel = selection as SelectionManager
+	if sel:
+		sel._recall_control_group(data.get("group", 0))
+		print("[Server] Recalled group ", data.get("group", 0), " selected ", sel.selected_entities.size(), " units")
+
+func _2v2_set_group(peer_id: int, data: Dictionary):
+	var sel = selection as SelectionManager
+	if not sel: return
+	var ids = data.get("selected_ids", [])
+	sel.selected_entities.clear()
+	for e in entities.get_children():
+		if e is Army and e.owner_peer_id == peer_id and e.get_instance_id() in ids:
+			sel.selected_entities.append(e)
+	var g = data.get("group", 0)
+	if g == 0:
+		sel._clear_control_groups_for_selected()
+		print("[Server] Peer ", peer_id, " cleared groups")
+	else:
+		sel._set_control_group(g)
+		print("[Server] Peer ", peer_id, " set group ", g, " with ", sel.selected_entities.size(), " units")
+
+func _2v2_recall_group(_peer_id: int, data: Dictionary):
+	var sel = selection as SelectionManager
+	if sel:
+		sel._recall_control_group(data.get("group", 0))
+		print("[Server] Team ", _peer_id, " recalled group ", data.get("group", 0), " selected ", sel.selected_entities.size(), " units")
+
+func get_gather_paused(team: int) -> bool:
+	return team_gather_paused.get(team, false)
