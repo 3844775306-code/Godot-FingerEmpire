@@ -564,6 +564,18 @@ func _ready():
 	# 创建切换按钮
 	_create_stats_toggle_button()
 
+	# FPS + 游戏时间显示
+	_fps_label = Label.new()
+	_fps_label.position = Vector2(10, 600)
+	_fps_label.add_theme_font_size_override("font_size", 16)
+	_fps_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
+	add_child(_fps_label)
+	_game_time_label = Label.new()
+	_game_time_label.position = Vector2(10, 620)
+	_game_time_label.add_theme_font_size_override("font_size", 16)
+	_game_time_label.add_theme_color_override("font_color", Color.WHITE)
+	add_child(_game_time_label)
+
 	set_process(true)
 	add_to_group("client_hud")
 
@@ -594,12 +606,22 @@ func update_data(resources: Dictionary, population: Dictionary, limits: Dictiona
 			res_bars[rk].value = min(float(rv)/max(rl,1)*100, 100)
 
 
+var _fps_label: Label = null
+var _game_time_label: Label = null
+var _fps_update_timer: float = 0.5
+
 func _process(delta):
 	# 每秒更新一次单位统计
 	_unit_stats_timer -= delta
 	if _unit_stats_timer <= 0:
 		_unit_stats_timer = 1.0
 		_update_unit_stats()
+
+	# FPS + 游戏时间
+	_fps_update_timer -= delta
+	if _fps_update_timer <= 0 and _fps_label:
+		_fps_update_timer = 0.5
+		_fps_label.text = "FPS: %.0f" % Engine.get_frames_per_second()
 
 	# 警报消息计时
 	if _alert_label and _alert_timer > 0:

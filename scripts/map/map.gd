@@ -98,13 +98,13 @@ func _draw():
 			show = visible_grid[gx][gy]
 		if not show: continue
 
-		var dot_color = Color.GRAY
+		var dot_color = Color(0.7, 0.7, 0.7)
 		if owner != -1 and player_colors.has(owner):
 			dot_color = player_colors[owner]
 		elif ent["team"] == RTSConfig.Team.RED:
-			dot_color = Color.RED
+			dot_color = Color(1.0, 0.25, 0.2)
 		elif ent["team"] == RTSConfig.Team.BLUE:
-			dot_color = Color.BLUE
+			dot_color = Color(0.3, 0.5, 1.0)
 
 		var pos = Vector2(gx * CELL_SIZE, gy * CELL_SIZE)
 		draw_rect(Rect2(pos - Vector2(1, 1), Vector2(3, 3)), dot_color)

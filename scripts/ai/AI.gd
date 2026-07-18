@@ -313,6 +313,9 @@ func decide(_delta):
 					var castle = get_peer_castle(my_peer_id)
 					if castle and castle.upgrade_level >= 2:
 						production_step = 1
+				# 生产阶段也尝试造步兵
+				if count_unit(11) < 3 and can_afford(11) and _can_train_unit():
+					produce_unit(11)
 		elif production_step == 1:
 			if count_building(23) < 1 and can_afford_building(23):
 				_cache_shipyard_location()
@@ -327,6 +330,8 @@ func decide(_delta):
 			else:
 				if count_building(23) >= 1 and warehouses >= 1:
 					phase = Phase.DEVELOPMENT
+				# 建筑+军队并行
+				_process_line_military()
 
 	elif phase == Phase.DEVELOPMENT:
 		_ensure_merchants()

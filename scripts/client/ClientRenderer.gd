@@ -28,6 +28,12 @@ var placement_preview: MeshInstance3D
 
 # ==================== 定时器 ====================
 var health_bar_timer: float = 0.0
+const HEALTH_BAR_INTERVAL: float = 0.05  # 20Hz，血条丝滑跟随
+
+# 客户端诊断
+var _diag_snap_age: float = 999.0
+var _diag_snap_count: int = 0
+var _diag_last_snap_time: int = 0
 var fog_timer: float = 0.0
 var minimap_timer: float = 0.0
 var _stale_cleanup_timer: float = 30.0
@@ -174,8 +180,9 @@ func apply_snapshot(data: Dictionary):
 	else:
 		pass #print("跳号或重传: 期望 ", last_applied_seq+1, " 收到 ", data.get("seq"))
 	last_applied_seq = seq
-	if last_snapshot_time != 0:
-		pass #print("快照间隔: ", now - last_snapshot_time, " ms")
+	_diag_snap_count += 1
+	_diag_last_snap_time = now
+	_diag_snap_age = 0.0
 	last_snapshot_time = now
 	if player_team == -1:
 		return
@@ -335,19 +342,18 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 		col_shape.shape = sphere
 	body.add_child(col_shape)
 
-	# 获取实体颜色（优先按玩家，其次按队伍）
+	# 获取实体颜色：统一使用 player_colors 按 owner_peer_id 着色
 	var entity_color: Color
 	var owner_id = info.get("owner_peer_id", -1)
-	
+
 	if owner_id != -1 and player_colors.has(owner_id):
 		entity_color = player_colors[owner_id]
-		
 	elif info["team"] == RTSConfig.Team.BLUE:
-		entity_color = Color.BLUE      # 蓝队基础色
+		entity_color = Color(0.3, 0.5, 1.0)   # 蓝队基础色
 	elif info["team"] == RTSConfig.Team.RED:
-		entity_color = Color.RED     # 红队基础色
+		entity_color = Color(1.0, 0.25, 0.2)   # 红队基础色
 	else:
-		entity_color = Color.GRAY
+		entity_color = Color(0.7, 0.7, 0.7)    # 中立灰色
 
 	# 模型
 	var mesh: MeshInstance3D
@@ -1030,6 +1036,12 @@ func _process(delta):
 		_process_fog_batch()
 
 	# 4. 计时器更新
+	# 快照超时诊断
+	_diag_snap_age += delta
+	if _diag_snap_age > 2.0 and _diag_last_snap_time > 0:
+		print("[Client] ⚠️ 快照超时! %.1fs 未收到快照, seq=%d, 已收=%d" % [_diag_snap_age, last_applied_seq, _diag_snap_count])
+		_diag_snap_age = 0.0
+
 	health_bar_timer -= delta
 	fog_timer -= delta
 	minimap_timer -= delta
@@ -1045,47 +1057,23 @@ func _process(delta):
 		_stale_cleanup_timer = 30.0
 		_cleanup_stale_entities()
 
-	# 7. 交错执行其他重型任务（血条、小地图）
-	var ready_tasks = []
-	if health_bar_timer <= 0: ready_tasks.append(0)
-	if minimap_timer <= 0: ready_tasks.append(1)
+	# 血条更新：高频率跟随（20Hz）
+	if health_bar_timer <= 0:
+		health_bar_timer = HEALTH_BAR_INTERVAL
+		_update_health_bars()
 
-	if ready_tasks.size() > 0:
-		if not first_fog_done:
-			# 首帧全部执行
-			for task in ready_tasks:
-				match task:
-					0:
-						health_bar_timer = 0.5
-						_update_health_bars()
-					1:
-						minimap_timer = 1.0
-						var minimap = get_node_or_null("UI/Minimap")
-						if minimap:
-							if minimap.terrain_colors.is_empty():
-								var minimap_map = get_node_or_null("Map")
-								if minimap_map and minimap_map.has_method("get_base_colors"):
-									minimap.terrain_colors = minimap_map.get_base_colors()
-							minimap.set_data(local_explored_grid, local_visible_grid, _collect_entity_snapshots())
-			first_fog_done = true
-		else:
-			var chosen = ready_tasks[heavy_work_index % ready_tasks.size()]
-			heavy_work_index += 1
-			match chosen:
-				0:
-					health_bar_timer = 0.5
-					_update_health_bars()
-				1:
-					minimap_timer = 1.0
-					var minimap = get_node_or_null("UI/Minimap")
-					if minimap:
-						if minimap.terrain_colors.is_empty():
-							var minimap_map = get_node_or_null("Map")
-							if minimap_map and minimap_map.has_method("get_base_colors"):
-								minimap.terrain_colors = minimap_map.get_base_colors()
-						minimap.set_data(local_explored_grid, local_visible_grid, _collect_entity_snapshots())
+	# 小地图更新
+	if minimap_timer <= 0:
+		minimap_timer = 1.0
+		var minimap = get_node_or_null("UI/Minimap")
+		if minimap:
+			if minimap.terrain_colors.is_empty():
+				var minimap_map = get_node_or_null("Map")
+				if minimap_map and minimap_map.has_method("get_base_colors"):
+					minimap.terrain_colors = minimap_map.get_base_colors()
+			minimap.set_data(local_explored_grid, local_visible_grid, _collect_entity_snapshots())
 
-	# 7. 建造预览
+# 7. 建造预览
 	if placement_mode:
 		var inp = $ClientInput
 		if inp and inp.has_method("get_last_world_pos"):

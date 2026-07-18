@@ -879,7 +879,16 @@ func _compute_entity_hash(entity: GameEntity) -> int:
 	return s.hash()
 
 func _should_include_in_delta(snapshot_key, entity_id: int, new_hash: int) -> bool:
-	return true  # Disabled: always send full snapshot
+	if not _entity_state_hashes.has(snapshot_key):
+		_entity_state_hashes[snapshot_key] = {}
+	var hashes = _entity_state_hashes[snapshot_key]
+	if not hashes.has(entity_id):
+		hashes[entity_id] = new_hash
+		return true  # 新实体，必须发送
+	if hashes[entity_id] != new_hash:
+		hashes[entity_id] = new_hash
+		return true  # 状态变化，需要发送
+	return false  # 无变化，跳过
 
 func _is_full_snapshot(snapshot_key) -> bool:
 	# 第一次快照一定是全量的（客户端还没有任何实体）
@@ -1008,11 +1017,21 @@ func build_snapshot_for_team(team: int) -> Dictionary:
 		if entity is GameEntity and entity.team == team and entity.health > 0 and entity.vision_range > 0:
 			team_units.append(entity)
 
+		var snapshot_key = "team_%d" % team
+		var is_full = _is_full_snapshot(snapshot_key)
+
 	for entity in entities.get_children():
 		if not (entity is GameEntity): continue
 		var snap = _serialize_entity(entity)
 		var id = snap["id"]
 		current_entities[id] = snap
+
+			# 增量压缩：只发送变化的实体
+			if not is_full:
+				var h = _compute_entity_hash(entity)
+				if not _should_include_in_delta(snapshot_key, id, h):
+					continue
+
 
 		if entity.team == team:
 			delta.append(snap)
@@ -1210,10 +1229,19 @@ func build_snapshot_for_player(peer_id: int) -> Dictionary:
 			team_units.append(entity)
 
 	var delta = []
+		var snapshot_key = "player_%d" % peer_id
+		var is_full = _is_full_snapshot(snapshot_key)
 	for entity in entities.get_children():
 		if not (entity is GameEntity): continue
 		var snap = _serialize_entity(entity)
 		var id = snap["id"]
+
+			# 增量压缩：只发送变化的实体
+			if not is_full:
+				var h = _compute_entity_hash(entity)
+				if not _should_include_in_delta(snapshot_key, id, h):
+					continue
+
 
 		if snap.get("owner_peer_id", -1) == peer_id:
 			delta.append(snap)
