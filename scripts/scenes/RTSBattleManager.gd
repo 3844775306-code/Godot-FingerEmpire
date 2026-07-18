@@ -620,8 +620,8 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 
 	cfg["level"] = level
 	cfg["team"] = team
+	entities.add_child(entity)  # 先加入场景树，让 _create_visual 能访问 get_tree()
 	entity.setup(cfg)
-	entities.add_child(entity)
 	entity.global_position = pos
 	mark_entity_cache_dirty()
 
