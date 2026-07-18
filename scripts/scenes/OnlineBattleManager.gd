@@ -1329,9 +1329,7 @@ func build_snapshot_for_player(peer_id: int) -> Dictionary:
 			dead.append(lid)
 
 	if dead.size() > 0: print("[DeadBug-Server] Sending %d dead_ids for player %d" % [dead.size(), peer_id])
-	player_last_snapshot_ids[peer_id] = []
-	for snap in delta:
-		player_last_snapshot_ids[peer_id].append(snap["id"])
+	player_last_snapshot_ids[peer_id] = current_all_ids.keys()  # 存全部实体，确保能检测死亡
 
 	return {
 		"delta": delta,
