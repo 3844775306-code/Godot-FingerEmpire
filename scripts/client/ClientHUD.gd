@@ -566,12 +566,12 @@ func _ready():
 
 	# FPS + 游戏时间显示
 	_fps_label = Label.new()
-	_fps_label.position = Vector2(10, 600)
+	_fps_label.position = Vector2(1100, 8)
 	_fps_label.add_theme_font_size_override("font_size", 16)
 	_fps_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
 	add_child(_fps_label)
 	_game_time_label = Label.new()
-	_game_time_label.position = Vector2(10, 620)
+	_game_time_label.position = Vector2(1100, 28)
 	_game_time_label.add_theme_font_size_override("font_size", 16)
 	_game_time_label.add_theme_color_override("font_color", Color.WHITE)
 	add_child(_game_time_label)
@@ -609,6 +609,7 @@ func update_data(resources: Dictionary, population: Dictionary, limits: Dictiona
 var _fps_label: Label = null
 var _game_time_label: Label = null
 var _fps_update_timer: float = 0.5
+var _client_time_acc: float = 0.0
 
 func _process(delta):
 	# 每秒更新一次单位统计
@@ -617,11 +618,17 @@ func _process(delta):
 		_unit_stats_timer = 1.0
 		_update_unit_stats()
 
+	# 本地计时
+	_client_time_acc += delta
+	var t_min = int(_client_time_acc / 60)
+	var t_sec = int(_client_time_acc) % 60
+	if _game_time_label:
+		_game_time_label.text = "%02d:%02d" % [t_min, t_sec]
 	# FPS + 游戏时间
 	_fps_update_timer -= delta
 	if _fps_update_timer <= 0 and _fps_label:
 		_fps_update_timer = 0.5
-		_fps_label.text = "FPS: %.0f" % Engine.get_frames_per_second()
+		_fps_label.text = "FPS: %.0f  |  %02d:%02d" % [Engine.get_frames_per_second(), t_min, t_sec]
 
 	# 警报消息计时
 	if _alert_label and _alert_timer > 0:
