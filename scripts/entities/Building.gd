@@ -269,6 +269,7 @@ func _create_visual():
 			var pc = bm2.get_player_colors()
 			if pc.has(owner_peer_id):
 				color = pc[owner_peer_id]
+	if entity_id == 20: print("[ColorBug] Castle: owner=%d team=%d color=%s" % [owner_peer_id, team, str(color)])
 	mat.albedo_color = color
 	mesh.set_surface_override_material(0, mat)
 	mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON

@@ -40,6 +40,7 @@ func _queue_client_alert(target_key, msg: String, color: Color = Color(1.0, 0.2,
 	if not _pending_client_alerts.has(target_key):
 		_pending_client_alerts[target_key] = []
 	_pending_client_alerts[target_key].append({"msg": msg, "color": color})
+	print("[AlertBug] Queued alert for key=%s: %s" % [str(target_key), msg])
 
 func _get_and_clear_alerts(target_key) -> Array:
 	var alerts = _pending_client_alerts.get(target_key, [])
