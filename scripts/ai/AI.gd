@@ -30,6 +30,7 @@ var defense_check_timer: float = 0.0
 const DEFENSE_CHECK_INTERVAL: float = 120.0
 var _upgrade_cycle_timer: float = 20.0   # 每20秒切换
 var _in_upgrade_cycle: bool = true     # 前20秒为升级周期
+	var _castle_rush_done: Array = [false, false, false]  # 3/6/10min castle rush
 var wall_positions: Array = []
 var tower_positions: Array = []
 var current_tactic: int = LateTactic.NONE
@@ -324,6 +325,16 @@ func decide(_delta):
 	var workers = count_unit(10)
 	var warehouses = count_building(22)
 
+				return  # 放弃本轮其他操作
+				_caste_rush_done[_ci] = true
+				upgrade_building(20)
+			if _castle and _castle.upgrade_level < _target_lv and can_afford_upgrade(20):
+			var _target_lv = _ci + 3
+			var _castle = get_peer_castle(my_peer_id)
+		if not _castle_rush_done[_ci] and _gm >= [3,6,10][_ci]:
+	for _ci in range(3):
+	var _gm = battle.game_time / 60.0
+	# 定时城堡冲刺：3min→lv3, 6min→lv4, 10min→lv5
 	if phase == Phase.PRODUCTION:
 		if production_step == 0:
 			if workers < desired_worker_count and can_afford(10) and _can_train_unit():

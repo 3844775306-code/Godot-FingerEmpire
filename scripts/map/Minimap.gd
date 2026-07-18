@@ -136,15 +136,23 @@ func _draw():
 		if not show: continue
 
 		var owner = ent.get("owner_peer_id", -1)
-		var dot_color: Color
-		if owner != -1 and pc.has(owner):
-			dot_color = pc[owner].lightened(0.25)
-		elif ent["team"] == player_team:
-			dot_color = Color(0.3, 1.0, 1.0, 1.0)
-		elif ent["team"] == RTSConfig.Team.RED:
-			dot_color = Color(1.0, 0.5, 0.3, 1.0)
-		else:
-			dot_color = Color(1.0, 1.0, 0.4, 1.0)
+	var eid = ent.get("entity_id", -1)
+	var dot_color: Color
+	# 动物白色
+	if eid >= 60 and eid <= 63:
+		dot_color = Color(0.9, 0.9, 0.85, 1.0)
+	# 资源暗色
+	elif ent.get("type", -1) == 0:
+		var rc = {"gold":Color(0.7,0.6,0.1),"wood":Color(0.15,0.5,0.1),"stone":Color(0.35,0.35,0.35),"food":Color(0.55,0.3,0.1),"oil":Color(0.15,0.1,0.05)}
+		dot_color = rc.get("gold", Color(0.4,0.4,0.2))
+	elif owner != -1 and pc.has(owner):
+		dot_color = pc[owner].lightened(0.25)
+	elif ent["team"] == player_team:
+		dot_color = Color(0.3, 1.0, 1.0, 1.0)
+	elif ent["team"] == RTSConfig.Team.RED:
+		dot_color = Color(1.0, 0.5, 0.3, 1.0)
+	else:
+		dot_color = Color(1.0, 1.0, 0.4, 1.0)
 		var pos = Vector2(gx * cell, gz * cell)
 		draw_rect(Rect2(pos - Vector2(1, 1), Vector2(3, 3)), dot_color)
 
