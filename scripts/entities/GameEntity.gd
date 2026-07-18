@@ -228,8 +228,8 @@ func _spawn_produced_unit():
 	if entity_id == 23:
 		spawn_pos = _find_water_spawn_near(global_position)
 
+	config["owner_peer_id"] = self.owner_peer_id  # 继承建筑所有权
 	var entity = bm.spawn_entity(config, team, spawn_pos, self.level)
-		# 在 spawn_entity 返回 entity 之后
 	if entity and owner_peer_id != -1:
 		
 		if bm and bm.has_method("increase_player_population"):

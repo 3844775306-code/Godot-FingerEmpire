@@ -278,10 +278,16 @@ func _process_snapshot(data: Dictionary):
 	if data.has("alerts"):
 		var alerts = data["alerts"]
 		if alerts is Array and alerts.size() > 0:
+			print("[Client Alert] 收到 %d 条警报" % alerts.size())
 			var hud = get_node_or_null("UI/HUD")
+			if not hud:
+				print("[Client Alert] HUD 节点未找到！")
 			for alert in alerts:
+				print("[Client Alert] msg=%s color=%s" % [alert["msg"], alert.get("color", "?")])
 				if hud and hud.has_method("show_alert_message"):
 					hud.show_alert_message(alert["msg"], alert.get("color", Color(1.0, 0.2, 0.1)))
+				elif hud:
+					print("[Client Alert] HUD 没有 show_alert_message 方法！")
 
 	if data.has("bullets"):
 		var server_ids = {}
