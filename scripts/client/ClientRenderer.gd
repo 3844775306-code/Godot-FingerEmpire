@@ -277,7 +277,6 @@ func _process_snapshot(data: Dictionary):
 	if data.has("alerts"):
 		var alerts = data["alerts"]
 		if alerts is Array and alerts.size() > 0:
-			print("[ClientAlert] Received %d alerts" % alerts.size())
 			var hud = get_node_or_null("UI/HUD")
 			for alert in alerts:
 				if hud and hud.has_method("show_alert_message"):

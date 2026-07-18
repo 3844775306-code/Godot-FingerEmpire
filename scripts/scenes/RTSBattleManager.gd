@@ -393,6 +393,7 @@ func _init_2v2_single():
 		castle_cfg["team"] = team
 		castle_cfg["owner_peer_id"] = pid
 		var castle = spawn_entity(castle_cfg, team, castle_pos, 1)
+		castle.owner_peer_id = pid
 		if castle:
 			castle.died.connect(_on_castle_died.bind(team))   # 简化处理，后续可扩展
 			ai_players[pid] = {"castle": castle, "team": team, "slot": slot}

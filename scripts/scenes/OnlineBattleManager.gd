@@ -229,6 +229,14 @@ func _init_1v1():
 
 
 	_init_entities_deferred()   # 父类的实体生成（会用到 team_nations）
+	# 修正联机模式的 owner_peer_id（父类用的是硬编码 1/3）
+	for pid in peers:
+		var team = player_teams[pid]
+		var castle = get_castle_by_team(team)
+		if castle: castle.owner_peer_id = pid
+	_player_colors.clear()
+	for pid in peers:
+		_player_colors[pid] = RTSConfig.COLOR_POOL[player_teams[pid]]
 	set_process(true)
 	broadcast_enabled = true
 	# 发送城堡位置
@@ -352,8 +360,7 @@ func _init_2v2():
 		NetworkManager.notify_team_info.rpc_id(pid, pid, info.team, info.slot, info.color)
 
 	has_game_started = true
-	# ---- 颜色调试 ----
-	var _color_debug_done: bool = false
+	
 
 
 
@@ -528,6 +535,7 @@ func _create_player_castle(peer_id: int, team: int, pos: Vector3):
 	cfg["produces"] = [{"unit_id": 10, "cooldown": 3.0, "queue_limit": 10}, {"unit_id": 19, "cooldown": 4.0, "queue_limit": 5}]
 	cfg["owner_peer_id"] = peer_id
 	var castle = spawn_entity(cfg, team, pos, 1)   # 移除了多余的 peer_id 参数
+	castle.owner_peer_id = peer_id
 	if castle:
 		castle.died.connect(_on_castle_died_2v2.bind(peer_id))
 		player_castles[peer_id] = castle
