@@ -325,16 +325,17 @@ func decide(_delta):
 	var workers = count_unit(10)
 	var warehouses = count_building(22)
 
-				return  # 放弃本轮其他操作
-				_caste_rush_done[_ci] = true
-				upgrade_building(20)
-			if _castle and _castle.upgrade_level < _target_lv and can_afford_upgrade(20):
-			var _target_lv = _ci + 3
-			var _castle = get_peer_castle(my_peer_id)
-		if not _castle_rush_done[_ci] and _gm >= [3,6,10][_ci]:
-	for _ci in range(3):
-	var _gm = battle.game_time / 60.0
 	# 定时城堡冲刺：3min→lv3, 6min→lv4, 10min→lv5
+	var _gm = battle.game_time / 60.0
+	for _ci in range(3):
+		if not _castle_rush_done[_ci] and _gm >= [3, 6, 10][_ci]:
+			var _castle = get_peer_castle(my_peer_id)
+			var _target_lv = _ci + 3
+			if _castle and _castle.upgrade_level < _target_lv and can_afford_upgrade(20):
+				upgrade_building(20)
+				_castle_rush_done[_ci] = true
+				return  # 放弃本轮其他操作
+
 	if phase == Phase.PRODUCTION:
 		if production_step == 0:
 			if workers < desired_worker_count and can_afford(10) and _can_train_unit():
