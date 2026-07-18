@@ -1106,10 +1106,10 @@ func _try_produce_merchants_or_officials() -> bool:
 
 func _process_line_military():
 	var priority = get_counter_priority()
-	if randf() < 0.1: print("[AI diag] military check: afford=%s can_train=%s priority=%s" % [can_afford(priority[0]) if priority.size()>0 else "n/a", _can_train_unit(), priority.slice(0,3)])
+	
 	for u_id in priority:
 		if count_unit(u_id) < target_army_count and can_afford(u_id) and _can_train_unit():
-			print("[AI diag] produce military: %s (count=%d, target=%d)" % [EntityDatabase.get_config(u_id).get("name","?"), count_unit(u_id), target_army_count])
+			
 			produce_unit(u_id); return
 
 func _process_line_3():

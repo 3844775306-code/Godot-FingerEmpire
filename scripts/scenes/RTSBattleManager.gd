@@ -177,14 +177,10 @@ var team_nations: Dictionary = {
 }
 
 
-# 获取玩家颜色映射（单机模式使用队伍颜色，联机由 OnlineBattleManager 覆盖）
+# 玩家颜色映射 — 联机时由 OnlineBattleManager._init_2v2 填充实际 peer_id
+var _player_colors: Dictionary = {}
 func get_player_colors() -> Dictionary:
-	return {
-		1: Color(0.2, 0.6, 1.0),   # 蓝方玩家
-		2: Color(0.4, 0.8, 1.0),   # 蓝方AI
-		3: Color(1.0, 0.3, 0.2),   # 红方AI1
-		4: Color(1.0, 0.6, 0.4),   # 红方AI2
-	}
+	return _player_colors
 
 func get_team_nation(team: int) -> int:
 	return team_nations.get(team, -1)
@@ -1224,12 +1220,7 @@ func _process(delta):
 		for c in entities.get_children():
 			if c is Bullet: bullets += 1
 		var delta_total = _all_entities.size() - _diag_last_total
-		print("[DIAG] 实体: 总计=%d (Δ%+d) | 军队=%d 建筑=%d 资源=%d 塔=%d | 子弹=%d | 缓存脏=%s" % [
-			_all_entities.size(), delta_total,
-			_armies.size(), _buildings.size(), _resources.size(), _towers.size(),
-			bullets,
-			_entity_cache_dirty
-		])
+		
 		if _all_entities.size() > 500:
 			print("[DIAG] ⚠️ 实体数量超过500，可能导致性能下降！")
 		if _all_entities.size() > 1000:

@@ -342,6 +342,7 @@ func _init_2v2():
 	var all_player_colors = {}
 	for pid in player_info.keys():
 		all_player_colors[pid] = player_info[pid].color
+	_player_colors = all_player_colors  # 同步到父类，供 Entity 颜色查询
 	for pid in player_info.keys():
 		NetworkManager.notify_all_player_colors.rpc_id(pid, all_player_colors)
 
