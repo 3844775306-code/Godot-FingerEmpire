@@ -362,6 +362,14 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 	else:
 		entity_color = Color(0.7, 0.7, 0.7)    # 中立灰色
 
+	# 动物覆盖色
+	var eid = info.get("entity_id", 0)
+	match eid:
+		60: entity_color = Color(0.55, 0.35, 0.2)
+		61: entity_color = Color(0.95, 0.75, 0.8)
+		62: entity_color = Color(0.9, 0.9, 0.85)
+		63: entity_color = Color(0.5, 0.7, 0.85)
+
 	# 模型
 	var mesh: MeshInstance3D
 	match info["type"]:
