@@ -880,7 +880,7 @@ func _compute_entity_hash(entity: GameEntity) -> int:
 		int(entity.owner_peer_id)
 	]
 	if entity is Building:
-		s += ",%d,%d,%d,%d" % [entity.upgrade_level, entity.production_queue.size(), int(entity.build_timer * 100), int(entity.production_timer * 100)]
+		s += ",%d,%d,%d,%d" % [entity.upgrade_level, entity.production_queue.size(), int(entity.build_timer * 100), int(entity.production_timer * 100), int(entity.upgrade_timer * 100)]
 	if entity.current_target and is_instance_valid(entity.current_target):
 		s += ",%d" % entity.current_target.get_instance_id()
 	return s.hash()
