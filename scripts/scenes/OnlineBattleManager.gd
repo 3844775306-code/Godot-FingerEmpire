@@ -1107,6 +1107,7 @@ func build_snapshot_for_team(team: int) -> Dictionary:
 		if not current_entities.has(id):
 			dead.append(id)
 	last_snapshot_cache[team] = current_entities
+	if dead.size() > 0: print("[DeadBug-Server] Sending %d dead_ids for team %d" % [dead.size(), team])
 
 	return {
 		"delta": delta,
@@ -1327,6 +1328,7 @@ func build_snapshot_for_player(peer_id: int) -> Dictionary:
 		if not current_all_ids.has(lid):
 			dead.append(lid)
 
+	if dead.size() > 0: print("[DeadBug-Server] Sending %d dead_ids for player %d" % [dead.size(), peer_id])
 	player_last_snapshot_ids[peer_id] = []
 	for snap in delta:
 		player_last_snapshot_ids[peer_id].append(snap["id"])
