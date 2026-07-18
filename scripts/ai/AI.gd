@@ -340,13 +340,11 @@ func decide(_delta):
 		_manage_shipyards()
 		_process_line_1()
 		_process_line_3()
-		if _try_produce_merchants_or_officials():
-			pass
-		elif randf() < 0.5:
+		var _did_merchant = _try_produce_merchants_or_officials()
+		if not _did_merchant and randf() < 0.5:
 			_process_line_upgrade()
-		else:
-			_process_line_military()
-		_process_line_4()
+		# 始终尝试军事生产
+		_process_line_military()
 		_process_line_5()
 		_ai_garrison_officials()
 		update_tactic(_delta)

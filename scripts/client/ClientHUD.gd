@@ -580,13 +580,18 @@ func _ready():
 	add_to_group("client_hud")
 
 
-func update_data(resources: Dictionary, population: Dictionary, limits: Dictionary, gather_counts: Dictionary = {}, income_rate: Dictionary = {}):
+func update_data(resources: Dictionary, population: Dictionary, limits: Dictionary, gather_counts: Dictionary = {}, income_rate: Dictionary = {}, game_time: float = -1.0):
 	gold_label.text = "%d/%d" % [resources.get("gold", 0), limits.get("gold", 0)]
 	wood_label.text = "%d/%d" % [resources.get("wood", 0), limits.get("wood", 0)]
 	stone_label.text = "%d/%d" % [resources.get("stone", 0), limits.get("stone", 0)]
 	food_label.text = "%d/%d" % [resources.get("food", 0), limits.get("food", 0)]
 	oil_label.text = "%d/%d" % [resources.get("oil", 0), limits.get("oil", 0)]
 	pop_label.text = "%d/%d" % [population.get("current", 0), population.get("max", 0)]
+	# 游戏时间
+	if game_time >= 0 and _game_time_label:
+		var m = int(game_time / 60)
+		var s = int(game_time) % 60
+		_game_time_label.text = "%02d:%02d" % [m, s]
 
 	# Display server-computed gather counts and income rates
 	var rn = {"gold": "黄金", "wood": "木材", "stone": "石头", "food": "食物", "oil": "石油"}

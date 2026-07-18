@@ -20,14 +20,13 @@ enum PlayerSlot {
 	SLOT_1 = 1
 }
 
-# 预定义玩家颜色
-const PLAYER_COLORS = {
-	0: Color.RED,         # 红队槽0
-	1: Color.ORANGE,      # 红队槽1
-	2: Color.BLUE,        # 蓝队槽0
-	3: Color.PURPLE         # 蓝队槽1
-}
+# 玩家颜色池 — 2v2按顺序取色确保四人颜色互不相同
+const COLOR_POOL = [
+	Color(1.0, 0.2, 0.1),    # 红
+	Color(0.2, 0.6, 1.0),    # 蓝
+	Color(1.0, 0.65, 0.0),   # 橙
+	Color(0.5, 0.3, 0.9),    # 紫
+]
 
-# 给每个 peer_id 分配全局颜色
 static func get_player_color(peer_id: int) -> Color:
-	return PLAYER_COLORS.get(peer_id % 4, Color.WHITE) # AI / 敌方
+	return COLOR_POOL[peer_id % COLOR_POOL.size()]

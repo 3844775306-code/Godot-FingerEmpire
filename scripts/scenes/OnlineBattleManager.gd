@@ -287,7 +287,7 @@ func _init_2v2():
 			team = RTSConfig.Team.BLUE
 
 		var slot = red_assigned if team == RTSConfig.Team.RED else blue_assigned
-		var color = RTSConfig.PLAYER_COLORS[i]   # 人类使用预设颜色
+			var color = _pick_player_color()   # 从颜色池随机分配
 		var nation = pending_nations.get(peers[i], 0)
 
 		player_info[peers[i]] = {
@@ -379,16 +379,17 @@ func _create_ai_player(peer_id: int, team: int, slot: int):
 	ai_controller.my_team = team
 	add_child(ai_controller)
 # 根据队伍和槽位为 AI 分配一个独特颜色（避免与人类玩家重复）
-func _get_ai_color(team: int, slot: int) -> Color:
-	# 预定义 AI 专用颜色，红蓝各两种
-	var ai_colors = {
-		RTSConfig.Team.RED: [Color(1, 0.5, 0), Color(1, 0.8, 0)],    # 橙色、金色
-		RTSConfig.Team.BLUE:  [Color(0.4, 0.8, 1), Color(0.6, 0.6, 1)] # 天蓝、浅紫
-	}
-	var colors = ai_colors.get(team, [Color.GRAY])
-	return colors[clampi(slot, 0, colors.size()-1)]
+	var _color_used_count: int = 0
 
-# 为 AI 玩家选择一个合适的城堡位置（不与其他玩家重叠）
+	func _pick_player_color() -> Color:
+		var c = RTSConfig.COLOR_POOL[_color_used_count % RTSConfig.COLOR_POOL.size()]
+		_color_used_count += 1
+		return c
+
+	func _get_ai_color(team: int, slot: int) -> Color:
+		var idx = _color_used_count
+		_color_used_count += 1
+		return RTSConfig.COLOR_POOL[idx % RTSConfig.COLOR_POOL.size()]
 func _get_ai_castle_pos(team: int, slot: int) -> Vector3:
 	var map = $Map
 	if not map: return Vector3.ZERO
@@ -1017,8 +1018,8 @@ func build_snapshot_for_team(team: int) -> Dictionary:
 		if entity is GameEntity and entity.team == team and entity.health > 0 and entity.vision_range > 0:
 			team_units.append(entity)
 
-		var snapshot_key = "team_%d" % team
-		var is_full = _is_full_snapshot(snapshot_key)
+	var snapshot_key = "team_%d" % team
+	var is_full = _is_full_snapshot(snapshot_key)
 
 	for entity in entities.get_children():
 		if not (entity is GameEntity): continue
@@ -1026,11 +1027,11 @@ func build_snapshot_for_team(team: int) -> Dictionary:
 		var id = snap["id"]
 		current_entities[id] = snap
 
-			# 增量压缩：只发送变化的实体
-			if not is_full:
-				var h = _compute_entity_hash(entity)
-				if not _should_include_in_delta(snapshot_key, id, h):
-					continue
+		# 增量压缩：只发送变化的实体
+		if not is_full:
+			var h = _compute_entity_hash(entity)
+			if not _should_include_in_delta(snapshot_key, id, h):
+				continue
 
 
 		if entity.team == team:
@@ -1077,6 +1078,7 @@ func build_snapshot_for_team(team: int) -> Dictionary:
 		"gather_counts": team_gather_counts.get(team, {"gold":0, "wood":0, "stone":0, "food":0, "oil":0}),
 		"income_rate": team_income_rates.get(team, {"gold":0.0, "wood":0.0, "stone":0.0, "food":0.0, "oil":0.0}),
 		"alerts": _get_and_clear_alerts(team)
+			"game_time": game_time,
 	}
 
 func _broadcast_1v1():
@@ -1229,18 +1231,18 @@ func build_snapshot_for_player(peer_id: int) -> Dictionary:
 			team_units.append(entity)
 
 	var delta = []
-		var snapshot_key = "player_%d" % peer_id
-		var is_full = _is_full_snapshot(snapshot_key)
+	var snapshot_key = "player_%d" % peer_id
+	var is_full = _is_full_snapshot(snapshot_key)
 	for entity in entities.get_children():
 		if not (entity is GameEntity): continue
 		var snap = _serialize_entity(entity)
 		var id = snap["id"]
 
-			# 增量压缩：只发送变化的实体
-			if not is_full:
-				var h = _compute_entity_hash(entity)
-				if not _should_include_in_delta(snapshot_key, id, h):
-					continue
+		# 增量压缩：只发送变化的实体
+		if not is_full:
+			var h = _compute_entity_hash(entity)
+			if not _should_include_in_delta(snapshot_key, id, h):
+				continue
 
 
 		if snap.get("owner_peer_id", -1) == peer_id:

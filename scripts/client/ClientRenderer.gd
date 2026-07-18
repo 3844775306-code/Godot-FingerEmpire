@@ -254,7 +254,7 @@ func _process_snapshot(data: Dictionary):
 		gather_counts = gather_counts.get(my_peer_id, {})
 		income_rate = income_rate.get(my_peer_id, {})
 	if has_node("UI/HUD") and not my_res.is_empty():
-		$UI/HUD.update_data(my_res, my_pop, my_limits, gather_counts, income_rate)
+		$UI/HUD.update_data(my_res, my_pop, my_limits, gather_counts, income_rate, data.get("game_time", 0.0))
 
 	# ---- InfoPanel 资源 ----
 	if has_node("UI/InfoPanel"):
