@@ -356,23 +356,26 @@ func decide(_delta):
 				_process_line_military()
 
 	elif phase == Phase.DEVELOPMENT:
-		
-		
-		# 建筑和升级
-		if  _should_skip_for_upgrade_cycle(_delta):
+		# 升级周期：只做升级
+		if _should_skip_for_upgrade_cycle(_delta):
+			if not _priority_upgrade():
+				_process_line_upgrade()
+		else:
+			# 正常周期：军事+建筑
+			_process_line_military()
 			_process_line_1()
 			_process_line_3()
-		else:
-		# 商人和官员
+			# 商人和官员
 			_ensure_merchants()
 			var _did_merchant = _try_produce_merchants_or_officials()
-			_process_line_military()
+			if not _did_merchant:
+				if not _priority_upgrade():
+					_process_line_upgrade()
 			# 其他
 			_manage_shipyards()
 			_process_line_5()
 		_ai_hunt_animals(_delta)
 		_check_hunt_cleanup()
-		
 		_ai_garrison_officials()
 		
 		update_tactic(_delta)
