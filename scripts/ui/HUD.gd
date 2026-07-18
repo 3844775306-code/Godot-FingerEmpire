@@ -652,7 +652,8 @@ func _process(delta):
 							"z": entity.global_position.z,
 							"team": entity.team,
 							"type": entity.entity_type,
-							"id": entity.get_instance_id()
+							"id": entity.get_instance_id(),
+							"owner_peer_id": entity.owner_peer_id
 						})
 				minimap.set_data(bm.explored_grid, bm.visible_grid, entities_info)
 
