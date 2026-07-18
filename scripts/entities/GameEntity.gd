@@ -169,7 +169,7 @@ func take_damage(amount: float, source: GameEntity = null):
 	if health <= 0:
 		die()
 func die():
-	if entity_type == 0: print("[DeadBug] Resource %s (id=%d) dying" % [display_name, get_instance_id()])
+	print("[DeadBug] Entity %s (type=%d id=%d eid=%d) dying at frame %d" % [display_name, entity_type, get_instance_id(), entity_id, Engine.get_process_frames()])
 	emit_signal("died")
 	# 动物死亡掉落食物
 	if self is Army and self.get("_animal_type") != "" and self.get("_animal_type") != null:

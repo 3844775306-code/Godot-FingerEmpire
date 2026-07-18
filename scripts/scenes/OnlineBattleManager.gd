@@ -1313,7 +1313,7 @@ func build_snapshot_for_player(peer_id: int) -> Dictionary:
 					break
 			if visible:
 				delta.append(snap)
-
+	var dead = []
 	var current_all_ids = {}
 	for entity in entities.get_children():
 		if entity is GameEntity and entity.health > 0:
@@ -1322,7 +1322,7 @@ func build_snapshot_for_player(peer_id: int) -> Dictionary:
 			dead.append(entity.get_instance_id())
 
 	var last_ids = player_last_snapshot_ids.get(peer_id, [])
-	var dead = []
+	
 	for lid in last_ids:
 		if not current_all_ids.has(lid):
 			dead.append(lid)

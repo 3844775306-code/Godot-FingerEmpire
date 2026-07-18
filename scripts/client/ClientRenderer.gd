@@ -216,6 +216,7 @@ func _process_snapshot(data: Dictionary):
 
 	# 删除死亡实体
 	if data.has("dead_ids"):
+		if data["dead_ids"].size() > 0: print("[DeadBug-Client] Received %d dead_ids" % data["dead_ids"].size())
 		for id in data["dead_ids"]:
 			if entity_nodes.has(id):
 				entity_nodes[id].queue_free()
