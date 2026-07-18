@@ -410,12 +410,6 @@ func _create_ai_player(peer_id: int, team: int, slot: int):
 # 根据队伍和槽位为 AI 分配一个独特颜色（避免与人类玩家重复）
 var _color_used_count: int = 0
 
-func get_player_colors() -> Dictionary:
-	var colors = {}
-	for pid in player_info.keys():
-		colors[pid] = player_info[pid].color
-	return colors
-
 func _pick_player_color() -> Color:
 	var c = RTSConfig.COLOR_POOL[_color_used_count % RTSConfig.COLOR_POOL.size()]
 	_color_used_count += 1
@@ -511,6 +505,7 @@ func _init_all_castles_2v2():
 		else:
 			pos = red1 if info.slot == 0 else red2
 
+		_player_colors[pid] = info.color  # 确保城堡创建时颜色可用
 		_create_player_castle(pid, info.team, pos)
 
 		# 生成3个初始农民
