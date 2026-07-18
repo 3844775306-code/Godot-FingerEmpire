@@ -176,6 +176,16 @@ var team_nations: Dictionary = {
 	RTSConfig.Team.RED: GameSettings.enemy_nation
 }
 
+
+# 获取玩家颜色映射（单机模式使用队伍颜色，联机由 OnlineBattleManager 覆盖）
+func get_player_colors() -> Dictionary:
+	return {
+		1: Color(0.2, 0.6, 1.0),   # 蓝方玩家
+		2: Color(0.4, 0.8, 1.0),   # 蓝方AI
+		3: Color(1.0, 0.3, 0.2),   # 红方AI1
+		4: Color(1.0, 0.6, 0.4),   # 红方AI2
+	}
+
 func get_team_nation(team: int) -> int:
 	return team_nations.get(team, -1)
 

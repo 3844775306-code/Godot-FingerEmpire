@@ -223,17 +223,8 @@ func _init_1v1():
 	await _wait_for_nations_1v1()
 	# 开始游戏
 	has_game_started = true
-	# ---- 颜色调试 ----
-	var _color_debug_done: bool = false
-	func _debug_print_colors():
-		if _color_debug_done: return
-		_color_debug_done = true
-		print("[ColorDebug] ===== 玩家颜色分配 =====")
-		for pid in player_info.keys():
-			var info = player_info[pid]
-			print("[ColorDebug] peer=%d team=%s slot=%d color=%s" % [pid, "BLUE" if info.team == RTSConfig.Team.BLUE else "RED", info.slot, str(info.color)])
-		print("[ColorDebug] all_player_colors dict: ", all_player_colors if "all_player_colors" in locals() else "(not built yet)")
-		print("[ColorDebug] =========================")
+	
+
 
 
 	_init_entities_deferred()   # 父类的实体生成（会用到 team_nations）
@@ -246,7 +237,17 @@ func _init_1v1():
 		var castle = get_castle_by_team(team)
 		if castle:
 			NetworkManager.notify_castle_pos.rpc_id(pid, castle.global_position)
-
+# ---- 颜色调试 ----
+var _color_debug_done: bool = false
+func _debug_print_colors():
+	if _color_debug_done: return
+	_color_debug_done = true
+	print("[ColorDebug] ===== 玩家颜色分配 =====")
+	for pid in player_info.keys():
+		var info = player_info[pid]
+		print("[ColorDebug] peer=%d team=%s slot=%d color=%s" % [pid, "BLUE" if info.team == RTSConfig.Team.BLUE else "RED", info.slot, str(info.color)])
+	#print("[ColorDebug] all_player_colors dict: ", all_player_colors if "all_player_colors" in locals() else "(not built yet)")
+	print("[ColorDebug] =========================")
 func _wait_for_nations_1v1():
 	while true:
 		if team_nations[RTSConfig.Team.BLUE] != -1 and team_nations[RTSConfig.Team.RED] != -1:
@@ -351,15 +352,7 @@ func _init_2v2():
 	has_game_started = true
 	# ---- 颜色调试 ----
 	var _color_debug_done: bool = false
-	func _debug_print_colors():
-		if _color_debug_done: return
-		_color_debug_done = true
-		print("[ColorDebug] ===== 玩家颜色分配 =====")
-		for pid in player_info.keys():
-			var info = player_info[pid]
-			print("[ColorDebug] peer=%d team=%s slot=%d color=%s" % [pid, "BLUE" if info.team == RTSConfig.Team.BLUE else "RED", info.slot, str(info.color)])
-		print("[ColorDebug] all_player_colors dict: ", all_player_colors if "all_player_colors" in locals() else "(not built yet)")
-		print("[ColorDebug] =========================")
+
 
 
 	_init_all_castles_2v2()
@@ -489,8 +482,8 @@ func _send_map_data(peers: Array):
 		NetworkManager.receive_map_data.rpc_id(pid, terrain_copy, res_data)
 
 # ---------- 2v2 城堡生成 ----------
-func _init_all_castles_2v2()
-	_debug_print_colors():
+func _init_all_castles_2v2():
+	_debug_print_colors()
 	var map = $Map
 	if not map: return
 
