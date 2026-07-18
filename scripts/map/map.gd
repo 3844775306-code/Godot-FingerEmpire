@@ -99,8 +99,10 @@ func _draw():
 		if not show: continue
 
 		var dot_color = Color(0.7, 0.7, 0.7)
-		if owner != -1 and player_colors.has(owner):
-			dot_color = player_colors[owner].lightened(0.25)
+		# 实时查询，和战场实体同源
+		var _pc = _renderer.player_colors if _renderer else {}
+		if owner != -1 and _pc.has(owner):
+			dot_color = _pc[owner].lightened(0.25)
 		elif ent["team"] == RTSConfig.Team.RED:
 			dot_color = Color(1.0, 0.25, 0.2)
 		elif ent["team"] == RTSConfig.Team.BLUE:

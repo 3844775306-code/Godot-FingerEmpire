@@ -12,11 +12,7 @@ var entity_snapshots: Array = []
 var player_team: int = 1
 var camera: Camera3D = null
 
-var _player_colors: Dictionary = {}
-
-
-
-# 纹理缓存 — 避免每帧 22500 次 draw_rect 调用
+# 纹理缓存
 var _terrain_tex: ImageTexture = null
 var _tex_dirty: bool = true
 
@@ -33,11 +29,6 @@ func _ready():
 	custom_minimum_size = Vector2(MINIMAP_SIZE, MINIMAP_SIZE)
 	mouse_filter = MOUSE_FILTER_STOP
 	camera = get_viewport().get_camera_3d()
-	# 获取玩家颜色映射（联机模式）
-	var bm = get_tree().get_first_node_in_group("battle_manager")
-	if bm and bm.has_method("get_player_colors"):
-		_player_colors = bm.get_player_colors()
-
 	set_process(true)
 
 func add_alert(world_pos: Vector3):
@@ -116,18 +107,20 @@ func _draw():
 	var ms = RTSConfig.MAP_SIZE
 	var cell = float(MINIMAP_SIZE) / ms
 
-	# 重建地形纹理缓存（仅在数据变化时）
 	if _tex_dirty or not _terrain_tex:
 		_rebuild_terrain_texture()
 
-	# 单次绘制整个地形纹理（替代 22500 次 draw_rect）
 	if _terrain_tex:
 		draw_texture(_terrain_tex, Vector2.ZERO)
 
-	# 描边
 	draw_rect(Rect2(Vector2.ZERO, Vector2(MINIMAP_SIZE, MINIMAP_SIZE)), Color(0.3, 0.55, 0.8, 0.9), false, 3)
 
-	# 实体点
+	# 每次绘制时实时查询颜色，和战场实体同源
+	var pc = {}
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if bm and bm.has_method("get_player_colors"):
+		pc = bm.get_player_colors()
+
 	for ent in entity_snapshots:
 		var gx = int(ent["x"] + ms / 2)
 		var gz = int(ent["z"] + ms / 2)
@@ -144,8 +137,8 @@ func _draw():
 
 		var owner = ent.get("owner_peer_id", -1)
 		var dot_color: Color
-		if owner != -1 and _player_colors.has(owner):
-			dot_color = _player_colors[owner].lightened(0.25)
+		if owner != -1 and pc.has(owner):
+			dot_color = pc[owner].lightened(0.25)
 		elif ent["team"] == player_team:
 			dot_color = Color(0.3, 1.0, 1.0, 1.0)
 		elif ent["team"] == RTSConfig.Team.RED:
