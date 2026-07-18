@@ -1055,16 +1055,33 @@ func _any_building_can_upgrade() -> bool:
 			return true
 	return false
 func _process_line_1():
-	_ai_expand_territory()
+	
+	for b_id in wanted_buildings:
+		if _should_build_or_upgrade(b_id) and can_afford_upgrade(b_id):
+			upgrade_building(b_id)
+			return
 	for b_id in wanted_buildings:
 		var target = MILITARY_PRODUCER_TARGETS.get(b_id, 1)
 		if count_building(b_id) < target and can_afford_building(b_id):
 			build_building(b_id, _get_build_position(b_id))
 			return
-	for b_id in wanted_buildings:
-		if _should_build_or_upgrade(b_id) and can_afford_upgrade(b_id):
-			upgrade_building(b_id)
-			return
+	_ai_expand_territory()
+
+
+# 优先升级：兵营(21)升到4级，受城堡等级限制则先升城堡
+func _priority_upgrade():
+	var castle = get_peer_castle(my_peer_id)
+	if not castle: return false
+	# 城堡等级不够兵营4级（兵营>=4需要城堡>=4）
+	for entity in battle.entities.get_children():
+		if entity is Building and entity.entity_id == 21 and entity_belongs_to_me(entity):
+			if entity.upgrade_level < 4:
+				if castle.upgrade_level < entity.upgrade_level + 1:
+					if can_afford_upgrade(20):
+						upgrade_building(20); return true
+				if can_afford_upgrade(21):
+					upgrade_building(21); return true
+	return false
 
 func _process_line_upgrade():
 	for b_id in wanted_buildings:

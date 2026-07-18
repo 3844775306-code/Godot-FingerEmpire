@@ -147,11 +147,11 @@ func _draw():
 		if owner != -1 and _player_colors.has(owner):
 			dot_color = _player_colors[owner]
 		elif ent["team"] == player_team:
-			dot_color = Color(0.0, 0.886, 1.0, 1.0)
+			dot_color = Color(0.3, 1.0, 1.0, 1.0)
 		elif ent["team"] == RTSConfig.Team.RED:
-			dot_color = Color(1.0, 0.33, 0.264, 1.0)
+			dot_color = Color(1.0, 0.5, 0.3, 1.0)
 		else:
-			dot_color = Color.YELLOW
+			dot_color = Color(1.0, 1.0, 0.4, 1.0)
 		var pos = Vector2(gx * cell, gz * cell)
 		draw_rect(Rect2(pos - Vector2(1, 1), Vector2(3, 3)), dot_color)
 

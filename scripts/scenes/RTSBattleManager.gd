@@ -757,8 +757,9 @@ func _place_building_at(pos: Vector3):
 	# 扣资源
 	for k in cost:
 		player_resources[k] -= cost[k]
-	
-	# 生成建筑
+
+	# 生成建筑（设置所有权用于颜色）
+	cfg["owner_peer_id"] = 1 if not is_online else player_owner_id
 	var b = spawn_entity(cfg, RTSConfig.Team.BLUE, pos) as Building
 	if b:
 		b.start_construction(5.0, cfg)	
@@ -1028,7 +1029,8 @@ func _place_building():
 	for k in cost:
 		player_resources[k] -= cost[k]
 
-	# 建造
+	# 建造（设置所有权用于颜色）
+	cfg["owner_peer_id"] = 1 if not is_online else player_owner_id
 	var b = spawn_entity(cfg, RTSConfig.Team.BLUE, pos) as Building
 	if b:
 		b.start_construction(5.0, cfg)
