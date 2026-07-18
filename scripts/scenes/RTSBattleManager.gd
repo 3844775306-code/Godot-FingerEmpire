@@ -625,9 +625,12 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 	cfg["team"] = team
 	entities.add_child(entity)
 	entity.setup(cfg)
-	# 直接应用玩家颜色（仿客户端机制：_player_colors[owner_peer_id]）
-	if entity.owner_peer_id != -1 and _player_colors.has(entity.owner_peer_id):
+	# 直接应用玩家颜色（仿客户端机制）- 资源除外
+	if entity.entity_type != 0 and entity.owner_peer_id != -1 and _player_colors.has(entity.owner_peer_id):
 		entity.apply_color(_player_colors[entity.owner_peer_id])
+	# 资源需要 setup 后再重建 visual（因为 _ready 时 resource_type 还是默认值）
+	if entity.entity_type == 0 and entity.has_method("_create_visual"):
+		entity._create_visual()
 	entity.global_position = pos
 	mark_entity_cache_dirty()
 
