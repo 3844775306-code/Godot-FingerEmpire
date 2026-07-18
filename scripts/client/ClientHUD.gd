@@ -617,18 +617,15 @@ var _fps_label: Label = null
 var _game_time_label: Label = null
 var _fps_update_timer: float = 0.5
 
-var _game_time_val: float = -1.0
 var _client_time_acc: float = 0.0
-var _client_time_min: int = 0
-var _client_time_sec: int = 0
 
 func _process(delta):
+	# 本地计时
 	_client_time_acc += delta
-	if _game_time_val >= 0:
-		_client_time_acc = min(_client_time_acc, 0.5)
-		var t = _game_time_val + _client_time_acc
-		_client_time_min = int(t / 60)
-		_client_time_sec = int(t) % 60
+	var t_min = int(_client_time_acc / 60)
+	var t_sec = int(_client_time_acc) % 60
+	if _game_time_label:
+		_game_time_label.text = "%02d:%02d" % [t_min, t_sec]
 	# 每秒更新一次单位统计
 	_unit_stats_timer -= delta
 	if _unit_stats_timer <= 0:

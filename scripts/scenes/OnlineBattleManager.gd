@@ -381,11 +381,11 @@ func _create_ai_player(peer_id: int, team: int, slot: int):
 # 根据队伍和槽位为 AI 分配一个独特颜色（避免与人类玩家重复）
 var _color_used_count: int = 0
 
-	func get_player_colors() -> Dictionary:
-		var colors = {}
-		for pid in player_info.keys():
-			colors[pid] = player_info[pid].color
-		return colors
+func get_player_colors() -> Dictionary:
+	var colors = {}
+	for pid in player_info.keys():
+		colors[pid] = player_info[pid].color
+	return colors
 
 func _pick_player_color() -> Color:
 	var c = RTSConfig.COLOR_POOL[_color_used_count % RTSConfig.COLOR_POOL.size()]
@@ -1029,7 +1029,7 @@ func build_snapshot_for_team(team: int) -> Dictionary:
 
 	for entity in entities.get_children():
 		if not (entity is GameEntity): continue
-			if entity.health <= 0: continue
+		if entity.health <= 0: continue
 		var snap = _serialize_entity(entity)
 		var id = snap["id"]
 		current_entities[id] = snap
@@ -1248,7 +1248,7 @@ func build_snapshot_for_player(peer_id: int) -> Dictionary:
 	var is_full = _is_full_snapshot(snapshot_key)
 	for entity in entities.get_children():
 		if not (entity is GameEntity): continue
-			if entity.health <= 0: continue
+		if entity.health <= 0: continue
 		var snap = _serialize_entity(entity)
 		var id = snap["id"]
 

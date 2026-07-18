@@ -61,7 +61,8 @@ var pending_delta: Array = []
 	
 var player_colors: Dictionary = {}   # peer_id -> Color
 func set_all_player_colors(colors: Dictionary):
-	player_colors = colors.duplicate()
+	player_colors.clear()
+	for k in colors: player_colors[k] = colors[k]  # 原地更新，保持引用
 	print("[ClientRenderer] 收到全局颜色映射，包含 %d 个玩家" % player_colors.size())
 # 新增方法
 func set_player_info(peer_id: int, team: int, slot: int, color: Color):
