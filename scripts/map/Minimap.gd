@@ -145,7 +145,7 @@ func _draw():
 		var owner = ent.get("owner_peer_id", -1)
 		var dot_color: Color
 		if owner != -1 and _player_colors.has(owner):
-			dot_color = _player_colors[owner]
+			dot_color = _player_colors[owner].lightened(0.25)
 		elif ent["team"] == player_team:
 			dot_color = Color(0.3, 1.0, 1.0, 1.0)
 		elif ent["team"] == RTSConfig.Team.RED:
