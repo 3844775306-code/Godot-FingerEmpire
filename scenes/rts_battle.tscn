@@ -1,0 +1,127 @@
+[gd_scene load_steps=16 format=3 uid="uid://b8rt5ggigw4q1"]
+
+[ext_resource type="Script" uid="uid://n6lb2pjc3b3n" path="res://scripts/scenes/RTSBattleManager.gd" id="1_nfr0c"]
+[ext_resource type="Script" uid="uid://y3juibmibwfb" path="res://scripts/map/CameraController.gd" id="2_coyb2"]
+[ext_resource type="Script" uid="uid://dhhgdpux4mj07" path="res://scripts/map/Ground.gd" id="3_18u6g"]
+[ext_resource type="Script" uid="uid://bd8mpjsx5lrjl" path="res://scripts/ui/HUD.gd" id="4_u01vu"]
+[ext_resource type="Script" uid="uid://d178itb4ttdku" path="res://scripts/map/Minimap.gd" id="5_3kwi1"]
+[ext_resource type="Script" uid="uid://cdi0kvctnhdy3" path="res://scripts/ui/InfoPanel.gd" id="6_coyb2"]
+[ext_resource type="Script" uid="uid://c50q8hbyc56oo" path="res://scripts/ui/SelectionManager.gd" id="7_d4ots"]
+[ext_resource type="Script" uid="uid://c3kba7nbcu6sg" path="res://scripts/ai/AI.gd" id="8_coyb2"]
+
+[sub_resource type="Gradient" id="Gradient_3m0ah"]
+offsets = PackedFloat32Array(0.02631579, 0.5701754)
+colors = PackedColorArray(1, 1, 1, 1, 1, 1, 1, 1)
+
+[sub_resource type="GradientTexture2D" id="GradientTexture2D_ke6fh"]
+gradient = SubResource("Gradient_3m0ah")
+
+[sub_resource type="PanoramaSkyMaterial" id="PanoramaSkyMaterial_opw4b"]
+panorama = SubResource("GradientTexture2D_ke6fh")
+
+[sub_resource type="Sky" id="Sky_ke6fh"]
+sky_material = SubResource("PanoramaSkyMaterial_opw4b")
+
+[sub_resource type="Environment" id="Environment_opw4b"]
+background_mode = 1
+sky = SubResource("Sky_ke6fh")
+ambient_light_energy = 5.0
+
+[sub_resource type="NavigationMesh" id="NavigationMesh_3m0ah"]
+vertices = PackedVector3Array(-49.5, 0.4, -49.5, -49.5, 0.4, 49.5, 49.5, 0.4, 49.5, 49.5, 0.4, -49.5)
+polygons = [PackedInt32Array(3, 2, 0), PackedInt32Array(0, 2, 1)]
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_ke6fh"]
+size = Vector3(100, 0.2, 100)
+
+[node name="battle_manager" type="Node3D"]
+script = ExtResource("1_nfr0c")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_opw4b")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.70710677, -0.35355338, 0.6123724, 0, 0.8660254, 0.5, -0.70710677, -0.35355338, 0.6123724, 0, 0, 0)
+light_energy = 5.0
+shadow_enabled = true
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.34202012, 0.93969256, 0, -0.93969256, 0.34202012, 0, 15, 0)
+projection = 1
+script = ExtResource("2_coyb2")
+
+[node name="Map" type="Node3D" parent="."]
+script = ExtResource("3_18u6g")
+
+[node name="VisualGround" type="MeshInstance3D" parent="Map"]
+
+[node name="NavRegion" type="NavigationRegion3D" parent="Map" groups=["nav_region"]]
+navigation_mesh = SubResource("NavigationMesh_3m0ah")
+
+[node name="GroundBody" type="StaticBody3D" parent="Map/NavRegion"]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Map/NavRegion/GroundBody"]
+shape = SubResource("BoxShape3D_ke6fh")
+
+[node name="Entities" type="Node3D" parent="."]
+
+[node name="UI" type="CanvasLayer" parent="."]
+script = ExtResource("4_u01vu")
+
+[node name="Minimap" type="Control" parent="UI"]
+layout_mode = 3
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -200.0
+offset_bottom = 200.0
+grow_horizontal = 0
+script = ExtResource("5_3kwi1")
+
+[node name="SelectionRect" type="ColorRect" parent="UI"]
+visible = false
+offset_right = 40.0
+offset_bottom = 40.0
+
+[node name="InfoPanel" type="Panel" parent="UI"]
+z_index = 10
+offset_top = 550.0
+offset_right = 100.0
+offset_bottom = 850.0
+scale = Vector2(2, 2)
+script = ExtResource("6_coyb2")
+
+[node name="VBox" type="VBoxContainer" parent="UI/InfoPanel"]
+layout_mode = 0
+offset_right = 100.0
+offset_bottom = 100.0
+
+[node name="NameLabel" type="Label" parent="UI/InfoPanel/VBox"]
+layout_mode = 2
+
+[node name="StatsLabel" type="Label" parent="UI/InfoPanel/VBox"]
+layout_mode = 2
+
+[node name="ProduceVBox" type="VBoxContainer" parent="UI/InfoPanel/VBox"]
+layout_mode = 2
+
+[node name="UpgradeBtn" type="Button" parent="UI/InfoPanel/VBox"]
+layout_mode = 2
+
+[node name="CloseBtn" type="Button" parent="UI/InfoPanel"]
+layout_mode = 1
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -100.0
+offset_bottom = 31.0
+grow_horizontal = 0
+text = "关闭"
+
+[node name="SelectionManager" type="Node3D" parent="."]
+script = ExtResource("7_d4ots")
+
+[node name="AIController" type="Node" parent="."]
+script = ExtResource("8_coyb2")
+
+[connection signal="pressed" from="UI/InfoPanel/VBox/UpgradeBtn" to="UI/InfoPanel" method="_on_upgrade_pressed"]

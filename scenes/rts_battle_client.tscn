@@ -1,0 +1,138 @@
+[gd_scene load_steps=16 format=3 uid="uid://dj63q7kjm6vln"]
+
+[ext_resource type="Script" uid="uid://d1l6rytf6y7o3" path="res://scripts/client/ClientRenderer.gd" id="1_13id7"]
+[ext_resource type="Script" uid="uid://y3juibmibwfb" path="res://scripts/map/CameraController.gd" id="2_iwg4n"]
+[ext_resource type="Script" uid="uid://dhhgdpux4mj07" path="res://scripts/map/Ground.gd" id="3_2568k"]
+[ext_resource type="Script" uid="uid://dlhs22wld8305" path="res://scripts/client/ClientHUD.gd" id="4_13id7"]
+[ext_resource type="Script" uid="uid://c575bxyaplsdx" path="res://scripts/map/map.gd" id="5_13id7"]
+[ext_resource type="Script" uid="uid://cn007ft5a15hj" path="res://scripts/client/ClientInfoPanel.gd" id="6_j6f5n"]
+[ext_resource type="Script" uid="uid://cwosj0mjw2wwc" path="res://scripts/ui/ClientBuildMenu.gd" id="7_iwg4n"]
+[ext_resource type="Script" uid="uid://bq5l6rpj64tfv" path="res://scripts/client/ClientInput.gd" id="7_j6f5n"]
+
+[sub_resource type="Gradient" id="Gradient_3m0ah"]
+offsets = PackedFloat32Array(0.02631579, 0.5701754)
+colors = PackedColorArray(1, 1, 1, 1, 1, 1, 1, 1)
+
+[sub_resource type="GradientTexture2D" id="GradientTexture2D_ke6fh"]
+gradient = SubResource("Gradient_3m0ah")
+
+[sub_resource type="PanoramaSkyMaterial" id="PanoramaSkyMaterial_opw4b"]
+panorama = SubResource("GradientTexture2D_ke6fh")
+
+[sub_resource type="Sky" id="Sky_ke6fh"]
+sky_material = SubResource("PanoramaSkyMaterial_opw4b")
+
+[sub_resource type="Environment" id="Environment_opw4b"]
+background_mode = 1
+sky = SubResource("Sky_ke6fh")
+ambient_light_energy = 5.0
+
+[sub_resource type="NavigationMesh" id="NavigationMesh_3m0ah"]
+vertices = PackedVector3Array(-49.5, 0.4, -49.5, -49.5, 0.4, 49.5, 49.5, 0.4, 49.5, 49.5, 0.4, -49.5)
+polygons = [PackedInt32Array(3, 2, 0), PackedInt32Array(0, 2, 1)]
+
+[sub_resource type="BoxShape3D" id="BoxShape3D_ke6fh"]
+size = Vector3(100, 0.2, 100)
+
+[node name="ClientRoot" type="Node3D" groups=["client_renderer"]]
+script = ExtResource("1_13id7")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="."]
+environment = SubResource("Environment_opw4b")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
+transform = Transform3D(0.70710677, -0.35355338, 0.6123724, 0, 0.8660254, 0.5, -0.70710677, -0.35355338, 0.6123724, 0, 0, 0)
+light_energy = 5.0
+shadow_enabled = true
+
+[node name="Camera3D" type="Camera3D" parent="."]
+transform = Transform3D(1, 0, 0, 0, 0.34202012, 0.93969256, 0, -0.93969256, 0.34202012, 0, 15, 0)
+projection = 1
+script = ExtResource("2_iwg4n")
+
+[node name="Map" type="Node3D" parent="." groups=["client_map"]]
+script = ExtResource("3_2568k")
+
+[node name="VisualGround" type="MeshInstance3D" parent="Map"]
+
+[node name="NavRegion" type="NavigationRegion3D" parent="Map" groups=["nav_region"]]
+navigation_mesh = SubResource("NavigationMesh_3m0ah")
+
+[node name="GroundBody" type="StaticBody3D" parent="Map/NavRegion"]
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Map/NavRegion/GroundBody"]
+shape = SubResource("BoxShape3D_ke6fh")
+
+[node name="Entities" type="Node3D" parent="."]
+
+[node name="UI" type="CanvasLayer" parent="."]
+
+[node name="HUD" type="Control" parent="UI"]
+layout_mode = 3
+anchors_preset = 0
+offset_right = 40.0
+offset_bottom = 40.0
+script = ExtResource("4_13id7")
+
+[node name="BuildMenu" type="Control" parent="UI"]
+visible = false
+layout_mode = 3
+anchors_preset = 0
+offset_right = 40.0
+offset_bottom = 40.0
+script = ExtResource("7_iwg4n")
+
+[node name="Minimap" type="Control" parent="UI"]
+layout_mode = 3
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -200.0
+offset_bottom = 200.0
+grow_horizontal = 0
+script = ExtResource("5_13id7")
+
+[node name="SelectionRect" type="ColorRect" parent="UI"]
+visible = false
+offset_right = 40.0
+offset_bottom = 40.0
+
+[node name="InfoPanel" type="Panel" parent="UI"]
+z_index = 10
+offset_top = 550.0
+offset_right = 100.0
+offset_bottom = 850.0
+scale = Vector2(2, 2)
+script = ExtResource("6_j6f5n")
+
+[node name="VBox" type="VBoxContainer" parent="UI/InfoPanel"]
+layout_mode = 0
+offset_right = 100.0
+offset_bottom = 100.0
+
+[node name="NameLabel" type="Label" parent="UI/InfoPanel/VBox"]
+layout_mode = 2
+
+[node name="StatsLabel" type="Label" parent="UI/InfoPanel/VBox"]
+layout_mode = 2
+
+[node name="ProduceVBox" type="VBoxContainer" parent="UI/InfoPanel/VBox"]
+layout_mode = 2
+
+[node name="UpgradeBtn" type="Button" parent="UI/InfoPanel/VBox"]
+layout_mode = 2
+
+[node name="CloseBtn" type="Button" parent="UI/InfoPanel"]
+layout_mode = 1
+anchors_preset = 1
+anchor_left = 1.0
+anchor_right = 1.0
+offset_left = -100.0
+offset_bottom = 31.0
+grow_horizontal = 0
+text = "关闭"
+
+[node name="ClientInput" type="Node3D" parent="."]
+script = ExtResource("7_j6f5n")
+
+[connection signal="pressed" from="UI/InfoPanel/VBox/UpgradeBtn" to="UI/InfoPanel" method="_on_upgrade_pressed"]

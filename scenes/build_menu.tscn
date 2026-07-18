@@ -1,0 +1,8 @@
+[gd_scene load_steps=2 format=3 uid="uid://c8p8ygu2hfy8y"]
+
+[ext_resource type="Script" uid="uid://drqj2iiqsa6g7" path="res://scripts/ui/BuildMenu.gd" id="1_rdxwr"]
+
+[node name="BuildMenu" type="Control"]
+layout_mode = 3
+anchors_preset = 0
+script = ExtResource("1_rdxwr")

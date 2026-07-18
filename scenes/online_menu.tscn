@@ -1,0 +1,62 @@
+[gd_scene load_steps=2 format=3 uid="uid://5dajgl01o3bl"]
+
+[ext_resource type="Script" uid="uid://ctt4l0wocv6jc" path="res://scripts/ui/OnlineMenu.gd" id="1_8wic7"]
+
+[node name="OnlineMenu" type="Control"]
+layout_mode = 3
+anchors_preset = 0
+script = ExtResource("1_8wic7")
+
+[node name="Panel" type="Panel" parent="."]
+layout_mode = 0
+offset_right = 2400.0
+offset_bottom = 1400.0
+
+[node name="VBox" type="VBoxContainer" parent="Panel"]
+layout_mode = 0
+offset_left = 400.0
+offset_top = 600.0
+offset_right = 1200.0
+offset_bottom = 800.0
+scale = Vector2(2, 2)
+
+[node name="Label" type="Label" parent="Panel/VBox"]
+layout_mode = 2
+text = "多人游戏"
+
+[node name="Button" type="Button" parent="Panel/VBox"]
+layout_mode = 2
+text = "创建服务器"
+
+[node name="HBox" type="HBoxContainer" parent="Panel/VBox"]
+layout_mode = 2
+
+[node name="Label" type="Label" parent="Panel/VBox/HBox"]
+layout_mode = 2
+text = "IP:"
+
+[node name="IPInput" type="LineEdit" parent="Panel/VBox/HBox"]
+layout_mode = 2
+
+[node name="Button2" type="Button" parent="Panel/VBox"]
+layout_mode = 2
+text = "加入游戏"
+
+[node name="StatusLabel" type="Label" parent="Panel/VBox"]
+layout_mode = 2
+
+[node name="Button3" type="Button" parent="Panel/VBox"]
+layout_mode = 2
+text = "返回"
+
+[node name="RedAISpin" type="SpinBox" parent="Panel/VBox"]
+visible = false
+layout_mode = 2
+
+[node name="BlueAISpin" type="SpinBox" parent="Panel/VBox"]
+visible = false
+layout_mode = 2
+
+[connection signal="pressed" from="Panel/VBox/Button" to="." method="_on_create_server_pressed"]
+[connection signal="pressed" from="Panel/VBox/Button2" to="." method="_on_join_game_pressed"]
+[connection signal="pressed" from="Panel/VBox/Button3" to="." method="_on_return_pressed"]

@@ -1,0 +1,15 @@
+# Godot 4+ specific ignores
+.godot/
+
+# Android build
+/android/
+
+# Export/build output
+build/
+
+# Windows specific
+Thumbs.db
+desktop.ini
+
+# macOS
+.DS_Store
