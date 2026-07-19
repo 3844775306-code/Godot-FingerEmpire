@@ -1244,7 +1244,10 @@ func _tint_preview(node: Node, color: Color):
 	for child in node.get_children():
 		if child is MeshInstance3D and child.mesh:
 			for si in child.mesh.get_surface_count():
-				if child.get_surface_override_material(si) != null: continue
+				var existing = child.get_surface_override_material(si)
+				if existing and "albedo_color" in existing:
+					existing.albedo_color = existing.albedo_color.lerp(color, 0.5)
+					continue
 				var src = child.get_active_material(si)
 				if src and "albedo_color" in src:
 					var m = src.duplicate()

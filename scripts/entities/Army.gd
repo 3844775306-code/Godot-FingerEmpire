@@ -194,8 +194,10 @@ func _add_weapon():
 	if wpath != "" and ResourceLoader.exists(wpath):
 		var ws = load(wpath)
 		if ws: var w = ws.instantiate(); if w: w.position = Vector3(0.3, body_radius * 0.6, 0); w.scale = Vector3.ONE * 0.8; add_child(w)
-		# 盾在另一侧
-		if entity_id in [36, 37, 38]: w.position = Vector3(-0.3, body_radius * 0.6, 0)
+	# 重装单位额外加剑
+	if entity_id in [36, 37, 38] and ResourceLoader.exists("res://models/arena/weapon-sword.glb"):
+		var sw = load("res://models/arena/weapon-sword.glb")
+		if sw: var s = sw.instantiate(); if s: s.position = Vector3(-0.3, body_radius * 0.6, 0); s.scale = Vector3.ONE * 0.8; add_child(s)
 	# 骑兵坐骑
 	var mpath = ""
 	if entity_id in [15, 19, 38]: mpath = "res://models/pets/animal-dog.glb"
