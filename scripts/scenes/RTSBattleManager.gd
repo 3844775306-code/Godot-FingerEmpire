@@ -757,12 +757,12 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 	entity.setup(cfg)
 	# 尝试加载3D模型
 	var model_loaded = _apply_entity_model(entity)
-	# 队伍色着色：轻微色调偏转，保留纹理
-	if entity.entity_type != 0:
+	# 队伍色着色：建筑始终着色，军队仅无模型时着色
+	if entity.entity_type == 1 or (entity.entity_type == 2 and not model_loaded):
 		var tint = Color(0.82, 0.9, 1.0) if team == RTSConfig.Team.BLUE else Color(1.0, 0.82, 0.82)
 		if entity.owner_peer_id != -1 and _player_colors.has(entity.owner_peer_id):
 			var pc = _player_colors[entity.owner_peer_id]
-			tint = Color(0.5 + pc.r * 0.5, 0.5 + pc.g * 0.5, 0.5 + pc.b * 0.5)  # 向白色混合50%
+			tint = Color(0.5 + pc.r * 0.5, 0.5 + pc.g * 0.5, 0.5 + pc.b * 0.5)
 		_apply_team_tint(entity, tint)
 	# 资源需要 setup 后再重建 visual
 	if entity.entity_type == 0 and not model_loaded and entity.has_method("_create_visual"):
