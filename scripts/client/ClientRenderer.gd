@@ -322,6 +322,19 @@ func _update_single_entity(info: Dictionary):
 
 # ---------- 替换原有的 _create_entity_node ----------
 # 递归给模型所有Mesh设置颜色
+func _apply_model_tint(node: Node, tint: Color):
+	for child in node.get_children():
+		if child is MeshInstance3D and child.mesh:
+			for si in child.mesh.get_surface_count():
+				var src = child.get_active_material(si)
+				var mat = StandardMaterial3D.new()
+				mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+				mat.albedo_color = tint
+				if src and "albedo_texture" in src:
+					mat.albedo_texture = src.albedo_texture
+				child.set_surface_override_material(si, mat)
+		_apply_model_tint(child, tint)
+
 func _apply_model_color(node: Node, c: Color):
 	for child in node.get_children():
 		if child is MeshInstance3D:
@@ -379,6 +392,9 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 
 	if loaded_model:
 		entity.add_child(loaded_model)
+		# 队伍色着色
+		if info.get("type", -1) != 0:
+			_apply_model_tint(loaded_model, entity_color)
 	else:
 		# 回退：程序化网格
 		match info["type"]:
