@@ -973,7 +973,6 @@ func _update_build_preview_from_screen(screen_pos: Vector2):
 		
 		var valid = is_position_in_player_vision(pos) and _is_valid_build_position(pos)
 		_tint_preview(build_preview, Color(0,1,0,0.5) if valid else Color(1,0,0,0.5))
-		if mat:
 	else:
 		build_preview.visible = false
 
