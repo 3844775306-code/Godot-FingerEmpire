@@ -25,7 +25,7 @@ var ai_limits: Dictionary = {}                # peer_id -> limits dict
 var building_defs: Array = []
 var build_mode: bool = false
 var selected_building_id: int = -1
-var build_preview: MeshInstance3D = null
+var build_preview: Node3D = null
 var current_build_menu: Control = null
 
 # ==================== 迷雾 ====================
@@ -1142,8 +1142,7 @@ func _update_build_preview(screen_pos: Vector2):
 		build_preview.visible = true
 
 		var valid = is_position_in_player_vision(pos) and _is_valid_build_position(pos)
-		var mat = build_preview.material_override as StandardMaterial3D
-		mat.albedo_color = Color(0,1,0,0.5) if valid else Color(1,0,0,0.5)
+		_tint_preview(build_preview, Color(0,1,0,0.5) if valid else Color(1,0,0,0.5))
 		mat.render_priority = 10          # 提高渲染优先级
 		mat.no_depth_test = true
 	else:
