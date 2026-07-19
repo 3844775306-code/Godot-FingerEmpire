@@ -1291,7 +1291,7 @@ func _update_visibility():
 
 # ==================== 警报辅助 ====================
 func _show_hud_alert(msg: String, color: Color = Color(1.0, 0.2, 0.1), _target_team: int = -1):
-	AudioManager.play_sfx("alert")
+	if color == Color(1.0, 0.2, 0.1) or color == Color(1.0, 0.8, 0.1): AudioManager.play_sfx("alert")
 	if has_node("UI"):
 		var hud = $UI
 		if hud and hud.has_method("show_alert_message"):
