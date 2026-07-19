@@ -703,9 +703,6 @@ func _get_model_aabb(node: Node) -> AABB:
 
 # 队伍着色：递归遍历，保留纹理，用 albedo_color 做色调
 func _apply_team_tint(entity: GameEntity, tint: Color):
-	if entity.entity_id == 10:
-		print("[FarmerTint] entity_id=%d model_loaded=%s tint=%s" % [entity.entity_id, str(entity.has_meta("_model_instance")), str(tint)])
-		_print_mesh_info(entity, 0)
 	_tint_recursive(entity, tint)
 
 func _print_mesh_info(node: Node, depth: int):
@@ -777,8 +774,8 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 	entity.setup(cfg)
 	# 尝试加载3D模型
 	var model_loaded = _apply_entity_model(entity)
-	# 队伍色着色
-	if entity.entity_type != 0:
+	# 队伍色着色：建筑始终着色，军队仅无模型时着色
+	if entity.entity_type == 1 or (entity.entity_type == 2 and not model_loaded):
 		var tint = Color(0.3, 0.6, 1.0) if team == RTSConfig.Team.BLUE else Color(1.0, 0.4, 0.4)
 		if entity.owner_peer_id != -1 and _player_colors.has(entity.owner_peer_id):
 			var pc = _player_colors[entity.owner_peer_id]
