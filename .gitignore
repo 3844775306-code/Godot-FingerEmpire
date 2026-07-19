@@ -1,6 +1,9 @@
 # Godot 4+ specific ignores
 .godot/
 
+# Source assets (not needed at runtime)
+source/
+
 # Android build
 /android/
 
