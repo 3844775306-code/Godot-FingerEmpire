@@ -610,7 +610,7 @@ func _init_entities_deferred():
 
 # ==================== 实体生成 ====================
 func _apply_entity_model(entity: GameEntity) -> bool:
-	var model_path = RTSConfig.get_entity_model(entity.entity_id, entity.level)
+	var model_path = RTSConfig.get_entity_model(entity.entity_id, entity.level, entity.global_position)
 	if model_path == "" or not ResourceLoader.exists(model_path):
 		return false
 	var model_scene = load(model_path)

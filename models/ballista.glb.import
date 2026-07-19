@@ -3,13 +3,13 @@
 importer="scene"
 importer_version=1
 type="PackedScene"
-uid="uid://gk52jp4w7s63"
-path="res://.godot/imported/tree-high.glb-63d65329a7a6d5c08776ce314e78dc9b.scn"
+uid="uid://cb208x1rpsldp"
+path="res://.godot/imported/ballista.glb-45be089a71417066c4b78bf7a63ff550.scn"
 
 [deps]
 
-source_file="res://models/tree-high.glb"
-dest_files=["res://.godot/imported/tree-high.glb-63d65329a7a6d5c08776ce314e78dc9b.scn"]
+source_file="res://models/ballista.glb"
+dest_files=["res://.godot/imported/ballista.glb-45be089a71417066c4b78bf7a63ff550.scn"]
 
 [params]
 

@@ -3,13 +3,13 @@
 importer="scene"
 importer_version=1
 type="PackedScene"
-uid="uid://kfe0tg7ojcbr"
-path="res://.godot/imported/watchtower.glb-cd9c06df4fff961f8cb32cf858422fcc.scn"
+uid="uid://ct007cncbubt6"
+path="res://.godot/imported/catapult.glb-68c43b993c66d7b4a28b594dd3b660ff.scn"
 
 [deps]
 
-source_file="res://models/watchtower.glb"
-dest_files=["res://.godot/imported/watchtower.glb-cd9c06df4fff961f8cb32cf858422fcc.scn"]
+source_file="res://models/catapult.glb"
+dest_files=["res://.godot/imported/catapult.glb-68c43b993c66d7b4a28b594dd3b660ff.scn"]
 
 [params]
 
