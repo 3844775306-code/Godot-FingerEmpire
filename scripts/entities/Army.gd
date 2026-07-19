@@ -855,20 +855,23 @@ func hide_waypoints():
 		if is_instance_valid(m): m.visible = false
 
 func _create_waypoint_marker(pos: Vector3):
-	var marker = MeshInstance3D.new()
-	var ring = TorusMesh.new()
-	ring.inner_radius = 0.3
-	ring.outer_radius = 0.4
-	marker.mesh = ring
+	var marker: Node3D
+	if ResourceLoader.exists("res://models/flag.glb"):
+		var flag_scene = load("res://models/flag.glb")
+		if flag_scene: marker = flag_scene.instantiate()
+	if not marker:
+		marker = MeshInstance3D.new()
+		var ring = TorusMesh.new()
+		ring.inner_radius = 0.3; ring.outer_radius = 0.4
+		marker.mesh = ring
+		var mat = StandardMaterial3D.new()
+		mat.albedo_color = Color(0, 1, 1, 0.8)
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		marker.material_override = mat
 	marker.position = pos + Vector3(0, 0.2, 0)
-	# horizontal (default)
-	var mat = StandardMaterial3D.new()
-	mat.albedo_color = Color(0, 1, 1, 0.8)
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	marker.material_override = mat
 	get_parent().add_child(marker)
 	waypoint_markers.append(marker)
-	# ±àºÅ±êÇ©
+	# 编号标签
 	var label = Label3D.new()
 	label.text = str(waypoint_markers.size())
 	label.position = Vector3(0, 0.55, 0)

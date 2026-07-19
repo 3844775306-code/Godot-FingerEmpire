@@ -14,19 +14,24 @@ var max_lifetime: float = 10.0
 var hit: bool = false
 
 func _ready():
-	# 简单球体视觉
 	add_to_group("bullets")
-	var mesh = MeshInstance3D.new()
-	var sphere = SphereMesh.new()
-	sphere.radius = 0.15
-	mesh.mesh = sphere
-	add_child(mesh)
-	var mat = StandardMaterial3D.new()
-	mat.albedo_color = Color.RED if team == 0 else Color.BLUE
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mesh.set_surface_override_material(0, mat)
+	# 远程攻击加载箭矢模型
+	if ResourceLoader.exists("res://models/weapon-arrow.glb"):
+		var arrow_scene = load("res://models/weapon-arrow.glb")
+		if arrow_scene:
+			var arrow = arrow_scene.instantiate()
+			if arrow: add_child(arrow)
+	if get_child_count() == 0:
+		var mesh = MeshInstance3D.new()
+		var sphere = SphereMesh.new()
+		sphere.radius = 0.15
+		mesh.mesh = sphere
+		add_child(mesh)
+		var mat = StandardMaterial3D.new()
+		mat.albedo_color = Color.RED if team == 0 else Color.BLUE
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mesh.set_surface_override_material(0, mat)
 
-	# 碰撞形状（仅用于视觉和可能的手动检测，我们不依赖物理信号）
 	var col_shape = CollisionShape3D.new()
 	col_shape.shape = SphereShape3D.new()
 	col_shape.shape.radius = 0.15

@@ -3,13 +3,13 @@
 importer="scene"
 importer_version=1
 type="PackedScene"
-uid="uid://c4glhr2v4ayvd"
-path="res://.godot/imported/archer.glb-6c26c4f0d75d253f337e851648d0d5e3.scn"
+uid="uid://f73yiey6f1ng"
+path="res://.godot/imported/flag.glb-0b6fa3c4b5180c1221a26057702dcf53.scn"
 
 [deps]
 
-source_file="res://models/archer.glb"
-dest_files=["res://.godot/imported/archer.glb-6c26c4f0d75d253f337e851648d0d5e3.scn"]
+source_file="res://models/flag.glb"
+dest_files=["res://.godot/imported/flag.glb-0b6fa3c4b5180c1221a26057702dcf53.scn"]
 
 [params]
 

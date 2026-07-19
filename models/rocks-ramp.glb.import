@@ -3,13 +3,13 @@
 importer="scene"
 importer_version=1
 type="PackedScene"
-uid="uid://c4glhr2v4ayvd"
-path="res://.godot/imported/archer.glb-6c26c4f0d75d253f337e851648d0d5e3.scn"
+uid="uid://dno7fvl7te25s"
+path="res://.godot/imported/rocks-ramp.glb-0ee549a8bf530487f5049dc1c7ed4ac8.scn"
 
 [deps]
 
-source_file="res://models/archer.glb"
-dest_files=["res://.godot/imported/archer.glb-6c26c4f0d75d253f337e851648d0d5e3.scn"]
+source_file="res://models/rocks-ramp.glb"
+dest_files=["res://.godot/imported/rocks-ramp.glb-0ee549a8bf530487f5049dc1c7ed4ac8.scn"]
 
 [params]
 
