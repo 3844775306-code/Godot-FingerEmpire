@@ -83,8 +83,7 @@ func _apply_color_recursive(node: Node, c: Color):
 func _ready():
 	add_to_group("entities")
 	collision_layer = 1
-	collision_mask = 1
-	up_direction = Vector3.UP
+	collision_mask = 0
 
 func setup(config: Dictionary):
 	entity_id = config.get("id", 0)
@@ -108,7 +107,7 @@ func setup(config: Dictionary):
 	regeneration_rate = config.get("regeneration_rate", 0.0)
 	production_list = config.get("produces", [])
 	collision_layer = 1
-	collision_mask = 1
+	collision_mask = 0
 	owner_peer_id = config.get("owner_peer_id", -1)
 	piercing = config.get("piercing", false)
 	ignore_building_armor = config.get("ignore_building_armor", false)

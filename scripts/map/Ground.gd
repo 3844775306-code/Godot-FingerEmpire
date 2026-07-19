@@ -412,7 +412,7 @@ func _create_chunked_collisions():
 			var body = StaticBody3D.new()
 			# 下沉到最低高度以下，避免遮挡任何实体
 			body.position = Vector3(center_x, _get_terrain_height(center_x, center_z), center_z)
-			body.collision_layer = 1   # 地面在层1，与单位碰撞
+			body.collision_layer = 2   # 地面在层2，不干扰单位选择
 			body.collision_mask = 0    # 不碰撞任何对象
 			var col = CollisionShape3D.new()
 			col.shape = BoxShape3D.new()
