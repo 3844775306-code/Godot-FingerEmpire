@@ -311,6 +311,9 @@ func _process(delta):
 
 # ═══ Decide ═══
 func decide(_delta):
+	if Engine.get_process_frames() % 60 == 0:
+		var _w = count_unit(10)
+		print("[AI_Diag] phase=%d workers=%d/%d afford=%s train=%s" % [phase, _w, desired_worker_count, str(can_afford(10)), str(_can_train_unit())])
 	_last_delta = _delta
 	if not battle: return
 	if battle is OnlineBattleManager and my_peer_id != -1:

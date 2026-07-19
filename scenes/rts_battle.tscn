@@ -42,6 +42,7 @@ environment = SubResource("Environment_opw4b")
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
 transform = Transform3D(0.70710677, -0.35355338, 0.6123724, 0, 0.8660254, 0.5, -0.70710677, -0.35355338, 0.6123724, 0, 0, 0)
+light_energy = 3.0
 shadow_enabled = true
 
 [node name="Camera3D" type="Camera3D" parent="."]
