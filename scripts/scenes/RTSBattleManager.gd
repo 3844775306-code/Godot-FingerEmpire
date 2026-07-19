@@ -356,6 +356,30 @@ func _ready():
 	_create_game_timer()
 	_create_diag_label()
 	set_process(true)
+	call_deferred("_print_model_animations")
+
+func _print_model_animations():
+	print("===== GLB Animation List =====")
+	var dir = DirAccess.open("res://models")
+	if not dir: print("Cannot open models/"); return
+	dir.list_dir_begin()
+	var fname = dir.get_next()
+	while fname != "":
+		if fname.ends_with(".glb"):
+			var path = "res://models/" + fname
+			var s = load(path)
+			if s:
+				var inst = s.instantiate()
+				if inst:
+					var ap = inst.get_node_or_null("AnimationPlayer") as AnimationPlayer
+					if ap:
+						var anims = ap.get_animation_list()
+						print("  %s: %s" % [fname, str(anims)])
+					inst.queue_free()
+		fname = dir.get_next()
+	dir.list_dir_end()
+	print("==============================")
+
 func _init_2v2_single():
 	# 定义四个玩家：玩家槽0(蓝)、AI槽1(蓝)、AI槽0(红)、AI槽1(红)
 	var setup = [
