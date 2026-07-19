@@ -26,6 +26,7 @@ var building_defs: Array = []
 var build_mode: bool = false
 var selected_building_id: int = -1
 var build_preview: Node3D = null
+var _preview_ring: MeshInstance3D = null
 var current_build_menu: Control = null
 
 # ==================== 迷雾 ====================
@@ -972,11 +973,16 @@ func _update_build_preview_from_screen(screen_pos: Vector2):
 		pos.y = $Map.get_height_at(pos) if $Map else 0
 		build_preview.global_position = pos
 		build_preview.visible = true
-		
+		if _preview_ring:
+			_preview_ring.global_position = pos + Vector3(0, 0.1, 0)
+			_preview_ring.visible = true
+
 		var valid = is_position_in_player_vision(pos) and _is_valid_build_position(pos)
-		_tint_preview(build_preview, Color(0,1,0,0.5) if valid else Color(1,0,0,0.5))
+		if _preview_ring and _preview_ring.material_override:
+			_preview_ring.material_override.albedo_color = Color(0,1,0,0.6) if valid else Color(1,0,0,0.6)
 	else:
 		build_preview.visible = false
+		if _preview_ring: _preview_ring.visible = false
 
 func _end_build_drag_and_place():
 	if not build_touch_active:
@@ -1146,9 +1152,12 @@ func _update_build_preview(screen_pos: Vector2):
 		build_preview.visible = true
 
 		var valid = is_position_in_player_vision(pos) and _is_valid_build_position(pos)
-		_tint_preview(build_preview, Color(0,1,0,0.5) if valid else Color(1,0,0,0.5))
+		if _preview_ring and _preview_ring.material_override:
+			_preview_ring.material_override.albedo_color = Color(0,1,0,0.6) if valid else Color(1,0,0,0.6)
+		if _preview_ring: _preview_ring.global_position = pos + Vector3(0, 0.1, 0); _preview_ring.visible = true
 	else:
 		build_preview.visible = false
+		if _preview_ring: _preview_ring.visible = false
 
 func _is_valid_build_position(pos: Vector3) -> bool:
 	# Cannot build near enemy units (10 unit radius)
@@ -1259,7 +1268,7 @@ func _on_building_selected_for_build(building_id: int):
 	var cfg = EntityDatabase.get_config(building_id)
 	if not cfg: return
 
-	# 尝试加载建筑3D模型作为预览
+	# 加载建筑3D模型作为预览
 	var model_path = RTSConfig.get_entity_model(building_id)
 	if model_path != "" and ResourceLoader.exists(model_path):
 		var s = load(model_path)
@@ -1268,13 +1277,19 @@ func _on_building_selected_for_build(building_id: int):
 		build_preview = MeshInstance3D.new()
 		build_preview.mesh = BoxMesh.new()
 		build_preview.mesh.size = Vector3(cfg.body_radius*2, cfg.body_radius*1.5, cfg.body_radius*2)
-		var mat = StandardMaterial3D.new()
-		mat.albedo_color = Color(0,1,0,0.5)
-		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		build_preview.material_override = mat
-	else:
-		_tint_preview(build_preview, Color(0,1,0,0.5))
+	build_preview.visible = false
 	add_child(build_preview)
+	# 预览底座指示环
+	_preview_ring = MeshInstance3D.new()
+	_preview_ring.mesh = TorusMesh.new()
+	_preview_ring.mesh.inner_radius = cfg.body_radius * 0.8
+	_preview_ring.mesh.outer_radius = cfg.body_radius * 0.9
+	_preview_ring.material_override = StandardMaterial3D.new()
+	_preview_ring.material_override.albedo_color = Color(0,1,0,0.6)
+	_preview_ring.material_override.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_preview_ring.material_override.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_preview_ring.visible = false
+	add_child(_preview_ring)
 
 # ==================== 战争迷雾 ====================
 func _init_fog_grid():
