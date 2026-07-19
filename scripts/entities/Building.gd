@@ -36,24 +36,35 @@ func _process(delta):
 	super._process(delta)
 	# 城墙动态朝向 + 拐角模型切换
 	if entity_id == 27 and Engine.get_process_frames() % 30 == 0:
-		var has_x = false; var has_z = false
+		var has_x_neg = false; var has_x_pos = false
+		var has_z_neg = false; var has_z_pos = false
 		var bm = get_tree().get_first_node_in_group("battle_manager")
 		if bm:
 			for e in bm.entities.get_children():
 				if e is Building and e.entity_id == 27 and e.health > 0 and e != self:
 					var d = e.global_position - global_position
-					if abs(d.x) < 2.0 and abs(d.z) < 0.5: has_x = true
-					if abs(d.z) < 2.0 and abs(d.x) < 0.5: has_z = true
-		var is_corner = has_x and has_z
+					if abs(d.z) < 2.0 and abs(d.x) < 0.5:
+						if d.z < 0: has_z_neg = true
+						else: has_z_pos = true
+					if abs(d.x) < 2.0 and abs(d.z) < 0.5:
+						if d.x < 0: has_x_neg = true
+						else: has_x_pos = true
+		var count = int(has_x_neg) + int(has_x_pos) + int(has_z_neg) + int(has_z_pos)
+		var is_corner = (count >= 2)
 		if is_corner and not has_meta("_wall_is_corner"):
 			set_meta("_wall_is_corner", true)
 			_reload_wall_model(bm, "res://models/castle/wall-corner.glb")
 		elif not is_corner and has_meta("_wall_is_corner") and get_meta("_wall_is_corner"):
 			set_meta("_wall_is_corner", false)
 			_reload_wall_model(bm, "res://models/castle/wall.glb")
-		if has_x and not has_z: rotation.y = deg_to_rad(90)
-		elif has_z and not has_x: rotation.y = 0
-		elif is_corner: rotation.y = deg_to_rad(180)
+		# 朝向：直墙/拐角自动判定
+		if is_corner:
+			if has_x_neg and has_z_neg: rotation.y = deg_to_rad(0)
+			elif has_x_pos and has_z_neg: rotation.y = deg_to_rad(90)
+			elif has_x_pos and has_z_pos: rotation.y = deg_to_rad(180)
+			elif has_x_neg and has_z_pos: rotation.y = deg_to_rad(270)
+		elif has_x_neg or has_x_pos: rotation.y = deg_to_rad(90)
+		else: rotation.y = 0
 
 	# 建造计时
 	if build_timer > 0.0:
