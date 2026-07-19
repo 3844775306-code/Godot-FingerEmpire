@@ -676,6 +676,15 @@ func _apply_entity_model(entity: GameEntity) -> bool:
 	entity.add_child(model_instance)
 	# 存储模型引用用于动画
 	entity.set_meta("_model_instance", model_instance)
+	# 启用顶点颜色（Kenney部分模型依赖顶点着色）
+	for child in model_instance.get_children():
+		if child is MeshInstance3D and child.mesh:
+			for si in child.mesh.get_surface_count():
+				var m = child.get_active_material(si)
+				if m and "vertex_color_use_as_albedo" in m and not m.vertex_color_use_as_albedo:
+					var dup = m.duplicate()
+					dup.vertex_color_use_as_albedo = true
+					child.set_surface_override_material(si, dup)
 	return true
 
 func _set_unshaded_recursive(node: Node):
