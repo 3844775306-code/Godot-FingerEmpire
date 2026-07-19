@@ -201,17 +201,19 @@ func _add_weapon():
 	# 骑兵坐骑
 	var mpath = ""
 	if entity_id in [15, 19, 38]: mpath = "res://models/pets/animal-dog.glb"
+		if entity_id == 15: body_radius *= 1.3
 	elif entity_id == 34: mpath = "res://models/pets/animal-elephant.glb"
 	if mpath != "" and ResourceLoader.exists(mpath):
 		var ms = load(mpath)
 		if ms: var m = ms.instantiate(); if m: m.position = Vector3(0, -body_radius * 0.1, -body_radius * 1.2); m.scale = Vector3.ONE * 0.9; add_child(m)
+		body_radius *= 1.3
 		body_radius *= 1.3
 
 func _add_collision_shape():
 	if not has_node("CollisionShape3D"):
 		var col = CollisionShape3D.new()
 		var shape = SphereShape3D.new()
-		shape.radius = body_radius * 0.6
+		shape.radius = body_radius * 0.6 * 0.6
 		col.shape = shape
 		col.name = "CollisionShape3D"
 		add_child(col)
