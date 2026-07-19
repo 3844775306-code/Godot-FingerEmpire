@@ -676,8 +676,6 @@ func _apply_entity_model(entity: GameEntity) -> bool:
 	entity.add_child(model_instance)
 	# 存储模型引用用于动画
 	entity.set_meta("_model_instance", model_instance)
-	# 模型保持原始亮度（修复导入后变暗的问题）
-	_set_unshaded_recursive(model_instance)
 	return true
 
 func _set_unshaded_recursive(node: Node):

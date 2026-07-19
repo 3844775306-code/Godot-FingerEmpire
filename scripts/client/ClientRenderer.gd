@@ -403,7 +403,6 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 
 	if loaded_model:
 		entity.add_child(loaded_model)
-		_set_unshaded_recursive(loaded_model)
 		# 队伍色着色（向白色混合50%，降低饱和度）
 		if info.get("type", -1) != 0:
 			var lt = Color(0.5 + entity_color.r * 0.5, 0.5 + entity_color.g * 0.5, 0.5 + entity_color.b * 0.5)

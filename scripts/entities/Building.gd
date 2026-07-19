@@ -145,7 +145,6 @@ func _reload_wall_model(bm, path):
 		var inst = s.instantiate()
 		if inst:
 			add_child(inst); set_meta("_model_instance", inst)
-			bm._set_unshaded_recursive(inst)
 			var tint = Color(0.75, 0.85, 1.0) if team == RTSConfig.Team.BLUE else Color(1.0, 0.75, 0.75)
 			bm._apply_team_tint(self, tint)
 
