@@ -676,11 +676,9 @@ func _apply_entity_model(entity: GameEntity) -> bool:
 	entity.add_child(model_instance)
 	# 存储模型引用用于动画
 	entity.set_meta("_model_instance", model_instance)
-	# 存储模型引用用于动画
-	# 调试：打印模型材质信息
-	if Engine.get_process_frames() < 3:
-		print("[ModelLoad] eid=%d model=%s" % [entity.entity_id, model_path])
-		_print_mesh_info(model_instance, 0)
+	# 角色模型启用顶点颜色（编辑器预览依赖此特性）
+	if entity.entity_id in [10, 43, 44, 45, 46, 47, 48, 49, 50, 51]:
+		_enable_vertex_colors(model_instance)
 	return true
 
 func _set_unshaded_recursive(node: Node):
@@ -761,6 +759,17 @@ func _update_entity_animation(entity: GameEntity):
 	if anim != "" and ap.has_animation(anim) and ap.current_animation != anim:
 		ap.play(anim)
 		
+
+func _enable_vertex_colors(node: Node):
+	for child in node.get_children():
+		if child is MeshInstance3D and child.mesh:
+			for si in child.mesh.get_surface_count():
+				var m = child.get_active_material(si)
+				if m and "vertex_color_use_as_albedo" in m:
+					var dup = m.duplicate()
+					dup.vertex_color_use_as_albedo = true
+					child.set_surface_override_material(si, dup)
+		_enable_vertex_colors(child)
 
 func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -> GameEntity:
 	if not entities or config.is_empty(): return null
