@@ -53,6 +53,7 @@ func _process(delta):
 			_reload_wall_model(bm, "res://models/castle/wall.glb")
 		if has_x and not has_z: rotation.y = deg_to_rad(90)
 		elif has_z and not has_x: rotation.y = 0
+		elif is_corner: rotation.y = deg_to_rad(90)  # 转角墙顺时针90度
 
 	# 建造计时
 	if build_timer > 0.0:
@@ -145,8 +146,11 @@ func _reload_wall_model(bm, path):
 		if inst:
 			add_child(inst); set_meta("_model_instance", inst)
 			bm._set_unshaded_recursive(inst)
-			if owner_peer_id != -1 and bm._player_colors.has(owner_peer_id):
-				bm._apply_team_tint(self, bm._player_colors[owner_peer_id])
+		var tint = Color(0.82, 0.9, 1.0) if team == RTSConfig.Team.BLUE else Color(1.0, 0.82, 0.82)
+		if owner_peer_id != -1 and bm._player_colors.has(owner_peer_id):
+			var pc = bm._player_colors[owner_peer_id]
+			tint = Color(0.5 + pc.r * 0.5, 0.5 + pc.g * 0.5, 0.5 + pc.b * 0.5)
+		bm._apply_team_tint(self, tint)
 
 func _finish_construction():
 	build_timer = 0.0
