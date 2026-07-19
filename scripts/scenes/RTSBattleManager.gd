@@ -799,6 +799,8 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 	if entity.entity_type == 0 and not model_loaded and entity.has_method("_create_visual"):
 		entity._create_visual()
 	entity.global_position = pos
+	# 特定建筑旋转90度
+	if entity.entity_id in [22, 27, 28]: entity.rotation.y = deg_to_rad(90)
 	mark_entity_cache_dirty()
 
 	# 地面高度修正
@@ -1242,7 +1244,10 @@ func _show_build_menu(world_pos: Vector3):
 func _tint_preview(node: Node, color: Color):
 	for child in node.get_children():
 		if child is MeshInstance3D and child.mesh:
+			var src = child.get_active_material(0)
 			var m = StandardMaterial3D.new()
+			if src and "albedo_texture" in src and src.albedo_texture:
+				m.albedo_texture = src.albedo_texture
 			m.albedo_color = color
 			m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 			child.material_override = m
