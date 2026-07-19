@@ -392,9 +392,10 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 
 	if loaded_model:
 		entity.add_child(loaded_model)
-		# 队伍色着色
+		# 队伍色着色（向白色混合50%，降低饱和度）
 		if info.get("type", -1) != 0:
-			_apply_model_tint(loaded_model, entity_color)
+			var lt = Color(0.5 + entity_color.r * 0.5, 0.5 + entity_color.g * 0.5, 0.5 + entity_color.b * 0.5)
+			_apply_model_tint(loaded_model, lt)
 	else:
 		# 回退：程序化网格
 		match info["type"]:
