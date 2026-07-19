@@ -609,21 +609,22 @@ func _init_entities_deferred():
 		cam.global_position = Vector3(player_castle.global_position.x, cam.global_position.y, player_castle.global_position.z)
 
 # ==================== 实体生成 ====================
-func _apply_entity_model(entity: GameEntity):
+func _apply_entity_model(entity: GameEntity) -> bool:
 	var model_path = RTSConfig.get_entity_model(entity.entity_id)
 	if model_path == "" or not FileAccess.file_exists(model_path):
-		return
+		return false
 	# 移除旧的程序化网格，加载3D模型
 	var model_scene = load(model_path)
-	if not model_scene: print("[Model] load failed: %s" % model_path); return
+	if not model_scene: return false
 	var model_instance = model_scene.instantiate()
-	if not model_instance: print("[Model] instantiate failed: %s" % model_path); return
-	if Engine.get_process_frames() < 10: print("[Model] loaded: %s for eid=%d" % [model_path, entity.entity_id])
+	if not model_instance: return false
 	# 移除旧Mesh子节点
 	for child in entity.get_children():
 		if child is MeshInstance3D and child.name != "SelectionRing":
 			child.queue_free()
 	entity.add_child(model_instance)
+tmodel_instance.owner = entity
+	return true
 	model_instance.owner = entity
 
 func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -> GameEntity:
@@ -642,10 +643,9 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 	cfg["team"] = team
 	entities.add_child(entity)
 	entity.setup(cfg)
-	# 尝试加载3D模型（在颜色应用之前）
-	_apply_entity_model(entity)
-	# 应用颜色：优先玩家颜色，否则队伍颜色，资源跳过
-	if entity.entity_type != 0:
+	# 尝试加载3D模型，成功则跳过队伍色覆盖（保留模型本色）
+	var model_loaded = _apply_entity_model(entity)
+	if not model_loaded and entity.entity_type != 0:
 		var c = Color(0.3, 0.5, 1.0) if team == RTSConfig.Team.BLUE else Color(1.0, 0.25, 0.2)
 		if entity.owner_peer_id != -1 and _player_colors.has(entity.owner_peer_id):
 			c = _player_colors[entity.owner_peer_id]
@@ -772,7 +772,7 @@ func _place_building_at(pos: Vector3):
 
 	var cfg = EntityDatabase.get_config(selected_building_id)
 	if not cfg:
-		return
+		return false
 
 	# 资源检查
 	var cost = cfg.get("cost", {})
@@ -784,7 +784,7 @@ func _place_building_at(pos: Vector3):
 	# 人口检查（防御塔）
 	var is_defense = (selected_building_id == 25 or selected_building_id == 26)
 	if is_defense and not can_train_unit(RTSConfig.Team.BLUE):
-		return
+		return false
 	
 	# 扣资源
 	for k in cost:
@@ -799,7 +799,7 @@ func _place_building_at(pos: Vector3):
 	# 但移动端主要用触摸，PC端继续用鼠标左键命令+右键选择
 func _start_build_drag(screen_pos: Vector2):
 	if not build_preview:
-		return
+		return false
 	build_touch_active = true
 	build_drag_started = true
 	# 立即更新一次预览位置
@@ -807,10 +807,10 @@ func _start_build_drag(screen_pos: Vector2):
 
 func _update_build_preview_from_screen(screen_pos: Vector2):
 	if not build_preview:
-		return
+		return false
 	var cam = get_viewport().get_camera_3d()
 	if not cam:
-		return
+		return false
 	var from = cam.project_ray_origin(screen_pos)
 	var to = from + cam.project_ray_normal(screen_pos) * 500
 	var space = get_world_3d().direct_space_state
@@ -834,7 +834,7 @@ func _update_build_preview_from_screen(screen_pos: Vector2):
 
 func _end_build_drag_and_place():
 	if not build_touch_active:
-		return
+		return false
 	build_touch_active = false
 	build_drag_started = false
 	
@@ -854,19 +854,19 @@ func _handle_right_click(event):
 			elif u is Building and u.has_method("_hide_garrison_marker"):
 				u.garrison_point = Vector3.ZERO
 				u._hide_garrison_marker()
-		return
+		return false
 
 	
 
 	if selection.selected_entities.is_empty():
 		_try_open_build_menu(event.position)
-		return
+		return false
 
 	# 右键空地 → 取消选择
 	var hit = _get_entity_under_click(event.position)
 	if not hit:
 		selection._clear_selection()
-		return
+		return false
 
 	_command_selected_units(event.position)
 
