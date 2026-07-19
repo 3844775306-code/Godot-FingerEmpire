@@ -3,6 +3,7 @@ extends Control
 var nation_select: OptionButton
 
 func _ready():
+	AudioManager.play_music("menu")
 	# 隐藏旧的场景节点，全部用代码重建
 	var old_box = get_node_or_null("VBoxContainer")
 	if old_box: old_box.visible = false

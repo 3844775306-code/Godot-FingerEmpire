@@ -293,6 +293,7 @@ func _create_game_timer():
 func _on_castle_died(team: int):
 	if game_over: return
 	game_over = true
+	AudioManager.play_music("defeat" if team == RTSConfig.Team.BLUE else "victory")
 
 	if team == RTSConfig.Team.BLUE:
 		_show_hud_alert("我方基地正遭受攻击！", Color(1.0, 0.2, 0.1))
@@ -355,6 +356,7 @@ func _ready():
 	_create_game_over_panel()
 	_create_game_timer()
 	_create_diag_label()
+	AudioManager.play_music("battle")
 	set_process(true)
 	call_deferred("_print_model_animations")
 
@@ -907,6 +909,7 @@ func _place_building_at(pos: Vector3):
 	var b = spawn_entity(cfg, RTSConfig.Team.BLUE, pos) as Building
 	if b:
 		b.start_construction(5.0, cfg)	
+			AudioManager.play_sfx("build_place")
 	# 注意：如果仍需要支持鼠标（PC调试），可以同时保留原鼠标处理
 	# 但移动端主要用触摸，PC端继续用鼠标左键命令+右键选择
 func _start_build_drag(screen_pos: Vector2):
@@ -1178,6 +1181,7 @@ func _place_building():
 	var b = spawn_entity(cfg, RTSConfig.Team.BLUE, pos) as Building
 	if b:
 		b.start_construction(5.0, cfg)
+			AudioManager.play_sfx("build_place")
 
 	if not Input.is_key_pressed(KEY_SHIFT):
 			_exit_build_mode()
@@ -1287,6 +1291,7 @@ func _update_visibility():
 
 # ==================== 警报辅助 ====================
 func _show_hud_alert(msg: String, color: Color = Color(1.0, 0.2, 0.1), _target_team: int = -1):
+	AudioManager.play_sfx("alert")
 	if has_node("UI"):
 		var hud = $UI
 		if hud and hud.has_method("show_alert_message"):

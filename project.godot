@@ -23,6 +23,7 @@ EntityDatabase="*res://scripts/core/EntityDatabase.gd"
 NetworkManager="*res://scripts/core/NetworkManager.gd"
 ThemeHelper="*res://scripts/ui/ThemeHelper.gd"
 GameSettings="*res://scripts/core/GameSettings.gd"
+AudioManager="*res://scripts/core/AudioManager.gd"
 
 [display]
 

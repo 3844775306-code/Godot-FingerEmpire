@@ -236,6 +236,16 @@ func _physics_process(delta):
 	else: speed = base_speed
 	
 	if bm:
+		# 涉水/航行音效
+		if Engine.get_process_frames() % 30 == 0:
+			var _in_water = (terrain == 2)
+			var _was_in_water = has_meta("_was_in_water") and get_meta("_was_in_water")
+			if _in_water != _was_in_water and not water_capable:
+				AudioManager.play_sfx_3d("water_step", global_position, _get_cam_pos())
+			elif _in_water and water_capable and current_order == "move":
+				AudioManager.play_sfx_3d("sail", global_position, _get_cam_pos())
+			set_meta("_was_in_water", _in_water)
+
 		var terrain = bm.get_terrain_at(global_position)
 		if water_capable and terrain != 2:
 			speed *= 0.3
@@ -645,6 +655,16 @@ func _apply_passive_collision(delta):
 			global_position += Vector3(randf_range(-0.2,0.2), 0, randf_range(-0.2,0.2))
 # ----------------- ¹¥»÷ -----------------
 func _attack(target, delta):
+
+	# 攻击音效
+	var _sfx = ""
+	if entity_id in [12, 26, 33, 13]: _sfx = "arrow_shoot"
+	elif entity_id in [16, 17]: _sfx = "cannon_fire" if entity_id == 16 else "treb_fire"
+	elif entity_id in [15]: _sfx = "sword_swing"
+	elif entity_id in [11, 30, 49, 18, 35]: _sfx = "heavy_swing"
+	elif entity_id in [38, 40]: _sfx = "sword_swing"
+	if _sfx != "": AudioManager.play_sfx_3d(_sfx, global_position, _get_cam_pos())
+
 	if attack_timer > 0:
 		attack_timer -= delta
 		return

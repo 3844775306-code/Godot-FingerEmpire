@@ -88,6 +88,10 @@ func _physics_process(delta):
 
 func _on_hit(entity: GameEntity):
 	if hit: return
+	# 命中音效
+	if damage_radius > 0: AudioManager.play_sfx("cannon_hit")
+	else: AudioManager.play_sfx("arrow_hit")
+
 	hit = true
 
 	# 确保 source 有效，无效则不传

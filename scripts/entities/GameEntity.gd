@@ -52,6 +52,10 @@ func _get_bm():
 		_bm = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
 	return _bm
 
+func _get_cam_pos() -> Vector3:
+	var cam = get_viewport().get_camera_3d()
+	return cam.global_position if cam else Vector3.ZERO
+
 # 递归设置实体颜色
 func apply_color(c: Color):
 	_apply_color_recursive(self, c)
@@ -179,7 +183,7 @@ func take_damage(amount: float, source: GameEntity = null):
 	if health <= 0:
 		die()
 func die():
-	print("[DeadBug] Entity %s (type=%d id=%d eid=%d) dying at frame %d" % [display_name, entity_type, get_instance_id(), entity_id, Engine.get_process_frames()])
+	AudioManager.play_sfx_3d("unit_die", global_position, _get_cam_pos())
 	emit_signal("died")
 	# 动物死亡掉落食物
 	if self is Army and self.get("_animal_type") != "" and self.get("_animal_type") != null:
@@ -252,6 +256,7 @@ func set_selected(selected: bool):
 		_hide_garrison_marker()
 
 func _spawn_produced_unit():
+	AudioManager.play_sfx("produce")
 	if production_queue.is_empty():
 		return
 
