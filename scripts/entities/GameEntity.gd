@@ -60,13 +60,14 @@ func _apply_color_recursive(node: Node, c: Color):
 	for child in node.get_children():
 		if child is MeshInstance3D:
 			for si in child.mesh.get_surface_count():
-				var mat = child.get_surface_override_material(si)
-				if not mat:
-					mat = StandardMaterial3D.new()
-					mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
-					mat.vertex_color_use_as_albedo = false
-					child.set_surface_override_material(si, mat)
+				var existing = child.get_surface_override_material(si)
+				if not existing:
+					existing = child.get_active_material(si)
+				var mat = existing.duplicate() if existing else StandardMaterial3D.new()
 				mat.albedo_color = c
+				mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+				mat.vertex_color_use_as_albedo = false
+				child.set_surface_override_material(si, mat)
 		_apply_color_recursive(child, c)
 
 	# 原有属性赋值...
