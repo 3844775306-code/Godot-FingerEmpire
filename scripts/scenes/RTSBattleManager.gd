@@ -654,6 +654,10 @@ func _apply_entity_model(entity: GameEntity) -> bool:
 				if abs(d.z) < 2.0 and abs(d.x) < 0.5: has_z = true
 		if has_x and has_z: model_path = "res://models/castle/wall-corner.glb"
 		else: model_path = "res://models/castle/wall.glb"
+		# 根据相邻墙方向旋转
+		if has_x and not has_z: entity.rotation.y = deg_to_rad(90)
+		elif has_z and not has_x: entity.rotation.y = 0
+		elif has_x and has_z: entity.rotation.y = deg_to_rad(45)
 	if model_path == "" or not ResourceLoader.exists(model_path):
 		return false
 	var model_scene = load(model_path)

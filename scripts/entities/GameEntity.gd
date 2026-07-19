@@ -214,11 +214,10 @@ func die():
 		var ap = model.get_node_or_null("AnimationPlayer") as AnimationPlayer
 		if ap and ap.has_animation("die"):
 			ap.play("die")
-			var _self = self
-			ap.animation_finished.connect(func(): _self.queue_free(), CONNECT_ONE_SHOT)
 			collision_layer = 0
-			visible = false
-			$CollisionShape3D.disabled = true if has_node("CollisionShape3D") else false
+			var t = Timer.new(); t.one_shot = true
+			t.wait_time = ap.get_animation("die").length + 0.2
+			t.timeout.connect(queue_free); add_child(t); t.start()
 			return
 	queue_free()
 
