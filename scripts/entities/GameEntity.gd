@@ -109,8 +109,8 @@ func _process(delta):
 		shock_timer -= delta
 	if freeze_timer > 0:
 		freeze_timer -= delta
-	# 模型动画
-	if Engine.get_process_frames() % 10 == 0:
+	# 模型动画（每30帧更新一次）
+	if Engine.get_process_frames() % 30 == 0:
 		var bm = _get_bm()
 		if bm and bm.has_method("_update_entity_animation"):
 			bm._update_entity_animation(self)

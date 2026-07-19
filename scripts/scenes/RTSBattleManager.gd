@@ -702,10 +702,15 @@ func _update_entity_animation(entity: GameEntity):
 	var ap = model.get_node_or_null("AnimationPlayer") as AnimationPlayer
 	if not ap: return
 	var anim = ""
-	if entity.health <= 0: anim = "Death"
-	elif entity.current_order == "attack": anim = "Attack"
-	elif entity.current_order == "move" or entity.current_order == "deliver": anim = "Walk"
-	else: anim = "Idle"
+	var is_animal = entity.get("_animal_type") != "" and entity.get("_animal_type") != null
+	if entity.health <= 0:
+		anim = "die"
+	elif entity.current_order == "attack":
+		anim = "attack-melee-left"
+	elif entity.current_order == "move" or entity.current_order == "deliver":
+		anim = "walk" if is_animal else "walk"
+	else:
+		anim = "idle" if is_animal else "idle"
 	if anim != "" and ap.has_animation(anim) and ap.current_animation != anim:
 		ap.play(anim)
 		
