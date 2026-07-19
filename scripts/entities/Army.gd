@@ -510,6 +510,7 @@ func _manual_move(delta):
 
 	# 沿A*路径移动
 	var move_target = target_pos
+	if Engine.get_process_frames() % 30 == 0: print("[Move] path=%d first=%s target=%s" % [astar_path.size(), str(astar_path[0]) if astar_path.size()>0 else "none", str(move_target)])
 	if astar_path.size() > 0:
 		move_target = astar_path[0]
 		if global_position.distance_to(move_target) < 0.5:
