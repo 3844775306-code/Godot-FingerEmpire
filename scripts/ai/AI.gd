@@ -191,6 +191,21 @@ func can_afford_upgrade(building_id: int) -> bool:
 
 # ═══ Production ═══
 func produce_unit(unit_id: int) -> bool:
+if unit_id == 10:
+	var _blds = 0; var _tried = 0; var _produced = 0
+	for entity in battle.entities.get_children():
+		if entity is Building and entity.health > 0 and entity.build_timer <= 0:
+			if not entity_belongs_to_me(entity): continue
+			_blds += 1
+			var _ql = 999
+			for p in entity.production_list:
+				if p.unit_id == 10: _ql = p.queue_limit
+			var _inq = 0
+			for q in entity.production_queue:
+				if q == 10: _inq += 1
+			if _inq >= _ql: _tried += 1; continue
+			if entity.try_produce(10): _produced += 1
+	if unit_id == 10: print("[AI_Prod] workers=%d/%d blds=%d tried=%d produced=%d" % [count_unit(10), desired_worker_count, _blds, _tried, _produced])
 	var produced = 0
 	for entity in battle.entities.get_children():
 		if produced >= 3: break
