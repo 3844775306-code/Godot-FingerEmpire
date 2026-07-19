@@ -359,6 +359,15 @@ func _ready():
 	call_deferred("_print_model_animations")
 
 func _print_model_animations():
+func _print_anim(path, label):
+	var s = load(path)
+	if s:
+		var inst = s.instantiate()
+		if inst:
+			var ap = inst.get_node_or_null("AnimationPlayer") as AnimationPlayer
+			if ap: print("  %s: %s" % [label, str(ap.get_animation_list())])
+			inst.queue_free()
+
 	print("===== GLB Animation List =====")
 	var dir = DirAccess.open("res://models")
 	if not dir: print("Cannot open models/"); return

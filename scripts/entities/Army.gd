@@ -466,6 +466,10 @@ func _manual_move(delta):
 		return
 
 	global_position += move_dir * speed * delta
+	# 旋转朝向移动方向
+	if move_dir.length() > 0.01:
+		var look_target = global_position + move_dir
+		look_at(Vector3(look_target.x, global_position.y, look_target.z), Vector3.UP)
 
 	# ±ß½çÏÞÖÆ
 	var half_map = RTSConfig.MAP_SIZE / 2.0

@@ -208,6 +208,15 @@ func die():
 		else:
 			bm.decrease_population(team, 1)
 	_hide_garrison_marker()
+	# 播放死亡动画后再删除
+	if has_meta("_model_instance"):
+		var model = get_meta("_model_instance")
+		var ap = model.get_node_or_null("AnimationPlayer") as AnimationPlayer
+		if ap and ap.has_animation("die"):
+			ap.play("die")
+			ap.animation_finished.connect(queue_free, CONNECT_ONE_SHOT)
+			collision_layer = 0  # 播放动画期间无视碰撞
+			return
 	queue_free()
 
 # 驻扎标记桩方法（子类覆盖）
