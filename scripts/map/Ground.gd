@@ -399,6 +399,7 @@ func _create_chunked_collisions():
 	var nav_mesh = NavigationMesh.new()
 	nav_mesh.agent_radius = 0.5
 	nav_mesh.agent_height = 1.2
+	nav_mesh.navigation_layers = 1
 	nav_region.navigation_mesh = nav_mesh
 
 	var half_map = size / 2.0
