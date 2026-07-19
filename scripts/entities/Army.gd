@@ -521,8 +521,8 @@ func _manual_move(delta):
 	if move_dir.length() < 0.01:
 		return
 
-	# 陆军避开不可通行地形（水域/山地）
-	if not water_capable:
+	# 陆军避开不可通行地形（仅在无A*路径时，路径本身已绕水）
+	if not water_capable and astar_path.size() == 0:
 		var next_pos = global_position + move_dir * speed * delta
 		var bm2 = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
 		if bm2:
