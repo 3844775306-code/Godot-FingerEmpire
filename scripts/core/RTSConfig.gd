@@ -58,7 +58,7 @@ const ENTITY_MODELS = {
 	38: "res://models/soldier.glb",  # 重装骑兵
 	# 船只
 	13: "res://models/ship-medium.glb",
-	14: "res://models/ship-small.glb",
+	14: "res://models/boat-row-small.glb",
 	39: "res://models/ship-large.glb",
 	40: "res://models/ship-small.glb",
 	# 攻城
