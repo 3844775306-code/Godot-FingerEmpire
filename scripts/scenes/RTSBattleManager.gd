@@ -676,22 +676,9 @@ func _apply_entity_model(entity: GameEntity) -> bool:
 	entity.add_child(model_instance)
 	# 存储模型引用用于动画
 	entity.set_meta("_model_instance", model_instance)
-	# 递归启用顶点颜色
-	_enable_vc_recursive(model_instance, entity.entity_id)
+	# 存储模型引用用于动画
+	entity.set_meta("_model_instance", model_instance)
 	return true
-
-func _enable_vc_recursive(node: Node, eid: int):
-	for child in node.get_children():
-		if child is MeshInstance3D and child.mesh:
-			for si in child.mesh.get_surface_count():
-				var m = child.get_active_material(si)
-				if m and "vertex_color_use_as_albedo" in m:
-					if eid in [10, 60, 62]: print("[VC_ebug] eid=%d mesh=%s vc_enabled=%s albedo=%s" % [eid, child.name, str(m.vertex_color_use_as_albedo), str(m.albedo_color)])
-					if not m.vertex_color_use_as_albedo:
-						var dup = m.duplicate()
-						dup.vertex_color_use_as_albedo = true
-						child.set_surface_override_material(si, dup)
-		_enable_vc_recursive(child, eid)
 
 func _set_unshaded_recursive(node: Node):
 	for child in node.get_children():
@@ -789,8 +776,8 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 	entity.setup(cfg)
 	# 尝试加载3D模型
 	var model_loaded = _apply_entity_model(entity)
-	# 队伍色着色：建筑始终着色，军队仅无模型时着色
-	if entity.entity_type == 1 or (entity.entity_type == 2 and not model_loaded):
+	# 队伍色着色：所有非资源实体
+	if entity.entity_type != 0:
 		var tint = Color(0.3, 0.6, 1.0) if team == RTSConfig.Team.BLUE else Color(1.0, 0.4, 0.4)
 		if entity.owner_peer_id != -1 and _player_colors.has(entity.owner_peer_id):
 			var pc = _player_colors[entity.owner_peer_id]
