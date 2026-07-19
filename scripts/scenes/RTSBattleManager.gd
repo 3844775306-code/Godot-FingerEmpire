@@ -678,7 +678,7 @@ func _apply_entity_model(entity: GameEntity) -> bool:
 	entity.set_meta("_model_instance", model_instance)
 	# 存储模型引用用于动画
 	# 调试：打印模型材质信息
-	if Engine.get_process_frames() < 300:
+	if Engine.get_process_frames() < 3:
 		print("[ModelLoad] eid=%d model=%s" % [entity.entity_id, model_path])
 		_print_mesh_info(model_instance, 0)
 	return true
@@ -780,8 +780,8 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 	entity.setup(cfg)
 	# 尝试加载3D模型
 	var model_loaded = _apply_entity_model(entity)
-	# 队伍色着色：所有非资源实体
-	if entity.entity_type != 0:
+	# 队伍色着色：建筑+动物+无模型军队；角色模型(农民/商人/官员)跳过
+	if entity.entity_type == 1 or (entity.entity_type == 2 and entity.entity_id not in [10, 43, 44, 45, 46, 47, 48, 49, 50, 51]):
 		var tint = Color(0.3, 0.6, 1.0) if team == RTSConfig.Team.BLUE else Color(1.0, 0.4, 0.4)
 		if entity.owner_peer_id != -1 and _player_colors.has(entity.owner_peer_id):
 			var pc = _player_colors[entity.owner_peer_id]
