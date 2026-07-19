@@ -204,7 +204,7 @@ func _add_weapon():
 	elif entity_id == 34: mpath = "res://models/pets/animal-elephant.glb"
 	if mpath != "" and ResourceLoader.exists(mpath):
 		var ms = load(mpath)
-		if ms: var m = ms.instantiate(); if m: m.position = Vector3(0, -body_radius * 0.8, 0); m.scale = Vector3.ONE * 0.9; add_child(m)
+		if ms: var m = ms.instantiate(); if m: m.position = Vector3(0, -body_radius * 0.1, -body_radius * 1.2); m.scale = Vector3.ONE * 0.9; add_child(m)
 
 func _add_collision_shape():
 	if not has_node("CollisionShape3D"):
@@ -478,13 +478,14 @@ func _manual_move(delta):
 	if move_dir.length() < 0.01:
 		return
 
-	global_position += move_dir * speed * delta
+	velocity = Vector3(move_dir.x, 0, move_dir.z) * speed
+	move_and_slide()
 	# 旋转朝向移动方向
 	if move_dir.length() > 0.01:
 		var look_target = global_position + move_dir
 		look_at(Vector3(look_target.x, global_position.y, look_target.z), Vector3.UP)
 
-	# ±ß½çÏÞÖÆ
+	# 边界限制
 	var half_map = RTSConfig.MAP_SIZE / 2.0
 	global_position.x = clamp(global_position.x, -half_map, half_map)
 	global_position.z = clamp(global_position.z, -half_map, half_map)

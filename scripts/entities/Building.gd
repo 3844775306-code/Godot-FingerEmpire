@@ -224,8 +224,8 @@ func is_under_construction() -> bool:
 func _ready():
 	super._ready()
 	entity_type = 1
-	collision_layer = 1
-	collision_mask = 1  # 阻挡敌方单位通过
+	collision_layer = 0  # 建筑不阻挡单位移动
+	collision_mask = 0
 	can_move = false
 	_add_selection_ring()
 	_add_collision_shape()
