@@ -63,7 +63,7 @@ func _apply_color_recursive(node: Node, c: Color):
 				var mat = child.get_surface_override_material(si)
 				if not mat:
 					mat = StandardMaterial3D.new()
-					mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+					mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
 					mat.vertex_color_use_as_albedo = false
 					child.set_surface_override_material(si, mat)
 				mat.albedo_color = c

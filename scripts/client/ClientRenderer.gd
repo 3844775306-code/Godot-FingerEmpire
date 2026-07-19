@@ -84,7 +84,7 @@ func _ready():
 	var mat = StandardMaterial3D.new()
 	mat.albedo_color = Color(0, 1, 0, 0.5)
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
 	mat.render_priority = 10          # 提高渲染优先级
 	mat.no_depth_test = true          # 禁用深度测试，确保不被遮挡
 	placement_preview.material_override = mat
@@ -329,7 +329,7 @@ func _apply_model_color(node: Node, c: Color):
 				var m = child.get_surface_override_material(si)
 				if not m:
 					m = StandardMaterial3D.new()
-					m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+					m.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
 					m.vertex_color_use_as_albedo = false
 					child.set_surface_override_material(si, m)
 				m.albedo_color = c
@@ -442,7 +442,7 @@ func _create_bullet_node(info: Dictionary) -> Node3D:
 	else:
 		mat.albedo_color = Color.RED if info["team"] == RTSConfig.Team.BLUE else Color.BLUE
 
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
 	mesh.material_override = mat
 	n.add_child(mesh)
 	entities_container.add_child(n)
@@ -592,7 +592,7 @@ func _update_waypoint_markers(node: Node3D, info: Dictionary):
 		pole.position = world_pos + Vector3(0, 1.0, 0)
 		var pole_mat = StandardMaterial3D.new()
 		pole_mat.albedo_color = pole_color
-		pole_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		pole_mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
 		pole_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 		pole_mat.render_priority = 10
 		pole_mat.no_depth_test = true
@@ -608,7 +608,7 @@ func _update_waypoint_markers(node: Node3D, info: Dictionary):
 		marker.position = world_pos + Vector3(0, 2.0, 0)
 		var mat = StandardMaterial3D.new()
 		mat.albedo_color = ring_color
-		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
 		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 		mat.render_priority = 10
 		mat.no_depth_test = true
@@ -624,7 +624,7 @@ func _update_waypoint_markers(node: Node3D, info: Dictionary):
 		dot.position = world_pos + Vector3(0, 0.2, 0)
 		var dot_mat = StandardMaterial3D.new()
 		dot_mat.albedo_color = ring_color
-		dot_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		dot_mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
 		dot_mat.render_priority = 10
 		dot_mat.no_depth_test = true
 		dot.material_override = dot_mat
