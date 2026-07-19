@@ -789,8 +789,8 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 	entity.setup(cfg)
 	# 尝试加载3D模型
 	var model_loaded = _apply_entity_model(entity)
-	# 队伍色着色：所有非资源实体
-	if entity.entity_type != 0:
+	# 队伍色着色：非资源、非中立实体
+	if entity.entity_type != 0 and entity.team != RTSConfig.Team.NEUTRAL:
 		var tint = Color(0.3, 0.6, 1.0) if team == RTSConfig.Team.BLUE else Color(1.0, 0.4, 0.4)
 		if entity.owner_peer_id != -1 and _player_colors.has(entity.owner_peer_id):
 			var pc = _player_colors[entity.owner_peer_id]
