@@ -615,9 +615,10 @@ func _apply_entity_model(entity: GameEntity):
 		return
 	# 移除旧的程序化网格，加载3D模型
 	var model_scene = load(model_path)
-	if not model_scene: return
+	if not model_scene: print("[Model] load failed: %s" % model_path); return
 	var model_instance = model_scene.instantiate()
-	if not model_instance: return
+	if not model_instance: print("[Model] instantiate failed: %s" % model_path); return
+	if Engine.get_process_frames() < 10: print("[Model] loaded: %s for eid=%d" % [model_path, entity.entity_id])
 	# 移除旧Mesh子节点
 	for child in entity.get_children():
 		if child is MeshInstance3D and child.name != "SelectionRing":
