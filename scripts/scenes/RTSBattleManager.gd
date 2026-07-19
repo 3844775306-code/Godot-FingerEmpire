@@ -601,7 +601,6 @@ func _init_entities_deferred():
 	# 生成玩家城堡
 	var castle_cfg = EntityDatabase.get_config(20)
 	castle_cfg["team"] = RTSConfig.Team.BLUE
-	castle_cfg["owner_peer_id"] = 1
 	var player_castle = spawn_entity(castle_cfg, RTSConfig.Team.BLUE, player_castle_pos)
 	if player_castle:
 		player_castle.died.connect(_on_castle_died.bind(RTSConfig.Team.BLUE))
@@ -614,7 +613,6 @@ func _init_entities_deferred():
 	# 生成敌人城堡
 	castle_cfg = EntityDatabase.get_config(20)
 	castle_cfg["team"] = RTSConfig.Team.RED
-	castle_cfg["owner_peer_id"] = 3
 	var enemy_castle = spawn_entity(castle_cfg, RTSConfig.Team.RED, enemy_castle_pos)
 	if enemy_castle:
 		enemy_castle.died.connect(_on_castle_died.bind(RTSConfig.Team.RED))
@@ -631,10 +629,8 @@ func _init_entities_deferred():
 
 	# 初始农民
 	var peasant_cfg = EntityDatabase.get_config(10)
-	peasant_cfg["owner_peer_id"] = 1
 	for i in 3:
 		spawn_entity(peasant_cfg, RTSConfig.Team.BLUE, player_castle_pos + Vector3(2,0,2+i*2))
-	peasant_cfg["owner_peer_id"] = 3
 	for i in 3:
 		spawn_entity(peasant_cfg, RTSConfig.Team.RED, enemy_castle_pos + Vector3(-2,0,-2-i*2))
 
