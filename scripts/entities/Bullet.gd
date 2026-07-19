@@ -16,7 +16,11 @@ var hit: bool = false
 func _ready():
 	add_to_group("bullets")
 	if damage_radius > 0 or (source and source.entity_id in [16,17,26,39]):
-		if ResourceLoader.exists("res://models/pirate/cannon-ball.glb"):
+		# 投石车用石头，火炮用炮弹
+		if source and source.entity_id == 17 and ResourceLoader.exists("res://models/defense/weapon-stone.glb"):
+			var st = load("res://models/defense/weapon-stone.glb")
+			if st: var s = st.instantiate(); if s: add_child(s)
+		elif ResourceLoader.exists("res://models/pirate/cannon-ball.glb"):
 			var cb = load("res://models/pirate/cannon-ball.glb")
 			if cb: var c = cb.instantiate(); if c: add_child(c)
 	else:
