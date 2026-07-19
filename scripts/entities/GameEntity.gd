@@ -84,6 +84,7 @@ func _ready():
 	add_to_group("entities")
 	collision_layer = 1
 	collision_mask = 1
+	up_direction = Vector3.UP
 
 func setup(config: Dictionary):
 	entity_id = config.get("id", 0)
