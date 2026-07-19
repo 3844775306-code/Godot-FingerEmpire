@@ -146,6 +146,7 @@ func take_damage(amount: float, source: GameEntity = null):
 	var reduction = eff_armor / (eff_armor + 100.0)
 	var actual_damage = amount * (1.0 - reduction)
 	health -= actual_damage
+	if source and source.attack_range <= 2.0 and actual_damage > 0: AudioManager.play_sfx_3d("sword_hit", global_position, _get_cam_pos())
 	# 战事警报：己方单位被攻击时通知小地图和屏幕提示
 	var bm = get_tree().get_first_node_in_group("battle_manager")
 	var _should_alert = (team == RTSConfig.Team.BLUE)
