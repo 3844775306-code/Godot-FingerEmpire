@@ -32,6 +32,7 @@ const SFX = {
 	sail          = "res://resources/audio/sound/sail.mp3",
 	ui_click      = "res://resources/audio/sound/mouse-click.wav",
 	alert         = "res://resources/audio/sound/alert.wav",
+	gather        = "res://resources/audio/sound/walk.wav",  # placeholder
 }
 const MUSIC = {
 	menu    = "res://resources/audio/music/menu-music.wav",

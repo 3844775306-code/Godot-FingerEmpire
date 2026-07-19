@@ -149,6 +149,7 @@ func _reload_wall_model(bm, path):
 
 func _finish_construction():
 	build_timer = 0.0
+	AudioManager.play_sfx("build_done")
 	# Set base stats first
 	max_health = building_data["max_health"]
 	health = max_health
