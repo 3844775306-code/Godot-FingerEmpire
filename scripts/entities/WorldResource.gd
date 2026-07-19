@@ -56,7 +56,7 @@ func _add_collision_shape():
 	if not has_node("CollisionShape3D"):
 		var col = CollisionShape3D.new()
 		var shape = SphereShape3D.new()
-		shape.radius = body_radius * 0.6 * 0.6
+		shape.radius = body_radius * 0.6
 		col.shape = shape
 		col.name = "CollisionShape3D"
 		add_child(col)
