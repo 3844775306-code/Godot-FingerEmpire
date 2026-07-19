@@ -59,10 +59,10 @@ func _process(delta):
 			_reload_wall_model(bm, "res://models/castle/wall.glb")
 		# 朝向：直墙/拐角自动判定
 		if is_corner:
-			if has_x_neg and has_z_neg: rotation.y = deg_to_rad(0)
-			elif has_x_pos and has_z_neg: rotation.y = deg_to_rad(90)
-			elif has_x_pos and has_z_pos: rotation.y = deg_to_rad(180)
-			elif has_x_neg and has_z_pos: rotation.y = deg_to_rad(270)
+			if has_x_neg and has_z_neg: rotation.y = deg_to_rad(90)
+			elif has_x_pos and has_z_neg: rotation.y = deg_to_rad(180)
+			elif has_x_pos and has_z_pos: rotation.y = deg_to_rad(270)
+			elif has_x_neg and has_z_pos: rotation.y = deg_to_rad(0)
 		elif has_x_neg or has_x_pos: rotation.y = deg_to_rad(90)
 		else: rotation.y = 0
 
@@ -157,6 +157,7 @@ func _reload_wall_model(bm, path):
 		if inst:
 			add_child(inst); set_meta("_model_instance", inst)
 			var tint = Color(0.75, 0.85, 1.0) if team == RTSConfig.Team.BLUE else Color(1.0, 0.75, 0.75)
+			print("[WallReload] path=%s team=%d owner=%d tint=%s" % [path, team, owner_peer_id, str(tint)])
 			bm._apply_team_tint(self, tint)
 
 func _finish_construction():

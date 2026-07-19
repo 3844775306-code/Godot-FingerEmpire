@@ -703,7 +703,15 @@ func _get_model_aabb(node: Node) -> AABB:
 
 # 队伍着色：递归遍历，保留纹理，用 albedo_color 做色调
 func _apply_team_tint(entity: GameEntity, tint: Color):
+	if entity.entity_id == 27: print("[TintDebug] wall tinting: mesh_count=%d" % _count_meshes(entity))
 	_tint_recursive(entity, tint)
+
+func _count_meshes(node: Node) -> int:
+	var c = 0
+	for child in node.get_children():
+		if child is MeshInstance3D and child.mesh: c += 1
+		c += _count_meshes(child)
+	return c
 
 func _tint_recursive(node: Node, tint: Color):
 	for child in node.get_children():
@@ -761,6 +769,7 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 		if entity.owner_peer_id != -1 and _player_colors.has(entity.owner_peer_id):
 			var pc = _player_colors[entity.owner_peer_id]
 			tint = Color(0.5 + pc.r * 0.5, 0.5 + pc.g * 0.5, 0.5 + pc.b * 0.5)
+		if entity.entity_id == 27: print("[WallTint] eid=27 owner=%d team=%d tint=%s" % [entity.owner_peer_id, team, str(tint)])
 		_apply_team_tint(entity, tint)
 	# 资源需要 setup 后再重建 visual
 	if entity.entity_type == 0 and not model_loaded and entity.has_method("_create_visual"):
