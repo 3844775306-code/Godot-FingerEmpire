@@ -703,7 +703,22 @@ func _get_model_aabb(node: Node) -> AABB:
 
 # 队伍着色：递归遍历，保留纹理，用 albedo_color 做色调
 func _apply_team_tint(entity: GameEntity, tint: Color):
+	if entity.entity_id == 10:
+		print("[FarmerTint] entity_id=%d model_loaded=%s tint=%s" % [entity.entity_id, str(entity.has_meta("_model_instance")), str(tint)])
+		_print_mesh_info(entity, 0)
 	_tint_recursive(entity, tint)
+
+func _print_mesh_info(node: Node, depth: int):
+	for child in node.get_children():
+		var indent = "  ".repeat(depth)
+		if child is MeshInstance3D and child.mesh:
+			var mat = child.get_active_material(0)
+			var has_tex = mat and "albedo_texture" in mat and mat.albedo_texture != null
+			var vc = child.mesh.get("vertex_color_array") if "vertex_color_array" in child.mesh else "n/a"
+			print(indent + "[Mesh] name=%s surf=%d has_tex=%s vc=%s" % [child.name, child.mesh.get_surface_count(), str(has_tex), str(vc != null and vc != "n/a")])
+		else:
+			print(indent + "[Node] name=%s type=%s" % [child.name, child.get_class()])
+		_print_mesh_info(child, depth+1)
 
 func _count_meshes(node: Node) -> int:
 	var c = 0
