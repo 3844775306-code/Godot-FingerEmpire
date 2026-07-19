@@ -205,7 +205,7 @@ func _add_weapon():
 	if mpath != "" and ResourceLoader.exists(mpath):
 		var ms = load(mpath)
 		if ms: var m = ms.instantiate(); if m: m.position = Vector3(0, -body_radius * 0.1, -body_radius * 1.2); m.scale = Vector3.ONE * 0.9; add_child(m)
-		body_radius *= 1.3  # 有坐骑的单位碰撞更大
+		body_radius *= 1.3
 
 func _add_collision_shape():
 	if not has_node("CollisionShape3D"):
@@ -650,7 +650,7 @@ func _apply_passive_collision(delta):
 		if entity is Building and entity.team == team: continue  # 不阻挡己方/友方建筑
 
 		var dist = global_position.distance_to(entity.global_position)
-		var min_dist = (body_radius + entity.body_radius) * 0.6
+		var min_dist = (body_radius + entity.body_radius) * 0.35
 		if dist < min_dist and dist > 0.001:
 			var overlap = min_dist - dist
 			var push_dir = (global_position - entity.global_position).normalized()

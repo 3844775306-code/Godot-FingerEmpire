@@ -795,6 +795,10 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 			var pc = _player_colors[entity.owner_peer_id]
 			tint = Color(0.2 + pc.r * 0.8, 0.2 + pc.g * 0.8, 0.2 + pc.b * 0.8)
 		_apply_team_tint(entity, tint)
+	# 有坐骑的单位抬高模型
+	if entity.entity_id in [15, 19, 34, 38] and entity.has_meta("_model_instance"):
+		var mi = entity.get_meta("_model_instance")
+		if is_instance_valid(mi): mi.position.y += entity.body_radius * 0.5
 	# 资源需要 setup 后再重建 visual
 	if entity.entity_type == 0 and not model_loaded and entity.has_method("_create_visual"):
 		entity._create_visual()
