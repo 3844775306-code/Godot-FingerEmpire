@@ -34,8 +34,8 @@ const ENTITY_MODELS = {
 	22: "res://models/unit-mill.glb",
 	23: "res://models/shipyard.glb",
 	24: "res://models/siege_workshop.glb",
-	25: "res://models/arrow_tower.glb",
-	26: "res://models/cannon_tower.glb",
+	25: "res://models/arrow-tower.glb",
+	26: "res://models/tower-complete-large.glb",
 	28: "res://models/unit-mansion.glb",
 	29: "res://models/siege_workshop.glb",
 	41: "res://models/tower.glb",
@@ -46,15 +46,15 @@ const ENTITY_MODELS = {
 	10: "res://models/soldier.glb",
 	11: "res://models/soldier.glb",
 	12: "res://models/archer.glb",
-	13: "res://models/unit-ship-large.glb",
-	14: "res://models/boat_small.glb",
-	16: "res://models/cannon.glb",
+	13: "res://models/ship-medium.glb",
+	14: "res://models/ship-small.glb",
+	16: "res://models/cannon-mobile.glb",
 	17: "res://models/catapult.glb",
 	18: "res://models/ram.glb",
 	33: "res://models/ballista.glb",
-	40: "res://models/unit-ship.glb",
+	39: "res://models/ship-large.glb",
+	40: "res://models/ship-small.glb",
 	# 资源
-	2: "res://models/stones.glb",
 	3: "res://models/farm.glb",
 }
 
@@ -62,7 +62,9 @@ static func get_entity_model(entity_id: int, level: int = 1, pos: Vector3 = Vect
 	if entity_id == 1:
 		return "res://models/tree-large.glb" if level >= 4 else "res://models/tree-small.glb"
 	if entity_id == 0:
-		return "res://models/rocks-large.glb" if level >= 4 else "res://models/rocks-small.glb"
+		return "res://models/rocks-sand-c.glb" if level >= 4 else ("res://models/rocks-sand-b.glb" if level >= 2 else "res://models/rocks-sand-a.glb")
+	if entity_id == 2:
+		return "res://models/rocks-c.glb" if level >= 4 else ("res://models/rocks-b.glb" if level >= 2 else "res://models/rocks-a.glb")
 	if entity_id == 27:
 		var bm = Engine.get_main_loop().get_first_node_in_group("battle_manager")
 		if bm:

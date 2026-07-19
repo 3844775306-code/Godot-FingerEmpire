@@ -15,12 +15,16 @@ var hit: bool = false
 
 func _ready():
 	add_to_group("bullets")
-	# 远程攻击加载箭矢模型
-	if ResourceLoader.exists("res://models/weapon-arrow.glb"):
-		var arrow_scene = load("res://models/weapon-arrow.glb")
-		if arrow_scene:
-			var arrow = arrow_scene.instantiate()
-			if arrow: add_child(arrow)
+	if damage_radius > 0 or (source and source.entity_id in [16,17,26,39]):
+		if ResourceLoader.exists("res://models/cannon-ball.glb"):
+			var cb = load("res://models/cannon-ball.glb")
+			if cb: var c = cb.instantiate(); if c: add_child(c)
+	else:
+		if ResourceLoader.exists("res://models/weapon-arrow.glb"):
+			var arrow_scene = load("res://models/weapon-arrow.glb")
+			if arrow_scene:
+				var arrow = arrow_scene.instantiate()
+				if arrow: add_child(arrow)
 	if get_child_count() == 0:
 		var mesh = MeshInstance3D.new()
 		var sphere = SphereMesh.new()
