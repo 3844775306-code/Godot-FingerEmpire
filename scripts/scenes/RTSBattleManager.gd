@@ -969,9 +969,8 @@ func _update_build_preview_from_screen(screen_pos: Vector2):
 		build_preview.visible = true
 		
 		var valid = is_position_in_player_vision(pos) and _is_valid_build_position(pos)
-		var mat = build_preview.material_override as StandardMaterial3D
+		_tint_preview(build_preview, Color(0,1,0,0.5) if valid else Color(1,0,0,0.5))
 		if mat:
-			mat.albedo_color = Color(0,1,0,0.5) if valid else Color(1,0,0,0.5)
 	else:
 		build_preview.visible = false
 
@@ -1241,15 +1240,30 @@ func _show_build_menu(world_pos: Vector3):
 	current_build_menu = menu
 	menu.building_selected.connect(_on_building_selected_for_build)
 
+func _tint_preview(node: Node, color: Color):
+	for child in node.get_children():
+		if child is MeshInstance3D and child.mesh:
+			var m = StandardMaterial3D.new()
+			m.albedo_color = color
+			m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			child.material_override = m
+		_tint_preview(child, color)
+
 func _on_building_selected_for_build(building_id: int):
 	selected_building_id = building_id
 	build_mode = true
 	var cfg = EntityDatabase.get_config(building_id)
 	if not cfg: return
 
-	build_preview = MeshInstance3D.new()
-	build_preview.mesh = BoxMesh.new()
-	build_preview.mesh.size = Vector3(cfg.body_radius*2, cfg.body_radius*1.5, cfg.body_radius*2)
+	# 尝试加载建筑3D模型作为预览
+	var model_path = RTSConfig.get_entity_model(building_id)
+	if model_path != "" and ResourceLoader.exists(model_path):
+		var s = load(model_path)
+		if s: build_preview = s.instantiate()
+	if not build_preview:
+		build_preview = MeshInstance3D.new()
+		build_preview.mesh = BoxMesh.new()
+		build_preview.mesh.size = Vector3(cfg.body_radius*2, cfg.body_radius*1.5, cfg.body_radius*2)
 	var mat = StandardMaterial3D.new()
 	mat.albedo_color = Color(0,1,0,0.5)
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
