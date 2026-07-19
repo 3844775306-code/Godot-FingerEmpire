@@ -358,7 +358,7 @@ func _ready():
 	set_process(true)
 	call_deferred("_print_model_animations")
 
-func _print_model_animations():
+
 func _print_anim(path, label):
 	var s = load(path)
 	if s:
@@ -375,8 +375,8 @@ func _print_anim(path, label):
 	var fname = dir.get_next()
 	while fname != "":
 		if fname.ends_with(".glb"):
-			var path = "res://models/" + fname
-			var s = load(path)
+			path = "res://models/" + fname
+			s = load(path)
 			if s:
 				var inst = s.instantiate()
 				if inst:

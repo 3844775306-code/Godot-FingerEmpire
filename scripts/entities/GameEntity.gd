@@ -214,8 +214,11 @@ func die():
 		var ap = model.get_node_or_null("AnimationPlayer") as AnimationPlayer
 		if ap and ap.has_animation("die"):
 			ap.play("die")
-			ap.animation_finished.connect(queue_free, CONNECT_ONE_SHOT)
-			collision_layer = 0  # 播放动画期间无视碰撞
+			var _self = self
+			ap.animation_finished.connect(func(): _self.queue_free(), CONNECT_ONE_SHOT)
+			collision_layer = 0
+			visible = false
+			$CollisionShape3D.disabled = true if has_node("CollisionShape3D") else false
 			return
 	queue_free()
 

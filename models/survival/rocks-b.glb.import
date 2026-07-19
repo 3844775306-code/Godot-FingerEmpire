@@ -3,13 +3,13 @@
 importer="scene"
 importer_version=1
 type="PackedScene"
-uid="uid://cvtrpjxbm8h7y"
-path="res://.godot/imported/rocks-sand-b.glb-ad6635907e50e00f200d781a2f84f44e.scn"
+uid="uid://qlawulxaedl8"
+path="res://.godot/imported/rocks-b.glb-65a7b50249f9faff57eb3fa86f3ac5a6.scn"
 
 [deps]
 
-source_file="res://models/pirate/rocks-sand-b.glb"
-dest_files=["res://.godot/imported/rocks-sand-b.glb-ad6635907e50e00f200d781a2f84f44e.scn"]
+source_file="res://models/survival/rocks-b.glb"
+dest_files=["res://.godot/imported/rocks-b.glb-65a7b50249f9faff57eb3fa86f3ac5a6.scn"]
 
 [params]
 

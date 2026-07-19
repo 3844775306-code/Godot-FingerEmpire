@@ -83,7 +83,7 @@ static func get_entity_model(entity_id: int, level: int = 1) -> String:
 	if entity_id == 1:
 		return "res://models/town/tree-high-round.glb" if level >= 5 else ("res://models/town/tree-high.glb" if level >= 3 else "res://models/town/tree.glb")
 	if entity_id == 0:
-		return "res://models/pirate/rocks-sand-c.glb" if level >= 4 else ("res://models/pirate/rocks-sand-b.glb" if level >= 2 else "res://models/pirate/rocks-sand-a.glb")
+		return "res://models/survival/rocks-sand-c.glb" if level >= 4 else ("res://models/survival/rocks-sand-b.glb" if level >= 2 else "res://models/survival/rocks-sand-a.glb")
 	if entity_id == 2:
-		return "res://models/pirate/rocks-c.glb" if level >= 4 else ("res://models/pirate/rocks-b.glb" if level >= 2 else "res://models/pirate/rocks-a.glb")
+		return "res://models/survival/rocks-c.glb" if level >= 4 else ("res://models/survival/rocks-b.glb" if level >= 2 else "res://models/survival/rocks-a.glb")
 	return ENTITY_MODELS.get(entity_id, "")
