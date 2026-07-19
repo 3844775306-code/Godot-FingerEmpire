@@ -34,6 +34,19 @@ func start_construction(time: float, data: Dictionary):
 				production_list.append(prod)
 func _process(delta):
 	super._process(delta)
+	# 城墙动态朝向
+	if entity_id == 27 and Engine.get_process_frames() % 30 == 0:
+		var has_x = false; var has_z = false
+		var bm = get_tree().get_first_node_in_group("battle_manager")
+		if bm:
+			for e in bm.entities.get_children():
+				if e is Building and e.entity_id == 27 and e.health > 0 and e != self:
+					var d = e.global_position - global_position
+					if abs(d.x) < 2.0 and abs(d.z) < 0.5: has_x = true
+					if abs(d.z) < 2.0 and abs(d.x) < 0.5: has_z = true
+		if has_x and not has_z: rotation.y = deg_to_rad(90)
+		elif has_z and not has_x: rotation.y = 0
+		elif has_x and has_z: rotation.y = deg_to_rad(45)
 
 	# 建造计时
 	if build_timer > 0.0:
