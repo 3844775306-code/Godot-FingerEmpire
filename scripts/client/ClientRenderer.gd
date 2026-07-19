@@ -373,7 +373,7 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 	# 尝试加载3D模型
 	var model_path = RTSConfig.get_entity_model(eid)
 	var loaded_model = null
-	if model_path != "" and FileAccess.file_exists(model_path):
+	if model_path != "" and ResourceLoader.exists(model_path):
 		var model_scene = load(model_path)
 		if model_scene: loaded_model = model_scene.instantiate()
 

@@ -258,11 +258,8 @@ func _create_visual():
 	mesh.mesh = box
 	mesh.position = Vector3(0, size_y / 2.0, 0)
 
-	# 还原你原本的颜色
 	var mat = StandardMaterial3D.new()
-	# 从 battle_manager 获取玩家颜色（联机模式按玩家着色）
-t	mat.albedo_color = Color.WHITE
-	mat.albedo_color = color
+	mat.albedo_color = Color.WHITE
 	mesh.set_surface_override_material(0, mat)
 	mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 	add_child(mesh)
