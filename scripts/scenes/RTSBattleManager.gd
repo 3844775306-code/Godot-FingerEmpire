@@ -657,8 +657,8 @@ func _tint_recursive(node: Node, tint: Color):
 				var mat = StandardMaterial3D.new()
 				mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
 				mat.albedo_color = tint
-				if src and src.has_method("get") and src.get("albedo_texture"):
-					mat.albedo_texture = src.get("albedo_texture")
+				if src and "albedo_texture" in src:
+					mat.albedo_texture = src.albedo_texture
 				child.set_surface_override_material(si, mat)
 		_tint_recursive(child, tint)
 
