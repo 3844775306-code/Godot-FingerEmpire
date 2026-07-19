@@ -34,7 +34,7 @@ func start_construction(time: float, data: Dictionary):
 				production_list.append(prod)
 func _process(delta):
 	super._process(delta)
-	# 城墙动态朝向
+	# 城墙动态朝向 + 拐角模型切换
 	if entity_id == 27 and Engine.get_process_frames() % 30 == 0:
 		var has_x = false; var has_z = false
 		var bm = get_tree().get_first_node_in_group("battle_manager")
@@ -44,9 +44,35 @@ func _process(delta):
 					var d = e.global_position - global_position
 					if abs(d.x) < 2.0 and abs(d.z) < 0.5: has_x = true
 					if abs(d.z) < 2.0 and abs(d.x) < 0.5: has_z = true
+		var is_corner = has_x and has_z
+		if is_corner and not has_meta("_wall_is_corner"):
+			set_meta("_wall_is_corner", true)
+			_reload_wall_model(bm, "res://models/castle/wall-corner.glb")
+		elif not is_corner and has_meta("_wall_is_corner") and get_meta("_wall_is_corner"):
+			set_meta("_wall_is_corner", false)
+			_reload_wall_model(bm, "res://models/castle/wall.glb")
 		if has_x and not has_z: rotation.y = deg_to_rad(90)
 		elif has_z and not has_x: rotation.y = 0
-		elif has_x and has_z: rotation.y = deg_to_rad(45)
+		elif is_corner: rotation.y = deg_to_rad(45)
+
+func _reload_wall_model(bm, path):
+	if not bm or not bm.has_method("_apply_entity_model") or not ResourceLoader.exists(path):
+		return
+	for child in get_children():
+		if child is MeshInstance3D and child.name != "SelectionRing":
+			child.queue_free()
+	if has_meta("_model_instance"):
+		var old = get_meta("_model_instance")
+		if is_instance_valid(old): old.queue_free()
+	var s = load(path)
+	if s:
+		var inst = s.instantiate()
+		if inst:
+			add_child(inst)
+			set_meta("_model_instance", inst)
+			bm._set_unshaded_recursive(inst)
+			if owner_peer_id != -1 and bm._player_colors.has(owner_peer_id):
+				bm._apply_team_tint(self, bm._player_colors[owner_peer_id])
 
 	# 建造计时
 	if build_timer > 0.0:

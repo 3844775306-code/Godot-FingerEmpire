@@ -279,6 +279,7 @@ func _ready():
 	_create_debug_panel()
 
 func _process(delta):
+	if Engine.get_process_frames() % 120 == 0: print("[AI] ping team=%d peer=%d phase=%d" % [my_team, my_peer_id, phase])
 	timer -= delta
 	_ai_income_timer -= delta
 	if _ai_res_snapshot.is_empty():
