@@ -153,8 +153,8 @@ func _draw():
 			dot_color = Color(1.0, 0.5, 0.3, 1.0)
 		else:
 			dot_color = Color(1.0, 1.0, 0.4, 1.0)
-			var pos = Vector2(gx * cell, gz * cell)
-			draw_rect(Rect2(pos - Vector2(1, 1), Vector2(3, 3)), dot_color)
+		var pos = Vector2(gx * cell, gz * cell)
+		draw_rect(Rect2(pos - Vector2(1, 1), Vector2(3, 3)), dot_color)
 
 	# 战事警报
 	for alert in alert_signals:
