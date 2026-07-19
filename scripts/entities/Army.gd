@@ -921,8 +921,9 @@ func _check_waypoint_loop(new_pos: Vector3):
 					command_queue[j]["is_loop"] = true
 				if j < waypoint_markers.size():
 					var m = waypoint_markers[j]
-					var mat = m.material_override as StandardMaterial3D
-					if mat: mat.albedo_color = Color(1.0, 0.55, 0.0, 0.9)
+					if m is MeshInstance3D:
+						var mat = m.material_override as StandardMaterial3D
+						if mat: mat.albedo_color = Color(1.0, 0.55, 0.0, 0.9)
 			break
 
 const LOOP_PROXIMITY = 0.3
@@ -945,8 +946,9 @@ func _detect_loops():
 			for j in range(i, min(command_queue.size(), waypoint_markers.size())):
 				var m = waypoint_markers[j]
 				if is_instance_valid(m):
-					var mat = m.material_override as StandardMaterial3D
-					if mat: mat.albedo_color = Color(1.0, 0.55, 0.0, 0.9)
+					if m is MeshInstance3D:
+						var mat = m.material_override as StandardMaterial3D
+						if mat: mat.albedo_color = Color(1.0, 0.55, 0.0, 0.9)
 			return
 
 
