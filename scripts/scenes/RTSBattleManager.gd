@@ -675,17 +675,8 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 	cfg["team"] = team
 	entities.add_child(entity)
 	entity.setup(cfg)
-	# 尝试加载3D模型，成功则跳过队伍色覆盖（保留模型本色）
+	# 尝试加载3D模型
 	var model_loaded = _apply_entity_model(entity)
-	if not model_loaded and entity.entity_type != 0:
-		var c = Color(0.3, 0.5, 1.0) if team == RTSConfig.Team.BLUE else Color(1.0, 0.25, 0.2)
-		if entity.owner_peer_id != -1 and _player_colors.has(entity.owner_peer_id):
-			c = _player_colors[entity.owner_peer_id]
-		entity.apply_color(c)
-	# 更新底座圈颜色为玩家色
-	if entity.has_node("SelectionRing") and entity.owner_peer_id != -1 and _player_colors.has(entity.owner_peer_id):
-		var ring = entity.get_node("SelectionRing")
-		ring.material_override.albedo_color = _player_colors[entity.owner_peer_id]
 	# 资源需要 setup 后再重建 visual
 	if entity.entity_type == 0 and not model_loaded and entity.has_method("_create_visual"):
 		entity._create_visual()
