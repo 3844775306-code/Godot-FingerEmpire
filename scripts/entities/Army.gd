@@ -236,6 +236,7 @@ func _physics_process(delta):
 	else: speed = base_speed
 	
 	if bm:
+		var terrain = bm.get_terrain_at(global_position)
 		# 涉水/航行音效
 		if Engine.get_process_frames() % 30 == 0:
 			var _in_water = (terrain == 2)
@@ -245,9 +246,6 @@ func _physics_process(delta):
 			elif _in_water and water_capable and current_order == "move":
 				_play_sfx_if_visible("sail")
 			set_meta("_was_in_water", _in_water)
-			set_meta("_was_in_water", _in_water)
-
-		var terrain = bm.get_terrain_at(global_position)
 		if water_capable and terrain != 2:
 			speed *= 0.3
 		elif terrain == 2 and not water_capable:
