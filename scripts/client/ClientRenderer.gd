@@ -378,7 +378,6 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 
 	if loaded_model:
 		entity.add_child(loaded_model)
-		loaded_model.owner = entity
 	else:
 		# 回退：程序化网格
 		match info["type"]:
