@@ -219,6 +219,38 @@ func _add_collision_shape():
 		add_child(col)
 
 # ----------------- Ö÷Ñ­»· -----------------
+
+var _path_markers: Array = []
+
+func set_selected(selected: bool):
+	super.set_selected(selected)
+	if selected:
+		_show_path()
+	else:
+		_hide_path()
+
+func _show_path():
+	_hide_path()
+	if astar_path.size() < 2: return
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if not bm: return
+	for wp in astar_path:
+		var m = MeshInstance3D.new()
+		m.mesh = SphereMesh.new()
+		m.mesh.radius = 0.2
+		m.mesh.height = 0.4
+		m.position = Vector3(wp.x, bm.get_terrain_height_at(wp) + 0.3, wp.z)
+		var mat = StandardMaterial3D.new()
+		mat.albedo_color = Color(0, 1, 1, 0.8)
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		m.material_override = mat
+		bm.add_child(m)
+		_path_markers.append(m)
+
+func _hide_path():
+	for m in _path_markers:
+		if is_instance_valid(m): m.queue_free()
+	_path_markers.clear()
 func _physics_process(delta):
 	if health <= 0:
 		die_official_cleanup()
