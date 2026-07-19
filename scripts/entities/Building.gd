@@ -58,6 +58,7 @@ func _process(delta):
 	# 建造计时
 	if build_timer > 0.0:
 		build_timer -= delta
+		if Engine.get_process_frames() % 60 == 0: AudioManager.play_sfx("build_loop")
 		if build_timer <= 0.0:
 			_finish_construction()
 
@@ -66,6 +67,7 @@ func _process(delta):
 		upgrade_timer -= delta
 		if upgrade_timer <= 0.0:
 			_finish_upgrade()
+			AudioManager.play_sfx("upgrade_done")
 
 	# 生产计时
 	if production_queue.size() > 0:
