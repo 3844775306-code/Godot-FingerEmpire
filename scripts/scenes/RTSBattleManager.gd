@@ -730,9 +730,9 @@ func _count_meshes(node: Node) -> int:
 		for child in node.get_children():
 			if child is MeshInstance3D and child.mesh:
 				for si in child.mesh.get_surface_count():
+					if child.get_surface_override_material(si) != null:
+						continue
 					var src = child.get_active_material(si)
-					if Engine.get_process_frames() < 3:
-						print("[MatDebug] mesh=%s type=%s has_alb=%s" % [child.name, src.get_class() if src else "null", str("albedo_color" in src) if src else "false"])
 					if src and "albedo_color" in src:
 						var dup = src.duplicate()
 						dup.albedo_color = src.albedo_color * tint
