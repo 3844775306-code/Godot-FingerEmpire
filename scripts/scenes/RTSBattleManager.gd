@@ -623,9 +623,8 @@ func _apply_entity_model(entity: GameEntity) -> bool:
 		if child is MeshInstance3D and child.name != "SelectionRing":
 			child.queue_free()
 	entity.add_child(model_instance)
-tmodel_instance.owner = entity
-	return true
-	model_instance.owner = entity
+	
+		
 
 func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -> GameEntity:
 	if not entities or config.is_empty(): return null
