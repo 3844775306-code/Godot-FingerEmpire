@@ -26,7 +26,6 @@ var building_defs: Array = []
 var build_mode: bool = false
 var selected_building_id: int = -1
 var build_preview: Node3D = null
-var _preview_ring: MeshInstance3D = null
 var current_build_menu: Control = null
 
 # ==================== 迷雾 ====================
@@ -973,16 +972,10 @@ func _update_build_preview_from_screen(screen_pos: Vector2):
 		pos.y = $Map.get_height_at(pos) if $Map else 0
 		build_preview.global_position = pos
 		build_preview.visible = true
-		if _preview_ring:
-			_preview_ring.global_position = pos + Vector3(0, 0.1, 0)
-			_preview_ring.visible = true
-
 		var valid = is_position_in_player_vision(pos) and _is_valid_build_position(pos)
-		if _preview_ring and _preview_ring.material_override:
-			_preview_ring.material_override.albedo_color = Color(0,1,0,0.6) if valid else Color(1,0,0,0.6)
+		_tint_preview(build_preview, Color(0, 1, 0) if valid else Color(1, 0, 0))
 	else:
 		build_preview.visible = false
-		if _preview_ring: _preview_ring.visible = false
 
 func _end_build_drag_and_place():
 	if not build_touch_active:
@@ -1152,12 +1145,9 @@ func _update_build_preview(screen_pos: Vector2):
 		build_preview.visible = true
 
 		var valid = is_position_in_player_vision(pos) and _is_valid_build_position(pos)
-		if _preview_ring and _preview_ring.material_override:
-			_preview_ring.material_override.albedo_color = Color(0,1,0,0.6) if valid else Color(1,0,0,0.6)
-		if _preview_ring: _preview_ring.global_position = pos + Vector3(0, 0.1, 0); _preview_ring.visible = true
+		_tint_preview(build_preview, Color(0, 1, 0) if valid else Color(1, 0, 0))
 	else:
 		build_preview.visible = false
-		if _preview_ring: _preview_ring.visible = false
 
 func _is_valid_build_position(pos: Vector3) -> bool:
 	# Cannot build near enemy units (10 unit radius)
@@ -1253,12 +1243,9 @@ func _show_build_menu(world_pos: Vector3):
 func _tint_preview(node: Node, color: Color):
 	for child in node.get_children():
 		if child is MeshInstance3D and child.mesh:
-			var src = child.get_active_material(0)
 			var m = StandardMaterial3D.new()
-			if src and "albedo_texture" in src and src.albedo_texture:
-				m.albedo_texture = src.albedo_texture
 			m.albedo_color = color
-			m.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 			child.material_override = m
 		_tint_preview(child, color)
 
@@ -1277,19 +1264,14 @@ func _on_building_selected_for_build(building_id: int):
 		build_preview = MeshInstance3D.new()
 		build_preview.mesh = BoxMesh.new()
 		build_preview.mesh.size = Vector3(cfg.body_radius*2, cfg.body_radius*1.5, cfg.body_radius*2)
+	# 缩放预览模型匹配实际大小
+	var target_size = cfg.body_radius * 2.0
+	var aabb = _get_model_aabb(build_preview)
+	var current_size = max(aabb.size.x, max(aabb.size.y, aabb.size.z))
+	if current_size > 0.01: build_preview.scale = Vector3.ONE * (target_size / current_size)
 	build_preview.visible = false
+	_tint_preview(build_preview, Color(0, 1, 0))
 	add_child(build_preview)
-	# 预览底座指示环
-	_preview_ring = MeshInstance3D.new()
-	_preview_ring.mesh = TorusMesh.new()
-	_preview_ring.mesh.inner_radius = cfg.body_radius * 0.8
-	_preview_ring.mesh.outer_radius = cfg.body_radius * 0.9
-	_preview_ring.material_override = StandardMaterial3D.new()
-	_preview_ring.material_override.albedo_color = Color(0,1,0,0.6)
-	_preview_ring.material_override.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	_preview_ring.material_override.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_preview_ring.visible = false
-	add_child(_preview_ring)
 
 # ==================== 战争迷雾 ====================
 func _init_fog_grid():
