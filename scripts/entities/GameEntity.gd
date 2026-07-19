@@ -59,15 +59,10 @@ func apply_color(c: Color):
 func _apply_color_recursive(node: Node, c: Color):
 	for child in node.get_children():
 		if child is MeshInstance3D:
-			for si in child.mesh.get_surface_count():
-				var existing = child.get_surface_override_material(si)
-				if not existing:
-					existing = child.get_active_material(si)
-				var mat = existing.duplicate() if existing else StandardMaterial3D.new()
-				mat.albedo_color = c
-				mat.albedo_texture = null  # 清除纹理，用纯色区分队伍
-				mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
-				child.set_surface_override_material(si, mat)
+			var mat = StandardMaterial3D.new()
+			mat.albedo_color = c
+			mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+			child.material_override = mat  # 覆盖所有表面
 		_apply_color_recursive(child, c)
 
 	# 原有属性赋值...

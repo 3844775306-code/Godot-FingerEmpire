@@ -325,15 +325,10 @@ func _update_single_entity(info: Dictionary):
 func _apply_model_color(node: Node, c: Color):
 	for child in node.get_children():
 		if child is MeshInstance3D:
-			for si in child.mesh.get_surface_count():
-				var existing = child.get_surface_override_material(si)
-				if not existing:
-					existing = child.get_active_material(si)
-				var m = existing.duplicate() if existing else StandardMaterial3D.new()
-				m.albedo_color = c
-				m.albedo_texture = null
-				m.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
-				child.set_surface_override_material(si, m)
+			var m = StandardMaterial3D.new()
+			m.albedo_color = c
+			m.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+			child.material_override = m
 		_apply_model_color(child, c)
 
 func _create_entity_node(info: Dictionary) -> Node3D:
