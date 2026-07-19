@@ -1243,10 +1243,13 @@ func _show_build_menu(world_pos: Vector3):
 func _tint_preview(node: Node, color: Color):
 	for child in node.get_children():
 		if child is MeshInstance3D and child.mesh:
-			var m = StandardMaterial3D.new()
-			m.albedo_color = color
-			m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-			child.material_override = m
+			for si in child.mesh.get_surface_count():
+				if child.get_surface_override_material(si) != null: continue
+				var src = child.get_active_material(si)
+				if src and "albedo_color" in src:
+					var m = src.duplicate()
+					m.albedo_color = src.albedo_color.lerp(color, 0.5)
+					child.set_surface_override_material(si, m)
 		_tint_preview(child, color)
 
 func _on_building_selected_for_build(building_id: int):

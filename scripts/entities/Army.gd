@@ -196,7 +196,7 @@ func _add_weapon():
 		if ws: var w = ws.instantiate(); if w: w.position = Vector3(0.3, body_radius * 0.6, 0); w.scale = Vector3.ONE * 0.8; add_child(w)
 	# 骑兵坐骑
 	var mpath = ""
-	if entity_id == 15: mpath = "res://models/pets/animal-dog.glb"
+	if entity_id in [15, 19]: mpath = "res://models/pets/animal-dog.glb"
 	elif entity_id == 34: mpath = "res://models/pets/animal-elephant.glb"
 	if mpath != "" and ResourceLoader.exists(mpath):
 		var ms = load(mpath)
