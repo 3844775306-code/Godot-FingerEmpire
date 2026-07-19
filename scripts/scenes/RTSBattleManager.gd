@@ -643,9 +643,12 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 	entity.setup(cfg)
 	# 尝试加载3D模型（在颜色应用之前）
 	_apply_entity_model(entity)
-	# 直接应用玩家颜色 — 资源除外
-	if entity.entity_type != 0 and entity.owner_peer_id != -1 and _player_colors.has(entity.owner_peer_id):
-		entity.apply_color(_player_colors[entity.owner_peer_id])
+	# 应用颜色：优先玩家颜色，否则队伍颜色，资源跳过
+	if entity.entity_type != 0:
+		var c = Color(0.3, 0.5, 1.0) if team == RTSConfig.Team.BLUE else Color(1.0, 0.25, 0.2)
+		if entity.owner_peer_id != -1 and _player_colors.has(entity.owner_peer_id):
+			c = _player_colors[entity.owner_peer_id]
+		entity.apply_color(c)
 	# 资源需要 setup 后再重建 visual
 	if entity.entity_type == 0 and entity.has_method("_create_visual"):
 		entity._create_visual()
