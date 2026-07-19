@@ -88,11 +88,7 @@ func _ready():
 	nav_agent = NavigationAgent3D.new()
 	nav_agent.path_desired_distance = 0.5
 	nav_agent.target_desired_distance = 0.5
-	nav_agent.navigation_layers = 1
 	add_child(nav_agent)
-	await get_tree().process_frame
-	if Engine.get_process_frames() < 5:
-		print("[NavAgent] map=%s ready" % str(nav_agent.get_navigation_map()))
 
 func setup(config: Dictionary):
 	entity_id = config.get("id", 0)
