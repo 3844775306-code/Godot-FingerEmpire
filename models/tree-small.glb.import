@@ -3,13 +3,13 @@
 importer="scene"
 importer_version=1
 type="PackedScene"
-uid="uid://ddj81apme4u3w"
-path="res://.godot/imported/boat_small.glb-a4b46a2024080e9a0df650f71d6b6d3e.scn"
+uid="uid://bre8c5asoherc"
+path="res://.godot/imported/tree-small.glb-a8121d2c85a4ebd08a6bcd6c0e2f8340.scn"
 
 [deps]
 
-source_file="res://models/boat_small.glb"
-dest_files=["res://.godot/imported/boat_small.glb-a4b46a2024080e9a0df650f71d6b6d3e.scn"]
+source_file="res://models/tree-small.glb"
+dest_files=["res://.godot/imported/tree-small.glb-a8121d2c85a4ebd08a6bcd6c0e2f8340.scn"]
 
 [params]
 

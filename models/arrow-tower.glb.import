@@ -3,13 +3,13 @@
 importer="scene"
 importer_version=1
 type="PackedScene"
-uid="uid://cwr6ddv4kf1gs"
-path="res://.godot/imported/warehouse.glb-de018f4a4e78544f9296a57434c53ca3.scn"
+uid="uid://bdsvokvjg4h4p"
+path="res://.godot/imported/arrow-tower.glb-ad9a82286a97a0764e6d7f0cbe88ccff.scn"
 
 [deps]
 
-source_file="res://models/warehouse.glb"
-dest_files=["res://.godot/imported/warehouse.glb-de018f4a4e78544f9296a57434c53ca3.scn"]
+source_file="res://models/arrow-tower.glb"
+dest_files=["res://.godot/imported/arrow-tower.glb-ad9a82286a97a0764e6d7f0cbe88ccff.scn"]
 
 [params]
 
