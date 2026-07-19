@@ -56,6 +56,15 @@ func _get_cam_pos() -> Vector3:
 	var cam = get_viewport().get_camera_3d()
 	return cam.global_position if cam else Vector3.ZERO
 
+# 仅在玩家视野内播放音效
+func _play_sfx_if_visible(key: String):
+	var bm = _get_bm()
+	if bm and bm.has_method("is_position_in_player_vision"):
+		if bm.is_position_in_player_vision(global_position):
+			AudioManager.play_sfx_3d(key, global_position, _get_cam_pos())
+	else:
+		AudioManager.play_sfx_3d(key, global_position, _get_cam_pos())
+
 # 递归设置实体颜色
 func apply_color(c: Color):
 	_apply_color_recursive(self, c)
@@ -146,7 +155,7 @@ func take_damage(amount: float, source: GameEntity = null):
 	var reduction = eff_armor / (eff_armor + 100.0)
 	var actual_damage = amount * (1.0 - reduction)
 	health -= actual_damage
-	if source and source.attack_range <= 2.0 and actual_damage > 0: AudioManager.play_sfx_3d("sword_hit", global_position, _get_cam_pos())
+	if source and source.attack_range <= 2.0 and actual_damage > 0: _play_sfx_if_visible("sword_hit")
 	# 战事警报：己方单位被攻击时通知小地图和屏幕提示
 	var bm = get_tree().get_first_node_in_group("battle_manager")
 	var _is_animal_attacker = source and source.get("_animal_type") != null and str(source.get("_animal_type")) != ""
@@ -185,7 +194,7 @@ func take_damage(amount: float, source: GameEntity = null):
 	if health <= 0:
 		die()
 func die():
-	AudioManager.play_sfx_3d("unit_die", global_position, _get_cam_pos())
+	_play_sfx_if_visible("unit_die")
 	emit_signal("died")
 	# 动物死亡掉落食物
 	if self is Army and self.get("_animal_type") != "" and self.get("_animal_type") != null:
