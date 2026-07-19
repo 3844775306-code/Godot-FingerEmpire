@@ -359,38 +359,56 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 
 	# 模型
 	var mesh: MeshInstance3D
-	match info["type"]:
-		0: # 资源
-			mesh = MeshInstance3D.new()
-			mesh.mesh = SphereMesh.new()
-			mesh.mesh.radius = r
-			var mat = StandardMaterial3D.new()
-			match info["entity_id"]:
-				0: mat.albedo_color = Color.YELLOW
-				1: mat.albedo_color = Color(0.3,0.8,0.2)
-				2: mat.albedo_color = Color.GRAY
-				3: mat.albedo_color = Color.SADDLE_BROWN
-				4: mat.albedo_color = Color.BLACK
-			mesh.material_override = mat
-		1: # 建筑
-			mesh = MeshInstance3D.new()
-			var box = BoxMesh.new()
-			box.size = Vector3(r*2, r*1.5, r*2)
-			mesh.mesh = box
-			var mat = StandardMaterial3D.new()
-			mat.albedo_color = entity_color
-			mesh.material_override = mat
-		2: # 军队
-			mesh = MeshInstance3D.new()
-			var cap = CapsuleMesh.new()
-			cap.radius = r*0.8
-			cap.height = r*2.5
-			mesh.mesh = cap
-			var mat = StandardMaterial3D.new()
-			mat.albedo_color = entity_color
-			mesh.material_override = mat
-	if mesh:
-		entity.add_child(mesh)
+	# 尝试加载3D模型
+	var model_path = RTSConfig.get_entity_model(eid)
+	var loaded_model = null
+	if model_path != "" and FileAccess.file_exists(model_path):
+		var model_scene = load(model_path)
+		if model_scene: loaded_model = model_scene.instantiate()
+
+	if loaded_model:
+		entity.add_child(loaded_model)
+		loaded_model.owner = entity
+		# 应用玩家颜色到模型材质
+		for child in loaded_model.get_children():
+			if child is MeshInstance3D:
+				var m = child.get_surface_override_material(0)
+				if not m: m = StandardMaterial3D.new(); child.set_surface_override_material(0, m)
+				m.albedo_color = entity_color
+	else:
+		# 回退：程序化网格
+		match info["type"]:
+			0: # 资源
+				mesh = MeshInstance3D.new()
+				mesh.mesh = SphereMesh.new()
+				mesh.mesh.radius = r
+				var mat = StandardMaterial3D.new()
+				match info["entity_id"]:
+					0: mat.albedo_color = Color.YELLOW
+					1: mat.albedo_color = Color(0.3,0.8,0.2)
+					2: mat.albedo_color = Color.GRAY
+					3: mat.albedo_color = Color.SADDLE_BROWN
+					4: mat.albedo_color = Color.BLACK
+				mesh.material_override = mat
+			1: # 建筑
+				mesh = MeshInstance3D.new()
+				var box = BoxMesh.new()
+				box.size = Vector3(r*2, r*1.5, r*2)
+				mesh.mesh = box
+				var mat = StandardMaterial3D.new()
+				mat.albedo_color = entity_color
+				mesh.material_override = mat
+			2: # 军队
+				mesh = MeshInstance3D.new()
+				var cap = CapsuleMesh.new()
+				cap.radius = r*0.8
+				cap.height = r*2.5
+				mesh.mesh = cap
+				var mat = StandardMaterial3D.new()
+				mat.albedo_color = entity_color
+				mesh.material_override = mat
+		if mesh:
+			entity.add_child(mesh)
 
 	# 存储 owner_peer_id 元数据，供后续使用
 	entity.set_meta("owner_peer_id", owner_id)

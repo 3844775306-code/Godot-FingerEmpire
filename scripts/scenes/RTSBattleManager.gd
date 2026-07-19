@@ -609,6 +609,22 @@ func _init_entities_deferred():
 		cam.global_position = Vector3(player_castle.global_position.x, cam.global_position.y, player_castle.global_position.z)
 
 # ==================== 实体生成 ====================
+func _apply_entity_model(entity: GameEntity):
+	var model_path = RTSConfig.get_entity_model(entity.entity_id)
+	if model_path == "" or not FileAccess.file_exists(model_path):
+		return
+	# 移除旧的程序化网格，加载3D模型
+	var model_scene = load(model_path)
+	if not model_scene: return
+	var model_instance = model_scene.instantiate()
+	if not model_instance: return
+	# 移除旧Mesh子节点
+	for child in entity.get_children():
+		if child is MeshInstance3D and child.name != "SelectionRing":
+			child.queue_free()
+	entity.add_child(model_instance)
+	model_instance.owner = entity
+
 func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -> GameEntity:
 	if not entities or config.is_empty(): return null
 
@@ -625,10 +641,12 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 	cfg["team"] = team
 	entities.add_child(entity)
 	entity.setup(cfg)
-	# 直接应用玩家颜色（仿客户端机制）- 资源除外
+	# 尝试加载3D模型（在颜色应用之前）
+	_apply_entity_model(entity)
+	# 直接应用玩家颜色 — 资源除外
 	if entity.entity_type != 0 and entity.owner_peer_id != -1 and _player_colors.has(entity.owner_peer_id):
 		entity.apply_color(_player_colors[entity.owner_peer_id])
-	# 资源需要 setup 后再重建 visual（因为 _ready 时 resource_type 还是默认值）
+	# 资源需要 setup 后再重建 visual
 	if entity.entity_type == 0 and entity.has_method("_create_visual"):
 		entity._create_visual()
 	entity.global_position = pos
