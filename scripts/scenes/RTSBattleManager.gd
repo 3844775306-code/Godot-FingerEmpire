@@ -649,6 +649,10 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 		if entity.owner_peer_id != -1 and _player_colors.has(entity.owner_peer_id):
 			c = _player_colors[entity.owner_peer_id]
 		entity.apply_color(c)
+	# 更新底座圈颜色为玩家色
+	if entity.has_node("SelectionRing") and entity.owner_peer_id != -1 and _player_colors.has(entity.owner_peer_id):
+		var ring = entity.get_node("SelectionRing")
+		ring.material_override.albedo_color = _player_colors[entity.owner_peer_id]
 	# 资源需要 setup 后再重建 visual
 	if entity.entity_type == 0 and entity.has_method("_create_visual"):
 		entity._create_visual()

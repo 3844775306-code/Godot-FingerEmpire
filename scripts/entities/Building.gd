@@ -214,10 +214,10 @@ func _add_selection_ring():
 		#ring.rotation.x = deg_to_rad(90)
 
 		var mat = StandardMaterial3D.new()
-		mat.albedo_color = Color.GREEN
+		mat.albedo_color = Color(0.3, 0.5, 1.0) if team == RTSConfig.Team.BLUE else Color(1.0, 0.25, 0.2)
 		mat.transparency = StandardMaterial3D.TRANSPARENCY_ALPHA
 		ring.material_override = mat
-		ring.visible = false
+		ring.visible = true  # 始终显示队伍色底座
 		add_child(ring)
 		
 func _add_collision_shape():
