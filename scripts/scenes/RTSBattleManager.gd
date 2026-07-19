@@ -737,7 +737,7 @@ func _tint_recursive(node: Node, tint: Color):
 				if src and "albedo_color" in src:
 					var dup = src.duplicate()
 					
-					dup.albedo_color = src.albedo_color.lerp(tint, 0.3)
+					dup.albedo_color = src.albedo_color.lerp(tint, 0.5)
 					child.set_surface_override_material(si, dup)
 		_tint_recursive(child, tint)
 
