@@ -201,7 +201,7 @@ func _add_weapon():
 	# 骑兵坐骑
 	var mpath = ""
 	if entity_id in [15, 19, 38]: mpath = "res://models/pets/animal-dog.glb"
-		if entity_id == 15: body_radius *= 1.3
+		
 	elif entity_id == 34: mpath = "res://models/pets/animal-elephant.glb"
 	if mpath != "" and ResourceLoader.exists(mpath):
 		var ms = load(mpath)
@@ -240,7 +240,7 @@ func _show_path():
 		m.mesh.radius = 0.2
 		m.mesh.height = 0.4
 		var h = 0.0; if bm.has_node("Map") and bm.get_node("Map").has_method("get_height_at"): h = bm.get_node("Map").get_height_at(wp)
-			m.position = Vector3(wp.x, h + 0.3, wp.z)
+		m.position = Vector3(wp.x, h + 0.3, wp.z)
 		var mat = StandardMaterial3D.new()
 		mat.albedo_color = Color(0, 1, 1, 0.8)
 		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -508,8 +508,15 @@ func _manual_move(delta):
 	if target_pos == Vector3.ZERO:
 		return
 
+	# 沿A*路径移动
+	var move_target = target_pos
+	if astar_path.size() > 0:
+		move_target = astar_path[0]
+		if global_position.distance_to(move_target) < 0.5:
+			astar_path.pop_front()
+
 	# 构建水平方向
-	var horizontal_target = Vector3(target_pos.x, global_position.y, target_pos.z)
+	var horizontal_target = Vector3(move_target.x, global_position.y, move_target.z)
 	var move_dir = (horizontal_target - global_position).normalized()
 	if move_dir.length() < 0.01:
 		return
@@ -537,6 +544,11 @@ func _manual_move(delta):
 	var half_map = RTSConfig.MAP_SIZE / 2.0
 	global_position.x = clamp(global_position.x, -half_map, half_map)
 	global_position.z = clamp(global_position.z, -half_map, half_map)
+	# 定期重新计算路径
+	astar_recalc_timer -= delta
+	if astar_recalc_timer <= 0 and current_order == "move" and astar_target != Vector3.ZERO:
+		astar_recalc_timer = ASTAR_RECALC_INTERVAL
+		astar_path = _calculate_astar_path(astar_target)
 
 		# ¸ù¾ÝµØÐÎ¸ß¶ÈÆ½»¬¸üÐÂ Y ×ø±ê
 	var bm = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
@@ -559,6 +571,8 @@ func _get_current_move_target() -> Vector3:
 
 func _set_move_target(pos: Vector3):
 	astar_target = pos
+	astar_path = _calculate_astar_path(pos)
+	astar_recalc_timer = ASTAR_RECALC_INTERVAL
 
 # ----------------- A* Ñ°Â· -----------------
 # ==================== A* Ñ°Â·£¨¿ªÏúÓÅ»¯°æ£© ====================
