@@ -456,63 +456,38 @@ func _manual_move(delta):
 	if not can_move or speed <= 0:
 		return
 	if hold_position and target_type != 0:
-		return 
-	# ²É¼¯/¹¥»÷Ë®Æ½·¶Î§ÄÚÍ£Ö¹ÒÆ¶¯
+		return
 	if current_target and is_instance_valid(current_target):
-		var target_radius = 0.0
-		if current_target is GameEntity: target_radius = current_target.body_radius
-		var h_diff = Vector2(global_position.x - current_target.global_position.x,
-							global_position.z - current_target.global_position.z)
-		var h_dist = h_diff.length() - body_radius - target_radius
+		var target_radius = current_target.body_radius if current_target is GameEntity else 0.0
+		var h_dist = Vector2(global_position.x - current_target.global_position.x, global_position.z - current_target.global_position.z).length() - body_radius - target_radius
 		if current_target is WorldResource and h_dist <= 0.5:
 			return
 		elif current_target is GameEntity and h_dist <= attack_range:
 			return
-
 	var target_pos = _get_current_move_target()
 	if target_pos == Vector3.ZERO:
 		return
-
-	# 构建水平方向
-	var horizontal_target = Vector3(target_pos.x, global_position.y, target_pos.z)
-	var move_dir = (horizontal_target - global_position).normalized()
-	if move_dir.length() < 0.01:
-		return
-
-	# 陆军避开不可通行地形（水域/山地）
-	if not water_capable:
-		var next_pos = global_position + move_dir * speed * delta
-		var bm2 = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
-		if bm2:
-			var terrain = bm2.get_terrain_at(next_pos)
-			if terrain == 2:  # 水域
-				move_dir = move_dir.rotated(Vector3.UP, deg_to_rad(45))  # 尝试偏转
-				next_pos = global_position + move_dir * speed * delta
-				terrain = bm2.get_terrain_at(next_pos)
-				if terrain == 2: move_dir = move_dir.rotated(Vector3.UP, deg_to_rad(-90))  # 反向偏转
-
-	velocity = Vector3(move_dir.x, 0, move_dir.z) * speed
-	move_and_slide()
-	# 旋转朝向移动方向
-	if move_dir.length() > 0.01:
-		var look_target = global_position + move_dir
-		look_at(Vector3(look_target.x, global_position.y, look_target.z), Vector3.UP)
-
-	# 边界限制
+	# Godot内置导航
+	if nav_agent and not nav_agent.is_navigation_finished():
+		var np = nav_agent.get_next_path_position()
+		var dir = (Vector3(np.x, 0, np.z) - Vector3(global_position.x, 0, global_position.z)).normalized()
+		if dir.length() > 0.01:
+			velocity.x = dir.x * speed; velocity.z = dir.z * speed; velocity.y = 0
+			move_and_slide()
+			look_at(Vector3(global_position.x + dir.x, global_position.y, global_position.z + dir.z), Vector3.UP)
+	elif nav_agent and nav_agent.is_navigation_finished():
+		var dir = (Vector3(target_pos.x, 0, target_pos.z) - Vector3(global_position.x, 0, global_position.z)).normalized()
+		if dir.length() > 0.001:
+			velocity.x = dir.x * speed; velocity.z = dir.z * speed; velocity.y = 0
+			move_and_slide()
 	var half_map = RTSConfig.MAP_SIZE / 2.0
 	global_position.x = clamp(global_position.x, -half_map, half_map)
 	global_position.z = clamp(global_position.z, -half_map, half_map)
-
-		# ¸ù¾ÝµØÐÎ¸ß¶ÈÆ½»¬¸üÐÂ Y ×ø±ê
 	var bm = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
 	if bm:
 		var map = bm.get_node("Map")
 		if map and map.has_method("get_height_at"):
-			var target_height = map.get_height_at(global_position)
-			# Ã¿Ãë×î´óÉý½µËÙ¶È
-			var elevation_speed = 5.0
-			global_position.y = move_toward(global_position.y, target_height, elevation_speed * delta)
-
+			global_position.y = map.get_height_at(global_position)
 func _get_current_move_target() -> Vector3:
 	if is_instance_valid(current_target):
 		return current_target.global_position
@@ -523,9 +498,7 @@ func _get_current_move_target() -> Vector3:
 	return Vector3.ZERO
 
 func _set_move_target(pos: Vector3):
-	astar_target = pos
-
-# ----------------- A* Ñ°Â· -----------------
+	nav_agent.target_position = pos
 # ==================== A* Ñ°Â·£¨¿ªÏúÓÅ»¯°æ£© ====================
 # ÓÅ»¯Ïî£º
 # 1. ×î´óËÑË÷½ÚµãÊýÏÞÖÆ£¨500 ½Úµã£©£¬·ÀÖ¹ÏÝÈë´ó¹æÄ£Ì½Ë÷
@@ -615,10 +588,6 @@ func _calculate_astar_path(target_pos: Vector3) -> Array:
 
 static func _tile_key(tile: Vector2i) -> String:
 	return str(tile.x) + "," + str(tile.y)
-
-func _heuristic(a: Vector2i, b: Vector2i) -> float:
-	# Âü¹þ¶Ù¾àÀë£¨ÊÊºÏ°Ë·½ÏòÒÆ¶¯£©
-	return abs(a.x - b.x) + abs(a.y - b.y)
 
 func _get_terrain_cost(tile: Vector2i, bm: RTSBattleManager) -> float:
 	var terrain = bm.get_terrain_at_grid(tile.x, tile.y)
