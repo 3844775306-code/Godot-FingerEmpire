@@ -71,9 +71,11 @@ func _process(delta):
 	if production_queue.size() > 0:
 		#var bm = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
 		var can_produce = true
+		var bm = _get_bm()
 		if owner_peer_id == -1:
 			can_produce = bm.can_train_unit(team)
 		elif bm.has_method("can_player_train"):
+			
 			can_produce = bm.can_player_train(owner_peer_id)
 		if can_produce:
 			production_timer -= delta
