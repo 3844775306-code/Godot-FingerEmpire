@@ -473,11 +473,23 @@ func _manual_move(delta):
 	if target_pos == Vector3.ZERO:
 		return
 
-	# ¹¹½¨Ë®Æ½Ãæ·½Ïò£¨ºöÂÔ¸ß¶È²î£©
+	# 构建水平方向
 	var horizontal_target = Vector3(target_pos.x, global_position.y, target_pos.z)
 	var move_dir = (horizontal_target - global_position).normalized()
 	if move_dir.length() < 0.01:
 		return
+
+	# 陆军避开不可通行地形（水域/山地）
+	if not water_capable:
+		var next_pos = global_position + move_dir * speed * delta
+		var bm2 = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
+		if bm2:
+			var terrain = bm2.get_terrain_at(next_pos)
+			if terrain == 2:  # 水域
+				move_dir = move_dir.rotated(Vector3.UP, deg_to_rad(45))  # 尝试偏转
+				next_pos = global_position + move_dir * speed * delta
+				terrain = bm2.get_terrain_at(next_pos)
+				if terrain == 2: move_dir = move_dir.rotated(Vector3.UP, deg_to_rad(-90))  # 反向偏转
 
 	velocity = Vector3(move_dir.x, 0, move_dir.z) * speed
 	move_and_slide()
