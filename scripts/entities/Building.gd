@@ -274,7 +274,7 @@ func _add_collision_shape():
 	if not has_node("CollisionShape3D"):
 		var col = CollisionShape3D.new()
 		var shape = BoxShape3D.new()
-		shape.size = Vector3(body_radius*2, body_radius*1.5, body_radius*2)
+		shape.size = Vector3(body_radius*1.2, body_radius*0.9, body_radius*1.2)
 		col.shape = shape
 		col.name = "CollisionShape3D"
 		add_child(col)
@@ -320,7 +320,7 @@ func _update_collision_shape():
 		var col = $CollisionShape3D
 		var shape = col.shape as BoxShape3D
 		if shape:
-			shape.size = Vector3(body_radius*2, body_radius*1.5, body_radius*2)
+			shape.size = Vector3(body_radius*1.2, body_radius*0.9, body_radius*1.2)
 
 func get_castle_level() -> int:
 	for entity in get_tree().get_nodes_in_group("entities"):

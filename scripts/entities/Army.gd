@@ -211,7 +211,7 @@ func _add_collision_shape():
 	if not has_node("CollisionShape3D"):
 		var col = CollisionShape3D.new()
 		var shape = SphereShape3D.new()
-		shape.radius = body_radius
+		shape.radius = body_radius * 0.6
 		col.shape = shape
 		col.name = "CollisionShape3D"
 		add_child(col)
@@ -650,7 +650,7 @@ func _apply_passive_collision(delta):
 		if entity is Building and entity.team == team: continue  # 不阻挡己方/友方建筑
 
 		var dist = global_position.distance_to(entity.global_position)
-		var min_dist = (body_radius + entity.body_radius) * 0.35
+		var min_dist = body_radius + entity.body_radius
 		if dist < min_dist and dist > 0.001:
 			var overlap = min_dist - dist
 			var push_dir = (global_position - entity.global_position).normalized()
