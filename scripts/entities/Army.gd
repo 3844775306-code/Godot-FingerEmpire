@@ -573,6 +573,8 @@ func _set_move_target(pos: Vector3):
 	astar_target = pos
 	astar_path = _calculate_astar_path(pos)
 	astar_recalc_timer = ASTAR_RECALC_INTERVAL
+	if Engine.get_process_frames() % 30 == 0:
+		print("[AStar] target=%s path_len=%d first=%s" % [str(pos), astar_path.size(), str(astar_path[0]) if astar_path.size()>0 else "empty"])
 
 # ----------------- A* Ñ°Â· -----------------
 # ==================== A* Ñ°Â·£¨¿ªÏúÓÅ»¯°æ£© ====================
