@@ -321,6 +321,20 @@ func _update_single_entity(info: Dictionary):
   # peer_id -> Color
 
 # ---------- 替换原有的 _create_entity_node ----------
+# 递归给模型所有Mesh设置颜色
+func _apply_model_color(node: Node, c: Color):
+	for child in node.get_children():
+		if child is MeshInstance3D:
+			for si in child.mesh.get_surface_count():
+				var m = child.get_surface_override_material(si)
+				if not m:
+					m = StandardMaterial3D.new()
+					m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+					m.vertex_color_use_as_albedo = false
+					child.set_surface_override_material(si, m)
+				m.albedo_color = c
+		_apply_model_color(child, c)
+
 func _create_entity_node(info: Dictionary) -> Node3D:
 	if not info.has("body_radius") or not info.has("type") or not info.has("team"):
 		return Node3D.new()
@@ -369,12 +383,8 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 	if loaded_model:
 		entity.add_child(loaded_model)
 		loaded_model.owner = entity
-		# 应用玩家颜色到模型材质
-		for child in loaded_model.get_children():
-			if child is MeshInstance3D:
-				var m = child.get_surface_override_material(0)
-				if not m: m = StandardMaterial3D.new(); child.set_surface_override_material(0, m)
-				m.albedo_color = entity_color
+		# 递归应用玩家颜色
+		_apply_model_color(loaded_model, entity_color)
 	else:
 		# 回退：程序化网格
 		match info["type"]:

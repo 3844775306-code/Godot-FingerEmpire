@@ -52,13 +52,22 @@ func _get_bm():
 		_bm = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
 	return _bm
 
-# 直接设置实体颜色（仿客户端机制）
+# 递归设置实体颜色
 func apply_color(c: Color):
-	for child in get_children():
+	_apply_color_recursive(self, c)
+
+func _apply_color_recursive(node: Node, c: Color):
+	for child in node.get_children():
 		if child is MeshInstance3D:
-			var mat = child.get_surface_override_material(0)
-			if not mat: mat = StandardMaterial3D.new(); child.set_surface_override_material(0, mat)
-			mat.albedo_color = c
+			for si in child.mesh.get_surface_count():
+				var mat = child.get_surface_override_material(si)
+				if not mat:
+					mat = StandardMaterial3D.new()
+					mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+					mat.vertex_color_use_as_albedo = false
+					child.set_surface_override_material(si, mat)
+				mat.albedo_color = c
+		_apply_color_recursive(child, c)
 
 	# 原有属性赋值...
 
