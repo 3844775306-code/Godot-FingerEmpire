@@ -645,6 +645,19 @@ func _get_model_aabb(node: Node) -> AABB:
 			aabb = aabb.merge(child_result)
 	return aabb
 
+# 队伍着色：保留纹理，用 albedo_color 做色调
+func _apply_team_tint(entity: GameEntity, tint: Color):
+	for child in entity.get_children():
+		if child is MeshInstance3D:
+			for si in child.mesh.get_surface_count():
+				var src = child.get_active_material(si)
+				var mat = StandardMaterial3D.new()
+				mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+				mat.albedo_color = tint
+				if src and src is StandardMaterial3D and src.albedo_texture:
+					mat.albedo_texture = src.albedo_texture
+				child.set_surface_override_material(si, mat)
+
 func _update_entity_animation(entity: GameEntity):
 	if not entity.has_meta("_model_instance"): return
 	var model = entity.get_meta("_model_instance")
@@ -677,6 +690,12 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 	entity.setup(cfg)
 	# 尝试加载3D模型
 	var model_loaded = _apply_entity_model(entity)
+	# 队伍色着色：蓝方偏蓝，红方偏红，保留纹理
+	if entity.entity_type != 0:
+		var tint = Color(0.55, 0.7, 1.0) if team == RTSConfig.Team.BLUE else Color(1.0, 0.55, 0.55)
+		if entity.owner_peer_id != -1 and _player_colors.has(entity.owner_peer_id):
+			tint = _player_colors[entity.owner_peer_id]
+		_apply_team_tint(entity, tint)
 	# 资源需要 setup 后再重建 visual
 	if entity.entity_type == 0 and not model_loaded and entity.has_method("_create_visual"):
 		entity._create_visual()
