@@ -24,7 +24,7 @@ const SFX = {
 	build_place   = "res://resources/audio/sound/place_build.wav",
 	build_loop    = "res://resources/audio/sound/build-loop.wav",
 	build_done    = "res://resources/audio/sound/build-finish.wav",
-	produce       = "res://resources/audio/sound/produce.wav",
+	produce       = "",
 	upgrade_done  = "res://resources/audio/sound/upgrade-finish.wav",
 	walk          = "res://resources/audio/sound/walk.wav",
 	water_step    = "res://resources/audio/sound/step-into-water-puddle-wade.wav",
@@ -72,7 +72,7 @@ func stop_music():
 
 func play_sfx(key: String):
 	var path = SFX.get(key, "")
-	if path == "": return
+	if path == "" or not ResourceLoader.exists(path): return
 	var p = _sfx_pool[_sfx_index]
 	_sfx_index = (_sfx_index + 1) % SFX_POOL_SIZE
 	p.stream = load(path)
