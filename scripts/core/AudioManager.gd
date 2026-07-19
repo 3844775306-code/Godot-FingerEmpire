@@ -28,6 +28,7 @@ const SFX = {
 	upgrade_done  = "res://resources/audio/sound/upgrade-finish.wav",
 	walk          = "res://resources/audio/sound/walk.wav",
 	water_step    = "res://resources/audio/sound/step-into-water-puddle-wade.wav",
+	swim          = "res://resources/audio/sound/swim.mp3",
 	sail          = "res://resources/audio/sound/sail.mp3",
 	ui_click      = "res://resources/audio/sound/mouse-click.wav",
 	alert         = "res://resources/audio/sound/alert.wav",

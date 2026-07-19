@@ -241,7 +241,8 @@ func _physics_process(delta):
 			var _in_water = (terrain == 2)
 			var _was_in_water = has_meta("_was_in_water") and get_meta("_was_in_water")
 			if _in_water != _was_in_water and not water_capable:
-				AudioManager.play_sfx_3d("water_step", global_position, _get_cam_pos())
+				AudioManager.play_sfx_3d("swim", global_position, _get_cam_pos())
+			elif _in_water and water_capable and current_order == "move":
 			elif _in_water and water_capable and current_order == "move":
 				AudioManager.play_sfx_3d("sail", global_position, _get_cam_pos())
 			set_meta("_was_in_water", _in_water)
