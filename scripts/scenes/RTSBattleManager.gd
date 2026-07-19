@@ -731,12 +731,10 @@ func _tint_recursive(node: Node, tint: Color):
 		if child is MeshInstance3D and child.mesh:
 			for si in child.mesh.get_surface_count():
 				var src = child.get_active_material(si)
-				var mat = StandardMaterial3D.new()
-				mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
-				mat.albedo_color = tint
-				if src and "albedo_texture" in src:
-					mat.albedo_texture = src.albedo_texture
-				child.set_surface_override_material(si, mat)
+				if src and "albedo_color" in src:
+					var dup = src.duplicate()
+					dup.albedo_color = src.albedo_color * tint  # 保留原色×队伍色
+					child.set_surface_override_material(si, dup)
 		_tint_recursive(child, tint)
 
 func _update_entity_animation(entity: GameEntity):
