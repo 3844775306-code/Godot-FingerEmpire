@@ -186,18 +186,18 @@ func _add_selection_ring():
 
 func _add_weapon():
 	var wpath = ""
-	if entity_id == 35: wpath = "res://models/weapon-spear.glb"
-	elif entity_id == 12: wpath = "res://models/weapon-bow.glb"
-	elif entity_id in [36, 37, 38]: wpath = "res://models/shield-round.glb"
+	if entity_id == 35: wpath = "res://models/arena/weapon-spear.glb"
+	elif entity_id == 12: wpath = "res://models/forest/weapon-bow.glb"
+	elif entity_id in [36, 37, 38]: wpath = "res://models/arena/shield-round.glb"
 	elif entity_id not in [18, 40] and attack_range <= 2.0 and target_type > 0:
-		wpath = "res://models/weapon-sword.glb"
+		wpath = "res://models/arena/weapon-sword.glb"
 	if wpath != "" and ResourceLoader.exists(wpath):
 		var ws = load(wpath)
 		if ws: var w = ws.instantiate(); if w: w.position = Vector3(0, body_radius, 0); add_child(w)
 	# 骑兵坐骑
 	var mpath = ""
-	if entity_id == 15: mpath = "res://models/animal-dog.glb"
-	elif entity_id == 34: mpath = "res://models/animal-elephant.glb"
+	if entity_id == 15: mpath = "res://models/pets/animal-dog.glb"
+	elif entity_id == 34: mpath = "res://models/pets/animal-elephant.glb"
 	if mpath != "" and ResourceLoader.exists(mpath):
 		var ms = load(mpath)
 		if ms: var m = ms.instantiate(); if m: m.position = Vector3(0, 0, 0); add_child(m)
@@ -876,8 +876,8 @@ func hide_waypoints():
 
 func _create_waypoint_marker(pos: Vector3):
 	var marker: Node3D
-	if ResourceLoader.exists("res://models/flag.glb"):
-		var flag_scene = load("res://models/flag.glb")
+	if ResourceLoader.exists("res://models/pirate/flag.glb"):
+		var flag_scene = load("res://models/pirate/flag.glb")
 		if flag_scene: marker = flag_scene.instantiate()
 	if not marker:
 		marker = MeshInstance3D.new()

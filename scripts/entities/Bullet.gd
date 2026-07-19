@@ -16,12 +16,12 @@ var hit: bool = false
 func _ready():
 	add_to_group("bullets")
 	if damage_radius > 0 or (source and source.entity_id in [16,17,26,39]):
-		if ResourceLoader.exists("res://models/cannon-ball.glb"):
-			var cb = load("res://models/cannon-ball.glb")
+		if ResourceLoader.exists("res://models/pirate/cannon-ball.glb"):
+			var cb = load("res://models/pirate/cannon-ball.glb")
 			if cb: var c = cb.instantiate(); if c: add_child(c)
 	else:
-		if ResourceLoader.exists("res://models/weapon-arrow.glb"):
-			var arrow_scene = load("res://models/weapon-arrow.glb")
+		if ResourceLoader.exists("res://models/forest/weapon-arrow.glb"):
+			var arrow_scene = load("res://models/forest/weapon-arrow.glb")
 			if arrow_scene:
 				var arrow = arrow_scene.instantiate()
 				if arrow: add_child(arrow)

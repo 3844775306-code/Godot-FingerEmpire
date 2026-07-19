@@ -215,8 +215,8 @@ func _show_garrison_marker(): pass
 func _hide_garrison_marker(): pass
 
 func _load_banner(pos: Vector3) -> Node3D:
-	if ResourceLoader.exists("res://models/banner.glb"):
-		var s = load("res://models/banner.glb")
+	if ResourceLoader.exists("res://models/arena/banner.glb"):
+		var s = load("res://models/arena/banner.glb")
 		if s: var b = s.instantiate(); if b: b.position = pos; return b
 	var m = MeshInstance3D.new()
 	m.mesh = CylinderMesh.new()
