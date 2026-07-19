@@ -24,7 +24,7 @@ func _ready():
 			var arrow_scene = load("res://models/forest/weapon-arrow.glb")
 			if arrow_scene:
 				var arrow = arrow_scene.instantiate()
-				if arrow: add_child(arrow)
+				if arrow: arrow.rotation.x = deg_to_rad(90); add_child(arrow)
 	if get_child_count() == 0:
 		var mesh = MeshInstance3D.new()
 		var sphere = SphereMesh.new()

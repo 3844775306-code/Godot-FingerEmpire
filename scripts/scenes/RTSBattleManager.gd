@@ -670,6 +670,9 @@ func _apply_entity_model(entity: GameEntity) -> bool:
 		var scale_factor = target_size / current_size
 		model_instance.scale = Vector3.ONE * scale_factor
 	entity.add_child(model_instance)
+	# 特殊朝向调整
+	if entity.entity_id == 16: model_instance.rotation.y = deg_to_rad(180)
+	elif entity.entity_id == 17: model_instance.rotation.y = deg_to_rad(90)
 	# 存储模型引用用于动画
 	entity.set_meta("_model_instance", model_instance)
 	# 角色模型启用顶点颜色（编辑器预览依赖此特性）
