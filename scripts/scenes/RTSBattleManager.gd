@@ -613,7 +613,6 @@ func _apply_entity_model(entity: GameEntity) -> bool:
 	var model_path = RTSConfig.get_entity_model(entity.entity_id)
 	if model_path == "" or not FileAccess.file_exists(model_path):
 		return false
-	# 移除旧的程序化网格，加载3D模型
 	var model_scene = load(model_path)
 	if not model_scene: return false
 	var model_instance = model_scene.instantiate()
@@ -622,8 +621,42 @@ func _apply_entity_model(entity: GameEntity) -> bool:
 	for child in entity.get_children():
 		if child is MeshInstance3D and child.name != "SelectionRing":
 			child.queue_free()
+	# 缩放模型以匹配实体大小
+	var target_size = entity.body_radius * 2.0
+	var aabb = _get_model_aabb(model_instance)
+	var current_size = max(aabb.size.x, max(aabb.size.y, aabb.size.z))
+	if current_size > 0.01:
+		var scale_factor = target_size / current_size
+		model_instance.scale = Vector3.ONE * scale_factor
 	entity.add_child(model_instance)
+	# 存储模型引用用于动画
+	entity.set_meta("_model_instance", model_instance)
 	return true
+
+func _get_model_aabb(node: Node) -> AABB:
+	var aabb = AABB()
+	for child in node.get_children():
+		if child is MeshInstance3D and child.mesh:
+			var child_aabb = child.mesh.get_aabb()
+			if child_aabb.size.length() > 0:
+				aabb = aabb.merge(child_aabb)
+		var child_result = _get_model_aabb(child)
+		if child_result.size.length() > 0:
+			aabb = aabb.merge(child_result)
+	return aabb
+
+func _update_entity_animation(entity: GameEntity):
+	if not entity.has_meta("_model_instance"): return
+	var model = entity.get_meta("_model_instance")
+	var ap = model.get_node_or_null("AnimationPlayer") as AnimationPlayer
+	if not ap: return
+	var anim = ""
+	if entity.health <= 0: anim = "Death"
+	elif entity.current_order == "attack": anim = "Attack"
+	elif entity.current_order == "move" or entity.current_order == "deliver": anim = "Walk"
+	else: anim = "Idle"
+	if anim != "" and ap.has_animation(anim) and ap.current_animation != anim:
+		ap.play(anim)
 		
 
 func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -> GameEntity:
