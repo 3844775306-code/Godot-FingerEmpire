@@ -687,7 +687,7 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 		var ring = entity.get_node("SelectionRing")
 		ring.material_override.albedo_color = _player_colors[entity.owner_peer_id]
 	# 资源需要 setup 后再重建 visual
-	if entity.entity_type == 0 and entity.has_method("_create_visual"):
+	if entity.entity_type == 0 and not model_loaded and entity.has_method("_create_visual"):
 		entity._create_visual()
 	entity.global_position = pos
 	mark_entity_cache_dirty()

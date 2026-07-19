@@ -369,6 +369,7 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 
 	# 模型
 	var mesh: MeshInstance3D
+	var eid = info.get("entity_id", 0)
 	# 尝试加载3D模型
 	var model_path = RTSConfig.get_entity_model(eid)
 	var loaded_model = null
