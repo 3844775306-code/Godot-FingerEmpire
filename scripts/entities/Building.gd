@@ -55,25 +55,6 @@ func _process(delta):
 		elif has_z and not has_x: rotation.y = 0
 		elif is_corner: rotation.y = deg_to_rad(45)
 
-func _reload_wall_model(bm, path):
-	if not bm or not bm.has_method("_apply_entity_model") or not ResourceLoader.exists(path):
-		return
-	for child in get_children():
-		if child is MeshInstance3D and child.name != "SelectionRing":
-			child.queue_free()
-	if has_meta("_model_instance"):
-		var old = get_meta("_model_instance")
-		if is_instance_valid(old): old.queue_free()
-	var s = load(path)
-	if s:
-		var inst = s.instantiate()
-		if inst:
-			add_child(inst)
-			set_meta("_model_instance", inst)
-			bm._set_unshaded_recursive(inst)
-			if owner_peer_id != -1 and bm._player_colors.has(owner_peer_id):
-				bm._apply_team_tint(self, bm._player_colors[owner_peer_id])
-
 	# 建造计时
 	if build_timer > 0.0:
 		build_timer -= delta
@@ -147,6 +128,22 @@ func _attack(target, delta):
 	else:
 		target.take_damage(attack, self)
 	attack_timer = attack_speed
+
+func _reload_wall_model(bm, path):
+	if not bm or not ResourceLoader.exists(path): return
+	for child in get_children():
+		if child is MeshInstance3D and child.name != "SelectionRing": child.queue_free()
+	if has_meta("_model_instance"):
+		var old = get_meta("_model_instance")
+		if is_instance_valid(old): old.queue_free()
+	var s = load(path)
+	if s:
+		var inst = s.instantiate()
+		if inst:
+			add_child(inst); set_meta("_model_instance", inst)
+			bm._set_unshaded_recursive(inst)
+			if owner_peer_id != -1 and bm._player_colors.has(owner_peer_id):
+				bm._apply_team_tint(self, bm._player_colors[owner_peer_id])
 
 func _finish_construction():
 	build_timer = 0.0
