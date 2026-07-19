@@ -645,18 +645,22 @@ func _get_model_aabb(node: Node) -> AABB:
 			aabb = aabb.merge(child_result)
 	return aabb
 
-# 队伍着色：保留纹理，用 albedo_color 做色调
+# 队伍着色：递归遍历，保留纹理，用 albedo_color 做色调
 func _apply_team_tint(entity: GameEntity, tint: Color):
-	for child in entity.get_children():
-		if child is MeshInstance3D:
+	_tint_recursive(entity, tint)
+
+func _tint_recursive(node: Node, tint: Color):
+	for child in node.get_children():
+		if child is MeshInstance3D and child.mesh:
 			for si in child.mesh.get_surface_count():
 				var src = child.get_active_material(si)
 				var mat = StandardMaterial3D.new()
 				mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
 				mat.albedo_color = tint
-				if src and src is StandardMaterial3D and src.albedo_texture:
-					mat.albedo_texture = src.albedo_texture
+				if src and src.has_method("get") and src.get("albedo_texture"):
+					mat.albedo_texture = src.get("albedo_texture")
 				child.set_surface_override_material(si, mat)
+		_tint_recursive(child, tint)
 
 func _update_entity_animation(entity: GameEntity):
 	if not entity.has_meta("_model_instance"): return
