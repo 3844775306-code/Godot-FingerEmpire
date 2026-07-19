@@ -53,12 +53,11 @@ func _process(delta):
 			_reload_wall_model(bm, "res://models/castle/wall.glb")
 		if has_x and not has_z: rotation.y = deg_to_rad(90)
 		elif has_z and not has_x: rotation.y = 0
-		elif is_corner: rotation.y = deg_to_rad(45)
 
 	# 建造计时
 	if build_timer > 0.0:
 		build_timer -= delta
-		if Engine.get_process_frames() % 60 == 0: AudioManager.play_sfx("build_loop")
+		if Engine.get_process_frames() % 40 == 0: AudioManager.play_sfx("build_loop")
 		if build_timer <= 0.0:
 			_finish_construction()
 

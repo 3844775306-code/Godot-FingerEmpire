@@ -24,7 +24,7 @@ const SFX = {
 	build_place   = "res://resources/audio/sound/place_build.wav",
 	build_loop    = "res://resources/audio/sound/build-loop.wav",
 	build_done    = "res://resources/audio/sound/build-finish.wav",
-	produce       = "",
+	produce       = "res://resources/audio/sound/build-finish.wav",
 	upgrade_done  = "res://resources/audio/sound/upgrade-finish.wav",
 	walk          = "res://resources/audio/sound/walk.wav",
 	water_step    = "res://resources/audio/sound/step-into-water-puddle-wade.wav",
@@ -77,6 +77,15 @@ func play_sfx(key: String):
 	_sfx_index = (_sfx_index + 1) % SFX_POOL_SIZE
 	p.stream = load(path)
 	p.volume_db = linear_to_db(_sfx_volume)
+	p.play()
+
+func play_sfx_quiet(key: String):
+	var path = SFX.get(key, "")
+	if path == "" or not ResourceLoader.exists(path): return
+	var p = _sfx_pool[_sfx_index]
+	_sfx_index = (_sfx_index + 1) % SFX_POOL_SIZE
+	p.stream = load(path)
+	p.volume_db = linear_to_db(_sfx_volume * 0.3)
 	p.play()
 
 func play_sfx_3d(key: String, pos: Vector3, cam_pos: Vector3):
