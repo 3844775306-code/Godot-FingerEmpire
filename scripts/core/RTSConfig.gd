@@ -25,9 +25,9 @@ const ENTITY_MODELS = {
 	22: "res://models/hexagon/unit-mill.glb",
 	23: "res://models/hexagon/shipyard.glb",
 	25: "res://models/hexagon/arrow-tower.glb",
-	27: "res://models/hexagon/wall.glb",
+	27: "res://models/castle/wall.glb",
 	28: "res://models/hexagon/unit-mansion.glb",
-	41: "res://models/hexagon/tower.glb",
+	41: "res://models/castle/tower.glb",
 	42: "res://models/hexagon/academy.glb",
 	52: "res://models/hexagon/market.glb",
 	53: "res://models/hexagon/building-walls.glb",
@@ -68,7 +68,7 @@ const ENTITY_MODELS = {
 	60: "res://models/pets/animal-cow.glb",
 	61: "res://models/pets/animal-pig.glb",
 	62: "res://models/pets/animal-polar.glb",
-	63: "res://models/pets/fish.glb",
+	63: "res://models/survival/fish.glb",
 }
 
 const CHARACTERS = ["character-female-a","character-female-b","character-female-c","character-female-d","character-female-e","character-female-f","character-male-a","character-male-b","character-male-c","character-male-d","character-male-e","character-male-f"]
@@ -81,7 +81,7 @@ static func get_entity_model(entity_id: int, level: int = 1) -> String:
 	if entity_id in [10, 43, 44, 45, 46, 47, 48, 49, 50, 51]:
 		return _random_character()
 	if entity_id == 1:
-		return "res://models/forest/tree-high-round.glb" if level >= 5 else ("res://models/forest/tree-high.glb" if level >= 3 else "res://models/forest/tree.glb")
+		return "res://models/town/tree-high-round.glb" if level >= 5 else ("res://models/town/tree-high.glb" if level >= 3 else "res://models/town/tree.glb")
 	if entity_id == 0:
 		return "res://models/pirate/rocks-sand-c.glb" if level >= 4 else ("res://models/pirate/rocks-sand-b.glb" if level >= 2 else "res://models/pirate/rocks-sand-a.glb")
 	if entity_id == 2:

@@ -880,8 +880,8 @@ func hide_waypoints():
 
 func _create_waypoint_marker(pos: Vector3):
 	var marker: Node3D
-	if ResourceLoader.exists("res://models/pirate/flag.glb"):
-		var flag_scene = load("res://models/pirate/flag.glb")
+	if ResourceLoader.exists("res://models/castle/flag.glb"):
+		var flag_scene = load("res://models/castle/flag.glb")
 		if flag_scene: marker = flag_scene.instantiate()
 	if not marker:
 		marker = MeshInstance3D.new()
