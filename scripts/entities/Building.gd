@@ -88,7 +88,7 @@ func _reload_wall_model(bm, path):
 
 	# 生产计时
 	if production_queue.size() > 0:
-		var bm = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
+		#var bm = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
 		var can_produce = true
 		if owner_peer_id == -1:
 			can_produce = bm.can_train_unit(team)

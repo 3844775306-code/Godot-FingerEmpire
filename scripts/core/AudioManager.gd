@@ -62,7 +62,7 @@ func play_music(key: String):
 	if not stream: return
 	_music_player.stream = stream
 	_music_player.volume_db = linear_to_db(_music_volume)
-	if stream is AudioStreamMP3: stream.loop_mode = AudioStreamMP3.LOOP_FORWARD
+	stream.loop_mode = 1 if "loop_mode" in stream else 0  # 1=forward loop
 	_music_player.play()
 
 func stop_music():

@@ -909,7 +909,7 @@ func _place_building_at(pos: Vector3):
 	var b = spawn_entity(cfg, RTSConfig.Team.BLUE, pos) as Building
 	if b:
 		b.start_construction(5.0, cfg)	
-			AudioManager.play_sfx("build_place")
+		AudioManager.play_sfx("build_place")
 	# 注意：如果仍需要支持鼠标（PC调试），可以同时保留原鼠标处理
 	# 但移动端主要用触摸，PC端继续用鼠标左键命令+右键选择
 func _start_build_drag(screen_pos: Vector2):
@@ -1181,7 +1181,7 @@ func _place_building():
 	var b = spawn_entity(cfg, RTSConfig.Team.BLUE, pos) as Building
 	if b:
 		b.start_construction(5.0, cfg)
-			AudioManager.play_sfx("build_place")
+		AudioManager.play_sfx("build_place")
 
 	if not Input.is_key_pressed(KEY_SHIFT):
 			_exit_build_mode()
