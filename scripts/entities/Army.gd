@@ -239,7 +239,8 @@ func _show_path():
 		m.mesh = SphereMesh.new()
 		m.mesh.radius = 0.2
 		m.mesh.height = 0.4
-		m.position = Vector3(wp.x, bm.get_terrain_height_at(wp) + 0.3, wp.z)
+		var h = 0.0; if bm.has_node("Map") and bm.get_node("Map").has_method("get_height_at"): h = bm.get_node("Map").get_height_at(wp)
+			m.position = Vector3(wp.x, h + 0.3, wp.z)
 		var mat = StandardMaterial3D.new()
 		mat.albedo_color = Color(0, 1, 1, 0.8)
 		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
