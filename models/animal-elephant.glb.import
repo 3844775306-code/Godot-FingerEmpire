@@ -3,13 +3,13 @@
 importer="scene"
 importer_version=1
 type="PackedScene"
-uid="uid://bre8c5asoherc"
-path="res://.godot/imported/tree-small.glb-a8121d2c85a4ebd08a6bcd6c0e2f8340.scn"
+uid="uid://dd1ubp7ow2ml"
+path="res://.godot/imported/animal-elephant.glb-95e06aa436a9eed40cbfe8ffd724b955.scn"
 
 [deps]
 
-source_file="res://models/tree-small.glb"
-dest_files=["res://.godot/imported/tree-small.glb-a8121d2c85a4ebd08a6bcd6c0e2f8340.scn"]
+source_file="res://models/animal-elephant.glb"
+dest_files=["res://.godot/imported/animal-elephant.glb-95e06aa436a9eed40cbfe8ffd724b955.scn"]
 
 [params]
 

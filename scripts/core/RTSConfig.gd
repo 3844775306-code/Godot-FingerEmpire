@@ -37,11 +37,11 @@ const ENTITY_MODELS = {
 	25: "res://models/arrow-tower.glb",
 	26: "res://models/tower-complete-large.glb",
 	28: "res://models/unit-mansion.glb",
-	29: "res://models/siege_workshop.glb",
+	29: "res://models/building-cabin.glb",
 	41: "res://models/tower.glb",
 	42: "res://models/academy.glb",
 	52: "res://models/market.glb",
-	53: "res://models/castle.glb",
+	53: "res://models/building-walls.glb",
 	# 军队
 	10: "res://models/soldier.glb",
 	11: "res://models/soldier.glb",
@@ -56,11 +56,17 @@ const ENTITY_MODELS = {
 	40: "res://models/ship-small.glb",
 	# 资源
 	3: "res://models/farm.glb",
+	4: "res://models/water-rocks.glb",
+	# 动物
+	60: "res://models/animal-cow.glb",
+	61: "res://models/animal-pig.glb",
+	62: "res://models/animal-polar.glb",
+	63: "res://models/fish.glb",
 }
 
 static func get_entity_model(entity_id: int, level: int = 1) -> String:
 	if entity_id == 1:
-		return "res://models/tree-large.glb" if level >= 4 else "res://models/tree-small.glb"
+		return "res://models/tree-high-round.glb" if level >= 5 else ("res://models/tree-high.glb" if level >= 3 else "res://models/tree.glb")
 	if entity_id == 0:
 		return "res://models/rocks-sand-c.glb" if level >= 4 else ("res://models/rocks-sand-b.glb" if level >= 2 else "res://models/rocks-sand-a.glb")
 	if entity_id == 2:

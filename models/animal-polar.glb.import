@@ -3,13 +3,13 @@
 importer="scene"
 importer_version=1
 type="PackedScene"
-uid="uid://dsyyrlrlrydt8"
-path="res://.godot/imported/siege_workshop.glb-4fa0f8fecb5245dfd582c010d73fe736.scn"
+uid="uid://qyjr0mdv4y2k"
+path="res://.godot/imported/animal-polar.glb-ecbd1c4f7347de3621a2cb6bc908da33.scn"
 
 [deps]
 
-source_file="res://models/siege_workshop.glb"
-dest_files=["res://.godot/imported/siege_workshop.glb-4fa0f8fecb5245dfd582c010d73fe736.scn"]
+source_file="res://models/animal-polar.glb"
+dest_files=["res://.godot/imported/animal-polar.glb-ecbd1c4f7347de3621a2cb6bc908da33.scn"]
 
 [params]
 
