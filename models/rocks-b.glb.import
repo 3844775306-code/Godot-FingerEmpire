@@ -3,13 +3,13 @@
 importer="scene"
 importer_version=1
 type="PackedScene"
-uid="uid://6wtbd3lmuc7x"
-path="res://.godot/imported/cannon_tower.glb-58c9d8d8f1702f5d87b32f26be4c1d41.scn"
+uid="uid://c42awaf4007jh"
+path="res://.godot/imported/rocks-b.glb-c97f21d434852c4d298757e1cf0e2024.scn"
 
 [deps]
 
-source_file="res://models/cannon_tower.glb"
-dest_files=["res://.godot/imported/cannon_tower.glb-58c9d8d8f1702f5d87b32f26be4c1d41.scn"]
+source_file="res://models/rocks-b.glb"
+dest_files=["res://.godot/imported/rocks-b.glb-c97f21d434852c4d298757e1cf0e2024.scn"]
 
 [params]
 

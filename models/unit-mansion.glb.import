@@ -3,13 +3,13 @@
 importer="scene"
 importer_version=1
 type="PackedScene"
-uid="uid://bup6b7fwavo8b"
-path="res://.godot/imported/warship.glb-78e2221d5456cf3941dd3430b12bc9b1.scn"
+uid="uid://be2t3atpom76c"
+path="res://.godot/imported/unit-mansion.glb-3a4d38cbe0d7a30b0dda26e765a33dfb.scn"
 
 [deps]
 
-source_file="res://models/warship.glb"
-dest_files=["res://.godot/imported/warship.glb-78e2221d5456cf3941dd3430b12bc9b1.scn"]
+source_file="res://models/unit-mansion.glb"
+dest_files=["res://.godot/imported/unit-mansion.glb-3a4d38cbe0d7a30b0dda26e765a33dfb.scn"]
 
 [params]
 

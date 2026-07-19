@@ -58,22 +58,11 @@ const ENTITY_MODELS = {
 	3: "res://models/farm.glb",
 }
 
-static func get_entity_model(entity_id: int, level: int = 1, pos: Vector3 = Vector3.ZERO) -> String:
+static func get_entity_model(entity_id: int, level: int = 1) -> String:
 	if entity_id == 1:
 		return "res://models/tree-large.glb" if level >= 4 else "res://models/tree-small.glb"
 	if entity_id == 0:
 		return "res://models/rocks-sand-c.glb" if level >= 4 else ("res://models/rocks-sand-b.glb" if level >= 2 else "res://models/rocks-sand-a.glb")
 	if entity_id == 2:
 		return "res://models/rocks-c.glb" if level >= 4 else ("res://models/rocks-b.glb" if level >= 2 else "res://models/rocks-a.glb")
-	if entity_id == 27:
-		var bm = Engine.get_main_loop().get_first_node_in_group("battle_manager")
-		if bm:
-			var has_x = false; var has_z = false
-			for e in bm.entities.get_children():
-				if e is Building and e.entity_id == 27 and e.health > 0:
-					var d = e.global_position - pos
-					if abs(d.x) < 2.0 and abs(d.z) < 0.5: has_x = true
-					if abs(d.z) < 2.0 and abs(d.x) < 0.5: has_z = true
-			if has_x and has_z: return "res://models/wall-corner.glb"
-		return "res://models/wall.glb"
 	return ENTITY_MODELS.get(entity_id, "")

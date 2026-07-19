@@ -3,13 +3,13 @@
 importer="scene"
 importer_version=1
 type="PackedScene"
-uid="uid://dwrj20k1w4wf1"
-path="res://.godot/imported/trebuchet.glb-cf1f1e761a6117afff3ec40257e4e16a.scn"
+uid="uid://dw4s1v2vdffsl"
+path="res://.godot/imported/cannon-ball.glb-6f48e298cb0d7a6c87c96a891a541a6c.scn"
 
 [deps]
 
-source_file="res://models/trebuchet.glb"
-dest_files=["res://.godot/imported/trebuchet.glb-cf1f1e761a6117afff3ec40257e4e16a.scn"]
+source_file="res://models/cannon-ball.glb"
+dest_files=["res://.godot/imported/cannon-ball.glb-6f48e298cb0d7a6c87c96a891a541a6c.scn"]
 
 [params]
 

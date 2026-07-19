@@ -610,7 +610,16 @@ func _init_entities_deferred():
 
 # ==================== 实体生成 ====================
 func _apply_entity_model(entity: GameEntity) -> bool:
-	var model_path = RTSConfig.get_entity_model(entity.entity_id, entity.level, entity.global_position)
+	var model_path = RTSConfig.get_entity_model(entity.entity_id, entity.level)
+	# 城墙拐角检测
+	if entity.entity_id == 27:
+		var has_x = false; var has_z = false
+		for e in entities.get_children():
+			if e is Building and e.entity_id == 27 and e.health > 0 and e != entity:
+				var d = e.global_position - entity.global_position
+				if abs(d.x) < 2.0 and abs(d.z) < 0.5: has_x = true
+				if abs(d.z) < 2.0 and abs(d.x) < 0.5: has_z = true
+		if has_x and has_z: model_path = "res://models/wall-corner.glb"
 	if model_path == "" or not ResourceLoader.exists(model_path):
 		return false
 	var model_scene = load(model_path)
