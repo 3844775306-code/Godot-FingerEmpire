@@ -374,18 +374,8 @@ func _show_garrison_marker():
 	_hide_garrison_marker()
 	var bm = get_tree().get_first_node_in_group("battle_manager")
 	if not bm: return
-	_garrison_marker = MeshInstance3D.new()
-	_garrison_marker.name = "GarrisonMarkerBld"
-	_garrison_marker.mesh = CylinderMesh.new()
-	_garrison_marker.mesh.top_radius = 0.35
-	_garrison_marker.mesh.bottom_radius = 0.35
-	_garrison_marker.mesh.height = 0.05
-	_garrison_marker.position = garrison_point + Vector3(0, 0.1, 0)
-	var mat = StandardMaterial3D.new()
-	mat.albedo_color = Color(0.2, 1.0, 0.4, 0.7)
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_garrison_marker.material_override = mat
-	bm.add_child(_garrison_marker)
+	_garrison_marker = _load_banner(garrison_point + Vector3(0, 0.1, 0))
+	if _garrison_marker: bm.add_child(_garrison_marker)
 
 func _hide_garrison_marker():
 	if _garrison_marker and is_instance_valid(_garrison_marker):

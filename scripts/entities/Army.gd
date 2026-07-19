@@ -167,6 +167,8 @@ func _create_visual():
 		color = Color(0.5, 0.7, 0.85)       # 银蓝
 	mat.albedo_color = color
 	mesh.set_surface_override_material(0, mat)
+	# 近战武器
+	_add_weapon()
 
 func _add_selection_ring():
 	if not has_node("SelectionRing"):
@@ -181,6 +183,15 @@ func _add_selection_ring():
 		ring.material_override.albedo_color = Color.GREEN
 		ring.visible = false
 		add_child(ring)
+
+func _add_weapon():
+	var wpath = ""
+	if entity_id == 35: wpath = "res://models/weapon-spear.glb"  # 长枪兵
+	elif entity_id not in [18, 40] and attack_range <= 2.0 and target_type > 0:
+		wpath = "res://models/weapon-sword.glb"  # 近战单位
+	if wpath != "" and ResourceLoader.exists(wpath):
+		var ws = load(wpath)
+		if ws: var w = ws.instantiate(); if w: w.position = Vector3(0, body_radius, 0); add_child(w)
 
 func _add_collision_shape():
 	if not has_node("CollisionShape3D"):
@@ -1365,18 +1376,8 @@ func _show_garrison_marker():
 	_hide_garrison_marker()
 	var bm = get_tree().get_first_node_in_group("battle_manager")
 	if not bm: return
-	_garrison_marker = MeshInstance3D.new()
-	_garrison_marker.name = "GarrisonMarker"
-	_garrison_marker.mesh = CylinderMesh.new()
-	_garrison_marker.mesh.top_radius = 0.3
-	_garrison_marker.mesh.bottom_radius = 0.3
-	_garrison_marker.mesh.height = 0.05
-	_garrison_marker.position = garrison_point + Vector3(0, 0.1, 0)
-	var mat = StandardMaterial3D.new()
-	mat.albedo_color = Color(0.2, 0.8, 1.0, 0.7)
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_garrison_marker.material_override = mat
-	bm.add_child(_garrison_marker)
+	_garrison_marker = _load_banner(garrison_point + Vector3(0, 0.1, 0))
+	if _garrison_marker: bm.add_child(_garrison_marker)
 
 func _hide_garrison_marker():
 	if _garrison_marker and is_instance_valid(_garrison_marker):

@@ -214,6 +214,20 @@ func die():
 func _show_garrison_marker(): pass
 func _hide_garrison_marker(): pass
 
+func _load_banner(pos: Vector3) -> Node3D:
+	if ResourceLoader.exists("res://models/banner.glb"):
+		var s = load("res://models/banner.glb")
+		if s: var b = s.instantiate(); if b: b.position = pos; return b
+	var m = MeshInstance3D.new()
+	m.mesh = CylinderMesh.new()
+	m.mesh.top_radius = 0.35; m.mesh.bottom_radius = 0.35; m.mesh.height = 0.05
+	m.position = pos
+	var mat = StandardMaterial3D.new()
+	mat.albedo_color = Color(0.2, 1.0, 0.4, 0.7)
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	m.material_override = mat
+	return m
+
 const GROUP_COLORS = [Color.RED, Color.BLUE, Color.GREEN, Color.YELLOW, Color.ORANGE, Color.PURPLE, Color.CYAN, Color.MAGENTA, Color.WHITE, Color.GRAY]
 
 func set_selected(selected: bool):
