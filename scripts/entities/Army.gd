@@ -456,39 +456,63 @@ func _manual_move(delta):
 	if not can_move or speed <= 0:
 		return
 	if hold_position and target_type != 0:
-		return
+		return 
+	# ²É¼¯/¹¥»÷Ë®Æ½·¶Î§ÄÚÍ£Ö¹ÒÆ¶¯
 	if current_target and is_instance_valid(current_target):
-		var target_radius = current_target.body_radius if current_target is GameEntity else 0.0
-		var h_dist = Vector2(global_position.x - current_target.global_position.x, global_position.z - current_target.global_position.z).length() - body_radius - target_radius
+		var target_radius = 0.0
+		if current_target is GameEntity: target_radius = current_target.body_radius
+		var h_diff = Vector2(global_position.x - current_target.global_position.x,
+							global_position.z - current_target.global_position.z)
+		var h_dist = h_diff.length() - body_radius - target_radius
 		if current_target is WorldResource and h_dist <= 0.5:
 			return
 		elif current_target is GameEntity and h_dist <= attack_range:
 			return
+
 	var target_pos = _get_current_move_target()
 	if target_pos == Vector3.ZERO:
 		return
-	# 移动：优先导航，回落直线
+
+	# 构建水平方向
 	var horizontal_target = Vector3(target_pos.x, global_position.y, target_pos.z)
 	var move_dir = (horizontal_target - global_position).normalized()
-	if move_dir.length() < 0.001:
+	if move_dir.length() < 0.01:
 		return
-	if nav_agent and nav_agent.get_navigation_map() and not nav_agent.is_navigation_finished():
-		var np = nav_agent.get_next_path_position()
-		move_dir = (Vector3(np.x, 0, np.z) - Vector3(global_position.x, 0, global_position.z)).normalized()
-		if move_dir.length() < 0.01:
-			move_dir = (horizontal_target - global_position).normalized()
-	velocity.x = move_dir.x * speed; velocity.z = move_dir.z * speed; velocity.y = 0
+
+	# 陆军避开不可通行地形（水域/山地）
+	if not water_capable:
+		var next_pos = global_position + move_dir * speed * delta
+		var bm2 = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
+		if bm2:
+			var terrain = bm2.get_terrain_at(next_pos)
+			if terrain == 2:  # 水域
+				move_dir = move_dir.rotated(Vector3.UP, deg_to_rad(45))  # 尝试偏转
+				next_pos = global_position + move_dir * speed * delta
+				terrain = bm2.get_terrain_at(next_pos)
+				if terrain == 2: move_dir = move_dir.rotated(Vector3.UP, deg_to_rad(-90))  # 反向偏转
+
+	velocity = Vector3(move_dir.x, 0, move_dir.z) * speed
 	move_and_slide()
+	# 旋转朝向移动方向
 	if move_dir.length() > 0.01:
-		look_at(Vector3(global_position.x + move_dir.x, global_position.y, global_position.z + move_dir.z), Vector3.UP)
+		var look_target = global_position + move_dir
+		look_at(Vector3(look_target.x, global_position.y, look_target.z), Vector3.UP)
+
+	# 边界限制
 	var half_map = RTSConfig.MAP_SIZE / 2.0
 	global_position.x = clamp(global_position.x, -half_map, half_map)
 	global_position.z = clamp(global_position.z, -half_map, half_map)
+
+		# ¸ù¾ÝµØÐÎ¸ß¶ÈÆ½»¬¸üÐÂ Y ×ø±ê
 	var bm = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
 	if bm:
 		var map = bm.get_node("Map")
 		if map and map.has_method("get_height_at"):
-			global_position.y = map.get_height_at(global_position)
+			var target_height = map.get_height_at(global_position)
+			# Ã¿Ãë×î´óÉý½µËÙ¶È
+			var elevation_speed = 5.0
+			global_position.y = move_toward(global_position.y, target_height, elevation_speed * delta)
+
 func _get_current_move_target() -> Vector3:
 	if is_instance_valid(current_target):
 		return current_target.global_position
@@ -500,6 +524,131 @@ func _get_current_move_target() -> Vector3:
 
 func _set_move_target(pos: Vector3):
 	astar_target = pos
+
+# ----------------- A* Ñ°Â· -----------------
+# ==================== A* Ñ°Â·£¨¿ªÏúÓÅ»¯°æ£© ====================
+# ÓÅ»¯Ïî£º
+# 1. ×î´óËÑË÷½ÚµãÊýÏÞÖÆ£¨500 ½Úµã£©£¬·ÀÖ¹ÏÝÈë´ó¹æÄ£Ì½Ë÷
+# 2. ¼òµ¥¼ÓÈ¨Æô·¢Ê½£¨1.2 ±¶£©£¬ÎþÉüÉÙÐí×îÓÅÐÔ»»È¡¸ü¿ìµÄÊÕÁ²ËÙ¶È
+# 3. ½« open_list µÄÅÅÐò¸ÄÎª½öÔÚÐÂ½Úµã¼ÓÈëÊ±°´Ðè²åÈë£¬±ÜÃâÃ¿Ö¡È«ÅÅÐò
+# 4. Ê¹ÓÃ Dictionary µÄ¿ìËÙ²éÕÒ
+
+func _calculate_astar_path(target_pos: Vector3) -> Array:
+	var bm = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
+	if not bm: return []
+	var start = global_position
+	var end = target_pos
+	var start_tile = bm.world_to_grid(start)
+	var end_tile = bm.world_to_grid(end)
+
+	# Èç¹ûÆðµãµÈÓÚÖÕµã£¬Ö±½Ó·µ»Ø¿Õ
+	if start_tile == end_tile:
+		return []
+
+	var open_list = []
+	var closed_set = {}
+	var g_score = {}
+	var f_score = {}
+	var came_from = {}
+	var start_key = _tile_key(start_tile)
+	g_score[start_key] = 0.0
+	f_score[start_key] = _heuristic(start_tile, end_tile) * 1.2   # Ð¡·ù¼ÓÈ¨
+	open_list.append({"tile": start_tile, "f": f_score[start_key]})
+
+	var max_nodes = 500
+	var nodes_explored = 0
+
+	while open_list.size() > 0 and nodes_explored < max_nodes:
+		# ÕÒµ½ F Öµ×îÐ¡µÄ½Úµã£¨ÊÖ¶¯²éÕÒ£¬±ÜÃâÅÅÐòÕû¸öÁÐ±í£©
+		var best_idx = 0
+		var best_f = open_list[0].f
+		for i in range(1, open_list.size()):
+			if open_list[i].f < best_f:
+				best_f = open_list[i].f
+				best_idx = i
+		var current = open_list.pop_at(best_idx)
+		var cur_tile: Vector2i = current.tile
+		nodes_explored += 1
+
+		if cur_tile == end_tile:
+			return _reconstruct_path(came_from, cur_tile)
+
+		var cur_key = _tile_key(cur_tile)
+		closed_set[cur_key] = true
+
+		# ¼ì²é 8 ¸öÁÚ¾Ó
+		for dx in range(-1, 2):
+			for dy in range(-1, 2):
+				if dx == 0 and dy == 0: continue
+				var neighbor = Vector2i(cur_tile.x + dx, cur_tile.y + dy)
+
+				# ±ß½ç¼ì²é
+				if neighbor.x < 0 or neighbor.x >= RTSConfig.MAP_SIZE or neighbor.y < 0 or neighbor.y >= RTSConfig.MAP_SIZE:
+					continue
+
+				var neighbor_key = _tile_key(neighbor)
+				if closed_set.has(neighbor_key): continue
+
+				var terrain_cost = _get_terrain_cost(neighbor, bm)
+				if terrain_cost >= 999.0: continue   # ²»¿ÉÍ¨ÐÐ
+
+				var step_cost = terrain_cost * (1.4 if (dx != 0 and dy != 0) else 1.0)
+				var tentative_g = g_score.get(cur_key, 9999.0) + step_cost
+
+				if tentative_g < g_score.get(neighbor_key, 9999.0):
+					came_from[neighbor_key] = cur_tile
+					g_score[neighbor_key] = tentative_g
+					f_score[neighbor_key] = tentative_g + _heuristic(neighbor, end_tile) * 1.2
+
+					# ¼ì²éÊÇ·ñÒÑÔÚ open_list ÖÐ
+					var found = false
+					for item in open_list:
+						if item.tile == neighbor:
+							item.f = f_score[neighbor_key]
+							found = true
+							break
+					if not found:
+						open_list.append({"tile": neighbor, "f": f_score[neighbor_key]})
+
+	# Èôµ½´ï×î´ó½ÚµãÊýÈÔÎ´ÕÒµ½£¬·µ»Ø¿Õ£¨µ¥Î»½«Ê¹ÓÃÖ±ÏßÒÆ¶¯£©
+	return []
+
+static func _tile_key(tile: Vector2i) -> String:
+	return str(tile.x) + "," + str(tile.y)
+
+func _heuristic(a: Vector2i, b: Vector2i) -> float:
+	# Âü¹þ¶Ù¾àÀë£¨ÊÊºÏ°Ë·½ÏòÒÆ¶¯£©
+	return abs(a.x - b.x) + abs(a.y - b.y)
+
+func _get_terrain_cost(tile: Vector2i, bm: RTSBattleManager) -> float:
+	var terrain = bm.get_terrain_at_grid(tile.x, tile.y)
+	if water_capable:
+		if terrain == 2: return 0.8
+		else: return 999.0
+	else:
+		if terrain == 2: return 999.0
+		elif terrain == 1: return 2.5
+		else:
+			# Check for enemy walls blocking the path
+			var wp = Vector3(tile.x - RTSConfig.MAP_SIZE/2.0, 0, tile.y - RTSConfig.MAP_SIZE/2.0)
+			for e in bm.entities.get_children():
+				if e is Building and e.entity_id == 27 and e.health > 0 and e.team != team:
+					var g = bm.world_to_grid(e.global_position)
+					if g.x == tile.x and g.y == tile.y:
+						return 999.0
+			return 1.0
+
+func _reconstruct_path(came_from: Dictionary, end_tile: Vector2i) -> Array:
+	var path = []
+	var current = end_tile
+	path.push_front(Vector3(current.x - RTSConfig.MAP_SIZE/2.0, 0, current.y - RTSConfig.MAP_SIZE/2.0))
+	for _i in range(200):
+		var key = _tile_key(current)
+		if not came_from.has(key): break
+		current = came_from[key]
+		path.push_front(Vector3(current.x - RTSConfig.MAP_SIZE/2.0, 0, current.y - RTSConfig.MAP_SIZE/2.0))
+	return path
+
 
 
 # ----------------- Åö×²·ÖÀë -----------------

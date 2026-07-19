@@ -84,11 +84,6 @@ func _ready():
 	add_to_group("entities")
 	collision_layer = 1
 	collision_mask = 0
-	# 导航代理
-	nav_agent = NavigationAgent3D.new()
-	nav_agent.path_desired_distance = 0.5
-	nav_agent.target_desired_distance = 0.5
-	add_child(nav_agent)
 
 func setup(config: Dictionary):
 	entity_id = config.get("id", 0)
