@@ -323,17 +323,6 @@ func _update_single_entity(info: Dictionary):
 # ---------- 替换原有的 _create_entity_node ----------
 # 递归给模型所有Mesh设置颜色
 
-func _enable_vertex_colors(node: Node):
-	for child in node.get_children():
-		if child is MeshInstance3D and child.mesh:
-			for si in child.mesh.get_surface_count():
-				var mat = child.get_active_material(si)
-				if mat and "vertex_color_use_as_albedo" in mat:
-					var m = mat.duplicate()
-					m.vertex_color_use_as_albedo = true
-					m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-					child.set_surface_override_material(si, m)
-		_enable_vertex_colors(child)
 
 func _apply_model_tint(node: Node, tint: Color):
 	for child in node.get_children():
@@ -417,7 +406,6 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 	if loaded_model:
 		entity.add_child(loaded_model)
 		# 启用顶点颜色 + 无光照渲染
-		_enable_vertex_colors(loaded_model)
 		# 队伍色着色（向白色混合50%，降低饱和度）
 		if info.get("type", -1) != 0:
 			var lt = Color(0.5 + entity_color.r * 0.5, 0.5 + entity_color.g * 0.5, 0.5 + entity_color.b * 0.5)

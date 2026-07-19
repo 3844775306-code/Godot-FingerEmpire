@@ -676,21 +676,7 @@ func _apply_entity_model(entity: GameEntity) -> bool:
 	entity.add_child(model_instance)
 	# 存储模型引用用于动画
 	entity.set_meta("_model_instance", model_instance)
-	# 启用顶点颜色（Kenney角色模型依赖顶点着色）
-	_enable_vertex_colors(model_instance)
 	return true
-
-func _enable_vertex_colors(node: Node):
-	for child in node.get_children():
-		if child is MeshInstance3D and child.mesh:
-			for si in child.mesh.get_surface_count():
-				var mat = child.get_active_material(si)
-				if mat and "vertex_color_use_as_albedo" in mat:
-					var m = mat.duplicate()
-					m.vertex_color_use_as_albedo = true
-					m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-					child.set_surface_override_material(si, m)
-		_enable_vertex_colors(child)
 
 func _set_unshaded_recursive(node: Node):
 	for child in node.get_children():
@@ -769,8 +755,8 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 	entity.setup(cfg)
 	# 尝试加载3D模型
 	var model_loaded = _apply_entity_model(entity)
-	# 队伍色着色：建筑始终着色，军队仅无模型时着色
-	if entity.entity_type == 1 or (entity.entity_type == 2 and not model_loaded):
+	# 队伍色着色
+	if entity.entity_type != 0:
 		var tint = Color(0.82, 0.9, 1.0) if team == RTSConfig.Team.BLUE else Color(1.0, 0.82, 0.82)
 		if entity.owner_peer_id != -1 and _player_colors.has(entity.owner_peer_id):
 			var pc = _player_colors[entity.owner_peer_id]
