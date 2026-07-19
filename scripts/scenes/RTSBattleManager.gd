@@ -1273,6 +1273,8 @@ func _on_building_selected_for_build(building_id: int):
 	var current_size = max(aabb.size.x, max(aabb.size.y, aabb.size.z))
 	if current_size > 0.01: build_preview.scale = Vector3.ONE * (target_size / current_size)
 	build_preview.visible = false
+	# 预览旋转（与实际放置一致）
+	if building_id in [22, 27, 28]: build_preview.rotation.y = deg_to_rad(90)
 	_tint_preview(build_preview, Color(0, 1, 0))
 	add_child(build_preview)
 

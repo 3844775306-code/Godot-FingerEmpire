@@ -194,13 +194,15 @@ func _add_weapon():
 	if wpath != "" and ResourceLoader.exists(wpath):
 		var ws = load(wpath)
 		if ws: var w = ws.instantiate(); if w: w.position = Vector3(0.3, body_radius * 0.6, 0); w.scale = Vector3.ONE * 0.8; add_child(w)
+		# 盾在另一侧
+		if entity_id in [36, 37, 38]: w.position = Vector3(-0.3, body_radius * 0.6, 0)
 	# 骑兵坐骑
 	var mpath = ""
-	if entity_id in [15, 19]: mpath = "res://models/pets/animal-dog.glb"
+	if entity_id in [15, 19, 38]: mpath = "res://models/pets/animal-dog.glb"
 	elif entity_id == 34: mpath = "res://models/pets/animal-elephant.glb"
 	if mpath != "" and ResourceLoader.exists(mpath):
 		var ms = load(mpath)
-		if ms: var m = ms.instantiate(); if m: m.position = Vector3(0, -body_radius * 0.4, -body_radius * 0.3); add_child(m)
+		if ms: var m = ms.instantiate(); if m: m.position = Vector3(0, -body_radius * 0.8, 0); m.scale = Vector3.ONE * 0.9; add_child(m)
 
 func _add_collision_shape():
 	if not has_node("CollisionShape3D"):
