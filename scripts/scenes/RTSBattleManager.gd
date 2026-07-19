@@ -665,7 +665,20 @@ func _apply_entity_model(entity: GameEntity) -> bool:
 	entity.add_child(model_instance)
 	# 存储模型引用用于动画
 	entity.set_meta("_model_instance", model_instance)
+	# 模型保持原始亮度（修复导入后变暗的问题）
+	_set_unshaded_recursive(model_instance)
 	return true
+
+func _set_unshaded_recursive(node: Node):
+	for child in node.get_children():
+		if child is MeshInstance3D and child.mesh:
+			for si in child.mesh.get_surface_count():
+				var src = child.get_active_material(si)
+				if src and "shading_mode" in src:
+					var m = src.duplicate()
+					m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+					child.set_surface_override_material(si, m)
+		_set_unshaded_recursive(child)
 
 func _get_model_aabb(node: Node) -> AABB:
 	var aabb = AABB()

@@ -335,6 +335,17 @@ func _apply_model_tint(node: Node, tint: Color):
 				child.set_surface_override_material(si, mat)
 		_apply_model_tint(child, tint)
 
+func _set_unshaded_recursive(node: Node):
+	for child in node.get_children():
+		if child is MeshInstance3D and child.mesh:
+			for si in child.mesh.get_surface_count():
+				var src = child.get_active_material(si)
+				if src and "shading_mode" in src:
+					var m = src.duplicate()
+					m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+					child.set_surface_override_material(si, m)
+		_set_unshaded_recursive(child)
+
 func _apply_model_color(node: Node, c: Color):
 	for child in node.get_children():
 		if child is MeshInstance3D:
@@ -392,6 +403,7 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 
 	if loaded_model:
 		entity.add_child(loaded_model)
+		_set_unshaded_recursive(loaded_model)
 		# 队伍色着色（向白色混合50%，降低饱和度）
 		if info.get("type", -1) != 0:
 			var lt = Color(0.5 + entity_color.r * 0.5, 0.5 + entity_color.g * 0.5, 0.5 + entity_color.b * 0.5)
