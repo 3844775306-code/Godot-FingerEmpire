@@ -677,7 +677,10 @@ func _apply_entity_model(entity: GameEntity) -> bool:
 	# 存储模型引用用于动画
 	entity.set_meta("_model_instance", model_instance)
 	# 存储模型引用用于动画
-	entity.set_meta("_model_instance", model_instance)
+	# 调试：打印模型材质信息
+	if Engine.get_process_frames() < 3:
+		print("[ModelLoad] eid=%d model=%s" % [entity.entity_id, model_path])
+		_print_mesh_info(model_instance, 0)
 	return true
 
 func _set_unshaded_recursive(node: Node):
@@ -712,7 +715,8 @@ func _print_mesh_info(node: Node, depth: int):
 		var indent = "  ".repeat(depth)
 		if child is MeshInstance3D and child.mesh:
 			var mat = child.get_active_material(0)
-			var has_tex = mat and "albedo_texture" in mat and mat.albedo_texture != null
+				var has_tex = mat and "albedo_texture" in mat and mat.albedo_texture != null
+				print(indent + "[Mesh] name=%s alb=%s tex=%s" % [child.name, str(mat.albedo_color), str(has_tex)])
 			var vc = child.mesh.get("vertex_color_array") if "vertex_color_array" in child.mesh else "n/a"
 			print(indent + "[Mesh] name=%s surf=%d has_tex=%s vc=%s" % [child.name, child.mesh.get_surface_count(), str(has_tex), str(vc != null and vc != "n/a")])
 		else:
@@ -726,17 +730,17 @@ func _count_meshes(node: Node) -> int:
 		c += _count_meshes(child)
 	return c
 
-	func _tint_recursive(node: Node, tint: Color):
-		for child in node.get_children():
-			if child is MeshInstance3D and child.mesh:
-				for si in child.mesh.get_surface_count():
-					if child.get_surface_override_material(si) != null:
-						continue
-					var src = child.get_active_material(si)
-					if src and "albedo_color" in src:
-						var dup = src.duplicate()
-						dup.albedo_color = src.albedo_color * tint
-						child.set_surface_override_material(si, dup)
+func _tint_recursive(node: Node, tint: Color):
+	for child in node.get_children():
+		if child is MeshInstance3D and child.mesh:
+			for si in child.mesh.get_surface_count():
+				var src = child.get_active_material(si)
+				
+				if src and "albedo_color" in src:
+					var dup = src.duplicate()
+					
+					dup.albedo_color = src.albedo_color * tint
+					child.set_surface_override_material(si, dup)
 		_tint_recursive(child, tint)
 
 func _update_entity_animation(entity: GameEntity):
