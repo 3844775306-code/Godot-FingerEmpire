@@ -478,11 +478,9 @@ func _manual_move(delta):
 	if move_dir.length() < 0.01:
 		return
 
-	# 重力
-	if not is_on_floor():
-		velocity.y -= 9.8 * delta
 	velocity.x = move_dir.x * speed
 	velocity.z = move_dir.z * speed
+	velocity.y = 0
 	move_and_slide()
 	# 旋转朝向移动方向
 	if move_dir.length() > 0.01:
@@ -493,6 +491,13 @@ func _manual_move(delta):
 	var half_map = RTSConfig.MAP_SIZE / 2.0
 	global_position.x = clamp(global_position.x, -half_map, half_map)
 	global_position.z = clamp(global_position.z, -half_map, half_map)
+
+	# 地形高度
+	var bm = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
+	if bm:
+		var map = bm.get_node("Map")
+		if map and map.has_method("get_height_at"):
+			global_position.y = map.get_height_at(global_position)
 
 func _get_current_move_target() -> Vector3:
 	if is_instance_valid(current_target):
