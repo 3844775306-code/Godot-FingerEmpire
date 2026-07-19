@@ -1263,10 +1263,12 @@ func _on_building_selected_for_build(building_id: int):
 		build_preview = MeshInstance3D.new()
 		build_preview.mesh = BoxMesh.new()
 		build_preview.mesh.size = Vector3(cfg.body_radius*2, cfg.body_radius*1.5, cfg.body_radius*2)
-	var mat = StandardMaterial3D.new()
-	mat.albedo_color = Color(0,1,0,0.5)
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	build_preview.material_override = mat
+		var mat = StandardMaterial3D.new()
+		mat.albedo_color = Color(0,1,0,0.5)
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		build_preview.material_override = mat
+	else:
+		_tint_preview(build_preview, Color(0,1,0,0.5))
 	add_child(build_preview)
 
 # ==================== 战争迷雾 ====================
