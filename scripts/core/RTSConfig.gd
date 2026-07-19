@@ -33,7 +33,7 @@ const ENTITY_MODELS = {
 	21: "res://models/barracks.glb",
 	22: "res://models/unit-mill.glb",
 	23: "res://models/shipyard.glb",
-	24: "res://models/siege_workshop.glb",
+	24: "res://models/building-cabin.glb",
 	25: "res://models/arrow-tower.glb",
 	26: "res://models/tower-complete-large.glb",
 	28: "res://models/unit-mansion.glb",

@@ -620,6 +620,7 @@ func _apply_entity_model(entity: GameEntity) -> bool:
 				if abs(d.x) < 2.0 and abs(d.z) < 0.5: has_x = true
 				if abs(d.z) < 2.0 and abs(d.x) < 0.5: has_z = true
 		if has_x and has_z: model_path = "res://models/wall-corner.glb"
+		else: model_path = "res://models/wall.glb"
 	if model_path == "" or not ResourceLoader.exists(model_path):
 		return false
 	var model_scene = load(model_path)
