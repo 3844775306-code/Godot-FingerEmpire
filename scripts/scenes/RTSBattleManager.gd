@@ -732,8 +732,11 @@ func _tint_recursive(node: Node, tint: Color):
 			for si in child.mesh.get_surface_count():
 				var src = child.get_active_material(si)
 				if src and "albedo_color" in src:
+					if Engine.get_process_frames() < 5:
+						if Engine.get_process_frames() < 5:
+							print("[MatDebug] mesh=%s mat_class=%s albedo=%s" % [child.name, src.get_class(), str(src.albedo_color)])
 					var dup = src.duplicate()
-					dup.albedo_color = src.albedo_color * tint  # 保留原色×队伍色
+					dup.albedo_color = src.albedo_color * tint
 					child.set_surface_override_material(si, dup)
 		_tint_recursive(child, tint)
 
