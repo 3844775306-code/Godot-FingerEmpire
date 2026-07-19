@@ -53,7 +53,7 @@ func _process(delta):
 		var can_produce = true
 		if owner_peer_id == -1:
 			can_produce = bm.can_train_unit(team)
-		else:
+		elif bm.has_method("can_player_train"):
 			can_produce = bm.can_player_train(owner_peer_id)
 		if can_produce:
 			production_timer -= delta
@@ -146,9 +146,8 @@ func _finish_construction():
 	if bm :
 		if owner_peer_id == -1:
 			bm.update_resource_limits(team)
-		else:
-			bm.has_method("update_player_limits") and bm.update_player_limits(owner_peer_id)
-			
+		elif bm.has_method("update_player_limits"):
+			bm.update_player_limits(owner_peer_id)
 			bm.update_player_population(owner_peer_id)
 
 	# 建造完成警报（仅己方，含位置和编队）
