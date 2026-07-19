@@ -726,18 +726,17 @@ func _count_meshes(node: Node) -> int:
 		c += _count_meshes(child)
 	return c
 
-func _tint_recursive(node: Node, tint: Color):
-	for child in node.get_children():
-		if child is MeshInstance3D and child.mesh:
-			for si in child.mesh.get_surface_count():
-				var src = child.get_active_material(si)
-				if src and "albedo_color" in src:
-					if Engine.get_process_frames() < 5:
-						if Engine.get_process_frames() < 5:
-							print("[MatDebug] mesh=%s mat_class=%s albedo=%s" % [child.name, src.get_class(), str(src.albedo_color)])
-					var dup = src.duplicate()
-					dup.albedo_color = src.albedo_color * tint
-					child.set_surface_override_material(si, dup)
+	func _tint_recursive(node: Node, tint: Color):
+		for child in node.get_children():
+			if child is MeshInstance3D and child.mesh:
+				for si in child.mesh.get_surface_count():
+					var src = child.get_active_material(si)
+					if Engine.get_process_frames() < 3:
+						print("[MatDebug] mesh=%s type=%s has_alb=%s" % [child.name, src.get_class() if src else "null", str("albedo_color" in src) if src else "false"])
+					if src and "albedo_color" in src:
+						var dup = src.duplicate()
+						dup.albedo_color = src.albedo_color * tint
+						child.set_surface_override_material(si, dup)
 		_tint_recursive(child, tint)
 
 func _update_entity_animation(entity: GameEntity):
