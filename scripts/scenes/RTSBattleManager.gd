@@ -678,7 +678,7 @@ func _apply_entity_model(entity: GameEntity) -> bool:
 	entity.set_meta("_model_instance", model_instance)
 	# 存储模型引用用于动画
 	# 调试：打印模型材质信息
-	if Engine.get_process_frames() < 3:
+	if Engine.get_process_frames() < 300:
 		print("[ModelLoad] eid=%d model=%s" % [entity.entity_id, model_path])
 		_print_mesh_info(model_instance, 0)
 	return true
@@ -715,8 +715,8 @@ func _print_mesh_info(node: Node, depth: int):
 		var indent = "  ".repeat(depth)
 		if child is MeshInstance3D and child.mesh:
 			var mat = child.get_active_material(0)
-				var has_tex = mat and "albedo_texture" in mat and mat.albedo_texture != null
-				print(indent + "[Mesh] name=%s alb=%s tex=%s" % [child.name, str(mat.albedo_color), str(has_tex)])
+			var has_tex = mat and "albedo_texture" in mat and mat.albedo_texture != null
+			print(indent + "[Mesh] name=%s alb=%s tex=%s" % [child.name, str(mat.albedo_color), str(has_tex)])
 			var vc = child.mesh.get("vertex_color_array") if "vertex_color_array" in child.mesh else "n/a"
 			print(indent + "[Mesh] name=%s surf=%d has_tex=%s vc=%s" % [child.name, child.mesh.get_surface_count(), str(has_tex), str(vc != null and vc != "n/a")])
 		else:
