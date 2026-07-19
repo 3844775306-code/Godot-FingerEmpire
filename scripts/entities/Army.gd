@@ -467,19 +467,20 @@ func _manual_move(delta):
 	var target_pos = _get_current_move_target()
 	if target_pos == Vector3.ZERO:
 		return
-	# Godot内置导航
-	if nav_agent and not nav_agent.is_navigation_finished():
+	# 移动：优先导航，回落直线
+	var horizontal_target = Vector3(target_pos.x, global_position.y, target_pos.z)
+	var move_dir = (horizontal_target - global_position).normalized()
+	if move_dir.length() < 0.001:
+		return
+	if nav_agent and nav_agent.get_navigation_map() and not nav_agent.is_navigation_finished():
 		var np = nav_agent.get_next_path_position()
-		var dir = (Vector3(np.x, 0, np.z) - Vector3(global_position.x, 0, global_position.z)).normalized()
-		if dir.length() > 0.01:
-			velocity.x = dir.x * speed; velocity.z = dir.z * speed; velocity.y = 0
-			move_and_slide()
-			look_at(Vector3(global_position.x + dir.x, global_position.y, global_position.z + dir.z), Vector3.UP)
-	elif nav_agent and nav_agent.is_navigation_finished():
-		var dir = (Vector3(target_pos.x, 0, target_pos.z) - Vector3(global_position.x, 0, global_position.z)).normalized()
-		if dir.length() > 0.001:
-			velocity.x = dir.x * speed; velocity.z = dir.z * speed; velocity.y = 0
-			move_and_slide()
+		move_dir = (Vector3(np.x, 0, np.z) - Vector3(global_position.x, 0, global_position.z)).normalized()
+		if move_dir.length() < 0.01:
+			move_dir = (horizontal_target - global_position).normalized()
+	velocity.x = move_dir.x * speed; velocity.z = move_dir.z * speed; velocity.y = 0
+	move_and_slide()
+	if move_dir.length() > 0.01:
+		look_at(Vector3(global_position.x + move_dir.x, global_position.y, global_position.z + move_dir.z), Vector3.UP)
 	var half_map = RTSConfig.MAP_SIZE / 2.0
 	global_position.x = clamp(global_position.x, -half_map, half_map)
 	global_position.z = clamp(global_position.z, -half_map, half_map)
