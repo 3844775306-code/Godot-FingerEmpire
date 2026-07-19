@@ -349,7 +349,10 @@ func _find_outside_spawn_pos() -> Vector3:
 	return best_pos
 
 func try_produce(unit_id: int) -> bool:
-	if unit_id == 10: print("[TryProd] eid=%d prod_list=%s queue=%s" % [entity_id, str([p.unit_id for p in production_list]), str(production_queue)])
+	if unit_id == 10:
+		var _ids = []
+		for _p in production_list: _ids.append(_p.unit_id)
+		print("[TryProd] eid=%d prod_ids=%s queue=%s" % [entity_id, str(_ids), str(production_queue)])
 	if entity_type != 1:
 		return false
 	
