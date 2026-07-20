@@ -19,7 +19,7 @@ func _ready():
 		# 投石车用石头，火炮用炮弹
 		if source and source.entity_id == 17 and ResourceLoader.exists("res://models/defense/weapon-stone.glb"):
 			var st = load("res://models/defense/weapon-stone.glb")
-			if st: var s = st.instantiate(); if s: add_child(s)
+			if st: var s = st.instantiate(); if s: s.scale = Vector3.ONE * 2.5; add_child(s)
 		elif ResourceLoader.exists("res://models/pirate/cannon-ball.glb"):
 			var cb = load("res://models/pirate/cannon-ball.glb")
 			if cb: var c = cb.instantiate(); if c: add_child(c)
@@ -28,11 +28,11 @@ func _ready():
 			var arrow_scene = load("res://models/forest/weapon-arrow.glb")
 			if arrow_scene:
 				var arrow = arrow_scene.instantiate()
-				if arrow: arrow.rotation.x = deg_to_rad(90); add_child(arrow)
+				if arrow: arrow.rotation.x = deg_to_rad(-90); arrow.scale = Vector3.ONE ; add_child(arrow)
 	if get_child_count() == 0:
 		var mesh = MeshInstance3D.new()
 		var sphere = SphereMesh.new()
-		sphere.radius = 0.15
+		sphere.radius = 0.25
 		mesh.mesh = sphere
 		add_child(mesh)
 		var mat = StandardMaterial3D.new()

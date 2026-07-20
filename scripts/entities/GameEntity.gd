@@ -280,13 +280,15 @@ func _spawn_produced_unit():
 	if not bm:
 		return
 
-	var spawn_pos = _find_outside_spawn_pos()
-	if spawn_pos == Vector3.ZERO:
-		spawn_pos = global_position + Vector3(0,0,2)
-
-	if entity_id == 23:
+	# Check if unit is water-capable and choose appropriate spawn
+	var is_water_unit = config.get("water_capable", false)
+	var spawn_pos = Vector3.ZERO
+	if is_water_unit:
 		spawn_pos = _find_water_spawn_near(global_position)
-
+	else:
+		spawn_pos = _find_land_spawn_pos()
+	if spawn_pos == Vector3.ZERO:
+		spawn_pos = global_position + Vector3(randf_range(-2,2), 0, randf_range(-2,2))
 	config["owner_peer_id"] = self.owner_peer_id  # 继承建筑所有权
 	var entity = bm.spawn_entity(config, team, spawn_pos, self.level)
 	if entity and owner_peer_id != -1:
@@ -318,6 +320,29 @@ func _spawn_produced_unit():
 				production_timer = prod.cooldown
 				break
 
+
+# Find spawn position on LAND (terrain != water)
+func _find_land_spawn_pos() -> Vector3:
+	var bm = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
+	var attempts = 0
+	var max_attempts = 30
+	while attempts < max_attempts:
+		var angle = randf_range(0, TAU)
+		var dist = randf_range(2.0, 4.0)
+		var test_pos = global_position + Vector3(cos(angle) * dist, 0, sin(angle) * dist)
+		# Check terrain: must be passable for land units
+		if bm and bm.get_terrain_at(test_pos) == 2:  # water
+			attempts += 1; continue
+		# Check no entity overlap
+		var conflict = false
+		for entity in get_tree().get_nodes_in_group("entities"):
+			if entity == self or not is_instance_valid(entity): continue
+			if entity is GameEntity and entity.health > 0:
+				if test_pos.distance_to(entity.global_position) < 1.5:
+					conflict = true; break
+		if not conflict: return test_pos
+		attempts += 1
+	return Vector3.ZERO  # fallback: caller will use default position
 func _find_outside_spawn_pos() -> Vector3:
 	var best_pos = Vector3.ZERO
 	var attempts = 0
@@ -352,7 +377,7 @@ func try_produce(unit_id: int) -> bool:
 	if unit_id == 10:
 		var _ids = []
 		for _p in production_list: _ids.append(_p.unit_id)
-		print("[TryProd] eid=%d prod_ids=%s queue=%s" % [entity_id, str(_ids), str(production_queue)])
+		#print("[TryProd] eid=%d prod_ids=%s queue=%s" % [entity_id, str(_ids), str(production_queue)])
 	if entity_type != 1:
 		return false
 	

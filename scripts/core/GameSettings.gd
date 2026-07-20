@@ -6,4 +6,3 @@ var is_single_2v2: bool = false
 # Called when the node enters the scene tree for the first time.
 func _ready() -> void:
 	pass # Replace with function body.
-

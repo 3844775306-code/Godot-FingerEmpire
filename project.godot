@@ -24,6 +24,7 @@ NetworkManager="*res://scripts/core/NetworkManager.gd"
 ThemeHelper="*res://scripts/ui/ThemeHelper.gd"
 GameSettings="*res://scripts/core/GameSettings.gd"
 AudioManager="*res://scripts/core/AudioManager.gd"
+Profiler="*res://scripts/core/Profiler.gd"
 
 [display]
 
@@ -34,10 +35,6 @@ window/size/viewport_height=1400
 
 version_control/plugin_name="GitPlugin"
 version_control/autoload_on_startup=true
-
-[editor_plugins]
-
-enabled=PackedStringArray("res://addons/script-ide/plugin.cfg")
 
 [gui]
 

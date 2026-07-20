@@ -81,6 +81,7 @@ func set_resources(res: Dictionary, lim: Dictionary, pop: Dictionary = {}):
 	resources = res; limits = lim; population = pop
 
 func update_info(entity_id: int):
+	if not renderer: renderer = get_tree().get_first_node_in_group("client_renderer")
 	if not renderer: return
 	observed_entity_id = entity_id
 	var info = renderer.get_entity_info(entity_id)
@@ -107,8 +108,18 @@ func update_info(entity_id: int):
 	var pct = float(info["health"]) / max(float(info["max_health"]), 1.0)
 	hp_bar.color = _bc(pct); hp_bar.size.x = 180 * pct; hp_bar.visible = true
 
+	# Construction / upgrade progress
 	var hc = _hc(pct)
-	var t = "[color=%s]HP[/color]:  [color=white]%d / %d[/color]\n" % [hc, info["health"], info["max_health"]]
+	var bt = info.get("build_timer", 0.0)
+	var mbt = info.get("max_build_time", 0.0)
+	var bt_str = ""
+	if bt > 0 and mbt > 0:
+		bt_str = "\n[color=orange]建造中[/color]:  %.0f%%" % (100.0 * (1.0 - bt / mbt))
+	var ut = info.get("upgrade_timer", 0.0)
+	var mut = info.get("max_upgrade_time", 0.0)
+	if ut > 0 and mut > 0:
+		bt_str += "\n[color=purple]升级中[/color]:  %.0f%%" % (100.0 * (1.0 - ut / mut))
+	var t = "[color=%s]HP[/color]:  [color=white]%d / %d[/color]%s\n" % [hc, info["health"], info["max_health"], bt_str]
 	t += "[color=orange]ATK[/color]:  [color=white]%d[/color]" % info["attack"]
 	if info.get("armor", 0) > 0: t += "\n[color=steelblue]ARMOR[/color]:  [color=white]%d[/color]" % info["armor"]
 	t += "\n[color=gold]RANGE[/color]:  [color=white]%.1f[/color]" % info.get("attack_range", 0.0)
@@ -125,6 +136,7 @@ func update_info(entity_id: int):
 		if demolish_btn:
 			demolish_btn.visible = (info.get("entity_id", 0) != 20)
 		if info.get("can_upgrade", false):
+
 			upgrade_btn.visible = true; upgrade_btn.text = "Upgrade"
 			if upgrade_btn.pressed.is_connected(_on_upgrade_pressed):
 				upgrade_btn.pressed.disconnect(_on_upgrade_pressed)

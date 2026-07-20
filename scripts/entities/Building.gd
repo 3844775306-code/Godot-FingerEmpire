@@ -40,13 +40,15 @@ func _process(delta):
 		var has_z_neg = false; var has_z_pos = false
 		var bm = get_tree().get_first_node_in_group("battle_manager")
 		if bm:
+			var half_len = body_radius * 2.0   # wall length along axis
+			var half_wid = body_radius * 0.5   # wall width perpendicular
 			for e in bm.entities.get_children():
 				if e is Building and e.entity_id == 27 and e.health > 0 and e != self:
 					var d = e.global_position - global_position
-					if abs(d.z) < 2.0 and abs(d.x) < 0.5:
+					if abs(d.z) < half_len and abs(d.x) < half_wid:
 						if d.z < 0: has_z_neg = true
 						else: has_z_pos = true
-					if abs(d.x) < 2.0 and abs(d.z) < 0.5:
+					if abs(d.x) < half_len and abs(d.z) < half_wid:
 						if d.x < 0: has_x_neg = true
 						else: has_x_pos = true
 		var count = int(has_x_neg) + int(has_x_pos) + int(has_z_neg) + int(has_z_pos)
@@ -224,8 +226,8 @@ func is_under_construction() -> bool:
 func _ready():
 	super._ready()
 	entity_type = 1
-	collision_layer = 0  # 建筑不阻挡单位移动
-	collision_mask = 0
+	collision_layer = 1
+	collision_mask = 1  # 阻挡敌方单位通过
 	can_move = false
 	_add_selection_ring()
 	_add_collision_shape()
@@ -274,7 +276,7 @@ func _add_collision_shape():
 	if not has_node("CollisionShape3D"):
 		var col = CollisionShape3D.new()
 		var shape = BoxShape3D.new()
-		shape.size = Vector3(body_radius*1.2, body_radius*0.9, body_radius*1.2)
+		shape.size = Vector3(body_radius*2, body_radius*1.5, body_radius*2)
 		col.shape = shape
 		col.name = "CollisionShape3D"
 		add_child(col)
@@ -320,7 +322,7 @@ func _update_collision_shape():
 		var col = $CollisionShape3D
 		var shape = col.shape as BoxShape3D
 		if shape:
-			shape.size = Vector3(body_radius*1.2, body_radius*0.9, body_radius*1.2)
+			shape.size = Vector3(body_radius*2, body_radius*1.5, body_radius*2)
 
 func get_castle_level() -> int:
 	for entity in get_tree().get_nodes_in_group("entities"):

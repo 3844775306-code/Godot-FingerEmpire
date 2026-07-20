@@ -1,5 +1,7 @@
 class_name ClientRenderer
 extends Node3D
+enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH }
+enum EB { UPGRADE=0, MAX_UPGRADE, CAN_UPGRADE, BUILD_TIMER, MAX_BUILD, PROD_CURRENT, PROD_PROGRESS, PROD_QSIZE, UPGRADE_TIMER, MAX_UPGRADE_TIME }
 var last_applied_seq = -1
 # ==================== 玩家信息 ====================
 var player_team: int = -1          # 1v1 模式队伍 (BLUE=0, RED=1)
@@ -62,7 +64,7 @@ var pending_delta: Array = []
 var player_colors: Dictionary = {}   # peer_id -> Color
 func set_all_player_colors(colors: Dictionary):
 	player_colors = colors.duplicate()
-	print("[ClientRenderer] 收到全局颜色映射，包含 %d 个玩家" % player_colors.size())
+
 # 新增方法
 func set_player_info(peer_id: int, team: int, slot: int, color: Color):
 	my_peer_id = peer_id
@@ -70,7 +72,7 @@ func set_player_info(peer_id: int, team: int, slot: int, color: Color):
 	player_team = team          # 兼容1v1代码
 	my_color = color
 	
-	print("[ClientRenderer] 2v2玩家信息：peer_id=%d, team=%d, color=%s" % [peer_id, team, color])
+
 # ==================== 初始化 ====================
 func _ready():
 	add_to_group("client_renderer")
@@ -119,18 +121,42 @@ func _ready():
 					menu.popup_at(wpos, cam.unproject_position(wpos))
 		)
 
-	# 建造菜单发射“放置开始”信号
-	if $UI/BuildMenu:
-		$UI/BuildMenu.build_placement_started.connect(func(bid: int):
-			placement_mode = true
-			placement_building_id = bid
-			var cfg = EntityDatabase.get_config(bid)
-			if not cfg.is_empty():
-				var r = cfg.get("body_radius", 1.0)
-				var b = placement_preview.mesh as BoxMesh
-				if b: b.size = Vector3(r*2, r*1.5, r*2)
-			placement_preview.visible = true
-		)
+		# 建造菜单发射“放置开始”信号
+		if $UI/BuildMenu:
+			$UI/BuildMenu.build_placement_started.connect(func(bid: int):
+				placement_mode = true
+				placement_building_id = bid
+				var cfg = EntityDatabase.get_config(bid)
+				if cfg.is_empty(): return
+				# Remove old model children
+				for c in placement_preview.get_children():
+					c.queue_free()
+				# Load 3D model
+				var model_path = RTSConfig.get_entity_model(bid)
+				if model_path != "" and ResourceLoader.exists(model_path):
+					var s = load(model_path)
+					if s:
+						var inst = s.instantiate()
+						inst.name = "PreviewModel"
+						placement_preview.mesh = null
+						placement_preview.add_child(inst)
+				# Fallback BoxMesh
+				if placement_preview.get_child_count() == 0:
+					box = BoxMesh.new()
+					box.size = Vector3(cfg.body_radius*2, cfg.body_radius*1.5, cfg.body_radius*2)
+					placement_preview.mesh = box
+				# Scale to match building size
+				var target_size = cfg.body_radius * 2.0
+				var aabb = _get_model_aabb(placement_preview)
+				var current_size = max(aabb.size.x, max(aabb.size.y, aabb.size.z))
+				if current_size > 0.01: placement_preview.scale = Vector3.ONE * (target_size / current_size)
+				if bid in [22, 27, 28]: placement_preview.rotation.y = deg_to_rad(90)
+				_tint_preview(placement_preview, Color(0, 1, 0))
+				placement_preview.visible = true
+			)
+
+	# Start battle music
+	AudioManager.play_music("battle")
 
 # ==================== 外部接口 ====================
 func set_player_team(team: int):
@@ -275,7 +301,6 @@ func _process_snapshot(data: Dictionary):
 
 	# ---- 子弹 ----
 	# ---- 服务器警报 ----
-	if Engine.get_process_frames() % 30 == 0: print("[AlertRx] snapshot has alerts: %s size=%d" % [str(data.has("alerts")), data.get("alerts", []).size()])
 	if data.has("alerts"):
 		var alerts = data["alerts"]
 		if alerts is Array and alerts.size() > 0:
@@ -283,6 +308,16 @@ func _process_snapshot(data: Dictionary):
 			for alert in alerts:
 				if hud and hud.has_method("show_alert_message"):
 					hud.show_alert_message(alert["msg"], alert.get("color", Color(1.0, 0.2, 0.1)))
+
+	# ---- 音效 ----
+	if data.has("audio_events"):
+		var ae = data["audio_events"]
+		if ae is Array:
+			for sfx in ae:
+				if sfx is Dictionary:
+					AudioManager.play_sfx(sfx["key"])
+				else:
+					AudioManager.play_sfx(sfx)
 
 	if data.has("bullets"):
 		var server_ids = {}
@@ -303,7 +338,66 @@ func _process_snapshot(data: Dictionary):
 				n.queue_free()
 				entity_nodes.erase(id)
 # ==================== 实体创建与更新 ====================
-func _update_single_entity(info: Dictionary):
+func _rebuild_building_info(d: Dictionary):
+	var cfg = EntityDatabase.get_config(d["entity_id"])
+	if cfg.is_empty(): return
+	var upgrades = cfg.get("upgrades", [])
+	var lv = d.get("upgrade_level", 1)
+	if lv <= upgrades.size():
+		d["get_upgrade_cost"] = upgrades[lv - 1].get("cost", {}).duplicate()
+	else:
+		d["get_upgrade_cost"] = {}
+	d["castle_level_required"] = cfg.get("castle_level_required", 0)
+	var produces = cfg.get("produces", [])
+	if not produces:
+		d["production_list"] = []
+		return
+	var pl = []
+	lv = d.get("upgrade_level", 1)
+	for i in range(min(lv, produces.size())):
+		var prod = produces[i].duplicate()
+		var unit_cfg = EntityDatabase.get_config(prod.unit_id)
+		var base_cost = unit_cfg.get("cost", {})
+		var scaled = {}
+		for res in base_cost:
+			scaled[res] = int(base_cost[res] * (1.0 + (lv - 1) * 0.2))
+		prod["current_cost"] = scaled
+		pl.append(prod)
+	d["production_list"] = pl
+
+func _update_single_entity(info):
+	# Convert compact Array format to Dictionary
+	if info is Array:
+		var arr = info
+		if arr.size() < E.size(): return
+		info = {
+			"id": arr[E.ID], "entity_id": arr[E.EID], "type": arr[E.TYPE],
+			"team": arr[E.TEAM], "x": arr[E.X], "y": arr[E.Y], "z": arr[E.Z],
+			"health": arr[E.HEALTH], "max_health": arr[E.MAX_HEALTH],
+			"attack": arr[E.ATTACK], "armor": arr[E.ARMOR], "speed": arr[E.SPEED],
+			"vision_range": arr[E.VISION], "body_radius": arr[E.BODY_R],
+			"target_type": arr[E.TARGET_TYPE], "owner_peer_id": arr[E.OWNER],
+			"level": arr[E.LEVEL], "current_order": arr[E.ORDER],
+			"hold_position": arr[E.HOLD], "name": arr[E.NAME],
+			"rotation_y": arr[E.ROT_Y] if arr.size() > E.ROT_Y else 0.0,
+			"waypoints": arr[E.WAYPOINTS] if arr.size() > E.WAYPOINTS and arr[E.WAYPOINTS] is Array else [],
+			"astar_path": arr[E.ASTAR_PATH] if arr.size() > E.ASTAR_PATH and arr[E.ASTAR_PATH] is Array else [],
+		}
+		# Building extras
+		if arr.size() > E.size() and arr[E.size()] is Array:
+			var ba = arr[E.size()]
+			if ba.size() >= EB.size():
+				info["upgrade_level"] = ba[EB.UPGRADE]
+				info["max_upgrade_level"] = ba[EB.MAX_UPGRADE]
+				info["can_upgrade"] = ba[EB.CAN_UPGRADE]
+				info["build_timer"] = ba[EB.BUILD_TIMER]
+				info["max_build_time"] = ba[EB.MAX_BUILD]
+				info["production_current_unit"] = ba[EB.PROD_CURRENT]
+				info["production_progress"] = ba[EB.PROD_PROGRESS]
+				info["production_queue_size"] = ba[EB.PROD_QSIZE]
+				info["upgrade_timer"] = ba[EB.UPGRADE_TIMER]
+				info["max_upgrade_time"] = ba[EB.MAX_UPGRADE_TIME]
+		_rebuild_building_info(info)
 	if not info.has("id") or not info.has("x") or not info.has("z"):
 		return
 	var id = info["id"]
@@ -311,7 +405,17 @@ func _update_single_entity(info: Dictionary):
 	if not node:
 		node = _create_entity_node(info)
 		entity_nodes[id] = node
-	node.global_position = Vector3(info["x"], info["y"], info["z"])
+	# Smooth position interpolation to reduce jitter/flashing
+	var target = Vector3(info["x"], info["y"], info["z"])
+	if node.has_meta("_prev_pos"):
+		var prev = node.get_meta("_prev_pos")
+		var dist = target.distance_to(prev)
+		if dist > 10.0: prev = target  # teleport if too far
+		node.global_position = prev.lerp(target, 0.3)
+	else:
+		node.global_position = target
+	node.set_meta("_prev_pos", node.global_position)
+	node.rotation.y = info.get("rotation_y", 0.0)
 	node.visible = _should_entity_be_visible(info)
 	node.set_meta("snapshot_info", info)
 	# Update waypoint markers if present
@@ -323,6 +427,96 @@ func _update_single_entity(info: Dictionary):
 # ---------- 替换原有的 _create_entity_node ----------
 # 递归给模型所有Mesh设置颜色
 
+# Wall orientation — exact replica of server Building.gd logic
+func _update_wall_orientation(wall_node: Node3D, info: Dictionary):
+	var has_x_neg = false; var has_x_pos = false
+	var has_z_neg = false; var has_z_pos = false
+	var r = info.get("body_radius", 1.0)
+	var half_len = r * 2.0
+	var half_wid = r * 0.5
+	var my_pos = wall_node.global_position
+	for id in entity_nodes.keys():
+		var other = entity_nodes.get(id)
+		if other == wall_node or not is_instance_valid(other): continue
+		if not other.has_meta("snapshot_info"): continue
+		var oi = other.get_meta("snapshot_info")
+		if oi.get("entity_id", 0) != 27: continue
+		if oi.get("health", 0) <= 0: continue
+		var d = other.global_position - my_pos
+		if abs(d.z) < half_len and abs(d.x) < half_wid:
+			if d.z < 0: has_z_neg = true
+			else: has_z_pos = true
+		if abs(d.x) < half_len and abs(d.z) < half_wid:
+			if d.x < 0: has_x_neg = true
+			else: has_x_pos = true
+	
+	var count = int(has_x_neg) + int(has_x_pos) + int(has_z_neg) + int(has_z_pos)
+	var is_corner = (count >= 2)
+	
+	# Model switch
+	var old_is_corner = wall_node.has_meta("_wall_is_corner") and wall_node.get_meta("_wall_is_corner")
+	if is_corner != old_is_corner:
+		wall_node.set_meta("_wall_is_corner", is_corner)
+		var path = "res://models/castle/wall-corner.glb" if is_corner else "res://models/castle/wall.glb"
+		if ResourceLoader.exists(path):
+			for child in wall_node.get_children():
+				if child is MeshInstance3D and child.name != "SelectionRing":
+					child.queue_free()
+			var s = load(path)
+			if s:
+				var inst = s.instantiate()
+				if inst:
+					var target_size = r * 2.0
+					var aabb = _get_model_aabb(inst)
+					var cs = max(aabb.size.x, max(aabb.size.y, aabb.size.z))
+					if cs > 0.01: inst.scale = Vector3.ONE * (target_size / cs)
+					wall_node.add_child(inst)
+	
+	# Rotation — matches server exactly
+	if is_corner:
+		if has_x_neg and has_z_neg: wall_node.rotation.y = deg_to_rad(90)
+		elif has_x_pos and has_z_neg: wall_node.rotation.y = deg_to_rad(180)
+		elif has_x_pos and has_z_pos: wall_node.rotation.y = deg_to_rad(270)
+		elif has_x_neg and has_z_pos: wall_node.rotation.y = deg_to_rad(0)
+	elif has_x_neg or has_x_pos: wall_node.rotation.y = deg_to_rad(90)
+	else: wall_node.rotation.y = 0
+
+func _get_model_aabb(node: Node) -> AABB:
+	var result = AABB()
+	for child in node.get_children():
+		if child is MeshInstance3D and child.mesh:
+			var caabb = child.mesh.get_aabb()
+			caabb.position += child.position
+			result = result.merge(caabb)
+		var cr = _get_model_aabb(child)
+		if cr.has_volume():
+			result = result.merge(cr)
+	return result
+
+func _find_animation_player(n: Node) -> AnimationPlayer:
+	for ch in n.get_children():
+		if ch is AnimationPlayer:
+			return ch
+		var found = _find_animation_player(ch)
+		if found: return found
+	return null
+
+func _update_entity_animation(node: Node3D, info: Dictionary):
+	var ap = _find_animation_player(node)
+	if not ap: return
+	var anim = ""
+	var ord = info.get("current_order", "")
+	var eid = info.get("entity_id", 0)
+	if info.get("health", 0) <= 0:
+		anim = "die"
+	elif ord == "attack":
+		anim = "attack-melee-left"
+	elif ord in ["move", "deliver"]:
+		anim = "walk"
+	else:
+		anim = "idle"
+	if anim != "" and ap.has_animation(anim) and ap.current_animation != anim:
+		ap.play(anim)
 
 func _apply_model_tint(node: Node, tint: Color):
 	for child in node.get_children():
@@ -336,6 +530,17 @@ func _apply_model_tint(node: Node, tint: Color):
 					mat.albedo_texture = src.albedo_texture
 				child.set_surface_override_material(si, mat)
 		_apply_model_tint(child, tint)
+
+func _tint_preview(node: Node, color: Color):
+	for child in node.get_children():
+		if child is MeshInstance3D and child.mesh:
+			for si in child.mesh.get_surface_count():
+				var src = child.get_active_material(si)
+				if src and "albedo_color" in src:
+					var m = src.duplicate()
+					m.albedo_color = src.albedo_color.lerp(color, 0.5)
+					child.set_surface_override_material(si, m)
+		_tint_preview(child, color)
 
 func _set_unshaded_recursive(node: Node):
 	for child in node.get_children():
@@ -404,8 +609,16 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 		if model_scene: loaded_model = model_scene.instantiate()
 
 	if loaded_model:
+		# Scale model to match entity body_radius
+		var target_size = info["body_radius"] * 2.0
+		var aabb = _get_model_aabb(loaded_model)
+		var current_size = max(aabb.size.x, max(aabb.size.y, aabb.size.z))
+		if current_size > 0.01:
+			loaded_model.scale = Vector3.ONE * (target_size / current_size)
+		# Special rotations
+		if info.get("entity_id", 0) == 16: loaded_model.rotation.y = deg_to_rad(180)
+		elif info.get("entity_id", 0) == 17: loaded_model.rotation.y = deg_to_rad(90)
 		entity.add_child(loaded_model)
-		# 启用顶点颜色 + 无光照渲染
 		# 队伍色着色（向白色混合50%，降低饱和度）
 		if info.get("type", -1) != 0:
 			var lt = Color(0.5 + entity_color.r * 0.5, 0.5 + entity_color.g * 0.5, 0.5 + entity_color.b * 0.5)
@@ -487,12 +700,10 @@ func _init_fog_grids():
 		local_explored_grid.append(exp_col)
 		local_visible_grid.append(vis_col)
 
-
 	
 
 	# 后续迷雾计算...
 # ==================== 战争迷雾 ====================
-
 
 func _start_fog_cycle():
 	# 尺寸检查
@@ -597,17 +808,35 @@ func _update_waypoint_markers(node: Node3D, info: Dictionary):
 		all_wp.erase(eid)
 
 	var wps = info.get("waypoints", [])
-	if wps.is_empty(): return
+	var apath = info.get("astar_path", [])
+	if wps.is_empty() and apath.is_empty(): return
 
 	var new_markers: Array = []
+	# Render A* path spheres (green)
+	for i in range(apath.size()):
+		var awp = apath[i]
+		var aworld_pos: Vector3 = awp if awp is Vector3 else Vector3(awp["x"], awp.get("y", 0), awp["z"])
+		var acol = Color(0, 1, 0, 0.9) if i == apath.size() - 1 else Color(0, 1, 1, 0.8)
+		var asphere = MeshInstance3D.new()
+		var asph = SphereMesh.new(); asph.radius = 0.13; asph.height = 0.26
+		asphere.mesh = asph
+		asphere.position = aworld_pos + Vector3(0, 1.0, 0)
+		var amat = StandardMaterial3D.new()
+		amat.albedo_color = acol; amat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+		amat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		amat.render_priority = 10; amat.no_depth_test = true
+		asphere.material_override = amat
+		entities_container.add_child(asphere)
+		new_markers.append(asphere)
 	for i in range(wps.size()):
 		var wp = wps[i]
 		var world_pos = Vector3(wp["x"], wp.get("y", 0), wp["z"])
 		var is_loop = wp.get("is_loop", false)
 
-		# Orange for loop waypoints, cyan for normal
-		var ring_color = Color(1.0, 0.55, 0.0, 0.9) if is_loop else Color(0, 1, 1, 0.8)
-		var pole_color = Color(1.0, 0.55, 0.0, 0.5) if is_loop else Color(0, 1, 1, 0.5)
+		# Last = green, loop = orange, others = cyan
+		var is_last = (i == wps.size() - 1)
+		var ring_color = Color(0, 1, 0, 0.9) if is_last else (Color(1.0, 0.55, 0.0, 0.9) if is_loop else Color(0, 1, 1, 0.8))
+		var pole_color = Color(0, 1, 0, 0.5) if is_last else (Color(1.0, 0.55, 0.0, 0.5) if is_loop else Color(0, 1, 1, 0.5))
 
 		# Vertical pole — world space, child of entities_container
 		var pole = MeshInstance3D.new()
@@ -659,7 +888,7 @@ func _update_waypoint_markers(node: Node3D, info: Dictionary):
 		# Number label
 		var lbl = Label3D.new()
 		lbl.text = str(i + 1); lbl.font_size = 32
-		lbl.position = Vector3(0, 0.8, 0); lbl.modulate = Color(1.0, 0.55, 0.0) if is_loop else Color.CYAN
+		lbl.position = Vector3(0, 0.8, 0); lbl.modulate = Color.GREEN if is_last else (Color(1.0, 0.55, 0.0) if is_loop else Color.CYAN)
 		lbl.render_priority = 11
 		lbl.no_depth_test = true
 		marker.add_child(lbl)
@@ -738,7 +967,6 @@ func _cleanup_stale_entities():
 		for id in to_remove:
 			entity_nodes.erase(id)
 			_remove_all_bars(id)
-		print("[ClientRenderer] Cleaned up ", to_remove.size(), " stale entity nodes")
 
 func _update_health_bars():
 	var cam = get_viewport().get_camera_3d()
@@ -753,6 +981,16 @@ func _update_health_bars():
 		if not info: continue
 		if not info.has("health") or not info.has("type"): continue
 		if info["health"] <= 0: continue  # 已死亡实体不显示血条
+		if not _should_entity_be_visible(info):
+			if unit_bars.has(id):
+				var bd = unit_bars[id]
+				if bd.get("bar"): bd.bar.visible = false
+				if bd.get("label"): bd.label.visible = false
+				if bd.get("prod_bar"): bd.prod_bar.visible = false
+				if bd.get("prod_label"): bd.prod_label.visible = false
+				if bd.get("upgrade_bar"): bd.upgrade_bar.visible = false
+				if bd.get("upgrade_label"): bd.upgrade_label.visible = false
+			continue
 		var hp = info["health"]
 		var max_hp = info.get("max_health", hp)
 		if max_hp <= 0: max_hp = hp  # 防止除零
@@ -805,8 +1043,11 @@ func _update_health_bars():
 			var pbar = _get_or_create_prod_bar(id)
 			var plab = _get_or_create_prod_label(id)
 			pbar.visible = true; plab.visible = true
-			pbar.value = info["production_progress"]
-			var unit_cfg = EntityDatabase.get_config(info["production_current_unit"])
+			var prog = info.get("production_progress")
+			pbar.value = prog if prog != null else 0.0
+			var pcu = info.get("production_current_unit")
+			if pcu == null or pcu == -1: continue
+			var unit_cfg = EntityDatabase.get_config(pcu)
 			plab.text = "%s x%d" % [unit_cfg.get("name","?"), info["production_queue_size"]]
 			var world_pos = node.global_position + Vector3.UP * (info["body_radius"]*2 + 0.5)
 			var screen_pos = cam.unproject_position(world_pos)
@@ -939,7 +1180,6 @@ func _get_or_create_upgrade_label(id) -> Label:
 		add_child(l)
 		unit_bars[id].upgrade_label = l
 	return unit_bars[id].upgrade_label
-
 
 	if not unit_bars.has(id):
 		unit_bars[id] = { "bar":null, "label":null, "prod_bar":null, "prod_label":null, "order_label":null }
@@ -1113,6 +1353,21 @@ func _process(delta):
 		_cleanup_stale_entities()
 
 	# 血条更新：高频率跟随（20Hz）
+	# Update entity animations every 30 frames
+	if Engine.get_process_frames() % 30 == 0:
+		for id in entity_nodes.keys():
+			var n = entity_nodes.get(id)
+			if is_instance_valid(n) and n.has_meta("snapshot_info"):
+				_update_entity_animation(n, n.get_meta("snapshot_info"))
+	# Update entity animations and wall orientation every 30 frames
+	if Engine.get_process_frames() % 30 == 0:
+		for id in entity_nodes.keys():
+			var n = entity_nodes.get(id)
+			if is_instance_valid(n) and n.has_meta("snapshot_info"):
+				var inf = n.get_meta("snapshot_info")
+				_update_entity_animation(n, inf)
+				if inf.get("entity_id", 0) == 27:
+					_update_wall_orientation(n, inf)
 	if health_bar_timer <= 0:
 		health_bar_timer = HEALTH_BAR_INTERVAL
 		_update_health_bars()
@@ -1134,3 +1389,20 @@ func _process(delta):
 		if inp and inp.has_method("get_last_world_pos"):
 			var pos = inp.get_last_world_pos()
 			placement_preview.global_position = pos
+func _add_water_box(map_size: int = 100, fog_texture = null):
+	# Remove existing water
+	var old = get_node_or_null("WaterBox")
+	if old: old.queue_free()
+	var w = MeshInstance3D.new()
+	w.name = "WaterBox"
+	var plane = PlaneMesh.new()
+	plane.size = Vector2(map_size, map_size)
+	w.mesh = plane
+	w.position = Vector3(0, -0.7, 0)
+	var shader = load("res://resources/water_noise.gdshader")
+	if shader:
+		var mat = ShaderMaterial.new()
+		mat.shader = shader
+		if fog_texture: mat.set_shader_parameter("fog_tex", fog_texture)
+		w.material_override = mat
+	add_child(w)

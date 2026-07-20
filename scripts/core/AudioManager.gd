@@ -1,10 +1,13 @@
 # AudioManager.gd — 全局音频管理 (Autoload)
 extends Node
 
-const SFX_POOL_SIZE = 10
+const SFX_POOL_SIZE = 20
 var _music_player: AudioStreamPlayer
 var _sfx_pool: Array[AudioStreamPlayer] = []
 var _sfx_index: int = 0
+	# Network audio sync
+var _net_audio_queue: Array = []  # queued audio events for clients
+var _cooldowns: Dictionary = {}  # per-key frame cooldown
 var _music_volume: float = 0.7
 var _sfx_volume: float = 0.8
 var _current_music: String = ""
@@ -71,6 +74,9 @@ func stop_music():
 	_music_player.stop()
 
 func play_sfx(key: String):
+	var frame = Engine.get_process_frames()
+	if _cooldowns.get(key, -99) + 5 > frame: return  # 5-frame cooldown
+	_cooldowns[key] = frame
 	var path = SFX.get(key, "")
 	if path == "" or not ResourceLoader.exists(path): return
 	var p = _sfx_pool[_sfx_index]
@@ -89,6 +95,9 @@ func play_sfx_quiet(key: String):
 	p.play()
 
 func play_sfx_3d(key: String, pos: Vector3, cam_pos: Vector3):
+	var frame = Engine.get_process_frames()
+	if _cooldowns.get(key, -99) + 10 > frame: return  # 10-frame cooldown
+	_cooldowns[key] = frame
 	# 距离衰减
 	var dist = cam_pos.distance_to(pos)
 	if dist > 50: return
@@ -100,10 +109,16 @@ func play_sfx_3d(key: String, pos: Vector3, cam_pos: Vector3):
 	var vol = _sfx_volume * clamp(1.0 - dist / 50.0, 0.1, 1.0)
 	p.volume_db = linear_to_db(vol)
 	p.play()
+		# Queue for network clients
+	_net_audio_queue.append({"key": key, "x": pos.x, "y": pos.y, "z": pos.z, "vol": _sfx_volume})
 
 func set_music_volume(v: float):
 	_music_volume = clamp(v, 0, 1)
 	if _music_player: _music_player.volume_db = linear_to_db(_music_volume)
 
+func drain_net_audio() -> Array:
+	var q = _net_audio_queue.duplicate()
+	_net_audio_queue.clear()
+	return q
 func set_sfx_volume(v: float):
 	_sfx_volume = clamp(v, 0, 1)

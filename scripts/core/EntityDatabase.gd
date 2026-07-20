@@ -212,7 +212,7 @@ func _init_data():
 		{
 			"id": 27, "type": 1, "name": "城墙", "team": 0,
 			"cost": {"stone": 30},
-			"max_health": 700, "armor": 30, "body_radius": 0.5,
+			"max_health": 700, "armor": 30, "body_radius": 0.65,
 			"upgrades": [
 				{ "level": 2, "cost": {"stone": 50}, "health_bonus": 200, "armor_bonus": 10 },
 				{ "level": 3, "cost": {"stone": 80, "gold": 30}, "health_bonus": 300, "armor_bonus": 15 },
@@ -450,7 +450,20 @@ func _init_data():
 					]
 				},
 
-			# ==================== 动物 (ID 60-63) ====================
+		{
+			"id": 53, "type": 1, "name": "城堡", "team": 0,
+			"cost": {"stone": 600, "gold": 400},
+			"max_health": 4000, "attack": 40, "attack_speed": 0.5, "attack_range": 5.0,
+			"body_radius": 1.5, "armor": 60,
+			"upgrades": [
+				{ "level": 2, "cost": {"stone": 300, "gold": 200}, "health_bonus": 500, "attack_bonus": 5, "armor_bonus": 10 },
+				{ "level": 3, "cost": {"stone": 500, "gold": 350}, "health_bonus": 700, "attack_bonus": 10, "armor_bonus": 15 },
+				{ "level": 4, "cost": {"gold": 500, "oil": 400}, "health_bonus": 1000, "attack_bonus": 15, "armor_bonus": 20 },
+				{ "level": 5, "cost": {"gold": 800, "oil": 600}, "health_bonus": 1200, "attack_bonus": 20, "armor_bonus": 25 }
+			]
+		},
+
+		# ==================== 动物 (ID 60-63) ====================
 			{
 				"id": 60, "type": 2, "name": "牛", "team": 2,
 				"max_health": 100, "attack": 20, "attack_speed": 1.5, "speed": 0.5,

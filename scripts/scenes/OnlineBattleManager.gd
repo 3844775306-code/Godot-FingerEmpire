@@ -4,9 +4,13 @@ extends RTSBattleManager
 # ==================== 模式与玩家管理 ====================
 var game_mode: int = NetworkManager.GameMode.ONEvONE
 
+# Compact entity array indices (no string keys = faster + smaller)
+enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH }
+enum EB { UPGRADE=0, MAX_UPGRADE, CAN_UPGRADE, BUILD_TIMER, MAX_BUILD, PROD_CURRENT, PROD_PROGRESS, PROD_QSIZE, UPGRADE_TIMER, MAX_UPGRADE_TIME }
+const SNAP_VERSION = 3  # 3 = added ROT_Y for entity rotation
+
 # 1v1 专用
 var player_teams: Dictionary = {}         # peer_id -> team
-
 
 # 2v2 专用
 var player_info: Dictionary = {}          # peer_id -> { "team": int, "slot": int, "alive": bool, "color": Color, "nation": int }
@@ -26,12 +30,16 @@ var player_last_snapshot_ids: Dictionary = {}   # peer_id -> Array[int]  # peer_
 var player_all_visible_ids: Dictionary = {}     # peer_id -> Dictionary (所有可见实体ID，用于死亡检测)
 # 快照系统
 var snapshot_timer: float = 0.0
-const SNAPSHOT_INTERVAL: float = 0.1
+const SNAPSHOT_INTERVAL: float = 0.04
 var broadcast_enabled: bool = false
+var _snap_sent: int = 0
+var _snap_sent_rate: int = 0
+var _snap_sent_timer: float = 0.0
 var last_snapshot_cache: Dictionary = {}
 var team_explored_resources: Dictionary = {}
 var team_gather_paused: Dictionary = {}
 var _mp_shift_held: bool = false
+var _bullet_cache: Array = []       # cached bullet list, refreshed once per snap
 
 # ==================== 警报系统（服务器→客户端） ====================
 var _pending_client_alerts: Dictionary = {}   # peer_id or team -> Array of {msg, color}
@@ -40,7 +48,6 @@ func _queue_client_alert(target_key, msg: String, color: Color = Color(1.0, 0.2,
 	if not _pending_client_alerts.has(target_key):
 		_pending_client_alerts[target_key] = []
 	_pending_client_alerts[target_key].append({"msg": msg, "color": color})
-	print("[AlertBug] Queued alert for key=%s: %s" % [str(target_key), msg])
 
 func _get_and_clear_alerts(target_key) -> Array:
 	var alerts = _pending_client_alerts.get(target_key, [])
@@ -67,8 +74,6 @@ var _income_calc_timer: float = 0.0
 
 func get_mp_shift() -> bool:
 	return _mp_shift_held
-
-
 
 func get_resources_for(owner_id: int) -> Dictionary:
 	if player_resources.has(owner_id):
@@ -226,8 +231,6 @@ func _init_1v1():
 	has_game_started = true
 	
 
-
-
 	_init_entities_deferred()   # 父类的实体生成（会用到 team_nations）
 	# 修正联机模式的 owner_peer_id（父类用的是硬编码 1/3）
 	for pid in peers:
@@ -364,8 +367,6 @@ func _init_2v2():
 	has_game_started = true
 	
 
-
-
 	_init_all_castles_2v2()
 	_debug_print_colors()
 	set_process(true)
@@ -477,6 +478,7 @@ func _wait_for_nations_2v2():
 # ---------- 地图发送 ----------
 func _send_map_data(peers: Array):
 	var terrain_copy = $Map.terrain_grid.duplicate(true)
+	var height_copy = $Map.height_grid.duplicate(true)
 	var res_data = []
 	for r in $Map.resource_positions:
 		res_data.append({
@@ -484,7 +486,7 @@ func _send_map_data(peers: Array):
 			"type": r["type"]
 		})
 	for pid in peers:
-		NetworkManager.receive_map_data.rpc_id(pid, terrain_copy, res_data)
+		NetworkManager.receive_map_data.rpc_id(pid, terrain_copy, height_copy, res_data)
 
 # ---------- 2v2 城堡生成 ----------
 func _init_all_castles_2v2():
@@ -554,7 +556,7 @@ func _stop_gather(team: int):
 				if entity.entity_id == 10 or entity.entity_id == 14:
 					entity.current_target = null
 					entity.current_order = ""
-					entity.astar_path.clear()
+					entity._movement.astar_path.clear()
 					entity.is_attack_moving = false
 	else:                                   # 恢复
 		for entity in entities.get_children():
@@ -642,7 +644,9 @@ func _1v1_right_click(team: int, data: Dictionary):
 	var selected_ids = data.get("selected_ids", [])
 	var shift_held = data.get("shift_held", false)
 	var target: GameEntity = _find_entity_by_id(target_id) if target_id != -1 else null
+	var offsets = data.get("formation_offsets", [])
 
+	var fi = 0
 	for entity in entities.get_children():
 		if entity is Army and entity.team == team and entity.get_instance_id() in selected_ids:
 			if not is_instance_valid(entity): continue
@@ -660,7 +664,12 @@ func _1v1_right_click(team: int, data: Dictionary):
 				else:
 					entity.move_to(target.global_position)
 			else:
-				entity.move_to(pos)
+				var fp = pos
+				if offsets.size() > fi:
+					var off = offsets[fi]
+					fp = pos + Vector3(off.x, off.y, off.z)
+				entity.move_to(fp)
+			fi += 1
 
 func _1v1_build(team: int, data: Dictionary):
 	var building_id = data["building_id"]
@@ -715,7 +724,9 @@ func _2v2_right_click(peer_id: int, data: Dictionary):
 	var pos = Vector3(data.get("pos_x",0), data.get("pos_y",0), data.get("pos_z",0))
 	var shift_held = data.get("shift_held", false)
 	var target: GameEntity = _find_entity_by_id(target_id) if target_id != -1 else null
+	var offsets = data.get("formation_offsets", [])
 
+	var fi = 0
 	for entity in entities.get_children():
 		if entity is Army and entity.get("owner_peer_id") == peer_id and entity.get_instance_id() in selected_ids:
 			if not is_instance_valid(entity): continue
@@ -733,7 +744,12 @@ func _2v2_right_click(peer_id: int, data: Dictionary):
 				else:
 					entity.move_to(target.global_position)
 			else:
-				entity.move_to(pos)
+				var fp = pos
+				if offsets.size() > fi:
+					var off = offsets[fi]
+					fp = pos + Vector3(off.x, off.y, off.z)
+				entity.move_to(fp)
+			fi += 1
 
 func _2v2_build(peer_id: int, data: Dictionary):
 	
@@ -816,7 +832,7 @@ func _2v2_stop_gather(peer_id: int):
 			if not paused:
 				entity.current_target = null
 				entity.current_order = ""
-				entity.astar_path.clear()
+				entity._movement.astar_path.clear()
 				entity.is_attack_moving = false
 			else:
 				if entity.current_order == "":
@@ -894,24 +910,50 @@ var _entity_state_hashes: Dictionary = {}   # key -> {entity_id: hash}
 var _full_snapshot_counters: Dictionary = {} # key -> counter
 const FULL_SNAPSHOT_EVERY: int = 30          # 每 30 个 delta (~3秒) 发一次全量基线
 
+# ==================== 快照视野网格（复用，仅分配一次） ====================
+var _snap_vis_grid: PackedByteArray = []  # flat byte grid (contiguous memory, faster)
+var _snap_vis_version: int = 0       # monotonically increasing version counter
+var _vis_offsets: Dictionary = {}    # vision_range -> PackedVector2Array (precomputed circle offsets)
+
+func _get_vis_offsets(r: int) -> PackedVector2Array:
+	if _vis_offsets.has(r):
+		return _vis_offsets[r]
+	var arr = PackedVector2Array()
+	for dx in range(-r, r + 1):
+		for dy in range(-r, r + 1):
+			if dx * dx + dy * dy <= r * r:
+				arr.append(Vector2(dx, dy))
+	_vis_offsets[r] = arr
+	return arr
+
+func _init_snap_vis_grid():
+	var ms = RTSConfig.MAP_SIZE
+	var total = ms * ms
+	_snap_vis_grid.resize(total)
+	var fill_bytes = PackedByteArray()
+	fill_bytes.resize(total)
+	_snap_vis_grid = fill_bytes
+
 func _compute_entity_hash(entity: GameEntity) -> int:
-	# 只对会变化的字段计算哈希（静态属性不参与）
-	var s = "%d,%d,%d,%d,%d,%d,%s,%s,%d" % [
-		int(entity.global_position.x * 100),
-		int(entity.global_position.z * 100),
-		int(entity.health),
-		int(entity.max_health),
-		entity.level,
-		int(entity.attack),
-		entity.current_order,
-		str(entity.hold_position),
-		int(entity.owner_peer_id)
-	]
+	# Integer-only hash — avoids string allocation and .hash() call
+	var h: int = int(entity.global_position.x * 100)
+	h = ((h << 5) ^ (h >> 27)) ^ int(entity.global_position.z * 100)
+	h = ((h << 5) ^ (h >> 27)) ^ int(entity.health)
+	h = ((h << 5) ^ (h >> 27)) ^ int(entity.max_health)
+	h = ((h << 5) ^ (h >> 27)) ^ entity.level
+	h = ((h << 5) ^ (h >> 27)) ^ int(entity.attack)
+	h = ((h << 5) ^ (h >> 27)) ^ hash(entity.current_order)
+	h = ((h << 5) ^ (h >> 27)) ^ (1 if entity.hold_position else 0)
+	h = ((h << 5) ^ (h >> 27)) ^ int(entity.owner_peer_id)
 	if entity is Building:
-		s += ",%d,%d,%d,%d" % [entity.upgrade_level, entity.production_queue.size(), int(entity.build_timer * 100), int(entity.production_timer * 100), int(entity.upgrade_timer * 100)]
+		h = ((h << 5) ^ (h >> 27)) ^ entity.upgrade_level
+		h = ((h << 5) ^ (h >> 27)) ^ entity.production_queue.size()
+		h = ((h << 5) ^ (h >> 27)) ^ int(entity.build_timer * 100)
+		h = ((h << 5) ^ (h >> 27)) ^ int(entity.production_timer * 100)
+		h = ((h << 5) ^ (h >> 27)) ^ int(entity.upgrade_timer * 100)
 	if entity.current_target and is_instance_valid(entity.current_target):
-		s += ",%d" % entity.current_target.get_instance_id()
-	return s.hash()
+		h = ((h << 5) ^ (h >> 27)) ^ entity.current_target.get_instance_id()
+	return h & 0x7FFFFFFF
 
 func _should_include_in_delta(snapshot_key, entity_id: int, new_hash: int) -> bool:
 	if not _entity_state_hashes.has(snapshot_key):
@@ -1031,83 +1073,126 @@ func _process(delta):
 	super._process(delta)    # 始终执行父类更新（迷雾、小地图、资源限制等）
 	if not broadcast_enabled: return
 	_update_gather_stats(delta)
+	# snapshot rate tracking
+	_snap_sent_timer += delta
+	if _snap_sent_timer >= 1.0:
+		_snap_sent_rate = _snap_sent
+		_snap_sent = 0
+		_snap_sent_timer = 0.0
+
 	snapshot_timer -= delta
 	if snapshot_timer <= 0:
 		snapshot_timer = SNAPSHOT_INTERVAL
 		broadcast_snapshot()
 
 func broadcast_snapshot():
+	_snap_sent += 1
+	# Ensure entity cache is fresh for this snap
+	_ensure_cache_fresh()
+	# Lazy-init the reusable vis_grid
+	if _snap_vis_grid.size() == 0:
+		_init_snap_vis_grid()
+	# Collect bullets ONCE for all players (before timing)
+	_bullet_cache.clear()
+	for bullet in get_tree().get_nodes_in_group("bullets"):
+		if bullet is Bullet:
+			_bullet_cache.append(bullet)
+	# Time only the actual broadcast work
+	var _pt = Time.get_ticks_usec()
 	if game_mode == NetworkManager.GameMode.ONEvONE:
 		_broadcast_1v1()
 	else:
 		_broadcast_2v2()
-# 1v1 视野裁剪快照
+	var _elapsed_snap = (Time.get_ticks_usec() - _pt) / 1000.0
+	if _elapsed_snap > 5.0: print("[Profile-Snap] %.1fms" % _elapsed_snap)
+
+# Build bullet data once — reused by all players
+func _build_bullets_data() -> Array:
+	var bullets_data = []
+	for bullet in _bullet_cache:
+		if is_instance_valid(bullet):
+			bullets_data.append({"id":bullet.get_instance_id(),"x":bullet.global_position.x,"y":bullet.global_position.y,"z":bullet.global_position.z,"team":bullet.team})
+	return bullets_data
+
+# 1v1 视野裁剪快照 — optimized: entity cache + version-grid + typed iteration
 func build_snapshot_for_team(team: int) -> Dictionary:
+	var snapshot_key = "team_%d" % team
+	var is_full = _is_full_snapshot(snapshot_key)
+
+	# Build visibility grid using cached team entities (skips neutral/resource entities)
+	_snap_vis_version = (_snap_vis_version + 1) & 0xFF
+	if _snap_vis_version == 0: _snap_vis_version = 1
+	var ver = _snap_vis_version
+	var _ms = RTSConfig.MAP_SIZE
+	var team_units = _entities_by_team.get(team, [])
+	for entity in team_units:
+		if entity.health > 0 and entity.vision_range > 0:
+			var g = world_to_grid(entity.global_position)
+			var r = entity.vision_range
+			var offsets = _get_vis_offsets(int(r)); for off in offsets:
+					var nx = g.x + int(off.x); var ny = g.y + int(off.y)
+					if nx >= 0 and nx < _ms and ny >= 0 and ny < _ms:
+						_snap_vis_grid[nx * _ms + ny] = ver
+
 	var current_entities = {}
 	var delta = []
 	var dead = []
 
-	var team_units: Array[GameEntity] = []
-	for entity in entities.get_children():
-		if entity is GameEntity and entity.team == team and entity.health > 0 and entity.vision_range > 0:
-			team_units.append(entity)
-
-	var snapshot_key = "team_%d" % team
-	var is_full = _is_full_snapshot(snapshot_key)
-
-	for entity in entities.get_children():
-		if not (entity is GameEntity): continue
-		if entity.health <= 0: continue
-		var snap = _serialize_entity(entity)
-		var id = snap["id"]
-		current_entities[id] = snap
-
-		# 增量压缩：只发送变化的实体
-		if not is_full:
-			var h = _compute_entity_hash(entity)
-			if not _should_include_in_delta(snapshot_key, id, h):
-				continue
-
-
-		if entity.team == team:
-			delta.append(snap)
+	# --- Own-team entities: delta check (from typed cache) ---
+	for entity in _entities_by_team.get(team, []):
+		if entity.health <= 0:
+			dead.append(entity.get_instance_id())
 			continue
+		var id = entity.get_instance_id()
+		current_entities[id] = true
+		if is_full:
+			delta.append(_serialize_entity_compact(entity))
+		else:
+			var h = _compute_entity_hash(entity)
+			if _should_include_in_delta(snapshot_key, id, h):
+				delta.append(_serialize_entity_compact(entity))
 
-		if entity is WorldResource:
+	# --- Enemy/neutral team entities: visibility grid check ---
+	var enemy_team = RTSConfig.Team.RED if team == RTSConfig.Team.BLUE else RTSConfig.Team.BLUE
+	for entity in _entities_by_team.get(enemy_team, []):
+		if entity.health <= 0:
+			dead.append(entity.get_instance_id())
+			continue
+		var id = entity.get_instance_id()
+		current_entities[id] = true
+		var g = world_to_grid(entity.global_position)
+		if _snap_vis_grid[g.x * _ms + g.y] == ver:
+			delta.append(_serialize_entity_compact(entity))
+
+	# --- Neutral entities (from _entities_by_team[NEUTRAL]): only if visible or explored ---
+	for entity in _entities_by_team.get(RTSConfig.Team.NEUTRAL, []):
+		if entity.health <= 0:
+			dead.append(entity.get_instance_id())
+			continue
+		var id = entity.get_instance_id()
+		current_entities[id] = true
+		var g = world_to_grid(entity.global_position)
+		var idx = g.x * _ms + g.y
+		if _snap_vis_grid[idx] == ver 			or (g.x > 0 and _snap_vis_grid[idx - _ms] == ver) 			or (g.x < _ms - 1 and _snap_vis_grid[idx + _ms] == ver) 			or (g.y > 0 and _snap_vis_grid[idx - 1] == ver) 			or (g.y < _ms - 1 and _snap_vis_grid[idx + 1] == ver):
+			delta.append(_serialize_entity_compact(entity))
+		elif entity is WorldResource:
 			if not team_explored_resources.has(team):
 				team_explored_resources[team] = {}
 			if team_explored_resources[team].has(id):
-				delta.append(snap)
-				continue
-			var visible = false
-			for unit in team_units:
-				if unit.global_position.distance_to(entity.global_position) <= unit.vision_range:
-					visible = true
-					break
-			if visible:
-				delta.append(snap)
+				delta.append(_serialize_entity_compact(entity))
+			else:
 				team_explored_resources[team][id] = true
-		else:
-			var visible = false
-			for unit in team_units:
-				if unit.global_position.distance_to(entity.global_position) <= unit.vision_range:
-					visible = true
-					break
-			if visible:
-				delta.append(snap)
+				delta.append(_serialize_entity_compact(entity))
 
-
-	# 确保已死亡的实体被加入dead_ids
-	for entity in entities.get_children():
-		if entity is GameEntity and entity.health <= 0:
-			dead.append(entity.get_instance_id())
-
+	# --- Disappeared entities (in last snapshot but not current) ---
 	var last_cache = last_snapshot_cache.get(team, {})
 	for id in last_cache.keys():
 		if not current_entities.has(id):
 			dead.append(id)
 	last_snapshot_cache[team] = current_entities
-	if dead.size() > 0: print("[DeadBug-Server] Sending %d dead_ids for team %d" % [dead.size(), team])
+
+	# --- Cleanup stale hashes ---
+	_cleanup_dead_entity_hashes(snapshot_key, current_entities)
 
 	return {
 		"delta": delta,
@@ -1124,20 +1209,68 @@ func build_snapshot_for_team(team: int) -> Dictionary:
 	}
 
 func _broadcast_1v1():
+	# Collect bullet data ONCE (reused for all players)
+	var bullets_data = _build_bullets_data()
 	for pid in player_teams.keys():
 		var team = player_teams[pid]
-		var data = build_snapshot_for_team(team)   # 原有的视野裁剪快照
-		# 补充子弹
-		var bullets_data = []
-		for bullet in get_tree().get_nodes_in_group("bullets"):
-			if bullet is Bullet:
-				bullets_data.append({"id":bullet.get_instance_id(),"x":bullet.global_position.x,"y":bullet.global_position.y,"z":bullet.global_position.z,"team":bullet.team})
+		var _pt_build = Time.get_ticks_usec()
+		var data = build_snapshot_for_team(team)
 		data["bullets"] = bullets_data
 		data["seq"] = snapshot_seq
+		data["audio_events"] = AudioManager.drain_net_audio()
 		snapshot_seq += 1
-		var bytes = var_to_bytes(data)
-		#print("快照大小: ", bytes.size(), " 字节")
 		NetworkManager._client_receive_snapshot.rpc_id(pid, data)
+		var _elapsed_p = (Time.get_ticks_usec() - _pt_build) / 1000.0
+		if _elapsed_p > 3.0: print("[Profile-Player] pid=%d %.1fms" % [pid, _elapsed_p])
+
+func _serialize_entity_compact(entity: GameEntity) -> Array:
+	var a = []
+	a.resize(E.size())
+	a[E.ID] = entity.get_instance_id()
+	a[E.EID] = entity.entity_id
+	a[E.TYPE] = entity.entity_type
+	a[E.TEAM] = entity.team
+	a[E.X] = entity.global_position.x
+	a[E.Y] = entity.global_position.y
+	a[E.Z] = entity.global_position.z
+	a[E.HEALTH] = entity.health
+	a[E.MAX_HEALTH] = entity.max_health
+	a[E.ATTACK] = entity.attack
+	a[E.ARMOR] = entity.armor
+	a[E.SPEED] = entity.speed
+	a[E.VISION] = entity.vision_range
+	a[E.BODY_R] = entity.body_radius
+	a[E.TARGET_TYPE] = entity.target_type
+	a[E.OWNER] = entity.owner_peer_id
+	a[E.LEVEL] = entity.level
+	a[E.ORDER] = entity.current_order if entity.current_order != "" else "idle"
+	a[E.HOLD] = entity.hold_position
+	a[E.NAME] = entity.get_display_name() if entity.has_method("get_display_name") else entity.display_name
+	a[E.ENTITY_ID] = entity.entity_id
+	a[E.WAYPOINTS] = _serialize_waypoints(entity)
+	a[E.ROT_Y] = entity.rotation.y
+	a[E.ASTAR_PATH] = _serialize_astar_path(entity)
+	# Building extra
+	if entity is Building:
+		var ba = []
+		ba.resize(EB.size())
+		ba[EB.UPGRADE] = entity.upgrade_level
+		ba[EB.MAX_UPGRADE] = entity.max_upgrade_level
+		ba[EB.CAN_UPGRADE] = entity.can_upgrade()
+		ba[EB.BUILD_TIMER] = entity.build_timer
+		ba[EB.MAX_BUILD] = entity.max_build_time
+		if entity.production_queue.size() > 0:
+			ba[EB.PROD_CURRENT] = entity.production_queue[0]
+			var cd = entity.get_prod_cooldown(entity.production_queue[0])
+			ba[EB.PROD_PROGRESS] = 1.0 - (entity.production_timer / cd) if cd > 0 else 0.0
+			ba[EB.PROD_QSIZE] = entity.production_queue.size()
+		ba[EB.UPGRADE_TIMER] = entity.upgrade_timer
+		ba[EB.MAX_UPGRADE_TIME] = entity.max_upgrade_time
+		a.append(ba)
+	else:
+		a.append([])
+	return a
+
 func _serialize_entity(entity: GameEntity) -> Dictionary:
 	var data = {
 		"id": entity.get_instance_id(),
@@ -1163,7 +1296,8 @@ func _serialize_entity(entity: GameEntity) -> Dictionary:
 		"order": entity.current_order if entity.current_order != "" else "idle",
 		"hold_position": entity.hold_position,
 		"owner_peer_id": entity.owner_peer_id,
-		"waypoints": _serialize_waypoints(entity)
+		"waypoints": _serialize_waypoints(entity),
+	"astar_path": _serialize_astar_path(entity)
 	}
 
 	# 建筑额外信息
@@ -1229,6 +1363,16 @@ func _serialize_waypoints(entity: GameEntity) -> Array:
 			result.append({"x": wp.x, "y": wp.y, "z": wp.z, "is_loop": false})
 	return result
 
+func _serialize_astar_path(entity: GameEntity) -> Array:
+	var path = []
+	if entity is Army and entity.get("_movement") != null and entity._movement:
+		path = entity._movement.astar_path
+	var result = []
+	for wp in path:
+		if wp is Vector3:
+			result.append({"x": wp.x, "y": wp.y, "z": wp.z})
+	return result
+
 func _serialize_castles() -> Dictionary:
 	var dict = {}
 	for pid in player_castles.keys():
@@ -1242,96 +1386,110 @@ func _serialize_castles() -> Dictionary:
 				"z": castle.global_position.z
 			}
 	return dict
+
 func _broadcast_2v2():
+	# Collect bullet data ONCE (reused for all players)
+	var bullets_data = _build_bullets_data()
 	for pid in player_info.keys():
 		if not player_info[pid].alive: continue
+		var _pt_build = Time.get_ticks_usec()
 		var data = build_snapshot_for_player(pid)
-		# 补充子弹（视野裁剪）
-		var bullets_data = []
-		for bullet in get_tree().get_nodes_in_group("bullets"):
-			if bullet is Bullet:
-				# 子弹如果不可见就不发送（可选）
-				bullets_data.append({
-					"id": bullet.get_instance_id(),
-					"x": bullet.global_position.x,
-					"y": bullet.global_position.y,
-					"z": bullet.global_position.z,
-					"team": bullet.team
-				})
 		data["bullets"] = bullets_data
 		data["seq"] = snapshot_seq
+		data["audio_events"] = AudioManager.drain_net_audio()
 		snapshot_seq += 1
-		var bytes = var_to_bytes(data)
-		#print("快照大小: ", bytes.size(), " 字节")
 		NetworkManager._client_receive_snapshot.rpc_id(pid, data)
+		var _elapsed_p = (Time.get_ticks_usec() - _pt_build) / 1000.0
+		if _elapsed_p > 3.0: print("[Profile-Player] pid=%d %.1fms" % [pid, _elapsed_p])
 
 func build_snapshot_for_player(peer_id: int) -> Dictionary:
 	var team = player_info[peer_id].team
-	var team_units: Array[GameEntity] = []
-	for entity in entities.get_children():
-		if entity is GameEntity and entity.team == team and entity.health > 0 and entity.vision_range > 0:
-			team_units.append(entity)
-
-	var delta = []
 	var snapshot_key = "player_%d" % peer_id
 	var is_full = _is_full_snapshot(snapshot_key)
-	for entity in entities.get_children():
-		if not (entity is GameEntity): continue
-		if entity.health <= 0: continue
-		var snap = _serialize_entity(entity)
-		var id = snap["id"]
+	var _t0 = Time.get_ticks_usec()
 
-		# 增量压缩：只发送变化的实体
+	# Build visibility grid using cached team entities
+	_snap_vis_version = (_snap_vis_version + 1) & 0xFF
+	if _snap_vis_version == 0: _snap_vis_version = 1
+	var ver = _snap_vis_version
+	var _ms = RTSConfig.MAP_SIZE
+	var team_units = _entities_by_team.get(team, [])
+	for entity in team_units:
+		if not entity: continue
+		if entity.health > 0 and entity.vision_range > 0:
+			var g = world_to_grid(entity.global_position)
+			var r = entity.vision_range
+			var offsets = _get_vis_offsets(int(r)); for off in offsets:
+					var nx = g.x + int(off.x); var ny = g.y + int(off.y)
+					if nx >= 0 and nx < _ms and ny >= 0 and ny < _ms:
+						_snap_vis_grid[nx * _ms + ny] = ver
+	var _t_vis = (Time.get_ticks_usec() - _t0) / 1000.0
+
+	var delta = []
+	var current_all_ids = {}
+	var dead = []
+
+	# --- Own entities: delta check ---
+	var own_team_arr = _entities_by_team.get(team, [])
+	for entity in own_team_arr:
+		if entity.health <= 0:
+			dead.append(entity.get_instance_id())
+			continue
+		var id = entity.get_instance_id()
+		current_all_ids[id] = true
+		# Same-team entities (own + teammate) all get delta compression
 		if not is_full:
 			var h = _compute_entity_hash(entity)
 			if not _should_include_in_delta(snapshot_key, id, h):
 				continue
+		delta.append(_serialize_entity_compact(entity))
+	var _t_own = (Time.get_ticks_usec() - _t0) / 1000.0
 
-
-		if snap.get("owner_peer_id", -1) == peer_id:
-			delta.append(snap)
+	# --- Enemy team entities: visibility grid check ---
+	var enemy_team = RTSConfig.Team.RED if team == RTSConfig.Team.BLUE else RTSConfig.Team.BLUE
+	for entity in _entities_by_team.get(enemy_team, []):
+		if entity.health <= 0:
+			dead.append(entity.get_instance_id())
 			continue
+		var id = entity.get_instance_id()
+		current_all_ids[id] = true
+		var g = world_to_grid(entity.global_position)
+		if _snap_vis_grid[g.x * _ms + g.y] == ver:
+			delta.append(_serialize_entity_compact(entity))
+	var _t_enemy = (Time.get_ticks_usec() - _t0) / 1000.0
 
-		if entity is WorldResource:
+	# --- Neutral entities: visible or explored ---
+	for entity in _entities_by_team.get(RTSConfig.Team.NEUTRAL, []):
+		if not entity:continue
+		if entity.health <= 0:
+			dead.append(entity.get_instance_id())
+			continue
+		var id = entity.get_instance_id()
+		current_all_ids[id] = true
+		var g = world_to_grid(entity.global_position)
+		var idx = g.x * _ms + g.y
+		if _snap_vis_grid[idx] == ver 			or (g.x > 0 and _snap_vis_grid[idx - _ms] == ver) 			or (g.x < _ms - 1 and _snap_vis_grid[idx + _ms] == ver) 			or (g.y > 0 and _snap_vis_grid[idx - 1] == ver) 			or (g.y < _ms - 1 and _snap_vis_grid[idx + 1] == ver):
+			delta.append(_serialize_entity_compact(entity))
+		elif entity is WorldResource:
 			if not team_explored_resources.has(team):
 				team_explored_resources[team] = {}
 			if team_explored_resources[team].has(id):
-				delta.append(snap)
-				continue
-			var visible = false
-			for unit in team_units:
-				if unit.global_position.distance_to(entity.global_position) <= unit.vision_range:
-					visible = true
-					break
-			if visible:
-				delta.append(snap)
+				delta.append(_serialize_entity_compact(entity))
+			else:
 				team_explored_resources[team][id] = true
-		else:
-			var visible = false
-			for unit in team_units:
-				if unit.global_position.distance_to(entity.global_position) <= unit.vision_range:
-					visible = true
-					break
-			if visible:
-				delta.append(snap)
-	var dead = []
-	var current_all_ids = {}
-	for entity in entities.get_children():
-		if entity is GameEntity and entity.health > 0:
-			current_all_ids[entity.get_instance_id()] = true
-		elif entity is GameEntity and entity.health <= 0:
-			dead.append(entity.get_instance_id())
+				delta.append(_serialize_entity_compact(entity))
+	var _t_neutral = (Time.get_ticks_usec() - _t0) / 1000.0
 
+	# --- Disappeared entities ---
 	var last_ids = player_last_snapshot_ids.get(peer_id, [])
-	
 	for lid in last_ids:
 		if not current_all_ids.has(lid):
 			dead.append(lid)
+	player_last_snapshot_ids[peer_id] = current_all_ids.keys()
 
-	if dead.size() > 0: print("[DeadBug-Server] Sending %d dead_ids for player %d" % [dead.size(), peer_id])
-	player_last_snapshot_ids[peer_id] = current_all_ids.keys()  # 存全部实体，确保能检测死亡
+	_cleanup_dead_entity_hashes(snapshot_key, current_all_ids)
 
-	return {
+	var result = {
 		"delta": delta,
 		"dead_ids": dead,
 		"player_resources": { peer_id: player_resources[peer_id] },
@@ -1345,7 +1503,13 @@ func build_snapshot_for_player(peer_id: int) -> Dictionary:
 		"alerts": _get_and_clear_alerts(team)
 	}
 
-func _1v1_set_group(team: int, data: Dictionary):
+	# Granular profiling: only print when total > 2.5ms
+	var _t_total = (Time.get_ticks_usec() - _t0) / 1000.0
+	
+
+	return result
+func _1v1_set_group
+(team: int, data: Dictionary):
 	var sel = selection as SelectionManager
 	if not sel: return
 	var g = data.get("group", 0)
@@ -1357,10 +1521,9 @@ func _1v1_set_group(team: int, data: Dictionary):
 			sel.selected_entities.append(e)
 	if g == 0:
 		sel._clear_control_groups_for_selected()
-		print("[Server] Cleared groups for team ", team)
+
 	else:
 		sel._set_control_group(g)
-		print("[Server] Set group ", g, " with ", sel.selected_entities.size(), " units")
 
 func _1v1_demolish(team: int, data: Dictionary):
 	var building_id = data.get("building_id", -1)
@@ -1434,7 +1597,6 @@ func _1v1_recall_group(_t: int, data: Dictionary):
 	var sel = selection as SelectionManager
 	if sel:
 		sel._recall_control_group(data.get("group", 0))
-		print("[Server] Recalled group ", data.get("group", 0), " selected ", sel.selected_entities.size(), " units")
 
 func _2v2_set_group(peer_id: int, data: Dictionary):
 	var sel = selection as SelectionManager
@@ -1447,16 +1609,14 @@ func _2v2_set_group(peer_id: int, data: Dictionary):
 	var g = data.get("group", 0)
 	if g == 0:
 		sel._clear_control_groups_for_selected()
-		print("[Server] Peer ", peer_id, " cleared groups")
+
 	else:
 		sel._set_control_group(g)
-		print("[Server] Peer ", peer_id, " set group ", g, " with ", sel.selected_entities.size(), " units")
 
 func _2v2_recall_group(_peer_id: int, data: Dictionary):
 	var sel = selection as SelectionManager
 	if sel:
 		sel._recall_control_group(data.get("group", 0))
-		print("[Server] Team ", _peer_id, " recalled group ", data.get("group", 0), " selected ", sel.selected_entities.size(), " units")
 
 func get_gather_paused(team: int) -> bool:
 	return team_gather_paused.get(team, false)

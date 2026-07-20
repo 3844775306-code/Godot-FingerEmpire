@@ -47,6 +47,7 @@ var _territory_timer: float = 120.0
 var _hunt_timer: float = 0.0
 var _hunt_target = null
 var _hunt_target_id: int = -1
+var _visible_enemies: Array = []  # enemies visible to AI (refreshed each think cycle)
 
 var my_peer_id: int = -1
 var my_team: int = RTSConfig.Team.RED
@@ -137,11 +138,11 @@ func count_building(id: int) -> int:
 			if my_peer_id == -1 and entity.team != my_team: continue
 			cnt += 1
 	return cnt
-
 func count_military(peer: int) -> int:
 	var total = 0
 	for entity in battle.entities.get_children():
-		if entity is Army and entity.health > 0:
+		if not is_instance_valid(entity) or entity.health <= 0: continue
+		if entity is Army:
 			if my_peer_id != -1 and entity.owner_peer_id != peer: continue
 			if my_peer_id == -1 and entity.team != peer: continue
 			if entity.entity_id != 10 and entity.entity_id != 14 and entity.entity_id not in [43,44,45,46,47,48,49,50,51]:
@@ -156,6 +157,30 @@ func count_military_by_team(tm: int) -> int:
 			if entity.entity_id != 10 and entity.entity_id != 14 and entity.entity_id not in [43,44,45,46,47,48,49,50,51]:
 				total += 1
 	return total
+# Check if any AI unit can see this entity
+func _is_visible_to_ai(target: GameEntity) -> bool:
+	for e in battle.entities.get_children():
+		if e is GameEntity and e.health > 0:
+			if my_peer_id != -1 and e.owner_peer_id != my_peer_id: continue
+			if my_peer_id == -1 and e.team != my_team: continue
+			if e.global_position.distance_to(target.global_position) <= e.vision_range:
+				return true
+	return false
+
+# Refresh visible enemies cache (called once per think cycle)
+func _refresh_visibility():
+	_visible_enemies.clear()
+	for e in battle.entities.get_children():
+		if not (e is GameEntity): continue
+		if e.health <= 0: continue
+		if entity_belongs_to_me(e): continue
+		if e is WorldResource: continue
+		if _is_visible_to_ai(e):
+			_visible_enemies.append(e)
+
+# Check if an entity is in the visible enemies cache
+func _is_visible_enemy(entity: GameEntity) -> bool:
+	return entity in _visible_enemies
 
 # ═══ Economy ═══
 func can_afford(unit_id: int) -> bool:
@@ -192,20 +217,7 @@ func can_afford_upgrade(building_id: int) -> bool:
 # ═══ Production ═══
 func produce_unit(unit_id: int) -> bool:
 	
-		var _blds = 0; var _tried = 0; var _produced = 0
-		for entity in battle.entities.get_children():
-			if entity is Building and entity.health > 0 and entity.build_timer <= 0:
-				if not entity_belongs_to_me(entity): continue
-				_blds += 1
-				var _ql = 999
-				for p in entity.production_list:
-					if p.unit_id == 10: _ql = p.queue_limit
-				var _inq = 0
-				for q in entity.production_queue:
-					if q == 10: _inq += 1
-				if _inq >= _ql: _tried += 1; continue
-				if entity.try_produce(10): _produced += 1
-		if unit_id == 10: print("[AI_Prod] workers=%d/%d blds=%d tried=%d produced=%d" % [count_unit(10), desired_worker_count, _blds, _tried, _produced])
+
 		var produced = 0
 		for entity in battle.entities.get_children():
 			if produced >= 3: break
@@ -218,6 +230,18 @@ func produce_unit(unit_id: int) -> bool:
 func build_building(building_id: int, pos: Vector3):
 	var cfg = EntityDatabase.get_config(building_id)
 	if not cfg: return
+
+	# Non-shipyard buildings: must be within AI vision range
+	if building_id != 23:
+		var world_pos = Vector3(pos.x, 0, pos.z)
+		var visible = false
+		for e in battle.entities.get_children():
+			if e is GameEntity and e.health > 0 and entity_belongs_to_me(e):
+				if e.global_position.distance_to(world_pos) <= e.vision_range:
+					visible = true
+					break
+		if not visible:
+			return  # cannot build outside vision
 	var cost = cfg.get("cost", {})
 	if not _deduct_resources(cost): return
 	cfg["owner_peer_id"] = my_peer_id
@@ -250,8 +274,9 @@ const COUNTER_MATRIX = {
 
 func analyze_enemy_composition() -> Dictionary:
 	var comp = {}
-	for entity in battle.entities.get_children():
-		if entity is Army and entity.health > 0:
+	for entity in _visible_enemies:
+		if not is_instance_valid(entity) or entity.health <= 0: continue
+		if entity is Army:
 			if entity_belongs_to_me(entity): continue
 			var uid = entity.entity_id
 			if uid in COUNTER_MATRIX:
@@ -294,7 +319,7 @@ func _ready():
 	_create_debug_panel()
 
 func _process(delta):
-	if Engine.get_process_frames() % 120 == 0: print("[AI] ping team=%d peer=%d phase=%d" % [my_team, my_peer_id, phase])
+	#if Engine.get_process_frames() % 120 == 0: print("[AI] ping team=%d peer=%d phase=%d" % [my_team, my_peer_id, phase])
 	timer -= delta
 	_ai_income_timer -= delta
 	if _ai_res_snapshot.is_empty():
@@ -325,10 +350,92 @@ func _process(delta):
 			check_defense_line()
 
 # ═══ Decide ═══
+
+# -- SETUP: validate castle exists, transition to PRODUCTION --
+func _state_setup():
+	if not get_peer_castle(my_peer_id):
+		queue_free()
+		return
+	phase = Phase.PRODUCTION
+
+# -- PRODUCTION: build initial economy and military --
+func _state_production(_delta):
+	var workers = count_unit(10)
+	var warehouses = count_building(22)
+	if production_step == 0:
+		if workers < desired_worker_count and can_afford(10) and _can_train_unit():
+			produce_unit(10)
+		else:
+			if can_afford_upgrade(20):
+				upgrade_building(20)
+			elif workers >= desired_worker_count and count_building(20) > 0:
+				var castle = get_peer_castle(my_peer_id)
+				if castle and castle.upgrade_level >= 1:
+					production_step = 1
+	elif production_step == 1:
+		if count_building(23) < 1 and can_afford_building(23):
+			_cache_shipyard_location()
+			if cached_shipyard_pos != Vector3.ZERO:
+				build_building(23, cached_shipyard_pos)
+		elif count_unit(14) < 1 and count_building(23) > 0 and can_afford(14) and _can_train_unit():
+			produce_unit(14)
+		elif warehouses < 1 and can_afford_building(22):
+			var castle = get_peer_castle(my_peer_id)
+			if castle:
+				build_building(22, castle.global_position + Vector3(randf_range(-10,10), 0, randf_range(-10,10)))
+		else:
+			if count_building(23) >= 1 and warehouses >= 1:
+				phase = Phase.DEVELOPMENT
+			_process_line_military()
+
+# -- DEVELOPMENT: expand base, counter enemy, upgrade --
+func _state_development(_delta):
+	# Castle rush: 3min→lv3, 6min→lv4, 10min→lv5
+	var _gm = battle.game_time / 60.0
+	for _ci in range(3):
+		if not _castle_rush_done[_ci] and _gm >= [3, 6, 10][_ci]:
+			var _castle = get_peer_castle(my_peer_id)
+			var _target_lv = _ci + 3
+			if _castle and _castle.upgrade_level < _target_lv and can_afford_upgrade(20):
+				upgrade_building(20)
+				_castle_rush_done[_ci] = true
+			return
+	# Upgrade cycle toggle
+	if _should_skip_for_upgrade_cycle(_delta):
+		if not _priority_upgrade():
+			_process_line_upgrade()
+	else:
+		_process_line_military()
+		_process_line_1()
+		_process_line_3()
+		_ensure_merchants()
+		var _did_merchant = _try_produce_merchants_or_officials()
+		if not _did_merchant:
+			if not _priority_upgrade():
+				_process_line_upgrade()
+		_manage_shipyards()
+		_process_line_5()
+	_ai_hunt_animals(_delta)
+	_check_hunt_cleanup()
+	_ai_garrison_officials()
+	update_tactic(_delta)
+
+# -- ASSAULT: execute tactical attacks --
+func _state_assault(_delta):
+	_process_line_military()
+	_process_line_1()
+	_process_line_3()
+	_ensure_merchants()
+	_try_produce_merchants_or_officials()
+	_manage_shipyards()
+	_process_line_5()
+	_ai_hunt_animals(_delta)
+	_check_hunt_cleanup()
+	_ai_garrison_officials()
+	update_tactic(_delta)
+# ═══ State Machine Dispatcher ═══
 func decide(_delta):
-	if Engine.get_process_frames() % 60 == 0:
-		var _w = count_unit(10)
-		print("[AI_Diag] phase=%d workers=%d/%d afford=%s train=%s" % [phase, _w, desired_worker_count, str(can_afford(10)), str(_can_train_unit())])
+	var _pt = Time.get_ticks_usec()
 	_last_delta = _delta
 	if not battle: return
 	if battle is OnlineBattleManager and my_peer_id != -1:
@@ -338,83 +445,18 @@ func decide(_delta):
 		battle.update_resource_limits(RTSConfig.Team.RED)
 		battle.update_population_limits()
 	clear_invalid_targets()
-	if not get_peer_castle(my_peer_id):
-		queue_free()
-		return
-	var workers = count_unit(10)
-	var warehouses = count_building(22)
-
-	
-
-	if phase == Phase.PRODUCTION:
-		if production_step == 0:
-			if workers < desired_worker_count and can_afford(10) and _can_train_unit():
-				produce_unit(10)
-			else:
-				if can_afford_upgrade(20):
-					upgrade_building(20)
-				elif workers >= desired_worker_count and count_building(20) > 0:
-					var castle = get_peer_castle(my_peer_id)
-					if castle and castle.upgrade_level >= 2:
-						production_step = 1
-				# 生产阶段也尝试造步兵
-				if count_unit(11) < 3 and can_afford(11) and _can_train_unit():
-					produce_unit(11)
-		elif production_step == 1:
-			if count_building(23) < 1 and can_afford_building(23):
-				_cache_shipyard_location()
-				if cached_shipyard_pos != Vector3.ZERO:
-					build_building(23, cached_shipyard_pos)
-			elif count_unit(14) < 1 and count_building(23) > 0 and can_afford(14) and _can_train_unit():
-				produce_unit(14)
-			elif warehouses < 1 and can_afford_building(22):
-				var castle = get_peer_castle(my_peer_id)
-				if castle:
-					build_building(22, castle.global_position + Vector3(randf_range(-10,10), 0, randf_range(-10,10)))
-			else:
-				if count_building(23) >= 1 and warehouses >= 1:
-					phase = Phase.DEVELOPMENT
-				# 建筑+军队并行
-				_process_line_military()
-
-	elif phase == Phase.DEVELOPMENT:
-		# 定时城堡冲刺：3min→lv3, 6min→lv4, 10min→lv5
-		var _gm = battle.game_time / 60.0
-		for _ci in range(3):
-			if not _castle_rush_done[_ci] and _gm >= [3, 6, 10][_ci]:
-				var _castle = get_peer_castle(my_peer_id)
-				var _target_lv = _ci + 3
-				if _castle and _castle.upgrade_level < _target_lv and can_afford_upgrade(20):
-					upgrade_building(20)
-					_castle_rush_done[_ci] = true
-				return  # 放弃本轮其他操作
-		# 升级周期：只做升级
-		if _should_skip_for_upgrade_cycle(_delta):
-			if not _priority_upgrade():
-				_process_line_upgrade()
-		else:
-			# 正常周期：军事+建筑
-			_process_line_military()
-			_process_line_1()
-			_process_line_3()
-			# 商人和官员
-			_ensure_merchants()
-			var _did_merchant = _try_produce_merchants_or_officials()
-			if not _did_merchant:
-				if not _priority_upgrade():
-					_process_line_upgrade()
-			# 其他
-			_manage_shipyards()
-			_process_line_5()
-		_ai_hunt_animals(_delta)
-		_check_hunt_cleanup()
-		_ai_garrison_officials()
-		
-		update_tactic(_delta)
+	_refresh_visibility()
+	if Engine.get_process_frames() % 60 == 0:
+		var _w = count_unit(10)
+		#print("[AI_Diag] state=%d workers=%d/%d" % [phase, _w, desired_worker_count])
+	# State dispatch
+	match phase:
+		Phase.PRODUCTION: _state_production(_delta)
+		Phase.DEVELOPMENT: _state_development(_delta)
+		Phase.ASSAULT: _state_assault(_delta)
+	if Engine.get_process_frames() % 120 == 0: print("[Profile-AI] %.1fms" % ((Time.get_ticks_usec() - _pt) / 1000.0))
 	if OS.is_debug_build():
 		update_debug_label()
-
-# ═══ Castle helpers ═══
 func get_team_castle(tm) -> Building:
 	for entity in battle.entities.get_children():
 		if entity is Building and entity.entity_id == 20 and entity.team == tm and entity.health > 0:
@@ -961,8 +1003,14 @@ func upgrade_defense_to_max():
 				_upg_attempts += 1
 
 # ═══ Shipyard ═══
-func _cache_shipyard_location(): cached_shipyard_pos = _find_best_water_adjacent_plain()
+func _cache_shipyard_location(): 
+	cached_shipyard_pos = _find_best_water_adjacent_plain()
 
+	#print("[AI Shipyard] searching for location...")
+
+	cached_shipyard_pos = _find_best_water_adjacent_plain()
+
+	#print("[AI Shipyard] result=", cached_shipyard_pos)
 func _find_best_water_adjacent_plain() -> Vector3:
 	var castle = get_peer_castle(my_peer_id)
 	if not castle: return Vector3.ZERO
@@ -1107,6 +1155,7 @@ func _process_line_1():
 func _priority_upgrade():
 	var castle = get_peer_castle(my_peer_id)
 	if not castle: return false
+	if my_peer_id >1000: return false
 	# 城堡等级不够兵营4级（兵营>=4需要城堡>=4）
 	for entity in battle.entities.get_children():
 		if entity is Building and entity.entity_id == 21 and entity_belongs_to_me(entity):

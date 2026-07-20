@@ -1,9 +1,17 @@
 class_name Army
 extends GameEntity
 
+enum UnitState { IDLE, MOVING, ATTACKING, GATHERING, DELIVERING, ATTACK_MOVING }
+const _STATE_NAMES = {UnitState.IDLE: "", UnitState.MOVING: "move", UnitState.ATTACKING: "attack", UnitState.GATHERING: "gather", UnitState.DELIVERING: "deliver", UnitState.ATTACK_MOVING: "attack_move"}
+
 # ÒÆ¶¯ÊôÐÔ
 var original_speed: float = 0.0
-
+var loop_index:int = 0
+# Cached terrain/speed lookups — avoid per-frame grid queries when stationary
+var _cached_bm = null
+var _last_grid_pos: Vector2i = Vector2i(-999, -999)
+var _cached_terrain: int = 0
+var _cached_speed_mod: float = 1.0
 # ²É¼¯½»¸¶
 var cargo: Dictionary = {"gold": 0, "wood": 0, "stone": 0, "food": 0, "oil": 0}
 var max_cargo: int = 50
@@ -30,7 +38,7 @@ var _merchant_trade_volume: int = 0  # 本轮交易量（显示用）
 
 # 驻扎系统
 var garrison_point: Vector3 = Vector3.ZERO   # 驻扎点（零向量=无驻扎）
-var _garrison_marker: MeshInstance3D = null  # 驻扎点标记
+var _garrison_marker: Node3D = null  # 驻扎点标记
 const NON_MILITARY_IDS = [10, 14, 43, 44, 45, 51, 46, 47, 48, 49, 50]
 
 func _is_military() -> bool:
@@ -57,28 +65,25 @@ var think_timer: float = 0.0
 const THINK_INTERVAL: float = 0.3
 
 # Åö×²·ÖÀë½ÚÁ÷
-var collision_timer: float = 0.0
-const COLLISION_INTERVAL: float = 0.15
 
 # A* Ñ°Â·
-var astar_path: Array = []                     
-var astar_target: Vector3 = Vector3.ZERO       
-var astar_recalc_timer: float = 0.0
-const ASTAR_RECALC_INTERVAL: float = 2.0       
+var _movement: MovementController = null
+# (moved to MovementController)
+# (moved to MovementController)
+# (moved to MovementController)
 
 # ÐÂÔö£ºÈ±Ê§µÄ±äÁ¿£¨ÐÞ¸´±¨´í£©
   # Ô­µØ¹ÌÊØ
 		# 0=Å©Ãñ / 1=Õ½¶·µ¥Î»
-
 
    # Â·¾¶ÖØËã¼ä¸ô
  # Ô­µØ·ÀÊØÄ£Ê½
 
 # ÔÚ _process »ò _find_enemy_in_range Ïà¹ØµÄ×Ô¶¯×·»÷´úÂëÖÐ
 
-
 func setup(config: Dictionary):
 	super.setup(config)
+	_add_weapon()  # now entity_id is set
 	original_speed = speed
 	gatherable_resources = config.get("gatherable_resources", [])
 	max_cargo = config.get("max_cargo", 50)
@@ -127,13 +132,12 @@ func _apply_nation_bonus():
 	# Ô­ÓÐ×·»÷Âß¼­...
 func _ready():
 	super._ready()
+	_movement = MovementController.new(self)
 	entity_type = 2
 	can_move = true
 	_create_visual()
 	_add_selection_ring()
 	_add_collision_shape()
-
-
 
 # ----------------- ÊÓ¾õÓëÅö×² -----------------
 func _create_visual():
@@ -167,8 +171,7 @@ func _create_visual():
 		color = Color(0.5, 0.7, 0.85)       # 银蓝
 	mat.albedo_color = color
 	mesh.set_surface_override_material(0, mat)
-	# 近战武器
-	_add_weapon()
+		# Weapons added after setup() in spawn_entity
 
 func _add_selection_ring():
 	if not has_node("SelectionRing"):
@@ -186,72 +189,58 @@ func _add_selection_ring():
 
 func _add_weapon():
 	var wpath = ""
-	if entity_id == 35: wpath = "res://models/arena/weapon-spear.glb"
-	elif entity_id == 12: wpath = "res://models/forest/weapon-bow.glb"
-	elif entity_id in [36, 37, 38]: wpath = "res://models/arena/shield-round.glb"
-	elif entity_id not in [18, 40] and attack_range <= 2.0 and target_type > 0:
+	# Bow: archers only
+	if entity_id in [12, 31, 37]: wpath = "res://models/forest/weapon-bow.glb"
+	# Spear
+	elif entity_id == 35: wpath = "res://models/arena/weapon-spear.glb"
+	# Sword: all infantry + cavalry + specials
+	elif entity_id in [11, 15, 19, 30, 32, 34, 36, 38]:
 		wpath = "res://models/arena/weapon-sword.glb"
 	if wpath != "" and ResourceLoader.exists(wpath):
 		var ws = load(wpath)
-		if ws: var w = ws.instantiate(); if w: w.position = Vector3(0.3, body_radius * 0.6, 0); w.scale = Vector3.ONE * 0.8; add_child(w)
-	# 重装单位额外加剑
-	if entity_id in [36, 37, 38] and ResourceLoader.exists("res://models/arena/weapon-sword.glb"):
-		var sw = load("res://models/arena/weapon-sword.glb")
-		if sw: var s = sw.instantiate(); if s: s.position = Vector3(-0.3, body_radius * 0.6, 0); s.scale = Vector3.ONE * 0.8; add_child(s)
-	# 骑兵坐骑
+		if ws:
+			var w = ws.instantiate()
+			if w:
+				w.position = Vector3(body_radius * 1.2, body_radius * 0.4, 0)
+				w.scale = Vector3.ONE 
+				if entity_id in [12, 31, 37]: w.rotation_degrees = Vector3(0, 180, 0)
+				add_child(w)
+	if entity_id in [36, 37, 38] and ResourceLoader.exists("res://models/arena/shield-round.glb"):
+		var sh = load("res://models/arena/shield-round.glb")
+		if sh: var s = sh.instantiate(); if s: s.position = Vector3(-0.3, body_radius * 0.6, 0); s.scale = Vector3.ONE * 0.8; add_child(s)
 	var mpath = ""
 	if entity_id in [15, 19, 38]: mpath = "res://models/pets/animal-dog.glb"
 		
 	elif entity_id == 34: mpath = "res://models/pets/animal-elephant.glb"
 	if mpath != "" and ResourceLoader.exists(mpath):
 		var ms = load(mpath)
-		if ms: var m = ms.instantiate(); if m: m.position = Vector3(0, -body_radius * 0.1, -body_radius * 1.2); m.scale = Vector3.ONE * 0.9; add_child(m)
-		body_radius *= 1.3
-		body_radius *= 1.3
+		if ms: var m = ms.instantiate(); if m: m.position = Vector3(0, -body_radius * 1.2, 0); m.scale = Vector3.ONE * 0.7; add_child(m)
+		var m = ms.instantiate();
+		body_radius *= 1.2  # make cavalry visibly larger
 
 func _add_collision_shape():
 	if not has_node("CollisionShape3D"):
 		var col = CollisionShape3D.new()
 		var shape = SphereShape3D.new()
-		shape.radius = body_radius * 0.6 * 0.6
+		shape.radius = body_radius * 0.6 
 		col.shape = shape
 		col.name = "CollisionShape3D"
 		add_child(col)
 
 # ----------------- Ö÷Ñ­»· -----------------
 
-var _path_markers: Array = []
-
 func set_selected(selected: bool):
 	super.set_selected(selected)
-	if selected:
-		_show_path()
-	else:
-		_hide_path()
-
-func _show_path():
-	_hide_path()
-	if astar_path.size() < 2: return
-	var bm = get_tree().get_first_node_in_group("battle_manager")
-	if not bm: return
-	for wp in astar_path:
-		var m = MeshInstance3D.new()
-		m.mesh = SphereMesh.new()
-		m.mesh.radius = 0.2
-		m.mesh.height = 0.4
-		var h = 0.0; if bm.has_node("Map") and bm.get_node("Map").has_method("get_height_at"): h = bm.get_node("Map").get_height_at(wp)
-		m.position = Vector3(wp.x, h + 0.3, wp.z)
-		var mat = StandardMaterial3D.new()
-		mat.albedo_color = Color(0, 1, 1, 0.8)
-		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		m.material_override = mat
-		bm.add_child(m)
-		_path_markers.append(m)
-
-func _hide_path():
-	for m in _path_markers:
-		if is_instance_valid(m): m.queue_free()
-	_path_markers.clear()
+	super.set_selected(selected)
+	if _movement: _movement.set_selected(selected)
+func _set_order(state: UnitState):
+	current_order = _STATE_NAMES.get(state, "")
+func _order_is(state: UnitState) -> bool:
+	return current_order == _STATE_NAMES.get(state, "___")
+func _order_in(states: Array) -> bool:
+	for s in states:
+		if _order_is(s): return true
+	return false
 func _physics_process(delta):
 	if health <= 0:
 		die_official_cleanup()
@@ -269,55 +258,76 @@ func _physics_process(delta):
 	
 
 	# ËÙ¶ÈÓëµØÐÎ
-	var bm = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
+	
+	# Cache bm reference (avoid per-frame scene-tree search)
+	if not _cached_bm:
+		_cached_bm = get_tree().get_first_node_in_group("battle_manager")
+	var bm = _cached_bm
 	var base_speed = original_speed
 	if shock_timer > 0: speed = 0
 	elif freeze_timer > 0: speed = max(base_speed * 0.5, 0.1)
 	else: speed = base_speed
-	
+
 	if bm:
-		var terrain = bm.get_terrain_at(global_position)
-		# 涉水/航行音效
-		if Engine.get_process_frames() % 30 == 0:
-			var _in_water = (terrain == 2)
-			var _was_in_water = has_meta("_was_in_water") and get_meta("_was_in_water")
-			if _in_water != _was_in_water and not water_capable:
-				_play_sfx_if_visible("swim")
-			elif _in_water and water_capable and current_order == "move":
-				_play_sfx_if_visible("sail")
-			set_meta("_was_in_water", _in_water)
-		if water_capable and terrain != 2:
-			speed *= 0.3
-		elif terrain == 2 and not water_capable:
-			speed = speed / 3.0
-		elif terrain == 1:
-			speed *= 0.5
+		# Only recompute terrain/speed-mod when grid position changes
+		var gpos = bm.world_to_grid(global_position)
+		if gpos != _last_grid_pos:
+			_last_grid_pos = gpos
+			_cached_terrain = bm.get_terrain_at(global_position)
+			var all_water = true
+			var all_land = true
+			for dx in [-1, 0, 1]:
+				for dy in [-1, 0, 1]:
+					if dx == 0 and dy == 0: continue
+					var t = bm.get_terrain_at_grid(gpos.x + dx, gpos.y + dy)
+					if t != 2: all_water = false
+					if t == 2: all_land = false
+				if not water_capable and all_water:
+					_cached_speed_mod = 0.01
+				elif water_capable and all_land:
+					_cached_speed_mod = 0.01
+				elif _cached_terrain == 1:
+					_cached_speed_mod = 0.5
+				else:
+					_cached_speed_mod = 1.0
+			speed *= _cached_speed_mod
+			# Water sound effects (every 30 frames, lightweight)
+			if Engine.get_process_frames() % 30 == 0:
+				var _in_water = (_cached_terrain == 2)
+				var _was_in_water = has_meta("_was_in_water") and get_meta("_was_in_water")
+				if _in_water != _was_in_water and not water_capable:
+					_play_sfx_if_visible("swim")
+				elif _in_water and water_capable and _order_is(UnitState.MOVING):
+					_play_sfx_if_visible("sail")
+				set_meta("_was_in_water", _in_water)
+
 	if entity_id >= 46 and entity_id <= 50:
 		_process_official(delta)
 		# 官员如果正在前往驻军建筑，继续走移动逻辑
-		if _garrison_target_id != -1 and current_order == "move":
+		if _garrison_target_id != -1 and _order_is(UnitState.MOVING):
 			_process_action(delta, bm)
-			_manual_move(delta)
-			if collision_timer <= 0:
-				collision_timer = 0.15
-				_apply_passive_collision(delta)
+			_movement.process_move(delta, bm)
+			if _movement.collision_timer <= 0:
+				_movement.collision_timer = 0.15
+				_movement.apply_collision(delta)
 			else:
-				collision_timer -= delta
+				_movement.collision_timer -= delta
 		return
 
+	# 目标有效性检查
 	# Ä¿±êÓÐÐ§ÐÔ¼ì²é
 		# Ä¿±êÓÐÐ§ÐÔ¼ì²é
 	if current_target and not is_instance_valid(current_target):
 		current_target = null
-		current_order = ""
+		_set_order(UnitState.IDLE)
 		is_attack_moving = false
 		if target_type == 0:   # Å©ÃñÀà£¬Ñ°ÕÒÐÂ×ÊÔ´
 			_find_nearest_resource()
 		else:                  # Õ½¶·µ¥Î»£¬Á¢¿ÌËÑË÷µÐÈË
 			_find_enemy_in_range()
-	if current_order == "attack" or current_order == "gather" :
+	if _order_in([UnitState.ATTACKING, UnitState.GATHERING]) :
 		if current_target == null:
-			current_order = ""
+			_set_order(UnitState.IDLE)
 			is_attack_moving = false
 			if target_type == 0:   # Å©ÃñÀà£¬Ñ°ÕÒÐÂ×ÊÔ´
 				_find_nearest_resource()
@@ -327,15 +337,15 @@ func _physics_process(delta):
 	_process_action(delta, bm)
 
 	# ÒÆ¶¯£¨ÊÖ¶¯ÉèÖÃ global_position£©
-	_manual_move(delta)
+	_movement.process_move(delta, bm)
 
 	# Åö×²·ÖÀë
-	collision_timer -= delta
-	if collision_timer <= 0:
-		collision_timer = COLLISION_INTERVAL
-		_apply_passive_collision(delta)
+	_movement.collision_timer -= delta
+	if _movement.collision_timer <= 0:
+		_movement.collision_timer = _movement.COLLISION_INTERVAL
+		_movement.apply_collision(delta)
 		# ÊµÊ±Ñ°µÐ£ºÖ»Òª²»ÔÚ²É¼¯/½»¸¶/¹¥»÷ÒÆ¶¯£¬ÇÒÃ»ÓÐÄ¿±ê£¬¾ÍÁ¢¿ÌËÑË÷µÐÈË
-	if target_type != 0 and current_target == null and current_order == "" and not is_attack_moving and entity_id not in [46,47,48,49,50]:
+	if target_type != 0 and current_target == null and _order_is(UnitState.IDLE) and not is_attack_moving and entity_id not in [46,47,48,49,50]:
 		_find_enemy_in_range()
 	# ¾ö²ß½ÚÁ÷
 	think_timer -= delta
@@ -344,10 +354,11 @@ func _physics_process(delta):
 		_think(delta, bm)
 		# ÔÚ _physics_process º¯ÊýµÄ×îºó
 	
+	
 # ----------------- ÐÐÎª´¦Àí -----------------
 func _process_action(delta, bm):
 	# ½»¸¶×´Ì¬
-	if current_order == "deliver" and delivery_target and is_instance_valid(delivery_target):
+	if _order_is(UnitState.DELIVERING) and delivery_target and is_instance_valid(delivery_target):
 				# Ê¹ÓÃË®Æ½¾àÀë£¨ºöÂÔ¸ß¶È²î£©£¬±ÜÃâµØÐÎÆð·ü¸ÉÈÅ
 		var h_diff = Vector2(delivery_target.global_position.x - global_position.x,
 							delivery_target.global_position.z - global_position.z)
@@ -362,24 +373,24 @@ func _process_action(delta, bm):
 			cargo.clear()
 			delivery_target = null
 			current_target = null
-			current_order = ""
+			_set_order(UnitState.IDLE)
 			if is_instance_valid(last_resource_target) and last_resource_target.health > 0:
 				gather_at(last_resource_target)
 			elif target_type == 0 and not _is_gather_paused():
 				_find_nearest_resource()
 			last_resource_target = null
 		else:
-			_set_move_target(delivery_target.global_position)
+			_movement.set_move_target(delivery_target.global_position, 1.0)
 		return
 		# Èç¹ûÊÇÒÆ¶¯ÃüÁîÇÒÒÑ½Ó½üÄ¿±ê£¬Çå³ýÃüÁî£¬×ªÎª¿ÕÏÐ
-	if current_order == "move" and not is_attack_moving:
-		if astar_target != Vector3.ZERO:
-			var h_diff = Vector2(astar_target.x - global_position.x, astar_target.z - global_position.z)
+	if _order_is(UnitState.MOVING) and not is_attack_moving:
+		if _movement.astar_target != Vector3.ZERO:
+			var h_diff = Vector2(_movement.astar_target.x - global_position.x, _movement.astar_target.z - global_position.z)
 			if h_diff.length() < 0.2:
-				current_order = ""
+				_set_order(UnitState.IDLE)
 				current_target = null
-				astar_path.clear()
-				astar_target = Vector3.ZERO
+				_movement.astar_path.clear()
+				_movement.astar_target = Vector3.ZERO
 				# Pop completed visual waypoint
 				if _current_move_queued and _visual_waypoints.size() > 0:
 					_visual_waypoints.pop_front()
@@ -396,16 +407,16 @@ func _process_action(delta, bm):
 			if dist <= attack_range:
 				_attack(current_target, delta)
 			else:
-				_set_move_target(current_target.global_position)
+				_movement.set_move_target(current_target.global_position, attack_range)
 		else:
-			if global_position.distance_to(attack_move_target) < 0.2:
+			if global_position.distance_to(attack_move_target) < body_radius + 0.5:
 				is_attack_moving = false
 				attack_move_target = Vector3.ZERO
 				if _current_move_queued and _visual_waypoints.size() > 0:
 					_visual_waypoints.pop_front()
 					_current_move_queued = false
 			else:
-				_set_move_target(attack_move_target)
+				_movement.set_move_target(attack_move_target)
 		return
 
 	# ²É¼¯ / ¹¥»÷
@@ -421,26 +432,27 @@ func _process_action(delta, bm):
 			if h_dist <= 0.5:
 				_gather(current_target, delta)
 			else:
-				_set_move_target(current_target.global_position)
+				_movement.set_move_target(current_target.global_position)
 		elif current_target is GameEntity:
 			if h_dist <= attack_range:
 				_attack(current_target, delta)
 			else:
-				_set_move_target(current_target.global_position)
-var loop_index:int = 0
+				_movement.set_move_target(current_target.global_position, attack_range)
+
 # ----------------- ¾ö²ß£¨½ÚÁ÷£© -----------------
+
 func _think(delta, bm):
 	# 驻扎追击距离限制：敌人离驻扎点超过视野则放弃追击
-	if garrison_point != Vector3.ZERO and current_target != null and current_order == "attack":
+	if garrison_point != Vector3.ZERO and current_target != null and _order_is(UnitState.ATTACKING):
 		if current_target.global_position.distance_to(garrison_point) > 10.0:
 			current_target = null
-			current_order = ""
+			_set_order(UnitState.IDLE)
 			is_attack_moving = false
 			move_to(garrison_point)
 			return
 
 	# 驻扎行为：空闲时追击视野内敌人，无敌人则返回驻扎点
-	if garrison_point != Vector3.ZERO and current_target == null and current_order == "" and not is_attack_moving:
+	if garrison_point != Vector3.ZERO and current_target == null and _order_is(UnitState.IDLE) and not is_attack_moving:
 		var enemy = _find_nearest_enemy_in_vision()
 		if enemy and is_instance_valid(enemy) and enemy.health > 0:
 			if enemy.global_position.distance_to(garrison_point) <= 10.0:
@@ -456,7 +468,7 @@ func _think(delta, bm):
 		return
 
 	# If current order done and queue has commands, pop next
-	if current_target == null and current_order == "" and not is_attack_moving and command_queue.size() > 0:
+	if current_target == null and _order_is(UnitState.IDLE) and not is_attack_moving and command_queue.size() > 0:
 		var next_cmd = command_queue[0]
 		var is_loop = next_cmd.get("is_loop", false)
 		
@@ -477,7 +489,7 @@ func _think(delta, bm):
 				loop_index = 0
 		return
 
-	if current_target == null and current_order == "" and not is_attack_moving:
+	if current_target == null and _order_is(UnitState.IDLE) and not is_attack_moving:
 		if _get_cargo_total() > 0:
 			_return_to_deliver()
 		elif target_type == 0:
@@ -486,73 +498,8 @@ func _think(delta, bm):
 		else:
 			_find_enemy_in_range()
 
-# ----------------- Manual movement -----------------
-func _manual_move(delta):
-	if not can_move or speed <= 0:
-		return
-	if hold_position and target_type != 0:
-		return 
-	# ²É¼¯/¹¥»÷Ë®Æ½·¶Î§ÄÚÍ£Ö¹ÒÆ¶¯
-	if current_target and is_instance_valid(current_target):
-		var target_radius = 0.0
-		if current_target is GameEntity: target_radius = current_target.body_radius
-		var h_diff = Vector2(global_position.x - current_target.global_position.x,
-							global_position.z - current_target.global_position.z)
-		var h_dist = h_diff.length() - body_radius - target_radius
-		if current_target is WorldResource and h_dist <= 0.5:
-			return
-		elif current_target is GameEntity and h_dist <= attack_range:
-			return
-
-	var target_pos = _get_current_move_target()
-	if target_pos == Vector3.ZERO:
-		return
-
-	# 沿A*路径移动
-	var move_target = target_pos
-	if Engine.get_process_frames() % 30 == 0: print("[Move] path=%d first=%s target=%s" % [astar_path.size(), str(astar_path[0]) if astar_path.size()>0 else "none", str(move_target)])
-	if astar_path.size() > 0:
-		move_target = astar_path[0]
-		if global_position.distance_to(move_target) < 0.5:
-			astar_path.pop_front()
-
-	# 构建水平方向
-	var horizontal_target = Vector3(move_target.x, global_position.y, move_target.z)
-	var move_dir = (horizontal_target - global_position).normalized()
-	if move_dir.length() < 0.01:
-		return
-
-	# 陆军避开不可通行地形（仅在无A*路径时，路径本身已绕水）
-	if not water_capable and astar_path.size() == 0:
-		var next_pos = global_position + move_dir * speed * delta
-		var bm2 = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
-		if bm2:
-			var terrain = bm2.get_terrain_at(next_pos)
-			if terrain == 2:  # 水域
-				move_dir = move_dir.rotated(Vector3.UP, deg_to_rad(45))  # 尝试偏转
-				next_pos = global_position + move_dir * speed * delta
-				terrain = bm2.get_terrain_at(next_pos)
-				if terrain == 2: move_dir = move_dir.rotated(Vector3.UP, deg_to_rad(-90))  # 反向偏转
-
-	velocity = Vector3(move_dir.x, 0, move_dir.z) * speed
-	move_and_slide()
-	# 旋转朝向移动方向
-	if move_dir.length() > 0.01:
-		var look_target = global_position + move_dir
-		look_at(Vector3(look_target.x, global_position.y, look_target.z), Vector3.UP)
-
-	# 边界限制
-	var half_map = RTSConfig.MAP_SIZE / 2.0
-	global_position.x = clamp(global_position.x, -half_map, half_map)
-	global_position.z = clamp(global_position.z, -half_map, half_map)
-	# 定期重新计算路径
-	astar_recalc_timer -= delta
-	if astar_recalc_timer <= 0 and current_order == "move" and astar_target != Vector3.ZERO:
-		astar_recalc_timer = ASTAR_RECALC_INTERVAL
-		astar_path = _calculate_astar_path(astar_target)
-
 		# ¸ù¾ÝµØÐÎ¸ß¶ÈÆ½»¬¸üÐÂ Y ×ø±ê
-	var bm = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
+	
 	if bm:
 		var map = bm.get_node("Map")
 		if map and map.has_method("get_height_at"):
@@ -561,168 +508,9 @@ func _manual_move(delta):
 			var elevation_speed = 5.0
 			global_position.y = move_toward(global_position.y, target_height, elevation_speed * delta)
 
-func _get_current_move_target() -> Vector3:
-	if is_instance_valid(current_target):
-		return current_target.global_position
-	if is_attack_moving:
-		return attack_move_target
-	if current_order == "move":
-		return astar_target
-	return Vector3.ZERO
+func recalculate_path():
+	if _movement: _movement.recalculate()
 
-func _set_move_target(pos: Vector3):
-	astar_target = pos
-	astar_path = _calculate_astar_path(pos)
-	astar_recalc_timer = ASTAR_RECALC_INTERVAL
-	if Engine.get_process_frames() % 30 == 0:
-		print("[AStar] target=%s path_len=%d first=%s" % [str(pos), astar_path.size(), str(astar_path[0]) if astar_path.size()>0 else "empty"])
-
-# ----------------- A* Ñ°Â· -----------------
-# ==================== A* Ñ°Â·£¨¿ªÏúÓÅ»¯°æ£© ====================
-# ÓÅ»¯Ïî£º
-# 1. ×î´óËÑË÷½ÚµãÊýÏÞÖÆ£¨500 ½Úµã£©£¬·ÀÖ¹ÏÝÈë´ó¹æÄ£Ì½Ë÷
-# 2. ¼òµ¥¼ÓÈ¨Æô·¢Ê½£¨1.2 ±¶£©£¬ÎþÉüÉÙÐí×îÓÅÐÔ»»È¡¸ü¿ìµÄÊÕÁ²ËÙ¶È
-# 3. ½« open_list µÄÅÅÐò¸ÄÎª½öÔÚÐÂ½Úµã¼ÓÈëÊ±°´Ðè²åÈë£¬±ÜÃâÃ¿Ö¡È«ÅÅÐò
-# 4. Ê¹ÓÃ Dictionary µÄ¿ìËÙ²éÕÒ
-
-func _calculate_astar_path(target_pos: Vector3) -> Array:
-	var bm = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
-	if not bm: return []
-	var start = global_position
-	var end = target_pos
-	var start_tile = bm.world_to_grid(start)
-	var end_tile = bm.world_to_grid(end)
-
-	# Èç¹ûÆðµãµÈÓÚÖÕµã£¬Ö±½Ó·µ»Ø¿Õ
-	if start_tile == end_tile:
-		return []
-
-	var open_list = []
-	var closed_set = {}
-	var g_score = {}
-	var f_score = {}
-	var came_from = {}
-	var start_key = _tile_key(start_tile)
-	g_score[start_key] = 0.0
-	f_score[start_key] = _heuristic(start_tile, end_tile) * 1.2   # Ð¡·ù¼ÓÈ¨
-	open_list.append({"tile": start_tile, "f": f_score[start_key]})
-
-	var max_nodes = 500
-	var nodes_explored = 0
-
-	while open_list.size() > 0 and nodes_explored < max_nodes:
-		# ÕÒµ½ F Öµ×îÐ¡µÄ½Úµã£¨ÊÖ¶¯²éÕÒ£¬±ÜÃâÅÅÐòÕû¸öÁÐ±í£©
-		var best_idx = 0
-		var best_f = open_list[0].f
-		for i in range(1, open_list.size()):
-			if open_list[i].f < best_f:
-				best_f = open_list[i].f
-				best_idx = i
-		var current = open_list.pop_at(best_idx)
-		var cur_tile: Vector2i = current.tile
-		nodes_explored += 1
-
-		if cur_tile == end_tile:
-			return _reconstruct_path(came_from, cur_tile)
-
-		var cur_key = _tile_key(cur_tile)
-		closed_set[cur_key] = true
-
-		# ¼ì²é 8 ¸öÁÚ¾Ó
-		for dx in range(-1, 2):
-			for dy in range(-1, 2):
-				if dx == 0 and dy == 0: continue
-				var neighbor = Vector2i(cur_tile.x + dx, cur_tile.y + dy)
-
-				# ±ß½ç¼ì²é
-				if neighbor.x < 0 or neighbor.x >= RTSConfig.MAP_SIZE or neighbor.y < 0 or neighbor.y >= RTSConfig.MAP_SIZE:
-					continue
-
-				var neighbor_key = _tile_key(neighbor)
-				if closed_set.has(neighbor_key): continue
-
-				var terrain_cost = _get_terrain_cost(neighbor, bm)
-				if terrain_cost >= 999.0: continue   # ²»¿ÉÍ¨ÐÐ
-
-				var step_cost = terrain_cost * (1.4 if (dx != 0 and dy != 0) else 1.0)
-				var tentative_g = g_score.get(cur_key, 9999.0) + step_cost
-
-				if tentative_g < g_score.get(neighbor_key, 9999.0):
-					came_from[neighbor_key] = cur_tile
-					g_score[neighbor_key] = tentative_g
-					f_score[neighbor_key] = tentative_g + _heuristic(neighbor, end_tile) * 1.2
-
-					# ¼ì²éÊÇ·ñÒÑÔÚ open_list ÖÐ
-					var found = false
-					for item in open_list:
-						if item.tile == neighbor:
-							item.f = f_score[neighbor_key]
-							found = true
-							break
-					if not found:
-						open_list.append({"tile": neighbor, "f": f_score[neighbor_key]})
-
-	# Èôµ½´ï×î´ó½ÚµãÊýÈÔÎ´ÕÒµ½£¬·µ»Ø¿Õ£¨µ¥Î»½«Ê¹ÓÃÖ±ÏßÒÆ¶¯£©
-	return []
-
-static func _tile_key(tile: Vector2i) -> String:
-	return str(tile.x) + "," + str(tile.y)
-
-func _heuristic(a: Vector2i, b: Vector2i) -> float:
-	# Âü¹þ¶Ù¾àÀë£¨ÊÊºÏ°Ë·½ÏòÒÆ¶¯£©
-	return abs(a.x - b.x) + abs(a.y - b.y)
-
-func _get_terrain_cost(tile: Vector2i, bm: RTSBattleManager) -> float:
-	var terrain = bm.get_terrain_at_grid(tile.x, tile.y)
-	if water_capable:
-		if terrain == 2: return 0.8
-		else: return 999.0
-	else:
-		if terrain == 2: return 999.0
-		elif terrain == 1: return 2.5
-		else:
-			# Check for enemy walls blocking the path
-			var wp = Vector3(tile.x - RTSConfig.MAP_SIZE/2.0, 0, tile.y - RTSConfig.MAP_SIZE/2.0)
-			for e in bm.entities.get_children():
-				if e is Building and e.entity_id == 27 and e.health > 0 and e.team != team:
-					var g = bm.world_to_grid(e.global_position)
-					if g.x == tile.x and g.y == tile.y:
-						return 999.0
-			return 1.0
-
-func _reconstruct_path(came_from: Dictionary, end_tile: Vector2i) -> Array:
-	var path = []
-	var current = end_tile
-	path.push_front(Vector3(current.x - RTSConfig.MAP_SIZE/2.0, 0, current.y - RTSConfig.MAP_SIZE/2.0))
-	for _i in range(200):
-		var key = _tile_key(current)
-		if not came_from.has(key): break
-		current = came_from[key]
-		path.push_front(Vector3(current.x - RTSConfig.MAP_SIZE/2.0, 0, current.y - RTSConfig.MAP_SIZE/2.0))
-	return path
-
-
-
-# ----------------- Åö×²·ÖÀë -----------------
-func _apply_passive_collision(delta):
-	var bm = _get_bm()
-	var entities_nearby = bm.get_nearby_entities(global_position, 5.0) if bm else get_tree().get_nodes_in_group("entities")
-	for entity in entities_nearby:
-		if entity == self or not is_instance_valid(entity): continue
-		if not (entity is GameEntity) or entity.health <= 0: continue
-		if entity is WorldResource: continue
-		if entity is Building and entity.team == team: continue  # 不阻挡己方/友方建筑
-
-		var dist = global_position.distance_to(entity.global_position)
-		var min_dist = body_radius + entity.body_radius
-		if dist < min_dist and dist > 0.001:
-			var overlap = min_dist - dist
-			var push_dir = (global_position - entity.global_position).normalized()
-			var push_s = 20.0 if entity is Building and entity.entity_id == 27 else 30.0 if entity is Building else 5.0
-			global_position += push_dir * overlap * min(push_s * delta, 0.95)
-		elif dist < 0.001:
-			global_position += Vector3(randf_range(-0.2,0.2), 0, randf_range(-0.2,0.2))
-# ----------------- ¹¥»÷ -----------------
 func _attack(target, delta):
 
 	# 攻击音效
@@ -825,7 +613,7 @@ func _return_to_deliver():
 			last_resource_target = current_target
 		delivery_target = target
 		current_target = target
-		current_order = "deliver"
+		_set_order(UnitState.DELIVERING)
 
 # ----------------- Ñ°ÕÒ½»¸¶µã -----------------
 func find_delivery_point() -> Building:
@@ -861,50 +649,60 @@ func _find_nearest_resource():
 			if dist < best_dist: best_dist = dist; best_target = entity
 	if best_target: gather_at(best_target)
 
+# Unified entity search: finds nearest entity matching filter within range
+func _find_nearest_entity(search_range: float, filter_func: Callable, use_cache: bool = true) -> GameEntity:
+	var best_dist = search_range
+	var best_target: GameEntity = null
+	var bm = _get_bm()
+	var candidates: Array = []
+	if bm and use_cache:
+		candidates = bm.get_nearby_enemies(global_position, search_range, team)
+	else:
+		candidates = get_tree().get_nodes_in_group("entities")
+	for entity in candidates:
+		if entity == self or not is_instance_valid(entity) or entity.health <= 0: continue
+		if not filter_func.call(entity): continue
+		var h_diff = Vector2(entity.global_position.x - global_position.x, entity.global_position.z - global_position.z)
+		var dist = h_diff.length() - body_radius - entity.body_radius
+		if dist <= search_range and dist < best_dist:
+			best_dist = dist
+			best_target = entity
+	return best_target
 func _find_enemy_in_range():
 	if entity_id in [46, 47, 48, 50]: return
-	var best_dist = vision_range*1.2
+	var best_dist = vision_range * 1.2
 	var best_target: GameEntity = null
-	# 优先使用缓存查询
 	var bm = _get_bm()
+	var enemies: Array = []
 	if bm:
-		var enemies = bm.get_nearby_enemies(global_position, vision_range, team)
-		for entity in enemies:
-			if entity == self or entity.health <= 0: continue
-			if entity is WorldResource: continue
-			if entity.get("_animal_type") != null and str(entity.get("_animal_type")) != "": continue
-			var h_diff = Vector2(entity.global_position.x - global_position.x,
-								entity.global_position.z - global_position.z)
-			var dist = h_diff.length() - body_radius - entity.body_radius
-			if dist <= vision_range and dist < best_dist:
-				best_dist = dist
-				best_target = entity
+		enemies = bm.get_nearby_enemies(global_position, vision_range, team)
 	else:
-		# 回退：全量扫描
-		for entity in get_tree().get_nodes_in_group("entities"):
-			if entity == self or entity.health <= 0: continue
-			if entity is WorldResource: continue
+		enemies = get_tree().get_nodes_in_group("entities")
+	for entity in enemies:
+		if entity == self or not is_instance_valid(entity) or entity.health <= 0: continue
+		if entity is WorldResource: continue
+		if entity.get("_animal_type") != null and str(entity.get("_animal_type")) != "": continue
+		if not bm:  # fallback: filter by team
 			if entity.team == team: continue
 			if entity is Building and entity.team == team: continue
-			if entity.get("_animal_type") != null and str(entity.get("_animal_type")) != "": continue
-			var h_diff = Vector2(entity.global_position.x - global_position.x,
-								entity.global_position.z - global_position.z)
-			var dist = h_diff.length() - body_radius - entity.body_radius
-			if dist <= vision_range and dist < best_dist:
-				best_dist = dist
-				best_target = entity
+		# Skip blacklisted (unreachable) targets
+		var bk = "%d,%d" % [int(entity.global_position.x), int(entity.global_position.z)]
+		if _movement and _movement._blacklist.has(bk): continue
+		var h_diff = Vector2(entity.global_position.x - global_position.x, entity.global_position.z - global_position.z)
+		var dist = h_diff.length() - body_radius - entity.body_radius
+		if dist <= vision_range and dist < best_dist:
+			best_dist = dist
+			best_target = entity
 	if best_target:
 		current_target = best_target
-		current_order = "attack"
+		_set_order(UnitState.ATTACKING)
 		is_attack_moving = false
-
-# ----------------- Command interface (Shift queue) -----------------
 func _should_queue() -> bool:
 	if _force_queue_next:
 		_force_queue_next = false
 		return true
 	if Input.is_key_pressed(KEY_SHIFT): return true
-	#if current_order != "": return true
+	#if not _order_is(UnitState.IDLE): return true
 	var bm = get_tree().get_first_node_in_group("battle_manager")
 	if bm and bm.has_method("get_mp_shift") and bm.get_mp_shift(): return true
 	return false
@@ -936,20 +734,26 @@ func _execute_command(cmd: Dictionary):
 	match cmd["type"]:
 		"move":
 			current_target = null
-			current_order = "move"
+			attack_move_target = Vector3.ZERO
+			_set_order(UnitState.MOVING)
 			is_attack_moving = false
-			_set_move_target(cmd["pos"])
+			_movement.set_move_target(cmd["pos"])
 		"attack":
 			current_target = cmd["target"]
-			current_order = "attack"
+			attack_move_target = Vector3.ZERO
+			_set_order(UnitState.ATTACKING)
 			is_attack_moving = false
+			_movement.set_move_target(cmd["target"].global_position, attack_range)
 		"gather":
 			current_target = cmd["target"]
-			current_order = "gather"
+			_set_order(UnitState.GATHERING)
 			is_attack_moving = false
+			_movement.set_move_target(cmd["target"].global_position)
 		"attack_move":
 			attack_move_target = cmd["pos"]
+			current_target = null
 			is_attack_moving = true
+			_movement.set_move_target(cmd["pos"])
 
 # ==================== Waypoint visualization ====================
 # Waypoint visibility control
@@ -1040,7 +844,6 @@ func _detect_loops():
 						if mat: mat.albedo_color = Color(1.0, 0.55, 0.0, 0.9)
 			return
 
-
 func get_waypoint_positions() -> Array:
 	return _visual_waypoints.duplicate()
 
@@ -1056,7 +859,7 @@ func _clear_waypoint_markers():
 	waypoint_markers.clear()
 	_waypoint_loop_start = -1
 	current_target = null
-	current_order = ""
+	_set_order(UnitState.IDLE)
 
 func move_to(pos: Vector3):
 	_queue_command({"type": "move", "pos": pos})
@@ -1073,8 +876,6 @@ func attack_move_to(pos: Vector3):
 # ÏÂÃæÊÇÄãÔ­ÓÐµÄ _attack, _gather, find_delivery_point, _find_nearest_resource, _find_enemy_in_range µÈº¯Êý
 # ÓÉÓÚÆª·ù£¬´Ë´¦²»ÔÙÖØ¸´£¬ÇëÖ±½Ó¸´ÖÆÖ®Ç°Ìá¹©µÄÍêÕû°æ±¾ÖÐ¶ÔÓ¦µÄº¯Êý¼´¿É¡£
 # ÔÚ Army.gd Ä©Î²Ìí¼Ó¸¨Öúº¯Êý
-
-
 
 # ==================== Merchant Trading AI (集市系统) ====================
 
@@ -1108,7 +909,6 @@ func _merchant_add(bm, type: String, amount: int):
 	var res = bm.player_resources if team == RTSConfig.Team.BLUE else bm.enemy_resources
 	var lim = bm.player_resource_limits if team == RTSConfig.Team.BLUE else bm.enemy_resource_limits
 	res[type] = min(res[type] + amount, lim.get(type, 99999))
-
 
 func _process_merchant(delta):
 	if _merchant_resource == "":
@@ -1256,8 +1056,8 @@ func _process_official(delta):
 				if global_position.distance_to(e.global_position) < 2.0:
 					_do_garrison(e)
 					_garrison_target_id = -1
-					current_order = ""
-					astar_target = Vector3.ZERO
+					_set_order(UnitState.IDLE)
+					_movement.astar_target = Vector3.ZERO
 				break
 
 	# If garrisoned but moved far away, auto-ungarrison
@@ -1403,10 +1203,10 @@ func _on_garrison_building_died(official_id: int):
 			break
 
 func stop_movement():
-	current_order = ""
+	_set_order(UnitState.IDLE)
 	current_target = null
-	astar_path.clear()
-	astar_target = Vector3.ZERO
+	_movement.astar_path.clear()
+	_movement.astar_target = Vector3.ZERO
 	is_attack_moving = false
 
 # Override die() for official cleanup
@@ -1434,7 +1234,6 @@ func die_official_cleanup():
 					if e is Army and e.has_meta("_clerk_bonus_%d" % my_id2):
 						e.remove_meta("_clerk_bonus_%d" % my_id2)
 						e.attack_speed /= 0.8
-
 
 func _is_gather_paused() -> bool:
 	var bm = get_tree().get_first_node_in_group("battle_manager")

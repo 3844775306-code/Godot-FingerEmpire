@@ -64,6 +64,8 @@ var _resources: Array = []              # 仅 WorldResource 实体
 var _towers: Array = []                 # 防御塔 (id 25, 26)
 var _entities_by_team: Dictionary = {}  # team int → Array
 var _entity_lookup: Dictionary = {}     # instance_id → GameEntity (O(1) 查找)
+var _global_wall_cache: Dictionary = {}  # cached entity positions for pathfinding
+var _wall_cache_dirty: bool = true
 var _cache_refresh_timer: float = 0.0
 
 # ==================== 诊断工具 ====================
@@ -90,6 +92,7 @@ func _create_diag_label():
 	add_child(canvas)
 
 func _rebuild_entity_cache():
+	var _pt = Time.get_ticks_usec()
 	_all_entities.clear()
 	_armies.clear()
 	_buildings.clear()
@@ -116,6 +119,7 @@ func _rebuild_entity_cache():
 			_entities_by_team[t] = []
 		_entities_by_team[t].append(child)
 	_entity_cache_dirty = false
+	if Engine.get_process_frames() % 120 == 0: print("[Profile-Cache] %.1fms entities=%d" % [(Time.get_ticks_usec() - _pt) / 1000.0, _all_entities.size()])
 
 func mark_entity_cache_dirty():
 	_entity_cache_dirty = true
@@ -157,6 +161,17 @@ func get_nearest_resource(from_pos: Vector3, search_range: float, resource_types
 	return best
 
 # 获取附近所有实体（用于碰撞检测等）
+func get_global_wall_cache() -> Dictionary:
+	if _wall_cache_dirty:
+		_global_wall_cache.clear()
+		for e in entities.get_children():
+			if not (e is GameEntity): continue
+			if e.health <= 0: continue
+			if e is Building or e is WorldResource:
+				var key = "%d,%d" % [int(e.global_position.x + RTSConfig.MAP_SIZE/2.0), int(e.global_position.z + RTSConfig.MAP_SIZE/2.0)]
+				_global_wall_cache[key] = true
+	_wall_cache_dirty = false
+	return _global_wall_cache
 func get_nearby_entities(from_pos: Vector3, search_range: float) -> Array:
 	_ensure_cache_fresh()
 	var result: Array = []
@@ -175,7 +190,6 @@ var team_nations: Dictionary = {
 	RTSConfig.Team.BLUE: GameSettings.player_nation,
 	RTSConfig.Team.RED: GameSettings.enemy_nation
 }
-
 
 # 玩家颜色映射 — 联机时由 OnlineBattleManager 填充实际 peer_id
 var _player_colors: Dictionary = {
@@ -214,6 +228,8 @@ func is_building_unlocked(building_id: int) -> bool:
 		24, 29, 52:   # 攻城车间、重装武器厂、集市 → 城堡3级
 			return cl >= 3
 		42:            # 书院 → 主城4级
+			return cl >= 4
+		53:            # 城堡 → 主城4级
 			return cl >= 4
 		53:            # 城堡 → 主城4级
 			return cl >= 4
@@ -359,7 +375,6 @@ func _ready():
 	AudioManager.play_music("battle")
 	set_process(true)
 	call_deferred("_print_model_animations")
-
 
 func _print_anim(path, label):
 	var s = load(path)
@@ -553,7 +568,12 @@ func upgrade_building_type(team: int, building_id: int, from_building: Building)
 				var full = e.building_data["produces"]
 				for i in range(min(new_lv, full.size())):
 					var prod = full[i].duplicate()
-					if not e.production_list.has(prod):
+					# Check by unit_id
+					var _dup = false
+					for _ep in e.production_list:
+						if _ep.get("unit_id") == prod.get("unit_id"): _dup = true; break
+					if not _dup:
+						e.production_list.append(prod)
 						e.production_list.append(prod)
 				# Also add unit from upgrade's unlocks_unit (for Market merchants etc.)
 				if upgrade.has("unlocks_unit"):
@@ -561,7 +581,12 @@ func upgrade_building_type(team: int, building_id: int, from_building: Building)
 					var uc = EntityDatabase.get_config(uid)
 					if not uc.is_empty():
 						var uprod = {"unit_id": uid, "cooldown": uc.get("attack_speed", 5.0), "queue_limit": 3}
-						if not e.production_list.has(uprod):
+						# Check by unit_id to avoid duplicates
+						var dup = false
+						for ep in e.production_list:
+							if ep.get("unit_id") == uid: dup = true; break
+						if not dup:
+							e.production_list.append(uprod)
 							e.production_list.append(uprod)
 			# Warehouse bonus
 			if e.entity_id == 22 and upgrade.has("storage_bonus"):
@@ -627,12 +652,25 @@ func _init_entities_deferred():
 		var cfg = EntityDatabase.get_config(res.type)
 		var e = spawn_entity(cfg, RTSConfig.Team.NEUTRAL, res.pos)
 
-	# 初始农民
+	# 初始农民（随机在城堡周围平原上生成）
 	var peasant_cfg = EntityDatabase.get_config(10)
-	for i in 3:
-		spawn_entity(peasant_cfg, RTSConfig.Team.BLUE, player_castle_pos + Vector3(2,0,2+i*2))
-	for i in 3:
-		spawn_entity(peasant_cfg, RTSConfig.Team.RED, enemy_castle_pos + Vector3(-2,0,-2-i*2))
+	for _i in range(3):
+		var fx = player_castle_pos.x + randf_range(-3, 3)
+		var fz = player_castle_pos.z + randf_range(-3, 3)
+		var ft = get_terrain_at(Vector3(fx, 0, fz))
+		if ft == 0:
+			spawn_entity(peasant_cfg, RTSConfig.Team.BLUE, Vector3(fx, 0, fz))
+		else:
+			spawn_entity(peasant_cfg, RTSConfig.Team.BLUE, player_castle_pos + Vector3(randf_range(-3,3), 0, randf_range(-3,3)))
+	for _i in range(3):
+		var fx = enemy_castle_pos.x + randf_range(-3, 3)
+		var fz = enemy_castle_pos.z + randf_range(-3, 3)
+		var ft = get_terrain_at(Vector3(fx, 0, fz))
+		if ft == 0:
+			spawn_entity(peasant_cfg, RTSConfig.Team.RED, Vector3(fx, 0, fz))
+		else:
+			spawn_entity(peasant_cfg, RTSConfig.Team.RED, enemy_castle_pos + Vector3(randf_range(-3,3), 0, randf_range(-3,3)))
+	
 
 	# 相机聚焦玩家城堡
 	var cam = get_viewport().get_camera_3d()
@@ -749,12 +787,12 @@ func _update_entity_animation(entity: GameEntity):
 	var is_animal = entity.get("_animal_type") != "" and entity.get("_animal_type") != null
 	if entity.health <= 0:
 		anim = "die"
-	elif entity.current_order == "attack":
+	elif entity is Army and entity._order_is(entity.UnitState.ATTACKING):
 		anim = "attack-melee-left"
-	elif entity.current_order == "move" or entity.current_order == "deliver":
-		anim = "walk" if is_animal else "walk"
+	elif entity is Army and entity._order_in([entity.UnitState.MOVING, entity.UnitState.DELIVERING]):
+		anim = "walk"
 	else:
-		anim = "idle" if is_animal else "idle"
+		anim = "idle"
 	if anim != "" and ap.has_animation(anim) and ap.current_animation != anim:
 		ap.play(anim)
 		
@@ -916,7 +954,6 @@ func _unhandled_input(event):
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
 		_handle_right_click(event)
 
-
 func _place_building_at(pos: Vector3):
 	# 检查城堡等级解锁
 	if not is_building_unlocked(selected_building_id): return
@@ -947,8 +984,17 @@ func _place_building_at(pos: Vector3):
 	if b:
 		b.start_construction(5.0, cfg)	
 		AudioManager.play_sfx("build_place")
+		notify_path_recalc(pos)
 	# 注意：如果仍需要支持鼠标（PC调试），可以同时保留原鼠标处理
 	# 但移动端主要用触摸，PC端继续用鼠标左键命令+右键选择
+
+# Notify all moving armies to recalculate paths after building placement
+func notify_path_recalc(build_pos: Vector3 = Vector3.ZERO):
+	if not entities: return
+	for e in entities.get_children():
+		if e is Army and e._order_is(e.UnitState.MOVING):
+			if build_pos != Vector3.ZERO and e.global_position.distance_to(build_pos) > 10.0: continue
+			e.recalculate_path()
 func _start_build_drag(screen_pos: Vector2):
 	if not build_preview:
 		return false
@@ -1054,8 +1100,6 @@ func _get_entity_under_click(screen_pos: Vector2):
 		return res.collider
 	return null
 
-
-
 func _command_selected_units(screen_pos: Vector2):
 	var cam = get_viewport().get_camera_3d()
 	if not cam: return
@@ -1075,6 +1119,20 @@ func _command_selected_units(screen_pos: Vector2):
 			target = res.collider.get_meta("entity_root")
 	var pos = res.position if res else _ray_plane_intersection(from,to,Vector3.ZERO,Vector3.UP)
 
+	# Formation spread for multi-unit move commands (no target clicked)
+	var formation_offsets = []
+	if not target:
+		var count = selection.selected_entities.size()
+		var cols = int(ceil(sqrt(count)))
+		var spacing = 1.0
+		for i in count:
+			var row = i / cols
+			var col = i % cols
+			var ox = (col - (cols - 1) / 2.0) * spacing
+			var oy = (row - (cols / 2.0)) * spacing
+			formation_offsets.append(Vector3(ox, 0, oy))
+
+	var fi = 0
 	for u in selection.selected_entities:
 		if is_instance_valid(u) and u is Army:
 			if target:
@@ -1092,7 +1150,11 @@ func _command_selected_units(screen_pos: Vector2):
 				else:
 					u.move_to(target.global_position)
 			else:
-				u.move_to(pos)
+				var fp = pos
+				if formation_offsets.size() > 1:
+					fp = pos + formation_offsets[fi]
+				u.move_to(fp)
+			fi += 1
 
 func _try_open_build_menu(screen_pos: Vector2):
 	selection.selected_entities.clear()
@@ -1153,6 +1215,23 @@ func _update_build_preview(screen_pos: Vector2):
 	else:
 		build_preview.visible = false
 
+# Check if terrain within radius is flat (adjacent height diff < 0.8)
+func _is_terrain_flat(pos: Vector3, radius: float) -> bool:
+	if not $Map or not $Map.has_method("get_height_at_grid"): return true
+	var g = world_to_grid(pos)
+	var check_range = int(ceil(radius)) 
+	for dx in range(-check_range, check_range + 1):
+		for dy in range(-check_range, check_range + 1):
+			var nx = g.x + dx; var ny = g.y + dy
+			if nx < 0 or nx >= RTSConfig.MAP_SIZE or ny < 0 or ny >= RTSConfig.MAP_SIZE: continue
+			var h0 = $Map.get_height_at_grid(nx, ny)
+			for nd in [Vector2i(1,0), Vector2i(0,1)]:
+				var ax = nx + nd.x; var ay = ny + nd.y
+				if ax < 0 or ax >= RTSConfig.MAP_SIZE or ay < 0 or ay >= RTSConfig.MAP_SIZE: continue
+				var h1 = $Map.get_height_at_grid(ax, ay)
+				if abs(h1 - h0) >= 1.0: return false
+	return true
+
 func _is_valid_build_position(pos: Vector3) -> bool:
 	# Cannot build near enemy units (10 unit radius)
 	for e in entities.get_children():
@@ -1163,10 +1242,12 @@ func _is_valid_build_position(pos: Vector3) -> bool:
 	if selected_building_id == 23:
 		if t != 0: return false
 		var g = world_to_grid(pos)
+		var water_count = 0
 		for dx in [-1,0,1]:
 			for dy in [-1,0,1]:
 				if dx==0 and dy==0: continue
-				if $Map.get_terrain(g.x+dx, g.y+dy) == 2: return true
+				if $Map.get_terrain(g.x+dx, g.y+dy) == 2: water_count += 1
+		return water_count >= 3
 		return false
 	else:
 		# Cannot overlap existing buildings/entities
@@ -1174,6 +1255,10 @@ func _is_valid_build_position(pos: Vector3) -> bool:
 			if e is GameEntity and e.health > 0:
 				if e.global_position.distance_to(pos) < (e.body_radius + 0.5):
 					return false
+		# Check terrain flatness within building radius
+		var cfg = EntityDatabase.get_config(selected_building_id)
+		var br = cfg.get("body_radius", 1.0) if cfg else 1.0
+		if not _is_terrain_flat(pos, br*0.5): return false
 		return t != 2
 
 func _place_building():
@@ -1213,6 +1298,7 @@ func _place_building():
 	if b:
 		b.start_construction(5.0, cfg)
 		AudioManager.play_sfx("build_place")
+		notify_path_recalc(pos)
 
 	if not Input.is_key_pressed(KEY_SHIFT):
 			_exit_build_mode()
@@ -1299,6 +1385,7 @@ func _init_fog_grid():
 		visible_grid.append(col_vis)
 
 func _update_fog_visibility():
+	var _pt = Time.get_ticks_usec()
 	if visible_grid.is_empty():
 		_init_fog_grid()
 	for x in range(RTSConfig.MAP_SIZE):
@@ -1381,6 +1468,7 @@ func _detect_enemy_near_base():
 # ==================== 每帧更新 ====================
 var _limit_update_timer: float = 0.0
 func _process(delta):
+	var _pt = Time.get_ticks_usec()
 	game_time += delta
 	if game_time_label:
 		var mins = int(game_time / 60)
@@ -1427,10 +1515,8 @@ func _process(delta):
 			if c is Bullet: bullets += 1
 		var delta_total = _all_entities.size() - _diag_last_total
 		
-		if _all_entities.size() > 500:
-			print("[DIAG] ⚠️ 实体数量超过500，可能导致性能下降！")
-		if _all_entities.size() > 1000:
-			print("[DIAG] 🔴 实体数量超过1000，极可能导致卡死！")
+		
+
 		_diag_last_total = _all_entities.size()
 		_diag_last_bullets = bullets
 
@@ -1470,6 +1556,7 @@ func _process(delta):
 
 	_update_visibility()
 
+	if Engine.get_process_frames() % 60 == 0: print("[Profile-Total] frame=%.1fms fps=%.0f entities=%d" % [(Time.get_ticks_usec() - _pt) / 1000.0, Engine.get_frames_per_second(), _all_entities.size()])
 # ==================== 工具函数 ====================
 func _ray_plane_intersection(ro, re, po, pn):
 	var d = (re - ro).normalized()
@@ -1496,7 +1583,14 @@ func get_terrain_at_grid(gx: int, gy: int) -> int:
 func grid_to_world(gx: int, gy: int) -> Vector3:
 	return Vector3(gx - RTSConfig.MAP_SIZE / 2.0, 0, gy - RTSConfig.MAP_SIZE / 2.0)
 # ==================== 快捷功能 ====================
+func get_height_at_grid(gx: int, gy: int) -> float:
+		if not $Map or not $Map.has_method("get_height_at_grid"):
+			return 0.0
+		return $Map.get_height_at_grid(gx, gy)
 func stop_all_gather():
+
+	
+
 	gather_paused = !gather_paused
 	if gather_paused:
 		# 暂停所有己方农民和采集船
@@ -1505,7 +1599,7 @@ func stop_all_gather():
 				if entity.entity_id == 10 or entity.entity_id == 14:
 					entity.current_target = null
 					entity.current_order = ""
-					entity.astar_path.clear()
+					entity._movement.astar_path.clear()
 					entity.is_attack_moving = false
 	else:
 		# 恢复：让空闲农民重新寻找资源

@@ -3,13 +3,13 @@
 importer="scene"
 importer_version=1
 type="PackedScene"
-uid="uid://d3v4jg23pj750"
-path="res://.godot/imported/weapon-stone.glb-5f1ef7b06d91b7cad8e58d71126e7161.scn"
+uid="uid://b58vybvpyk61"
+path="res://.godot/imported/weapon-ammo-boulder.glb-8b56971d93a6da9cd10a3946d9a1e46c.scn"
 
 [deps]
 
-source_file="res://models/defense/weapon-stone.glb"
-dest_files=["res://.godot/imported/weapon-stone.glb-5f1ef7b06d91b7cad8e58d71126e7161.scn"]
+source_file="res://models/defense/weapon-ammo-boulder.glb"
+dest_files=["res://.godot/imported/weapon-ammo-boulder.glb-8b56971d93a6da9cd10a3946d9a1e46c.scn"]
 
 [params]
 

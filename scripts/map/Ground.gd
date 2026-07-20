@@ -12,6 +12,8 @@ func _get_map_size() -> int:
 
 # 地形数据 0=平原, 1=山地, 2=水域
 var terrain_grid: Array = []
+var height_grid: Array = []            # per-tile height values
+const CLIFF_THRESHOLD: float = 2.0     # height diff > this = impassable
 var base_colors: Array = []           # 原始颜色 (MAP_SIZE x MAP_SIZE)
 var terrain_image: Image
 var terrain_texture: ImageTexture
@@ -44,10 +46,11 @@ func _ready():
 	_place_resources()
 	_create_visual_and_texture()
 	_create_chunked_collisions()
+	_add_water_box()
 	map_generated = true
 
 # 服务器发来的完整地图数据直接覆盖
-func apply_received_map(p_terrain: Array, p_resources: Array):
+func apply_received_map(p_terrain: Array, p_height: Array, p_resources: Array):
 	# 清除旧的视觉和碰撞体
 	for child in get_children():
 		if child.name.begins_with("TerrainPlane") or child.name == "NavRegion":
@@ -60,6 +63,7 @@ func apply_received_map(p_terrain: Array, p_resources: Array):
 	# 覆盖地形网格和颜色
 	terrain_grid = p_terrain.duplicate(true)
 	base_colors.clear()
+	height_grid = p_height.duplicate(true)
 	for x in range(size):
 		var color_col = []
 		for y in range(size):
@@ -97,45 +101,48 @@ func _generate_terrain():
 	noise.fractal_octaves = 4
 
 	terrain_grid.clear()
+	height_grid.clear()
 	base_colors.clear()
 	for x in range(size):
 		var col = []
 		var color_col = []
+		var height_col = []
 		for y in range(size):
 			var val = noise.get_noise_2d(x, y)
 			var type = 0
 			var color: Color
 			if val > 0.3:
-				type = 1
-				color = Color.SADDLE_BROWN
+				type = 1; color = Color.SADDLE_BROWN
 			elif val < -0.25:
-				type = 2
-				color = Color.DEEP_SKY_BLUE
+				type = 2; color = Color.DEEP_SKY_BLUE
 			else:
-				type = 0
-				color = Color.DARK_GREEN
+				type = 0; color = Color.DARK_GREEN
 			col.append(type)
 			color_col.append(color)
+			var h = 0.0
+			if type == 1: h = val * height_scale * 5.0
+			elif type == 0: h = val * 0.3
+			else: h = -height_scale * 0.5
+			height_col.append(h)
 		terrain_grid.append(col)
 		base_colors.append(color_col)
+		height_grid.append(height_col)
 
 # ---------- 城堡选址 ----------
 func get_four_castle_positions() -> Array:
 	var size = _get_map_size()
 	var half = size / 2.0
 	var margin = 10
-	var safe_size = 7
-
-	var blue1 = _find_castle_spot_in_region(margin, half + margin, half - margin, size - margin, safe_size)
-	var blue2 = _find_castle_spot_in_region(half + margin, half + margin, size - margin, size - margin, safe_size)
-	var red1 = _find_castle_spot_in_region(margin, margin, half - margin, half - margin, safe_size)
-	var red2 = _find_castle_spot_in_region(half + margin, margin, size - margin, half - margin, safe_size)
-
-	if blue1 == Vector3.ZERO: blue1 = _force_flat_spot(half - 20, half + 20, safe_size)
-	if blue2 == Vector3.ZERO: blue2 = _force_flat_spot(half + 20, half + 20, safe_size)
-	if red1 == Vector3.ZERO: red1 = _force_flat_spot(half - 20, half - 20, safe_size)
-	if red2 == Vector3.ZERO: red2 = _force_flat_spot(half + 20, half - 20, safe_size)
-
+	var ps = 5  # 5x5 flat plain
+	
+	var blue1 = _find_flat_plain(margin, half + ps, half - ps, size - margin, ps)
+	if blue1 == Vector3.ZERO: blue1 = grid_to_world(half - 20, half + 20)
+	var blue2 = _find_flat_plain(half + ps, half + ps, size - margin, size - margin, ps)
+	if blue2 == Vector3.ZERO: blue2 = grid_to_world(half + 20, half + 20)
+	var red1 = _find_flat_plain(margin, margin, half - ps, half - ps, ps)
+	if red1 == Vector3.ZERO: red1 = grid_to_world(half - 20, half - 20)
+	var red2 = _find_flat_plain(half + ps, margin, size - margin, half - ps, ps)
+	if red2 == Vector3.ZERO: red2 = grid_to_world(half + 20, half - 20)
 	return [blue1, blue2, red1, red2]
 
 func _force_flat_spot(gx: int, gy: int, safe_size: int) -> Vector3:
@@ -147,20 +154,40 @@ func _force_flat_spot(gx: int, gy: int, safe_size: int) -> Vector3:
 			terrain_grid[nx][ny] = 0
 	return grid_to_world(gx, gy)
 
+func _find_flat_plain(gx_min,gy_min,gx_max,gy_max,ps:int) -> Vector3:
+	var size=_get_map_size()
+	gx_min=clampi(gx_min,0,size-1);gx_max=clampi(gx_max,0,size-1)
+	gy_min=clampi(gy_min,0,size-1);gy_max=clampi(gy_max,0,size-1)
+	var hp=ps/2
+	for _try in range(500):
+		var cx=randi_range(gx_min+hp,gx_max-hp)
+		var cy=randi_range(gy_min+hp,gy_max-hp)
+		var ok=true
+		for dx in range(-hp,hp+1):
+			for dy in range(-hp,hp+1):
+				var nx=cx+dx;var ny=cy+dy
+				if nx<0 or nx>=size or ny<0 or ny>=size:ok=false;break
+				if terrain_grid[nx][ny]!=0:ok=false;break
+				var h0=height_grid[nx][ny]
+				for nd in [Vector2i(1,0),Vector2i(0,1)]:
+					var ax=nx+nd.x;var ay=ny+nd.y
+					if ax>=0 and ax<size and ay>=0 and ay<size:
+						if abs(height_grid[ax][ay]-h0)>=0.8:ok=false;break
+			if not ok:break
+		if ok:return grid_to_world(cx,cy)
+	return Vector3.ZERO
+
 func _place_castles():
 	var size = _get_map_size()
 	var half = size / 2.0
 	var margin = 10
-	var safe_size = 7
-
-	player_castle_pos = _find_castle_spot_in_region(margin, half + safe_size, half - safe_size, size - margin, safe_size)
+	var ps = 5
+	player_castle_pos = _find_flat_plain(half/2+margin, half+ps, half-ps, size-margin, ps)
 	if player_castle_pos == Vector3.ZERO:
-		player_castle_pos = grid_to_world(half - 15, half + 15)
-
-	enemy_castle_pos = _find_castle_spot_in_region(half + safe_size, margin, size - margin, half - safe_size, safe_size)
+		player_castle_pos = grid_to_world(half-15, half+15)
+	enemy_castle_pos = _find_flat_plain(half+ps, margin, size-margin, half-ps, ps)
 	if enemy_castle_pos == Vector3.ZERO:
-		enemy_castle_pos = grid_to_world(half + 15, half - 15)
-
+		enemy_castle_pos = grid_to_world(half+15, half-15)
 func _find_castle_spot_in_region(gx_min, gy_min, gx_max, gy_max, safe_size: int = 5) -> Vector3:
 	var size = _get_map_size()
 	gx_min = clampi(gx_min, 0, size - 1)
@@ -322,7 +349,7 @@ func _has_nearby_terrain(x, y, terr_type, radius, size) -> bool:
 
 func _create_visual_and_texture():
 	var size = _get_map_size()
-	var subdivisions = 100
+	var subdivisions = _get_map_size()
 	var mesh = ArrayMesh.new()
 	var surface_tool = SurfaceTool.new()
 	surface_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
@@ -457,9 +484,33 @@ func apply_fog(explored: Array, visible: Array):
 	terrain_texture.update(terrain_image)
 
 # ---------- 工具函数 ----------
+
+func _add_water_box():
+		var size = _get_map_size()
+		var w = MeshInstance3D.new()
+		w.name = "WaterBox"
+		var plane = PlaneMesh.new()
+		plane.size = Vector2(size, size)
+		w.mesh = plane
+		w.position = Vector3(0, -0.7, 0)
+		var shader = load("res://resources/water_noise.gdshader")
+		if shader:
+			var mat = ShaderMaterial.new()
+			mat.shader = shader
+			mat.set_shader_parameter("fog_tex", terrain_texture)
+			w.material_override = mat
+		else:
+			var mat = StandardMaterial3D.new()
+			mat.albedo_color = Color(0.0, 0.75, 1.0, 0.5)
+			mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+			mat.metallic = 0.3; mat.roughness = 0.2
+			mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+			w.material_override = mat
+		print("[Water-Server] box added, shader_loaded=%s, fog_tex=%s" % [str(shader != null), str(terrain_texture)])
+		add_child(w)
 func get_height_at(world_pos: Vector3) -> float:
 	var size = _get_map_size()
-	var subdivisions = 100
+	var subdivisions = _get_map_size()
 	var fx = (world_pos.x / size + 0.5) * subdivisions
 	var fz = (world_pos.z / size + 0.5) * subdivisions
 	var x = clampi(int(fx), 0, subdivisions)
@@ -470,6 +521,11 @@ func get_terrain(gx: int, gy: int) -> int:
 	if gx >= 0 and gx < terrain_grid.size() and gy >= 0 and gy < terrain_grid[0].size():
 		return terrain_grid[gx][gy]
 	return -1
+
+func get_height_at_grid(gx:int,gy:int)->float:
+	if gx>=0 and gx<height_grid.size() and gy>=0 and gy<height_grid[0].size():
+		return height_grid[gx][gy]
+	return 0.0
 
 func grid_to_world(gx: int, gy: int) -> Vector3:
 	var size = _get_map_size()
@@ -484,12 +540,13 @@ func _get_terrain_height(world_x: float, world_z: float) -> float:
 	var gz = int(world_z + size / 2.0)
 	gx = clampi(gx, 0, size - 1)
 	gz = clampi(gz, 0, size - 1)
-	var terrain_type = terrain_grid[gx][gz]
-	match terrain_type:
-		0: return 0.0
-		1: return height_scale * 0.8
-		2: return -height_scale * 0.5
+	if height_grid.size() > gx and height_grid[gx].size() > gz:
+		return height_grid[gx][gz]
 	return 0.0
+		
+
+func get_terrain_texture() -> ImageTexture:
+	return terrain_texture
 
 func get_terrain_grid() -> Array:
 	return terrain_grid

@@ -48,7 +48,6 @@ func select_all_military():
 	_update_selection_visuals()
 	emit_signal("selection_changed", client_selected_ids.duplicate())
 
-
 # 框选状态
 var is_box_selecting: bool = false
 var box_start: Vector2 = Vector2.ZERO
@@ -326,6 +325,7 @@ func _send_left_click(event):
 
 	var target_id = -1
 	var pos = Vector3.ZERO
+	var formation_offsets = []
 
 	if result_entity and result_entity.collider.has_meta("entity_root"):
 		var root = result_entity.collider.get_meta("entity_root")
@@ -336,13 +336,25 @@ func _send_left_click(event):
 	else:
 		pos = _get_ground_position(event.position)
 		if pos == Vector3.ZERO: return
+		# Formation spread for multi-unit ground move
+		var count = client_selected_ids.size()
+		if count > 1:
+			var cols = int(ceil(sqrt(count)))
+			var spacing = 1.0
+			for i in count:
+				var row = i / cols
+				var col = i % cols
+				var ox = (col - (cols - 1) / 2.0) * spacing
+				var oy = (row - (cols / 2.0)) * spacing
+				formation_offsets.append(Vector3(ox, 0, oy))
 
 	var cmd = {
 		"action": "right_click",
 		"selected_ids": client_selected_ids.duplicate(),
 		"target_id": target_id,
 		"pos_x": pos.x, "pos_y": pos.y, "pos_z": pos.z,
-		"shift_held": Input.is_key_pressed(KEY_SHIFT)
+		"shift_held": Input.is_key_pressed(KEY_SHIFT),
+		"formation_offsets": formation_offsets,
 	}
 	NetworkManager.send_command.rpc_id(1, cmd)
 
@@ -458,8 +470,7 @@ func _update_placement_preview(screen_pos: Vector2):
 
 		renderer.placement_preview.global_position = pos
 		renderer.placement_preview.visible = true
-		var mat = renderer.placement_preview.material_override as StandardMaterial3D
-		if mat: mat.albedo_color = Color.GREEN if (in_vision and terrain_ok) else Color.RED
+		renderer._tint_preview(renderer.placement_preview, Color.GREEN if (in_vision and terrain_ok) else Color.RED)
 	else:
 		renderer.placement_preview.visible = false
 

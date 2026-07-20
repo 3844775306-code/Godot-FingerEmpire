@@ -99,7 +99,7 @@ func send_command(data: Dictionary):
 func _client_receive_snapshot(data: Dictionary):
 	if mode == Mode.CLIENT:
 		var renderer = _get_renderer()
-		if renderer:
+		if renderer and renderer.has_method("apply_snapshot"):
 			renderer.apply_snapshot(data)
 
 @rpc("authority", "call_remote", "reliable")
@@ -127,15 +127,21 @@ func _load_battle_scene():
 		get_tree().change_scene_to_file("res://scenes/rts_battle_client.tscn")
 
 @rpc("any_peer", "call_remote", "reliable")
-func receive_map_data(terrain: Array, resources: Array):
+func receive_map_data(terrain: Array, height_data: Array, resources: Array):
 	if mode == Mode.CLIENT:
 		RTSConfig.MAP_SIZE = terrain.size()
 		var map = _get_map()
 		if map:
-			map.apply_received_map(terrain, resources)
-			var renderer = _get_renderer()
-			if renderer: renderer.on_map_size_changed(); renderer._init_fog_grids()
-
+			map.apply_received_map(terrain, height_data, resources)
+		var renderer = _get_renderer()
+		if renderer and renderer.has_method("_add_water_box"):
+			var fog_tex = null
+			if map and map.has_method("get_terrain_texture"):
+				fog_tex = map.get_terrain_texture()
+			renderer._add_water_box(terrain.size(), fog_tex)
+		if renderer:
+			renderer.on_map_size_changed()
+			renderer._init_fog_grids()
 @rpc("authority", "call_remote", "reliable")
 func notify_game_over(winner_team: int):
 	if mode == Mode.CLIENT:
