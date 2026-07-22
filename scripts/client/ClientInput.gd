@@ -166,13 +166,7 @@ func _unhandled_input(event):
 				if ground_pos != Vector3.ZERO:
 					emit_signal("build_requested", ground_pos)
 			else:
-				var hit_id = _get_entity_id_under_mouse(event.position)
-				if hit_id == -1:
-					client_selected_ids.clear()
-					_update_selection_visuals()
-					emit_signal("selection_changed", [])
-				else:
-					_send_left_click(event)
+				_send_left_click(event)
 
 		elif event is InputEventMouseMotion:
 			# 拖拽检测：按下左键后移动鼠标 → 开始框选
