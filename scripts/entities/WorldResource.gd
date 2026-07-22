@@ -8,7 +8,7 @@ func _ready():
 	entity_type = 0
 	var lv = randi_range(1,5)
 	level = lv
-	var scale = 0.4 + (lv - 1) * 0.3
+	var scale = 0.4 + (lv - 1.0) * 0.3
 	max_health = int(max_health * scale)
 	health = max_health
 	team = RTSConfig.Team.NEUTRAL
@@ -56,7 +56,7 @@ func _add_collision_shape():
 	if not has_node("CollisionShape3D"):
 		var col = CollisionShape3D.new()
 		var shape = SphereShape3D.new()
-		shape.radius = body_radius * 1.5  # 与客户端一致，覆盖模型可见范围
+		shape.radius = body_radius * 3 # 增大碰撞范围，确保点击树叶边缘时也能命中
 		col.shape = shape
 		col.name = "CollisionShape3D"
 		add_child(col)

@@ -1134,6 +1134,7 @@ func _command_selected_units(screen_pos: Vector2):
 	var space = get_world_3d().direct_space_state
 	var q = PhysicsRayQueryParameters3D.create(from, to)
 	q.collide_with_bodies = true
+	q.collision_mask = 1   # 与 SelectionManager 保持一致，只检测实体层
 	var res = space.intersect_ray(q)
 
 	var target: GameEntity = null

@@ -1,6 +1,6 @@
 class_name ClientRenderer
 extends Node3D
-enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH }
+enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ATTACK_SPEED, ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH }
 enum EB { UPGRADE=0, MAX_UPGRADE, CAN_UPGRADE, BUILD_TIMER, MAX_BUILD, PROD_CURRENT, PROD_PROGRESS, PROD_QSIZE, UPGRADE_TIMER, MAX_UPGRADE_TIME }
 var last_applied_seq = -1
 # ==================== 玩家信息 ====================
@@ -51,6 +51,7 @@ var last_snapshot_time = 0
 @onready var entities_container: Node3D = $Entities
 # 新增变量（放在类顶部）
 
+var my_nation: int = -1  # for nation-specific unit production
 var my_team: int = -1
 
 var stale_snapshot: bool = false
@@ -58,6 +59,7 @@ var stale_snapshot: bool = false
 var latest_snapshot: Dictionary = {}    # 必须初始化为空字典
 var snapshot_processing: bool = false
 var pending_delta: Array = []
+var _prev_bullet_ids: Dictionary = {}  # id -> entity_id for sound detection
 
 	# 如果有最新快照待处理，且当前不忙，则开始处理
 	
@@ -151,12 +153,24 @@ func _ready():
 				var current_size = max(aabb.size.x, max(aabb.size.y, aabb.size.z))
 				if current_size > 0.01: placement_preview.scale = Vector3.ONE * (target_size / current_size)
 				if bid in [22, 27, 28]: placement_preview.rotation.y = deg_to_rad(90)
+				if bid == 18: placement_preview.rotation.y = deg_to_rad(-90)
 				_tint_preview(placement_preview, Color(0, 1, 0))
 				placement_preview.visible = true
 			)
 
 	# Start battle music
 	AudioManager.play_music("battle")
+
+# Check if a world position is within the player's visible range
+func _is_audible(pos: Vector3) -> bool:
+	var gx = int(pos.x + RTSConfig.MAP_SIZE / 2)
+	var gz = int(pos.z + RTSConfig.MAP_SIZE / 2)
+	if gx < 0 or gx >= RTSConfig.MAP_SIZE or gz < 0 or gz >= RTSConfig.MAP_SIZE: return false
+	return local_visible_grid.size() > gx and local_visible_grid[gx].size() > gz and local_visible_grid[gx][gz]
+
+func _get_cam_pos() -> Vector3:
+	var cam = get_viewport().get_camera_3d()
+	return cam.global_position if cam else Vector3.ZERO
 
 # ==================== 外部接口 ====================
 func set_player_team(team: int):
@@ -207,6 +221,13 @@ func apply_snapshot(data: Dictionary):
 		pass #print("跳号或重传: 期望 ", last_applied_seq+1, " 收到 ", data.get("seq"))
 	last_applied_seq = seq
 	_diag_snap_count += 1
+	# HUD network stats
+	var hud = get_tree().get_first_node_in_group("client_hud")
+	if hud:
+		hud._snap_recv_count += 1
+		if hud._last_snap_seq >= 0 and seq > hud._last_snap_seq + 1:
+			hud._snap_lost_count += (seq - hud._last_snap_seq - 1)
+		hud._last_snap_seq = seq
 	_diag_last_snap_time = now
 	_diag_snap_age = 0.0
 	last_snapshot_time = now
@@ -231,6 +252,8 @@ func _safe_process_snapshot(data: Dictionary) -> bool:
 func _process_snapshot(data: Dictionary):
 	# 缓存人口
 	last_population = data.get("population", last_population)
+	# Sync game time from server
+	
 	
 	# ---- 实体更新 ----
 	if data.has("delta"):
@@ -290,11 +313,12 @@ func _process_snapshot(data: Dictionary):
 	# ---- 国家信息 ----
 	if has_node("UI/HUD"):
 		if data.has("nation"):
-			var my_nation = data["nation"] if player_team == RTSConfig.Team.BLUE else data.get("enemy_nation", -1)
+			my_nation = data["nation"] if player_team == RTSConfig.Team.BLUE else data.get("enemy_nation", -1)
 			var enemy_nation = data.get("enemy_nation", -1) if player_team == RTSConfig.Team.BLUE else data["nation"]
 			$UI/HUD.set_nations(my_nation, enemy_nation)
 		elif data.has("team_nations") and my_team != -1:
-			var my_team_nation = data["team_nations"].get(my_team, -1)
+			my_nation = data["team_nations"].get(my_team, -1)
+			var my_team_nation = my_nation
 			var enemy_team = RTSConfig.Team.RED if my_team == RTSConfig.Team.BLUE else RTSConfig.Team.BLUE
 			var enemy_nation = data["team_nations"].get(enemy_team, -1)
 			$UI/HUD.set_nations(my_team_nation, enemy_nation)
@@ -309,23 +333,28 @@ func _process_snapshot(data: Dictionary):
 				if hud and hud.has_method("show_alert_message"):
 					hud.show_alert_message(alert["msg"], alert.get("color", Color(1.0, 0.2, 0.1)))
 
-	# ---- 音效 ----
-	if data.has("audio_events"):
-		var ae = data["audio_events"]
-		if ae is Array:
-			for sfx in ae:
-				if sfx is Dictionary:
-					AudioManager.play_sfx(sfx["key"])
-				else:
-					AudioManager.play_sfx(sfx)
-
 	if data.has("bullets"):
 		var server_ids = {}
+		var new_bullets = []
 		for b in data["bullets"]:
 			if not b.has("id") or not b.has("x"): continue
 			var id = b["id"]
-			server_ids[id] = true
+			server_ids[id] = b.get("entity_id", -1)
 			var node = entity_nodes.get(id)
+			# New bullet created → play shoot sound
+			if not _prev_bullet_ids.has(id) and not node:
+				var bpos = Vector3(b["x"], b["y"], b["z"])
+				if _is_audible(bpos):
+					var eid = b.get("entity_id", -1)
+					var cam = _get_cam_pos()
+					if eid == 12 or eid == 31 or eid == 37:
+						AudioManager.play_sfx_3d("arrow_shoot", bpos, cam)
+					elif eid == 16 or eid == 39:
+						AudioManager.play_sfx_3d("cannon_fire", bpos, cam)
+					elif eid == 17:
+						AudioManager.play_sfx_3d("treb_fire", bpos, cam)
+					else:
+						AudioManager.play_sfx_3d("arrow_shoot", bpos, cam)
 			if not node:
 				node = _create_bullet_node(b)
 				entity_nodes[id] = node
@@ -335,8 +364,19 @@ func _process_snapshot(data: Dictionary):
 		for id in entity_nodes.keys():
 			var n = entity_nodes[id]
 			if n.has_meta("is_bullet") and not server_ids.has(id):
+				# Bullet destroyed → play hit sound
+				if _is_audible(n.global_position):
+					var eid2 = _prev_bullet_ids.get(id, -1)
+					var cam = _get_cam_pos()
+					if eid2 == 16 or eid2 == 39:
+						AudioManager.play_sfx_3d("cannon_hit", n.global_position, cam)
+					elif eid2 == 17:
+						AudioManager.play_sfx_3d("treb_hit", n.global_position, cam)
+					else:
+						AudioManager.play_sfx_3d("arrow_hit", n.global_position, cam)
 				n.queue_free()
 				entity_nodes.erase(id)
+		_prev_bullet_ids = server_ids
 # ==================== 实体创建与更新 ====================
 func _rebuild_building_info(d: Dictionary):
 	var cfg = EntityDatabase.get_config(d["entity_id"])
@@ -363,6 +403,23 @@ func _rebuild_building_info(d: Dictionary):
 			scaled[res] = int(base_cost[res] * (1.0 + (lv - 1) * 0.2))
 		prod["current_cost"] = scaled
 		pl.append(prod)
+	# Add nation-specific units (matching server _unlock_nation_units)
+	if my_nation >= 0 and d.get("entity_id", 0) in [20, 53]:
+		NationData._static_init()
+		var nation_units = NationData.NATION_UNITS.get(my_nation, [])
+		for nu in nation_units:
+			if nu["unit_id"] == 10: continue
+			var already = false
+			for ep in pl:
+				if ep.unit_id == nu["unit_id"]: already = true; break
+			if not already:
+				var np = {"unit_id": nu["unit_id"], "cooldown": nu.get("cooldown", 5.0), "queue_limit": nu.get("queue_limit", 5)}
+				var uc2 = EntityDatabase.get_config(nu["unit_id"])
+				var bc2 = uc2.get("cost", {})
+				var sc2 = {}
+				for rk in bc2: sc2[rk] = int(bc2[rk] * (1.0 + (lv - 1) * 0.2))
+				np["current_cost"] = sc2
+				pl.append(np)
 	d["production_list"] = pl
 
 func _update_single_entity(info):
@@ -374,7 +431,7 @@ func _update_single_entity(info):
 			"id": arr[E.ID], "entity_id": arr[E.EID], "type": arr[E.TYPE],
 			"team": arr[E.TEAM], "x": arr[E.X], "y": arr[E.Y], "z": arr[E.Z],
 			"health": arr[E.HEALTH], "max_health": arr[E.MAX_HEALTH],
-			"attack": arr[E.ATTACK], "armor": arr[E.ARMOR], "speed": arr[E.SPEED],
+			"attack": arr[E.ATTACK], "attack_speed": arr[E.ATTACK_SPEED] if arr.size() > E.ATTACK_SPEED else 1.0, "armor": arr[E.ARMOR], "speed": arr[E.SPEED],
 			"vision_range": arr[E.VISION], "body_radius": arr[E.BODY_R],
 			"target_type": arr[E.TARGET_TYPE], "owner_peer_id": arr[E.OWNER],
 			"level": arr[E.LEVEL], "current_order": arr[E.ORDER],
@@ -405,6 +462,9 @@ func _update_single_entity(info):
 	if not node:
 		node = _create_entity_node(info)
 		entity_nodes[id] = node
+		# New building placed → play placement sound
+		if info.get("type") == 1 and _is_audible(node.global_position):
+			AudioManager.play_sfx_3d("build_place", node.global_position, _get_cam_pos())
 	# Smooth position interpolation to reduce jitter/flashing
 	var target = Vector3(info["x"], info["y"], info["z"])
 	if node.has_meta("_prev_pos"):
@@ -418,6 +478,22 @@ func _update_single_entity(info):
 	node.rotation.y = info.get("rotation_y", 0.0)
 	node.visible = _should_entity_be_visible(info)
 	node.set_meta("snapshot_info", info)
+	# Client-side sound effects (detect state transitions, visible entities only)
+	var prev_info = node.get_meta("_prev_info") if node.has_meta("_prev_info") else {}
+	if not prev_info.is_empty() and _is_audible(node.global_position):
+		# Build done
+		if prev_info.get("build_timer", 0) > 0 and info.get("build_timer", 0) <= 0:
+			AudioManager.play_sfx_3d("build_done", node.global_position, _get_cam_pos())
+		# Upgrade done
+		if prev_info.get("upgrade_timer", 0) > 0 and info.get("upgrade_timer", 0) <= 0:
+			AudioManager.play_sfx_3d("upgrade_done", node.global_position, _get_cam_pos())
+		# Production finished (progress was >0, now 0)
+		var prev_prog = prev_info.get("production_progress")
+		var new_prog = info.get("production_progress")
+		if prev_prog != null and new_prog != null and prev_prog > 0 and new_prog <= 0:
+			AudioManager.play_sfx_3d("produce", node.global_position, _get_cam_pos())
+
+	node.set_meta("_prev_info", info.duplicate())
 	# Update waypoint markers if present
 	_update_waypoint_markers(node, info)
 
@@ -432,8 +508,8 @@ func _update_wall_orientation(wall_node: Node3D, info: Dictionary):
 	var has_x_neg = false; var has_x_pos = false
 	var has_z_neg = false; var has_z_pos = false
 	var r = info.get("body_radius", 1.0)
-	var half_len = r * 2.0
-	var half_wid = r * 0.5
+	var half_len = r * 2.0 * 1.2
+	var half_wid = r * 0.8
 	var my_pos = wall_node.global_position
 	for id in entity_nodes.keys():
 		var other = entity_nodes.get(id)
@@ -443,15 +519,16 @@ func _update_wall_orientation(wall_node: Node3D, info: Dictionary):
 		if oi.get("entity_id", 0) != 27: continue
 		if oi.get("health", 0) <= 0: continue
 		var d = other.global_position - my_pos
-		if abs(d.z) < half_len and abs(d.x) < half_wid:
+		if abs(d.z) <= half_len and abs(d.x) < half_wid:
 			if d.z < 0: has_z_neg = true
 			else: has_z_pos = true
-		if abs(d.x) < half_len and abs(d.z) < half_wid:
+		if abs(d.x) <= half_len and abs(d.z) < half_wid:
 			if d.x < 0: has_x_neg = true
 			else: has_x_pos = true
 	
-	var count = int(has_x_neg) + int(has_x_pos) + int(has_z_neg) + int(has_z_pos)
-	var is_corner = (count >= 2)
+	var has_x = has_x_neg or has_x_pos
+	var has_z = has_z_neg or has_z_pos
+	var is_corner = has_x and has_z  # corner only when both axes have neighbors
 	
 	# Model switch
 	var old_is_corner = wall_node.has_meta("_wall_is_corner") and wall_node.get_meta("_wall_is_corner")
@@ -474,10 +551,10 @@ func _update_wall_orientation(wall_node: Node3D, info: Dictionary):
 	
 	# Rotation — matches server exactly
 	if is_corner:
-		if has_x_neg and has_z_neg: wall_node.rotation.y = deg_to_rad(90)
-		elif has_x_pos and has_z_neg: wall_node.rotation.y = deg_to_rad(180)
-		elif has_x_pos and has_z_pos: wall_node.rotation.y = deg_to_rad(270)
-		elif has_x_neg and has_z_pos: wall_node.rotation.y = deg_to_rad(0)
+		if has_x_neg and has_z_neg: wall_node.rotation.y = deg_to_rad(90 + 180)
+		elif has_x_pos and has_z_neg: wall_node.rotation.y = deg_to_rad(180 + 180)
+		elif has_x_pos and has_z_pos: wall_node.rotation.y = deg_to_rad(270 + 180)
+		elif has_x_neg and has_z_pos: wall_node.rotation.y = deg_to_rad(0 + 180)
 	elif has_x_neg or has_x_pos: wall_node.rotation.y = deg_to_rad(90)
 	else: wall_node.rotation.y = 0
 
@@ -511,12 +588,23 @@ func _update_entity_animation(node: Node3D, info: Dictionary):
 		anim = "die"
 	elif ord == "attack":
 		anim = "attack-melee-left"
+	elif ord == "gather":
+			anim = "attack-melee-left"
 	elif ord in ["move", "deliver"]:
 		anim = "walk"
 	else:
 		anim = "idle"
-	if anim != "" and ap.has_animation(anim) and ap.current_animation != anim:
-		ap.play(anim)
+	if anim != "" and ap.has_animation(anim):
+		var spd = 1.0
+		var atk_spd = info.get("attack_speed", 1.0)
+		if atk_spd == null: atk_spd = 1.0
+		var mv_spd = info.get("speed", 2.0)
+		if mv_spd == null: mv_spd = 2.0
+		if anim == "attack-melee-left": spd = atk_spd
+		elif anim == "walk": spd = mv_spd * 0.6
+		ap.speed_scale = spd
+		if ap.current_animation != anim:
+			ap.play(anim)
 
 func _apply_model_tint(node: Node, tint: Color):
 	for child in node.get_children():
@@ -581,7 +669,8 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 		col_shape.shape = box
 	else:
 		var sphere = SphereShape3D.new()
-		sphere.radius = r
+		if info["type"] == 0: sphere.radius = r * 3.5  # 增大碰撞范围，匹配3D模型的视觉大小
+		else: sphere.radius = r
 		col_shape.shape = sphere
 	body.add_child(col_shape)
 
@@ -616,13 +705,40 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 		if current_size > 0.01:
 			loaded_model.scale = Vector3.ONE * (target_size / current_size)
 		# Special rotations
-		if info.get("entity_id", 0) == 16: loaded_model.rotation.y = deg_to_rad(180)
+		if info.get("entity_id", 0) == 10: loaded_model.rotation.y = deg_to_rad(180)
+		elif info.get("entity_id", 0) == 16: loaded_model.rotation.y = deg_to_rad(90)
 		elif info.get("entity_id", 0) == 17: loaded_model.rotation.y = deg_to_rad(90)
+		elif info.get("entity_id", 0) == 18: loaded_model.rotation.y = deg_to_rad(90)
+		if info.get("entity_id", 0) in [25, 26, 33]: loaded_model.scale *= 2.0
+		elif info.get("entity_id", 0) == 18: loaded_model.rotation.y = deg_to_rad(-90)
+		# Towers bigger
+		if info.get("entity_id", 0) in [25, 26, 33]: loaded_model.scale *= 1.5
 		entity.add_child(loaded_model)
-		# 队伍色着色（向白色混合50%，降低饱和度）
+		# 队伍色着色
 		if info.get("type", -1) != 0:
 			var lt = Color(0.5 + entity_color.r * 0.5, 0.5 + entity_color.g * 0.5, 0.5 + entity_color.b * 0.5)
 			_apply_model_tint(loaded_model, lt)
+		# Weapons and mounts (match server Army._add_weapon)
+		var eid2 = info.get("entity_id", 0)
+		var br = info.get("body_radius", 0.5)
+		if eid2 in [12, 31, 37] and ResourceLoader.exists("res://models/forest/weapon-bow.glb"):
+			var ws = load("res://models/forest/weapon-bow.glb")
+			if ws: var w = ws.instantiate(); if w: w.position = Vector3(br*1.2, br*0.4, 0); w.scale = Vector3.ONE; w.rotation_degrees = Vector3(0, 180, 0); entity.add_child(w)
+		if eid2 == 35 and ResourceLoader.exists("res://models/arena/weapon-spear.glb"):
+			var ws = load("res://models/arena/weapon-spear.glb")
+			if ws: var w = ws.instantiate(); if w: w.position = Vector3(br*1.2, br*0.4, 0); entity.add_child(w)
+		if eid2 in [11, 15, 19, 30, 32, 34, 36, 38] and ResourceLoader.exists("res://models/arena/weapon-sword.glb"):
+			var ws = load("res://models/arena/weapon-sword.glb")
+			if ws: var w = ws.instantiate(); if w: w.position = Vector3(br*1.2, br*0.4, 0); w.scale = Vector3.ONE; entity.add_child(w)
+		if eid2 in [36, 37, 38] and ResourceLoader.exists("res://models/arena/shield-round.glb"):
+			var sh = load("res://models/arena/shield-round.glb")
+			if sh: var s = sh.instantiate(); if s: s.position = Vector3(-0.3, br*0.6, 0); s.scale = Vector3.ONE*0.8; entity.add_child(s)
+		var mpath = ""
+		if eid2 in [15, 19, 38]: mpath = "res://models/pets/animal-dog.glb"
+		elif eid2 == 34: mpath = "res://models/pets/animal-elephant.glb"
+		if mpath != "" and ResourceLoader.exists(mpath):
+			var ms = load(mpath)
+			if ms: var m = ms.instantiate(); if m: m.position = Vector3(0, -br*1.2, 0); m.scale = Vector3.ONE*0.7; entity.add_child(m)
 	else:
 		# 回退：程序化网格
 		match info["type"]:
@@ -667,22 +783,36 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 func _create_bullet_node(info: Dictionary) -> Node3D:
 	var n = Node3D.new()
 	n.set_meta("is_bullet", true)
-	var mesh = MeshInstance3D.new()
-	var s = SphereMesh.new()
-	s.radius = 0.2; s.height = 0.4
-	mesh.mesh = s
-	var mat = StandardMaterial3D.new()
-
-	# 子弹颜色也按玩家区分
-	var owner_id = info.get("owner_peer_id", -1)
-	if owner_id != -1 and player_colors.has(owner_id):
-		mat.albedo_color = player_colors[owner_id]
-	else:
-		mat.albedo_color = Color.RED if info["team"] == RTSConfig.Team.BLUE else Color.BLUE
-
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
-	mesh.material_override = mat
-	n.add_child(mesh)
+	# Try loading actual bullet model (matches server Bullet.gd)
+	var eid = info.get("entity_id", -1)
+	var loaded = false
+	# Match server Bullet._ready logic exactly
+	if eid in [16, 17, 26, 39]:
+		if eid == 17 and ResourceLoader.exists("res://models/defense/weapon-stone.glb"):
+			var st = load("res://models/defense/weapon-stone.glb")
+			if st: var inst = st.instantiate(); if inst: inst.scale = Vector3.ONE * 2.5; n.add_child(inst); loaded = true
+		elif ResourceLoader.exists("res://models/pirate/cannon-ball.glb"):
+			var cb = load("res://models/pirate/cannon-ball.glb")
+			if cb: var inst = cb.instantiate(); if inst: n.add_child(inst); loaded = true
+	if not loaded and ResourceLoader.exists("res://models/forest/weapon-arrow.glb"):
+		var arrow_scene = load("res://models/forest/weapon-arrow.glb")
+		if arrow_scene:
+			var arrow = arrow_scene.instantiate()
+			if arrow: arrow.rotation.x = deg_to_rad(-90); arrow.scale = Vector3.ONE; n.add_child(arrow); loaded = true
+	if not loaded:
+		var mesh = MeshInstance3D.new()
+		var s = SphereMesh.new()
+		s.radius = 0.25
+		mesh.mesh = s
+		var mat = StandardMaterial3D.new()
+		var owner_id = info.get("owner_peer_id", -1)
+		if owner_id != -1 and player_colors.has(owner_id):
+			mat.albedo_color = player_colors[owner_id]
+		else:
+			mat.albedo_color = Color.RED if info["team"] == RTSConfig.Team.BLUE else Color.BLUE
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mesh.material_override = mat
+		n.add_child(mesh)
 	entities_container.add_child(n)
 	return n
 func on_map_size_changed():
@@ -999,6 +1129,8 @@ func _update_health_bars():
 
 		# 建造中
 		if type == 1 and info.get("build_timer", 0) > 0:
+			if Engine.get_process_frames() % 40 == 0:
+				AudioManager.play_sfx_3d("build_loop", node.global_position, _get_cam_pos())
 			var bar = _get_or_create_health_bar(id)
 			var lab = _get_or_create_label(id)
 			bar.visible = true; lab.visible = true
@@ -1025,9 +1157,8 @@ func _update_health_bars():
 			var uplab = _get_or_create_upgrade_label(id)
 			upbar.visible = true; uplab.visible = true
 			upbar.update_bar(info["upgrade_timer"], info["max_upgrade_time"], -1)
-			upbar.set_team_color(Color(0.6, 0.2, 0.8))
 			uplab.text = "升级中"
-			uplab.add_theme_color_override("font_color", Color(0.8, 0.4, 1.0))
+			uplab.add_theme_color_override("font_color", Color(1.0, 0.65, 0.0))
 			var uwp = node.global_position + Vector3.UP * (info["body_radius"]*2 + 0.5)
 			var usp = cam.unproject_position(uwp)
 			if viewport_rect.has_point(usp):
@@ -1039,7 +1170,7 @@ func _update_health_bars():
 		else:
 			_hide_upgrade_bars(id)
 
-		if type == 1 and info.has("production_current_unit") and info["production_current_unit"] != -1:
+		if type == 1 and info.get("production_current_unit", -1) != -1 and info.get("production_current_unit") != null:
 			var pbar = _get_or_create_prod_bar(id)
 			var plab = _get_or_create_prod_label(id)
 			pbar.visible = true; plab.visible = true
@@ -1252,6 +1383,7 @@ func get_terrain_height(world_pos: Vector3) -> float:
 
 # ==================== 游戏结束面板 ====================
 func show_game_over(winner_team: int):
+	AudioManager.play_music("victory" if winner_team == player_team else "defeat")
 	var existing = get_node_or_null("UI/GameOverPanel")
 	if existing: existing.queue_free()
 
@@ -1359,6 +1491,19 @@ func _process(delta):
 			var n = entity_nodes.get(id)
 			if is_instance_valid(n) and n.has_meta("snapshot_info"):
 				_update_entity_animation(n, n.get_meta("snapshot_info"))
+	# Movement sounds every 20 frames
+	if Engine.get_process_frames() % 40 == 0:
+		for id in entity_nodes.keys():
+			var mnode = entity_nodes.get(id)
+			if is_instance_valid(mnode) and mnode.has_meta("snapshot_info"):
+				var minf = mnode.get_meta("snapshot_info")
+				var mord = minf.get("current_order", "")
+				if mord in ["move", "deliver"] and minf.get("health", 0) > 0 and _is_audible(mnode.global_position):
+					var terr = get_terrain_at(mnode.global_position)
+					if terr == 2:
+						AudioManager.play_sfx_3d("sail", mnode.global_position, _get_cam_pos())
+					else:
+						AudioManager.play_sfx_3d("walk", mnode.global_position, _get_cam_pos())
 	# Update entity animations and wall orientation every 30 frames
 	if Engine.get_process_frames() % 30 == 0:
 		for id in entity_nodes.keys():
@@ -1398,7 +1543,7 @@ func _add_water_box(map_size: int = 100, fog_texture = null):
 	var plane = PlaneMesh.new()
 	plane.size = Vector2(map_size, map_size)
 	w.mesh = plane
-	w.position = Vector3(0, -0.7, 0)
+	w.position = Vector3(0, -0.9, 0)
 	var shader = load("res://resources/water_noise.gdshader")
 	if shader:
 		var mat = ShaderMaterial.new()
