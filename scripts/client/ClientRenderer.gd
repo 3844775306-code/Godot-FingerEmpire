@@ -90,11 +90,11 @@ func _ready():
 	_snap_time_label.add_theme_color_override("font_outline_color", Color.BLACK)
 	_snap_time_label.add_theme_constant_override("outline_size", 1)
 	_snap_time_label.text = "等待快照..."
-		var ui = get_node_or_null("UI")
-		if ui:
-			ui.add_child(_snap_time_label)
-		else:
-			add_child(_snap_time_label)
+	var ui = get_node_or_null("UI")
+	if ui:
+		ui.add_child(_snap_time_label)
+	else:
+		add_child(_snap_time_label)
 	_init_fog_grids()
 
 	# 建造预览体
@@ -250,8 +250,8 @@ func apply_snapshot(data: Dictionary):
 	_diag_last_snap_time = now
 	_diag_snap_age = 0.0
 	last_snapshot_time = now
-		if data.has("game_time"):
-			_game_time = data["game_time"]
+	if data.has("game_time"):
+		_game_time = data["game_time"]
 	# 丢弃未处理的旧快照，只保留最新
 	if snapshot_processing:
 		pending_delta.clear()
@@ -688,7 +688,7 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 		col_shape.shape = box
 	else:
 		var sphere = SphereShape3D.new()
-		if info["type"] == 0: sphere.radius = r * 3.5  # 增大碰撞范围，匹配3D模型的视觉大小
+		if info["type"] == 0: sphere.radius = r * 1.2  # 增大碰撞范围，匹配3D模型的视觉大小
 		else: sphere.radius = r
 		col_shape.shape = sphere
 	body.add_child(col_shape)
@@ -729,7 +729,6 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 		elif info.get("entity_id", 0) == 17: loaded_model.rotation.y = deg_to_rad(90)
 		elif info.get("entity_id", 0) == 18: loaded_model.rotation.y = deg_to_rad(90)
 		if info.get("entity_id", 0) in [25, 26, 33]: loaded_model.scale *= 2.0
-		elif info.get("entity_id", 0) == 18: loaded_model.rotation.y = deg_to_rad(-90)
 		# Towers bigger
 		if info.get("entity_id", 0) in [25, 26, 33]: loaded_model.scale *= 1.5
 		entity.add_child(loaded_model)

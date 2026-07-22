@@ -19,7 +19,7 @@ const ATTACK_COOLDOWN: float = 120.0
 var production_step: int = 0
 
 var wanted_buildings: Array = [20, 21, 23, 25, 42, 26, 24, 29, 41, 52, 53]
-var wanted_units: Array = [11,12,15,16,17,18,35,36,37,38,39,40,13,43,44,45,46,47,48,49,50,58,59,5,6]
+var wanted_units: Array = [11,12,15,16,17,18,35,36,37,38,39,40,13,43,44,45,46,47,48,49,50,58,59,5,6,9,64]
 var target_army_count: int = 7
 var target_house_count: int = 8
 var desired_worker_count: int = 8
@@ -206,6 +206,19 @@ func _is_visible_enemy(entity: GameEntity) -> bool:
 	return entity in _visible_enemies
 
 # ═══ Economy ═══
+func _ai_can_build(building_id: int) -> bool:
+	var cl = 0
+	var castle = get_peer_castle(my_peer_id)
+	if castle: cl = castle.upgrade_level
+	match building_id:
+		23, 25, 26:  # 船坞、箭塔、炮塔 → 城堡2级
+			return cl >= 2
+		24, 29, 52:   # 攻城车间、重装武器厂、集市 → 城堡3级
+			return cl >= 3
+		42, 54, 53:   # 书院、修道院、城堡 → 4级
+			return cl >= 4
+	return true
+
 func can_afford(unit_id: int) -> bool:
 	var cfg = EntityDatabase.get_config(unit_id)
 	if not cfg: return false
@@ -253,11 +266,8 @@ func produce_unit(unit_id: int) -> bool:
 func build_building(building_id: int, pos: Vector3):
 	var cfg = EntityDatabase.get_config(building_id)
 	if not cfg: return
-	# Check castle level requirement
-	var req_lv = cfg.get("castle_level_required", 0)
-	if req_lv > 0:
-		var castle = get_peer_castle(my_peer_id)
-		if not castle or castle.upgrade_level < req_lv: return
+	# Check castle level requirement (matches RTSBattleManager.is_building_unlocked)
+	if not _ai_can_build(building_id): return
 	# Non-shipyard buildings: must be within AI vision range
 	if building_id != 23:
 		var world_pos = Vector3(pos.x, 0, pos.z)
@@ -297,6 +307,7 @@ const COUNTER_MATRIX = {
 	33: [15,16,17,13,38], 16: [15,13,38], 17: [15,13,38], 18: [11,34,36],
 	13: [16,17,39], 34: [12,33,37], 35: [12,33,37], 36: [12,33,37,39],
 	37: [15,13,38,40], 38: [36,11,34,35], 39: [13,40,17], 40: [13,16,17],
+		58: [36,38,25,26,64], 59: [25,26,36,37,64], 9: [13,39,40], 64: [16,17,18,59],
 }
 
 func analyze_enemy_composition() -> Dictionary:
@@ -1321,14 +1332,15 @@ func update_debug_label():
 		var s = _res_bars[i].get_theme_stylebox("fill")
 		if s: s.bg_color = r.c
 	var all_units = [[10,"农"],[11,"步"],[12,"弓"],[13,"战船"],[14,"采船"],[15,"骑"],[16,"炮"],[17,"投石"],[18,"攻城"],[19,"侦察"],
-		[30,"狂战"],[31,"长弓"],[32,"法骑"],[33,"连弩"],[34,"象骑"],[35,"长枪"],[36,"重步"],[37,"重弓"],[38,"重骑"],[39,"炮艇"],[40,"快艇"],
-		[43,"油商"],[44,"木商"],[45,"石商"],[51,"食商"],[46,"县吏"],[47,"上校"],[48,"尚书"],[49,"统帅"],[50,"丞相"]]
+		[30,"狂战"],[31,"长弓"],[32,"法骑"],[33,"诸弩"],[34,"象骑"],[35,"长枪"],[36,"重步"],[37,"重弓"],[38,"重骑"],[39,"炮艇"],[40,"爆破"],
+		[43,"油商"],[44,"木商"],[45,"石商"],[51,"食商"],[46,"县吏"],[47,"上校"],[48,"尚书"],[49,"统帅"],[50,"丞相"],
+		[58,"连弩"],[59,"巨投"],[5,"推车"],[6,"贸车"],[9,"运载"],[55,"僧侣"],[56,"长老"],[57,"宗师"]]
 	var mil_lines = []
 	for u in all_units:
 		var cnt = count_unit(u[0])
 		if cnt > 0: mil_lines.append("[color=#aaa]%s[/color]:[color=white]%d[/color]" % [u[1], cnt])
 	_mil_rtl.text = "[color=gray](无军队)[/color]" if mil_lines.is_empty() else " ".join(mil_lines)
-	var all_blds = [[20,"城"],[21,"营"],[22,"仓"],[23,"坞"],[24,"攻城车"],[25,"箭塔"],[26,"炮塔"],[27,"墙"],[28,"民"],[29,"重工"],[41,"瞭望"],[42,"书院"],[52,"集市"],[53,"城堡"]]
+	var all_blds = [[20,"城"],[21,"营"],[22,"仓"],[23,"坞"],[24,"攻城车"],[25,"箭塔"],[26,"炮塔"],[27,"墙"],[28,"民"],[29,"重工"],[41,"瞭望"],[42,"书院"],[52,"集市"],[53,"城堡"],[64,"炮台"],[7,"桥"],[8,"梯子"],[54,"修道"]]
 	var bld_lines = []
 	for b in all_blds:
 		var cnt = 0; var max_lv = 1
