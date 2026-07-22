@@ -5,7 +5,7 @@ extends RTSBattleManager
 var game_mode: int = NetworkManager.GameMode.ONEvONE
 
 # Compact entity array indices (no string keys = faster + smaller)
-enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH }
+enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ATTACK_SPEED, ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH }
 enum EB { UPGRADE=0, MAX_UPGRADE, CAN_UPGRADE, BUILD_TIMER, MAX_BUILD, PROD_CURRENT, PROD_PROGRESS, PROD_QSIZE, UPGRADE_TIMER, MAX_UPGRADE_TIME }
 const SNAP_VERSION = 3  # 3 = added ROT_Y for entity rotation
 
@@ -134,8 +134,14 @@ func add_player_resource(peer_id: int, type: String, amount: int):
 
 # 交付资源（玩家农民返回城堡/仓库时调用）
 func deliver_player_resources(peer_id: int, cargo: Dictionary):
+	var mult = 1.0
+	if player_info.get(peer_id, {}).get("is_ai", false):
+		var pinfo = player_info.get(peer_id, {})
+		var diff = GameSettings.red_ai_difficulty if pinfo.get("team", -1) == RTSConfig.Team.RED else GameSettings.blue_ai_difficulty
+		if diff == GameSettings.AIDifficulty.NORMAL: mult = 2.0
+		elif diff >= GameSettings.AIDifficulty.HARD: mult = 3.0
 	for type in cargo:
-		add_player_resource(peer_id, type, cargo[type])
+		add_player_resource(peer_id, type, int(cargo[type] * mult))
 
 # 减少玩家资源
 func deduct_player_resources(peer_id: int, cost: Dictionary) -> bool:
@@ -318,7 +324,8 @@ func _init_2v2():
 
 		player_info[peers[i]] = {
 			"team": team, "slot": slot, "alive": true,
-			"color": color, "nation": nation
+			"color": color, "nation": nation,
+			"is_ai": false,
 		}
 		player_resources[peers[i]] = { "gold": 100, "wood": 100, "stone": 100, "food": 100, "oil": 0 }
 		player_population[peers[i]] = { "current": 3, "max": 20 }
@@ -394,6 +401,7 @@ func _create_ai_player(peer_id: int, team: int, slot: int):
 		"team": team,
 		"slot": slot,
 		"alive": true,
+		"is_ai": true,
 		"color": _get_ai_color(team, slot),
 		"nation": ai_nation
 	}
@@ -1236,6 +1244,7 @@ func _serialize_entity_compact(entity: GameEntity) -> Array:
 	a[E.HEALTH] = entity.health
 	a[E.MAX_HEALTH] = entity.max_health
 	a[E.ATTACK] = entity.attack
+	a[E.ATTACK_SPEED] = entity.attack_speed
 	a[E.ARMOR] = entity.armor
 	a[E.SPEED] = entity.speed
 	a[E.VISION] = entity.vision_range
@@ -1392,12 +1401,12 @@ func _broadcast_2v2():
 	var bullets_data = _build_bullets_data()
 	for pid in player_info.keys():
 		if not player_info[pid].alive: continue
-		if pid >= 1000: continue  # 跳过 AI，无客户端
+		if player_info[pid].get("is_ai", false): continue  # 跳过 AI，无客户端
 		var _pt_build = Time.get_ticks_usec()
 		var data = build_snapshot_for_player(pid)
 		data["bullets"] = bullets_data
 		data["seq"] = snapshot_seq
-		data["audio_events"] = AudioManager.drain_net_audio()
+		
 		snapshot_seq += 1
 		NetworkManager._client_receive_snapshot.rpc_id(pid, data)
 		var _elapsed_p = (Time.get_ticks_usec() - _pt_build) / 1000.0

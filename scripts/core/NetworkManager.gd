@@ -95,12 +95,14 @@ func send_command(data: Dictionary):
 		else:
 			print("错误：未找到 online_battle_manager！")
 
-@rpc("any_peer", "call_remote", "unreliable")
+@rpc("any_peer", "call_remote", "reliable")
 func _client_receive_snapshot(data: Dictionary):
 	if mode == Mode.CLIENT:
 		var renderer = _get_renderer()
 		if renderer and renderer.has_method("apply_snapshot"):
 			renderer.apply_snapshot(data)
+		else:
+			print("[NetworkManager] 警告: ClientRenderer 未就绪，快照被丢弃")
 
 @rpc("authority", "call_remote", "reliable")
 func notify_all_player_colors(colors: Dictionary):
@@ -142,6 +144,16 @@ func receive_map_data(terrain: Array, height_data: Array, resources: Array):
 		if renderer:
 			renderer.on_map_size_changed()
 			renderer._init_fog_grids()
+
+
+
+
+@rpc("authority", "call_remote", "reliable")
+func show_results(history: Array, player_is_blue: bool):
+	if mode == Mode.CLIENT:
+		GameSettings.post_game_data = {"history": history, "is_blue": player_is_blue}
+		get_tree().change_scene_to_file("res://scenes/main_menu.tscn")
+
 @rpc("authority", "call_remote", "reliable")
 func notify_game_over(winner_team: int):
 	if mode == Mode.CLIENT:
@@ -153,6 +165,15 @@ func notify_castle_pos(pos: Vector3):
 	if mode == Mode.CLIENT:
 		var renderer = _get_renderer()
 		if renderer: renderer.set_castle_pos(pos)
+@rpc("any_peer", "call_remote", "reliable")
+func ping_server(client_time: int):
+	pong_client.rpc_id(multiplayer.get_remote_sender_id(), client_time)
+
+@rpc("authority", "call_remote", "reliable")
+func pong_client(client_time: int):
+	var hud = get_tree().get_first_node_in_group("client_hud")
+	if hud: hud._ping_rtt = Time.get_ticks_msec() - client_time
+
 
 @rpc("any_peer", "call_remote", "reliable")
 func send_nation_choice(nation: int):

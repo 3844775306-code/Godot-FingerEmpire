@@ -213,6 +213,8 @@ func get_entity_config(entity_id: int) -> Dictionary:
 func apply_snapshot(data: Dictionary):
 	var now = Time.get_ticks_msec()
 	var seq = data.get("seq", -1)
+	if player_team == -1:
+		return   # 尚未收到队伍分配，暂不处理快照
 	if seq <= last_applied_seq:
 		return   # 丢弃过时快照
 	if last_applied_seq != -1 and data.get("seq") == last_applied_seq + 1:
@@ -231,8 +233,6 @@ func apply_snapshot(data: Dictionary):
 	_diag_last_snap_time = now
 	_diag_snap_age = 0.0
 	last_snapshot_time = now
-	if player_team == -1:
-		return
 	# 丢弃未处理的旧快照，只保留最新
 	if snapshot_processing:
 		pending_delta.clear()
