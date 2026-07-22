@@ -60,6 +60,11 @@ var _cart_search_timer: float = 0.0
 const CART_FOLLOW_DIST: float = 1.5     # 后方跟随距离
 const CART_CHASE_SPEED_MULT: float = 2.0 # 追赶速度倍数
 
+# 爆破船/运载船 vars
+var _has_exploded: bool = false
+var _boarded_units: Array = []       # 运载船上的单位
+var _boarded_on: int = -1            # 登上的运载船instance_id
+
 # Official vars
 var _garrison_target_id: int = -1
 var _garrison_building: WeakRef = null
@@ -253,9 +258,21 @@ func _physics_process(delta):
 		die_official_cleanup()
 		return
 	
-	# 手推车/贸易车行为
+	# 爆破船/运载船/手推车/贸易车 特殊行为
+	if entity_id == 40:
+		_process_demolition(delta)
+		return
+	if entity_id == 9:
+		_process_transport(delta)
+		return
 	if entity_id in [5, 6]:
 		_process_cart(delta)
+		return
+	# 登船单位：位置跟随运载船
+	if _boarded_on != -1:
+		var transport = instance_from_id(_boarded_on)
+		if is_instance_valid(transport):
+			global_position = transport.global_position
 		return
 
 	# 动物行为（每5帧处理一次）
@@ -806,8 +823,8 @@ func _find_enemy_in_range():
 		if entity == self or not is_instance_valid(entity) or entity.health <= 0: continue
 		if entity is WorldResource: continue
 		if entity.get("_animal_type") != null and str(entity.get("_animal_type")) != "": continue
-		# 攻城车只攻击建筑
-		if entity_id == 18 and not (entity is Building): continue
+		# 攻击类型过滤
+		if not _can_attack_target(entity): continue
 		if not bm:  # fallback: filter by team
 			if entity.team == team: continue
 			if entity is Building and entity.team == team: continue
@@ -1353,9 +1370,18 @@ func stop_movement():
 
 # Override die() for official cleanup
 func die_official_cleanup():
+	# 爆破船死亡时未爆炸则立即爆炸
+	if entity_id == 40 and not _has_exploded:
+		_demolition_explode()
+		return
 	# Cart cleanup
 	if entity_id in [5, 6]:
 		_clear_cart_owner()
+	# 运载船死亡时船上单位也死亡
+	if entity_id == 9:
+		for u in _boarded_units:
+			if is_instance_valid(u): u.health = 0; u.die()
+		_boarded_units.clear()
 	# Merchant cleanup
 	if entity_id >= 43 and entity_id <= 45:
 		_on_merchant_die()
@@ -1392,104 +1418,143 @@ func _is_gather_paused() -> bool:
 	return false
 
 
-	# ==================== Cart System (手推车/贸易车) ====================
+# ==================== Cart System (手推车/贸易车) ====================
 
-	func _process_cart(delta):
-		var bm = _get_bm()
-		if not bm: return
+func _process_cart(delta):
+	var bm = _get_bm()
+	if not bm: return
 
-		var owner = _cart_owner.get_ref() if _cart_owner else null
-		if owner and not is_instance_valid(owner):
-			_clear_cart_owner()
-			owner = null
+	var owner = _cart_owner.get_ref() if _cart_owner else null
+	if owner and not is_instance_valid(owner):
+		_clear_cart_owner()
+		owner = null
 
-		match _cart_state:
-			CartState.IDLE:
-				_cart_search_timer -= delta
-				if _cart_search_timer <= 0:
-					_cart_search_timer = 1.0
-					var new_owner = _find_cart_owner()
-					if new_owner:
-						_cart_owner = weakref(new_owner)
-						new_owner.set_meta("_has_cart", get_instance_id())
-						_cart_state = CartState.CHASING
+	match _cart_state:
+		CartState.IDLE:
+			_cart_search_timer -= delta
+			if _cart_search_timer <= 0:
+				_cart_search_timer = 1.0
+				var new_owner = _find_cart_owner()
+				if new_owner:
+					_cart_owner = weakref(new_owner)
+					new_owner.set_meta("_has_cart", get_instance_id())
+					_cart_state = CartState.CHASING
 
-			CartState.CHASING:
-				if not owner:
-					_cart_state = CartState.IDLE
-					return
-				var dist = global_position.distance_to(owner.global_position)
-				if dist < 3.0:
-					_cart_state = CartState.FOLLOWING
-				else:
-					var chase_speed = owner.speed * CART_CHASE_SPEED_MULT
-					var dir = (owner.global_position - global_position).normalized()
-					global_position += dir * chase_speed * delta
-					look_at(Vector3(owner.global_position.x, global_position.y, owner.global_position.z), Vector3.UP)
-					_apply_cart_buff(owner)
-
-			CartState.FOLLOWING:
-				if not owner:
-					_cart_state = CartState.IDLE
-					return
-				var owner_forward = -Vector3(cos(owner.rotation.y), 0, -sin(owner.rotation.y))
-				var target_pos = owner.global_position + owner_forward * CART_FOLLOW_DIST
-				target_pos.y = global_position.y
-				global_position = global_position.lerp(target_pos, min(delta * 3.0, 1.0))
-				rotation.y = owner.rotation.y
+		CartState.CHASING:
+			if not owner:
+				_cart_state = CartState.IDLE
+				return
+			var dist = global_position.distance_to(owner.global_position)
+			if dist < 3.0:
+				_cart_state = CartState.FOLLOWING
+			else:
+				var chase_speed = owner.speed * CART_CHASE_SPEED_MULT
+				var dir = (owner.global_position - global_position).normalized()
+				global_position += dir * chase_speed * delta
+				look_at(Vector3(owner.global_position.x, global_position.y, owner.global_position.z), Vector3.UP)
 				_apply_cart_buff(owner)
 
-	func _find_cart_owner() -> GameEntity:
+		CartState.FOLLOWING:
+			if not owner:
+				_cart_state = CartState.IDLE
+				return
+			var owner_forward = -Vector3(cos(owner.rotation.y), 0, -sin(owner.rotation.y))
+			var target_pos = owner.global_position + owner_forward * CART_FOLLOW_DIST
+			target_pos.y = global_position.y
+			global_position = global_position.lerp(target_pos, min(delta * 3.0, 1.0))
+			rotation.y = owner.rotation.y
+			_apply_cart_buff(owner)
+
+func _find_cart_owner() -> GameEntity:
+	var bm = _get_bm()
+	if not bm: return null
+	var best: GameEntity = null
+	var best_dist = 10.0
+	var my_team = team
+	for e in bm.entities.get_children():
+		if not (e is Army) or e.health <= 0 or e.team != my_team: continue
+		if e.has_meta("_has_cart"): continue
+		if entity_id == 5:
+			if e.entity_id != 10: continue
+		elif entity_id == 6:
+			if e.entity_id not in [43, 44, 45, 51]: continue
+		var d = global_position.distance_to(e.global_position)
+		if d < best_dist:
+			best_dist = d
+			best = e
+	return best
+
+func _apply_cart_buff(owner):
+	if not is_instance_valid(owner): return
+	if entity_id == 5 and owner.entity_id == 10:
+		if not owner.has_meta("_cart_orig_speed"):
+			owner.set_meta("_cart_orig_speed", owner.speed)
+			owner.set_meta("_cart_orig_max_cargo", owner.max_cargo)
+		owner.speed = owner.get_meta("_cart_orig_speed") * 1.5
+		owner.max_cargo = owner.get_meta("_cart_orig_max_cargo") + 50
+	elif entity_id == 6 and owner.entity_id in [43, 44, 45, 51]:
+		if not owner.has_meta("_cart_orig_speed"):
+			owner.set_meta("_cart_orig_speed", owner.speed)
+		owner.speed = owner.get_meta("_cart_orig_speed") * 1.5
+		if not owner.has_meta("_cart_trade_bonus"):
+			owner.set_meta("_cart_trade_bonus", 80)
+
+func _clear_cart_owner():
+	var owner = _cart_owner.get_ref() if _cart_owner else null
+	if owner and is_instance_valid(owner):
+		if owner.has_meta("_cart_orig_speed"):
+			owner.speed = owner.get_meta("_cart_orig_speed")
+			owner.remove_meta("_cart_orig_speed")
+		if owner.has_meta("_cart_orig_max_cargo"):
+			owner.max_cargo = owner.get_meta("_cart_orig_max_cargo")
+			owner.remove_meta("_cart_orig_max_cargo")
+		if owner.has_meta("_cart_trade_bonus"):
+			owner.remove_meta("_cart_trade_bonus")
+		owner.remove_meta("_has_cart")
+	_cart_owner = null
+	_cart_state = CartState.IDLE
+
+func die_cart_cleanup():
+	_clear_cart_owner()
+
+	# ==================== Attack filtering ====================
+
+	func _can_attack_target(target: GameEntity) -> bool:
+		if not is_instance_valid(target) or target.health <= 0: return false
+		# 近战不能攻击城墙上的敌人（包括炮台）
+		if attack_range <= 1.0 and target is not Building:
+			var bm = _get_bm()
+			if bm:
+				var tg = bm.world_to_grid(target.global_position)
+				for e in bm.entities.get_children():
+					if e is Building and e.entity_id == 27 and e.health > 0:
+						var wg = bm.world_to_grid(e.global_position)
+						if wg.x == tg.x and wg.y == tg.y: return false
+					if e is Building and e.entity_id == 64 and e.health > 0:
+						var wg = bm.world_to_grid(e.global_position)
+						if wg.x == tg.x and wg.y == tg.y: return false
+		# 不在城墙上的单位不能攻击梯子
+		if target is Building and target.entity_id == 8:
+			var on_wall = _is_unit_on_wall()
+			if not on_wall: return false
+		# 桥只能被火炮/投石车/巨型投石机/爆破船攻击
+		if target is Building and target.entity_id == 7:
+			if entity_id not in [16, 17, 40, 59]: return false
+		# 爆破船只攻击非动物敌人
+		if entity_id == 40:
+			var at = target.get("_animal_type") if target is Army else ""
+			if at != null and str(at) != "": return false
+		return true
+
+	func _is_unit_on_wall() -> bool:
 		var bm = _get_bm()
-		if not bm: return null
-		var best: GameEntity = null
-		var best_dist = 10.0
-		var my_team = team
+		if not bm: return false
+		var tg = bm.world_to_grid(global_position)
 		for e in bm.entities.get_children():
-			if not (e is Army) or e.health <= 0 or e.team != my_team: continue
-			if e.has_meta("_has_cart"): continue
-			if entity_id == 5:
-				if e.entity_id != 10: continue
-			elif entity_id == 6:
-				if e.entity_id not in [43, 44, 45, 51]: continue
-			var d = global_position.distance_to(e.global_position)
-			if d < best_dist:
-				best_dist = d
-				best = e
-		return best
-
-	func _apply_cart_buff(owner):
-		if not is_instance_valid(owner): return
-		if entity_id == 5 and owner.entity_id == 10:
-			if not owner.has_meta("_cart_orig_speed"):
-				owner.set_meta("_cart_orig_speed", owner.speed)
-				owner.set_meta("_cart_orig_max_cargo", owner.max_cargo)
-			owner.speed = owner.get_meta("_cart_orig_speed") * 1.5
-			owner.max_cargo = owner.get_meta("_cart_orig_max_cargo") + 50
-		elif entity_id == 6 and owner.entity_id in [43, 44, 45, 51]:
-			if not owner.has_meta("_cart_orig_speed"):
-				owner.set_meta("_cart_orig_speed", owner.speed)
-			owner.speed = owner.get_meta("_cart_orig_speed") * 1.5
-			if not owner.has_meta("_cart_trade_bonus"):
-				owner.set_meta("_cart_trade_bonus", 80)
-
-	func _clear_cart_owner():
-		var owner = _cart_owner.get_ref() if _cart_owner else null
-		if owner and is_instance_valid(owner):
-			if owner.has_meta("_cart_orig_speed"):
-				owner.speed = owner.get_meta("_cart_orig_speed")
-				owner.remove_meta("_cart_orig_speed")
-			if owner.has_meta("_cart_orig_max_cargo"):
-				owner.max_cargo = owner.get_meta("_cart_orig_max_cargo")
-				owner.remove_meta("_cart_orig_max_cargo")
-			if owner.has_meta("_cart_trade_bonus"):
-				owner.remove_meta("_cart_trade_bonus")
-			owner.remove_meta("_has_cart")
-		_cart_owner = null
-		_cart_state = CartState.IDLE
-
-	func die_cart_cleanup():
-		_clear_cart_owner()
+			if e is Building and e.entity_id == 27 and e.health > 0 and e.team == team:
+				var wg = bm.world_to_grid(e.global_position)
+				if wg.x == tg.x and wg.y == tg.y: return true
+		return false
 
 # ==================== Garrison System ====================
 func _find_nearest_enemy_in_vision():
@@ -1637,6 +1702,74 @@ func _spawn_baby_animal():
 		baby.attack = max(1, int(attack * 0.4))
 		baby.speed = speed * 0.8
 		baby._animal_food_reward = int(_animal_food_reward * 0.4)
+
+	# ==================== Demolition Ship ====================
+	func _process_demolition(delta):
+		if _has_exploded: return
+		# 正常陆军逻辑：追赶目标
+		var bm = _get_bm()
+		if not bm: return
+		if current_target and is_instance_valid(current_target) and _can_attack_target(current_target):
+			var dist = global_position.distance_to(current_target.global_position) - body_radius - current_target.body_radius
+			if dist <= attack_range:
+				_demolition_explode()
+			else:
+				_movement.set_move_target(current_target.global_position, attack_range)
+				_movement.process_move(delta, bm)
+		elif is_attack_moving and attack_move_target != Vector3.ZERO:
+			if global_position.distance_to(attack_move_target) < 1.0:
+				is_attack_moving = false; attack_move_target = Vector3.ZERO
+			else:
+				_movement.set_move_target(attack_move_target)
+				_movement.process_move(delta, bm)
+		else:
+			_find_enemy_in_range()
+
+	func _demolition_explode():
+		if _has_exploded: return
+		_has_exploded = true
+		_play_sfx_if_visible("cannon_hit")
+		var bm = _get_bm()
+		if bm:
+			for e in bm.entities.get_children():
+				if e is GameEntity and e != self and e.team != team and e.health > 0:
+					var d = global_position.distance_to(e.global_position) - e.body_radius
+					if d <= damage_radius:
+						e.take_damage(attack, self)
+		die()
+
+	# ==================== Transport Ship ====================
+	func _process_transport(delta):
+		var bm = _get_bm()
+		if not bm: return
+		# 移动逻辑
+		if current_target or is_attack_moving:
+			_movement.process_move(delta, bm)
+		# 更新登船单位位置
+		for u in _boarded_units:
+			if is_instance_valid(u):
+				u.global_position = global_position
+
+	func board_unit(unit):
+		if _boarded_units.size() >= 8: return
+		_boarded_units.append(unit)
+		unit.visible = false
+		unit.collision_layer = 0
+		unit.set_meta("_boarded_on", get_instance_id())
+		if unit is Army: unit._boarded_on = get_instance_id()
+
+	func unboard_at(pos: Vector3):
+		for u in _boarded_units:
+			if is_instance_valid(u):
+				u.global_position = pos + Vector3(randf_range(-2,2), 0, randf_range(-2,2))
+				u.visible = true
+				u.collision_layer = 1
+				u.remove_meta("_boarded_on")
+				if u is Army: u._boarded_on = -1
+		_boarded_units.clear()
+
+	func get_boarded_count() -> int:
+		return _boarded_units.size()
 
 func _adult_grow():
 	_animal_grow_timer = 0.0

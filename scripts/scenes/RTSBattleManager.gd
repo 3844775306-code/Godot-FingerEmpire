@@ -1161,15 +1161,42 @@ func _command_selected_units(screen_pos: Vector2):
 	var fi = 0
 	for u in selection.selected_entities:
 		if is_instance_valid(u) and u is Army:
+			# 登船单位：右键岸边 → 下船
+			if u.get("_boarded_on") != null and u._boarded_on != -1:
+				if target == null:
+					u.move_to(pos)
+				elif target is Building or target is WorldResource:
+					u.move_to(target.global_position)
+				else:
+					u.move_to(pos)
+				continue
+			# 运载船下船命令：右键岸边空地
+			if u.entity_id == 9 and target == null and u._boarded_units.size() > 0:
+				# 检查岸边（相邻陆地格）
+				var gpos = world_to_grid(pos)
+				if get_terrain_at_grid(gpos.x, gpos.y) == 0:
+					u.unboard_at(pos)
+				else:
+					u.move_to(pos)
+				continue
 			if target:
-				if target is WorldResource:
-					# 只有农民(10)、采集船(14)、动物才能采集资源
+				if target is Army and target.entity_id == 9 and target.team == u.team and u.water_capable == false:
+					# 陆军登船：右键己方运载船
+					if u.entity_id not in [5,6,55,56,57]:  # 排除cart和僧侣类
+						target.board_unit(u)
+					else:
+						u.move_to(target.global_position)
+				elif target is WorldResource:
 					if u.entity_id == 10 or u.entity_id == 14 or u.get("_animal_type") != "":
 						u.gather_at(target)
 					else:
 						u.attack_move_to(target.global_position)
 				elif target.team != u.team:
-					u.attack_target(target)
+					# 攻击过滤：不可攻击目标改为移动
+					if u.has_method("_can_attack_target") and u._can_attack_target(target):
+						u.attack_target(target)
+					else:
+						u.move_to(target.global_position)
 				elif u.entity_id >= 46 and u.entity_id <= 50 and target is Building:
 					u._garrison_target_id = target.get_instance_id()
 					u.move_to(target.global_position)

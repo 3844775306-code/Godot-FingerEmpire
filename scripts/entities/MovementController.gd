@@ -298,8 +298,9 @@ static var _wall_exclude: Vector2i = Vector2i(-999, -999)
 static var _wall_frame: int = -1
 static var _wall_bm_id: int = -1
 static var _wall_team: int = -1  # friendly-wall passability is team-dependent
-static var _bridge_set: Dictionary = {}  # Vector2i -> true (桥所在格子)
-static var _ladder_set: Dictionary = {}  # Vector2i -> true (梯子使该敌方城墙格可通行)
+static var _bridge_set: Dictionary = {}          # 桥所在格子
+static var _ladder_set: Dictionary = {}          # 梯子使该敌方城墙格可通行
+static var _transport_water: Dictionary = {}     # 运载船周围3格水域(陆军可通行)
 
 func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Array:
 	var _pt = Time.get_ticks_usec()
@@ -318,6 +319,17 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 		_wall_set.clear()
 		_bridge_set.clear()
 		_ladder_set.clear()
+		_transport_water.clear()
+		# 运载船：周围3格水域标记为陆军可通行
+		for e in bm.entities.get_children():
+			if e is Army and e.entity_id == 9 and e.health > 0 and e.team == _army.team:
+				var tg = bm.world_to_grid(e.global_position)
+				for rdx in range(-3, 4):
+					for rdy in range(-3, 4):
+						var tx = tg.x + rdx; var ty = tg.y + rdy
+						if tx >= 0 and tx < RTSConfig.MAP_SIZE and ty >= 0 and ty < RTSConfig.MAP_SIZE:
+							if bm.get_terrain_at_grid(tx, ty) == 2:
+								_transport_water[Vector2i(tx, ty)] = true
 		for e in bm.entities.get_children():
 			if not (e is GameEntity) or e.health <= 0: continue
 			if not (e is Building or e is WorldResource): continue
@@ -424,11 +436,12 @@ func _get_terrain_cost(tile: Vector2i, bm: RTSBattleManager, wall_cache: Diction
 	if wall_cache.has(tile): return 5.0
 	var terrain = bm.get_terrain_at_grid(tile.x, tile.y)
 	if _army.water_capable:
-		return 0.8 if terrain == 2 else 999.0
+		# 水军无法通过桥
+		return 999.0 if _bridge_set.has(tile) else (0.8 if terrain == 2 else 999.0)
 	match terrain:
 		0: return 1.0
 		1: return 2.5
-		2: return 1.5 if _bridge_set.has(tile) else 999.0  # 桥使水可通行
+		2: return 1.5 if _bridge_set.has(tile) or _transport_water.has(tile) else 999.0
 	return 999.0
 
 func _get_tile_height(tile: Vector2i, bm: RTSBattleManager) -> float:

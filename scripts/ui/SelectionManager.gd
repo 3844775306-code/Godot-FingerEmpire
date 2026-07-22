@@ -105,6 +105,10 @@ func _input(event):
 			var clicked_entity = _get_entity_under_mouse(pos)
 			var now = Time.get_ticks_msec() / 1000.0
 			if clicked_entity and clicked_entity.team == RTSConfig.Team.BLUE:
+				# 运载船：已有选中单位时不选中，改为发送命令
+				if clicked_entity is Army and clicked_entity.entity_id == 9 and not selected_entities.is_empty():
+					bm._command_selected_units(event.position)
+					return
 				# Official garrison: if selected is official and clicked is building, send garrison command
 				if clicked_entity is Building and Input.is_key_pressed(KEY_CTRL):
 					for e in selected_entities:

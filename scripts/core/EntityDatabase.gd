@@ -63,6 +63,14 @@ func _init_data():
 			"max_health": 150, "armor": 10, "body_radius": 0.5
 		},
 
+		# ==================== 运载船 (ID 9) ====================
+		{
+			"id": 9, "type": 2, "name": "运载船", "team": 0,
+			"cost": {"wood": 120, "gold": 60},
+			"max_health": 400, "armor": 15, "speed": 1.5,
+			"vision_range": 18, "body_radius": 1.0, "water_capable": true, "can_move": true, "target_type": 0
+		},
+
 		# ==================== 军队 (ID 10-18) ====================
 		{
 			"id": 10, "type": 2, "name": "农民", "team": 0,
@@ -142,12 +150,12 @@ func _init_data():
 			"id": 20, "type": 1, "name": "主城", "team": 0,
 			"cost": {"wood": 0, "gold": 0},
 			"max_health": 3000, "armor": 20, "body_radius": 1.2,
-			"produces": [ {"unit_id": 10, "cooldown": 3.0, "queue_limit": 5}, {"unit_id": 19, "cooldown": 4.0, "queue_limit": 5}, {"unit_id": 5, "cooldown": 8.0, "queue_limit": 3}, {"unit_id": 6, "cooldown": 10.0, "queue_limit": 3} ],
+			"produces": [ {"unit_id": 10, "cooldown": 3.0, "queue_limit": 5}, {"unit_id": 19, "cooldown": 4.0, "queue_limit": 5}, {"unit_id": 5, "cooldown": 8.0, "queue_limit": 3}, {"unit_id": 6, "cooldown": 10.0, "queue_limit": 3}, {"unit_id": 64, "cooldown": 12.0, "queue_limit": 3} ],
 			"upgrades": [
 				{ "level": 2, "cost": {"wood": 50, "stone": 50}, "health_bonus": 200, "armor_bonus": 5 , "unlocks_unit": 19},
-				{ "level": 3, "cost": {"stone": 200, "gold": 150}, "health_bonus": 300, "armor_bonus": 10, "unlocks_unit": 5 },
-				{ "level": 4, "cost": {"gold": 300, "oil": 200}, "health_bonus": 400, "armor_bonus": 15, "unlocks_unit": 6 },
-				{ "level": 5, "cost": {"gold": 500, "oil": 400}, "health_bonus": 500, "armor_bonus": 20 }
+				{ "level": 3, "cost": {"stone": 200, "gold": 150}, "health_bonus": 300, "armor_bonus": 10, "unlocks_unit": 64 },
+				{ "level": 4, "cost": {"gold": 300, "oil": 200}, "health_bonus": 400, "armor_bonus": 15, "unlocks_unit": 5 },
+				{ "level": 5, "cost": {"gold": 500, "oil": 400}, "health_bonus": 500, "armor_bonus": 20, "unlocks_unit": 6 }
 			]
 		},
 		{
@@ -185,13 +193,14 @@ func _init_data():
 				{ "unit_id": 14, "cooldown": 6.0, "queue_limit": 2 }, 
 				{ "unit_id": 13, "cooldown": 7.0, "queue_limit": 5 },   # 采集船
 				{ "unit_id": 39, "cooldown": 10.0, "queue_limit": 5 },   # 炮艇
-				{ "unit_id": 40, "cooldown": 5.0, "queue_limit": 8 }     # 快艇
+				{ "unit_id": 40, "cooldown": 5.0, "queue_limit": 8 },     # 爆破船
+				{ "unit_id": 9, "cooldown": 15.0, "queue_limit": 3 }     # 运载船
 			],
 			"upgrades": [
 				{ "level": 2, "cost": {"wood": 120, "stone": 80}, "health_bonus": 100, "unlocks_unit": 13 },
 				{ "level": 3, "cost": {"stone": 180, "gold": 100}, "health_bonus": 150,"unlocks_unit": 40 },
 				{ "level": 4, "cost": {"gold": 240, "oil": 150}, "health_bonus": 200 ,"unlocks_unit": 39},
-				{ "level": 5, "cost": {"gold": 400, "oil": 300}, "health_bonus": 250 }
+				{ "level": 5, "cost": {"gold": 400, "oil": 300}, "health_bonus": 250, "unlocks_unit": 9 }
 			]
 		},
 		{
@@ -240,8 +249,8 @@ func _init_data():
 			"cost": {"stone": 30},
 			"max_health": 700, "armor": 30, "body_radius": 1.0,
 			"upgrades": [
-				{ "level": 2, "cost": {"stone": 50}, "health_bonus": 200, "armor_bonus": 10, "unlocks_unit": 5 },
-				{ "level": 3, "cost": {"stone": 80, "gold": 30}, "health_bonus": 300, "armor_bonus": 15, "unlocks_unit": 6 },
+				{ "level": 2, "cost": {"stone": 50}, "health_bonus": 200, "armor_bonus": 10, "unlocks_unit": 64 },
+				{ "level": 3, "cost": {"stone": 80, "gold": 30}, "health_bonus": 300, "armor_bonus": 15, "unlocks_unit": 5 },
 				{ "level": 4, "cost": {"gold": 100, "oil": 50}, "health_bonus": 400, "armor_bonus": 20 },
 				{ "level": 5, "cost": {"gold": 150, "oil": 100}, "health_bonus": 500, "armor_bonus": 25 }
 			]
@@ -351,11 +360,12 @@ func _init_data():
 		},
 		# ==================== 快艇 (ID 40) ====================
 		{
-			"id": 40, "type": 2, "name": "快艇", "team": 0,
-			"cost": {"wood": 40, "gold": 20},
-			"max_health": 120, "attack": 15, "attack_speed": 1.0, "speed": 3.5,
-			"vision_range": 18, "attack_range": 0.8, "target_type": 2,
-			"body_radius": 0.5, "armor": 5, "water_capable": true, "can_move": true
+			"id": 40, "type": 2, "name": "爆破船", "team": 0,
+			"cost": {"wood": 60, "gold": 30, "oil": 10},
+			"max_health": 80, "attack": 100, "attack_speed": 10.0, "speed": 2.5,
+			"vision_range": 14, "attack_range": 1.5, "damage_radius": 4.0, "target_type": 3,
+			"body_radius": 0.5, "armor": 0, "water_capable": true, "can_move": true,
+			"ignore_armor": true
 		},
 				# ==================== 瞭望塔 (ID 41) ====================
 		{
@@ -483,8 +493,8 @@ func _init_data():
 			"max_health": 4000, "attack": 40, "attack_speed": 0.5, "attack_range": 5.0,
 			"body_radius": 1.5, "armor": 60,
 			"upgrades": [
-				{ "level": 2, "cost": {"stone": 300, "gold": 200}, "health_bonus": 500, "attack_bonus": 5, "armor_bonus": 10, "unlocks_unit": 5 },
-				{ "level": 3, "cost": {"stone": 500, "gold": 350}, "health_bonus": 700, "attack_bonus": 10, "armor_bonus": 15, "unlocks_unit": 6 },
+				{ "level": 2, "cost": {"stone": 300, "gold": 200}, "health_bonus": 500, "attack_bonus": 5, "armor_bonus": 10, "unlocks_unit": 64 },
+				{ "level": 3, "cost": {"stone": 500, "gold": 350}, "health_bonus": 700, "attack_bonus": 10, "armor_bonus": 15, "unlocks_unit": 5 },
 				{ "level": 4, "cost": {"gold": 500, "oil": 400}, "health_bonus": 1000, "attack_bonus": 15, "armor_bonus": 20 },
 				{ "level": 5, "cost": {"gold": 800, "oil": 600}, "health_bonus": 1200, "attack_bonus": 20, "armor_bonus": 25 }
 			]
