@@ -36,6 +36,8 @@ const HEALTH_BAR_INTERVAL: float = 0.05  # 20Hz，血条丝滑跟随
 var _diag_snap_age: float = 999.0
 var _diag_snap_count: int = 0
 var _diag_last_snap_time: int = 0
+var _snap_time_label: Label = null
+var _snap_time_timer: float = 0.0
 var fog_timer: float = 0.0
 var minimap_timer: float = 0.0
 var _stale_cleanup_timer: float = 30.0
@@ -78,6 +80,16 @@ func set_player_info(peer_id: int, team: int, slot: int, color: Color):
 # ==================== 初始化 ====================
 func _ready():
 	add_to_group("client_renderer")
+		# 快照时间显示标签
+		_snap_time_label = Label.new()
+		_snap_time_label.name = "SnapTimeLabel"
+		_snap_time_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_snap_time_label.add_theme_font_size_override("font_size", 16)
+		_snap_time_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7, 0.8))
+		_snap_time_label.add_theme_color_override("font_outline_color", Color.BLACK)
+		_snap_time_label.add_theme_constant_override("outline_size", 1)
+		_snap_time_label.text = "等待快照..."
+		add_child(_snap_time_label)
 	_init_fog_grids()
 
 	# 建造预览体
@@ -1466,9 +1478,29 @@ func _process(delta):
 	# 快照超时诊断
 	_diag_snap_age += delta
 	if _diag_snap_age > 2.0 and _diag_last_snap_time > 0:
-		print("[Client] ⚠️ 快照超时! %.1fs 未收到快照, seq=%d, 已收=%d" % [_diag_snap_age, last_applied_seq, _diag_snap_count])
+			var now_str = Time.get_datetime_string_from_system()
+			print("[Client] 快照超时! %s | %.1fs未收到快照, seq=%d, 已收=%d" % [now_str, _diag_snap_age, last_applied_seq, _diag_snap_count])
 		_diag_snap_age = 0.0
 
+		# 更新快照时间标签
+		_snap_time_timer -= delta
+		if _snap_time_timer <= 0:
+			_snap_time_timer = 1.0
+			if _snap_time_label and _diag_last_snap_time > 0:
+				var dt = Time.get_datetime_dict_from_unix_time(_diag_last_snap_time / 1000.0)
+				_snap_time_label.text = "快照: %02d:%02d:%02d" % [dt.hour, dt.minute, dt.second]
+				var elapsed = (Time.get_ticks_msec() - _diag_last_snap_time) / 1000.0
+				if elapsed > 2.0:
+					_snap_time_label.add_theme_color_override("font_color", Color(1.0, 0.3, 0.2, 0.9))
+				else:
+					_snap_time_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3, 0.8))
+			elif _snap_time_label:
+				_snap_time_label.text = "等待快照..."
+			# 定位到屏幕顶部中央
+			if _snap_time_label:
+				var vp = get_viewport().get_visible_rect()
+				_snap_time_label.position = Vector2(vp.size.x / 2 - 120, 10)
+				_snap_time_label.size = Vector2(240, 24)
 	health_bar_timer -= delta
 	fog_timer -= delta
 	minimap_timer -= delta
