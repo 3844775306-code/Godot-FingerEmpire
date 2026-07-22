@@ -230,6 +230,26 @@ func die():
 		else:
 			bm.decrease_population(team, 1)
 	_hide_garrison_marker()
+	# 切换到毁坏模型
+	var dem_path = RTSConfig.get_demolished_model(entity_id)
+	if dem_path != "" and ResourceLoader.exists(dem_path):
+		collision_layer = 0
+		# 隐藏原有视觉模型
+		for child in get_children():
+			if child is MeshInstance3D:
+				child.visible = false
+			if child.has_meta("_model_instance"):
+				var m = child.get_meta("_model_instance")
+				if is_instance_valid(m): m.visible = false
+		# 加载毁坏模型
+		var s = load(dem_path)
+		if s:
+			var inst = s.instantiate()
+			inst.name = "DemolishedModel"
+			add_child(inst)
+		var t = Timer.new(); t.one_shot = true; t.wait_time = 2.0
+		t.timeout.connect(queue_free); add_child(t); t.start()
+		return
 	# 播放死亡动画后再删除
 	if has_meta("_model_instance"):
 		var model = get_meta("_model_instance")

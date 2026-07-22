@@ -22,7 +22,7 @@ const ENTITY_MODELS = {
 	# 建筑 (hexagon)
 	5: "res://models/town/cart.glb",
 	6: "res://models/town/cart-high.glb",
-	7: "res://models/forest/bridge.glb",
+	7: "res://models/castle/bridge-draw.glb",
 	8: "res://models/forest/ladder.glb",
 	20: "res://models/hexagon/castle.glb",
 	21: "res://models/hexagon/barracks.glb",
@@ -95,3 +95,14 @@ static func get_entity_model(entity_id: int, level: int = 1) -> String:
 	if entity_id == 2:
 		return "res://models/survival/rocks-c.glb" if level >= 4 else ("res://models/survival/rocks-b.glb" if level >= 2 else "res://models/survival/rocks-a.glb")
 	return ENTITY_MODELS.get(entity_id, "")
+
+const DEMOLISHED_MODELS = {
+	17: "res://models/castle/siege-catapult-demolished.glb",
+	18: "res://models/castle/siege-ram-demolished.glb",
+	27: "res://models/arena/bricks.glb",
+	58: "res://models/castle/siege-ballista-demolished.glb",
+	59: "res://models/castle/siege-trebuchet-demolished.glb",
+}
+
+static func get_demolished_model(entity_id: int) -> String:
+	return DEMOLISHED_MODELS.get(entity_id, "")

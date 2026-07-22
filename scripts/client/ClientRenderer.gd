@@ -282,12 +282,27 @@ func _process_snapshot(data: Dictionary):
 		for ent in data["entities"]:
 			_update_single_entity(ent)
 
-	# 删除死亡实体
+	# 删除死亡实体（先展示毁坏模型2秒）
 	if data.has("dead_ids"):
-		if data["dead_ids"].size() > 0: print("[DeadBug-Client] Received %d dead_ids" % data["dead_ids"].size())
 		for id in data["dead_ids"]:
 			if entity_nodes.has(id):
-				entity_nodes[id].queue_free()
+				var node = entity_nodes[id]
+				# 切换到毁坏模型
+				var info = node.get_meta("snapshot_info", {})
+				var eid = info.get("entity_id", -1)
+				var dem_path = RTSConfig.get_demolished_model(eid)
+				if dem_path != "" and ResourceLoader.exists(dem_path):
+					for child in node.get_children():
+						if child is MeshInstance3D: child.visible = false
+					var s = load(dem_path)
+					if s:
+						var inst = s.instantiate()
+						inst.name = "DemolishedModel"
+						node.add_child(inst)
+					var t = Timer.new(); t.one_shot = true; t.wait_time = 2.0
+					t.timeout.connect(node.queue_free); node.add_child(t); t.start()
+				else:
+					node.queue_free()
 				entity_nodes.erase(id)
 			_remove_all_bars(id)
 
