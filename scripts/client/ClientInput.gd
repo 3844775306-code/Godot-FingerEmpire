@@ -433,11 +433,15 @@ func _process(_delta):
 	if _pending_left_click:
 		_left_click_timer -= _delta
 		if _left_click_timer <= 0:
-			_pending_left_click = false
-			var ev = InputEventMouseButton.new()
-			ev.button_index = 1; ev.pressed = true; ev.position = _touch_start_pos
-			_processing_delayed = true
-			_unhandled_input(ev)
+			# 如果鼠标仍按住，等待松手（可能正在准备拖拽）
+			if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
+				_left_click_timer = 0.05
+			else:
+				_pending_left_click = false
+				var ev = InputEventMouseButton.new()
+				ev.button_index = 1; ev.pressed = true; ev.position = _touch_start_pos
+				_processing_delayed = true
+				_unhandled_input(ev)
 	# 每帧更新选择环位置（跟随目标）
 	if selection_rings.size() > 0:
 		_process_selection_rings()
