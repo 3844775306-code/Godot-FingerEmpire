@@ -1,13 +1,13 @@
 [gd_scene load_steps=16 format=3 uid="uid://b8rt5ggigw4q1"]
 
-[ext_resource type="Script" uid="uid://n6lb2pjc3b3n" path="res://scripts/scenes/RTSBattleManager.gd" id="1_nfr0c"]
+[ext_resource type="Script" uid="uid://dv0qun2ftre8u" path="res://scripts/scenes/RTSBattleManager.gd" id="1_nfr0c"]
 [ext_resource type="Script" uid="uid://y3juibmibwfb" path="res://scripts/map/CameraController.gd" id="2_coyb2"]
 [ext_resource type="Script" uid="uid://dhhgdpux4mj07" path="res://scripts/map/Ground.gd" id="3_18u6g"]
 [ext_resource type="Script" uid="uid://bd8mpjsx5lrjl" path="res://scripts/ui/HUD.gd" id="4_u01vu"]
 [ext_resource type="Script" uid="uid://d178itb4ttdku" path="res://scripts/map/Minimap.gd" id="5_3kwi1"]
 [ext_resource type="Script" uid="uid://cdi0kvctnhdy3" path="res://scripts/ui/InfoPanel.gd" id="6_coyb2"]
-[ext_resource type="Script" uid="uid://c50q8hbyc56oo" path="res://scripts/ui/SelectionManager.gd" id="7_d4ots"]
-[ext_resource type="Script" uid="uid://c3kba7nbcu6sg" path="res://scripts/ai/AI.gd" id="8_coyb2"]
+[ext_resource type="Script" uid="uid://domon4xnxr3f6" path="res://scripts/ui/SelectionManager.gd" id="7_d4ots"]
+[ext_resource type="Script" uid="uid://dchu3vjxmxe3n" path="res://scripts/ai/AI.gd" id="8_coyb2"]
 
 [sub_resource type="Gradient" id="Gradient_3m0ah"]
 offsets = PackedFloat32Array(0.02631579, 0.5701754)
