@@ -90,11 +90,17 @@ func _input(event):
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
 			_touch_start_pos = event.position
-			# Ctrl+左键 → 设置驻扎点（仅对已选中的军队/建筑）
+			# Ctrl+左键 → 即时处理
 			if Input.is_key_pressed(KEY_CTRL) and not selected_entities.is_empty():
 				if bm and bm.has_method("_set_garrison_for_selected"):
 					bm._set_garrison_for_selected(event.position)
 				return
+			# Mobile: delegate to battle manager for 0.1s delay
+			if bm:
+				bm._touch_start_pos = event.position
+				bm._left_click_timer = bm.CLICK_DELAY
+				bm._pending_left_click = true
+				bm._left_click_source = "selection"
 			var pos = event.position
 			var clicked_entity = _get_entity_under_mouse(pos)
 			var now = Time.get_ticks_msec() / 1000.0
