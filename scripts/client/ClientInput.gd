@@ -169,12 +169,13 @@ func _unhandled_input(event):
 				_send_left_click(event)
 
 		elif event is InputEventMouseMotion:
-			# 拖拽检测：按下左键后移动鼠标 → 开始框选
-			if _pending_left_click and _touch_start_pos.distance_to(event.position) > 5.0:
+			# 任何鼠标移动 → 取消延迟点击，防止计时器抢先触发
+			if _pending_left_click:
 				_pending_left_click = false
-				is_box_selecting = true
-				box_start = _touch_start_pos
-				box_end = event.position
+				if _touch_start_pos.distance_to(event.position) > 5.0:
+					is_box_selecting = true
+					box_start = _touch_start_pos
+					box_end = event.position
 			# 框选进行中：更新矩形
 			if is_box_selecting:
 				box_end = event.position
