@@ -215,7 +215,6 @@ func _add_weapon():
 	if mpath != "" and ResourceLoader.exists(mpath):
 		var ms = load(mpath)
 		if ms: var m = ms.instantiate(); if m: m.position = Vector3(0, -body_radius * 1.2, 0); m.scale = Vector3.ONE * 0.7; add_child(m)
-		var m = ms.instantiate();
 		body_radius *= 1.2  # make cavalry visibly larger
 
 func _add_collision_shape():
@@ -246,9 +245,10 @@ func _physics_process(delta):
 		die_official_cleanup()
 		return
 	
-	# 动物行为
+	# 动物行为（每5帧处理一次）
 	if _animal_type != "":
-		_process_animal(delta)
+		if Engine.get_process_frames() % 5 == 0:
+			_process_animal(delta * 5.0)
 		return
 
 	# Merchant/official special logic
@@ -282,23 +282,27 @@ func _physics_process(delta):
 					var t = bm.get_terrain_at_grid(gpos.x + dx, gpos.y + dy)
 					if t != 2: all_water = false
 					if t == 2: all_land = false
-				if not water_capable and all_water:
-					_cached_speed_mod = 0.01
-				elif water_capable and all_land:
-					_cached_speed_mod = 0.01
-				elif _cached_terrain == 1:
-					_cached_speed_mod = 0.5
-				else:
-					_cached_speed_mod = 1.0
-			speed *= _cached_speed_mod
-			# Water sound effects (every 30 frames, lightweight)
+			if not water_capable and all_water:
+				_cached_speed_mod = 0.01
+			elif water_capable and all_land:
+				_cached_speed_mod = 0.01
+			elif _cached_terrain == 1:
+				_cached_speed_mod = 0.5
+			else:
+				_cached_speed_mod = 1.0
+			speed = base_speed * _cached_speed_mod
+			# Movement sounds (every 20 frames, when position changed)
+			if Engine.get_process_frames() % 10 == 0 and health > 0:
+					if _cached_terrain == 2:
+						_play_sfx_if_visible("sail")
+					else:
+						_play_sfx_if_visible("walk")
+			# Water transition sounds (every 30 frames)
 			if Engine.get_process_frames() % 30 == 0:
 				var _in_water = (_cached_terrain == 2)
 				var _was_in_water = has_meta("_was_in_water") and get_meta("_was_in_water")
 				if _in_water != _was_in_water and not water_capable:
 					_play_sfx_if_visible("swim")
-				elif _in_water and water_capable and _order_is(UnitState.MOVING):
-					_play_sfx_if_visible("sail")
 				set_meta("_was_in_water", _in_water)
 
 	if entity_id >= 46 and entity_id <= 50:
@@ -306,6 +310,7 @@ func _physics_process(delta):
 		# 官员如果正在前往驻军建筑，继续走移动逻辑
 		if _garrison_target_id != -1 and _order_is(UnitState.MOVING):
 			_process_action(delta, bm)
+			_set_order(UnitState.MOVING)
 			_movement.process_move(delta, bm)
 			if _movement.collision_timer <= 0:
 				_movement.collision_timer = 0.15
@@ -345,8 +350,7 @@ func _physics_process(delta):
 		_movement.collision_timer = _movement.COLLISION_INTERVAL
 		_movement.apply_collision(delta)
 		# ÊµÊ±Ñ°µÐ£ºÖ»Òª²»ÔÚ²É¼¯/½»¸¶/¹¥»÷ÒÆ¶¯£¬ÇÒÃ»ÓÐÄ¿±ê£¬¾ÍÁ¢¿ÌËÑË÷µÐÈË
-	if target_type != 0 and current_target == null and _order_is(UnitState.IDLE) and not is_attack_moving and entity_id not in [46,47,48,49,50]:
-		_find_enemy_in_range()
+	
 	# ¾ö²ß½ÚÁ÷
 	think_timer -= delta
 	if think_timer <= 0:
@@ -379,8 +383,8 @@ func _process_action(delta, bm):
 			elif target_type == 0 and not _is_gather_paused():
 				_find_nearest_resource()
 			last_resource_target = null
-		else:
-			_movement.set_move_target(delivery_target.global_position, 1.0)
+		elif delivery_target.global_position != _movement.astar_target:
+			_movement.set_move_target(delivery_target.global_position, 1.0 if entity_id == 14 else 0.0)
 		return
 		# Èç¹ûÊÇÒÆ¶¯ÃüÁîÇÒÒÑ½Ó½üÄ¿±ê£¬Çå³ýÃüÁî£¬×ªÎª¿ÕÏÐ
 	if _order_is(UnitState.MOVING) and not is_attack_moving:
@@ -395,9 +399,7 @@ func _process_action(delta, bm):
 				if _current_move_queued and _visual_waypoints.size() > 0:
 					_visual_waypoints.pop_front()
 					_current_move_queued = false
-				# Á¢¼´Ñ°µÐ
-				if target_type != 0 and entity_id not in [46,47,48,49,50]:
-					_find_enemy_in_range()
+				
 				# ²É¼¯µ¥Î»»áÓÉ¿ÕÏÐÂß¼­´¦Àí
 	# ¹¥»÷ÒÆ¶¯
 	if is_attack_moving:
@@ -522,6 +524,17 @@ func _attack(target, delta):
 	elif entity_id in [38, 40]: _sfx = "sword_swing"
 	if _sfx != "": AudioManager.play_sfx_3d(_sfx, global_position, _get_cam_pos())
 
+	# 特殊攻击类型：僧侣治疗 / 长老百分比伤害 / 宗师降攻招降
+	if entity_id == 55:
+		_monk_heal(target, delta)
+		return
+	if entity_id == 56:
+		_elder_attack(target, delta)
+		return
+	if entity_id == 57:
+		_grandmaster_attack(target, delta)
+		return
+
 	if attack_timer > 0:
 		attack_timer -= delta
 		return
@@ -589,6 +602,7 @@ func _gather(resource_node: WorldResource, delta):
 		if gatherable_resources.size() > 0 and not res_type in gatherable_resources:
 			return
 		var amount = attack
+		if GameSettings.fast_mode: amount *= 3
 		var bm = get_tree().get_first_node_in_group("battle_manager")
 		if bm and bm.has_method("get_team_nation"):
 			var nation = bm.get_team_nation(team)
@@ -936,7 +950,14 @@ func _process_merchant(delta):
 				old.assigned_merchants = max(0, old.assigned_merchants - 1)
 			_merchant_assigned_market = weakref(best_market)
 			best_market.assigned_merchants += 1
-			_merchant_trade_volume = _calc_trade_volume(own.upgrade_level, global_position.distance_to(best_market.global_position))
+			# Use A* path length for trade distance (not straight-line)
+			var astar_dist = global_position.distance_to(best_market.global_position)
+			if _movement:
+				var path = _movement._calculate_astar_path(best_market.global_position)
+				if path.size() > 1:
+					astar_dist = 0.0
+					for j in range(1, path.size()): astar_dist += path[j-1].distance_to(path[j])
+			_merchant_trade_volume = _calc_trade_volume(own.upgrade_level, astar_dist)
 			_merchant_state = 1
 
 		1:  # BUYING at castle: spend resource, get gold
@@ -955,8 +976,12 @@ func _process_merchant(delta):
 			if not market or not is_instance_valid(market):
 				_merchant_state = 0; return
 			var d = global_position.distance_to(market.global_position)
-			if d < 2.0: _merchant_state = 3
-			else: global_position += (market.global_position - global_position).normalized() * speed * delta
+			if d < 5.0: _merchant_state = 3
+			else:
+				if _movement and _movement.astar_target.distance_squared_to(market.global_position) > 0.5:
+					_movement.set_move_target(market.global_position)
+					_set_order(UnitState.MOVING)
+				_movement.process_move(delta, bm)
 
 		3:  # SELLING at market: spend gold, get resource
 			var market2 = _merchant_assigned_market.get_ref() if _merchant_assigned_market else null
@@ -975,7 +1000,11 @@ func _process_merchant(delta):
 		4:  # TRAVEL_HOME
 			var d2 = global_position.distance_to(own.global_position)
 			if d2 < 2.0: _merchant_state = 0
-			else: global_position += (own.global_position - global_position).normalized() * speed * delta
+			else: 
+				if _movement and _movement.astar_target.distance_squared_to(own.global_position) > 0.5:
+					_movement.set_move_target(own.global_position)
+					_set_order(UnitState.MOVING)
+				_movement.process_move(delta, bm)
 
 func _on_merchant_die():
 	var market = _merchant_assigned_market.get_ref() if _merchant_assigned_market else null
@@ -1338,14 +1367,15 @@ func _process_animal(delta):
 		var flee_speed = 0.5
 		if _animal_type == "sheep" or _animal_type == "fish":
 			flee_speed = 0.8
-		# 避免跑进水里（鱼除外）
-		var new_pos = global_position + flee_dir * flee_speed * delta
-		if _animal_type != "fish":
-			var bm = get_tree().get_first_node_in_group("battle_manager")
-			if bm and bm.get_terrain_at(new_pos) == 2:
-				flee_dir = -flee_dir  # 反向
-				new_pos = global_position + flee_dir * flee_speed * delta
-		global_position = new_pos
+		var is_fish = (_animal_type == "fish")
+		var bm = get_tree().get_first_node_in_group("battle_manager")
+		for angle_offset in [0, 45, -45, 90, -90, 135, -135, 180]:
+			var test_dir = flee_dir.rotated(Vector3.UP, deg_to_rad(angle_offset))
+			var new_pos = global_position + test_dir * flee_speed * delta
+			if bm:
+				var t = bm.get_terrain_at(new_pos)
+				if (is_fish and t == 2) or (not is_fish and t != 2):
+					global_position = new_pos; return
 		return
 
 	# 闲逛

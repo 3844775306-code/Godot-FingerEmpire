@@ -78,7 +78,7 @@ static func _random_character() -> String:
 	return "res://models/characters/%s.glb" % c
 
 static func get_entity_model(entity_id: int, level: int = 1) -> String:
-	if entity_id in [10, 43, 44, 45, 46, 47, 48, 49, 50, 51]:
+	if entity_id in [10, 43, 44, 45, 46, 47, 48, 49, 50, 51, 55, 56, 57]:
 		return _random_character()
 	if entity_id == 1:
 		return "res://models/town/tree-high-round.glb" if level >= 5 else ("res://models/town/tree-high.glb" if level >= 3 else "res://models/town/tree.glb")

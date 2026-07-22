@@ -212,7 +212,7 @@ func _init_data():
 		{
 			"id": 27, "type": 1, "name": "城墙", "team": 0,
 			"cost": {"stone": 30},
-			"max_health": 700, "armor": 30, "body_radius": 0.65,
+			"max_health": 700, "armor": 30, "body_radius": 1.0,
 			"upgrades": [
 				{ "level": 2, "cost": {"stone": 50}, "health_bonus": 200, "armor_bonus": 10 },
 				{ "level": 3, "cost": {"stone": 80, "gold": 30}, "health_bonus": 300, "armor_bonus": 15 },
@@ -461,6 +461,50 @@ func _init_data():
 				{ "level": 4, "cost": {"gold": 500, "oil": 400}, "health_bonus": 1000, "attack_bonus": 15, "armor_bonus": 20 },
 				{ "level": 5, "cost": {"gold": 800, "oil": 600}, "health_bonus": 1200, "attack_bonus": 20, "armor_bonus": 25 }
 			]
+		},
+
+		# ==================== 修道院 (ID 54) ====================
+		{
+			"id": 54, "type": 1, "name": "修道院", "team": 0,
+			"cost": {"wood": 200, "stone": 150, "gold": 100},
+			"max_health": 800, "body_radius": 1.0, "armor": 5,
+			"produces": [
+				{"unit_id": 55, "cooldown": 8.0, "queue_limit": 5}
+			],
+			"upgrades": [
+				{ "level": 2, "cost": {"gold": 200, "wood": 100}, "health_bonus": 100, "unlocks_unit": 56 },
+				{ "level": 3, "cost": {"gold": 400, "stone": 200}, "health_bonus": 150, "unlocks_unit": 57 },
+				{ "level": 4, "cost": {"gold": 600, "oil": 300}, "health_bonus": 200 },
+				{ "level": 5, "cost": {"gold": 800, "oil": 500}, "health_bonus": 250 }
+			]
+		},
+
+		# ==================== 僧侣 (ID 55) ====================
+		{
+			"id": 55, "type": 2, "name": "僧侣", "team": 0,
+			"cost": {"food": 50, "gold": 200},
+			"max_health": 50, "attack": 30, "attack_speed": 2.0, "speed": 1.5,
+			"vision_range": 10, "attack_range": 5.0, "target_type": 0, "body_radius": 0.4,
+			"armor": 0, "can_move": true,
+			"special_type": "monk"
+		},
+		# ==================== 长老 (ID 56) ====================
+		{
+			"id": 56, "type": 2, "name": "长老", "team": 0,
+			"cost": {"food": 80, "gold": 300},
+			"max_health": 50, "attack": 0, "attack_speed": 2.0, "speed": 1.5,
+			"vision_range": 12, "attack_range": 5.0, "target_type": 3, "body_radius": 0.4,
+			"armor": 0, "can_move": true,
+			"special_type": "elder", "ignore_armor": true
+		},
+		# ==================== 宗师 (ID 57) ====================
+		{
+			"id": 57, "type": 2, "name": "宗师", "team": 0,
+			"cost": {"food": 100, "gold": 500},
+			"max_health": 80, "attack": 7, "attack_speed": 2.5, "speed": 1.5,
+			"vision_range": 12, "attack_range": 4.0, "target_type": 2, "body_radius": 0.5,
+			"armor": 50, "can_move": true,
+			"special_type": "grandmaster"
 		},
 
 		# ==================== 动物 (ID 60-63) ====================

@@ -244,7 +244,7 @@ func is_building_unlocked(building_id: int) -> bool:
 			return cl >= 2
 		24, 29, 52:   # 攻城车间、重装武器厂、集市 → 城堡3级
 			return cl >= 3
-		42:            # 书院 → 主城4级
+		42, 54:        # 书院、修道院 → 主城4级
 			return cl >= 4
 		53:            # 城堡 → 主城4级
 			return cl >= 4
@@ -257,7 +257,7 @@ func get_building_required_castle_level(building_id: int) -> int:
 	match building_id:
 		23, 25, 26: return 2
 		24, 29: return 3
-		42: return 4
+		42, 54: return 4
 	return 1
 
 func get_enemy_castle() -> Building:
@@ -937,8 +937,12 @@ func add_resource(type: String, amount: int, team: int):
 		res[type] = min(res[type] + amount, lim[type])
 
 func deliver_resources(cargo: Dictionary, team: int):
+	var mult = 1.0
+	if team == RTSConfig.Team.RED:
+		if GameSettings.ai_difficulty == GameSettings.AIDifficulty.NORMAL: mult = 2.0
+		elif GameSettings.ai_difficulty >= GameSettings.AIDifficulty.HARD: mult = 3.0
 	for t in cargo:
-		add_resource(t, cargo[t], team)
+		add_resource(t, int(cargo[t] * mult), team)
 
 func _input(event):
 	# Don't process clicks on interactive UI panels
@@ -1520,9 +1524,11 @@ func _process(delta):
 			]
 		else:
 			_fps_label.add_theme_color_override("font_color", Color.LIME_GREEN)
-		if _snap_rate_label and has_method("broadcast_snapshot"):
-			var sr = get("_snap_sent_rate")
-			_snap_rate_label.text = "Snap: %d/s" % sr if sr > 0 else ""
+		if _snap_rate_label:
+			var diff_names = ["简单", "普通", "困难", "地狱"]
+			var dn = diff_names[clampi(GameSettings.ai_difficulty, 0, 3)]
+			var sr = get("_snap_sent_rate") if has_method("broadcast_snapshot") else 0
+			_snap_rate_label.text = "AI:%s  Snap:%d/s" % [dn, sr] if sr > 0 else "AI:%s" % dn
 			_fps_label.text = "FPS:%.0f | 实体:%d(A%d B%d) | 物理:%d | 步骤:%d" % [
 				Engine.get_frames_per_second(),
 				_all_entities.size(), _armies.size(), _buildings.size(),
