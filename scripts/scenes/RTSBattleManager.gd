@@ -34,6 +34,14 @@ var visible_grid: Array = []
 var fog_timer: float = 0.0
 
 # ==================== 游戏状态 ====================
+var _pending_left_click: bool = false
+var _left_click_timer: float = 0.0
+var _touch_start_pos: Vector2 = Vector2.ZERO
+var _touch_start_time: int = 0
+var _left_click_source: String = "selection"
+var _processing_delayed: bool = false
+const CLICK_DELAY: float = 0.1
+
 var game_over_panel: Control = null
 var game_over_label: Label = null
 var game_over: bool = false
@@ -77,6 +85,7 @@ var _diag_active_entity: String = ""
 var _diag_active_frame: int = 0
 var _diag_physics_heartbeat: int = 0
 var _fps_label: Label = null
+var _snap_rate_label: Label = null
 
 func _create_diag_label():
 	_fps_label = Label.new()
@@ -85,10 +94,18 @@ func _create_diag_label():
 	_fps_label.add_theme_font_size_override("font_size", 16)
 	_fps_label.add_theme_color_override("font_color", Color.LIME_GREEN)
 	_fps_label.z_index = 200
+	_snap_rate_label = Label.new()
+	_snap_rate_label.position = Vector2(900, 4)
+	_snap_rate_label.size = Vector2(600, 20)
+	_snap_rate_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_snap_rate_label.add_theme_font_size_override("font_size", 14)
+	_snap_rate_label.add_theme_color_override("font_color", Color(1.0, 0.9, 0.3))
+	_snap_rate_label.z_index = 200
 	var canvas = CanvasLayer.new()
 	canvas.name = "DiagLayer"
 	canvas.layer = 100
 	canvas.add_child(_fps_label)
+	canvas.add_child(_snap_rate_label)
 	add_child(canvas)
 
 func _rebuild_entity_cache():
@@ -708,7 +725,7 @@ func _apply_entity_model(entity: GameEntity) -> bool:
 		model_instance.scale = Vector3.ONE * scale_factor
 	entity.add_child(model_instance)
 	# 特殊朝向调整
-	if entity.entity_id == 16: model_instance.rotation.y = deg_to_rad(180)
+	if entity.entity_id == 16: model_instance.rotation.y = deg_to_rad(90)
 	elif entity.entity_id == 17: model_instance.rotation.y = deg_to_rad(90)
 	# 存储模型引用用于动画
 	entity.set_meta("_model_instance", model_instance)
@@ -792,8 +809,13 @@ func _update_entity_animation(entity: GameEntity):
 		anim = "walk"
 	else:
 		anim = "idle"
-	if anim != "" and ap.has_animation(anim) and ap.current_animation != anim:
-		ap.play(anim)
+	if anim != "" and ap.has_animation(anim):
+		var spd = 1.0
+		if anim == "attack-melee-left": spd = entity.attack_speed
+		elif anim == "walk": spd = entity.speed * 0.6
+		ap.speed_scale = spd
+		if ap.current_animation != anim:
+			ap.play(anim)
 		
 
 func _enable_vertex_colors(node: Node):
@@ -950,6 +972,7 @@ func _input(event):
 func _unhandled_input(event):
 	# Game clicks - only fires when no GUI Control consumed the event
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+		_pending_left_click = false
 		_handle_right_click(event)
 
 func _place_building_at(pos: Vector3):
@@ -1188,8 +1211,12 @@ func _process_build_mode(event):
 		_update_build_preview(event.position)
 	elif event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
-			_place_building()
+			_touch_start_pos = event.position
+			_left_click_timer = CLICK_DELAY
+			_pending_left_click = true
+			_left_click_source = "build"
 		elif event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+			_pending_left_click = false
 			_exit_build_mode()
 
 func _update_build_preview(screen_pos: Vector2):
@@ -1452,10 +1479,10 @@ func _detect_enemy_near_base():
 	var threat_detected = false
 	for e in get_tree().get_nodes_in_group("vision_providers"):
 		if not (e is Army) or e.team != RTSConfig.Team.RED or e.health <= 0: continue
-			var dist = e.global_position.distance_to(player_castle.global_position)
-			if dist < player_castle.vision_range * 1.2:
-				threat_detected = true
-				break
+		var dist = e.global_position.distance_to(player_castle.global_position)
+		if dist < player_castle.vision_range * 1.2:
+			threat_detected = true
+			break
 
 	if threat_detected and not _is_alert_on_cooldown("enemy_approach"):
 		var loc_str = "(%d,%d)" % [int(player_castle.global_position.x), int(player_castle.global_position.z)]
@@ -1466,6 +1493,15 @@ func _detect_enemy_near_base():
 var _limit_update_timer: float = 0.0
 func _process(delta):
 	var _pt = Time.get_ticks_usec()
+	# 延迟左键处理：建造模式下直接放置建筑
+	if _pending_left_click:
+		_left_click_timer -= delta
+		if _left_click_timer <= 0:
+			_pending_left_click = false
+			if _left_click_source == "build":
+				_place_building()
+				if not Input.is_key_pressed(KEY_SHIFT):
+					_exit_build_mode()
 	game_time += delta
 	if game_time_label:
 		var mins = int(game_time / 60)
@@ -1484,6 +1520,9 @@ func _process(delta):
 			]
 		else:
 			_fps_label.add_theme_color_override("font_color", Color.LIME_GREEN)
+		if _snap_rate_label and has_method("broadcast_snapshot"):
+			var sr = get("_snap_sent_rate")
+			_snap_rate_label.text = "Snap: %d/s" % sr if sr > 0 else ""
 			_fps_label.text = "FPS:%.0f | 实体:%d(A%d B%d) | 物理:%d | 步骤:%d" % [
 				Engine.get_frames_per_second(),
 				_all_entities.size(), _armies.size(), _buildings.size(),
