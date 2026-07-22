@@ -1296,6 +1296,41 @@ func _is_valid_build_position(pos: Vector3) -> bool:
 			if e.global_position.distance_to(pos) < 10.0:
 				return false
 	var t = get_terrain_at(pos)
+	# 桥：只能在水上建造
+	if selected_building_id == 7:
+		if t != 2: return false
+		for e in entities.get_children():
+			if e is GameEntity and e.health > 0:
+				if e.global_position.distance_to(pos) < (e.body_radius + 0.5):
+					return false
+		return true
+	# 梯子：必须在敌方城墙裸露侧建造
+	if selected_building_id == 8:
+		if t == 2: return false
+		for e in entities.get_children():
+			if e is GameEntity and e.health > 0:
+				if e.global_position.distance_to(pos) < (e.body_radius + 0.5):
+					return false
+		# 检查是否与敌方城墙裸露侧相邻
+		var g = world_to_grid(pos)
+		for dx in [-1, 0, 1]:
+			for dy in [-1, 0, 1]:
+				if dx == 0 and dy == 0: continue
+				if abs(dx) + abs(dy) != 1: continue  # 仅正交方向
+				var wx = g.x + dx; var wy = g.y + dy
+				for e in entities.get_children():
+					if e is Building and e.entity_id == 27 and e.team != RTSConfig.Team.BLUE and e.team != RTSConfig.Team.NEUTRAL and e.health > 0:
+						var wg = world_to_grid(e.global_position)
+						if wg.x == wx and wg.y == wy:
+							# 检查城墙在此方向是否裸露(反方向无同队城墙)
+							var exposed = true
+							for e2 in entities.get_children():
+								if e2 is Building and e2.entity_id == 27 and e2.team == e.team and e2.health > 0 and e2 != e:
+									var wg2 = world_to_grid(e2.global_position)
+									if wg2.x == wg.x - dx and wg2.y == wg.y - dy:
+										exposed = false; break
+							if exposed: return true
+		return false
 	if selected_building_id == 23:
 		if t != 0: return false
 		var g = world_to_grid(pos)
@@ -1330,8 +1365,8 @@ func _place_building():
 	var cfg = EntityDatabase.get_config(selected_building_id)
 	if not cfg: return
 
-	# 地形检查
-	if selected_building_id != 23 and get_terrain_at(pos) == 2: return
+	# 地形检查（桥允许水上、船坞必须陆地邻水）
+	if selected_building_id != 23 and selected_building_id != 7 and get_terrain_at(pos) == 2: return
 	if selected_building_id == 23 and get_terrain_at(pos) != 0: return
 
 	# 资源检查

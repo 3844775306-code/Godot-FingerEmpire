@@ -55,11 +55,13 @@ func _init_data():
 		# ==================== 桥 (ID 7) ====================
 		{
 			"id": 7, "type": 1, "name": "桥", "team": 0,
+			"cost": {"wood": 50},
 			"max_health": 300, "armor": 20, "body_radius": 0.8
 		},
 		# ==================== 梯子 (ID 8) ====================
 		{
 			"id": 8, "type": 1, "name": "梯子", "team": 0,
+			"cost": {"wood": 30},
 			"max_health": 150, "armor": 10, "body_radius": 0.5
 		},
 
