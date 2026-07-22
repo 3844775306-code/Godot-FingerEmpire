@@ -192,6 +192,7 @@ func apply_collision(delta):
 		if entity == _army or not is_instance_valid(entity): continue
 		if not (entity is GameEntity) or entity.health <= 0: continue
 		if entity is WorldResource: continue
+		if entity is Building and entity.entity_id == 7: continue  # 桥不阻挡通行
 		if entity is Building and entity.entity_id == 27 and entity.team == _army.team: continue  # pass through friendly walls
 		if entity is Building and entity.entity_id == 27 and entity.team != _army.team:
 			if _has_adjacent_ladder(bm, bm.world_to_grid(entity.global_position), _army.team): continue  # pass through laddered enemy walls
