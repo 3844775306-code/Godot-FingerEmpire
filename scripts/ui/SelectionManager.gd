@@ -103,12 +103,21 @@ func _input(event):
 				bm._left_click_source = "selection"
 			var pos = event.position
 			var clicked_entity = _get_entity_under_mouse(pos)
-			var now = Time.get_ticks_msec() / 1000.0
-			if clicked_entity and clicked_entity.team == RTSConfig.Team.BLUE:
-				# 运载船：已有选中单位时不选中，改为发送命令
-				if not selected_entities.is_empty() and ((clicked_entity is Army and clicked_entity.entity_id == 9) or (clicked_entity is Building and clicked_entity.entity_id == 7)):
+			# 桥/运载船：已有选中单位时发送移动命令(不选中)，兼容射线未命中实体的桥
+			if not selected_entities.is_empty():
+				var bypass = (clicked_entity and ((clicked_entity is Army and clicked_entity.entity_id == 9) or (clicked_entity is Building and clicked_entity.entity_id == 7)))
+				if not bypass and not clicked_entity:
+					var gpos = _get_ground_pos(pos)
+					var gg = bm.world_to_grid(gpos)
+					for e in get_tree().get_nodes_in_group("entities"):
+						if e is Building and e.entity_id == 7 and e.health > 0:
+							if bm.world_to_grid(e.global_position) == gg:
+								bypass = true; break
+				if bypass:
 					bm._command_selected_units(event.position)
 					return
+			var now = Time.get_ticks_msec() / 1000.0
+			if clicked_entity and clicked_entity.team == RTSConfig.Team.BLUE:
 				# Official garrison: if selected is official and clicked is building, send garrison command
 				if clicked_entity is Building and Input.is_key_pressed(KEY_CTRL):
 					for e in selected_entities:
@@ -236,6 +245,14 @@ func _get_entity_under_mouse(screen_pos: Vector2) -> GameEntity:
 	if result and result.collider is GameEntity:
 		return result.collider
 	return null
+
+func _get_ground_pos(screen_pos: Vector2) -> Vector3:
+	var cam = get_viewport().get_camera_3d()
+	if not cam: return Vector3.ZERO
+	var from = cam.project_ray_origin(screen_pos)
+	var to = from + cam.project_ray_normal(screen_pos) * 2000
+	var res = get_viewport().get_world_3d().direct_space_state.intersect_ray(PhysicsRayQueryParameters3D.create(from, to))
+	return res.position if res else Vector3.ZERO
 
 # ---------- 选择列表操作 ----------
 func _add_to_selection(entity: GameEntity):

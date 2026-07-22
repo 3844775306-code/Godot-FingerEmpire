@@ -22,7 +22,7 @@ const ENTITY_MODELS = {
 	# 建筑 (hexagon)
 	5: "res://models/town/cart.glb",
 	6: "res://models/town/cart-high.glb",
-	7: "res://models/castle/bridge-draw.glb",
+	7: "res://models/forest/bridge.glb",
 	8: "res://models/forest/ladder.glb",
 	20: "res://models/hexagon/castle.glb",
 	21: "res://models/hexagon/barracks.glb",
