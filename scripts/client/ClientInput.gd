@@ -166,7 +166,13 @@ func _unhandled_input(event):
 				if ground_pos != Vector3.ZERO:
 					emit_signal("build_requested", ground_pos)
 			else:
-				_send_left_click(event)
+				var hit_id = _get_entity_id_under_mouse(event.position)
+				if hit_id == -1:
+					client_selected_ids.clear()
+					_update_selection_visuals()
+					emit_signal("selection_changed", [])
+				else:
+					_send_left_click(event)
 
 		elif event is InputEventMouseMotion:
 			# 任何鼠标移动 → 取消延迟点击，防止计时器抢先触发
