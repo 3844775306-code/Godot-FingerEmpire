@@ -335,11 +335,12 @@ func _try_select(event):
 		_update_selection_visuals()
 	else:
 		if not client_selected_ids:
-				# 点击空地 → 清除选择
+			# 点击空地 → 清除选择
 			client_selected_ids.clear()
 			emit_signal("selection_changed", [])
 			_update_selection_visuals()
-				# 不在此处开始框选，框选由拖拽触发
+		else:
+			_send_left_click(event)
 func _send_left_click(event):
 	if not renderer: return
 	var cam = get_viewport().get_camera_3d()
