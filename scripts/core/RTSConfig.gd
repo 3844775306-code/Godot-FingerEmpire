@@ -102,6 +102,7 @@ const DEMOLISHED_MODELS = {
 	27: "res://models/arena/bricks.glb",
 	58: "res://models/castle/siege-ballista-demolished.glb",
 	59: "res://models/castle/siege-trebuchet-demolished.glb",
+	41: "res://models/castle/siege-tower-demolished.glb",
 }
 
 static func get_demolished_model(entity_id: int) -> String:
