@@ -657,7 +657,7 @@ func _1v1_right_click(team: int, data: Dictionary):
 	var fi = 0
 	for entity in entities.get_children():
 		if entity is Army and entity.team == team and entity.get_instance_id() in selected_ids:
-		if not is_instance_valid(entity): continue
+			if not is_instance_valid(entity): continue
 			if not shift_held:
 				entity._clear_command_queue()
 			entity._force_queue_next = shift_held
@@ -738,7 +738,7 @@ func _2v2_right_click(peer_id: int, data: Dictionary):
 	var fi = 0
 	for entity in entities.get_children():
 		if entity is Army and entity.get("owner_peer_id") == peer_id and entity.get_instance_id() in selected_ids:
-		if not is_instance_valid(entity): continue
+			if not is_instance_valid(entity): continue
 			if not shift_held:
 				entity._clear_command_queue()
 			entity._force_queue_next = shift_held
@@ -1460,7 +1460,7 @@ func build_snapshot_for_player(peer_id: int) -> Dictionary:
 		if not is_full:
 			var h = _compute_entity_hash(entity)
 			if not _should_include_in_delta(snapshot_key, id, h):
-			continue
+				continue
 		delta.append(_serialize_entity_compact(entity))
 	var _t_own = (Time.get_ticks_usec() - _t0) / 1000.0
 
@@ -1522,6 +1522,7 @@ func build_snapshot_for_player(peer_id: int) -> Dictionary:
 		"income_rate": {peer_id: team_income_rates.get(peer_id, {"gold":0.0, "wood":0.0, "stone":0.0, "food":0.0, "oil":0.0})},
 		"player_info": player_info,
 		"alerts": _get_and_clear_alerts(team)
+t		"game_time": game_time,
 	}
 
 	# Granular profiling: only print when total > 2.5ms

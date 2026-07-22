@@ -174,12 +174,20 @@ func _unhandled_input(event):
 				else:
 					_send_left_click(event)
 
-	elif event is InputEventMouseMotion and is_box_selecting:
-		box_end = event.position
-		var r = Rect2(box_start, box_end - box_start).abs()
-		box_rect.position = r.position
-		box_rect.size = r.size
-		box_rect.visible = true
+		elif event is InputEventMouseMotion:
+			# 拖拽检测：按下左键后移动鼠标 → 开始框选
+			if _pending_left_click and _touch_start_pos.distance_to(event.position) > 5.0:
+				_pending_left_click = false
+				is_box_selecting = true
+				box_start = _touch_start_pos
+				box_end = event.position
+			# 框选进行中：更新矩形
+			if is_box_selecting:
+				box_end = event.position
+				var r = Rect2(box_start, box_end - box_start).abs()
+				box_rect.position = r.position
+				box_rect.size = r.size
+				box_rect.visible = true
 
 func _on_left_release(event):
 	if is_box_selecting:
@@ -327,11 +335,11 @@ func _try_select(event):
 		_update_selection_visuals()
 	else:
 		if not client_selected_ids:
-			# 点击空地 → 开始框选
+				# 点击空地 → 清除选择
 			client_selected_ids.clear()
 			emit_signal("selection_changed", [])
 			_update_selection_visuals()
-			is_box_selecting = true
+				# 不在此处开始框选，框选由拖拽触发
 func _send_left_click(event):
 	if not renderer: return
 	var cam = get_viewport().get_camera_3d()
