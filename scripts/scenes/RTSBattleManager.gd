@@ -1301,6 +1301,7 @@ func _is_valid_build_position(pos: Vector3) -> bool:
 		if t != 2: return false
 		for e in entities.get_children():
 			if e is GameEntity and e.health > 0:
+				if e is Building and e.entity_id == 7: continue  # 允许邻接已有桥
 				if e.global_position.distance_to(pos) < (e.body_radius + 0.5):
 					return false
 		# 至少一侧邻接陆地或已有桥
