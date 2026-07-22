@@ -121,10 +121,16 @@ func _input(event):
 					return
 				last_clicked_entity = clicked_entity
 				last_click_time = now
-				# 处理单击：Shift 追加/取消，否则替换选择
+				# 处理单击：Shift追加，否则替换选择（而非追加）
 				if clicked_entity in selected_entities:
-					_clear_selection()
+					if Input.is_key_pressed(KEY_SHIFT):
+						_remove_from_selection(clicked_entity)
+					else:
+						_clear_selection()
+				elif Input.is_key_pressed(KEY_SHIFT):
+					_add_to_selection(clicked_entity)
 				else:
+					_clear_selection()
 					_add_to_selection(clicked_entity)
 			else:
 				# 点击空地或非己方实体
@@ -157,6 +163,7 @@ func _input(event):
 					if clicked_entity in selected_entities:
 						_clear_selection()
 					else:
+						_clear_selection()
 						_add_to_selection(clicked_entity)
 				else:
 					if not selected_entities:

@@ -13,6 +13,12 @@ var client_selected_ids: Array = []
 	# Local control groups (mirrored with server)
 var local_groups: Dictionary = {}  # int -> Array[int]
 var _last_group_key: int = -1
+# Mobile touch delay
+var _pending_left_click: bool = false
+var _left_click_timer: float = 0.0
+var _touch_start_pos: Vector2 = Vector2.ZERO
+var _processing_delayed: bool = false
+const LEFT_CLICK_DELAY: float = 0.1
 var _last_group_time: float = 0.0
 const DOUBLE_TAP_THRESHOLD = 0.3
 # Query which groups an entity belongs to
@@ -105,6 +111,7 @@ func _unhandled_input(event):
 			if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 				_confirm_placement()
 			elif event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+				_pending_left_click = false
 				_cancel_placement()
 		# 触摸按下（移动端）
 		elif event is InputEventScreenTouch:
@@ -137,10 +144,17 @@ func _unhandled_input(event):
 							chud.show_alert_message("已设置驻扎点", Color(0.3, 0.7, 1.0))
 					get_viewport().set_input_as_handled()
 					return
-				_try_select(event)
+				if _processing_delayed:
+					_processing_delayed = false
+					_try_select(event)
+				else:
+					_touch_start_pos = event.position
+					_left_click_timer = LEFT_CLICK_DELAY
+					_pending_left_click = true
 			else:
 				_on_left_release(event)
 		elif event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+			_pending_left_click = false
 			# Ctrl+右键空地 → 取消驻扎点
 			if Input.is_key_pressed(KEY_CTRL) and not client_selected_ids.is_empty():
 				var _hit_id = _get_entity_id_under_mouse(event.position)
@@ -168,7 +182,13 @@ func _unhandled_input(event):
 		box_rect.visible = true
 
 # ---------- 选择 ----------
-func _try_select(event):
+		if _processing_delayed:
+			_processing_delayed = false
+			_try_select(event)
+		else:
+			_touch_start_pos = event.position
+			_left_click_timer = LEFT_CLICK_DELAY
+			_pending_left_click = true
 	var pos = event.position
 	var clicked_id = _get_entity_id_under_mouse(pos)
 	if clicked_id != -1:
@@ -199,10 +219,16 @@ func _try_select(event):
 		last_clicked_id = clicked_id
 		last_click_time = now
 
-		# 单击
+		# 单击：Shift追加，否则替换选择（而非追加）
 		if clicked_id in client_selected_ids:
-			client_selected_ids.clear()
+			if Input.is_key_pressed(KEY_SHIFT):
+				client_selected_ids.erase(clicked_id)
+			else:
+				client_selected_ids.clear()
+		elif Input.is_key_pressed(KEY_SHIFT):
+			client_selected_ids.append(clicked_id)
 		else:
+			client_selected_ids.clear()
 			client_selected_ids.append(clicked_id)
 
 		emit_signal("selection_changed", client_selected_ids.duplicate())
@@ -288,6 +314,14 @@ func _create_ring_for_entity(id):
 	ring.material_override.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	node.add_child(ring)
 	selection_rings[id] = ring
+	if _pending_left_click:
+		_left_click_timer -= 0.016
+		if _left_click_timer <= 0:
+			_pending_left_click = false
+			var ev = InputEventMouseButton.new()
+			ev.button_index = 1; ev.pressed = true; ev.position = _touch_start_pos
+			_processing_delayed = true
+			_unhandled_input(ev)
 
 func _process_selection_rings():
 	# 每帧更新选择环的位置（跟随目标移动）
@@ -310,6 +344,58 @@ func _process_selection_rings():
 		selection_rings.erase(id)
 
 # ---------- 右键命令 ----------
+func _try_select(event):
+	var pos = event.position
+	var clicked_id = _get_entity_id_under_mouse(pos)
+	if clicked_id != -1:
+		var info = _get_entity_info(clicked_id)
+		if not info: return
+
+		# 2v2 权限：只能选自己的单位
+		if renderer.my_peer_id != -1:
+			var owner = info.get("owner_peer_id", -1)
+			if owner != renderer.my_peer_id :
+				_send_left_click(event)
+				return
+		else:
+			var owner = info.get("team", -1)
+			
+			renderer = get_tree().get_first_node_in_group("client_renderer")
+			
+			if owner != renderer.player_team :
+				_send_left_click(event)
+				return
+		# 双击全选同类
+		var now = Time.get_ticks_msec() / 1000.0
+		if last_clicked_id == clicked_id and (now - last_click_time) < DOUBLE_CLICK_THRESHOLD:
+			_select_all_of_same_type(clicked_id, info)
+			last_clicked_id = -1
+			last_click_time = 0.0
+			return
+		last_clicked_id = clicked_id
+		last_click_time = now
+
+		# 单击：Shift追加，否则替换选择（而非追加）
+		if clicked_id in client_selected_ids:
+			if Input.is_key_pressed(KEY_SHIFT):
+				client_selected_ids.erase(clicked_id)
+			else:
+				client_selected_ids.clear()
+		elif Input.is_key_pressed(KEY_SHIFT):
+			client_selected_ids.append(clicked_id)
+		else:
+			client_selected_ids.clear()
+			client_selected_ids.append(clicked_id)
+
+		emit_signal("selection_changed", client_selected_ids.duplicate())
+		_update_selection_visuals()
+	else:
+		if not client_selected_ids:
+			# 点击空地 → 开始框选
+			client_selected_ids.clear()
+			emit_signal("selection_changed", [])
+			_update_selection_visuals()
+			is_box_selecting = true
 func _send_left_click(event):
 	if not renderer: return
 	var cam = get_viewport().get_camera_3d()
