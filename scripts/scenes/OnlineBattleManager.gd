@@ -902,6 +902,12 @@ func assign_nation(peer_id: int, nation: int):
 func _on_castle_died_2v2(peer_id: int):
 	if not player_info.has(peer_id): return
 	player_info[peer_id].alive = false
+		print("[GameOver-2v2] Castle died: peer=%d team=%d, checking team..." % [peer_id, team])
+		var _alive_count = 0
+		for _pid in player_info.keys():
+			if player_info[_pid].team == team and player_info[_pid].alive:
+				_alive_count += 1
+		print("[GameOver-2v2] Team %d alive players: %d" % [team, _alive_count])
 	var team = player_info[peer_id].team
 	# 整队检查
 	for pid in player_info.keys():
@@ -909,8 +915,10 @@ func _on_castle_died_2v2(peer_id: int):
 			return   # 还有存活，不结束
 	# 全队阵亡
 	game_over = true
+		print("[GameOver-2v2] GAME OVER! Winner team=%d, notifying players..." % [RTSConfig.Team.BLUE if team == RTSConfig.Team.RED else RTSConfig.Team.RED])
 	var winner = RTSConfig.Team.BLUE if team == RTSConfig.Team.RED else RTSConfig.Team.RED
 	for pid in player_info.keys():
+		if pid >= 1000: continue
 		NetworkManager.notify_game_over.rpc_id(pid, winner)
 
 # 1v1 的城堡死亡已在 RTSBattleManager 中通过 _on_castle_died 处理（游戏结束通知玩家）
@@ -1521,8 +1529,8 @@ func build_snapshot_for_player(peer_id: int) -> Dictionary:
 		"gather_counts": {peer_id: team_gather_counts.get(peer_id, {"gold":0, "wood":0, "stone":0, "food":0, "oil":0})},
 		"income_rate": {peer_id: team_income_rates.get(peer_id, {"gold":0.0, "wood":0.0, "stone":0.0, "food":0.0, "oil":0.0})},
 		"player_info": player_info,
-		"alerts": _get_and_clear_alerts(team)
-t		"game_time": game_time,
+		"alerts": _get_and_clear_alerts(team),
+		"game_time": game_time,
 	}
 
 	# Granular profiling: only print when total > 2.5ms
