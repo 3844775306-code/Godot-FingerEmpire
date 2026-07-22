@@ -657,7 +657,7 @@ func _1v1_right_click(team: int, data: Dictionary):
 	var fi = 0
 	for entity in entities.get_children():
 		if entity is Army and entity.team == team and entity.get_instance_id() in selected_ids:
-			if not is_instance_valid(entity): continue
+		if not is_instance_valid(entity): continue
 			if not shift_held:
 				entity._clear_command_queue()
 			entity._force_queue_next = shift_held
@@ -738,7 +738,7 @@ func _2v2_right_click(peer_id: int, data: Dictionary):
 	var fi = 0
 	for entity in entities.get_children():
 		if entity is Army and entity.get("owner_peer_id") == peer_id and entity.get_instance_id() in selected_ids:
-			if not is_instance_valid(entity): continue
+		if not is_instance_valid(entity): continue
 			if not shift_held:
 				entity._clear_command_queue()
 			entity._force_queue_next = shift_held
@@ -1139,7 +1139,7 @@ func build_snapshot_for_team(team: int) -> Dictionary:
 	var _ms = RTSConfig.MAP_SIZE
 	var team_units = _entities_by_team.get(team, [])
 	for entity in team_units:
-		if entity.health > 0 and entity.vision_range > 0:
+		if is_instance_valid(entity) and entity.health > 0 and entity.vision_range > 0:
 			var g = world_to_grid(entity.global_position)
 			var r = entity.vision_range
 			var offsets = _get_vis_offsets(int(r)); for off in offsets:
@@ -1153,6 +1153,7 @@ func build_snapshot_for_team(team: int) -> Dictionary:
 
 	# --- Own-team entities: delta check (from typed cache) ---
 	for entity in _entities_by_team.get(team, []):
+		if not is_instance_valid(entity): continue
 		if entity.health <= 0:
 			dead.append(entity.get_instance_id())
 			continue
@@ -1168,6 +1169,7 @@ func build_snapshot_for_team(team: int) -> Dictionary:
 	# --- Enemy/neutral team entities: visibility grid check ---
 	var enemy_team = RTSConfig.Team.RED if team == RTSConfig.Team.BLUE else RTSConfig.Team.BLUE
 	for entity in _entities_by_team.get(enemy_team, []):
+		if not is_instance_valid(entity): continue
 		if entity.health <= 0:
 			dead.append(entity.get_instance_id())
 			continue
@@ -1179,6 +1181,7 @@ func build_snapshot_for_team(team: int) -> Dictionary:
 
 	# --- Neutral entities (from _entities_by_team[NEUTRAL]): only if visible or explored ---
 	for entity in _entities_by_team.get(RTSConfig.Team.NEUTRAL, []):
+		if not is_instance_valid(entity): continue
 		if entity.health <= 0:
 			dead.append(entity.get_instance_id())
 			continue
@@ -1431,7 +1434,7 @@ func build_snapshot_for_player(peer_id: int) -> Dictionary:
 	var team_units = _entities_by_team.get(team, [])
 	for entity in team_units:
 		if not entity: continue
-		if entity.health > 0 and entity.vision_range > 0:
+		if is_instance_valid(entity) and entity.health > 0 and entity.vision_range > 0:
 			var g = world_to_grid(entity.global_position)
 			var r = entity.vision_range
 			var offsets = _get_vis_offsets(int(r)); for off in offsets:
@@ -1447,6 +1450,7 @@ func build_snapshot_for_player(peer_id: int) -> Dictionary:
 	# --- Own entities: delta check ---
 	var own_team_arr = _entities_by_team.get(team, [])
 	for entity in own_team_arr:
+		if not is_instance_valid(entity): continue
 		if entity.health <= 0:
 			dead.append(entity.get_instance_id())
 			continue
@@ -1456,13 +1460,14 @@ func build_snapshot_for_player(peer_id: int) -> Dictionary:
 		if not is_full:
 			var h = _compute_entity_hash(entity)
 			if not _should_include_in_delta(snapshot_key, id, h):
-				continue
+			continue
 		delta.append(_serialize_entity_compact(entity))
 	var _t_own = (Time.get_ticks_usec() - _t0) / 1000.0
 
 	# --- Enemy team entities: visibility grid check ---
 	var enemy_team = RTSConfig.Team.RED if team == RTSConfig.Team.BLUE else RTSConfig.Team.BLUE
 	for entity in _entities_by_team.get(enemy_team, []):
+		if not is_instance_valid(entity): continue
 		if entity.health <= 0:
 			dead.append(entity.get_instance_id())
 			continue
@@ -1476,6 +1481,7 @@ func build_snapshot_for_player(peer_id: int) -> Dictionary:
 	# --- Neutral entities: visible or explored ---
 	for entity in _entities_by_team.get(RTSConfig.Team.NEUTRAL, []):
 		if not entity:continue
+		if not is_instance_valid(entity): continue
 		if entity.health <= 0:
 			dead.append(entity.get_instance_id())
 			continue
