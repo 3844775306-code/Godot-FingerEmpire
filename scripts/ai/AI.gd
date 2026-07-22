@@ -19,7 +19,7 @@ const ATTACK_COOLDOWN: float = 120.0
 var production_step: int = 0
 
 var wanted_buildings: Array = [20, 21, 23, 25, 42, 26, 24, 29, 41, 52, 53]
-var wanted_units: Array = [11,12,15,16,17,18,35,36,37,38,39,40,13,43,44,45,46,47,48,49,50,58,59]
+var wanted_units: Array = [11,12,15,16,17,18,35,36,37,38,39,40,13,43,44,45,46,47,48,49,50,58,59,5,6]
 var target_army_count: int = 7
 var target_house_count: int = 8
 var desired_worker_count: int = 8

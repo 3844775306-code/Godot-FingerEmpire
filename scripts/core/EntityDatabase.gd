@@ -38,6 +38,31 @@ func _init_data():
 			"body_radius": 0.6, "resource_type": "oil"
 		},
 
+		# ==================== 手推车 (ID 5) ====================
+		{
+			"id": 5, "type": 2, "name": "手推车", "team": 0,
+			"cost": {"wood": 80, "gold": 20},
+			"max_health": 80, "armor": 5, "speed": 3.0,
+			"vision_range": 6, "body_radius": 0.6, "can_move": true, "target_type": 0
+		},
+		# ==================== 贸易车 (ID 6) ====================
+		{
+			"id": 6, "type": 2, "name": "贸易车", "team": 0,
+			"cost": {"wood": 100, "gold": 50},
+			"max_health": 100, "armor": 10, "speed": 3.0,
+			"vision_range": 6, "body_radius": 0.7, "can_move": true, "target_type": 0
+		},
+		# ==================== 桥 (ID 7) ====================
+		{
+			"id": 7, "type": 1, "name": "桥", "team": 0,
+			"max_health": 300, "armor": 20, "body_radius": 0.8
+		},
+		# ==================== 梯子 (ID 8) ====================
+		{
+			"id": 8, "type": 1, "name": "梯子", "team": 0,
+			"max_health": 150, "armor": 10, "body_radius": 0.5
+		},
+
 		# ==================== 军队 (ID 10-18) ====================
 		{
 			"id": 10, "type": 2, "name": "农民", "team": 0,
@@ -117,11 +142,11 @@ func _init_data():
 			"id": 20, "type": 1, "name": "主城", "team": 0,
 			"cost": {"wood": 0, "gold": 0},
 			"max_health": 3000, "armor": 20, "body_radius": 1.2,
-			"produces": [ {"unit_id": 10, "cooldown": 3.0, "queue_limit": 5}, {"unit_id": 19, "cooldown": 4.0, "queue_limit": 5} ],
+			"produces": [ {"unit_id": 10, "cooldown": 3.0, "queue_limit": 5}, {"unit_id": 19, "cooldown": 4.0, "queue_limit": 5}, {"unit_id": 5, "cooldown": 8.0, "queue_limit": 3}, {"unit_id": 6, "cooldown": 10.0, "queue_limit": 3} ],
 			"upgrades": [
 				{ "level": 2, "cost": {"wood": 50, "stone": 50}, "health_bonus": 200, "armor_bonus": 5 , "unlocks_unit": 19},
-				{ "level": 3, "cost": {"stone": 200, "gold": 150}, "health_bonus": 300, "armor_bonus": 10 },
-				{ "level": 4, "cost": {"gold": 300, "oil": 200}, "health_bonus": 400, "armor_bonus": 15 },
+				{ "level": 3, "cost": {"stone": 200, "gold": 150}, "health_bonus": 300, "armor_bonus": 10, "unlocks_unit": 5 },
+				{ "level": 4, "cost": {"gold": 300, "oil": 200}, "health_bonus": 400, "armor_bonus": 15, "unlocks_unit": 6 },
 				{ "level": 5, "cost": {"gold": 500, "oil": 400}, "health_bonus": 500, "armor_bonus": 20 }
 			]
 		},
@@ -215,8 +240,8 @@ func _init_data():
 			"cost": {"stone": 30},
 			"max_health": 700, "armor": 30, "body_radius": 1.0,
 			"upgrades": [
-				{ "level": 2, "cost": {"stone": 50}, "health_bonus": 200, "armor_bonus": 10 },
-				{ "level": 3, "cost": {"stone": 80, "gold": 30}, "health_bonus": 300, "armor_bonus": 15 },
+				{ "level": 2, "cost": {"stone": 50}, "health_bonus": 200, "armor_bonus": 10, "unlocks_unit": 5 },
+				{ "level": 3, "cost": {"stone": 80, "gold": 30}, "health_bonus": 300, "armor_bonus": 15, "unlocks_unit": 6 },
 				{ "level": 4, "cost": {"gold": 100, "oil": 50}, "health_bonus": 400, "armor_bonus": 20 },
 				{ "level": 5, "cost": {"gold": 150, "oil": 100}, "health_bonus": 500, "armor_bonus": 25 }
 			]
@@ -458,8 +483,8 @@ func _init_data():
 			"max_health": 4000, "attack": 40, "attack_speed": 0.5, "attack_range": 5.0,
 			"body_radius": 1.5, "armor": 60,
 			"upgrades": [
-				{ "level": 2, "cost": {"stone": 300, "gold": 200}, "health_bonus": 500, "attack_bonus": 5, "armor_bonus": 10 },
-				{ "level": 3, "cost": {"stone": 500, "gold": 350}, "health_bonus": 700, "attack_bonus": 10, "armor_bonus": 15 },
+				{ "level": 2, "cost": {"stone": 300, "gold": 200}, "health_bonus": 500, "attack_bonus": 5, "armor_bonus": 10, "unlocks_unit": 5 },
+				{ "level": 3, "cost": {"stone": 500, "gold": 350}, "health_bonus": 700, "attack_bonus": 10, "armor_bonus": 15, "unlocks_unit": 6 },
 				{ "level": 4, "cost": {"gold": 500, "oil": 400}, "health_bonus": 1000, "attack_bonus": 15, "armor_bonus": 20 },
 				{ "level": 5, "cost": {"gold": 800, "oil": 600}, "health_bonus": 1200, "attack_bonus": 20, "armor_bonus": 25 }
 			]

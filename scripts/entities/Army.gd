@@ -52,6 +52,14 @@ var _animal_reproduce_timer: float = 45.0
 var _animal_grow_timer: float = 0.0
 var _animal_food_reward: int = 0
 
+# Cart vars
+enum CartState { IDLE, CHASING, FOLLOWING }
+var _cart_state: int = CartState.IDLE
+var _cart_owner: WeakRef = null
+var _cart_search_timer: float = 0.0
+const CART_FOLLOW_DIST: float = 1.5     # 后方跟随距离
+const CART_CHASE_SPEED_MULT: float = 2.0 # 追赶速度倍数
+
 # Official vars
 var _garrison_target_id: int = -1
 var _garrison_building: WeakRef = null
@@ -245,6 +253,11 @@ func _physics_process(delta):
 		die_official_cleanup()
 		return
 	
+	# 手推车/贸易车行为
+	if entity_id in [5, 6]:
+		_process_cart(delta)
+		return
+
 	# 动物行为（每5帧处理一次）
 	if _animal_type != "":
 		if Engine.get_process_frames() % 5 == 0:
@@ -1057,6 +1070,7 @@ func _process_merchant(delta):
 					astar_dist = 0.0
 					for j in range(1, path.size()): astar_dist += path[j-1].distance_to(path[j])
 			_merchant_trade_volume = _calc_trade_volume(own.upgrade_level, astar_dist)
+			if has_meta("_cart_trade_bonus"): _merchant_trade_volume += get_meta("_cart_trade_bonus")
 			_merchant_state = 1
 
 		1:  # BUYING at castle: spend resource, get gold
@@ -1339,6 +1353,9 @@ func stop_movement():
 
 # Override die() for official cleanup
 func die_official_cleanup():
+	# Cart cleanup
+	if entity_id in [5, 6]:
+		_clear_cart_owner()
 	# Merchant cleanup
 	if entity_id >= 43 and entity_id <= 45:
 		_on_merchant_die()
@@ -1373,6 +1390,106 @@ func _is_gather_paused() -> bool:
 	if bm.get("gather_paused") is bool:
 		return bm.gather_paused
 	return false
+
+
+	# ==================== Cart System (手推车/贸易车) ====================
+
+	func _process_cart(delta):
+		var bm = _get_bm()
+		if not bm: return
+
+		var owner = _cart_owner.get_ref() if _cart_owner else null
+		if owner and not is_instance_valid(owner):
+			_clear_cart_owner()
+			owner = null
+
+		match _cart_state:
+			CartState.IDLE:
+				_cart_search_timer -= delta
+				if _cart_search_timer <= 0:
+					_cart_search_timer = 1.0
+					var new_owner = _find_cart_owner()
+					if new_owner:
+						_cart_owner = weakref(new_owner)
+						new_owner.set_meta("_has_cart", get_instance_id())
+						_cart_state = CartState.CHASING
+
+			CartState.CHASING:
+				if not owner:
+					_cart_state = CartState.IDLE
+					return
+				var dist = global_position.distance_to(owner.global_position)
+				if dist < 3.0:
+					_cart_state = CartState.FOLLOWING
+				else:
+					var chase_speed = owner.speed * CART_CHASE_SPEED_MULT
+					var dir = (owner.global_position - global_position).normalized()
+					global_position += dir * chase_speed * delta
+					look_at(Vector3(owner.global_position.x, global_position.y, owner.global_position.z), Vector3.UP)
+					_apply_cart_buff(owner)
+
+			CartState.FOLLOWING:
+				if not owner:
+					_cart_state = CartState.IDLE
+					return
+				var owner_forward = -Vector3(cos(owner.rotation.y), 0, -sin(owner.rotation.y))
+				var target_pos = owner.global_position + owner_forward * CART_FOLLOW_DIST
+				target_pos.y = global_position.y
+				global_position = global_position.lerp(target_pos, min(delta * 3.0, 1.0))
+				rotation.y = owner.rotation.y
+				_apply_cart_buff(owner)
+
+	func _find_cart_owner() -> GameEntity:
+		var bm = _get_bm()
+		if not bm: return null
+		var best: GameEntity = null
+		var best_dist = 10.0
+		var my_team = team
+		for e in bm.entities.get_children():
+			if not (e is Army) or e.health <= 0 or e.team != my_team: continue
+			if e.has_meta("_has_cart"): continue
+			if entity_id == 5:
+				if e.entity_id != 10: continue
+			elif entity_id == 6:
+				if e.entity_id not in [43, 44, 45, 51]: continue
+			var d = global_position.distance_to(e.global_position)
+			if d < best_dist:
+				best_dist = d
+				best = e
+		return best
+
+	func _apply_cart_buff(owner):
+		if not is_instance_valid(owner): return
+		if entity_id == 5 and owner.entity_id == 10:
+			if not owner.has_meta("_cart_orig_speed"):
+				owner.set_meta("_cart_orig_speed", owner.speed)
+				owner.set_meta("_cart_orig_max_cargo", owner.max_cargo)
+			owner.speed = owner.get_meta("_cart_orig_speed") * 1.5
+			owner.max_cargo = owner.get_meta("_cart_orig_max_cargo") + 50
+		elif entity_id == 6 and owner.entity_id in [43, 44, 45, 51]:
+			if not owner.has_meta("_cart_orig_speed"):
+				owner.set_meta("_cart_orig_speed", owner.speed)
+			owner.speed = owner.get_meta("_cart_orig_speed") * 1.5
+			if not owner.has_meta("_cart_trade_bonus"):
+				owner.set_meta("_cart_trade_bonus", 80)
+
+	func _clear_cart_owner():
+		var owner = _cart_owner.get_ref() if _cart_owner else null
+		if owner and is_instance_valid(owner):
+			if owner.has_meta("_cart_orig_speed"):
+				owner.speed = owner.get_meta("_cart_orig_speed")
+				owner.remove_meta("_cart_orig_speed")
+			if owner.has_meta("_cart_orig_max_cargo"):
+				owner.max_cargo = owner.get_meta("_cart_orig_max_cargo")
+				owner.remove_meta("_cart_orig_max_cargo")
+			if owner.has_meta("_cart_trade_bonus"):
+				owner.remove_meta("_cart_trade_bonus")
+			owner.remove_meta("_has_cart")
+		_cart_owner = null
+		_cart_state = CartState.IDLE
+
+	func die_cart_cleanup():
+		_clear_cart_owner()
 
 # ==================== Garrison System ====================
 func _find_nearest_enemy_in_vision():

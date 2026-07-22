@@ -39,29 +39,28 @@ func set_selected(sel: bool):
 
 func set_move_target(pos: Vector3, stop_range: float = 0.0):
 	# Use Vector2i key for fast hashing (was string "%d,%d")
+	if astar_target.distance_to(pos)<0.5:return
 	var key = Vector2i(int(pos.x), int(pos.z))
 	if _blacklist.has(key):
-		# Expire blacklist after 5 seconds (300 frames at 60fps)
-		if Engine.get_process_frames() - _blacklist[key] < 300:
-			return
-		_blacklist.erase(key)
+		return  # permanently blacklisted (cleared on building placement)
 
 	# Only cache normal movement (stop_range==0). Attacks recalc every time.
-	var use_cache = (stop_range == 0.0)
-	if use_cache and _path_cache.has(key):
-		astar_path = _path_cache[key]
-		if _is_selected: _show_path()
-		return
+	#var use_cache = (stop_range == 0.0)
+	#if use_cache and _path_cache.has(key):
+		#astar_path = _path_cache[key]
+		#if _is_selected: _show_path()
+		#return
 	# New target: calculate and cache
 	astar_target = pos
 	astar_path = _calculate_astar_path(pos, stop_range)
 	if astar_path.size() > 0:
 		_path_cache[key] = astar_path
 	else:
-		_blacklist[key] = Engine.get_process_frames()  # unreachable, will expire
+		_blacklist[key] = true
 	if _is_selected: _show_path()
 
 func recalculate():
+	
 	_path_cache.clear()  # new building may block cached paths
 	_blacklist.clear()  # new building may open paths
 	# building recalc - cached paths cleared
@@ -115,7 +114,7 @@ func process_move(delta, bm: RTSBattleManager):
 	var move_target = target_pos
 	# No A* path = no movement, unless close to target (final approach)
 	if astar_path.size() == 0:
-		if astar_target.distance_squared_to(_army.global_position) > 9.0:
+		if astar_target.distance_squared_to(_army.global_position) > 3.0:
 			return  # too far, no path → stay put
 		# Close enough: allow final approach to exact target
 
@@ -135,8 +134,27 @@ func process_move(delta, bm: RTSBattleManager):
 
 	
 
+	# Mountain avoidance: deflect if next step is impassable
+	var next_pos = _army.global_position + move_dir * _army.speed * 0.016
+	if bm and not _army.water_capable:
+		var terr = bm.get_terrain_at(next_pos)
+		if terr == 1:
+			var alt = move_dir.rotated(Vector3.UP, deg_to_rad(45))
+			next_pos = _army.global_position + alt * _army.speed * 0.016
+			if bm.get_terrain_at(next_pos) == 1:
+				alt = move_dir.rotated(Vector3.UP, deg_to_rad(-90))
+				next_pos = _army.global_position + alt * _army.speed * 0.016
+				if bm.get_terrain_at(next_pos) == 1: return
+			move_dir = alt
 	_army.velocity = Vector3(move_dir.x, 0, move_dir.z) * _army.speed
 	_army.move_and_slide()
+	# Movement sounds (every 10 frames, when actually moving)
+	if _army.speed > 0.1 and Engine.get_process_frames() % 40 == 0:
+		var terr = bm.get_terrain_at(_army.global_position) if bm else 0
+		if terr == 2:
+			_army._play_sfx_if_visible("sail")
+		else:
+			_army._play_sfx_if_visible("walk")
 
 	# Rotate toward movement direction
 	if move_dir.length() > 0.01:
@@ -153,14 +171,16 @@ func process_move(delta, bm: RTSBattleManager):
 		var map = bm.get_node("Map")
 		if map and map.has_method("get_height_at"):
 			var target_height = map.get_height_at(_army.global_position)
-			# Climb friendly walls
+			# Climb friendly walls + laddered enemy walls
 			var gpos2 = bm.world_to_grid(_army.global_position)
 			for e in bm.entities.get_children():
-				if e is Building and e.entity_id == 27 and e.health > 0 and e.team == _army.team:
+				if e is Building and e.entity_id == 27 and e.health > 0:
 					var wg = bm.world_to_grid(e.global_position)
 					if wg.x == gpos2.x and wg.y == gpos2.y:
-						target_height += 2.5  # stand on wall
-						break
+						if e.team == _army.team:
+							target_height += 4.5; break  # friendly wall
+						elif _has_adjacent_ladder(bm, wg, _army.team):
+							target_height += 4.5; break  # laddered enemy wall
 			_army.global_position.y = move_toward(_army.global_position.y, target_height, 5.0 * delta)
 
 # ==================== Collision separation ====================
@@ -173,6 +193,8 @@ func apply_collision(delta):
 		if not (entity is GameEntity) or entity.health <= 0: continue
 		if entity is WorldResource: continue
 		if entity is Building and entity.entity_id == 27 and entity.team == _army.team: continue  # pass through friendly walls
+		if entity is Building and entity.entity_id == 27 and entity.team != _army.team:
+			if _has_adjacent_ladder(bm, bm.world_to_grid(entity.global_position), _army.team): continue  # pass through laddered enemy walls
 
 		var dist = _army.global_position.distance_to(entity.global_position)
 		var min_dist = _army.body_radius + entity.body_radius
@@ -276,6 +298,8 @@ static var _wall_exclude: Vector2i = Vector2i(-999, -999)
 static var _wall_frame: int = -1
 static var _wall_bm_id: int = -1
 static var _wall_team: int = -1  # friendly-wall passability is team-dependent
+static var _bridge_set: Dictionary = {}  # Vector2i -> true (桥所在格子)
+static var _ladder_set: Dictionary = {}  # Vector2i -> true (梯子使该敌方城墙格可通行)
 
 func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Array:
 	var _pt = Time.get_ticks_usec()
@@ -292,11 +316,32 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 	var bm_id = bm.get_instance_id()
 	if _wall_frame != frame or _wall_bm_id != bm_id or _wall_team != _army.team or _wall_exclude != end_tile:
 		_wall_set.clear()
+		_bridge_set.clear()
+		_ladder_set.clear()
 		for e in bm.entities.get_children():
 			if not (e is GameEntity) or e.health <= 0: continue
 			if not (e is Building or e is WorldResource): continue
 			var eg = bm.world_to_grid(e.global_position)
 			if eg == end_tile: continue
+			# 桥不阻挡通行，单独记录
+			if e is Building and e.entity_id == 7:
+				_bridge_set[eg] = true
+				continue
+			# 梯子不阻挡通行，且使其相邻敌方城墙可通行
+			if e is Building and e.entity_id == 8:
+				# 标记梯子相邻的敌方城墙格为可通行
+				for dx in range(-1, 2):
+					for dy in range(-1, 2):
+						if dx == 0 and dy == 0: continue
+						var nx = eg.x + dx; var ny = eg.y + dy
+						if nx < 0 or nx >= RTSConfig.MAP_SIZE or ny < 0 or ny >= RTSConfig.MAP_SIZE: continue
+						# 检查相邻格是否有敌方城墙
+						for e2 in bm.entities.get_children():
+							if e2 is Building and e2.entity_id == 27 and e2.team != _army.team and e2.health > 0:
+								var wg = bm.world_to_grid(e2.global_position)
+								if wg.x == nx and wg.y == ny:
+									_ladder_set[wg] = true
+				continue
 			if e is Building and e.entity_id == 27 and e.team == _army.team: continue
 			_wall_set[eg] = true
 		_wall_frame = frame; _wall_bm_id = bm_id; _wall_team = _army.team; _wall_exclude = end_tile
@@ -311,7 +356,7 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 	g_score[start_tile] = 0.0
 	open_list.push(start_tile, _heuristic(start_tile, end_tile) * 1.2)
 
-	var max_nodes = 800; var nodes_explored = 0
+	var max_nodes = 1000; var nodes_explored = 0
 	var from_height := _get_tile_height(start_tile, bm)
 
 	while not open_list.is_empty() and nodes_explored < max_nodes:
@@ -352,7 +397,7 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 				if abs(neighbor_h - from_height) > 3.0: continue
 
 				# Wall collision (skip for goal tile — allow reaching target)
-				if neighbor != end_tile and wall_cache.has(neighbor): continue
+				if neighbor != end_tile and wall_cache.has(neighbor) and not _ladder_set.has(neighbor): continue
 
 				var step_cost = terrain_cost * (1.414 if (dx != 0 and dy != 0) else 1.0)
 				var tentative_g = cur_g + step_cost
@@ -362,14 +407,20 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 					g_score[neighbor] = tentative_g
 					open_list.push(neighbor, tentative_g + _heuristic(neighbor, end_tile) * 1.2)
 
-	if Engine.get_process_frames() % 60 == 0: print("[Profile-A*] %.1fms nodes=%d" % [(Time.get_ticks_usec() - _pt) / 1000.0, nodes_explored])
+	var _elapsed = (Time.get_ticks_usec() - _pt) / 1000.0
+	if _elapsed > 3.0 or Engine.get_process_frames() % 120 == 0:
+		var gm = _army.get_tree().get_first_node_in_group("battle_manager")
+		var gt = gm.game_time if gm else 0.0
+		print("[A*] t=%.1fs elapsed=%.1fms nodes=%d" % [gt, _elapsed, nodes_explored])
 	return []
 
 func _heuristic(a: Vector2i, b: Vector2i) -> float:
 	return abs(a.x - b.x) + abs(a.y - b.y)
 
 func _get_terrain_cost(tile: Vector2i, bm: RTSBattleManager, wall_cache: Dictionary) -> float:
-	# Returns 999.0 for impassable; single pass merges wall + terrain check
+	# 梯子使敌方城墙可通行
+	if _ladder_set.has(tile): return 3.0
+	# 普通建筑/资源阻挡
 	if wall_cache.has(tile): return 5.0
 	var terrain = bm.get_terrain_at_grid(tile.x, tile.y)
 	if _army.water_capable:
@@ -377,7 +428,7 @@ func _get_terrain_cost(tile: Vector2i, bm: RTSBattleManager, wall_cache: Diction
 	match terrain:
 		0: return 1.0
 		1: return 2.5
-		2: return 999.0
+		2: return 1.5 if _bridge_set.has(tile) else 999.0  # 桥使水可通行
 	return 999.0
 
 func _get_tile_height(tile: Vector2i, bm: RTSBattleManager) -> float:
@@ -397,3 +448,15 @@ func _reconstruct_path(came_from: Dictionary, end_tile: Vector2i) -> Array:
 		path.append(Vector3(current.x - half, 0, current.y - half))
 	path.reverse()
 	return path
+
+# 检查指定城墙格是否有己方梯子相邻
+func _has_adjacent_ladder(bm: RTSBattleManager, wall_tile: Vector2i, my_team: int) -> bool:
+	for dx in range(-1, 2):
+		for dy in range(-1, 2):
+			if dx == 0 and dy == 0: continue
+			for e in bm.entities.get_children():
+				if e is Building and e.entity_id == 8 and e.health > 0 and e.team == my_team:
+					var lt = bm.world_to_grid(e.global_position)
+					if lt.x == wall_tile.x + dx and lt.y == wall_tile.y + dy:
+						return true
+	return false
