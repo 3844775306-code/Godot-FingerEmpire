@@ -12,14 +12,16 @@ var attack_type: int = 1          # 1=普通, 2=电击, 3=冰冻, 4=灼烧
 var time_alive: float = 0.0
 var max_lifetime: float = 10.0
 var hit: bool = false
+var target_pos: Vector3 = Vector3.ZERO   # 固定目标点（非追踪模式）
+var _saved_dir: Vector3 = Vector3.ZERO
 
 func _ready():
 	add_to_group("bullets")
 	if damage_radius > 0 or (source and source.entity_id in [16,17,26,39]):
-		# 投石车用石头，火炮用炮弹
-		if source and source.entity_id == 17 and ResourceLoader.exists("res://models/defense/weapon-stone.glb"):
+		# 投石车/巨型投石机用石头，火炮用炮弹
+		if source and source.entity_id in [17, 59] and ResourceLoader.exists("res://models/defense/weapon-stone.glb"):
 			var st = load("res://models/defense/weapon-stone.glb")
-			if st: var s = st.instantiate(); if s: s.scale = Vector3.ONE * 2.5; add_child(s)
+			if st: var s = st.instantiate(); if s: s.scale = Vector3.ONE * (3.5 if source.entity_id == 59 else 2.5); add_child(s)
 		elif ResourceLoader.exists("res://models/pirate/cannon-ball.glb"):
 			var cb = load("res://models/pirate/cannon-ball.glb")
 			if cb: var c = cb.instantiate(); if c: add_child(c)
@@ -60,8 +62,17 @@ func _physics_process(delta):
 		queue_free()
 		return
 
-	# 飞向目标
-	if target and is_instance_valid(target):
+	# 固定目标点模式（投石车/巨型投石机）：飞向固定位置
+	if target_pos != Vector3.ZERO:
+		if _saved_dir == Vector3.ZERO:
+			_saved_dir = (target_pos - global_position).normalized()
+		global_position += _saved_dir * speed * delta
+		# 到达目标点 → 对周围敌人造成AOE伤害
+		if global_position.distance_to(target_pos) < 0.5:
+			_on_hit_pos()
+			return
+	# 追踪模式：飞向目标单位
+	elif target and is_instance_valid(target):
 		var dir = (target.global_position - global_position).normalized()
 		global_position += dir * speed * delta
 		# 检查是否足够近（命中）
@@ -120,4 +131,27 @@ func _on_hit(entity: GameEntity):
 	if attack_type == 2: entity.shock(0.5)
 	elif attack_type == 3: entity.freeze(3.0)
 
+	queue_free()
+
+# 固定目标点命中：对落点周围所有敌人造成AOE伤害
+func _on_hit_pos():
+	if hit: return
+	hit = true
+	if damage_radius > 0: AudioManager.play_sfx("cannon_hit")
+	var src = source if is_instance_valid(source) else null
+
+	if damage_radius > 0:
+		var bm = _get_bm()
+		if bm:
+			var nearby = bm.get_nearby_enemies(global_position, damage_radius, team)
+			for e in nearby:
+				if e == src: continue
+				if e.global_position.distance_to(global_position) <= damage_radius:
+					e.take_damage(damage, src)
+		else:
+			for e in get_tree().get_nodes_in_group("entities"):
+				if e == src: continue
+				if e is GameEntity and e.team != team:
+					if e.global_position.distance_to(global_position) <= damage_radius:
+						e.take_damage(damage, src)
 	queue_free()

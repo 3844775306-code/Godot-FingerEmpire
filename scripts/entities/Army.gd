@@ -517,8 +517,8 @@ func _attack(target, delta):
 
 	# 攻击音效
 	var _sfx = ""
-	if entity_id in [12, 26, 33, 13]: _sfx = "arrow_shoot"
-	elif entity_id in [16, 17]: _sfx = "cannon_fire" if entity_id == 16 else "treb_fire"
+	if entity_id in [12, 26, 33, 13, 58]: _sfx = "arrow_shoot"
+	elif entity_id in [16, 17, 59]: _sfx = "cannon_fire" if entity_id == 16 else "treb_fire"
 	elif entity_id in [15]: _sfx = "sword_swing"
 	elif entity_id in [11, 30, 49, 18, 35]: _sfx = "heavy_swing"
 	elif entity_id in [38, 40]: _sfx = "sword_swing"
@@ -572,9 +572,19 @@ func _attack(target, delta):
 			bullet.team = team
 			bullet.damage = attack
 			bullet.speed = 8.0
-			bullet.target = target
 			bullet.source = self
 			bullet.damage_radius = damage_radius
+
+			# 投石车(17) / 巨型投石机(59)：子弹飞向固定位置，不追踪目标
+			if entity_id == 17 or entity_id == 59:
+				var tpos = target.global_position
+				# 巨型投石机50%概率打偏
+				if entity_id == 59 and randf() < 0.5:
+					var miss_offset = Vector3(randf_range(-attack_range, attack_range), 0, randf_range(-attack_range, attack_range))
+					tpos += miss_offset
+				bullet.target_pos = tpos
+			else:
+				bullet.target = target
 
 			var angle_offset = 0.0
 			if bullet_count > 1 and spread_angle > 0:
@@ -783,6 +793,8 @@ func _find_enemy_in_range():
 		if entity == self or not is_instance_valid(entity) or entity.health <= 0: continue
 		if entity is WorldResource: continue
 		if entity.get("_animal_type") != null and str(entity.get("_animal_type")) != "": continue
+		# 攻城车只攻击建筑
+		if entity_id == 18 and not (entity is Building): continue
 		if not bm:  # fallback: filter by team
 			if entity.team == team: continue
 			if entity is Building and entity.team == team: continue

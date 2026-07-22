@@ -176,12 +176,13 @@ func _init_data():
 			"produces": [
 				{ "unit_id": 18, "cooldown": 6.0, "queue_limit": 3 },
 				{ "unit_id": 16, "cooldown": 8.0, "queue_limit": 2 },
-				{ "unit_id": 17, "cooldown": 10.0, "queue_limit": 2 }
+				{ "unit_id": 17, "cooldown": 10.0, "queue_limit": 2 },
+				{ "unit_id": 58, "cooldown": 5.0, "queue_limit": 8 }
 			],
 			"upgrades": [
 				{ "level": 2, "cost": {"wood": 80, "stone": 40}, "health_bonus": 100, "unlocks_unit": 16 },
 				{ "level": 3, "cost": {"stone": 100, "gold": 60}, "health_bonus": 150, "unlocks_unit": 17 },
-				{ "level": 4, "cost": {"gold": 150, "oil": 80}, "health_bonus": 200 },
+				{ "level": 4, "cost": {"gold": 150, "oil": 80}, "health_bonus": 200, "unlocks_unit": 58 },
 				{ "level": 5, "cost": {"gold": 250, "oil": 150}, "health_bonus": 250 }
 			]
 		},
@@ -280,12 +281,13 @@ func _init_data():
 			"produces": [
 				{ "unit_id": 36, "cooldown": 12.0, "queue_limit": 5 },
 				{ "unit_id": 37, "cooldown": 14.0, "queue_limit": 5 },
-				{ "unit_id": 38, "cooldown": 16.0, "queue_limit": 5 }
+				{ "unit_id": 38, "cooldown": 16.0, "queue_limit": 5 },
+				{ "unit_id": 59, "cooldown": 15.0, "queue_limit": 3 }
 			],
 			"upgrades": [
-				{ "level": 2, "cost": {"stone": 150, "oil": 100}, "health_bonus": 150, "unlocks_unit": 36 },
-				{ "level": 3, "cost": {"stone": 250, "oil": 180}, "health_bonus": 200, "unlocks_unit": 37 },
-				{ "level": 4, "cost": {"stone": 400, "oil": 300}, "health_bonus": 250, "unlocks_unit": 38 },
+				{ "level": 2, "cost": {"stone": 150, "oil": 100}, "health_bonus": 150, "unlocks_unit": 37 },
+				{ "level": 3, "cost": {"stone": 250, "oil": 180}, "health_bonus": 200, "unlocks_unit": 38 },
+				{ "level": 4, "cost": {"stone": 400, "oil": 300}, "health_bonus": 250, "unlocks_unit": 59 },
 				{ "level": 5, "cost": {"stone": 600, "oil": 500}, "health_bonus": 300 }
 			]
 		},
@@ -483,7 +485,7 @@ func _init_data():
 		{
 			"id": 55, "type": 2, "name": "僧侣", "team": 0,
 			"cost": {"food": 50, "gold": 200},
-			"max_health": 50, "attack": 30, "attack_speed": 2.0, "speed": 1.5,
+			"max_health": 50, "attack": 30, "attack_speed": 1.2, "speed": 1.5,
 			"vision_range": 10, "attack_range": 5.0, "target_type": 0, "body_radius": 0.4,
 			"armor": 0, "can_move": true,
 			"special_type": "monk"
@@ -492,7 +494,7 @@ func _init_data():
 		{
 			"id": 56, "type": 2, "name": "长老", "team": 0,
 			"cost": {"food": 80, "gold": 300},
-			"max_health": 50, "attack": 0, "attack_speed": 2.0, "speed": 1.5,
+			"max_health": 50, "attack": 0, "attack_speed": 1.2, "speed": 1.5,
 			"vision_range": 12, "attack_range": 5.0, "target_type": 3, "body_radius": 0.4,
 			"armor": 0, "can_move": true,
 			"special_type": "elder", "ignore_armor": true
@@ -501,10 +503,27 @@ func _init_data():
 		{
 			"id": 57, "type": 2, "name": "宗师", "team": 0,
 			"cost": {"food": 100, "gold": 500},
-			"max_health": 80, "attack": 7, "attack_speed": 2.5, "speed": 1.5,
+			"max_health": 80, "attack": 7, "attack_speed": 1.2, "speed": 1.5,
 			"vision_range": 12, "attack_range": 4.0, "target_type": 2, "body_radius": 0.5,
 			"armor": 50, "can_move": true,
 			"special_type": "grandmaster"
+		},
+
+		# ==================== 连弩 (ID 58) ====================
+		{
+			"id": 58, "type": 2, "name": "连弩", "team": 0,
+			"cost": {"wood": 50, "gold": 40},
+			"max_health": 60, "attack": 4, "attack_speed": 0.25, "speed": 1.2,
+			"vision_range": 22, "attack_range": 11.0, "target_type": 3, "body_radius": 0.4,
+			"armor": 0, "can_move": true, "multiple_process": [10, 5, 30, 6, 2]
+		},
+		# ==================== 巨型投石机 (ID 59) ====================
+		{
+			"id": 59, "type": 2, "name": "巨型投石机", "team": 0,
+			"cost": {"wood": 150, "stone": 200, "gold": 100},
+			"max_health": 350, "attack": 150, "attack_speed": 5.0, "speed": 0.4,
+			"vision_range": 20, "attack_range": 9.0, "damage_radius": 3.0, "target_type": 3,
+			"body_radius": 1.0, "armor": 30, "can_move": true
 		},
 
 		# ==================== 动物 (ID 60-63) ====================

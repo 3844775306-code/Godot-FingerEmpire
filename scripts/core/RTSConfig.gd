@@ -58,6 +58,8 @@ const ENTITY_MODELS = {
 	38: "res://models/arena/soldier.glb",
 	39: "res://models/pirate/ship-large.glb",
 	40: "res://models/pirate/ship-small.glb",
+	58: "res://models/defense/weapon-ballista.glb",
+	59: "res://models/castle/siege-trebuchet.glb",
 	# 商人/官员
 	43: "", 44: "", 45: "", 51: "",
 	46: "", 47: "", 48: "", 49: "", 50: "",
