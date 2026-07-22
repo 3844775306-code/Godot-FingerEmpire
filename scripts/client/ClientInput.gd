@@ -419,6 +419,15 @@ func _get_ground_position(screen_pos: Vector2) -> Vector3:
 	return result.position if result else Vector3.ZERO
 
 func _process(_delta):
+	# 处理延迟左键计时器
+	if _pending_left_click:
+		_left_click_timer -= _delta
+		if _left_click_timer <= 0:
+			_pending_left_click = false
+			var ev = InputEventMouseButton.new()
+			ev.button_index = 1; ev.pressed = true; ev.position = _touch_start_pos
+			_processing_delayed = true
+			_unhandled_input(ev)
 	# 每帧更新选择环位置（跟随目标）
 	if selection_rings.size() > 0:
 		_process_selection_rings()

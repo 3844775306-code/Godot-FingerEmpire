@@ -684,6 +684,7 @@ func _1v1_build(team: int, data: Dictionary):
 	var pos = Vector3(data["pos_x"], data["pos_y"], data["pos_z"])
 	var cfg = EntityDatabase.get_config(building_id)
 	if cfg.is_empty(): return
+	if not is_building_unlocked(building_id): return
 	# Cannot build near enemies
 	for e in entities.get_children():
 		if e is GameEntity and e.team != team and e.team != RTSConfig.Team.NEUTRAL and e.health > 0:
@@ -766,6 +767,10 @@ func _2v2_build(peer_id: int, data: Dictionary):
 	var pos = Vector3(data["pos_x"], data["pos_y"], data["pos_z"])
 	var cfg = EntityDatabase.get_config(building_id)
 	if cfg.is_empty(): return
+	var req_lv = get_building_required_castle_level(building_id)
+	if req_lv > 1:
+			var castle = player_castles.get(peer_id)
+			if not castle or castle.upgrade_level < req_lv: return
 	var cost = cfg.get("cost", {})
 	# Cannot build near enemies
 	for e in entities.get_children():
