@@ -595,7 +595,94 @@ func _attack(target, delta):
 
 	attack_timer = attack_speed
 
-# ----------------- ²É¼¯ -----------------
+# ==================== 特殊攻击 ====================
+
+# 僧侣：治疗周围5格内血量最低的己方军队
+func _monk_heal(_target, delta):
+	if attack_timer > 0:
+		attack_timer -= delta
+		return
+	var lowest = null
+	var lowest_hp = INF
+	for entity in get_tree().get_nodes_in_group("entities"):
+		if not (entity is Army) or entity == self or entity.health <= 0: continue
+		if entity.team != team: continue
+		var dist = global_position.distance_to(entity.global_position)
+		if dist <= attack_range + entity.body_radius:
+			if entity.health < lowest_hp:
+				lowest_hp = entity.health
+				lowest = entity
+	if lowest:
+		var heal_amt = min(attack, lowest.max_health - lowest.health)
+		lowest.health += heal_amt
+		attack_timer = attack_speed
+		_spawn_effect_marker(lowest, Color.GREEN)
+
+# 长老：对目标军队造成5%最大生命值伤害，远程，无视护甲
+func _elder_attack(target, delta):
+	if attack_timer > 0:
+		attack_timer -= delta
+		return
+	if not is_instance_valid(target) or target.health <= 0: return
+	if not (target is Army):
+		current_target = null
+		return
+	var dmg = target.max_health * 0.05
+	target.health -= dmg
+	_spawn_effect_marker(target, Color.RED)
+	if target.health <= 0:
+		target.die()
+	attack_timer = attack_speed
+
+# 宗师：降低目标攻击力（2格内翻倍），攻击<0时招降
+func _grandmaster_attack(target, delta):
+	if attack_timer > 0:
+		attack_timer -= delta
+		return
+	if not is_instance_valid(target) or target.health <= 0: return
+	if not (target is Army):
+		current_target = null
+		return
+	var reduce = attack
+	var dist = global_position.distance_to(target.global_position)
+	if dist <= 2.0 + body_radius + target.body_radius:
+		reduce *= 2
+	if not target.has_meta("_original_attack"):
+		target.set_meta("_original_attack", target.attack)
+	target.attack -= reduce
+	_spawn_effect_marker(target, Color.YELLOW)
+	if target.attack < 0:
+		# 招降
+		target.team = team
+		target.owner_peer_id = owner_peer_id
+		target.attack = target.get_meta("_original_attack")
+		target.remove_meta("_original_attack")
+		var bm = _get_bm()
+		if bm and bm.has_method("_apply_team_tint"):
+			var tint = Color(0.3, 0.6, 1.0) if team == RTSConfig.Team.BLUE else Color(1.0, 0.4, 0.4)
+			bm._apply_team_tint(target, tint)
+		_spawn_effect_marker(target, Color.YELLOW)
+	attack_timer = attack_speed
+
+# 特效标记：在目标头顶生成彩色球体，1秒后消失
+func _spawn_effect_marker(target, color: Color):
+	var marker = MeshInstance3D.new()
+	var sphere = SphereMesh.new()
+	sphere.radius = 0.3; sphere.height = 0.6
+	marker.mesh = sphere
+	marker.position = target.global_position + Vector3(0, target.body_radius * 3.0, 0)
+	var mat = StandardMaterial3D.new()
+	mat.albedo_color = color
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.render_priority = 10; mat.no_depth_test = true
+	marker.material_override = mat
+	var bm = _get_bm()
+	if bm: bm.add_child(marker)
+	var t = Timer.new(); t.one_shot = true; t.wait_time = 1.0
+	t.timeout.connect(marker.queue_free)
+	marker.add_child(t); t.start()
+
 func _gather(resource_node: WorldResource, delta):
 	if gather_timer <= 0:
 		var res_type = resource_node.resource_type
