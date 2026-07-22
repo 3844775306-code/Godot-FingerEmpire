@@ -1,11 +1,12 @@
 # scripts/ui/SelectionManager.gd
+
 class_name SelectionManager
 # scripts/ui/SelectionManager.gd
 extends Node
 
 # 当前选中的实体列表
 var selected_entities: Array = []
-
+var _touch_start_pos: Vector2 = Vector2.ZERO
 # 框选相关
 var is_box_selecting: bool = false
 var box_start: Vector2
@@ -88,7 +89,48 @@ func _input(event):
 
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
-			_on_left_mouse_pressed(event)
+			_touch_start_pos = event.position
+			# Ctrl+左键 → 设置驻扎点（仅对已选中的军队/建筑）
+			if Input.is_key_pressed(KEY_CTRL) and not selected_entities.is_empty():
+				if bm and bm.has_method("_set_garrison_for_selected"):
+					bm._set_garrison_for_selected(event.position)
+				return
+			var pos = event.position
+			var clicked_entity = _get_entity_under_mouse(pos)
+			var now = Time.get_ticks_msec() / 1000.0
+			if clicked_entity and clicked_entity.team == RTSConfig.Team.BLUE:
+				# Official garrison: if selected is official and clicked is building, send garrison command
+				if clicked_entity is Building and Input.is_key_pressed(KEY_CTRL):
+					for e in selected_entities:
+						if e is Army and e.entity_id >= 46 and e.entity_id <= 50:
+							e._garrison_target_id = clicked_entity.get_instance_id()
+							e.move_to(clicked_entity.global_position)
+							return
+				# 双击检测：短时间内再次点击同一个实体
+				if last_clicked_entity == clicked_entity and (now - last_click_time) < DOUBLE_CLICK_THRESHOLD:
+					# 双击：选中屏幕上所有同类型己方实体
+					_select_all_of_same_type(clicked_entity)
+					last_clicked_entity = null
+					last_click_time = 0.0
+					return
+				last_clicked_entity = clicked_entity
+				last_click_time = now
+				# 处理单击：Shift 追加/取消，否则替换选择
+				if clicked_entity in selected_entities:
+					_clear_selection()
+				else:
+					_add_to_selection(clicked_entity)
+			else:
+				# 点击空地或非己方实体
+				if not selected_entities:
+					last_clicked_entity = null
+					_clear_selection()
+					is_box_selecting = true
+					box_start = pos
+					box_end = pos
+				else:
+					# 有选中单位时点击敌方/空地 → 攻击/移动命令
+					bm._command_selected_units(event.position)
 		else:
 			_on_left_mouse_released(event)
 
@@ -100,59 +142,37 @@ func _input(event):
 		box_rect.size = r.size
 		box_rect.visible = true
 
-# ---------- 左键按下 ----------
-func _on_left_mouse_pressed(event):
-	# Ctrl+左键 → 设置驻扎点（仅对已选中的军队/建筑）
-	if Input.is_key_pressed(KEY_CTRL) and not selected_entities.is_empty():
-		var bm = get_tree().get_first_node_in_group("battle_manager")
-		if bm and bm.has_method("_set_garrison_for_selected"):
-			bm._set_garrison_for_selected(event.position)
-		return
+		# ========== 移动端触摸：单指框选 / 点击选择 ==========
+		if event is InputEventScreenTouch:
+			if event.pressed:
+				_touch_start_pos = event.position
+				var clicked_entity = _get_entity_under_mouse(event.position)
+				if clicked_entity and clicked_entity.team == RTSConfig.Team.BLUE:
+					if clicked_entity in selected_entities:
+						_clear_selection()
+					else:
+						_add_to_selection(clicked_entity)
+				else:
+					if not selected_entities:
+						_clear_selection()
+						is_box_selecting = true
+						box_start = event.position
+						box_end = event.position
+					else:
+						bm._command_selected_units(event.position)
+			else:
+				if is_box_selecting:
+					_on_left_mouse_released(event)
 
-	var pos = event.position
-	var clicked_entity = _get_entity_under_mouse(pos)
-	var now = Time.get_ticks_msec() / 1000.0
+		elif event is InputEventScreenDrag and is_box_selecting:
+			box_end = event.position
+			var r1 = Rect2(box_start, box_end - box_start).abs()
+			box_rect.position = r1.position
+			box_rect.size = r1.size
+			box_rect.visible = true
 
-	if clicked_entity and clicked_entity.team == RTSConfig.Team.BLUE:
-		# Official garrison: if selected is official and clicked is building, send garrison command
-		if clicked_entity is Building and Input.is_key_pressed(KEY_CTRL):
-			for e in selected_entities:
-				if e is Army and e.entity_id >= 46 and e.entity_id <= 50:
-					e._garrison_target_id = clicked_entity.get_instance_id()
-					e.move_to(clicked_entity.global_position)
-					return
 
-		# 双击检测：短时间内再次点击同一个实体
-		if last_clicked_entity == clicked_entity and (now - last_click_time) < DOUBLE_CLICK_THRESHOLD:
-			# 双击：选中屏幕上所有同类型己方实体
-			_select_all_of_same_type(clicked_entity)
-			last_clicked_entity = null
-			last_click_time = 0.0
-			return
 
-		last_clicked_entity = clicked_entity
-		last_click_time = now
-
-		# 处理单击：Shift 追加/取消，否则替换选择
-		
-		if clicked_entity in selected_entities:
-			_clear_selection()
-		else:
-			_add_to_selection(clicked_entity)
-		
-	else:
-		if not selected_entities:
-		# 点击空地或非己方实体 -> 开始框选
-			last_clicked_entity = null
-			_clear_selection()
-			is_box_selecting = true
-			box_start = pos
-			box_end = pos
-		else:
-			var bm = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
-			bm._command_selected_units(event.position)
-
-# ---------- 左键释放 ----------
 func _on_left_mouse_released(event):
 	if is_box_selecting:
 		is_box_selecting = false

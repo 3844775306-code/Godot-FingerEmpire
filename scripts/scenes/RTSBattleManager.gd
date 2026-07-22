@@ -326,9 +326,8 @@ func _on_castle_died(team: int):
 func update_population_limits():
 	var p_max = 0
 	var e_max = 0
-	if not entities: return
-	for entity in entities.get_children():
-		if not (entity is Building) or entity.health <= 0 or entity.build_timer > 0: continue
+	for entity in get_tree().get_nodes_in_group("pop_buildings"):
+		if entity.health <= 0 or entity.build_timer > 0: continue
 		if entity.team == RTSConfig.Team.BLUE:
 			if entity.entity_id == 20: p_max += 20
 			elif entity.entity_id == 28: p_max += 10
@@ -897,9 +896,8 @@ func update_resource_limits(team: int):
 	var warehouse = 0
 	var shipyard = 0
 
-	if not entities: return
-	for e in entities.get_children():
-		if e is Building and e.team == team and e.health > 0:
+	for e in get_tree().get_nodes_in_group("storage_buildings"):
+		if e.team == team and e.health > 0:
 			if e.entity_id == 20: castle += 1
 			elif e.entity_id == 22 and e.build_timer <= 0: warehouse += e.building_data.get("storage_bonus", 0)
 			elif e.entity_id == 23: shipyard += 1
@@ -1392,9 +1390,8 @@ func _update_fog_visibility():
 		for y in range(RTSConfig.MAP_SIZE):
 			visible_grid[x][y] = false
 
-	if not entities: return
-	for e in entities.get_children():
-		if e is GameEntity and e.team == RTSConfig.Team.BLUE and e.health > 0:
+	for e in get_tree().get_nodes_in_group("vision_providers"):
+		if e.team == RTSConfig.Team.BLUE and e.health > 0:
 			var g = world_to_grid(e.global_position)
 			var r = e.vision_range
 			for dx in range(-r, r+1):
@@ -1453,8 +1450,8 @@ func _detect_enemy_near_base():
 	if not player_castle: return
 
 	var threat_detected = false
-	for e in entities.get_children():
-		if e is Army and e.team == RTSConfig.Team.RED and e.health > 0:
+	for e in get_tree().get_nodes_in_group("vision_providers"):
+		if not (e is Army) or e.team != RTSConfig.Team.RED or e.health <= 0: continue
 			var dist = e.global_position.distance_to(player_castle.global_position)
 			if dist < player_castle.vision_range * 1.2:
 				threat_detected = true

@@ -111,7 +111,14 @@ func setup(config: Dictionary):
 	owner_peer_id = config.get("owner_peer_id", -1)
 	piercing = config.get("piercing", false)
 	ignore_building_armor = config.get("ignore_building_armor", false)
-	#print(owner_peer_id)
+	# 加入遍历分组 (Godot group)，避免每帧全量扫描 entities.get_children()
+	if entity_type != 0 and vision_range > 0:
+		add_to_group("vision_providers")
+	if entity_type == 1:
+		if entity_id == 20 or entity_id == 28:
+			add_to_group("pop_buildings")
+		if entity_id == 20 or entity_id == 22 or entity_id == 23:
+			add_to_group("storage_buildings")
 func _process(delta):
 	if health <= 0:
 		return
@@ -122,8 +129,8 @@ func _process(delta):
 		shock_timer -= delta
 	if freeze_timer > 0:
 		freeze_timer -= delta
-	# 模型动画（每30帧更新一次）
-	if Engine.get_process_frames() % 30 == 0:
+	# 模型动画（每30帧更新一次，资源跳过）
+	if entity_type != 0 and Engine.get_process_frames() % 30 == 0:
 		var bm = _get_bm()
 		if bm and bm.has_method("_update_entity_animation"):
 			bm._update_entity_animation(self)
@@ -155,7 +162,7 @@ func take_damage(amount: float, source: GameEntity = null):
 	var reduction = eff_armor / (eff_armor + 100.0)
 	var actual_damage = amount * (1.0 - reduction)
 	health -= actual_damage
-	if source and source.attack_range <= 2.0 and actual_damage > 0: _play_sfx_if_visible("sword_hit")
+	if source and source.attack_range <= 2.0 and actual_damage > 0 and not (self is WorldResource): _play_sfx_if_visible("sword_hit")
 	# 战事警报：己方单位被攻击时通知小地图和屏幕提示
 	var bm = get_tree().get_first_node_in_group("battle_manager")
 	var _is_animal_attacker = source and source.get("_animal_type") != null and str(source.get("_animal_type")) != ""
@@ -291,10 +298,11 @@ func _spawn_produced_unit():
 		spawn_pos = global_position + Vector3(randf_range(-2,2), 0, randf_range(-2,2))
 	config["owner_peer_id"] = self.owner_peer_id  # 继承建筑所有权
 	var entity = bm.spawn_entity(config, team, spawn_pos, self.level)
-	if entity and owner_peer_id != -1:
-		
-		if bm and bm.has_method("increase_player_population"):
+	if entity:
+		if owner_peer_id != -1 and bm.has_method("increase_player_population"):
 			bm.increase_player_population(owner_peer_id, 1)
+		elif bm.has_method("increase_population"):
+			bm.increase_population(team, 1)  # 1v1 fallback
 	if entity:
 		entity.owner_peer_id = self.owner_peer_id   # 继承建筑所有权
 		# 训练完成警报（含编队和位置）
@@ -377,7 +385,6 @@ func try_produce(unit_id: int) -> bool:
 	if unit_id == 10:
 		var _ids = []
 		for _p in production_list: _ids.append(_p.unit_id)
-		#print("[TryProd] eid=%d prod_ids=%s queue=%s" % [entity_id, str(_ids), str(production_queue)])
 	if entity_type != 1:
 		return false
 	
@@ -394,7 +401,9 @@ func try_produce(unit_id: int) -> bool:
 		if id == unit_id:
 			current_in_queue += 1
 	if current_in_queue >= prod_config.queue_limit:
+		print("[TryProduce] queue full: ", unit_id, " limit=", prod_config.queue_limit)
 		return false
+	print("[TryProduce] SUCCESS: ", unit_id, " queue=", current_in_queue + 1)
 	
 	var unit_cfg = EntityDatabase.get_config(unit_id)
 	if not unit_cfg:

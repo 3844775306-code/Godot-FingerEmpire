@@ -113,8 +113,8 @@ func update_player_limits(peer_id: int):
 	var castle = 0
 	var warehouse_bonus = 0
 	var shipyard = 0
-	for entity in entities.get_children():
-		if entity is Building and entity.health > 0 and entity.owner_peer_id == peer_id and entity.team == player_info[peer_id].team:
+	for entity in get_tree().get_nodes_in_group("storage_buildings"):
+		if entity.health > 0 and entity.owner_peer_id == peer_id and entity.team == player_info[peer_id].team:
 			if entity.entity_id == 20: castle += 1
 			elif entity.entity_id == 22 and entity.build_timer <= 0: warehouse_bonus += entity.building_data.get("storage_bonus", 0)
 			elif entity.entity_id == 23: shipyard += 1
@@ -171,11 +171,11 @@ func can_player_train(peer_id: int) -> bool:
 	return pop["current"] < pop["max"]*2
 func update_player_population(peer_id: int):
 	if not player_population.has(peer_id):
-		player_population[peer_id] = {"current": 0, "max": 20} # 初始城堡20人口
+		player_population[peer_id] = {"current": 0, "max": 20}
 	var max_pop = 0
 	var info = player_info[peer_id]
-	for entity in entities.get_children():
-		if entity is Building and entity.owner_peer_id == peer_id and entity.health > 0:
+	for entity in get_tree().get_nodes_in_group("pop_buildings"):
+		if entity.owner_peer_id == peer_id and entity.health > 0:
 			if entity.entity_id == 20: max_pop += 20
 			elif entity.entity_id == 28: max_pop += 10
 	if info:
@@ -1392,6 +1392,7 @@ func _broadcast_2v2():
 	var bullets_data = _build_bullets_data()
 	for pid in player_info.keys():
 		if not player_info[pid].alive: continue
+		if pid >= 1000: continue  # 跳过 AI，无客户端
 		var _pt_build = Time.get_ticks_usec()
 		var data = build_snapshot_for_player(pid)
 		data["bullets"] = bullets_data
@@ -1620,3 +1621,7 @@ func _2v2_recall_group(_peer_id: int, data: Dictionary):
 
 func get_gather_paused(team: int) -> bool:
 	return team_gather_paused.get(team, false)
+
+# Override: 联机模式跳过每帧O(n^2)可见性检查（服务端不需要渲染）
+func _update_visibility():
+	pass

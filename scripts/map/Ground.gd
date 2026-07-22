@@ -27,6 +27,7 @@ var enemy_castle_pos: Vector3 = Vector3.ZERO
 
 # 资源生成列表
 var resource_positions: Array = []
+var _cached_four_castle_positions: Array = []  # cached for consistency
 
 # 自定义地图种子（为0则随机）
 var custom_seed: int = 0
@@ -130,11 +131,12 @@ func _generate_terrain():
 
 # ---------- 城堡选址 ----------
 func get_four_castle_positions() -> Array:
+	if not _cached_four_castle_positions.is_empty():
+		return _cached_four_castle_positions
 	var size = _get_map_size()
 	var half = size / 2.0
 	var margin = 10
-	var ps = 5  # 5x5 flat plain
-	
+	var ps = 5
 	var blue1 = _find_flat_plain(margin, half + ps, half - ps, size - margin, ps)
 	if blue1 == Vector3.ZERO: blue1 = grid_to_world(half - 20, half + 20)
 	var blue2 = _find_flat_plain(half + ps, half + ps, size - margin, size - margin, ps)
@@ -143,7 +145,8 @@ func get_four_castle_positions() -> Array:
 	if red1 == Vector3.ZERO: red1 = grid_to_world(half - 20, half - 20)
 	var red2 = _find_flat_plain(half + ps, margin, size - margin, half - ps, ps)
 	if red2 == Vector3.ZERO: red2 = grid_to_world(half + 20, half - 20)
-	return [blue1, blue2, red1, red2]
+	_cached_four_castle_positions = [blue1, blue2, red1, red2]
+	return _cached_four_castle_positions
 
 func _force_flat_spot(gx: int, gy: int, safe_size: int) -> Vector3:
 	var size = _get_map_size()
@@ -242,23 +245,37 @@ func _place_resources():
 	var guaranteed = [
 		{"type":3, "min_sz":3, "max_sz":4, "dist":8,  "terrain":0},  # farmland
 		{"type":1, "min_sz":5, "max_sz":6, "dist":12, "terrain":0, "near_mountain":true},  # forest
-		{"type":2, "min_sz":2, "max_sz":3, "dist":30, "terrain":1},  # stone
+		{"type":2, "min_sz":2, "max_sz":3, "dist":30, "terrain":0, "adjacent_mountains":2},  # stone (山边平地)
+		{"type":0, "min_sz":2, "max_sz":3, "dist":10, "terrain":0},  # gold
 	]
 	for castle in castles:
 		for gu in guaranteed:
-			_place_group_near(gu.type, gu.min_sz, gu.max_sz, castle[0], castle[1], gu.dist, gu.terrain, placed, size, gu.get("near_mountain", false))
+			_place_group_near(gu.type, gu.min_sz, gu.max_sz, castle[0], castle[1], gu.dist, gu.terrain, placed, size, gu.get("near_mountain", false), gu.get("adjacent_mountains", 0))
+	# Extra resources for Hard/Hell AI near enemy/red castles
+	var hard_extra = [
+		{"type":3, "min_sz":3, "max_sz":4, "dist":10, "terrain":0},  # farmland
+		{"type":1, "min_sz":5, "max_sz":6, "dist":14, "terrain":0, "near_mountain":true},  # forest
+		{"type":2, "min_sz":2, "max_sz":3, "dist":30, "terrain":0, "adjacent_mountains":2},  # stone (山边平地)
+		{"type":0, "min_sz":2, "max_sz":3, "dist":12, "terrain":0},  # gold
+	]
+	if GameSettings.ai_difficulty >= GameSettings.AIDifficulty.HARD or GameSettings.red_ai_difficulty >= GameSettings.AIDifficulty.HARD or GameSettings.blue_ai_difficulty >= GameSettings.AIDifficulty.HARD:
+		# Only for enemy/AI castles (index 1+ or red team castles in 2v2)
+		var ai_castles = castles.slice(1) if castles.size() == 2 else castles.slice(2) if castles.size() == 4 else []
+		for cs in ai_castles:
+			for gu in hard_extra:
+				_place_group_near(gu.type, gu.min_sz, gu.max_sz, cs[0], cs[1], gu.dist, gu.terrain, placed, size, gu.get("near_mountain", false))
 
 	# ── Remaining groups: placed anywhere ──
 	var remaining = [
 		{"type":0, "count": int(4*mult), "min_sz":1, "max_sz":2, "terrain":0},
 		{"type":1, "count": int(8*mult), "min_sz":5, "max_sz":6, "terrain":0, "near_mountain":true},
-		{"type":2, "count": int(6*mult), "min_sz":2, "max_sz":3, "terrain":1},
+		{"type":2, "count": int(6*mult), "min_sz":2, "max_sz":3, "terrain":0, "adjacent_mountains":2},
 		{"type":3, "count": int(6*mult), "min_sz":3, "max_sz":4, "terrain":0, "away_mountain":true},
 		{"type":4, "count": int(6*mult), "min_sz":1, "max_sz":2, "terrain":2},
 	]
 	for g in remaining:
 		for _gi in range(g.count):
-			_place_group_random(g.type, g.min_sz, g.max_sz, g.terrain, placed, size, castles, g.get("near_mountain", false), g.get("away_mountain", false))
+			_place_group_random(g.type, g.min_sz, g.max_sz, g.terrain, placed, size, castles, g.get("near_mountain", false), g.get("away_mountain", false), g.get("adjacent_mountains", 0))
 
 	# ── Animals ──
 	for _i in range(int(8 * mult)):
@@ -283,7 +300,7 @@ func _place_resources():
 							placed["a%d,%d" % [ax, ay]] = true
 
 # ── Helper: place a group near a position ──
-func _place_group_near(rtype, min_sz, max_sz, cx, cy, max_dist, terrain, placed, size, near_mountain=false):
+func _place_group_near(rtype, min_sz, max_sz, cx, cy, max_dist, terrain, placed, size, near_mountain=false, adjacent_mountains=0):
 	var best_x = -1; var best_y = -1
 	for _attempt in range(200):
 		var tx = cx + randi_range(-max_dist, max_dist)
@@ -292,13 +309,14 @@ func _place_group_near(rtype, min_sz, max_sz, cx, cy, max_dist, terrain, placed,
 		if terrain_grid[tx][ty] != terrain: continue
 		if placed.has("g%d,%d,%d" % [rtype, tx, ty]): continue
 		if near_mountain and not _has_nearby_terrain(tx, ty, 1, 3, size): continue
+		if adjacent_mountains > 0 and _count_adjacent_terrain(tx, ty, 1, size) < adjacent_mountains: continue
 		best_x = tx; best_y = ty; break
 	if best_x < 0: return
 	placed["g%d,%d,%d" % [rtype, best_x, best_y]] = true
-	_spawn_group(rtype, min_sz, max_sz, best_x, best_y, terrain, placed, size)
+	_spawn_group(rtype, min_sz, max_sz, best_x, best_y, terrain, placed, size, adjacent_mountains)
 
 # ── Helper: place a group randomly on the map ──
-func _place_group_random(rtype, min_sz, max_sz, terrain, placed, size, castles, near_mountain=false, away_mountain=false):
+func _place_group_random(rtype, min_sz, max_sz, terrain, placed, size, castles, near_mountain=false, away_mountain=false, adjacent_mountains=0):
 	var cx = -1; var cy = -1
 	for _attempt in range(100):
 		var tx = randi_range(5, size - 6); var ty = randi_range(5, size - 6)
@@ -311,6 +329,7 @@ func _place_group_random(rtype, min_sz, max_sz, terrain, placed, size, castles, 
 		if too_close: continue
 		if near_mountain and not _has_nearby_terrain(tx, ty, 1, 3, size): continue
 		if away_mountain and _has_nearby_terrain(tx, ty, 1, 3, size): continue
+		if adjacent_mountains > 0 and _count_adjacent_terrain(tx, ty, 1, size) < adjacent_mountains: continue
 		# Away from existing groups of same type
 		var dup = false
 		for k in placed.keys():
@@ -321,10 +340,10 @@ func _place_group_random(rtype, min_sz, max_sz, terrain, placed, size, castles, 
 		cx = tx; cy = ty; break
 	if cx < 0: return
 	placed["g%d,%d,%d" % [rtype, cx, cy]] = true
-	_spawn_group(rtype, min_sz, max_sz, cx, cy, terrain, placed, size)
+	_spawn_group(rtype, min_sz, max_sz, cx, cy, terrain, placed, size, adjacent_mountains)
 
 # ── Spawn individual resources in a group ──
-func _spawn_group(rtype, min_sz, max_sz, cx, cy, terrain, placed, size):
+func _spawn_group(rtype, min_sz, max_sz, cx, cy, terrain, placed, size, adjacent_mountains=0):
 	var count = min_sz + randi_range(0, max_sz - min_sz)
 	resource_positions.append({"pos": grid_to_world(cx, cy), "type": rtype})
 	var placed_count = 1
@@ -333,10 +352,23 @@ func _spawn_group(rtype, min_sz, max_sz, cx, cy, terrain, placed, size):
 		var mx = cx + randi_range(-4, 4); var my = cy + randi_range(-4, 4)
 		if mx < 0 or mx >= size or my < 0 or my >= size: continue
 		if terrain_grid[mx][my] != terrain: continue
+		if adjacent_mountains > 0 and _count_adjacent_terrain(mx, my, 1, size) < adjacent_mountains: continue
 		if placed.has("r%d,%d" % [mx, my]): continue
 		placed["r%d,%d" % [mx, my]] = true
 		resource_positions.append({"pos": grid_to_world(mx, my), "type": rtype})
 		placed_count += 1
+
+# ── Check if terrain type exists within range ──
+# Count adjacent tiles (8 directions) of a specific terrain type
+func _count_adjacent_terrain(x, y, terr_type, size) -> int:
+	var count = 0
+	for dx in [-1, 0, 1]:
+		for dy in [-1, 0, 1]:
+			if dx == 0 and dy == 0: continue
+			var nx = x + dx; var ny = y + dy
+			if nx >= 0 and nx < size and ny >= 0 and ny < size:
+				if terrain_grid[nx][ny] == terr_type: count += 1
+	return count
 
 # ── Check if terrain type exists within range ──
 func _has_nearby_terrain(x, y, terr_type, radius, size) -> bool:
@@ -492,7 +524,7 @@ func _add_water_box():
 		var plane = PlaneMesh.new()
 		plane.size = Vector2(size, size)
 		w.mesh = plane
-		w.position = Vector3(0, -0.7, 0)
+		w.position = Vector3(0, -0.9, 0)
 		var shader = load("res://resources/water_noise.gdshader")
 		if shader:
 			var mat = ShaderMaterial.new()

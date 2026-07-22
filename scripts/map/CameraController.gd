@@ -12,8 +12,9 @@ var drag_start: Vector2
 var is_dragging: bool = false
 
 # 触摸拖拽相关
-var touch_drag_start: Vector2
-var touch_drag_active: bool = false
+var _touch_count: int = 0           # 当前触摸点数
+var touch_pan_active: bool = false  # 三指拖拽移动相机
+var touch_pan_start: Vector2
 
 func _ready():
 	if projection == PROJECTION_ORTHOGONAL:
@@ -39,19 +40,27 @@ func _input(event):
 		drag_start = event.position
 
 	# ========== 手机触摸操作 ==========
-	# 单指拖拽
+	# 三指拖拽 → 平移地图；单/双指 → 框选（由 SelectionManager 处理）
 	if event is InputEventScreenTouch:
-		if event.index == 0:   # 仅处理第一根手指
-			touch_drag_active = event.pressed
+		if event.pressed:
+			_touch_count += 1
+		else:
+			_touch_count = max(0, _touch_count - 1)
+		# 三指按下时开始平移，松手时停止
+		if _touch_count >= 3:
+			touch_pan_active = event.pressed
 			if event.pressed:
-				touch_drag_start = event.position
+				touch_pan_start = event.position
+		else:
+			touch_pan_active = false
 
-	elif event is InputEventScreenDrag and touch_drag_active and event.index == 0:
-		# 单指拖动移动相机
-		var delta = event.position - touch_drag_start
-		var factor = size / 30.0
-		global_translate(Vector3(-delta.x * 0.1 * factor, 0, -delta.y * 0.1 * factor))
-		touch_drag_start = event.position
+	elif event is InputEventScreenDrag:
+		if touch_pan_active:
+			# 三指拖动移动相机
+			var delta = event.position - touch_pan_start
+			var factor = size / 30.0
+			global_translate(Vector3(-delta.x * 0.1 * factor, 0, -delta.y * 0.1 * factor))
+			touch_pan_start = event.position
 
 	# 双指捏合缩放
 	if event is InputEventMagnifyGesture:

@@ -4,6 +4,11 @@ var nation_select: OptionButton
 
 func _ready():
 	AudioManager.play_music("menu")
+	# Scale to fit screen (design: 2400x1400)
+	var vs = get_viewport().get_visible_rect().size
+	var s = min(vs.x / 2400.0, vs.y / 1400.0)
+	scale = Vector2(s, s)
+	position = (vs - Vector2(2400, 1400) * s) / 2.0
 	# 隐藏旧的场景节点，全部用代码重建
 	var old_box = get_node_or_null("VBoxContainer")
 	if old_box: old_box.visible = false
@@ -168,7 +173,7 @@ func _create_settings_panel():
 	var panel = Panel.new()
 	panel.name = "SettingsPanel"
 	panel.position = Vector2(750, 400)
-	panel.size = Vector2(900, 350)
+	panel.size = Vector2(900, 420)
 	var s = StyleBoxFlat.new()
 	s.bg_color = Color(0.08, 0.09, 0.16, 0.95)
 	s.corner_radius_top_left = 12; s.corner_radius_top_right = 12
@@ -263,10 +268,67 @@ func _create_settings_panel():
 	test.pressed.connect(func(): AudioManager.play_sfx("ui_click"))
 	panel.add_child(test)
 
+	# --- 命令模式 ---
+	var cmd_label = Label.new()
+	cmd_label.text = "命令模式"
+	cmd_label.position = Vector2(50, 290)
+	cmd_label.size = Vector2(200, 30)
+	cmd_label.add_theme_font_size_override("font_size", 22)
+	cmd_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.8))
+	panel.add_child(cmd_label)
+
+	var cmd_single = Button.new()
+	cmd_single.text = "单次命令"
+	cmd_single.position = Vector2(280, 290)
+	cmd_single.size = Vector2(140, 40)
+	cmd_single.add_theme_font_size_override("font_size", 18)
+
+	# 提前声明所有样式变量，确保闭包可捕获
+	var style_single_on = StyleBoxFlat.new()
+	style_single_on.bg_color = Color(0.25, 0.5, 0.25)
+	style_single_on.corner_radius_top_left = 6; style_single_on.corner_radius_top_right = 0
+	style_single_on.corner_radius_bottom_left = 6; style_single_on.corner_radius_bottom_right = 0
+	style_single_on.border_width_left = 1; style_single_on.border_width_top = 1; style_single_on.border_width_bottom = 1
+	style_single_on.border_color = Color(0.4, 0.7, 0.4)
+	var style_single_off = style_single_on.duplicate()
+	style_single_off.bg_color = Color(0.12, 0.12, 0.18)
+	style_single_off.border_color = Color(0.2, 0.2, 0.3)
+
+	var style_cont_on = StyleBoxFlat.new()
+	style_cont_on.bg_color = Color(0.15, 0.35, 0.55)
+	style_cont_on.corner_radius_top_left = 0; style_cont_on.corner_radius_top_right = 6
+	style_cont_on.corner_radius_bottom_left = 0; style_cont_on.corner_radius_bottom_right = 6
+	style_cont_on.border_width_right = 1; style_cont_on.border_width_top = 1; style_cont_on.border_width_bottom = 1
+	style_cont_on.border_color = Color(0.3, 0.5, 0.7)
+	var style_cont_off = style_cont_on.duplicate()
+	style_cont_off.bg_color = Color(0.12, 0.12, 0.18)
+	style_cont_off.border_color = Color(0.2, 0.2, 0.3)
+	var cmd_cont = Button.new()
+	cmd_single.add_theme_stylebox_override("normal", style_single_on if GameSettings.command_mode == 0 else style_single_off)
+	cmd_single.pressed.connect(func():
+		GameSettings.command_mode = 0
+		cmd_single.add_theme_stylebox_override("normal", style_single_on)
+		cmd_cont.add_theme_stylebox_override("normal", style_cont_off)
+	)
+	panel.add_child(cmd_single)
+
+	
+	cmd_cont.text = "连续命令"
+	cmd_cont.position = Vector2(420, 290)
+	cmd_cont.size = Vector2(140, 40)
+	cmd_cont.add_theme_font_size_override("font_size", 18)
+	cmd_cont.add_theme_stylebox_override("normal", style_cont_off if GameSettings.command_mode == 0 else style_cont_on)
+	cmd_cont.pressed.connect(func():
+		GameSettings.command_mode = 1
+		cmd_single.add_theme_stylebox_override("normal", style_single_off)
+		cmd_cont.add_theme_stylebox_override("normal", style_cont_on)
+	)
+	panel.add_child(cmd_cont)
+
 	# Hint
 	var hint = Label.new()
-	hint.text = "音效距离衰减：50米内可听到"
-	hint.position = Vector2(50, 300)
+	hint.text = "音效距离衰减：50米内可听到 | 单次命令：下令后取消选择"
+	hint.position = Vector2(50, 350)
 	hint.size = Vector2(800, 25)
 	hint.add_theme_font_size_override("font_size", 16)
 	hint.add_theme_color_override("font_color", Color(0.4, 0.4, 0.5))
