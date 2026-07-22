@@ -1303,6 +1303,21 @@ func _is_valid_build_position(pos: Vector3) -> bool:
 			if e is GameEntity and e.health > 0:
 				if e.global_position.distance_to(pos) < (e.body_radius + 0.5):
 					return false
+		# 至少一侧邻接陆地或已有桥
+		var g = world_to_grid(pos)
+		var has_land = false
+		for dx in [-1, 0, 1]:
+			for dy in [-1, 0, 1]:
+				if dx == 0 and dy == 0: continue
+				if abs(dx) + abs(dy) != 1: continue
+				var nx = g.x + dx; var ny = g.y + dy
+				if nx < 0 or nx >= RTSConfig.MAP_SIZE or ny < 0 or ny >= RTSConfig.MAP_SIZE: continue
+				if get_terrain_at_grid(nx, ny) != 2: has_land = true
+				for e in entities.get_children():
+					if e is Building and e.entity_id == 7 and e.health > 0:
+						var bg = world_to_grid(e.global_position)
+						if bg.x == nx and bg.y == ny: has_land = true
+		if not has_land: return false
 		return true
 	# 梯子：必须在敌方城墙裸露侧建造
 	if selected_building_id == 8:
