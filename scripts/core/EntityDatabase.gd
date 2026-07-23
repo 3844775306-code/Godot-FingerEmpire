@@ -226,7 +226,7 @@ func _init_data():
 			"id": 25, "type": 1, "name": "箭塔", "team": 0,
 			"cost": {"wood": 80, "stone": 50},
 			"max_health": 800, "attack": 15, "attack_speed": 1.2, "attack_range": 6.0,
-			"target_type": 3, "body_radius": 0.6, "armor": 50,
+			"target_type": 3, "body_radius": 1.2, "armor": 50,
 			"upgrades": [
 				{ "level": 2, "cost": {"wood": 100, "stone": 60}, "health_bonus": 120, "attack_bonus": 10 },
 				{ "level": 3, "cost": {"stone": 120, "gold": 50}, "health_bonus": 180, "attack_bonus": 15 },
@@ -238,7 +238,7 @@ func _init_data():
 			"id": 26, "type": 1, "name": "炮塔", "team": 0,
 			"cost": {"stone": 100, "gold": 80},
 			"max_health": 700, "attack": 30, "attack_speed": 2.0, "attack_range": 7.0,
-			"damage_radius": 1.4, "target_type": 3, "body_radius": 0.8, "armor": 40,
+			"damage_radius": 1.4, "target_type": 3, "body_radius": 1.6, "armor": 40,
 			"upgrades": [
 				{ "level": 2, "cost": {"stone": 80, "gold": 60}, "health_bonus": 150, "attack_bonus": 20 },
 				{ "level": 3, "cost": {"gold": 120, "oil": 60}, "health_bonus": 200, "attack_bonus": 25 },

@@ -75,6 +75,35 @@ func _ready():
 	nation_select.add_theme_font_size_override("font_size", 22)
 	add_child(nation_select)
 
+	# AI难度选择
+	var diff_label = Label.new()
+	diff_label.text = "AI难度"
+	diff_label.position = Vector2(700, center_y + 0)
+	diff_label.size = Vector2(200, 30)
+	diff_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	diff_label.add_theme_font_size_override("font_size", 20)
+	diff_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+	add_child(diff_label)
+	var diff_select = OptionButton.new()
+	diff_select.name = "DiffSelect"
+	diff_select.add_item("  简单")
+	diff_select.add_item("  普通（AI资源×2）")
+	diff_select.add_item("  困难（AI资源×3+额外资源）")
+	diff_select.add_item("  地狱（困难+速度+20%）")
+	diff_select.position = Vector2(910, center_y - 2)
+	diff_select.size = Vector2(740, 45)
+	diff_select.add_theme_font_size_override("font_size", 18)
+	add_child(diff_select)
+
+	# 快速模式
+	var fast_check = CheckBox.new()
+	fast_check.name = "FastCheck"
+	fast_check.text = "快速模式（采集×3）"
+	fast_check.position = Vector2(910, center_y + 440)
+	fast_check.add_theme_font_size_override("font_size", 18)
+	fast_check.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+	add_child(fast_check)
+
 	# 按钮
 	var btn_data = [
 		["单人游戏", Vector2(850, center_y + 40), _on_play_pressed, Color(0.15, 0.5, 0.2)],
@@ -156,9 +185,17 @@ func _make_menu_button(text: String, pos: Vector2, color: Color) -> Button:
 func _on_play_pressed():
 	GameSettings.player_nation = nation_select.selected
 	GameSettings.enemy_nation = randi() % 5
+	var ds = get_node_or_null("DiffSelect")
+	if ds: GameSettings.ai_difficulty = ds.selected
+	var fc = get_node_or_null("FastCheck")
+	GameSettings.fast_mode = fc.button_pressed if fc else false
 	get_tree().change_scene_to_file("res://scenes/rts_battle.tscn")
 
 func _on_multiplayer_pressed():
+	var ds = get_node_or_null("DiffSelect")
+	if ds: GameSettings.ai_difficulty = ds.selected
+	var fc = get_node_or_null("FastCheck")
+	GameSettings.fast_mode = fc.button_pressed if fc else false
 	get_tree().change_scene_to_file("res://scenes/online_menu.tscn")
 
 func _on_settings_pressed():

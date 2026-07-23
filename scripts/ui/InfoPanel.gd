@@ -160,7 +160,10 @@ func update_info(entity: GameEntity):
 		for c in produce_vbox.get_children(): c.queue_free()
 		if not entity.production_list.is_empty():
 			produce_vbox.visible = true
+			var seen = {}
 			for prod in entity.production_list:
+				if seen.has(prod.unit_id): continue
+				seen[prod.unit_id] = true
 				var uc = EntityDatabase.get_config(prod.unit_id)
 				if not uc: continue
 				var btn = Button.new(); btn.text = ""; btn.add_theme_font_size_override("font_size", 13); btn.custom_minimum_size = Vector2(180, 32); btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL

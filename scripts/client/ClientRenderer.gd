@@ -299,7 +299,7 @@ func _process_snapshot(data: Dictionary):
 						var inst = s.instantiate()
 						inst.name = "DemolishedModel"
 						node.add_child(inst)
-					var t = Timer.new(); t.one_shot = true; t.wait_time = 2.0
+					var t = Timer.new(); t.one_shot = true; t.wait_time = 1.0
 					t.timeout.connect(node.queue_free); node.add_child(t); t.start()
 				else:
 					node.queue_free()
@@ -527,6 +527,9 @@ func _update_single_entity(info):
 		if prev_prog != null and new_prog != null and prev_prog > 0 and new_prog <= 0:
 			AudioManager.play_sfx_3d("produce", node.global_position, _get_cam_pos())
 
+	# 快照状态切换时立即同步动画（不等30帧轮询）
+	if not prev_info.is_empty() and prev_info.get("current_order", "") != info.get("current_order", ""):
+		_update_entity_animation(node, info)
 	node.set_meta("_prev_info", info.duplicate())
 	# Update waypoint markers if present
 	_update_waypoint_markers(node, info)
@@ -1539,35 +1542,23 @@ func _process(delta):
 		_stale_cleanup_timer = 30.0
 		_cleanup_stale_entities()
 
-	# 血条更新：高频率跟随（20Hz）
-	# Update entity animations every 30 frames
+	# 动画+音效+城墙 统一更新（每30帧同步）
 	if Engine.get_process_frames() % 30 == 0:
 		for id in entity_nodes.keys():
 			var n = entity_nodes.get(id)
-			if is_instance_valid(n) and n.has_meta("snapshot_info"):
-				_update_entity_animation(n, n.get_meta("snapshot_info"))
-	# Movement sounds every 20 frames
-	if Engine.get_process_frames() % 40 == 0:
-		for id in entity_nodes.keys():
-			var mnode = entity_nodes.get(id)
-			if is_instance_valid(mnode) and mnode.has_meta("snapshot_info"):
-				var minf = mnode.get_meta("snapshot_info")
-				var mord = minf.get("current_order", "")
-				if mord in ["move", "deliver"] and minf.get("health", 0) > 0 and _is_audible(mnode.global_position):
-					var terr = get_terrain_at(mnode.global_position)
-					if terr == 2:
-						AudioManager.play_sfx_3d("sail", mnode.global_position, _get_cam_pos())
-					else:
-						AudioManager.play_sfx_3d("walk", mnode.global_position, _get_cam_pos())
-	# Update entity animations and wall orientation every 30 frames
-	if Engine.get_process_frames() % 30 == 0:
-		for id in entity_nodes.keys():
-			var n = entity_nodes.get(id)
-			if is_instance_valid(n) and n.has_meta("snapshot_info"):
-				var inf = n.get_meta("snapshot_info")
-				_update_entity_animation(n, inf)
-				if inf.get("entity_id", 0) == 27:
-					_update_wall_orientation(n, inf)
+			if not is_instance_valid(n) or not n.has_meta("snapshot_info"):
+				continue
+			var inf = n.get_meta("snapshot_info")
+			# 动画更新（状态切换已在 _update_single_entity 中即时触发）
+			_update_entity_animation(n, inf)
+			# 持续性移动音效（与动画同频）
+			var ord = inf.get("current_order", "")
+			if ord in ["move", "deliver"] and inf.get("health", 0) > 0 and _is_audible(n.global_position):
+				var terr = get_terrain_at(n.global_position)
+				AudioManager.play_sfx_3d("sail" if terr == 2 else "walk", n.global_position, _get_cam_pos())
+			# 城墙朝向
+			if inf.get("entity_id", 0) == 27:
+				_update_wall_orientation(n, inf)
 	if health_bar_timer <= 0:
 		health_bar_timer = HEALTH_BAR_INTERVAL
 		_update_health_bars()

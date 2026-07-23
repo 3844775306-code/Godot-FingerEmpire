@@ -570,6 +570,18 @@ func _ready():
 	_fps_label.add_theme_font_size_override("font_size", 16)
 	_fps_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
 	add_child(_fps_label)
+
+	# Network stats display
+	_net_stat_label = Label.new()
+	_net_stat_label.position = Vector2(1100, 48)
+	_net_stat_label.add_theme_font_size_override("font_size", 14)
+	_net_stat_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
+	add_child(_net_stat_label)
+	_ping_label = Label.new()
+	_ping_label.position = Vector2(1100, 65)
+	_ping_label.add_theme_font_size_override("font_size", 14)
+	_ping_label.add_theme_color_override("font_color", Color(0.6, 0.8, 1.0))
+	add_child(_ping_label)
 	_game_time_label = Label.new()
 	_game_time_label.position = Vector2(1100, 28)
 	_game_time_label.add_theme_font_size_override("font_size", 16)
@@ -610,6 +622,15 @@ var _fps_label: Label = null
 var _game_time_label: Label = null
 var _fps_update_timer: float = 0.5
 var _client_time_acc: float = 0.0
+# Network stats
+var _snap_recv_count: int = 0
+var _snap_recv_rate: int = 0
+var _snap_lost_count: int = 0
+var _last_snap_seq: int = -1
+var _net_stat_timer: float = 1.0
+var _ping_label: Label = null
+var _net_stat_label: Label = null
+var _ping_rtt: int = 0
 
 func _process(delta):
 	# 每秒更新一次单位统计
@@ -630,7 +651,19 @@ func _process(delta):
 		_fps_update_timer = 0.5
 		_fps_label.text = "FPS: %.0f  |  %02d:%02d" % [Engine.get_frames_per_second(), t_min, t_sec]
 
-	# 警报消息计时
+	# Network stats every 1 second
+	_net_stat_timer -= delta
+	if _net_stat_timer <= 0:
+		_net_stat_timer = 1.0
+		_snap_recv_rate = _snap_recv_count
+		_snap_recv_count = 0
+	_net_stat_label.text = "Snap: %d/s" % _snap_recv_rate
+	# Ping every 1s
+	NetworkManager.ping_server.rpc_id(1, Time.get_ticks_msec())
+	if _ping_label:
+		var pc = Color.GREEN if _ping_rtt < 60 else (Color.YELLOW if _ping_rtt < 120 else Color.RED)
+		_ping_label.add_theme_color_override("font_color", pc)
+		_ping_label.text = "Ping: %dms" % _ping_rtt if _ping_rtt > 0 else "Ping: --"
 	if _alert_label and _alert_timer > 0:
 		_alert_timer -= delta
 		if _alert_timer <= 0:

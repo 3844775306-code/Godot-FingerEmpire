@@ -1,6 +1,5 @@
-# scripts/ui/ClientInput.gd
-class_name client_input
 # scripts/client/ClientInput.gd
+class_name client_input
 extends Node
 
 # 信号
@@ -10,17 +9,38 @@ signal build_requested(world_pos: Vector3)
 # 当前选中实体
 var client_selected_ids: Array = []
 
-	# Local control groups (mirrored with server)
+# Local control groups (mirrored with server)
 var local_groups: Dictionary = {}  # int -> Array[int]
 var _last_group_key: int = -1
-# Mobile touch delay
-var _pending_left_click: bool = false
-var _left_click_timer: float = 0.0
-var _touch_start_pos: Vector2 = Vector2.ZERO
-var _processing_delayed: bool = false
-const LEFT_CLICK_DELAY: float = 0.1
 var _last_group_time: float = 0.0
 const DOUBLE_TAP_THRESHOLD = 0.3
+
+# 框选状态
+var is_box_selecting: bool = false
+var box_start: Vector2 = Vector2.ZERO
+var box_end: Vector2 = Vector2.ZERO
+var box_rect: ColorRect
+
+# 双击全选
+var last_clicked_id: int = -1
+var last_click_time: float = 0.0
+const DOUBLE_CLICK_THRESHOLD = 0.3
+
+# 引用客户端渲染器
+var renderer: ClientRenderer = null
+
+# 队伍（从渲染器获取）
+var player_team: int:
+	get:
+		if renderer: return renderer.player_team
+		return -1
+
+# 集结模式
+var rally_mode: bool = false
+
+# 用于建造预览的世界坐标
+var last_world_pos: Vector3 = Vector3.ZERO
+
 # Query which groups an entity belongs to
 func get_entity_groups(entity_id: int) -> Array:
 	var result = []
@@ -54,32 +74,6 @@ func select_all_military():
 	_update_selection_visuals()
 	emit_signal("selection_changed", client_selected_ids.duplicate())
 
-# 框选状态
-var is_box_selecting: bool = false
-var box_start: Vector2 = Vector2.ZERO
-var box_end: Vector2 = Vector2.ZERO
-var box_rect: ColorRect
-
-# 双击全选
-var last_clicked_id: int = -1
-var last_click_time: float = 0.0
-const DOUBLE_CLICK_THRESHOLD = 0.3
-
-# 引用客户端渲染器
-var renderer: ClientRenderer = null
-
-# 队伍（从渲染器获取）
-var player_team: int:
-	get:
-		if renderer: return renderer.player_team
-		return -1
-
-# 集结模式
-var rally_mode: bool = false
-
-# 用于建造预览的世界坐标
-var last_world_pos: Vector3 = Vector3.ZERO
-
 func _ready():
 	set_process_input(true)
 	set_process(true)
@@ -98,99 +92,223 @@ func _ready():
 	if ui: ui.add_child(box_rect)
 	else: get_tree().root.add_child(box_rect)
 
-func _unhandled_input(event):
+# ==================== 输入处理（照搬单机版 SelectionManager + RTSBattleManager） ====================
+func _input(event):
 	if not renderer: return
 
-	# 建造放置模式优先  ← 这行保留
+	# 建造放置模式优先
 	if renderer.placement_mode:
-		# 鼠标移动（PC）
+		# 鼠标移动
 		if event is InputEventMouseMotion:
 			_update_placement_preview(event.position)
-		# 鼠标点击（PC）
+		# 鼠标点击
 		elif event is InputEventMouseButton:
 			if event.button_index == MOUSE_BUTTON_LEFT and event.pressed:
 				_confirm_placement()
 			elif event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
-				_pending_left_click = false
 				_cancel_placement()
-		# 触摸按下（移动端）
+		# 触摸
 		elif event is InputEventScreenTouch:
 			if event.pressed:
-				# 手指按下：立即更新预览位置，但不放置
 				_update_placement_preview(event.position)
 			else:
-				# 手指抬起：放置建筑
 				_confirm_placement()
-		# 触摸拖动（移动端）
 		elif event is InputEventScreenDrag:
 			_update_placement_preview(event.position)
 		return  # 建造模式下不再处理其他输入
 
-	# 普通交互
-	if event is InputEventMouseButton:
-		if event.button_index == MOUSE_BUTTON_LEFT:
-			if event.pressed:
-				# Ctrl+左键 → 设置驻扎点（仅对已选中的军队/建筑）
-				if Input.is_key_pressed(KEY_CTRL) and not client_selected_ids.is_empty():
-					var ground_pos = _get_ground_position(event.position)
-					if ground_pos != Vector3.ZERO:
-						NetworkManager.send_command.rpc_id(1, {
-							"action": "set_garrison",
-							"selected_ids": client_selected_ids.duplicate(),
-							"pos_x": ground_pos.x, "pos_y": ground_pos.y, "pos_z": ground_pos.z
-						})
-						var chud = _get_client_hud()
-						if chud and chud.has_method("show_alert_message"):
-							chud.show_alert_message("已设置驻扎点", Color(0.3, 0.7, 1.0))
-					get_viewport().set_input_as_handled()
-					return
-				if _processing_delayed:
-					_processing_delayed = false
-					_try_select(event)
-				else:
-					_touch_start_pos = event.position
-					_left_click_timer = LEFT_CLICK_DELAY
-					_pending_left_click = true
+	# 键盘快捷键（照搬 SelectionManager._input）
+	if event is InputEventKey and event.pressed:
+		var key = event.keycode
+		var ctrl = event.ctrl_pressed
+		var shift = event.shift_pressed
+
+		# Delete键 → 拆除建筑
+		if key == KEY_DELETE:
+			for eid in client_selected_ids.duplicate():
+				var info = _get_entity_info(eid)
+				if info.get("type") == 1 and info.get("entity_id") != 20:
+					NetworkManager.send_command.rpc_id(1, {"action": "demolish", "building_id": eid})
+					client_selected_ids.erase(eid)
+			_update_selection_visuals()
+			emit_signal("selection_changed", client_selected_ids.duplicate())
+			get_viewport().set_input_as_handled()
+			return
+
+		# U键升级选中建筑
+		if key == KEY_U:
+			for eid in client_selected_ids.duplicate():
+				var info = _get_entity_info(eid)
+				if info.get("type") == 1:
+					NetworkManager.send_command.rpc_id(1, {"action": "upgrade", "building_id": eid})
+			get_viewport().set_input_as_handled()
+			return
+
+		# 数字键 1-9：单选建筑 → 快速生产（照搬 SelectionManager）
+		if key >= KEY_1 and key <= KEY_9 and not ctrl and not shift:
+			if client_selected_ids.size() == 1:
+				var info = _get_entity_info(client_selected_ids[0])
+				if info.get("type") == 1:  # Building
+					var b_cfg = EntityDatabase.get_config(info["entity_id"])
+					if b_cfg and b_cfg.has("produces"):
+						var produces = b_cfg["produces"]
+						var num = key - KEY_0
+						if produces.size() >= num:
+							var unit_id = produces[num - 1]["unit_id"]
+							NetworkManager.send_command.rpc_id(1, {
+								"action": "produce",
+								"building_id": client_selected_ids[0],
+								"unit_id": unit_id,
+								"ctrl_held": false,
+								"shift_held": false
+							})
+							get_viewport().set_input_as_handled()
+							return
+
+		# 数字键 0-9：编队系统（照搬 SelectionManager._handle_number_key）
+		if key >= KEY_0 and key <= KEY_9:
+			var g = key - KEY_0
+			if ctrl and g == 0:
+				# Ctrl+0 → 清除编队
+				for sid in client_selected_ids:
+					for k in local_groups.keys():
+						local_groups[k].erase(sid)
+				NetworkManager.send_command.rpc_id(1, {"action": "set_group", "group": 0, "selected_ids": client_selected_ids.duplicate()})
+			elif ctrl:
+				# Ctrl+数字 → 设置编队
+				local_groups[g] = client_selected_ids.duplicate()
+				NetworkManager.send_command.rpc_id(1, {"action": "set_group", "group": g, "selected_ids": client_selected_ids.duplicate()})
+				var chud = _get_client_hud()
+				if chud and chud.has_method("show_alert_message"):
+					chud.show_alert_message("编队 %d 已设置 (%d 单位)" % [g, client_selected_ids.size()], Color(0.3, 0.7, 1.0))
 			else:
-				_on_left_release(event)
-		elif event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
-			_pending_left_click = false
-			# Ctrl+右键空地 → 取消驻扎点
+				# 数字 → 召回编队
+				var now = Time.get_ticks_msec() / 1000.0
+				if local_groups.has(g):
+					if _last_group_key == g and (now - _last_group_time) < DOUBLE_TAP_THRESHOLD:
+						_jump_camera_to_group(g)
+						_last_group_key = -1
+						_last_group_time = 0.0
+					else:
+						client_selected_ids = local_groups[g].duplicate()
+						emit_signal("selection_changed", client_selected_ids.duplicate())
+						_update_selection_visuals()
+						_last_group_key = g
+						_last_group_time = now
+				NetworkManager.send_command.rpc_id(1, {"action": "recall_group", "group": g})
+			get_viewport().set_input_as_handled()
+			return
+
+	# ========== 左键处理（照搬 SelectionManager._input） ==========
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed:
+			# Ctrl+左键 → 设置驻扎点
 			if Input.is_key_pressed(KEY_CTRL) and not client_selected_ids.is_empty():
-				var _hit_id = _get_entity_id_under_mouse(event.position)
-				if _hit_id == -1:
-					NetworkManager.send_command.rpc_id(1, {"action": "clear_garrison", "selected_ids": client_selected_ids.duplicate()})
-					return
-			if client_selected_ids.is_empty():
 				var ground_pos = _get_ground_position(event.position)
 				if ground_pos != Vector3.ZERO:
-					emit_signal("build_requested", ground_pos)
+					NetworkManager.send_command.rpc_id(1, {
+						"action": "set_garrison",
+						"selected_ids": client_selected_ids.duplicate(),
+						"pos_x": ground_pos.x, "pos_y": ground_pos.y, "pos_z": ground_pos.z
+					})
+					var chud = _get_client_hud()
+					if chud and chud.has_method("show_alert_message"):
+						chud.show_alert_message("已设置驻扎点", Color(0.3, 0.7, 1.0))
+				get_viewport().set_input_as_handled()
+				return
+
+			var pos = event.position
+			var clicked_id = _get_entity_id_under_mouse(pos)
+
+			# 桥/运载船：已有选中单位时发送移动命令(不选中)
+			if not client_selected_ids.is_empty():
+				var bypass = false
+				if clicked_id != -1:
+					var cinfo = _get_entity_info(clicked_id)
+					if cinfo and ((cinfo.get("entity_id") == 9) or (cinfo.get("entity_id") == 7)):
+						bypass = true
+				if not bypass and clicked_id == -1:
+					# 桥可能射线未命中，用grid后备检测
+					var gpos = _get_ground_position(pos)
+					if gpos != Vector3.ZERO:
+						for node in renderer.entity_nodes.values():
+							if not node.has_meta("snapshot_info"): continue
+							var ninfo = node.get_meta("snapshot_info")
+							if ninfo and ninfo.get("entity_id") == 7 and ninfo.get("health", 0) > 0:
+								if node.global_position.distance_to(gpos) < 1.5:
+									bypass = true; break
+				if bypass:
+					_send_left_click(event)
+					return
+
+			# 点击己方实体 → 选中
+			if clicked_id != -1:
+				var info = _get_entity_info(clicked_id)
+				if not info: return
+
+				# 2v2 权限：只能选自己的单位
+				if renderer.my_peer_id != -1:
+					if info.get("owner_peer_id", -1) != renderer.my_peer_id:
+						_send_left_click(event)  # 敌方 → 攻击命令
+						return
+				else:
+					if info.get("team", -1) != renderer.player_team:
+						_send_left_click(event)  # 敌方 → 攻击命令
+						return
+
+				if info["health"] <= 0: return
+
+				# 双击全选同类
+				var now = Time.get_ticks_msec() / 1000.0
+				if last_clicked_id == clicked_id and (now - last_click_time) < DOUBLE_CLICK_THRESHOLD:
+					_select_all_of_same_type(clicked_id, info)
+					last_clicked_id = -1
+					last_click_time = 0.0
+					return
+				last_clicked_id = clicked_id
+				last_click_time = now
+
+				# 单击：Shift追加，否则替换选择
+				if clicked_id in client_selected_ids:
+					if Input.is_key_pressed(KEY_SHIFT):
+						client_selected_ids.erase(clicked_id)
+					else:
+						client_selected_ids.clear()
+				elif Input.is_key_pressed(KEY_SHIFT):
+					client_selected_ids.append(clicked_id)
+				else:
+					client_selected_ids.clear()
+					client_selected_ids.append(clicked_id)
+
+				emit_signal("selection_changed", client_selected_ids.duplicate())
+				_update_selection_visuals()
 			else:
-				var hit_id = _get_entity_id_under_mouse(event.position)
-				if hit_id == -1:
+				# 点击空地或非己方实体
+				if client_selected_ids.is_empty():
+					# 无选中 + 空地 → 立即启动框选（照搬单机版）
+					last_clicked_id = -1
 					client_selected_ids.clear()
 					_update_selection_visuals()
 					emit_signal("selection_changed", [])
-				else:
-					_send_left_click(event)
-
-		elif event is InputEventMouseMotion:
-			# 任何鼠标移动 → 取消延迟点击，防止计时器抢先触发
-			if _pending_left_click:
-				_pending_left_click = false
-				if _touch_start_pos.distance_to(event.position) > 5.0:
 					is_box_selecting = true
-					box_start = _touch_start_pos
-					box_end = event.position
-			# 框选进行中：更新矩形
-			if is_box_selecting:
-				box_end = event.position
-				var r = Rect2(box_start, box_end - box_start).abs()
-				box_rect.position = r.position
-				box_rect.size = r.size
-				box_rect.visible = true
+					box_start = pos
+					box_end = pos
+				else:
+					# 有选中单位 + 点击空地/敌方 → 攻击/移动命令
+					_send_left_click(event)
+		else:
+			# 左键松开 → 处理框选
+			_on_left_release(event)
 
-func _on_left_release(event):
+	# ========== 框选更新（照搬 SelectionManager: elif MouseMotion and is_box_selecting） ==========
+	elif event is InputEventMouseMotion and is_box_selecting:
+		box_end = event.position
+		var r = Rect2(box_start, box_end - box_start).abs()
+		box_rect.position = r.position
+		box_rect.size = r.size
+		box_rect.visible = true
+
+func _on_left_release(_event):
 	if is_box_selecting:
 		is_box_selecting = false
 		box_rect.visible = false
@@ -203,6 +321,9 @@ func _on_left_release(event):
 			if not info: continue
 			# 2v2 权限过滤
 			if renderer.my_peer_id != -1 and info.get("owner_peer_id", -1) != renderer.my_peer_id:
+				continue
+			# 单机：只能选己方
+			if renderer.my_peer_id == -1 and info.get("team", -1) != renderer.player_team:
 				continue
 			if info["health"] <= 0: continue
 			var screen_pos = cam.unproject_position(node.global_position)
@@ -227,121 +348,35 @@ func _select_all_of_same_type(target_id: int, info: Dictionary):
 	emit_signal("selection_changed", client_selected_ids.duplicate())
 	_update_selection_visuals()
 
-# ---------- 选择环 ----------
-var selection_rings: Dictionary = {}
-func _update_selection_visuals():
-	for rid in selection_rings.keys():
-		if is_instance_valid(selection_rings[rid]):
-			selection_rings[rid].queue_free()
-	selection_rings.clear()
-	for id in client_selected_ids:
-		_create_ring_for_entity(id)
-
-func _create_ring_for_entity(id):
-	var node = renderer.entity_nodes.get(id)
-	if not node: return
-	if not node.has_meta("snapshot_info"): return
-	var info = node.get_meta("snapshot_info")
-	if not info: return
-	var radius = info.get("body_radius", 0.5)
-	var ring = MeshInstance3D.new()
-	ring.mesh = TorusMesh.new()
-	ring.mesh.inner_radius = radius + 0.15
-	ring.mesh.outer_radius = radius + 0.35
-	ring.position = Vector3(0, radius * 2.5 + 0.1, 0)
-	ring.material_override = StandardMaterial3D.new()
-	# 己方绿色，敌方红色
-	var ring_team = info.get("team", -1)
-	if ring_team == RTSConfig.Team.BLUE:
-		ring.material_override.albedo_color = Color.GREEN
-	else:
-		ring.material_override.albedo_color = Color.RED
-	ring.material_override.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	node.add_child(ring)
-	selection_rings[id] = ring
-	if _pending_left_click:
-		_left_click_timer -= 0.016
-		if _left_click_timer <= 0:
-			_pending_left_click = false
-			var ev = InputEventMouseButton.new()
-			ev.button_index = 1; ev.pressed = true; ev.position = _touch_start_pos
-			_processing_delayed = true
-			_unhandled_input(ev)
-
-func _process_selection_rings():
-	# 每帧更新选择环的位置（跟随目标移动）
-	var to_remove = []
-	for id in selection_rings.keys():
-		var ring = selection_rings[id]
-		if not is_instance_valid(ring):
-			to_remove.append(id)
-			continue
-		var node = renderer.entity_nodes.get(id)
-		if not is_instance_valid(node):
-			ring.queue_free()
-			to_remove.append(id)
-			continue
-		# 环跟随实体位置（自动跟随因为是子节点，此处检查有效性）
-		if not node.has_meta("snapshot_info"):
-			ring.queue_free()
-			to_remove.append(id)
-	for id in to_remove:
-		selection_rings.erase(id)
-
-# ---------- 右键命令 ----------
-func _try_select(event):
-	var pos = event.position
-	var clicked_id = _get_entity_id_under_mouse(pos)
-	if clicked_id != -1:
-		var info = _get_entity_info(clicked_id)
-		if not info: return
-
-		# 2v2 权限：只能选自己的单位
-		if renderer.my_peer_id != -1:
-			var owner = info.get("owner_peer_id", -1)
-			if owner != renderer.my_peer_id :
-				_send_left_click(event)
-				return
-		else:
-			var owner = info.get("team", -1)
-			
-			renderer = get_tree().get_first_node_in_group("client_renderer")
-			
-			if owner != renderer.player_team :
-				_send_left_click(event)
-				return
-		# 双击全选同类
-		var now = Time.get_ticks_msec() / 1000.0
-		if last_clicked_id == clicked_id and (now - last_click_time) < DOUBLE_CLICK_THRESHOLD:
-			_select_all_of_same_type(clicked_id, info)
-			last_clicked_id = -1
-			last_click_time = 0.0
+# ==================== 右键处理（照搬单机版 _handle_right_click） ====================
+func _unhandled_input(event):
+	if not renderer: return
+	# 右键 → 命令/建造（照搬单机版：_unhandled_input 只处理右键）
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+		# Ctrl+右键 → 清除驻扎点
+		if Input.is_key_pressed(KEY_CTRL) and not client_selected_ids.is_empty():
+			var hit_id = _get_entity_id_under_mouse(event.position)
+			if hit_id == -1:
+				NetworkManager.send_command.rpc_id(1, {"action": "clear_garrison", "selected_ids": client_selected_ids.duplicate()})
 			return
-		last_clicked_id = clicked_id
-		last_click_time = now
 
-		# 单击：Shift追加，否则替换选择（而非追加）
-		if clicked_id in client_selected_ids:
-			if Input.is_key_pressed(KEY_SHIFT):
-				client_selected_ids.erase(clicked_id)
-			else:
-				client_selected_ids.clear()
-		elif Input.is_key_pressed(KEY_SHIFT):
-			client_selected_ids.append(clicked_id)
-		else:
-			client_selected_ids.clear()
-			client_selected_ids.append(clicked_id)
+		# 无选中 + 右键空地 → 打开建造菜单（照搬单机版 _try_open_build_menu）
+		if client_selected_ids.is_empty():
+			var ground_pos = _get_ground_position(event.position)
+			if ground_pos != Vector3.ZERO:
+				emit_signal("build_requested", ground_pos)
+			return
 
-		emit_signal("selection_changed", client_selected_ids.duplicate())
-		_update_selection_visuals()
-	else:
-		if not client_selected_ids:
-			# 点击空地 → 清除选择
+		# 右键空地 → 取消选择（照搬单机版：hit==null → clear selection）
+		var hit_id = _get_entity_id_under_mouse(event.position)
+		if hit_id == -1:
 			client_selected_ids.clear()
-			emit_signal("selection_changed", [])
 			_update_selection_visuals()
+			emit_signal("selection_changed", [])
 		else:
 			_send_left_click(event)
+
+# ---------- 命令发送 ----------
 func _send_left_click(event):
 	if not renderer: return
 	var cam = get_viewport().get_camera_3d()
@@ -429,19 +464,6 @@ func _get_ground_position(screen_pos: Vector2) -> Vector3:
 	return result.position if result else Vector3.ZERO
 
 func _process(_delta):
-	# 处理延迟左键计时器
-	if _pending_left_click:
-		_left_click_timer -= _delta
-		if _left_click_timer <= 0:
-			# 如果鼠标仍按住，等待松手（可能正在准备拖拽）
-			if Input.is_mouse_button_pressed(MOUSE_BUTTON_LEFT):
-				_left_click_timer = 0.05
-			else:
-				_pending_left_click = false
-				var ev = InputEventMouseButton.new()
-				ev.button_index = 1; ev.pressed = true; ev.position = _touch_start_pos
-				_processing_delayed = true
-				_unhandled_input(ev)
 	# 每帧更新选择环位置（跟随目标）
 	if selection_rings.size() > 0:
 		_process_selection_rings()
@@ -469,6 +491,58 @@ func _jump_camera_to_group(g: int):
 	if cam:
 		cam.global_position = Vector3(center.x, cam.global_position.y, center.z)
 
+# ---------- 选择环 ----------
+var selection_rings: Dictionary = {}
+func _update_selection_visuals():
+	for rid in selection_rings.keys():
+		if is_instance_valid(selection_rings[rid]):
+			selection_rings[rid].queue_free()
+	selection_rings.clear()
+	for id in client_selected_ids:
+		_create_ring_for_entity(id)
+
+func _create_ring_for_entity(id):
+	var node = renderer.entity_nodes.get(id)
+	if not node: return
+	if not node.has_meta("snapshot_info"): return
+	var info = node.get_meta("snapshot_info")
+	if not info: return
+	var radius = info.get("body_radius", 0.5)
+	var ring = MeshInstance3D.new()
+	ring.mesh = TorusMesh.new()
+	ring.mesh.inner_radius = radius + 0.15
+	ring.mesh.outer_radius = radius + 0.35
+	ring.position = Vector3(0, radius * 2.5 + 0.1, 0)
+	ring.material_override = StandardMaterial3D.new()
+	# 己方绿色，敌方红色
+	var ring_team = info.get("team", -1)
+	if ring_team == RTSConfig.Team.BLUE:
+		ring.material_override.albedo_color = Color.GREEN
+	else:
+		ring.material_override.albedo_color = Color.RED
+	ring.material_override.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	node.add_child(ring)
+	selection_rings[id] = ring
+
+func _process_selection_rings():
+	# 每帧更新选择环的位置（跟随目标移动）
+	var to_remove = []
+	for id in selection_rings.keys():
+		var ring = selection_rings[id]
+		if not is_instance_valid(ring):
+			to_remove.append(id)
+			continue
+		var node = renderer.entity_nodes.get(id)
+		if not is_instance_valid(node):
+			ring.queue_free()
+			to_remove.append(id)
+			continue
+		if not node.has_meta("snapshot_info"):
+			ring.queue_free()
+			to_remove.append(id)
+	for id in to_remove:
+		selection_rings.erase(id)
+
 # ---------- 建造放置 ----------
 func _update_placement_preview(screen_pos: Vector2):
 	var cam = get_viewport().get_camera_3d()
@@ -477,7 +551,6 @@ func _update_placement_preview(screen_pos: Vector2):
 	var to = from + cam.project_ray_normal(screen_pos) * 2000
 	var space_state = get_viewport().get_world_3d().direct_space_state
 
-	# 先尝试射线检测地面碰撞体（层2）
 	var query = PhysicsRayQueryParameters3D.create(from, to)
 	query.collide_with_bodies = true
 	query.collision_mask = 2
@@ -489,7 +562,6 @@ func _update_placement_preview(screen_pos: Vector2):
 		ground_pos = result.position
 		hit_ground = true
 	else:
-		# 后备方案：使用平面求交（Y=0 平面）
 		var plane_normal = Vector3.UP
 		var plane_point = Vector3.ZERO
 		var dir = (to - from).normalized()
@@ -504,13 +576,12 @@ func _update_placement_preview(screen_pos: Vector2):
 		var pos = ground_pos
 		pos.x = round(pos.x)
 		pos.z = round(pos.z)
-		pos.y = renderer.get_terrain_height(pos)   # 贴合地形高度
+		pos.y = renderer.get_terrain_height(pos)
 		last_world_pos = pos
 
-		# 合法性检查
 		var in_vision = renderer.is_in_player_vision(pos)
-		var terrain_ok = renderer.get_terrain_at(pos) != 2   # 不在水中
-		if renderer.placement_building_id == 23:  # 船坞特殊
+		var terrain_ok = renderer.get_terrain_at(pos) != 2
+		if renderer.placement_building_id == 23:
 			terrain_ok = renderer.get_terrain_at(pos) == 0 and _check_adjacent_water(pos)
 
 		renderer.placement_preview.global_position = pos
@@ -539,7 +610,7 @@ func _confirm_placement():
 	}
 	NetworkManager.send_command.rpc_id(1, cmd)
 	if not Input.is_key_pressed(KEY_SHIFT):
-			_cancel_placement()
+		_cancel_placement()
 
 func _cancel_placement():
 	renderer.placement_mode = false
@@ -556,90 +627,6 @@ func _check_adjacent_water(world_pos: Vector3) -> bool:
 			if renderer.get_terrain_at_grid(gx+dx, gz+dy) == 2:
 				return true
 	return false
-
-# ---------- 键盘快捷键 ----------
-func _input(event):
-	if not event is InputEventKey or not event.pressed:
-		return
-
-	if event.keycode == KEY_DELETE:
-		for eid in client_selected_ids.duplicate():
-			var info = _get_entity_info(eid)
-			if info.get("type") == 1 and info.get("entity_id") != 20:
-				NetworkManager.send_command.rpc_id(1, {"action": "demolish", "building_id": eid})
-				client_selected_ids.erase(eid)
-		_update_selection_visuals()
-		emit_signal("selection_changed", client_selected_ids.duplicate())
-		get_viewport().set_input_as_handled()
-		return
-
-	# U键升级选中建筑
-	if event.keycode == KEY_U:
-		for eid in client_selected_ids.duplicate():
-			var info = _get_entity_info(eid)
-			if info.get("type") == 1:
-				NetworkManager.send_command.rpc_id(1, {"action": "upgrade", "building_id": eid})
-		get_viewport().set_input_as_handled()
-		return
-
-		# 单选建筑 + 数字 → 快速生产（无Ctrl/Shift）
-	if event.keycode >= KEY_1 and event.keycode <= KEY_9 and not event.ctrl_pressed and not event.shift_pressed:
-		if client_selected_ids.size() == 1:
-			var info = _get_entity_info(client_selected_ids[0])
-			if info.get("type") == 1:  # Building
-				var b_cfg = EntityDatabase.get_config(info["entity_id"])
-				if b_cfg and b_cfg.has("produces"):
-					var produces = b_cfg["produces"]
-					var num = event.keycode - KEY_0
-					if produces.size() >= num:
-						var unit_id = produces[num - 1]["unit_id"]
-						NetworkManager.send_command.rpc_id(1, {
-							"action": "produce",
-							"building_id": client_selected_ids[0],
-							"unit_id": unit_id,
-							"ctrl_held": false,
-							"shift_held": false
-						})
-						get_viewport().set_input_as_handled()
-						return
-
-	# 编队系统: Ctrl+数字 = 设置, 数字 = 召回
-	if event.keycode >= KEY_0 and event.keycode <= KEY_9:
-		var g = event.keycode - KEY_0
-		var ctrl = event.ctrl_pressed
-		if ctrl and g == 0:
-			for sid in client_selected_ids:
-				for key in local_groups.keys():
-					local_groups[key].erase(sid)
-			NetworkManager.send_command.rpc_id(1, {"action": "set_group", "group": 0, "selected_ids": client_selected_ids.duplicate()})
-		elif ctrl:
-			local_groups[g] = client_selected_ids.duplicate()
-			print("[Client] Set group ", g, " with ", client_selected_ids.size(), " units")
-			NetworkManager.send_command.rpc_id(1, {"action": "set_group", "group": g, "selected_ids": client_selected_ids.duplicate()})
-			var chud = _get_client_hud()
-			if chud and chud.has_method("show_alert_message"):
-				chud.show_alert_message("编队 %d 已设置 (%d 单位)" % [g, client_selected_ids.size()], Color(0.3, 0.7, 1.0))
-		else:
-			var now = Time.get_ticks_msec() / 1000.0
-			if local_groups.has(g):
-				# 双击检测：切图到编队中心
-				if _last_group_key == g and (now - _last_group_time) < DOUBLE_TAP_THRESHOLD:
-					_jump_camera_to_group(g)
-					_last_group_key = -1
-					_last_group_time = 0.0
-				else:
-					client_selected_ids = local_groups[g].duplicate()
-					emit_signal("selection_changed", client_selected_ids.duplicate())
-					_update_selection_visuals()
-					print("[Client] Recalled group ", g, " with ", client_selected_ids.size(), " units")
-					var chud2 = _get_client_hud()
-					if chud2 and chud2.has_method("show_alert_message"):
-						chud2.show_alert_message("编队 %d (%d 单位)" % [g, client_selected_ids.size()], Color(0.3, 0.7, 1.0))
-					_last_group_key = g
-					_last_group_time = now
-			NetworkManager.send_command.rpc_id(1, {"action": "recall_group", "group": g})
-		get_viewport().set_input_as_handled()
-		return
 
 # ---------- 集结模式 ----------
 func enable_rally_mode(): rally_mode = true

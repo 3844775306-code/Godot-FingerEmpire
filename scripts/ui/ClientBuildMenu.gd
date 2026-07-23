@@ -8,7 +8,7 @@ signal build_placement_started(building_id: int)
 const BUILDING_REQUIRED_CASTLE: Dictionary = {
 	23: 2, 25: 2, 26: 2,
 	24: 3, 29: 3, 52: 3,
-	42: 4, 53: 4
+	42: 4, 53: 4, 54: 4
 }
 
 func popup_at(p_world_pos: Vector3, screen_pos: Vector2):

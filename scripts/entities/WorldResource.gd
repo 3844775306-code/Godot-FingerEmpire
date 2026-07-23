@@ -6,13 +6,10 @@ var resource_type: String = "gold"
 func _ready():
 	super._ready()
 	entity_type = 0
-	var lv = randi_range(1,5)
-	level = lv
-	var scale = 0.4 + (lv - 1.0) * 0.3
-	max_health = int(max_health * scale)
-	health = max_health
-	team = RTSConfig.Team.NEUTRAL
-	can_move = false
+	
+	 
+	
+	
 	_create_visual()
 	_add_selection_ring()
 	_add_collision_shape()
@@ -21,6 +18,13 @@ func _ready():
 func setup(config: Dictionary):
 	super.setup(config)
 	resource_type = config.get("resource_type", "gold")
+	var lv = randi_range(1,5)
+	level = lv
+	max_health  *= 0.4 + (level - 1.0) * 0.3
+	
+	health = max_health
+	team = RTSConfig.Team.NEUTRAL
+	can_move = false
 
 func _create_visual():
 	var mesh = MeshInstance3D.new()
@@ -56,7 +60,7 @@ func _add_collision_shape():
 	if not has_node("CollisionShape3D"):
 		var col = CollisionShape3D.new()
 		var shape = SphereShape3D.new()
-		shape.radius = body_radius * 3 # 增大碰撞范围，确保点击树叶边缘时也能命中
+		shape.radius = body_radius * 1.2 # 增大碰撞范围，确保点击树叶边缘时也能命中
 		col.shape = shape
 		col.name = "CollisionShape3D"
 		add_child(col)

@@ -134,18 +134,18 @@ func process_move(delta, bm: RTSBattleManager):
 
 	
 
-	# Mountain avoidance: deflect if next step is impassable
-	var next_pos = _army.global_position + move_dir * _army.speed * 0.016
-	if bm and not _army.water_capable:
-		var terr = bm.get_terrain_at(next_pos)
-		if terr == 1:
-			var alt = move_dir.rotated(Vector3.UP, deg_to_rad(45))
-			next_pos = _army.global_position + alt * _army.speed * 0.016
-			if bm.get_terrain_at(next_pos) == 1:
-				alt = move_dir.rotated(Vector3.UP, deg_to_rad(-90))
-				next_pos = _army.global_position + alt * _army.speed * 0.016
-				if bm.get_terrain_at(next_pos) == 1: return
-			move_dir = alt
+	## Mountain avoidance: deflect if next step is impassable
+	#var next_pos = _army.global_position + move_dir * _army.speed * 0.016
+	#if bm and not _army.water_capable:
+		#var terr = bm.get_terrain_at(next_pos)
+		#if terr == 1:
+			#var alt = move_dir.rotated(Vector3.UP, deg_to_rad(45))
+			#next_pos = _army.global_position + alt * _army.speed * 0.016
+			#if bm.get_terrain_at(next_pos) == 1:
+				#alt = move_dir.rotated(Vector3.UP, deg_to_rad(-90))
+				#next_pos = _army.global_position + alt * _army.speed * 0.016
+				#if bm.get_terrain_at(next_pos) == 1: return
+			#move_dir = alt
 	_army.velocity = Vector3(move_dir.x, 0, move_dir.z) * _army.speed
 	_army.move_and_slide()
 	# Movement sounds (every 10 frames, when actually moving)

@@ -45,6 +45,7 @@ const CLICK_DELAY: float = 0.1
 var game_over_panel: Control = null
 var game_over_label: Label = null
 var game_over: bool = false
+var _team_castle_count: Dictionary = {}   # 单机2v2: 每队存活城堡数
 var game_time: float = 0.0
 var game_time_label: Label = null
 var gather_paused: bool = false
@@ -323,6 +324,22 @@ func _create_game_timer():
 		add_child(game_time_label)
 
 # ==================== 城堡被摧毁 → 游戏结束 ====================
+# 单机2v2：检查同队所有城堡是否全部死亡
+func _on_2v2_castle_died(team: int):
+	if game_over: return
+	_team_castle_count[team] = _team_castle_count.get(team, 2) - 1
+	if _team_castle_count[team] > 0: return   # 还有存活城堡，继续
+	game_over = true
+	AudioManager.play_music("defeat" if team == RTSConfig.Team.BLUE else "victory")
+	if team == RTSConfig.Team.BLUE:
+		_show_hud_alert("我方基地正遭受攻击！", Color(1.0, 0.2, 0.1))
+		game_over_label.text = "你输了！"
+		game_over_label.add_theme_color_override("font_color", Color.RED)
+	else:
+		_show_hud_alert("敌军基地已被摧毁！", Color(0.2, 1.0, 0.3))
+		game_over_label.text = "你赢了！"
+		game_over_label.add_theme_color_override("font_color", Color.GREEN)
+	game_over_panel.visible = true
 func _on_castle_died(team: int):
 	if game_over: return
 	game_over = true
@@ -435,6 +452,8 @@ func _init_2v2_single():
 	if not map: return
 	var positions = map.get_four_castle_positions()   # [blue1, blue2, red1, red2]
 
+	_team_castle_count[RTSConfig.Team.BLUE] = 2
+	_team_castle_count[RTSConfig.Team.RED] = 2
 	for info in setup:
 		var pid = info.peer_id
 		var team = info.team
@@ -464,7 +483,7 @@ func _init_2v2_single():
 		var castle = spawn_entity(castle_cfg, team, castle_pos, 1)
 		castle.owner_peer_id = pid
 		if castle:
-			castle.died.connect(_on_castle_died.bind(team))   # 简化处理，后续可扩展
+			castle.died.connect(_on_2v2_castle_died.bind(team))
 			ai_players[pid] = {"castle": castle, "team": team, "slot": slot}
 
 		# 生成3个农民
@@ -727,6 +746,7 @@ func _apply_entity_model(entity: GameEntity) -> bool:
 	# 特殊朝向调整
 	if entity.entity_id == 16: model_instance.rotation.y = deg_to_rad(90)
 	elif entity.entity_id == 17: model_instance.rotation.y = deg_to_rad(90)
+	elif entity.entity_id == 18: model_instance.rotation.y = deg_to_rad(90)
 	# 存储模型引用用于动画
 	entity.set_meta("_model_instance", model_instance)
 	# 角色模型启用顶点颜色（编辑器预览依赖此特性）
@@ -871,14 +891,12 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 		var h = $Map.get_height_at(pos)
 		entity.global_position.y = h
 
+
 	# 人口管理
-	if entity is Army:
-		if entity.entity_id < 60:  # 动物不占人口
-			increase_population(team, 1)
-		elif entity is Building:
-			if entity.entity_id == 25 or entity.entity_id == 26:
-	
-				increase_population(team, 1)
+	if entity is Army and entity.entity_id < 60:
+		increase_population(team, 1)
+	elif entity is Building and (entity.entity_id == 25 or entity.entity_id == 26):
+		increase_population(team, 1)
 
 	return entity
 
@@ -979,6 +997,14 @@ func _unhandled_input(event):
 		_pending_left_click = false
 		_handle_right_click(event)
 
+
+# 统计指定类型的建筑数量（按队伍过滤）
+func _count_buildings_of_type(building_id: int, for_team: int) -> int:
+	var cnt = 0
+	for e in entities.get_children():
+		if e is Building and e.health > 0 and e.entity_id == building_id and e.team == for_team:
+			cnt += 1
+	return cnt
 func _place_building_at(pos: Vector3):
 	# 检查城堡等级解锁
 	if not is_building_unlocked(selected_building_id): return
@@ -999,6 +1025,11 @@ func _place_building_at(pos: Vector3):
 	if is_defense and not can_train_unit(RTSConfig.Team.BLUE):
 		return false
 	
+
+	# 每种建筑最多10个
+	if _count_buildings_of_type(selected_building_id, RTSConfig.Team.BLUE) >= 10:
+		_show_hud_alert("该建筑已达上限(10个)！", Color(1.0, 0.4, 0.3))
+		return
 	# 扣资源
 	for k in cost:
 		player_resources[k] -= cost[k]
@@ -1009,6 +1040,8 @@ func _place_building_at(pos: Vector3):
 	if b:
 		b.start_construction(5.0, cfg)	
 		AudioManager.play_sfx("build_place")
+		if selected_building_id == 53:
+			b.died.connect(_on_castle_died.bind(RTSConfig.Team.BLUE))
 		notify_path_recalc(pos)
 	# 注意：如果仍需要支持鼠标（PC调试），可以同时保留原鼠标处理
 	# 但移动端主要用触摸，PC端继续用鼠标左键命令+右键选择
@@ -1082,11 +1115,23 @@ func _handle_right_click(event):
 		_try_open_build_menu(event.position)
 		return false
 
-	# 右键空地 → 取消选择
+	# 右键空地 → 取消选择（桥：射线穿透时通过grid后备检测）
 	var hit = _get_entity_under_click(event.position)
 	if not hit:
-		selection._clear_selection()
-		return false
+		var gpos = _get_ground_pos(event.position)
+		if gpos != Vector3.ZERO:
+			var gg = world_to_grid(gpos)
+			var found_bridge = false
+			for e in entities.get_children():
+				if e is Building and e.entity_id == 7 and e.health > 0:
+					if world_to_grid(e.global_position) == gg:
+						found_bridge = true; break
+			if not found_bridge:
+				selection._clear_selection()
+				return false
+		else:
+			selection._clear_selection()
+			return false
 
 	_command_selected_units(event.position)
 
@@ -1396,6 +1441,11 @@ func _place_building():
 	var is_defense = (selected_building_id == 25 or selected_building_id == 26)
 	if is_defense and not can_train_unit(RTSConfig.Team.BLUE): return
 
+
+	# 每种建筑最多10个
+	if _count_buildings_of_type(selected_building_id, RTSConfig.Team.BLUE) >= 10:
+		_show_hud_alert("该建筑已达上限(10个)！", Color(1.0, 0.4, 0.3))
+		return
 	# 扣费
 	for k in cost:
 		player_resources[k] -= cost[k]
@@ -1406,6 +1456,8 @@ func _place_building():
 	if b:
 		b.start_construction(5.0, cfg)
 		AudioManager.play_sfx("build_place")
+		if selected_building_id == 53:
+			b.died.connect(_on_castle_died.bind(RTSConfig.Team.BLUE))
 		notify_path_recalc(pos)
 
 	if not Input.is_key_pressed(KEY_SHIFT):

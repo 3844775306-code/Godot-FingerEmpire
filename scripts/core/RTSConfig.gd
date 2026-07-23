@@ -35,6 +35,7 @@ const ENTITY_MODELS = {
 	42: "res://models/hexagon/academy.glb",
 	52: "res://models/hexagon/market.glb",
 	53: "res://models/hexagon/building-walls.glb",
+	54: "res://models/hexagon/building-village.glb",
 	# 建筑 (castle)
 	26: "res://models/castle/tower-complete-large.glb",
 	# 建筑 (hexagon cabin)

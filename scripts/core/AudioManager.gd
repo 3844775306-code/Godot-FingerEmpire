@@ -6,7 +6,6 @@ var _music_player: AudioStreamPlayer
 var _sfx_pool: Array[AudioStreamPlayer] = []
 var _sfx_index: int = 0
 	# Network audio sync
-var _net_audio_queue: Array = []  # queued audio events for clients
 var _cooldowns: Dictionary = {}  # per-key frame cooldown
 var _music_volume: float = 0.7
 var _sfx_volume: float = 0.8
@@ -110,15 +109,10 @@ func play_sfx_3d(key: String, pos: Vector3, cam_pos: Vector3):
 	p.volume_db = linear_to_db(vol)
 	p.play()
 		# Queue for network clients
-	_net_audio_queue.append({"key": key, "x": pos.x, "y": pos.y, "z": pos.z, "vol": _sfx_volume})
 
 func set_music_volume(v: float):
 	_music_volume = clamp(v, 0, 1)
 	if _music_player: _music_player.volume_db = linear_to_db(_music_volume)
 
-func drain_net_audio() -> Array:
-	var q = _net_audio_queue.duplicate()
-	_net_audio_queue.clear()
-	return q
 func set_sfx_volume(v: float):
 	_sfx_volume = clamp(v, 0, 1)

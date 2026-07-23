@@ -70,6 +70,11 @@ const WALL_SPACING: float = 1.3
 const TOWER_SPACING: float = 3.0
 const DEFENSE_FRONT_DIST: float = 8.0
 const SAFE_DEFEND_RADIUS: float = 45.0
+const LAND_RALLY_DISTANCE: float = 12.0
+const LAND_RALLY_INTERVAL: float = 8.0
+var _land_rally_timer: float = 0.0
+const NAVAL_PATROL_INTERVAL: float = 15.0
+var _naval_patrol_timer: float = 0.0
 
 # ═══ Resource wrappers ═══
 func _get_resources() -> Dictionary:
@@ -268,6 +273,7 @@ func build_building(building_id: int, pos: Vector3):
 	if not cfg: return
 	# Check castle level requirement (matches RTSBattleManager.is_building_unlocked)
 	if not _ai_can_build(building_id): return
+	if count_building(building_id) >= 10: return
 	# Non-shipyard buildings: must be within AI vision range
 	if building_id != 23:
 		var world_pos = Vector3(pos.x, 0, pos.z)
@@ -288,11 +294,6 @@ func build_building(building_id: int, pos: Vector3):
 	var b = battle.spawn_entity(cfg, team, pos)
 	if b:
 		b.start_construction(5.0, cfg)
-		if building_id == 25 or building_id == 26:
-			if battle is OnlineBattleManager and my_peer_id != -1:
-				battle.increase_player_population(my_peer_id)
-			else:
-				battle.increase_population(team)
 
 func upgrade_building(building_id: int):
 	for entity in battle.entities.get_children():
@@ -387,6 +388,11 @@ func _process(delta):
 	if worker_allocate_timer <= 0:
 		worker_allocate_timer = WORKER_ALLOCATE_INTERVAL
 		allocate_workers()
+	_naval_patrol_timer -= delta
+	if _naval_patrol_timer <= 0:
+		_naval_patrol_timer = NAVAL_PATROL_INTERVAL
+		if phase >= Phase.DEVELOPMENT:
+			_patrol_navy_around_water()
 	# Troop accumulation: assault when army >= 30
 	var army_count = count_military(my_peer_id if my_peer_id != -1 else my_team)
 	if army_count >= 30 and phase == Phase.DEVELOPMENT:
@@ -464,6 +470,7 @@ func _state_development(_delta):
 			_process_line_upgrade()
 	_manage_shipyards()
 	_process_line_5()
+	_rally_land_army_to_castle()
 	_ai_hunt_animals(_delta)
 	_check_hunt_cleanup()
 	_ai_garrison_officials()
@@ -475,6 +482,7 @@ func _state_assault(_delta):
 	_process_line_1()
 	_process_line_3()
 	_ensure_merchants()
+	_rally_land_army_to_castle()
 	_try_produce_merchants_or_officials()
 	_manage_shipyards()
 	_process_line_5()
@@ -917,20 +925,21 @@ func execute_overwhelm():
 	var enemy_castle = get_team_castle(1 - my_team)
 	if not enemy_castle: return
 	var rally = enemy_castle.global_position + Vector3(0, 0, 5)
-	if wall_positions.size() > 0: rally = wall_positions[wall_positions.size()/2] + Vector3(0, 0, 2)
+	#if wall_positions.size() > 0: rally = wall_positions[wall_positions.size()/2] + Vector3(0, 0, 2)
 	var self_castle = get_peer_castle(my_peer_id)
 	if not self_castle: return
-	var home = self_castle.global_position
+	# 第一波：召集全军到敌方集结点（取消距离限制，确保全军参与）
 	for entity in battle.entities.get_children():
 		if entity is Army and entity.team == my_team and entity.health > 0 and entity_belongs_to_me(entity):
 			if entity.entity_id in [10,14,46,47,48,50]: continue
-			if entity.global_position.distance_to(home) <= HOME_ASSEMBLE_RANGE:
-				entity.attack_move_to(rally)
+			entity.attack_move_to(rally)
+	# 等待部队集结
 	await get_tree().create_timer(10.0).timeout
+	# 第二波：全军压上敌方城堡
 	for entity in battle.entities.get_children():
 		if entity is Army and entity.team == my_team and entity.health > 0 and entity_belongs_to_me(entity):
 			if entity.entity_id in [10,14,46,47,48,50]: continue
-			if not enemy_castle:continue
+			if not enemy_castle or not is_instance_valid(enemy_castle): continue
 			entity.attack_move_to(enemy_castle.global_position)
 
 func execute_raid():
@@ -1298,6 +1307,79 @@ func _ensure_merchants():
 			for prod in entity.production_list:
 				if prod.unit_id == mid: found = true; break
 			if not found: entity.production_list.append({"unit_id": mid, "cooldown": 10.0, "queue_limit": 3})
+
+
+# ═══ Land Army Rally ═══
+# 每个单位只集合一次（通过 meta 标记），在 decide() 中每次决策周期调用
+func _rally_land_army_to_castle():
+	var castle = get_peer_castle(my_peer_id)
+	if not castle: return
+	var enemy_dir = _get_enemy_army_direction(castle.global_position)
+	var rally_point = castle.global_position + enemy_dir.normalized() * LAND_RALLY_DISTANCE
+	# Ensure rally point is on valid terrain (not water)
+	var gx = int(rally_point.x + RTSConfig.MAP_SIZE / 2)
+	var gz = int(rally_point.z + RTSConfig.MAP_SIZE / 2)
+	if gx >= 0 and gx < RTSConfig.MAP_SIZE and gz >= 0 and gz < RTSConfig.MAP_SIZE:
+		if battle.get_terrain_at_grid(gx, gz) == 2:
+			for offset in [Vector3(5,0,0), Vector3(-5,0,0), Vector3(0,0,5), Vector3(0,0,-5), Vector3(8,0,0), Vector3(-8,0,0)]:
+				var alt = rally_point + offset
+				var agx = int(alt.x + RTSConfig.MAP_SIZE / 2)
+				var agz = int(alt.z + RTSConfig.MAP_SIZE / 2)
+				if agx >= 0 and agx < RTSConfig.MAP_SIZE and agz >= 0 and agz < RTSConfig.MAP_SIZE:
+					if battle.get_terrain_at_grid(agx, agz) != 2:
+						rally_point = alt; break
+	for entity in battle.entities.get_children():
+		if not (entity is Army) or entity.health <= 0: continue
+		if not entity_belongs_to_me(entity): continue
+		# Skip non-combat / naval units
+		if entity.entity_id in [10, 14, 43, 44, 45, 46, 47, 48, 49, 50, 51]: continue
+		if entity.water_capable: continue
+		# 已集合过的单位不再重复集合
+		if entity.has_meta("ai_rallied"): continue
+		# Only rally idle units (刚生产出来的单位处于空闲状态)
+		if entity.current_order != "" or entity.current_target != null: continue
+		entity.set_meta("ai_rallied", true)
+		entity.attack_move_to(rally_point)
+
+# ═══ Naval Patrol ═══
+func _patrol_navy_around_water():
+	var shipyards: Array = []
+	for e in battle.entities.get_children():
+		if e is Building and e.entity_id == 23 and e.health > 0 and e.build_timer <= 0 and entity_belongs_to_me(e):
+			shipyards.append(e)
+	if shipyards.is_empty(): return
+	var idle_naval: Array = []
+	for entity in battle.entities.get_children():
+		if not (entity is Army) or entity.health <= 0: continue
+		if not entity_belongs_to_me(entity): continue
+		if not entity.water_capable: continue
+		if entity.entity_id == 14: continue  # skip fishing boats
+		if entity.current_order != "" or entity.current_target != null: continue
+		idle_naval.append(entity)
+	if idle_naval.is_empty(): return
+	for unit in idle_naval:
+		var best_sy = shipyards[0]
+		var best_dist = unit.global_position.distance_to(best_sy.global_position)
+		for sy in shipyards:
+			var d = unit.global_position.distance_to(sy.global_position)
+			if d < best_dist:
+				best_dist = d
+				best_sy = sy
+		var patrol_point = _find_water_patrol_point(best_sy.global_position)
+		if patrol_point != Vector3.ZERO:
+			unit.attack_move_to(patrol_point)
+
+func _find_water_patrol_point(near_pos: Vector3) -> Vector3:
+	for radius in [8, 15, 25, 35]:
+		for _try in range(30):
+			var angle = randf_range(0, TAU)
+			var test = near_pos + Vector3(cos(angle) * radius, 0, sin(angle) * radius)
+			var gx = int(test.x + RTSConfig.MAP_SIZE / 2)
+			var gz = int(test.z + RTSConfig.MAP_SIZE / 2)
+			if gx >= 0 and gx < RTSConfig.MAP_SIZE and gz >= 0 and gz < RTSConfig.MAP_SIZE:
+				if battle.get_terrain_at_grid(gx, gz) == 2:
+					return test
+	return Vector3.ZERO
 
 
 

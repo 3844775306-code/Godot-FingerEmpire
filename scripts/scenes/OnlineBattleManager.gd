@@ -665,7 +665,11 @@ func _1v1_right_click(team: int, data: Dictionary):
 				if target is WorldResource:
 					entity.gather_at(target)
 				elif target.team != entity.team:
-					entity.attack_target(target)
+					# 攻击过滤：不可攻击目标（如桥）改为移动
+					if entity.has_method("_can_attack_target") and entity._can_attack_target(target):
+						entity.attack_target(target)
+					else:
+						entity.move_to(target.global_position)
 				elif entity.entity_id >= 46 and entity.entity_id <= 50 and target is Building:
 					entity._garrison_target_id = target.get_instance_id()
 					entity.move_to(target.global_position)
@@ -693,10 +697,20 @@ func _1v1_build(team: int, data: Dictionary):
 	var cost = cfg.get("cost", {})
 	for r in cost.keys():
 		if res[r] < cost[r]: return
+
+	# 每种建筑最多10个
+	var _bld_cnt = 0
+	for _e in entities.get_children():
+		if _e is Building and _e.health > 0 and _e.entity_id == building_id and _e.team == team:
+			_bld_cnt += 1
+	if _bld_cnt >= 10: return
 	for r in cost.keys():
 		res[r] -= cost[r]
 	var b = spawn_entity(cfg, team, pos)
-	if b: b.start_construction(5.0, cfg)
+	if b:
+		b.start_construction(5.0, cfg)
+		if building_id == 53:
+			b.died.connect(_on_castle_died.bind(team))
 
 func _1v1_upgrade(team: int, data: Dictionary):
 	var building_id = data["building_id"]
@@ -746,7 +760,11 @@ func _2v2_right_click(peer_id: int, data: Dictionary):
 				if target is WorldResource:
 					entity.gather_at(target)
 				elif target.get("team") != entity.team:
-					entity.attack_target(target)
+					# 攻击过滤：不可攻击目标（如桥）改为移动
+					if entity.has_method("_can_attack_target") and entity._can_attack_target(target):
+						entity.attack_target(target)
+					else:
+						entity.move_to(target.global_position)
 				elif entity.entity_id >= 46 and entity.entity_id <= 50 and target is Building:
 					entity._garrison_target_id = target.get_instance_id()
 					entity.move_to(target.global_position)
@@ -780,12 +798,21 @@ func _2v2_build(peer_id: int, data: Dictionary):
 	var is_defense = (building_id == 25 or building_id == 26)
 	if is_defense and not can_player_train(peer_id):
 		return
+
+	# 每种建筑最多10个（按 owner_peer_id 统计）
+	var _bld_cnt = 0
+	for _e in entities.get_children():
+		if _e is Building and _e.health > 0 and _e.entity_id == building_id and _e.owner_peer_id == peer_id:
+			_bld_cnt += 1
+	if _bld_cnt >= 10: return
 	# 扣除个人资源
 	if not deduct_player_resources(peer_id, cost): return
 	cfg["owner_peer_id"] = peer_id
 	var b = spawn_entity(cfg, player_info[peer_id].team, pos, 1)
 	if b:
 		b.start_construction(5.0, cfg)
+		if building_id == 53:
+			b.died.connect(_on_castle_died_2v2.bind(peer_id))
 		if is_defense:
 			increase_player_population(peer_id, 1)
 		update_player_limits(peer_id)
@@ -899,23 +926,33 @@ func assign_nation(peer_id: int, nation: int):
 			pending_nations[peer_id] = nation
 
 # ---------- 游戏结束 ----------
+
+	# 1v1 联机：重写父类 _on_castle_died，发送RPC通知客户端
+func _on_castle_died(team: int):
+	if game_over: return
+	game_over = true
+	var winner = RTSConfig.Team.BLUE if team == RTSConfig.Team.RED else RTSConfig.Team.RED
+	print("[GameOver-1v1] Castle died: team=%d, winner=%d, notifying..." % [team, winner])
+	for pid in multiplayer.get_peers():
+		NetworkManager.notify_game_over.rpc_id(pid, winner)
 func _on_castle_died_2v2(peer_id: int):
 	if not player_info.has(peer_id): return
 	player_info[peer_id].alive = false
-		print("[GameOver-2v2] Castle died: peer=%d team=%d, checking team..." % [peer_id, team])
-		var _alive_count = 0
-		for _pid in player_info.keys():
-			if player_info[_pid].team == team and player_info[_pid].alive:
-				_alive_count += 1
-		print("[GameOver-2v2] Team %d alive players: %d" % [team, _alive_count])
 	var team = player_info[peer_id].team
+	print("[GameOver-2v2] Castle died: peer=%d team=%d, checking team..." % [peer_id, team])
+	var _alive_count = 0
+	for _pid in player_info.keys():
+		if player_info[_pid].team == team and player_info[_pid].alive:
+			_alive_count += 1
+	print("[GameOver-2v2] Team %d alive players: %d" % [team, _alive_count])
+	
 	# 整队检查
 	for pid in player_info.keys():
 		if player_info[pid].team == team and player_info[pid].alive:
 			return   # 还有存活，不结束
 	# 全队阵亡
 	game_over = true
-		print("[GameOver-2v2] GAME OVER! Winner team=%d, notifying players..." % [RTSConfig.Team.BLUE if team == RTSConfig.Team.RED else RTSConfig.Team.RED])
+	print("[GameOver-2v2] GAME OVER! Winner team=%d, notifying players..." % [RTSConfig.Team.BLUE if team == RTSConfig.Team.RED else RTSConfig.Team.RED])
 	var winner = RTSConfig.Team.BLUE if team == RTSConfig.Team.RED else RTSConfig.Team.RED
 	for pid in player_info.keys():
 		if pid >= 1000: continue
@@ -1416,7 +1453,6 @@ func _broadcast_2v2():
 	# Collect bullet data ONCE (reused for all players)
 	var bullets_data = _build_bullets_data()
 	for pid in player_info.keys():
-		if not player_info[pid].alive: continue
 		if player_info[pid].get("is_ai", false): continue  # 跳过 AI，无客户端
 		var _pt_build = Time.get_ticks_usec()
 		var data = build_snapshot_for_player(pid)

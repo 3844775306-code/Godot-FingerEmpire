@@ -327,12 +327,18 @@ func _physics_process(delta):
 						_play_sfx_if_visible("sail")
 					else:
 						_play_sfx_if_visible("walk")
+					# 移动音效触发时立即同步行走动画
+					if bm.has_method("_update_entity_animation"):
+						bm._update_entity_animation(self)
 			# Water transition sounds (every 30 frames)
 			if Engine.get_process_frames() % 30 == 0:
 				var _in_water = (_cached_terrain == 2)
 				var _was_in_water = has_meta("_was_in_water") and get_meta("_was_in_water")
 				if _in_water != _was_in_water and not water_capable:
 					_play_sfx_if_visible("swim")
+					# 涉水音效触发时立即同步行走动画
+					if bm.has_method("_update_entity_animation"):
+						bm._update_entity_animation(self)
 				set_meta("_was_in_water", _in_water)
 
 	if entity_id >= 46 and entity_id <= 50:
@@ -552,7 +558,12 @@ func _attack(target, delta):
 	elif entity_id in [15]: _sfx = "sword_swing"
 	elif entity_id in [11, 30, 49, 18, 35]: _sfx = "heavy_swing"
 	elif entity_id in [38, 40]: _sfx = "sword_swing"
-	if _sfx != "": AudioManager.play_sfx_3d(_sfx, global_position, _get_cam_pos())
+	if _sfx != "":
+		AudioManager.play_sfx_3d(_sfx, global_position, _get_cam_pos())
+		# 音效触发时立即同步攻击动画
+		var bm = _get_bm()
+		if bm and bm.has_method("_update_entity_animation"):
+			bm._update_entity_animation(self)
 
 	# 特殊攻击类型：僧侣治疗 / 长老百分比伤害 / 宗师降攻招降
 	if entity_id == 55:
@@ -739,6 +750,10 @@ func _gather(resource_node: WorldResource, delta):
 			return
 		resource_node.take_damage(amount, self)
 		cargo[res_type] = cargo.get(res_type, 0) + amount
+		# 采集音效 + 立即同步攻击动画
+		AudioManager.play_sfx_3d("sword_swing", global_position, _get_cam_pos())
+		if bm and bm.has_method("_update_entity_animation"):
+			bm._update_entity_animation(self)
 		gather_timer = 1.0
 	gather_timer -= delta
 
@@ -1462,7 +1477,7 @@ func _process_cart(delta):
 			var target_pos = owner.global_position + owner_forward * CART_FOLLOW_DIST
 			target_pos.y = global_position.y
 			global_position = global_position.lerp(target_pos, min(delta * 3.0, 1.0))
-			rotation.y = owner.rotation.y
+			rotation.y = owner.rotation.y 
 			_apply_cart_buff(owner)
 
 func _find_cart_owner() -> GameEntity:
@@ -1517,44 +1532,44 @@ func _clear_cart_owner():
 func die_cart_cleanup():
 	_clear_cart_owner()
 
-	# ==================== Attack filtering ====================
+# ==================== Attack filtering ====================
 
-	func _can_attack_target(target: GameEntity) -> bool:
-		if not is_instance_valid(target) or target.health <= 0: return false
-		# 近战不能攻击城墙上的敌人（包括炮台）
-		if attack_range <= 1.0 and target is not Building:
-			var bm = _get_bm()
-			if bm:
-				var tg = bm.world_to_grid(target.global_position)
-				for e in bm.entities.get_children():
-					if e is Building and e.entity_id == 27 and e.health > 0:
-						var wg = bm.world_to_grid(e.global_position)
-						if wg.x == tg.x and wg.y == tg.y: return false
-					if e is Building and e.entity_id == 64 and e.health > 0:
-						var wg = bm.world_to_grid(e.global_position)
-						if wg.x == tg.x and wg.y == tg.y: return false
-		# 不在城墙上的单位不能攻击梯子
-		if target is Building and target.entity_id == 8:
-			var on_wall = _is_unit_on_wall()
-			if not on_wall: return false
-		# 桥只能被火炮/投石车/巨型投石机/爆破船攻击
-		if target is Building and target.entity_id == 7:
-			if entity_id not in [16, 17, 40, 59]: return false
-		# 爆破船只攻击非动物敌人
-		if entity_id == 40:
-			var at = target.get("_animal_type") if target is Army else ""
-			if at != null and str(at) != "": return false
-		return true
-
-	func _is_unit_on_wall() -> bool:
+func _can_attack_target(target: GameEntity) -> bool:
+	if not is_instance_valid(target) or target.health <= 0: return false
+	# 近战不能攻击城墙上的敌人（包括炮台）
+	if attack_range <= 1.0 and target is not Building:
 		var bm = _get_bm()
-		if not bm: return false
-		var tg = bm.world_to_grid(global_position)
-		for e in bm.entities.get_children():
-			if e is Building and e.entity_id == 27 and e.health > 0 and e.team == team:
-				var wg = bm.world_to_grid(e.global_position)
-				if wg.x == tg.x and wg.y == tg.y: return true
-		return false
+		if bm:
+			var tg = bm.world_to_grid(target.global_position)
+			for e in bm.entities.get_children():
+				if e is Building and e.entity_id == 27 and e.health > 0:
+					var wg = bm.world_to_grid(e.global_position)
+					if wg.x == tg.x and wg.y == tg.y: return false
+				if e is Building and e.entity_id == 64 and e.health > 0:
+					var wg = bm.world_to_grid(e.global_position)
+					if wg.x == tg.x and wg.y == tg.y: return false
+	# 不在城墙上的单位不能攻击梯子
+	if target is Building and target.entity_id == 8:
+		var on_wall = _is_unit_on_wall()
+		if not on_wall: return false
+	# 桥只能被火炮/投石车/巨型投石机/爆破船攻击
+	if target is Building and target.entity_id == 7:
+		if entity_id not in [16, 17, 40, 59]: return false
+	# 爆破船只攻击非动物敌人
+	if entity_id == 40:
+		var at = target.get("_animal_type") if target is Army else ""
+		if at != null and str(at) != "": return false
+	return true
+
+func _is_unit_on_wall() -> bool:
+	var bm = _get_bm()
+	if not bm: return false
+	var tg = bm.world_to_grid(global_position)
+	for e in bm.entities.get_children():
+		if e is Building and e.entity_id == 27 and e.health > 0 and e.team == team:
+			var wg = bm.world_to_grid(e.global_position)
+			if wg.x == tg.x and wg.y == tg.y: return true
+	return false
 
 # ==================== Garrison System ====================
 func _find_nearest_enemy_in_vision():
@@ -1703,73 +1718,73 @@ func _spawn_baby_animal():
 		baby.speed = speed * 0.8
 		baby._animal_food_reward = int(_animal_food_reward * 0.4)
 
-	# ==================== Demolition Ship ====================
-	func _process_demolition(delta):
-		if _has_exploded: return
-		# 正常陆军逻辑：追赶目标
-		var bm = _get_bm()
-		if not bm: return
-		if current_target and is_instance_valid(current_target) and _can_attack_target(current_target):
-			var dist = global_position.distance_to(current_target.global_position) - body_radius - current_target.body_radius
-			if dist <= attack_range:
-				_demolition_explode()
-			else:
-				_movement.set_move_target(current_target.global_position, attack_range)
-				_movement.process_move(delta, bm)
-		elif is_attack_moving and attack_move_target != Vector3.ZERO:
-			if global_position.distance_to(attack_move_target) < 1.0:
-				is_attack_moving = false; attack_move_target = Vector3.ZERO
-			else:
-				_movement.set_move_target(attack_move_target)
-				_movement.process_move(delta, bm)
+# ==================== Demolition Ship ====================
+func _process_demolition(delta):
+	if _has_exploded: return
+	# 正常陆军逻辑：追赶目标
+	var bm = _get_bm()
+	if not bm: return
+	if current_target and is_instance_valid(current_target) and _can_attack_target(current_target):
+		var dist = global_position.distance_to(current_target.global_position) - body_radius - current_target.body_radius
+		if dist <= attack_range:
+			_demolition_explode()
 		else:
-			_find_enemy_in_range()
-
-	func _demolition_explode():
-		if _has_exploded: return
-		_has_exploded = true
-		_play_sfx_if_visible("cannon_hit")
-		var bm = _get_bm()
-		if bm:
-			for e in bm.entities.get_children():
-				if e is GameEntity and e != self and e.team != team and e.health > 0:
-					var d = global_position.distance_to(e.global_position) - e.body_radius
-					if d <= damage_radius:
-						e.take_damage(attack, self)
-		die()
-
-	# ==================== Transport Ship ====================
-	func _process_transport(delta):
-		var bm = _get_bm()
-		if not bm: return
-		# 移动逻辑
-		if current_target or is_attack_moving:
+			_movement.set_move_target(current_target.global_position, attack_range)
 			_movement.process_move(delta, bm)
-		# 更新登船单位位置
-		for u in _boarded_units:
-			if is_instance_valid(u):
-				u.global_position = global_position
+	elif is_attack_moving and attack_move_target != Vector3.ZERO:
+		if global_position.distance_to(attack_move_target) < 1.0:
+			is_attack_moving = false; attack_move_target = Vector3.ZERO
+		else:
+			_movement.set_move_target(attack_move_target)
+			_movement.process_move(delta, bm)
+	else:
+		_find_enemy_in_range()
 
-	func board_unit(unit):
-		if _boarded_units.size() >= 8: return
-		_boarded_units.append(unit)
-		unit.visible = false
-		unit.collision_layer = 0
-		unit.set_meta("_boarded_on", get_instance_id())
-		if unit is Army: unit._boarded_on = get_instance_id()
+func _demolition_explode():
+	if _has_exploded: return
+	_has_exploded = true
+	_play_sfx_if_visible("cannon_hit")
+	var bm = _get_bm()
+	if bm:
+		for e in bm.entities.get_children():
+			if e is GameEntity and e != self and e.team != team and e.health > 0:
+				var d = global_position.distance_to(e.global_position) - e.body_radius
+				if d <= damage_radius:
+					e.take_damage(attack, self)
+	die()
 
-	func unboard_at(pos: Vector3):
-		for u in _boarded_units:
-			if is_instance_valid(u):
-				u.global_position = pos + Vector3(randf_range(-2,2), 0, randf_range(-2,2))
-				u.visible = true
-				u.collision_layer = 1
-				u.remove_meta("_boarded_on")
-				if u is Army: u._boarded_on = -1
-		_boarded_units.clear()
+# ==================== Transport Ship ====================
+func _process_transport(delta):
+	var bm = _get_bm()
+	if not bm: return
+	# 移动逻辑
+	if current_target or is_attack_moving:
+		_movement.process_move(delta, bm)
+	# 更新登船单位位置
+	for u in _boarded_units:
+		if is_instance_valid(u):
+			u.global_position = global_position
 
-	func get_boarded_count() -> int:
-		return _boarded_units.size()
+func board_unit(unit):
+	if _boarded_units.size() >= 8: return
+	_boarded_units.append(unit)
+	unit.visible = false
+	unit.collision_layer = 0
+	unit.set_meta("_boarded_on", get_instance_id())
+	if unit is Army: unit._boarded_on = get_instance_id()
+
+func unboard_at(pos: Vector3):
+	for u in _boarded_units:
+		if is_instance_valid(u):
+			u.global_position = pos + Vector3(randf_range(-2,2), 0, randf_range(-2,2))
+			u.visible = true
+			u.collision_layer = 1
+			u.remove_meta("_boarded_on")
+			if u is Army: u._boarded_on = -1
+	_boarded_units.clear()
+
+func get_boarded_count() -> int:
+	return _boarded_units.size()
 
 func _adult_grow():
 	_animal_grow_timer = 0.0

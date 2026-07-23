@@ -18,9 +18,9 @@ var _saved_dir: Vector3 = Vector3.ZERO
 func _ready():
 	add_to_group("bullets")
 	if damage_radius > 0 or (source and source.entity_id in [16,17,26,39]):
-		# 投石车/巨型投石机用石头，火炮用炮弹
-		if source and source.entity_id in [17, 59] and ResourceLoader.exists("res://models/defense/weapon-stone.glb"):
-			var st = load("res://models/defense/weapon-stone.glb")
+		# 投石车/巨型投石机用巨石
+		if source and source.entity_id in [17, 59] and ResourceLoader.exists("res://models/defense/weapon-ammo-boulder.glb"):
+			var st = load("res://models/defense/weapon-ammo-boulder.glb")
 			if st: var s = st.instantiate(); if s: s.scale = Vector3.ONE * (3.5 if source.entity_id == 59 else 2.5); add_child(s)
 		elif ResourceLoader.exists("res://models/pirate/cannon-ball.glb"):
 			var cb = load("res://models/pirate/cannon-ball.glb")

@@ -110,7 +110,7 @@ func _input(event):
 					var gpos = _get_ground_pos(pos)
 					var gg = bm.world_to_grid(gpos)
 					for e in get_tree().get_nodes_in_group("entities"):
-						if e is Building and e.entity_id == 7 and e.health > 0:
+						if e is Building and e.entity_id == 7 or e.entity_id == 27 and e.health > 0:
 							if bm.world_to_grid(e.global_position) == gg:
 								bypass = true; break
 				if bypass:

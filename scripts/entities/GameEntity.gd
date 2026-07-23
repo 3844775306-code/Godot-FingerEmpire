@@ -90,6 +90,7 @@ func setup(config: Dictionary):
 	entity_type = config.get("type", 2)
 	team = config.get("team", 2)
 	display_name = config.get("name", "")
+	
 	max_health = config.get("max_health", 100.0)
 	health = max_health
 	armor = config.get("armor", 0)
@@ -202,6 +203,10 @@ func take_damage(amount: float, source: GameEntity = null):
 		die()
 func die():
 	_play_sfx_if_visible("unit_die")
+	# 音效触发时立即同步死亡动画
+	var _bm_anim = _get_bm()
+	if _bm_anim and _bm_anim.has_method("_update_entity_animation"):
+		_bm_anim._update_entity_animation(self)
 	emit_signal("died")
 	# 动物死亡掉落食物
 	if self is Army and self.get("_animal_type") != "" and self.get("_animal_type") != null:
@@ -247,7 +252,7 @@ func die():
 			var inst = s.instantiate()
 			inst.name = "DemolishedModel"
 			add_child(inst)
-		var t = Timer.new(); t.one_shot = true; t.wait_time = 2.0
+		var t = Timer.new(); t.one_shot = true; t.wait_time = 1.0
 		t.timeout.connect(queue_free); add_child(t); t.start()
 		return
 	# 播放死亡动画后再删除
@@ -319,12 +324,11 @@ func _spawn_produced_unit():
 	config["owner_peer_id"] = self.owner_peer_id  # 继承建筑所有权
 	var entity = bm.spawn_entity(config, team, spawn_pos, self.level)
 	if entity:
+		entity.owner_peer_id = self.owner_peer_id   # 继承建筑所有权
+
+		# 在线模式：按玩家统计人口（单人模式 spawn_entity 已处理）
 		if owner_peer_id != -1 and bm.has_method("increase_player_population"):
 			bm.increase_player_population(owner_peer_id, 1)
-		elif bm.has_method("increase_population"):
-			bm.increase_population(team, 1)  # 1v1 fallback
-	if entity:
-		entity.owner_peer_id = self.owner_peer_id   # 继承建筑所有权
 		# 训练完成警报（含编队和位置）
 		if team == RTSConfig.Team.BLUE and bm.has_method("_show_hud_alert"):
 			var unit_name = config.get("name", "单位")
@@ -436,6 +440,22 @@ func try_produce(unit_id: int) -> bool:
 	
 	var bm = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
 	if not bm:
+		return false
+
+	# 每种单位最多生产20个（含已存在+队列中，按 owner_peer_id 或 team 归属）
+	var _total_of_type = 0
+	for _e in bm.entities.get_children():
+		if _e is Army and _e.health > 0 and _e.entity_id == unit_id:
+			if owner_peer_id != -1 and _e.owner_peer_id != owner_peer_id: continue
+			if owner_peer_id == -1 and _e.team != team: continue
+			_total_of_type += 1
+	for _e in bm.entities.get_children():
+		if _e is Building and _e.health > 0:
+			if owner_peer_id != -1 and _e.owner_peer_id != owner_peer_id: continue
+			if owner_peer_id == -1 and _e.team != team: continue
+			for _pid in _e.production_queue:
+				if _pid == unit_id: _total_of_type += 1
+	if _total_of_type >= 20:
 		return false
 	
 		# 根据建筑所属队伍和 owner_peer_id 选择资源库

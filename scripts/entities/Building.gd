@@ -11,15 +11,19 @@ var upgrade_timer: float = 0.0
 var max_upgrade_time: float = 0.0
 var assigned_merchants: int = 0                    # 集市分配的商人数量（仅entity_id==52时使用）
 var garrison_point: Vector3 = Vector3.ZERO         # 新生产单位的驻扎点
-var _garrison_marker: MeshInstance3D = null
+var _garrison_marker: Node3D = null
+
+# Hell difficulty speed bonus
 
 func start_construction(time: float, data: Dictionary):
 	building_data = data
-	max_build_time = data["max_health"] / 75.0
+	var spd = 1.0
+	if GameSettings.fast_mode: spd = 2.0
+	if owner_peer_id >= 1000 and GameSettings.ai_difficulty >= GameSettings.AIDifficulty.HELL: spd *= 1.2
+	max_build_time = data["max_health"] / 75.0 / spd
 	build_timer = max_build_time
 	max_health = 10
 	health = 10
-	armor = 0
 	attack = 0
 	production_list = []
 	# 建造期间不提供视野
@@ -40,19 +44,21 @@ func _process(delta):
 		var has_z_neg = false; var has_z_pos = false
 		var bm = get_tree().get_first_node_in_group("battle_manager")
 		if bm:
-			var half_len = body_radius * 2.0   # wall length along axis
-			var half_wid = body_radius * 0.5   # wall width perpendicular
+			# Adjacent wall spacing = body_radius * 2.0; add 20% tolerance
+			var half_len = body_radius * 2.0 * 1.2
+			var half_wid = body_radius * 0.8
 			for e in bm.entities.get_children():
 				if e is Building and e.entity_id == 27 and e.health > 0 and e != self:
 					var d = e.global_position - global_position
-					if abs(d.z) < half_len and abs(d.x) < half_wid:
+					if abs(d.z) <= half_len and abs(d.x) < half_wid:
 						if d.z < 0: has_z_neg = true
 						else: has_z_pos = true
-					if abs(d.x) < half_len and abs(d.z) < half_wid:
+					if abs(d.x) <= half_len and abs(d.z) < half_wid:
 						if d.x < 0: has_x_neg = true
 						else: has_x_pos = true
-		var count = int(has_x_neg) + int(has_x_pos) + int(has_z_neg) + int(has_z_pos)
-		var is_corner = (count >= 2)
+		var has_x = has_x_neg or has_x_pos
+		var has_z = has_z_neg or has_z_pos
+		var is_corner = has_x and has_z  # 拐角：两轴各有一个邻居
 		if is_corner and not has_meta("_wall_is_corner"):
 			set_meta("_wall_is_corner", true)
 			_reload_wall_model(bm, "res://models/castle/wall-corner.glb")
@@ -61,10 +67,10 @@ func _process(delta):
 			_reload_wall_model(bm, "res://models/castle/wall.glb")
 		# 朝向：直墙/拐角自动判定
 		if is_corner:
-			if has_x_neg and has_z_neg: rotation.y = deg_to_rad(90)
-			elif has_x_pos and has_z_neg: rotation.y = deg_to_rad(180)
-			elif has_x_pos and has_z_pos: rotation.y = deg_to_rad(270)
-			elif has_x_neg and has_z_pos: rotation.y = deg_to_rad(0)
+			if has_x_neg and has_z_neg: rotation.y = deg_to_rad(90 + 180)
+			elif has_x_pos and has_z_neg: rotation.y = deg_to_rad(180 + 180)
+			elif has_x_pos and has_z_pos: rotation.y = deg_to_rad(270 + 180)
+			elif has_x_neg and has_z_pos: rotation.y = deg_to_rad(0 + 180)
 		elif has_x_neg or has_x_pos: rotation.y = deg_to_rad(90)
 		else: rotation.y = 0
 
@@ -89,13 +95,17 @@ func _process(delta):
 		var bm = _get_bm()
 		if owner_peer_id == -1:
 			can_produce = bm.can_train_unit(team)
-		elif bm.has_method("can_player_train"):
-			
+		elif bm.has_method("can_player_train") and bm.player_population.has(owner_peer_id):
 			can_produce = bm.can_player_train(owner_peer_id)
+		else:
+			can_produce = bm.can_train_unit(team)  # 1v1 fallback
 		if can_produce:
 			production_timer -= delta
 			if production_timer <= 0.0:
+				print("[Spawn] queue=", production_queue.size(), " unit=", production_queue[0] if production_queue.size() > 0 else -1)
 				_spawn_produced_unit()
+		else:
+			print("[Spawn] BLOCKED can_produce=false owner_peer_id=", owner_peer_id)
 	else:
 		production_timer = 0.0
 
@@ -217,7 +227,7 @@ func _finish_construction():
 	if entity_id == 53 and bm and bm.has_method("get_team_nation"):
 		var nation = bm.get_team_nation(team)
 		if nation >= 0:
-			call_deferred("_unlock_nation_units", nation)
+			_unlock_nation_units(nation)
 
 	
 func is_under_construction() -> bool:
@@ -236,7 +246,7 @@ func _ready():
 	
 func _apply_nation_start_bonus():
 	# 仅对主城(id=20)和城堡(id=53)应用
-	if entity_id != 20 and entity_id != 53:
+	if entity_id not in [20, 53] and entity_id != 53:
 		return
 	var bm = get_tree().get_first_node_in_group("battle_manager")
 	if not bm or not bm.has_method("get_team_nation"):
@@ -326,7 +336,7 @@ func _update_collision_shape():
 
 func get_castle_level() -> int:
 	for entity in get_tree().get_nodes_in_group("entities"):
-		if entity is Building and entity.team == team and entity.entity_id == 20:
+		if entity is Building and entity.team == team and entity.entity_id in [20, 53]:
 			return entity.upgrade_level
 	return 1
 
@@ -335,7 +345,7 @@ func can_upgrade() -> bool:
 	if upgrade_timer > 0: return false
 	if upgrade_level >= max_upgrade_level: return false
 	# Cannot upgrade beyond castle level (except castle itself)
-	if entity_id != 20:
+	if entity_id not in [20, 53]:
 		var bm = get_tree().get_first_node_in_group("battle_manager")
 		if bm:
 			var castle = null
@@ -374,7 +384,10 @@ func perform_upgrade(bm: RTSBattleManager) -> bool:
 	# Start upgrade timer (time = total cost / 20 seconds)
 	var total_cost = 0
 	for k in cost: total_cost += cost[k]
-	max_upgrade_time = max(total_cost / 20.0, 5.0)
+	var spd2 = 1.0
+	if GameSettings.fast_mode: spd2 = 2.0
+	if owner_peer_id >= 1000 and GameSettings.ai_difficulty >= GameSettings.AIDifficulty.HELL: spd2 *= 1.2
+	max_upgrade_time = max(total_cost / 20.0, 5.0) / spd2
 	upgrade_timer = max_upgrade_time
 	return true
 
@@ -396,9 +409,12 @@ func _finish_upgrade():
 		bm._show_hud_alert("升级完成: %s%s %s" % [display_name, group_str, loc_str], Color(0.2, 1.0, 0.3))
 
 func get_prod_cooldown(unit_id: int) -> float:
+	var spd3 = 1.0
+	if GameSettings.fast_mode: spd3 = 2.0
+	if owner_peer_id >= 1000 and GameSettings.ai_difficulty >= GameSettings.AIDifficulty.HELL: spd3 *= 1.2
 	for prod in production_list:
 		if prod.unit_id == unit_id:
-			return prod.cooldown
+			return prod.cooldown / spd3
 	return 1.0
 
 	
