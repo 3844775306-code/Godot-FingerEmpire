@@ -43,6 +43,9 @@ var freeze_timer: float = 0.0
 var owner_peer_id: int = -1
 var piercing: bool = false                  # 长枪兵穿透（无视军队护甲）
 var ignore_building_armor: bool = false     # 攻城车无视建筑护甲
+var _base_attack: float = 0.0               # 驻军前原始攻击力（用于还原）
+var _base_attack_speed: float = 0.0         # 驻军前原始攻速（攻城车专用）
+var _base_speed: float = 0.0                # 驻军前原始移速（攻城车专用）
 
 # 缓存的 BattleManager 引用 — 避免每帧场景树遍历
 var _bm: RTSBattleManager = null

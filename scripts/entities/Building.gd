@@ -13,6 +13,10 @@ var assigned_merchants: int = 0                    # 集市分配的商人数量
 var garrison_point: Vector3 = Vector3.ZERO         # 新生产单位的驻扎点
 var _garrison_marker: Node3D = null
 
+# 士兵/农民进驻系统
+var garrisoned_soldiers: Array = []      # Array of WeakRef — 进驻的单位
+var garrison_max: int = 0                # 进驻上限（城堡10/箭塔炮塔5/其他0）
+
 # Hell difficulty speed bonus
 
 func start_construction(time: float, data: Dictionary):
@@ -140,6 +144,12 @@ func _attack(target, delta):
 	if attack_timer > 0:
 		attack_timer -= delta
 		return
+	# 炮台：旋转朝向目标
+	if entity_id == 64:
+		var dir = target.global_position - global_position
+		dir.y = 0
+		if dir.length() > 0.01:
+			rotation.y = atan2(dir.x, dir.z) + deg_to_rad(90)
 	if damage_radius > 0 or attack_range > 1.0:
 		var bullet = Bullet.new()
 		bullet.team = team
@@ -184,6 +194,7 @@ func _finish_construction():
 		vision_range = 10.0
 	armor = building_data.get("armor", 0)
 	attack = building_data.get("attack", 0)
+	garrison_max = get_garrison_limit()
 	# Inherit global building type level - apply bonuses on top of base
 	var bm = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
 	if bm and bm.has_method("get_building_type_level"):
@@ -450,3 +461,85 @@ func _hide_garrison_marker():
 	if _garrison_marker and is_instance_valid(_garrison_marker):
 		_garrison_marker.queue_free()
 	_garrison_marker = null
+
+# ==================== 士兵/农民进驻系统 ====================
+func get_garrison_limit() -> int:
+	match entity_id:
+		53: return 10     # 城堡
+		25, 26: return 5  # 箭塔、炮塔
+		_: return 0        # 不可进驻
+
+func can_garrison_soldier() -> bool:
+	if build_timer > 0: return false
+	if entity_id not in [25, 26, 53]: return false
+	return _count_valid_garrisoned() < get_garrison_limit()
+
+func get_garrison_count() -> int:
+	return _count_valid_garrisoned()
+
+func _count_valid_garrisoned() -> int:
+	var cnt = 0
+	var clean = []
+	for ref in garrisoned_soldiers:
+		if ref is WeakRef and ref.get_ref() and is_instance_valid(ref.get_ref()):
+			cnt += 1
+			clean.append(ref)
+	# 清理无效引用
+	if clean.size() != garrisoned_soldiers.size():
+		garrisoned_soldiers = clean
+	return cnt
+
+func _add_soldier_to_garrison(army: Army) -> bool:
+	if not can_garrison_soldier(): return false
+	if _base_attack <= 0:
+		_base_attack = building_data.get("attack", 0)
+	garrisoned_soldiers.append(weakref(army))
+	_recalc_garrison_attack()
+	return true
+
+func _remove_soldier_from_garrison(army: Army):
+	var aid = army.get_instance_id()
+	for i in range(garrisoned_soldiers.size() - 1, -1, -1):
+		var ref = garrisoned_soldiers[i]
+		if ref is WeakRef and ref.get_ref() and ref.get_ref().get_instance_id() == aid:
+			garrisoned_soldiers.remove_at(i)
+			break
+	_recalc_garrison_attack()
+
+func _recalc_garrison_attack():
+	var cnt = _count_valid_garrisoned()
+	if cnt > 0:
+		attack = _base_attack * (1.0 + 0.5 * cnt)   # 每人 +50% 基础攻击
+	else:
+		attack = _base_attack if _base_attack > 0 else building_data.get("attack", 0)
+		_base_attack = 0.0  # 重置，下次进驻时重新记录
+
+func release_all_garrisoned():
+	var bm = _get_bm()
+	var map = bm.get_node_or_null("Map") if bm else null
+	for ref in garrisoned_soldiers.duplicate():
+		var unit = ref.get_ref() if ref is WeakRef else null
+		if not unit or not is_instance_valid(unit): continue
+		if unit.has_method("_exit_soldier_garrison"):
+			var pos = _find_land_nearby(map)
+			unit.global_position = pos
+			unit._exit_soldier_garrison()
+	garrisoned_soldiers.clear()
+	_recalc_garrison_attack()
+
+func _find_land_nearby(map) -> Vector3:
+	for _attempt in range(20):
+		var angle = randf() * TAU
+		var radius = body_radius + randf() * 3.0
+		var pos = global_position + Vector3(cos(angle) * radius, 0, sin(angle) * radius)
+		if map and map.has_method("get_terrain_at"):
+			if map.get_terrain_at(pos) == 0:  # 平原
+				return pos
+		else:
+			return pos
+	return global_position + Vector3(2, 0, 2)  # 兜底位置
+
+func die():
+	# 先释放所有进驻单位，再执行死亡逻辑
+	release_all_garrisoned()
+	super.die()

@@ -202,8 +202,8 @@ func _input(event):
 	# ========== 左键处理（照搬 SelectionManager._input） ==========
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
-			# Ctrl+左键 → 设置驻扎点
-			if Input.is_key_pressed(KEY_CTRL) and not client_selected_ids.is_empty():
+			# Alt+左键 → 设置驻扎点
+			if Input.is_key_pressed(KEY_ALT) and not client_selected_ids.is_empty():
 				var ground_pos = _get_ground_position(event.position)
 				if ground_pos != Vector3.ZERO:
 					NetworkManager.send_command.rpc_id(1, {
@@ -240,6 +240,27 @@ func _input(event):
 				if bypass:
 					_send_left_click(event)
 					return
+
+			# Alt+左键点击己方实体 + 有官员被选中 → 发送右击命令（官员进驻建筑）
+			if Input.is_key_pressed(KEY_ALT) and not client_selected_ids.is_empty() and clicked_id != -1:
+				var alt_info = _get_entity_info(clicked_id)
+				if alt_info and alt_info.get("health", 0) > 0:
+					var is_friendly = false
+					if renderer.my_peer_id != -1:
+						is_friendly = alt_info.get("owner_peer_id", -1) == renderer.my_peer_id
+					else:
+						is_friendly = alt_info.get("team", -1) == renderer.player_team
+					if is_friendly:
+						var has_official = false
+						for sid in client_selected_ids:
+							var sinfo = _get_entity_info(sid)
+							if sinfo and sinfo.get("entity_id", -1) >= 46 and sinfo.get("entity_id", -1) <= 50:
+								has_official = true
+								break
+						if has_official:
+							_send_left_click(event)
+							get_viewport().set_input_as_handled()
+							return
 
 			# 点击己方实体 → 选中
 			if clicked_id != -1:
@@ -353,8 +374,8 @@ func _unhandled_input(event):
 	if not renderer: return
 	# 右键 → 命令/建造（照搬单机版：_unhandled_input 只处理右键）
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
-		# Ctrl+右键 → 清除驻扎点
-		if Input.is_key_pressed(KEY_CTRL) and not client_selected_ids.is_empty():
+		# Alt+右键 → 清除驻扎点
+		if Input.is_key_pressed(KEY_ALT) and not client_selected_ids.is_empty():
 			var hit_id = _get_entity_id_under_mouse(event.position)
 			if hit_id == -1:
 				NetworkManager.send_command.rpc_id(1, {"action": "clear_garrison", "selected_ids": client_selected_ids.duplicate()})

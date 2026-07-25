@@ -1,7 +1,7 @@
 class_name ClientRenderer
 extends Node3D
-enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ATTACK_SPEED, ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH }
-enum EB { UPGRADE=0, MAX_UPGRADE, CAN_UPGRADE, BUILD_TIMER, MAX_BUILD, PROD_CURRENT, PROD_PROGRESS, PROD_QSIZE, UPGRADE_TIMER, MAX_UPGRADE_TIME }
+enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ATTACK_SPEED, ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH, GARRISONED }
+enum EB { UPGRADE=0, MAX_UPGRADE, CAN_UPGRADE, BUILD_TIMER, MAX_BUILD, PROD_CURRENT, PROD_PROGRESS, PROD_QSIZE, UPGRADE_TIMER, MAX_UPGRADE_TIME, GARRISON_COUNT }
 var last_applied_seq = -1
 # ==================== 玩家信息 ====================
 var player_team: int = -1          # 1v1 模式队伍 (BLUE=0, RED=1)
@@ -47,7 +47,7 @@ var heavy_work_index: int = 0            # 轮转索引，每帧只做一个重�
 var first_fog_done: bool = false          # 首帧标志，确保初始化立即执行所有任务
 var fog_cycle_active: bool = false        # 增量迷雾计算进行中
 var fog_units_queue: Array = []           # 待处理的单位队列
-var fog_batch_size: int = 5               # 每帧处理的单位数量
+var fog_batch_size: int = 10              # 每帧处理的单位数量（翻倍加速迷雾）
 
 var last_snapshot_time = 0
 	
@@ -298,8 +298,9 @@ func _process_snapshot(data: Dictionary):
 					if s:
 						var inst = s.instantiate()
 						inst.name = "DemolishedModel"
+						if eid == 41: inst.scale = Vector3(0.5, 0.5, 0.5)
 						node.add_child(inst)
-					var t = Timer.new(); t.one_shot = true; t.wait_time = 1.0
+					var t = Timer.new(); t.one_shot = true; t.wait_time = 0.5
 					t.timeout.connect(node.queue_free); node.add_child(t); t.start()
 				else:
 					node.queue_free()
@@ -317,18 +318,22 @@ func _process_snapshot(data: Dictionary):
 	var my_pop = last_population
 
 	if data.has("player_resources") and my_peer_id != -1:
-		my_res = data["player_resources"].get(my_peer_id, {})
-		my_pop = data.get("player_population", {}).get(my_peer_id, {"current":0,"max":0})
-		my_limits = data.get("player_limits", {}).get(my_peer_id, {})
+		my_res = data["player_resources"].get(my_peer_id, last_resources)
+		my_pop = data.get("player_population", {}).get(my_peer_id, last_population)
+		my_limits = data.get("player_limits", {}).get(my_peer_id, last_limits)
 	elif data.has("resources"):
 		my_res = data["resources"]["player"] if player_team == RTSConfig.Team.BLUE else data["resources"]["enemy"]
 		my_pop = data["population"]
 		my_limits = data.get("limits", {}).get("player" if player_team == RTSConfig.Team.BLUE else "enemy", {})
 
-	# 保存最新资源
-	last_resources = my_res
-	last_limits = my_limits
+	# 保存最新资源（仅当快照包含资源数据时才更新缓存）
+	if data.has("player_resources") or data.has("resources"):
+		last_resources = my_res
+		last_limits = my_limits
 	last_population = my_pop
+		# Debug: log first few snapshots
+	if _diag_snap_count <= 5:
+		print("[Snapshot#%d] team=%d peer=%d pop=%s res_keys=%s" % [_diag_snap_count, player_team, my_peer_id, str(my_pop), str(my_res.keys())])
 
 	# ---- HUD 更新 ----
 	var gather_counts = data.get("gather_counts", {})
@@ -340,8 +345,8 @@ func _process_snapshot(data: Dictionary):
 	if has_node("UI/HUD") and not my_res.is_empty():
 		$UI/HUD.update_data(my_res, my_pop, my_limits, gather_counts, income_rate)
 
-	# ---- InfoPanel 资源 ----
-	if has_node("UI/InfoPanel"):
+	# ---- InfoPanel 资源（仅当有资源数据时更新） ----
+	if has_node("UI/InfoPanel") and not my_res.is_empty():
 		$UI/InfoPanel.set_resources(my_res, my_limits, my_pop)
 
 	# ---- 国家信息 ----
@@ -473,6 +478,7 @@ func _update_single_entity(info):
 			"rotation_y": arr[E.ROT_Y] if arr.size() > E.ROT_Y else 0.0,
 			"waypoints": arr[E.WAYPOINTS] if arr.size() > E.WAYPOINTS and arr[E.WAYPOINTS] is Array else [],
 			"astar_path": arr[E.ASTAR_PATH] if arr.size() > E.ASTAR_PATH and arr[E.ASTAR_PATH] is Array else [],
+			"is_garrisoned": arr[E.GARRISONED] if arr.size() > E.GARRISONED else false,
 		}
 		# Building extras
 		if arr.size() > E.size() and arr[E.size()] is Array:
@@ -488,6 +494,7 @@ func _update_single_entity(info):
 				info["production_queue_size"] = ba[EB.PROD_QSIZE]
 				info["upgrade_timer"] = ba[EB.UPGRADE_TIMER]
 				info["max_upgrade_time"] = ba[EB.MAX_UPGRADE_TIME]
+				info["garrisoned_soldier_count"] = ba[EB.GARRISON_COUNT] if ba.size() > EB.GARRISON_COUNT else 0
 		_rebuild_building_info(info)
 	if not info.has("id") or not info.has("x") or not info.has("z"):
 		return
@@ -743,7 +750,7 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 			loaded_model.scale = Vector3.ONE * (target_size / current_size)
 		# Special rotations
 		if info.get("entity_id", 0) == 10: loaded_model.rotation.y = deg_to_rad(180)
-		elif info.get("entity_id", 0) == 16: loaded_model.rotation.y = deg_to_rad(90)
+		elif info.get("entity_id", 0) == 16: loaded_model.rotation.y = deg_to_rad(180)
 		elif info.get("entity_id", 0) == 17: loaded_model.rotation.y = deg_to_rad(90)
 		elif info.get("entity_id", 0) == 18: loaded_model.rotation.y = deg_to_rad(90)
 		if info.get("entity_id", 0) in [25, 26, 33]: loaded_model.scale *= 2.0
@@ -1098,6 +1105,9 @@ func _get_entity_label_color(info: Dictionary) -> Color:
 	return Color.WHITE
 
 func _should_entity_be_visible(ent: Dictionary) -> bool:
+	# 进驻中的单位始终隐藏
+	if ent.get("is_garrisoned", false):
+		return false
 	if ent["team"] == player_team:
 		return true
 	if ent["team"] == RTSConfig.Team.NEUTRAL:

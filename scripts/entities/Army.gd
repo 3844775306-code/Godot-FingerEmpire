@@ -68,6 +68,10 @@ var _boarded_on: int = -1            # 登上的运载船instance_id
 # Official vars
 var _garrison_target_id: int = -1
 var _garrison_building: WeakRef = null
+
+# 士兵/农民进驻
+var _soldier_garrison_building: WeakRef = null   # 进驻的建筑或攻城车
+var _ram_garrisoned_soldiers: Array = []          # 攻城车存储的进驻兵（仅 entity_id==18）
 var _salary_timer: float = 0.0
 var _official_active: bool = true
 var _visual_waypoints: Array = []      # Persisted waypoint positions for snapshot
@@ -257,7 +261,11 @@ func _physics_process(delta):
 	if health <= 0:
 		die_official_cleanup()
 		return
-	
+
+	# 进驻中的士兵跳过所有行为
+	if _soldier_garrison_building and _soldier_garrison_building.get_ref() and is_instance_valid(_soldier_garrison_building.get_ref()):
+		return
+
 	# 爆破船/运载船/手推车/贸易车 特殊行为
 	if entity_id == 40:
 		_process_demolition(delta)
@@ -1227,8 +1235,26 @@ func _process_official(delta):
 	if _garrison_target_id != -1:
 		for e in bm.entities.get_children():
 			if e is Building and e.get_instance_id() == _garrison_target_id:
-				if global_position.distance_to(e.global_position) < 2.0:
-					_do_garrison(e)
+				var dist = global_position.distance_to(e.global_position)
+				if entity_id >= 46 and entity_id <= 50:
+					# 官员进驻：距离 < 2
+					if dist < 2.0:
+						_do_garrison(e)
+						_garrison_target_id = -1
+						_set_order(UnitState.IDLE)
+						_movement.astar_target = Vector3.ZERO
+				elif _is_garrisonable_unit() and dist < 4.0:
+					# 士兵/农民进驻：距离 < 4
+					_do_soldier_garrison(e)
+					_garrison_target_id = -1
+					_set_order(UnitState.IDLE)
+					_movement.astar_target = Vector3.ZERO
+				break
+			elif e is Army and e.entity_id == 18 and e.get_instance_id() == _garrison_target_id:
+				var dist = global_position.distance_to(e.global_position)
+				if _is_garrisonable_unit() and dist < 4.0:
+					# 攻城车进驻
+					_do_soldier_garrison(e)
 					_garrison_target_id = -1
 					_set_order(UnitState.IDLE)
 					_movement.astar_target = Vector3.ZERO
@@ -1758,8 +1784,7 @@ func _process_transport(delta):
 	var bm = _get_bm()
 	if not bm: return
 	# 移动逻辑
-	if current_target or is_attack_moving:
-		_movement.process_move(delta, bm)
+	_movement.process_move(delta, bm)
 	# 更新登船单位位置
 	for u in _boarded_units:
 		if is_instance_valid(u):
@@ -1794,3 +1819,96 @@ func _adult_grow():
 		health = max_health
 		attack = cfg.get("attack", attack)
 		_animal_food_reward = cfg.get("food_reward", _animal_food_reward)
+
+# ==================== 士兵/农民进驻系统 ====================
+func _is_garrisonable_unit() -> bool:
+	# 水军不能进驻，官员用独立系统
+	if entity_id in [9, 13, 14, 39, 40]: return false  # 船
+	if entity_id >= 46 and entity_id <= 50: return false  # 官员
+	return entity_id == 10 or target_type > 0  # 农民或战斗单位
+
+func can_soldier_garrison(target) -> bool:
+	if not _is_garrisonable_unit(): return false
+	if _soldier_garrison_building and _soldier_garrison_building.get_ref(): return false
+	if target is Building:
+		return target.can_garrison_soldier() if target.has_method("can_garrison_soldier") else false
+	if target is Army and target.entity_id == 18:
+		return target._ram_garrisoned_soldiers.size() < 5
+	return false
+
+func _do_soldier_garrison(target):
+	if target is Building:
+		if not target._add_soldier_to_garrison(self): return
+		_soldier_garrison_building = weakref(target)
+		if not target.died.is_connected(_on_soldier_garrison_building_died):
+			target.died.connect(_on_soldier_garrison_building_died.bind(get_instance_id()))
+	elif target is Army and target.entity_id == 18:
+		_soldier_garrison_building = weakref(target)
+		target._ram_garrisoned_soldiers.append(get_instance_id())
+		if not target.died.is_connected(_on_soldier_garrison_building_died):
+			target.died.connect(_on_soldier_garrison_building_died.bind(get_instance_id()))
+		target._recalc_ram_garrison_bonus()
+	else:
+		return
+	visible = false
+	collision_layer = 0
+	stop_movement()
+	current_target = null
+	current_order = ""
+
+func _exit_soldier_garrison():
+	var target = _soldier_garrison_building.get_ref() if _soldier_garrison_building else null
+	if not target or not is_instance_valid(target):
+		_soldier_garrison_building = null
+		visible = true
+		collision_layer = 1
+		return
+	if target is Building:
+		target._remove_soldier_from_garrison(self)
+	elif target is Army and target.entity_id == 18:
+		if target.has_method("_recalc_ram_garrison_bonus"):
+			var my_id = get_instance_id()
+			target._ram_garrisoned_soldiers.erase(my_id)
+			target._recalc_ram_garrison_bonus()
+	visible = true
+	collision_layer = 1
+	_soldier_garrison_building = null
+
+func _on_soldier_garrison_building_died(my_id: int):
+	if _soldier_garrison_building:
+		var target = _soldier_garrison_building.get_ref()
+		if target and target.died.is_connected(_on_soldier_garrison_building_died):
+			target.died.disconnect(_on_soldier_garrison_building_died)
+	_soldier_garrison_building = null
+	visible = true
+	collision_layer = 1
+	# 释放到附近随机位置
+	var bm = _get_bm()
+	var map = bm.get_node_or_null("Map") if bm else null
+	for _attempt in range(20):
+		var angle = randf() * TAU
+		var pos = global_position + Vector3(cos(angle) * 2, 0, sin(angle) * 2)
+		if map and map.has_method("get_terrain_at"):
+			if map.get_terrain_at(pos) == 0:
+				global_position = pos
+				break
+
+# ==================== 攻城车进驻（攻速/移速加成） ====================
+func _recalc_ram_garrison_bonus():
+	if entity_id != 18: return
+	var cnt = _ram_garrisoned_soldiers.size()
+	if cnt == 0:
+		if _base_attack_speed > 0:
+			attack_speed = _base_attack_speed
+			_base_attack_speed = 0.0
+		if _base_speed > 0:
+			speed = _base_speed
+			_base_speed = 0.0
+		return
+	if _base_attack_speed <= 0:
+		_base_attack_speed = attack_speed
+	if _base_speed <= 0:
+		_base_speed = speed
+	var bonus = 1.0 + 0.05 * cnt
+	attack_speed = _base_attack_speed * bonus
+	speed = _base_speed * bonus

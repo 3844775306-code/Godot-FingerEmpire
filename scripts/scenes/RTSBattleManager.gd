@@ -241,12 +241,12 @@ func get_player_castle_level() -> int:
 func is_building_unlocked(building_id: int) -> bool:
 	var cl = get_player_castle_level()
 	match building_id:
-		23, 25, 26:  # 船坞、箭塔、炮塔 → 城堡2级
+		23, 25, 26, 64:  # 船坞、箭塔、炮塔、炮台 → 城堡2级
 			return cl >= 2
 		24, 29, 52:   # 攻城车间、重装武器厂、集市 → 城堡3级
 			return cl >= 3
-		42, 54:        # 书院、修道院 → 主城4级
-			return cl >= 4
+		42, 54:        # 书院、修道院 → 主城3级
+			return cl >= 3
 		53:            # 城堡 → 主城4级
 			return cl >= 4
 		53:            # 城堡 → 主城4级
@@ -507,6 +507,20 @@ func _init_2v2_single():
 		var cam = get_viewport().get_camera_3d()
 		if cam:
 			cam.global_position = Vector3(player_castle.global_position.x, cam.global_position.y, player_castle.global_position.z)
+# 获取房主队伍的统一入口（子类 OnlineBattleManager 重写为实际队伍）
+func get_host_team() -> int:
+	return RTSConfig.Team.BLUE
+
+# 获取房主资源的统一入口（子类 OnlineBattleManager 重写为 peer_id=1 格式）
+func get_host_resources() -> Dictionary:
+	return player_resources
+func get_host_pop() -> int:
+	return player_pop
+func get_host_max_pop() -> int:
+	return player_max_pop
+func get_host_limits() -> Dictionary:
+	return player_resource_limits
+
 # 根据owner_id获取资源字典
 func get_resources_for(owner_id: int) -> Dictionary:
 	if owner_id == player_owner_id:
@@ -522,6 +536,7 @@ func deduct_resources_for(owner_id: int, cost: Dictionary) -> bool:
 		if res.get(k, 0) < cost[k]: return false
 	for k in cost: 
 		res[k] -= cost[k]
+
 	return true
 
 # 获取人口
@@ -565,6 +580,7 @@ func deduct_player_resources(owner_id: int, cost: Dictionary) -> bool:
 			return false
 	for k in cost:
 		res[k] -= cost[k]
+
 	return true
 
 # 获取上限
@@ -744,7 +760,7 @@ func _apply_entity_model(entity: GameEntity) -> bool:
 		model_instance.scale = Vector3.ONE * scale_factor
 	entity.add_child(model_instance)
 	# 特殊朝向调整
-	if entity.entity_id == 16: model_instance.rotation.y = deg_to_rad(90)
+	if entity.entity_id == 16: model_instance.rotation.y = deg_to_rad(180)
 	elif entity.entity_id == 17: model_instance.rotation.y = deg_to_rad(90)
 	elif entity.entity_id == 18: model_instance.rotation.y = deg_to_rad(90)
 	# 存储模型引用用于动画
@@ -886,8 +902,8 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 	if entity.entity_id in [22, 27, 28]: entity.rotation.y = deg_to_rad(90)
 	mark_entity_cache_dirty()
 
-	# 地面高度修正
-	if $Map:
+	# 地面高度修正（炮台跳过——需保留城墙上的高度偏移）
+	if $Map and entity.entity_id != 64:
 		var h = $Map.get_height_at(pos)
 		entity.global_position.y = h
 
@@ -1015,33 +1031,42 @@ func _place_building_at(pos: Vector3):
 
 	# 资源检查
 	var cost = cfg.get("cost", {})
+	var res = player_resources
+	if has_method("get_host_resources"):
+		res = get_host_resources()
 	for k in cost:
-		if player_resources[k] < cost[k]:
+		if res[k] < cost[k]:
 			_show_hud_alert({"gold":"黄金","wood":"木材","stone":"石头","food":"食物","oil":"石油"}.get(k, k) + "不足！", Color(1.0, 0.8, 0.1))
 			return
 	
 	# 人口检查（防御塔）
 	var is_defense = (selected_building_id == 25 or selected_building_id == 26)
-	if is_defense and not can_train_unit(RTSConfig.Team.BLUE):
+	if is_defense and not can_train_unit(get_host_team()):
 		return false
 	
 
 	# 每种建筑最多10个
-	if _count_buildings_of_type(selected_building_id, RTSConfig.Team.BLUE) >= 10:
+	if _count_buildings_of_type(selected_building_id, get_host_team()) >= 10:
 		_show_hud_alert("该建筑已达上限(10个)！", Color(1.0, 0.4, 0.3))
 		return
 	# 扣资源
 	for k in cost:
-		player_resources[k] -= cost[k]
+		res[k] -= cost[k]
+		if has_method("get_host_resources"):
+			player_resources[1][k] = res[k]
 
 	# 生成建筑（设置所有权用于颜色）
 	cfg["owner_peer_id"] = 1 if not is_online else player_owner_id
-	var b = spawn_entity(cfg, RTSConfig.Team.BLUE, pos) as Building
+	var b = spawn_entity(cfg, get_host_team(), pos) as Building
 	if b:
-		b.start_construction(5.0, cfg)	
+		if selected_building_id == 64:
+			for e in entities.get_children():
+				if e is Building and e.entity_id == 27 and e.team == get_host_team() and e.health > 0:
+					if Vector2(e.global_position.x - pos.x, e.global_position.z - pos.z).length() < e.body_radius:
+						b.rotation.y = e.rotation.y
+						break
+		b.start_construction(5.0, cfg)
 		AudioManager.play_sfx("build_place")
-		if selected_building_id == 53:
-			b.died.connect(_on_castle_died.bind(RTSConfig.Team.BLUE))
 		notify_path_recalc(pos)
 	# 注意：如果仍需要支持鼠标（PC调试），可以同时保留原鼠标处理
 	# 但移动端主要用触摸，PC端继续用鼠标左键命令+右键选择
@@ -1078,6 +1103,17 @@ func _update_build_preview_from_screen(screen_pos: Vector2):
 		pos.x = round(pos.x)
 		pos.z = round(pos.z)
 		pos.y = $Map.get_height_at(pos) if $Map else 0
+		# 炮台预览：放置在城墙上
+		if selected_building_id == 64:
+			for e in entities.get_children():
+				if e is Building and e.entity_id == 27 and e.team == get_host_team() and e.health > 0:
+					var hdist2 = Vector2(e.global_position.x - pos.x, e.global_position.z - pos.z).length()
+					if hdist2 < (e.body_radius + 1.0):
+						pos.x = e.global_position.x
+						pos.z = e.global_position.z
+						pos.y = e.global_position.y + 4.0
+						build_preview.rotation.y = e.rotation.y
+						break
 		build_preview.global_position = pos
 		build_preview.visible = true
 		var valid = is_position_in_player_vision(pos) and _is_valid_build_position(pos)
@@ -1099,8 +1135,8 @@ func _end_build_drag_and_place():
 	# 无论是否放置成功，都退出建造模式
 	_exit_build_mode()
 func _handle_right_click(event):
-	# Ctrl+右键 → 清除驻扎点
-	if Input.is_key_pressed(KEY_CTRL):
+	# Alt+右键 → 清除驻扎点
+	if Input.is_key_pressed(KEY_ALT):
 		for u in selection.selected_entities:
 			if u is Army and u.has_method("_clear_garrison"):
 				u._clear_garrison()
@@ -1245,6 +1281,9 @@ func _command_selected_units(screen_pos: Vector2):
 				elif u.entity_id >= 46 and u.entity_id <= 50 and target is Building:
 					u._garrison_target_id = target.get_instance_id()
 					u.move_to(target.global_position)
+				elif u.has_method("can_soldier_garrison") and u.can_soldier_garrison(target):
+					u._garrison_target_id = target.get_instance_id()
+					u.move_to(target.global_position)
 				else:
 					u.move_to(target.global_position)
 			else:
@@ -1277,7 +1316,7 @@ func _set_rally_point_by_click(screen_pos: Vector2):
 func is_position_in_player_vision(world_pos: Vector3) -> bool:
 	if not entities: return false
 	for e in entities.get_children():
-		if e is GameEntity and e.team == RTSConfig.Team.BLUE and e.health>0:
+		if e is GameEntity and e.team == get_host_team() and e.health>0:
 			if e.global_position.distance_to(world_pos) <= e.vision_range:
 				return true
 	return false
@@ -1309,6 +1348,17 @@ func _update_build_preview(screen_pos: Vector2):
 		pos.x = round(pos.x)
 		pos.z = round(pos.z)
 		pos.y = $Map.get_height_at(pos) if $Map else 0
+		# 炮台预览：放置在城墙上
+		if selected_building_id == 64:
+			for e in entities.get_children():
+				if e is Building and e.entity_id == 27 and e.team == get_host_team() and e.health > 0:
+					var hd2 = Vector2(e.global_position.x - pos.x, e.global_position.z - pos.z).length()
+					if hd2 < (e.body_radius + 1.0):
+						pos.x = e.global_position.x
+						pos.z = e.global_position.z
+						pos.y = e.global_position.y + 4.0
+						build_preview.rotation.y = e.rotation.y
+						break
 		build_preview.global_position = pos
 		build_preview.visible = true
 
@@ -1337,7 +1387,7 @@ func _is_terrain_flat(pos: Vector3, radius: float) -> bool:
 func _is_valid_build_position(pos: Vector3) -> bool:
 	# Cannot build near enemy units (10 unit radius)
 	for e in entities.get_children():
-		if e is GameEntity and e.team != RTSConfig.Team.BLUE and e.team != RTSConfig.Team.NEUTRAL and e.health > 0:
+		if e is GameEntity and e.team != get_host_team() and e.team != RTSConfig.Team.NEUTRAL and e.health > 0:
 			if e.global_position.distance_to(pos) < 10.0:
 				return false
 	var t = get_terrain_at(pos)
@@ -1403,6 +1453,16 @@ func _is_valid_build_position(pos: Vector3) -> bool:
 		return water_count >= 3
 		return false
 	else:
+		# 炮台(ID=64)：只能放在己方城墙上
+		if selected_building_id == 64:
+			var on_wall = false
+			for e in entities.get_children():
+				if e is Building and e.entity_id == 27 and e.team == get_host_team() and e.health > 0:
+					var wd = Vector2(e.global_position.x - pos.x, e.global_position.z - pos.z).length()
+					if wd < (e.body_radius):
+						on_wall = true
+						break
+			if not on_wall: return false
 		# Cannot overlap existing buildings/entities
 		for e in entities.get_children():
 			if e is GameEntity and e.health > 0:
@@ -1432,32 +1492,34 @@ func _place_building():
 
 	# 资源检查
 	var cost = cfg.get("cost", {})
+	var res = player_resources
+	if has_method("get_host_resources"):
+		res = get_host_resources()
 	for k in cost:
-		if player_resources[k] < cost[k]:
+		if res[k] < cost[k]:
 			_show_hud_alert({"gold":"黄金","wood":"木材","stone":"石头","food":"食物","oil":"石油"}.get(k, k) + "不足！", Color(1.0, 0.8, 0.1))
 			return
 
 	# 人口（防御塔）
 	var is_defense = (selected_building_id == 25 or selected_building_id == 26)
-	if is_defense and not can_train_unit(RTSConfig.Team.BLUE): return
+	if is_defense and not can_train_unit(get_host_team()): return
 
 
 	# 每种建筑最多10个
-	if _count_buildings_of_type(selected_building_id, RTSConfig.Team.BLUE) >= 10:
+	if _count_buildings_of_type(selected_building_id, get_host_team()) >= 10:
 		_show_hud_alert("该建筑已达上限(10个)！", Color(1.0, 0.4, 0.3))
 		return
 	# 扣费
 	for k in cost:
-		player_resources[k] -= cost[k]
+		res[k] -= cost[k]
+
 
 	# 建造（设置所有权用于颜色）
 	cfg["owner_peer_id"] = 1 if not is_online else player_owner_id
-	var b = spawn_entity(cfg, RTSConfig.Team.BLUE, pos) as Building
+	var b = spawn_entity(cfg, get_host_team(), pos) as Building
 	if b:
 		b.start_construction(5.0, cfg)
 		AudioManager.play_sfx("build_place")
-		if selected_building_id == 53:
-			b.died.connect(_on_castle_died.bind(RTSConfig.Team.BLUE))
 		notify_path_recalc(pos)
 
 	if not Input.is_key_pressed(KEY_SHIFT):
@@ -1553,7 +1615,7 @@ func _update_fog_visibility():
 			visible_grid[x][y] = false
 
 	for e in get_tree().get_nodes_in_group("vision_providers"):
-		if e.team == RTSConfig.Team.BLUE and e.health > 0:
+		if e.team == get_host_team() and e.health > 0:
 			var g = world_to_grid(e.global_position)
 			var r = e.vision_range
 			for dx in range(-r, r+1):
@@ -1573,12 +1635,12 @@ func _update_visibility():
 	if not entities: return
 	var players = []
 	for e in entities.get_children():
-		if e is GameEntity and e.team == RTSConfig.Team.BLUE and e.health > 0:
+		if e is GameEntity and e.team == get_host_team() and e.health > 0:
 			players.append(e)
 
 	for e in entities.get_children():
 		if not (e is GameEntity): continue
-		if e.team == RTSConfig.Team.BLUE:
+		if e.team == get_host_team():
 			e.visible = true
 			continue
 		if e.team == RTSConfig.Team.NEUTRAL:
@@ -1704,7 +1766,7 @@ func _process(delta):
 	_limit_update_timer -= delta
 	if _limit_update_timer <= 0:
 		_limit_update_timer = 1.0
-		update_resource_limits(RTSConfig.Team.BLUE)
+		update_resource_limits(get_host_team())
 		update_resource_limits(RTSConfig.Team.RED)
 		if game_mode_2v2:
 			for pid in ai_players.keys():
@@ -1787,7 +1849,7 @@ func toggle_hold_position():
 	hold_position_active = !hold_position_active
 	if not entities: return
 	for e in entities.get_children():
-		if e is Army and e.team == RTSConfig.Team.BLUE and e.health > 0:
+		if e is Army and e.team == get_host_team() and e.health > 0:
 			if e.entity_id != 10 and e.entity_id != 14:
 				e.hold_position = hold_position_active
 
@@ -1800,7 +1862,7 @@ func set_rally_mode(active: bool):
 func execute_rally(target_pos: Vector3):
 	if not entities: return
 	for e in entities.get_children():
-		if e is Army and e.team == RTSConfig.Team.BLUE and e.health > 0:
+		if e is Army and e.team == get_host_team() and e.health > 0:
 			if e.entity_id != 10 and e.entity_id != 14:
 				e.move_to(target_pos)
 	set_rally_mode(false)

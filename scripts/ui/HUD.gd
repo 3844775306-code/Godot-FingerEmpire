@@ -97,7 +97,7 @@ func _create_unit_stats_panel():
 	var bg = Panel.new()
 	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	var bg_style = StyleBoxFlat.new()
-	bg_style.bg_color = Color(0.05, 0.06, 0.12, 0.88)
+	bg_style.bg_color = Color(UITheme.INK, UITheme.ALPHA_BG)
 	bg_style.corner_radius_top_left = 8
 	bg_style.corner_radius_top_right = 8
 	bg_style.corner_radius_bottom_left = 8
@@ -106,7 +106,7 @@ func _create_unit_stats_panel():
 	bg_style.border_width_right = 2
 	bg_style.border_width_top = 2
 	bg_style.border_width_bottom = 2
-	bg_style.border_color = Color(0.2, 0.6, 1.0, 0.5)
+	bg_style.border_color = Color(UITheme.GOLD, UITheme.ALPHA_BORDER)
 	bg.add_theme_stylebox_override("panel", bg_style)
 	unit_stats_panel.add_child(bg)
 
@@ -193,12 +193,19 @@ func _update_unit_stats():
 	if not bm:
 		return
 
+	# 在线模式桥接
+	var pop = bm.player_pop
+	var max_pop = bm.player_max_pop
+	if bm.has_method("get_host_resources"):
+		pop = bm.get_host_pop()
+		max_pop = bm.get_host_max_pop()
+
 	var team = RTSConfig.Team.BLUE
 
 	# 更新人口
 	if _stats_pop_label and _stats_pop_bar:
-		_stats_pop_label.text = "人口: %d/%d" % [bm.player_pop, bm.player_max_pop]
-		_stats_pop_bar.value = min(float(bm.player_pop) / max(bm.player_max_pop, 1) * 100, 100)
+		_stats_pop_label.text = "人口: %d/%d" % [pop, max_pop]
+		_stats_pop_bar.value = min(float(pop) / max(max_pop, 1) * 100, 100)
 
 	var unit_names = {
 		10: "农民", 11: "步兵", 12: "弓箭手", 13: "战船", 14: "采集船",
@@ -319,7 +326,30 @@ func _input(event):
 			KEY_A: _on_attack_all_pressed()
 			KEY_S: _on_retreat_all_pressed()
 			KEY_DELETE: _on_demolish_selected()
-			KEY_SPACE: _on_jump_to_alert()
+			KEY_SPACE: _on_space_pressed()
+
+func _on_space_pressed():
+	# 优先：释放选中建筑的进驻单位
+	var bm = _get_bm()
+	if bm and bm.has_node("SelectionManager"):
+		var sm = bm.get_node("SelectionManager")
+		if sm.has_method("get_selected_entities"):
+			var sel = sm.get_selected_entities()
+			var released = false
+			for e in sel:
+				if e is Building and e.garrisoned_soldiers.size() > 0:
+					e.release_all_garrisoned()
+					released = true
+				elif e is Army and e.entity_id == 18 and e._ram_garrisoned_soldiers.size() > 0:
+					e._recalc_ram_garrison_bonus.call_deferred()
+					for uid in e._ram_garrisoned_soldiers.duplicate():
+						var unit = instance_from_id(uid)
+						if unit and is_instance_valid(unit):
+							unit._exit_soldier_garrison()
+					released = true
+			if released: return
+	# 否则：跳转到警报位置
+	_on_jump_to_alert()
 
 func _on_jump_to_alert():
 	var minimap = $Minimap as Minimap
@@ -360,12 +390,12 @@ func _order_all_units(order_type: String, destination: Vector3):
 func _ready():
 	# 资源颜色和名称
 	const RES_CFG = [
-		{name="黄金", key="gold", color=Color(1.0, 0.84, 0.1)},
-		{name="木材", key="wood", color=Color(0.25, 0.82, 0.2)},
-		{name="石头", key="stone", color=Color(0.62, 0.62, 0.62)},
-		{name="食物", key="food", color=Color(1.0, 0.55, 0.1)},
-		{name="石油", key="oil", color=Color(0.4, 0.25, 0.1)},
-		{name="人口", key="pop", color=Color(0.3, 0.7, 1.0)},
+		{name="黄金", key="gold", color=UITheme.RES_GOLD},
+		{name="木材", key="wood", color=UITheme.RES_WOOD},
+		{name="石头", key="stone", color=UITheme.RES_STONE},
+		{name="食物", key="food", color=UITheme.RES_FOOD},
+		{name="石油", key="oil", color=UITheme.RES_OIL},
+		{name="人口", key="pop", color=UITheme.RES_POP},
 	]
 	var res_labels = {}
 
@@ -379,12 +409,12 @@ func _ready():
 		bg.position = Vector2(8, y)
 		bg.size = Vector2(240, 36)
 		var bg_style = StyleBoxFlat.new()
-		bg_style.bg_color = Color(0.12, 0.12, 0.12, 0.75)
+		bg_style.bg_color = Color(UITheme.INK, UITheme.ALPHA_OVERLAY)
 		bg_style.corner_radius_top_left = 5; bg_style.corner_radius_top_right = 5
 		bg_style.corner_radius_bottom_left = 5; bg_style.corner_radius_bottom_right = 5
 		bg_style.border_width_left = 1; bg_style.border_width_right = 1
 		bg_style.border_width_top = 1; bg_style.border_width_bottom = 1
-		bg_style.border_color = Color(col.r * 0.4, col.g * 0.4, col.b * 0.4, 0.5)
+		bg_style.border_color = Color(UITheme.GOLD, UITheme.ALPHA_SUBTLE)
 		bg.add_theme_stylebox_override("panel", bg_style)
 		add_child(bg)
 
@@ -405,7 +435,7 @@ func _ready():
 		val_lbl.size = Vector2(160, 20)
 		val_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		val_lbl.add_theme_font_size_override("font_size", 15)
-		val_lbl.add_theme_color_override("font_color", Color.WHITE)
+		val_lbl.add_theme_color_override("font_color", UITheme.PARCHMENT)
 		val_lbl.add_theme_color_override("font_outline_color", Color.BLACK)
 		val_lbl.add_theme_constant_override("outline_size", 1)
 		add_child(val_lbl)
@@ -523,10 +553,10 @@ func _ready():
 
 	set_process(true)
 
-const ALERT_DANGER = Color(1.0, 0.2, 0.1)     # 红色 — 基地/建筑被攻击
-const ALERT_WARNING = Color(1.0, 0.8, 0.1)   # 黄色 — 敌军来袭/资源不足
-const ALERT_INFO = Color(0.2, 1.0, 0.3)      # 绿色 — 建造/训练/升级完成
-const ALERT_GROUP = Color(0.3, 0.7, 1.0)     # 蓝色 — 编队反馈
+const ALERT_DANGER = UITheme.ALERT_DANGER     # 红色 — 基地/建筑被攻击
+const ALERT_WARNING = UITheme.ALERT_WARNING   # 黄色 — 敌军来袭/资源不足
+const ALERT_INFO = UITheme.ALERT_INFO      # 绿色 — 建造/训练/升级完成
+const ALERT_GROUP = UITheme.ALERT_GROUP     # 蓝色 — 编队反馈
 
 func show_alert_message(msg: String, color: Color = ALERT_DANGER):
 	if not _alert_label:
@@ -577,18 +607,28 @@ func update_data(resources: Dictionary, population: Dictionary, limits: Dictiona
 func _process(delta):
 	_unit_stats_timer -= delta
 	var bm = _get_bm()
-	if bm:
-		gold_label.text = "黄金: %d/%d" % [bm.player_resources["gold"], bm.player_resource_limits["gold"]]
-		wood_label.text = "木材: %d/%d" % [bm.player_resources["wood"], bm.player_resource_limits["wood"]]
-		stone_label.text = "石头: %d/%d" % [bm.player_resources["stone"], bm.player_resource_limits["stone"]]
-		food_label.text = "食物: %d/%d" % [bm.player_resources["food"], bm.player_resource_limits["food"]]
-		oil_label.text = "石油: %d/%d" % [bm.player_resources["oil"], bm.player_resource_limits["oil"]]
-		pop_label.text = "人口: %d/%d" % [bm.player_pop, bm.player_max_pop]
+	
+	# 在线模式：统一用 get_host_* 桥接
+	var res = bm.player_resources
+	var pop = bm.player_pop
+	var max_pop = bm.player_max_pop
+	var lim = bm.player_resource_limits
+	if bm.has_method("get_host_resources"):
+		res = bm.get_host_resources()
+		pop = bm.get_host_pop()
+		max_pop = bm.get_host_max_pop()
+		lim = bm.get_host_limits()
+		gold_label.text = "黄金: %d/%d" % [res["gold"], lim["gold"]]
+		wood_label.text = "木材: %d/%d" % [res["wood"], lim["wood"]]
+		stone_label.text = "石头: %d/%d" % [res["stone"], lim["stone"]]
+		food_label.text = "食物: %d/%d" % [res["food"], lim["food"]]
+		oil_label.text = "石油: %d/%d" % [res["oil"], lim["oil"]]
+		pop_label.text = "人口: %d/%d" % [pop, max_pop]
 		if pop_bar:
-			pop_bar.value = min(float(bm.player_pop)/max(bm.player_max_pop,1)*100, 100)
+			pop_bar.value = min(float(pop)/max(max_pop,1)*100, 100)
 			for rk in ["gold","wood","stone","food","oil"]:
 				if res_bars.has(rk):
-					var rv = bm.player_resources.get(rk, 0)
+					var rv = res.get(rk, 0)
 					var rl = bm.player_resource_limits.get(rk, 500)
 					res_bars[rk].value = min(float(rv)/max(rl,1)*100, 100)
 		var player_nation = bm.team_nations.get(RTSConfig.Team.BLUE, -1)
@@ -605,19 +645,19 @@ func _process(delta):
 		gather_timer = 1.0
 		var gather_counts = {"gold":0, "wood":0, "stone":0, "food":0, "oil":0}
 		for entity in get_tree().get_nodes_in_group("entities"):
-			if entity is Army and entity.team == RTSConfig.Team.BLUE and entity.health > 0:
+			if entity is Army and entity.health > 0 and (entity.owner_peer_id == 1 or entity.team == bm.get_host_team()):
 				if entity.entity_id in [10, 14] and entity.current_order in ["gather", "deliver"]:
 					var tgt = entity.current_target
 					if is_instance_valid(tgt) and tgt is WorldResource:
 						var rt = tgt.resource_type
 						if rt in gather_counts:
 							gather_counts[rt] += 1
-	
+		
 		if res_snapshot.is_empty():
 			res_snapshot = bm.player_resources.duplicate()
 		else:
 			for rk in ["gold","wood","stone","food","oil"]:
-				var cur = bm.player_resources.get(rk, 0)
+				var cur = res.get(rk, 0)
 				var prev = res_snapshot.get(rk, cur)
 				if cur > prev:
 					res_income[rk] = res_income.get(rk, 0) + (cur - prev)

@@ -90,8 +90,8 @@ func _input(event):
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
 			_touch_start_pos = event.position
-			# Ctrl+左键 → 即时处理
-			if Input.is_key_pressed(KEY_CTRL) and not selected_entities.is_empty():
+			# Alt+左键 → 即时处理
+			if Input.is_key_pressed(KEY_ALT) and not selected_entities.is_empty():
 				if bm and bm.has_method("_set_garrison_for_selected"):
 					bm._set_garrison_for_selected(event.position)
 				return
@@ -117,9 +117,9 @@ func _input(event):
 					bm._command_selected_units(event.position)
 					return
 			var now = Time.get_ticks_msec() / 1000.0
-			if clicked_entity and clicked_entity.team == RTSConfig.Team.BLUE:
+			if clicked_entity and clicked_entity.team == bm.get_host_team():
 				# Official garrison: if selected is official and clicked is building, send garrison command
-				if clicked_entity is Building and Input.is_key_pressed(KEY_CTRL):
+				if clicked_entity is Building and Input.is_key_pressed(KEY_ALT):
 					for e in selected_entities:
 						if e is Army and e.entity_id >= 46 and e.entity_id <= 50:
 							e._garrison_target_id = clicked_entity.get_instance_id()
@@ -172,7 +172,7 @@ func _input(event):
 			if event.pressed:
 				_touch_start_pos = event.position
 				var clicked_entity = _get_entity_under_mouse(event.position)
-				if clicked_entity and clicked_entity.team == RTSConfig.Team.BLUE:
+				if clicked_entity and clicked_entity.team == bm.get_host_team():
 					if clicked_entity in selected_entities:
 						_clear_selection()
 					else:
@@ -209,7 +209,8 @@ func _on_left_mouse_released(event):
 			return
 		# 遍历所有实体，选中屏幕矩形内的己方单位
 		for entity in get_tree().get_nodes_in_group("entities"):
-			if entity.team == RTSConfig.Team.BLUE:
+			var bm = get_tree().get_first_node_in_group("battle_manager")
+			if entity.team == bm.get_host_team():
 				var screen_pos = cam.unproject_position(entity.global_position)
 				if rect.has_point(screen_pos):
 					_add_to_selection(entity)
@@ -270,7 +271,9 @@ func _remove_from_selection(entity: GameEntity):
 func select_all_military():
 	_clear_selection()
 	for entity in get_tree().get_nodes_in_group("entities"):
-		if entity is Army and entity.team == RTSConfig.Team.BLUE and entity.health > 0:
+		var bm = get_tree().get_first_node_in_group("battle_manager")
+
+		if entity is Army and entity.team == bm.get_host_team() and entity.health > 0:
 			if entity.entity_id != 10 and entity.entity_id != 14 and entity.entity_id not in [46,47,48,50]:   # 非农民、非采集船
 				_add_to_selection(entity)
 func _clear_selection():

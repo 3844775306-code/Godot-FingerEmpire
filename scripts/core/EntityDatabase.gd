@@ -521,7 +521,7 @@ func _init_data():
 		# ==================== 僧侣 (ID 55) ====================
 		{
 			"id": 55, "type": 2, "name": "僧侣", "team": 0,
-			"cost": {"food": 50, "gold": 200},
+			"cost": {"food": 50, "gold": 150},
 			"max_health": 50, "attack": 30, "attack_speed": 1.2, "speed": 1.5,
 			"vision_range": 10, "attack_range": 5.0, "target_type": 0, "body_radius": 0.4,
 			"armor": 0, "can_move": true,
@@ -530,7 +530,7 @@ func _init_data():
 		# ==================== 长老 (ID 56) ====================
 		{
 			"id": 56, "type": 2, "name": "长老", "team": 0,
-			"cost": {"food": 80, "gold": 300},
+			"cost": {"food": 80, "gold": 200},
 			"max_health": 50, "attack": 0, "attack_speed": 1.2, "speed": 1.5,
 			"vision_range": 12, "attack_range": 5.0, "target_type": 3, "body_radius": 0.4,
 			"armor": 0, "can_move": true,
@@ -539,7 +539,7 @@ func _init_data():
 		# ==================== 宗师 (ID 57) ====================
 		{
 			"id": 57, "type": 2, "name": "宗师", "team": 0,
-			"cost": {"food": 100, "gold": 500},
+			"cost": {"food": 100, "gold": 300},
 			"max_health": 80, "attack": 7, "attack_speed": 1.2, "speed": 1.5,
 			"vision_range": 12, "attack_range": 4.0, "target_type": 2, "body_radius": 0.5,
 			"armor": 50, "can_move": true,
@@ -561,6 +561,20 @@ func _init_data():
 			"max_health": 350, "attack": 150, "attack_speed": 5.0, "speed": 0.4,
 			"vision_range": 20, "attack_range": 9.0, "damage_radius": 3.0, "target_type": 3,
 			"body_radius": 1.0, "armor": 30, "can_move": true
+		},
+
+			{
+			"id": 64, "type": 1, "name": "炮台", "team": 0,
+			"cost": {"wood": 50, "stone": 60},
+			"max_health": 300, "attack": 30, "attack_speed": 2.0, "attack_range": 7.0,
+			"damage_radius": 1.4, "target_type": 3, "body_radius": 1.0, "armor": 20,
+			"vision_range": 9, "can_move": false, "wall_only": true,
+			"upgrades": [
+				{ "level": 2, "cost": {"stone": 80, "gold": 60}, "health_bonus": 80, "attack_bonus": 10 },
+				{ "level": 3, "cost": {"gold": 120, "oil": 60}, "health_bonus": 100, "attack_bonus": 15 },
+				{ "level": 4, "cost": {"gold": 200, "oil": 100}, "health_bonus": 120, "attack_bonus": 20 },
+				{ "level": 5, "cost": {"gold": 300, "oil": 200}, "health_bonus": 150, "attack_bonus": 25 }
+			]
 		},
 
 		# ==================== 动物 (ID 60-63) ====================

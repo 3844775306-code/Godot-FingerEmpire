@@ -43,10 +43,10 @@ var _toggle_stats_btn: Button
 var _unit_stats_timer: float = 1.0
 
 # ==================== 警报系统 ====================
-const ALERT_DANGER = Color(1.0, 0.2, 0.1)
-const ALERT_WARNING = Color(1.0, 0.8, 0.1)
-const ALERT_INFO = Color(0.2, 1.0, 0.3)
-const ALERT_GROUP = Color(0.3, 0.7, 1.0)
+const ALERT_DANGER = UITheme.ALERT_DANGER
+const ALERT_WARNING = UITheme.ALERT_WARNING
+const ALERT_INFO = UITheme.ALERT_INFO
+const ALERT_GROUP = UITheme.ALERT_GROUP
 
 var _alert_label: Label = null
 var _alert_bg: ColorRect = null
@@ -101,7 +101,7 @@ func _create_unit_stats_panel():
 	var bg = Panel.new()
 	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	var bg_style = StyleBoxFlat.new()
-	bg_style.bg_color = Color(0.05, 0.06, 0.12, 0.88)
+	bg_style.bg_color = Color(UITheme.INK, UITheme.ALPHA_BG)
 	bg_style.corner_radius_top_left = 8
 	bg_style.corner_radius_top_right = 8
 	bg_style.corner_radius_bottom_left = 8
@@ -110,7 +110,7 @@ func _create_unit_stats_panel():
 	bg_style.border_width_right = 2
 	bg_style.border_width_top = 2
 	bg_style.border_width_bottom = 2
-	bg_style.border_color = Color(0.2, 0.6, 1.0, 0.5)
+	bg_style.border_color = Color(UITheme.GOLD, UITheme.ALPHA_BORDER)
 	bg.add_theme_stylebox_override("panel", bg_style)
 	unit_stats_panel.add_child(bg)
 
@@ -341,7 +341,17 @@ func _input(event):
 			KEY_R: _on_rally_pressed()
 			KEY_A: _on_attack_all_pressed()
 			KEY_S: _on_retreat_all_pressed()
-			KEY_SPACE: _on_jump_to_alert()
+			KEY_SPACE: _on_space_pressed()
+
+func _on_space_pressed():
+	# 优先：尝试释放选中建筑的进驻单位
+	var input_node = get_tree().get_first_node_in_group("client_input")
+	if input_node and input_node.has_method("get_selected_ids"):
+		var sel_ids = input_node.get_selected_ids()
+		if not sel_ids.is_empty():
+			NetworkManager.send_command.rpc_id(1, {"action": "ungarrison_soldiers", "selected_ids": sel_ids.duplicate()})
+			return
+	_on_jump_to_alert()
 
 func _on_jump_to_alert():
 	var minimap = get_node_or_null("../Minimap") as Minimap
@@ -393,12 +403,12 @@ func show_alert_message(msg: String, color: Color = ALERT_DANGER):
 func _ready():
 	# 创建资源标签（字号28，背景扩大）
 	const RES_CFG = [
-		{name="黄金", key="gold", color=Color(1.0, 0.84, 0.08)},
-		{name="木材", key="wood", color=Color(0.2, 0.78, 0.18)},
-		{name="石头", key="stone", color=Color(0.6, 0.6, 0.6)},
-		{name="食物", key="food", color=Color(1.0, 0.5, 0.08)},
-		{name="石油", key="oil", color=Color(0.4, 0.25, 0.1)},
-		{name="人口", key="pop", color=Color(0.25, 0.65, 1.0)},
+		{name="黄金", key="gold", color=UITheme.RES_GOLD},
+		{name="木材", key="wood", color=UITheme.RES_WOOD},
+		{name="石头", key="stone", color=UITheme.RES_STONE},
+		{name="食物", key="food", color=UITheme.RES_FOOD},
+		{name="石油", key="oil", color=UITheme.RES_OIL},
+		{name="人口", key="pop", color=UITheme.RES_POP},
 	]
 	const BASE_BG = Color(0.12, 0.12, 0.12, 0.75)
 	const ROW_H = 44; const ROW_W = 290; const FONT_SZ = 18
@@ -445,7 +455,7 @@ func _ready():
 		gl.size = Vector2(ROW_W - 28, 14)
 		gl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		gl.add_theme_font_size_override("font_size", 10)
-		gl.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
+		gl.add_theme_color_override("font_color", UITheme.STONE)
 		add_child(gl)
 		gather_labels[cfg.key] = gl
 
@@ -568,19 +578,19 @@ func _ready():
 	_fps_label = Label.new()
 	_fps_label.position = Vector2(1100, 8)
 	_fps_label.add_theme_font_size_override("font_size", 16)
-	_fps_label.add_theme_color_override("font_color", Color(0.3, 1.0, 0.3))
+	_fps_label.add_theme_color_override("font_color", UITheme.EMERALD)
 	add_child(_fps_label)
 
 	# Network stats display
 	_net_stat_label = Label.new()
 	_net_stat_label.position = Vector2(1100, 48)
 	_net_stat_label.add_theme_font_size_override("font_size", 14)
-	_net_stat_label.add_theme_color_override("font_color", Color(0.6, 0.6, 0.6))
+	_net_stat_label.add_theme_color_override("font_color", UITheme.STONE)
 	add_child(_net_stat_label)
 	_ping_label = Label.new()
 	_ping_label.position = Vector2(1100, 65)
 	_ping_label.add_theme_font_size_override("font_size", 14)
-	_ping_label.add_theme_color_override("font_color", Color(0.6, 0.8, 1.0))
+	_ping_label.add_theme_color_override("font_color", UITheme.SAPPHIRE.lightened(0.15))
 	add_child(_ping_label)
 	_game_time_label = Label.new()
 	_game_time_label.position = Vector2(1100, 28)

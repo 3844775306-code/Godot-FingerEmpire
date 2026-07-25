@@ -5,9 +5,9 @@ extends RTSBattleManager
 var game_mode: int = NetworkManager.GameMode.ONEvONE
 
 # Compact entity array indices (no string keys = faster + smaller)
-enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ATTACK_SPEED, ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH }
-enum EB { UPGRADE=0, MAX_UPGRADE, CAN_UPGRADE, BUILD_TIMER, MAX_BUILD, PROD_CURRENT, PROD_PROGRESS, PROD_QSIZE, UPGRADE_TIMER, MAX_UPGRADE_TIME }
-const SNAP_VERSION = 3  # 3 = added ROT_Y for entity rotation
+enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ATTACK_SPEED, ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH, GARRISONED }
+enum EB { UPGRADE=0, MAX_UPGRADE, CAN_UPGRADE, BUILD_TIMER, MAX_BUILD, PROD_CURRENT, PROD_PROGRESS, PROD_QSIZE, UPGRADE_TIMER, MAX_UPGRADE_TIME, GARRISON_COUNT }
+const SNAP_VERSION = 4  # 4 = added GARRISONED (Army) + GARRISON_COUNT (Building)
 
 # 1v1 专用
 var player_teams: Dictionary = {}         # peer_id -> team
@@ -15,7 +15,6 @@ var player_teams: Dictionary = {}         # peer_id -> team
 # 2v2 专用
 var player_info: Dictionary = {}          # peer_id -> { "team": int, "slot": int, "alive": bool, "color": Color, "nation": int }
 var player_castles: Dictionary = {}       # peer_id -> Building
-   # peer_id -> { "gold": int, "wood": int, ... }
 var player_population: Dictionary = {}    # peer_id -> { "current": int, "max": int }
 # 删除原来的：var player_resource_limits: Dictionary = {}
 # 新增
@@ -88,6 +87,20 @@ func get_resources_for(owner_id: int) -> Dictionary:
 	if player_info.has(owner_id):
 		return player_resources.get(owner_id, {})
 	return {}
+
+# HUD/建造 桥接：在线模式返回房主(peer_id=1)数据
+func get_host_resources() -> Dictionary:
+	return player_resources.get(1, {"gold":0, "wood":0, "stone":0, "food":0, "oil":0})
+func get_host_pop() -> int:
+	return player_population.get(1, {}).get("current", 0)
+func get_host_max_pop() -> int:
+	return player_population.get(1, {}).get("max", 20)
+func get_host_limits() -> Dictionary:
+	return player_limits_dict.get(1, {"gold":500, "wood":500, "stone":500, "food":500, "oil":0})
+func get_host_team() -> int:
+	if player_info.has(1): return player_info[1].team
+	if player_teams.has(1): return player_teams[1]
+	return RTSConfig.Team.BLUE
 
 func deduct_resources_for(owner_id: int, cost: Dictionary) -> bool:
 	var res = get_resources_for(owner_id)
@@ -212,16 +225,31 @@ func _ready():
 
 # ---------- 1v1 初始化 ----------
 func _init_1v1():
-	# 等待 2 名玩家
-	while multiplayer.get_peers().size() < 2:
+	# 等待所需数量的远程客户端（max_players 已减去 AI）
+	var needed = maxi(0, NetworkManager.max_players - 1)
+	while multiplayer.get_peers().size() < needed:
 		await get_tree().process_frame
 
 	var peers = multiplayer.get_peers()
 	peers.sort()
+	# 房主 (peer_id=1) → BLUE
+	player_teams[1] = RTSConfig.Team.BLUE
+	player_info[1] = {"team": RTSConfig.Team.BLUE, "slot": 0, "alive": true, "is_ai": false}
+	player_resources[1] = {"gold":100, "wood":100, "stone":100, "food":100, "oil":0}
+	player_population[1] = {"current": 3, "max": 20}
+	if NetworkManager.pending_nations.has(1):
+		pending_nations[1] = NetworkManager.pending_nations[1]
+	if pending_nations.has(1):
+		team_nations[RTSConfig.Team.BLUE] = pending_nations[1]
+		pending_nations.erase(1)
+	else:
+		team_nations[RTSConfig.Team.BLUE] = GameSettings.player_nation
+	# 远程客户端 → RED
 	for i in range(peers.size()):
-		var team = RTSConfig.Team.BLUE if i == 0 else RTSConfig.Team.RED
+		var team = RTSConfig.Team.RED
 		player_teams[peers[i]] = team
-		# 如果暂存了国家
+		if NetworkManager.pending_nations.has(peers[i]):
+			pending_nations[peers[i]] = NetworkManager.pending_nations[peers[i]]
 		if pending_nations.has(peers[i]):
 			team_nations[team] = pending_nations[peers[i]]
 			pending_nations.erase(peers[i])
@@ -238,13 +266,13 @@ func _init_1v1():
 	
 
 	_init_entities_deferred()   # 父类的实体生成（会用到 team_nations）
-	# 修正联机模式的 owner_peer_id（父类用的是硬编码 1/3）
-	for pid in peers:
+	# 修正 owner_peer_id（包含房主 peer_id=1）
+	for pid in player_teams.keys():
 		var team = player_teams[pid]
 		var castle = get_castle_by_team(team)
 		if castle: castle.owner_peer_id = pid
 	_player_colors.clear()
-	for pid in peers:
+	for pid in player_teams.keys():
 		_player_colors[pid] = RTSConfig.COLOR_POOL[player_teams[pid]]
 	set_process(true)
 	broadcast_enabled = true
@@ -297,11 +325,12 @@ func _init_2v2():
 	var red_slots_free = 2 - NetworkManager.red_ai_count
 	var blue_slots_free = 2 - NetworkManager.blue_ai_count
 	var required_humans = red_slots_free + blue_slots_free
+	var required_remote = maxi(0, required_humans - 1)  # 减去房主
 
-	print("[2v2] 需要人类玩家数:", required_humans, " 红方AI:", NetworkManager.red_ai_count, " 蓝方AI:", NetworkManager.blue_ai_count)
+	print("[2v2] 需要人类玩家数:", required_humans, " 远程:", required_remote)
 
 	# 等待足够的人类玩家连接
-	while multiplayer.get_peers().size() < required_humans:
+	while multiplayer.get_peers().size() < required_remote:
 		await get_tree().process_frame
 
 	var peers = multiplayer.get_peers()
@@ -310,7 +339,21 @@ func _init_2v2():
 	var red_assigned = 0
 	var blue_assigned = 0
 
-	# ---------- 分配人类玩家到剩余空位 ----------
+	# ---------- 房主 (peer_id=1) 分配 ----------
+	var host_team = RTSConfig.Team.RED if red_slots_free > 0 else RTSConfig.Team.BLUE
+	player_info[1] = {
+		"team": host_team, "slot": 0, "alive": true,
+		"color": _pick_player_color(),
+		"nation": NetworkManager.pending_nations.get(1, GameSettings.player_nation),
+		"is_ai": false,
+	}
+	player_resources[1] = {"gold":100, "wood":100, "stone":100, "food":100, "oil":0}
+	player_population[1] = {"current": 3, "max": 20}
+	if host_team == RTSConfig.Team.RED: red_assigned += 1
+	else: blue_assigned += 1
+	print("[2v2] 房主 peer_id=1 队伍", "红" if host_team == RTSConfig.Team.RED else "蓝")
+
+	# ---------- 分配远程人类玩家 ----------
 	for i in range(peers.size()):
 		var team: int
 		if red_assigned < red_slots_free and (red_assigned <= blue_assigned or blue_assigned >= blue_slots_free):
@@ -366,8 +409,13 @@ func _init_2v2():
 	for pid in player_info.keys():
 		NetworkManager.notify_all_player_colors.rpc_id(pid, all_player_colors)
 
-	_send_map_data(player_info.keys())
+	# 只向真实客户端发送（跳过AI合成peer_id）
+	var real_pids: Array = []
 	for pid in player_info.keys():
+		if not player_info[pid].is_ai:
+			real_pids.append(pid)
+	_send_map_data(real_pids)
+	for pid in real_pids:
 		var info = player_info[pid]
 		NetworkManager.notify_team_info.rpc_id(pid, pid, info.team, info.slot, info.color)
 
@@ -625,6 +673,7 @@ func _process_1v1_command(peer_id: int, data: Dictionary):
 		"demolish":      _1v1_demolish(team, data)
 		"set_garrison":  _set_garrison_for_team(team, data)
 		"clear_garrison": _clear_garrison_for_team(team, data)
+		"ungarrison_soldiers": _ungarrison_soldiers_1v1(team, data)
 
 func _process_2v2_command(peer_id: int, data: Dictionary):
 	if not player_info.has(peer_id) or not player_info[peer_id].alive: return
@@ -643,6 +692,7 @@ func _process_2v2_command(peer_id: int, data: Dictionary):
 		"recall_group":  _2v2_recall_group(peer_id, data)
 		"set_garrison":  _2v2_set_garrison(peer_id, data)
 		"clear_garrison": _2v2_clear_garrison(peer_id, data)
+		"ungarrison_soldiers": _ungarrison_soldiers_2v2(peer_id, data)
 
 # ---------- 1v1 命令实现 ----------
 func _1v1_right_click(team: int, data: Dictionary):
@@ -673,9 +723,11 @@ func _1v1_right_click(team: int, data: Dictionary):
 				elif entity.entity_id >= 46 and entity.entity_id <= 50 and target is Building:
 					entity._garrison_target_id = target.get_instance_id()
 					entity.move_to(target.global_position)
+				elif entity.has_method("can_soldier_garrison") and entity.can_soldier_garrison(target):
+					entity._garrison_target_id = target.get_instance_id()
+					entity.move_to(target.global_position)
 				else:
 					entity.move_to(target.global_position)
-			else:
 				var fp = pos
 				if offsets.size() > fi:
 					var off = offsets[fi]
@@ -693,7 +745,7 @@ func _1v1_build(team: int, data: Dictionary):
 	for e in entities.get_children():
 		if e is GameEntity and e.team != team and e.team != RTSConfig.Team.NEUTRAL and e.health > 0:
 			if e.global_position.distance_to(pos) < 10.0: return
-	var res = player_resources if team == RTSConfig.Team.BLUE else enemy_resources
+	var res = get_resources_for(1) if team == RTSConfig.Team.BLUE else enemy_resources
 	var cost = cfg.get("cost", {})
 	for r in cost.keys():
 		if res[r] < cost[r]: return
@@ -706,11 +758,15 @@ func _1v1_build(team: int, data: Dictionary):
 	if _bld_cnt >= 10: return
 	for r in cost.keys():
 		res[r] -= cost[r]
+	if building_id == 64:
+		for e in entities.get_children():
+			if e is Building and e.entity_id == 27 and e.team == team and e.health > 0:
+				if Vector2(e.global_position.x - pos.x, e.global_position.z - pos.z).length() < (e.body_radius + 1.0):
+					pos.y = e.global_position.y + 4.0
+					break
 	var b = spawn_entity(cfg, team, pos)
 	if b:
 		b.start_construction(5.0, cfg)
-		if building_id == 53:
-			b.died.connect(_on_castle_died.bind(team))
 
 func _1v1_upgrade(team: int, data: Dictionary):
 	var building_id = data["building_id"]
@@ -768,9 +824,11 @@ func _2v2_right_click(peer_id: int, data: Dictionary):
 				elif entity.entity_id >= 46 and entity.entity_id <= 50 and target is Building:
 					entity._garrison_target_id = target.get_instance_id()
 					entity.move_to(target.global_position)
+				elif entity.has_method("can_soldier_garrison") and entity.can_soldier_garrison(target):
+					entity._garrison_target_id = target.get_instance_id()
+					entity.move_to(target.global_position)
 				else:
 					entity.move_to(target.global_position)
-			else:
 				var fp = pos
 				if offsets.size() > fi:
 					var off = offsets[fi]
@@ -808,11 +866,15 @@ func _2v2_build(peer_id: int, data: Dictionary):
 	# 扣除个人资源
 	if not deduct_player_resources(peer_id, cost): return
 	cfg["owner_peer_id"] = peer_id
+	if building_id == 64:
+		for e in entities.get_children():
+			if e is Building and e.entity_id == 27 and e.team == player_info[peer_id].team and e.health > 0:
+				if Vector2(e.global_position.x - pos.x, e.global_position.z - pos.z).length() < (e.body_radius + 1.0):
+					pos.y = e.global_position.y + 4.0
+					break
 	var b = spawn_entity(cfg, player_info[peer_id].team, pos, 1)
 	if b:
 		b.start_construction(5.0, cfg)
-		if building_id == 53:
-			b.died.connect(_on_castle_died_2v2.bind(peer_id))
 		if is_defense:
 			increase_player_population(peer_id, 1)
 		update_player_limits(peer_id)
@@ -1009,8 +1071,12 @@ func _compute_entity_hash(entity: GameEntity) -> int:
 		h = ((h << 5) ^ (h >> 27)) ^ int(entity.build_timer * 100)
 		h = ((h << 5) ^ (h >> 27)) ^ int(entity.production_timer * 100)
 		h = ((h << 5) ^ (h >> 27)) ^ int(entity.upgrade_timer * 100)
+		h = ((h << 5) ^ (h >> 27)) ^ entity.get_garrison_count()
 	if entity.current_target and is_instance_valid(entity.current_target):
 		h = ((h << 5) ^ (h >> 27)) ^ entity.current_target.get_instance_id()
+	# 进驻状态
+	if entity is Army:
+		h = ((h << 5) ^ (h >> 27)) ^ (1 if entity._soldier_garrison_building and entity._soldier_garrison_building.get_ref() else 0)
 	return h & 0x7FFFFFFF
 
 func _should_include_in_delta(snapshot_key, entity_id: int, new_hash: int) -> bool:
@@ -1255,19 +1321,18 @@ func build_snapshot_for_team(team: int) -> Dictionary:
 	# --- Cleanup stale hashes ---
 	_cleanup_dead_entity_hashes(snapshot_key, current_entities)
 
-	return {
-		"delta": delta,
-		"dead_ids": dead,
-		"resources": {"player": player_resources, "enemy": enemy_resources},
-		"limits": {"player": player_resource_limits, "enemy": enemy_resource_limits},
-		"population": {"current": player_pop if team == RTSConfig.Team.BLUE else enemy_pop, "max": player_max_pop if team == RTSConfig.Team.BLUE else enemy_max_pop},
-		"nation": team_nations.get(team, -1),
-		"enemy_nation": team_nations.get(RTSConfig.Team.RED if team == RTSConfig.Team.BLUE else RTSConfig.Team.BLUE, -1),
-		"gather_counts": team_gather_counts.get(team, {"gold":0, "wood":0, "stone":0, "food":0, "oil":0}),
-		"income_rate": team_income_rates.get(team, {"gold":0.0, "wood":0.0, "stone":0.0, "food":0.0, "oil":0.0}),
-		"alerts": _get_and_clear_alerts(team),
-		"game_time": game_time,
-	}
+	var e = (_snap_sent % 10 == 0)  # 资源数据1Hz降频
+	var r = {"delta": delta, "dead_ids": dead, "game_time": game_time}
+	if e or is_full:
+		r["resources"] = {"player": player_resources, "enemy": enemy_resources}
+		r["limits"] = {"player": player_resource_limits, "enemy": enemy_resource_limits}
+		r["population"] = {"current": player_pop if team == RTSConfig.Team.BLUE else enemy_pop, "max": player_max_pop if team == RTSConfig.Team.BLUE else enemy_max_pop}
+		r["nation"] = team_nations.get(team, -1)
+		r["enemy_nation"] = team_nations.get(RTSConfig.Team.RED if team == RTSConfig.Team.BLUE else RTSConfig.Team.BLUE, -1)
+		r["gather_counts"] = team_gather_counts.get(team, {"gold":0, "wood":0, "stone":0, "food":0, "oil":0})
+		r["income_rate"] = team_income_rates.get(team, {"gold":0.0, "wood":0.0, "stone":0.0, "food":0.0, "oil":0.0})
+	r["alerts"] = _get_and_clear_alerts(team)
+	return r
 
 func _broadcast_1v1():
 	# Collect bullet data ONCE (reused for all players)
@@ -1312,6 +1377,11 @@ func _serialize_entity_compact(entity: GameEntity) -> Array:
 	a[E.WAYPOINTS] = _serialize_waypoints(entity)
 	a[E.ROT_Y] = entity.rotation.y
 	a[E.ASTAR_PATH] = _serialize_astar_path(entity)
+	# 进驻状态
+	var _is_garrisoned = false
+	if entity is Army and entity._soldier_garrison_building and entity._soldier_garrison_building.get_ref():
+		_is_garrisoned = true
+	a[E.GARRISONED] = _is_garrisoned
 	# Building extra
 	if entity is Building:
 		var ba = []
@@ -1328,6 +1398,7 @@ func _serialize_entity_compact(entity: GameEntity) -> Array:
 			ba[EB.PROD_QSIZE] = entity.production_queue.size()
 		ba[EB.UPGRADE_TIMER] = entity.upgrade_timer
 		ba[EB.MAX_UPGRADE_TIME] = entity.max_upgrade_time
+		ba[EB.GARRISON_COUNT] = entity.get_garrison_count()
 		a.append(ba)
 	else:
 		a.append([])
@@ -1554,20 +1625,23 @@ func build_snapshot_for_player(peer_id: int) -> Dictionary:
 
 	_cleanup_dead_entity_hashes(snapshot_key, current_all_ids)
 
+	var e2 = (_snap_sent % 10 == 0)  # 资源数据1Hz降频
 	var result = {
 		"delta": delta,
 		"dead_ids": dead,
-		"player_resources": { peer_id: player_resources[peer_id] },
-		"player_limits": { peer_id: player_limits_dict.get(peer_id, {}) },
-		"player_population": { peer_id: player_population[peer_id] },
-		"player_castles": _serialize_castles(),
-		"team_nations": team_nations,
-		"gather_counts": {peer_id: team_gather_counts.get(peer_id, {"gold":0, "wood":0, "stone":0, "food":0, "oil":0})},
-		"income_rate": {peer_id: team_income_rates.get(peer_id, {"gold":0.0, "wood":0.0, "stone":0.0, "food":0.0, "oil":0.0})},
-		"player_info": player_info,
-		"alerts": _get_and_clear_alerts(team),
 		"game_time": game_time,
 	}
+	if e2 or is_full:
+		result["player_resources"] = { peer_id: player_resources[peer_id] }
+		result["player_limits"] = { peer_id: player_limits_dict.get(peer_id, {}) }
+		result["player_population"] = { peer_id: player_population[peer_id] }
+		result["gather_counts"] = {peer_id: team_gather_counts.get(peer_id, {"gold":0, "wood":0, "stone":0, "food":0, "oil":0})}
+		result["income_rate"] = {peer_id: team_income_rates.get(peer_id, {"gold":0.0, "wood":0.0, "stone":0.0, "food":0.0, "oil":0.0})}
+	if is_full:
+		result["team_nations"] = team_nations
+		result["player_info"] = player_info
+	result["player_castles"] = _serialize_castles()
+	result["alerts"] = _get_and_clear_alerts(team)
 
 	# Granular profiling: only print when total > 2.5ms
 	var _t_total = (Time.get_ticks_usec() - _t0) / 1000.0
@@ -1599,7 +1673,7 @@ func _1v1_demolish(team: int, data: Dictionary):
 			var base_cfg = EntityDatabase.get_config(e.entity_id)
 			if not base_cfg.is_empty():
 				var cost = base_cfg.get("cost", {})
-				var res_dict = player_resources if team == RTSConfig.Team.BLUE else enemy_resources
+				var res_dict = get_resources_for(1) if team == RTSConfig.Team.BLUE else enemy_resources
 				for res in cost:
 					res_dict[res] += int(cost[res] * 0.5)
 			e.queue_free()
@@ -1659,6 +1733,33 @@ func _2v2_set_garrison(peer_id: int, data: Dictionary):
 				elif e is Building:
 					e.garrison_point = pos
 
+# ---------- 释放进驻单位 ----------
+func _ungarrison_soldiers_1v1(team: int, data: Dictionary):
+	for eid in data.get("selected_ids", []):
+		for e in entities.get_children():
+			if e.get_instance_id() == eid and e.team == team:
+				if e is Building and e.garrisoned_soldiers.size() > 0:
+					e.release_all_garrisoned()
+				elif e is Army and e.entity_id == 18 and e._ram_garrisoned_soldiers.size() > 0:
+					for uid in e._ram_garrisoned_soldiers.duplicate():
+						var unit = instance_from_id(uid)
+						if unit and is_instance_valid(unit):
+							unit._exit_soldier_garrison()
+				break
+
+func _ungarrison_soldiers_2v2(peer_id: int, data: Dictionary):
+	for eid in data.get("selected_ids", []):
+		for e in entities.get_children():
+			if e.get_instance_id() == eid and e.owner_peer_id == peer_id:
+				if e is Building and e.garrisoned_soldiers.size() > 0:
+					e.release_all_garrisoned()
+				elif e is Army and e.entity_id == 18 and e._ram_garrisoned_soldiers.size() > 0:
+					for uid in e._ram_garrisoned_soldiers.duplicate():
+						var unit = instance_from_id(uid)
+						if unit and is_instance_valid(unit):
+							unit._exit_soldier_garrison()
+				break
+
 func _1v1_recall_group(_t: int, data: Dictionary):
 	var sel = selection as SelectionManager
 	if sel:
@@ -1689,4 +1790,4 @@ func get_gather_paused(team: int) -> bool:
 
 # Override: 联机模式跳过每帧O(n^2)可见性检查（服务端不需要渲染）
 func _update_visibility():
-	pass
+	super._update_visibility()    # 调用父类迷雾遮罩逻辑，隐藏视野外单位

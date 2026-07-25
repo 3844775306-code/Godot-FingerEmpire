@@ -210,13 +210,23 @@ func _on_produce_pressed(unit_id: int):
 	if observed_entity_id == -1: return
 	var n = 5 if Input.is_key_pressed(KEY_SHIFT) else 1
 	var info = renderer.get_entity_info(observed_entity_id)
-	var inp = get_tree().get_first_node_in_group("client_input") as client_input
-	if inp and Input.is_key_pressed(KEY_CTRL):
-		for sid in inp.client_selected_ids:
-			var si = renderer.get_entity_info(sid)
-			if si.get("entity_id") == info.get("entity_id"):
+	if Input.is_key_pressed(KEY_CTRL):
+		# Ctrl: ALL player buildings of same type (match single-player behavior)
+		var target_eid = info.get("entity_id")
+		var my_peer = renderer.my_peer_id
+		var sent = false
+		for node in renderer.entity_nodes.values():
+			if not node.has_meta("snapshot_info"): continue
+			var si = node.get_meta("snapshot_info")
+			if not si: continue
+			if si.get("entity_id") == target_eid and si.get("health", 0) > 0:
+				if my_peer != -1 and si.get("owner_peer_id", -1) != my_peer: continue
 				for _i in range(n):
-					NetworkManager.send_command.rpc_id(1, {"action": "produce", "building_id": sid, "unit_id": unit_id, "ctrl_held": true, "shift_held": Input.is_key_pressed(KEY_SHIFT)})
+					NetworkManager.send_command.rpc_id(1, {"action": "produce", "building_id": si["id"], "unit_id": unit_id, "ctrl_held": true, "shift_held": Input.is_key_pressed(KEY_SHIFT)})
+				sent = true
+		if not sent:
+			for _i in range(n):
+				NetworkManager.send_command.rpc_id(1, {"action": "produce", "building_id": observed_entity_id, "unit_id": unit_id, "ctrl_held": true, "shift_held": Input.is_key_pressed(KEY_SHIFT)})
 	else:
 		for _i in range(n):
 			NetworkManager.send_command.rpc_id(1, {"action": "produce", "building_id": observed_entity_id, "unit_id": unit_id, "ctrl_held": false, "shift_held": Input.is_key_pressed(KEY_SHIFT)})
@@ -390,3 +400,8 @@ func _on_close_pressed():
 	_pending_multi_ids.clear()
 	_pending_multi_btns.clear()
 	visible = false; observed_entity_id = -1
+	var ci = get_tree().get_first_node_in_group("client_input") as client_input
+	if ci:
+		ci.client_selected_ids.clear()
+		ci._update_selection_visuals()
+		ci.emit_signal("selection_changed", [])

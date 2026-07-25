@@ -14,7 +14,13 @@ var battle: RTSBattleManager = null
 var demolish_btn: Button = null
 
 const RC = {"wood": "green", "stone": "gray", "gold": "gold", "food": "orange", "oil": "saddlebrown"}
-
+# 统一资源获取：在线模式用 get_host_resources()，单机用 player_resources
+func _get_res() -> Dictionary:
+	if not battle:
+		return {}
+	if battle.has_method("get_host_resources"):
+		return battle.get_host_resources()
+	return battle.player_resources
 func _ready():
 	visible = false
 	var s = StyleBoxFlat.new()
@@ -141,7 +147,7 @@ func update_info(entity: GameEntity):
 			for res in ["wood", "stone", "gold", "oil"]:
 				if cost.get(res, 0) > 0:
 					var need = cost[res]
-					var have = battle.player_resources.get(res, 0) if battle else 0
+					var have = _get_res().get(res, 0)
 					var rc = RC.get(res, "white")
 					var cc = "white" if have >= need else "red"
 					var l = _make_rtl_label()
@@ -173,7 +179,7 @@ func update_info(entity: GameEntity):
 					var base = uc["cost"][res]
 					var scaled = int(base * (1.0 + (lv - 1) * 0.2))
 					var need = scaled * batch_count
-					var have = battle.player_resources.get(res, 0) if battle else 0
+					var have = _get_res().get(res, 0)
 					if have < need: ok = false
 					cs.append({"res": res, "need": need})
 				btn.disabled = not ok
@@ -183,7 +189,7 @@ func update_info(entity: GameEntity):
 				var ct = ""
 				for ci in cs:
 					var rc = RC.get(ci.res, "white")
-					var cc = "white" if battle.player_resources.get(ci.res, 0) >= ci.need else "red"
+					var cc = "white" if _get_res().get(ci.res, 0) >= ci.need else "red"
 					ct += "[color=%s]%s[/color]:[color=%s]%d[/color] " % [rc, ci.res, cc, ci.need]
 				rtl.text = "%s  [%s]" % [uc.get("name", "?"), ct.strip_edges()]
 				btn.add_child(rtl)
@@ -376,3 +382,8 @@ func _on_demolish_pressed():
 
 func _on_close_pressed():
 	visible = false; observed_entity = null
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if bm:
+		var sel = bm.get_node_or_null("SelectionManager")
+		if sel and sel.has_method("_clear_selection"):
+			sel._clear_selection()
