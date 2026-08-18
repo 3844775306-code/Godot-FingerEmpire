@@ -101,6 +101,10 @@ func _rebuild_terrain_texture():
 	_tex_dirty = false
 
 func _draw():
+	# 在线模式下动态更新玩家队伍
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if bm and bm.has_method("get_host_team"):
+		player_team = bm.get_host_team()
 	if terrain_colors.is_empty() or explored_grid.is_empty():
 		return
 
@@ -113,11 +117,11 @@ func _draw():
 	if _terrain_tex:
 		draw_texture(_terrain_tex, Vector2.ZERO)
 
-	draw_rect(Rect2(Vector2.ZERO, Vector2(MINIMAP_SIZE, MINIMAP_SIZE)), Color(0.3, 0.55, 0.8, 0.9), false, 3)
+	draw_rect(Rect2(Vector2.ZERO, Vector2(MINIMAP_SIZE, MINIMAP_SIZE)), Color(UITheme.GOLD, UITheme.ALPHA_BG), false, UITheme.BORDER_THICK)
 
 	# 每次绘制时实时查询颜色，和战场实体同源
 	var pc = {}
-	var bm = get_tree().get_first_node_in_group("battle_manager")
+	bm = get_tree().get_first_node_in_group("battle_manager")
 	if bm and bm.has_method("get_player_colors"):
 		pc = bm.get_player_colors()
 
@@ -154,7 +158,7 @@ func _draw():
 		else:
 			dot_color = Color(1.0, 1.0, 0.4, 1.0)
 		var pos = Vector2(gx * cell, gz * cell)
-		draw_rect(Rect2(pos - Vector2(1, 1), Vector2(3, 3)), dot_color)
+		draw_rect(Rect2(pos - Vector2(2, 2), Vector2(5, 5)), dot_color)
 
 	# 战事警报
 	for alert in alert_signals:
@@ -162,8 +166,8 @@ func _draw():
 		var pulse = abs(sin(Time.get_ticks_msec() / 1000.0 / ALERT_PULSE_PERIOD * PI))
 		var radius = lerp(4.0, ALERT_MAX_RADIUS, 1.0 - progress) * (0.6 + 0.4 * pulse)
 		var alpha = progress * (0.7 + 0.3 * pulse)
-		var ring_color = Color(1.0, 0.15, 0.1, alpha)
-		draw_circle(alert["pos"], radius, Color(1.0, 0.2, 0.1, alpha * 0.25))
+		var ring_color = Color(UITheme.VERMILION, alpha)
+		draw_circle(alert["pos"], radius, Color(UITheme.VERMILION, alpha * 0.25))
 		draw_arc(alert["pos"], radius, 0, TAU, 32, ring_color, 2.0)
 
 func _gui_input(event):

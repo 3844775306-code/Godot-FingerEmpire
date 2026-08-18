@@ -69,6 +69,82 @@ func _input(event):
 			get_viewport().set_input_as_handled()
 			return
 
+		# F1~F3 全局命令
+		if key == KEY_F1:
+			select_all_military()
+			get_viewport().set_input_as_handled(); return
+		if key == KEY_F2 and bm:
+			bm.global_attack()
+			get_viewport().set_input_as_handled(); return
+		if key == KEY_F3 and bm:
+			bm.global_retreat()
+			get_viewport().set_input_as_handled(); return
+
+		# 无选中 → 快速建造
+		if selected_entities.is_empty() and not ctrl and not shift:
+			var build_id = -1
+			match key:
+				KEY_Q: build_id = 28; 
+				KEY_W: build_id = 22; 
+				KEY_E: build_id = 41
+				KEY_R: build_id = 52; 
+				KEY_T: build_id = 42; 
+				KEY_Y: build_id = 7;
+				KEY_A: build_id = 21; 
+				KEY_S: build_id = 23; 
+				KEY_D: build_id = 24
+				KEY_F: build_id = 29; 
+				KEY_G: build_id = 54; 
+				KEY_H: build_id = 53
+				KEY_Z: build_id = 27; 
+				KEY_X: build_id = 64; 
+				KEY_C: build_id = 25
+				KEY_V: build_id = 26; 
+				KEY_B: build_id = 8
+			if build_id != -1 and bm and bm.can_afford_building(build_id, RTSConfig.Team.BLUE):
+				bm.enter_build_mode(build_id)
+				get_viewport().set_input_as_handled(); return
+
+		# 选中建筑 → 命令卡热键
+		if selected_entities.size() == 1 and not ctrl and not shift:
+			var e = selected_entities[0]
+			if is_instance_valid(e) and e is Building:
+				var produces = e.production_list
+				var bid = e.get_instance_id()
+				var handled = true
+				match key:
+					KEY_Q: if produces.size() >= 1: bm.produce_unit(e, produces[0].unit_id)
+					KEY_W: if produces.size() >= 2: bm.produce_unit(e, produces[1].unit_id)
+					KEY_E: if produces.size() >= 3: bm.produce_unit(e, produces[2].unit_id)
+					KEY_R: if produces.size() >= 4: bm.produce_unit(e, produces[3].unit_id)
+					KEY_F: if produces.size() >= 5: bm.produce_unit(e, produces[4].unit_id)
+					KEY_A: bm.upgrade_building(e)
+					KEY_S: if e.entity_id != 20: bm.demolish_building(e)
+					KEY_D: bm.release_garrisoned(e)
+					_: handled = false
+				if handled:
+					get_viewport().set_input_as_handled(); return
+
+		# 选中军队 → 命令卡热键
+		if not selected_entities.is_empty() and not ctrl and not shift:
+			var army_selected = false
+			for e in selected_entities:
+				if is_instance_valid(e) and e is Army: army_selected = true; break
+			if army_selected and bm:
+				var handled = true
+				match key:
+					KEY_Q: bm.clear_orders_for_selected()
+					KEY_W: bm.toggle_attack_move_for_selected()
+					KEY_E: bm.garrison_nearest_for_selected()
+					KEY_R: _select_all_of_same_type(selected_entities[0])
+					KEY_A: bm.global_attack_selected()
+					KEY_S: bm.global_retreat_selected()
+					KEY_D: bm.ungarrison_selected()
+					KEY_F: bm.toggle_patrol_mode()
+					_: handled = false
+				if handled:
+					get_viewport().set_input_as_handled(); return
+
 		# 数字键 1-9
 		if key >= KEY_1 and key <= KEY_9:
 			var num = key - KEY_0  # 1-9
@@ -434,3 +510,55 @@ func _upgrade_selected():
 		if is_instance_valid(e) and e is Building and e.can_upgrade():
 			var bm = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
 			if bm: e.perform_upgrade(bm)
+
+# Tab/M/,/./Space helpers
+func _cycle_same_type_sp():
+	if selected_entities.is_empty(): select_all_military(); return
+	var current_eid = selected_entities[0].entity_id if selected_entities.size()==1 else -1
+	var candidates = []
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if bm:
+		bm._ensure_cache_fresh()
+		for e in bm._armies:
+			if e.health<=0 or e.entity_id==14: continue
+			if e.team != bm.get_host_team(): continue
+			if e.entity_id == current_eid: candidates.append(e)
+	if candidates.size()>0:
+		var idx = (candidates.find(selected_entities[0])+1) % candidates.size() if current_eid!=-1 and selected_entities.size()==1 else 0
+		_clear_selection()
+		selected_entities=[candidates[idx]]; candidates[idx].set_selected(true); _update_info_panel()
+
+func _jump_to_castle_sp():
+	var bm = get_tree().get_first_node_in_group("battle_manager"); if not bm: return
+	bm._ensure_cache_fresh()
+	for e in bm._buildings:
+		if e.entity_id==20 and e.team==bm.get_host_team():
+			var cam = get_viewport().get_camera_3d()
+			if cam: cam.global_position = Vector3(e.global_position.x, cam.global_position.y, e.global_position.z); return
+
+var _sp_last_space: float = 0.0
+func _handle_space_sp() -> bool:
+	var now = Time.get_ticks_msec()/1000.0
+	if now-_sp_last_space < 0.3 and not selected_entities.is_empty():
+		_sp_last_space = 0.0
+		var cam = get_viewport().get_camera_3d(); if not cam: return true
+		var avg=Vector3.ZERO; var cnt=0
+		for e in selected_entities:
+			if is_instance_valid(e): avg+=e.global_position; cnt+=1
+		if cnt>0: cam.global_position=Vector3(avg.x/cnt, cam.global_position.y, avg.z/cnt)
+		return true
+	_sp_last_space = now
+	return false
+
+func _cycle_idle_sp(filter_id: int):
+	var bm = get_tree().get_first_node_in_group("battle_manager"); if not bm: return
+	bm._ensure_cache_fresh()
+	var candidates=[]; var team=bm.get_host_team()
+	for e in bm._armies:
+		if e.health<=0: continue; if e.team!=team: continue
+		if filter_id==10 and e.entity_id!=10: continue
+		if filter_id==-1 and (e.entity_id==10 or e.entity_id==14): continue
+		if e.current_order in ["idle",""]: candidates.append(e)
+	if candidates.size()==0: return
+	_clear_selection()
+	selected_entities=[candidates[0]]; candidates[0].set_selected(true); _update_info_panel()

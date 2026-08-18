@@ -162,6 +162,14 @@ func _ready():
 	steam_status.add_theme_font_size_override("font_size", 14)
 	steam_status.add_theme_color_override("font_color", Color(0.5, 0.5, 0.5))
 	panel.add_child(steam_status)
+
+	# 主动检查 Steam 当前状态（弥补 Autoload 信号先于本节点发出的时序问题）
+	if SteamManager.steam_initialized:
+		_on_steam_ready()
+	elif not Engine.has_singleton("Steam"):
+		_on_steam_failed("Steam SDK not loaded, steam_api64.dll missing")
+	elif SteamManager.steam_initialized == false:
+		_on_steam_failed("Steam init failed - make sure Steam client is running")
 	
 	steam_lobby_list = ItemList.new()
 	steam_lobby_list.position = Vector2(rx, ry + 115); steam_lobby_list.size = Vector2(570, 120)

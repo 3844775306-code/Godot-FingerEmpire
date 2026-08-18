@@ -402,7 +402,11 @@ func _ready():
 		else:
 			call_deferred("_init_entities_deferred")   # 单机1v1原逻辑
 	if info_panel: info_panel.battle = self
+	# 命令卡覆盖层
+	var card = CommandCard.new(); card.name = "CommandCard"
+	$UI.add_child(card)
 	_create_game_over_panel()
+	set_process_input(true)
 	_create_game_timer()
 	_create_diag_label()
 	AudioManager.play_music("battle")
@@ -612,7 +616,8 @@ func upgrade_building_type(team: int, building_id: int, from_building: Building)
 			e.level = new_lv
 			e.max_health += upgrade.get("health_bonus", 0)
 			e.health = min(e.health + upgrade.get("health_bonus", 0), e.max_health)
-			e.armor += upgrade.get("armor_bonus", 0)
+			e.melee_armor += upgrade.get("melee_armor_bonus", upgrade.get("armor_bonus", 0))
+			e.shield_armor += upgrade.get("shield_armor_bonus", upgrade.get("armor_bonus", 0))
 			e.attack += upgrade.get("attack_bonus", 0)
 			# Unlock units
 			if e.building_data.has("produces") and e.building_data["produces"] is Array:
@@ -979,6 +984,10 @@ func deliver_resources(cargo: Dictionary, team: int):
 		add_resource(t, int(cargo[t] * mult), team)
 
 func _input(event):
+	# O键切换命令卡
+	if event is InputEventKey and event.pressed and event.keycode == KEY_O:
+		var cc = $UI.get_node_or_null("CommandCard")
+		if cc: cc.visible = not cc.visible
 	# Don't process clicks on interactive UI panels
 	if event is InputEventMouseButton:
 		if has_node("UI/InfoPanel"):
@@ -1768,6 +1777,7 @@ func _process(delta):
 		_limit_update_timer = 1.0
 		update_resource_limits(get_host_team())
 		update_resource_limits(RTSConfig.Team.RED)
+		_update_command_card_sp()
 		if game_mode_2v2:
 			for pid in ai_players.keys():
 				update_resource_limits(ai_players[pid].team)
@@ -1865,4 +1875,116 @@ func execute_rally(target_pos: Vector3):
 		if e is Army and e.team == get_host_team() and e.health > 0:
 			if e.entity_id != 10 and e.entity_id != 14:
 				e.move_to(target_pos)
-	set_rally_mode(false)
+
+# ---- 命令卡热键方法 (单机) ----
+func clear_orders_for_selected():
+	for e in selection.selected_entities:
+		if is_instance_valid(e) and e is Army:
+			e.current_target = null
+			e.current_order = ""
+			e._clear_command_queue()
+			if e.has_method("_ungarrison_official"): e._ungarrison_official()
+
+func toggle_attack_move_for_selected():
+	for e in selection.selected_entities:
+		if is_instance_valid(e) and e is Army:
+			e.is_attack_moving = not e.is_attack_moving
+
+func garrison_nearest_for_selected():
+	_ensure_cache_fresh()
+	var avg = _get_selected_avg_pos()
+	var best_dist = 30.0 * 30.0; var best_target: GameEntity = null
+	for entity in _all_entities:
+		if entity.team != RTSConfig.Team.BLUE: continue
+		var ok = (entity is Building and entity.entity_id in [20,21,22,23,24,25,26,29,41,42,52,53,54]) or (entity is Army and entity.entity_id in [9,18])
+		if not ok: continue
+		var d = entity.global_position.distance_squared_to(avg)
+		if d < best_dist: best_dist = d; best_target = entity
+	if best_target:
+		for e in selection.selected_entities:
+			if is_instance_valid(e) and e is Army:
+				e.set("_garrison_target_id", best_target.get_instance_id())
+				e.move_to(best_target.global_position)
+
+func global_attack():
+	var castle = get_enemy_castle_pos()
+	if castle == Vector3.ZERO: return
+	for e in selection.selected_entities:
+		if is_instance_valid(e) and e is Army: e.attack_move_to(castle)
+
+func global_retreat():
+	var castle = get_host_castle_pos()
+	if castle == Vector3.ZERO: return
+	for e in selection.selected_entities:
+		if is_instance_valid(e) and e is Army: e.move_to(castle)
+
+func global_attack_selected(): global_attack()
+func global_retreat_selected(): global_retreat()
+
+func get_enemy_castle_pos() -> Vector3:
+	for e in _all_entities:
+		if e is Building and e.entity_id == 20 and e.team != get_host_team(): return e.global_position
+	return Vector3.ZERO
+
+func get_host_castle_pos() -> Vector3:
+	for e in _all_entities:
+		if e is Building and e.entity_id == 20 and e.team == get_host_team(): return e.global_position
+	return Vector3.ZERO
+
+func ungarrison_selected():
+	for e in selection.selected_entities:
+		if is_instance_valid(e) and e is Army and e.has_method("_exit_soldier_garrison"):
+			e._exit_soldier_garrison()
+		if is_instance_valid(e) and e is Building and e.has_method("release_all_garrisoned"):
+			e.release_all_garrisoned()
+
+func toggle_patrol_mode():
+	print("[RTS] patrol mode stub")
+
+func produce_unit(building: Building, unit_id: int):
+	building.try_produce(unit_id)
+
+func upgrade_building(b: Building):
+	if b.has_method("start_upgrade"): b.start_upgrade()
+
+
+
+func release_garrisoned(b: Building):
+	if b.has_method("release_all_garrisoned"): b.release_all_garrisoned()
+
+func enter_build_mode(building_id: int):
+	_on_building_selected_for_build(building_id)
+
+func can_afford_building(build_id: int, team: int) -> bool:
+	var cfg = EntityDatabase.get_config(build_id)
+	if cfg.is_empty(): return false
+	var cost = cfg.get("cost", {})
+	if cost.is_empty(): return true
+	var res = player_resources if team == RTSConfig.Team.BLUE else enemy_resources
+	for k in cost:
+		if res.get(k, 0) < cost[k]: return false
+	return true
+
+func _get_selected_avg_pos() -> Vector3:
+	var p = Vector3.ZERO; var c = 0
+	for e in selection.selected_entities:
+		if is_instance_valid(e): p += e.global_position; c += 1
+	return p / c if c > 0 else Vector3.ZERO
+
+func _update_command_card_sp():
+	var cc = $UI.get_node_or_null("CommandCard")
+	if not cc or not cc.visible: return
+	if selection.selected_entities.size() == 1:
+		var e = selection.selected_entities[0]
+		if is_instance_valid(e) and e is Building:
+			cc.show_building(e.production_list, e.get_instance_id(), e.entity_id, self)
+		elif is_instance_valid(e) and e is Army:
+			cc.show_army()
+		else:
+			cc.hide_all()
+	elif selection.selected_entities.is_empty():
+		var clv = 1
+		for e in _buildings: if e.entity_id==20 and e.team==get_host_team(): clv = e.level; break
+		cc.show_construct(get_host_resources(), clv, self)
+	else:
+		cc.hide_all()

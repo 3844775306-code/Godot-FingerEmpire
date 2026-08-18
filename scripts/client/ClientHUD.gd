@@ -325,33 +325,15 @@ func _on_rally_pressed():
 		input_node.select_all_military()
 
 
-func _on_stop_gather_pressed():
-	NetworkManager.send_command.rpc_id(1, {"action": "stop_gather"})
-
-
-func _on_hold_position_pressed():
-	NetworkManager.send_command.rpc_id(1, {"action": "toggle_hold_position"})
-
+func _get_player_resource(res: String) -> int:
+	var renderer = get_tree().get_first_node_in_group("client_renderer")
+	if renderer: return renderer.get_player_resource(res)
+	return 0
 
 func _input(event):
 	if event is InputEventKey and event.pressed:
 		match event.keycode:
-			KEY_H: _on_stop_gather_pressed()
-			KEY_P: _on_hold_position_pressed()
-			KEY_R: _on_rally_pressed()
-			KEY_A: _on_attack_all_pressed()
-			KEY_S: _on_retreat_all_pressed()
-			KEY_SPACE: _on_space_pressed()
-
-func _on_space_pressed():
-	# 优先：尝试释放选中建筑的进驻单位
-	var input_node = get_tree().get_first_node_in_group("client_input")
-	if input_node and input_node.has_method("get_selected_ids"):
-		var sel_ids = input_node.get_selected_ids()
-		if not sel_ids.is_empty():
-			NetworkManager.send_command.rpc_id(1, {"action": "ungarrison_soldiers", "selected_ids": sel_ids.duplicate()})
-			return
-	_on_jump_to_alert()
+			_: pass  # Space等由ClientInput统一处理
 
 func _on_jump_to_alert():
 	var minimap = get_node_or_null("../Minimap") as Minimap
@@ -416,7 +398,7 @@ func _ready():
 
 	for i in range(RES_CFG.size()):
 		var cfg = RES_CFG[i]
-		var y = 10 + i * (ROW_H + 5)
+		var y = 1100 + i * (ROW_H + 5)
 		var col = cfg.color
 
 		var bg = Panel.new()
@@ -529,7 +511,7 @@ func _ready():
 	btn_theme.set_font_size("font_size", "Button", 24)
 
 	attack_all_btn = Button.new()
-	attack_all_btn.text = "全军进攻 (A)"
+	attack_all_btn.text = "全军进攻 (F2)"
 	attack_all_btn.position = Vector2(10, 470)
 	attack_all_btn.theme = btn_theme
 	attack_all_btn.custom_minimum_size = Vector2(180, 50)
@@ -537,36 +519,12 @@ func _ready():
 	add_child(attack_all_btn)
 
 	retreat_all_btn = Button.new()
-	retreat_all_btn.text = "全军撤退 (S)"
+	retreat_all_btn.text = "全军撤退 (F3)"
 	retreat_all_btn.position = Vector2(210, 470)
 	retreat_all_btn.theme = btn_theme
 	retreat_all_btn.custom_minimum_size = Vector2(180, 50)
 	retreat_all_btn.pressed.connect(_on_retreat_all_pressed)
 	add_child(retreat_all_btn)
-
-	var stop_gather_btn = Button.new()
-	stop_gather_btn.text = "暂停采集 (H)"
-	stop_gather_btn.position = Vector2(10, 540)
-	stop_gather_btn.theme = btn_theme
-	stop_gather_btn.custom_minimum_size = Vector2(180, 50)
-	stop_gather_btn.pressed.connect(_on_stop_gather_pressed)
-	add_child(stop_gather_btn)
-
-	var hold_position_btn = Button.new()
-	hold_position_btn.text = "原地防守 (P)"
-	hold_position_btn.position = Vector2(210, 540)
-	hold_position_btn.theme = btn_theme
-	hold_position_btn.custom_minimum_size = Vector2(180, 50)
-	hold_position_btn.pressed.connect(_on_hold_position_pressed)
-	add_child(hold_position_btn)
-
-	var rally_btn = Button.new()
-	rally_btn.text = "全选军队 (R)"
-	rally_btn.position = Vector2(10, 610)
-	rally_btn.theme = btn_theme
-	rally_btn.custom_minimum_size = Vector2(180, 50)
-	rally_btn.pressed.connect(_on_rally_pressed)
-	add_child(rally_btn)
 
 	# 创建单位统计面板
 	_create_unit_stats_panel()

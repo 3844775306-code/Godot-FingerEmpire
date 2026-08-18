@@ -1,3 +1,4 @@
+
 class_name GameEntity
 extends CharacterBody3D
 
@@ -11,7 +12,8 @@ var level: int = 1
 var hold_position: bool = false  
 var max_health: float = 100.0
 var health: float = 100.0
-var armor: float = 0.0
+var melee_armor: float = 0.0       # 铠甲：抵挡近战攻击 (target_type=2)
+var shield_armor: float = 0.0      # 盾牌：抵挡远程攻击 (target_type=3)
 var attack: float = 0.0
 var _last_damager: GameEntity = null
 var attack_speed: float = 1.0
@@ -96,7 +98,8 @@ func setup(config: Dictionary):
 	
 	max_health = config.get("max_health", 100.0)
 	health = max_health
-	armor = config.get("armor", 0)
+	melee_armor = config.get("melee_armor", config.get("armor", 0))
+	shield_armor = config.get("shield_armor", config.get("armor", 0))
 	attack = config.get("attack", 0)
 	attack_speed = config.get("attack_speed", 1.0)
 	attack_range = config.get("attack_range", 1.0)
@@ -145,7 +148,7 @@ func take_damage(amount: float, source: GameEntity = null):
 		var gb = get("_garrison_building")
 		if gb and gb.get_ref():
 			amount *=0.3
-	var eff_armor = armor
+	var eff_armor: float = melee_armor
 	if source:
 		_last_damager = source
 		# 动物被攻击后反击
@@ -153,6 +156,10 @@ func take_damage(amount: float, source: GameEntity = null):
 			self.set("_animal_retaliating", true)
 			self.set("_animal_attacker", source)
 			
+		# 远程攻击(target_type=3) → 使用盾牌护甲
+		if source.target_type == 3:
+			eff_armor = shield_armor
+
 		# 长枪兵无视军队护甲
 		if source.piercing and self is Army:
 			eff_armor = 0
@@ -163,8 +170,8 @@ func take_damage(amount: float, source: GameEntity = null):
 		if entity_id == 10 and source and source.get("_animal_type") != null and str(source.get("_animal_type")) != "":
 			amount = amount * 0.7
 
-	var reduction = eff_armor / (eff_armor + 100.0)
-	var actual_damage = amount * (1.0 - reduction)
+		# 减法护甲：实际伤害 = max(攻击力 - 护甲, 1)
+	var actual_damage = max(amount - eff_armor, 1.0)
 	health -= actual_damage
 	if source and source.attack_range <= 2.0 and actual_damage > 0 and not (self is WorldResource): _play_sfx_if_visible("sword_hit")
 	# 战事警报：己方单位被攻击时通知小地图和屏幕提示

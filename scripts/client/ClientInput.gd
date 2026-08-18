@@ -35,9 +35,6 @@ var player_team: int:
 		if renderer: return renderer.player_team
 		return -1
 
-# 集结模式
-var rally_mode: bool = false
-
 # 用于建造预览的世界坐标
 var last_world_pos: Vector3 = Vector3.ZERO
 
@@ -124,6 +121,121 @@ func _input(event):
 		var shift = event.shift_pressed
 
 		# Delete键 → 拆除建筑
+
+		# 无选中时 → 快速建造快捷键
+		if client_selected_ids.is_empty() and not ctrl and not shift:
+			var build_id = -1
+			match key:
+				KEY_Q: build_id = 28
+				KEY_W: build_id = 22
+				KEY_E: build_id = 41
+				KEY_R: build_id = 52
+				KEY_T: build_id = 42
+				KEY_Y: build_id = 7
+				KEY_A: build_id = 21
+				KEY_S: build_id = 23
+				KEY_D: build_id = 24
+				KEY_F: build_id = 29
+				KEY_G: build_id = 54
+				KEY_H: build_id = 53
+				KEY_Z: build_id = 27
+				KEY_X: build_id = 64
+				KEY_C: build_id = 25
+				KEY_V: build_id = 26
+				KEY_B: build_id = 8
+			if build_id != -1 and _can_afford_building(build_id):
+				renderer.start_build_placement(build_id)
+				get_viewport().set_input_as_handled()
+				return
+
+			# F1~F3 全局命令
+			if key == KEY_F1:
+				select_all_military()
+				get_viewport().set_input_as_handled(); return
+			if key == KEY_F2:
+				NetworkManager.send_command.rpc_id(1, {"action": "global_attack", "selected_ids": []})
+				get_viewport().set_input_as_handled(); return
+			if key == KEY_F3:
+				NetworkManager.send_command.rpc_id(1, {"action": "global_retreat", "selected_ids": []})
+				get_viewport().set_input_as_handled(); return
+
+			# F4 全军驻扎  F5 统计面板
+			if key == KEY_F4:
+				NetworkManager.send_command.rpc_id(1, {"action": "toggle_hold_position"})
+				get_viewport().set_input_as_handled(); return
+			if key == KEY_F5:
+				_toggle_stats_panel()
+				get_viewport().set_input_as_handled(); return
+			if key == KEY_F6:
+				print("[ClientInput] F6: AI决策面板 (未实现)")
+				get_viewport().set_input_as_handled(); return
+			if key == KEY_F7:
+				print("[ClientInput] F7: 外交面板 (未实现)")
+				get_viewport().set_input_as_handled(); return
+			if key == KEY_F8:
+				print("[ClientInput] F8: 设置面板 (未实现)")
+				get_viewport().set_input_as_handled(); return
+
+			# Tab 同类循环  M 主城  ,.; 循环闲置
+			if key == KEY_TAB and not ctrl:
+				_cycle_same_type()
+				get_viewport().set_input_as_handled(); return
+			if key == KEY_M and not ctrl:
+				_jump_to_castle()
+				get_viewport().set_input_as_handled(); return
+			if key == KEY_COMMA:
+				_cycle_idle(10)
+				get_viewport().set_input_as_handled(); return
+			if key == KEY_PERIOD:
+				_cycle_idle(-1)
+				get_viewport().set_input_as_handled(); return
+
+			# 双击空格: 视角居中选中
+			if key == KEY_SPACE and not ctrl:
+				_handle_space()
+				get_viewport().set_input_as_handled(); return
+
+		# 命令卡网格热键（选中建筑时）
+		if client_selected_ids.size() == 1 and not ctrl and not shift:
+			var sel_info = _get_entity_info(client_selected_ids[0])
+			if sel_info.get("type") == 1:
+				var b_cfg = EntityDatabase.get_config(sel_info.get("entity_id", -1))
+				var produces = b_cfg.get("produces", [])
+				var bid = client_selected_ids[0]
+				match key:
+					KEY_Q: if produces.size() >= 1: _send_produce(bid, produces[0]["unit_id"])
+					KEY_W: if produces.size() >= 2: _send_produce(bid, produces[1]["unit_id"])
+					KEY_E: if produces.size() >= 3: _send_produce(bid, produces[2]["unit_id"])
+					KEY_R: if produces.size() >= 4: _send_produce(bid, produces[3]["unit_id"])
+					KEY_F: if produces.size() >= 5: _send_produce(bid, produces[4]["unit_id"])
+					KEY_A: NetworkManager.send_command.rpc_id(1, {"action":"upgrade","building_id":bid})
+					KEY_S: if sel_info.get("entity_id") != 20: NetworkManager.send_command.rpc_id(1, {"action":"demolish","building_id":bid})
+					KEY_D: NetworkManager.send_command.rpc_id(1, {"action":"ungarrison_soldiers","selected_ids":[bid]})
+					_: pass
+				if key in [KEY_Q,KEY_W,KEY_E,KEY_R,KEY_F,KEY_A,KEY_S,KEY_D]:
+					get_viewport().set_input_as_handled(); return
+
+		# 命令卡网格热键（选中军队时）
+		if not client_selected_ids.is_empty() and not ctrl and not shift:
+			var army_selected = false
+			for sid in client_selected_ids:
+				if _get_entity_info(sid).get("type") == 2:
+					army_selected = true; break
+			if army_selected:
+				var handled = true
+				match key:
+					KEY_Q: NetworkManager.send_command.rpc_id(1, {"action":"clear_order","selected_ids":client_selected_ids.duplicate()})
+					KEY_W: NetworkManager.send_command.rpc_id(1, {"action":"toggle_attack_move","selected_ids":client_selected_ids.duplicate()})
+					KEY_E: _garrison_nearest()
+					KEY_R: _select_all_of_same_type(client_selected_ids[0], _get_entity_info(client_selected_ids[0]))
+					KEY_A: NetworkManager.send_command.rpc_id(1, {"action":"global_attack","selected_ids":client_selected_ids.duplicate()})
+					KEY_S: NetworkManager.send_command.rpc_id(1, {"action":"global_retreat","selected_ids":client_selected_ids.duplicate()})
+					KEY_D: NetworkManager.send_command.rpc_id(1, {"action":"ungarrison_soldiers","selected_ids":client_selected_ids.duplicate()})
+					KEY_F: _toggle_patrol_mode()
+					_: handled = false
+				if handled:
+					get_viewport().set_input_as_handled(); return
+
 		if key == KEY_DELETE:
 			for eid in client_selected_ids.duplicate():
 				var info = _get_entity_info(eid)
@@ -241,26 +353,19 @@ func _input(event):
 					_send_left_click(event)
 					return
 
-			# Alt+左键点击己方实体 + 有官员被选中 → 发送右击命令（官员进驻建筑）
-			if Input.is_key_pressed(KEY_ALT) and not client_selected_ids.is_empty() and clicked_id != -1:
-				var alt_info = _get_entity_info(clicked_id)
-				if alt_info and alt_info.get("health", 0) > 0:
+			# Ctrl+左键点击己方建筑 → 进驻（官员/农民/军队统一）
+			if Input.is_key_pressed(KEY_CTRL) and not client_selected_ids.is_empty() and clicked_id != -1:
+				var tgt_info = _get_entity_info(clicked_id)
+				if tgt_info and tgt_info.get("health", 0) > 0:
 					var is_friendly = false
 					if renderer.my_peer_id != -1:
-						is_friendly = alt_info.get("owner_peer_id", -1) == renderer.my_peer_id
+						is_friendly = tgt_info.get("owner_peer_id", -1) == renderer.my_peer_id
 					else:
-						is_friendly = alt_info.get("team", -1) == renderer.player_team
-					if is_friendly:
-						var has_official = false
-						for sid in client_selected_ids:
-							var sinfo = _get_entity_info(sid)
-							if sinfo and sinfo.get("entity_id", -1) >= 46 and sinfo.get("entity_id", -1) <= 50:
-								has_official = true
-								break
-						if has_official:
-							_send_left_click(event)
-							get_viewport().set_input_as_handled()
-							return
+						is_friendly = tgt_info.get("team", -1) == renderer.player_team
+					if is_friendly and tgt_info.get("type") == 1:
+						_send_left_click(event)
+						get_viewport().set_input_as_handled()
+						return
 
 			# 点击己方实体 → 选中
 			if clicked_id != -1:
@@ -375,7 +480,7 @@ func _unhandled_input(event):
 	# 右键 → 命令/建造（照搬单机版：_unhandled_input 只处理右键）
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
 		# Alt+右键 → 清除驻扎点
-		if Input.is_key_pressed(KEY_ALT) and not client_selected_ids.is_empty():
+		if Input.is_key_pressed(KEY_CTRL) and not client_selected_ids.is_empty():
 			var hit_id = _get_entity_id_under_mouse(event.position)
 			if hit_id == -1:
 				NetworkManager.send_command.rpc_id(1, {"action": "clear_garrison", "selected_ids": client_selected_ids.duplicate()})
@@ -650,5 +755,142 @@ func _check_adjacent_water(world_pos: Vector3) -> bool:
 	return false
 
 # ---------- 集结模式 ----------
-func enable_rally_mode(): rally_mode = true
-func disable_rally_mode(): rally_mode = false
+
+# 检查是否负担得起建筑
+func _can_afford_building(build_id: int) -> bool:
+	var cfg = EntityDatabase.get_config(build_id)
+	if cfg.is_empty(): return false
+	# 解锁检查
+	var clv = renderer.get_player_castle_level() if renderer else 1
+	const REQ = {23:2, 25:2, 26:2, 24:3, 29:3, 52:3, 42:3, 53:4, 54:4}
+	if REQ.has(build_id) and clv < REQ[build_id]: return false
+	var cost = cfg.get("cost", {})
+	if cost.is_empty(): return true
+	var hud = _get_client_hud()
+	if not hud: return true
+	for res in cost:
+		var have = hud._get_player_resource(res)
+		if have < cost[res]: return false
+	return true
+
+
+
+
+# 进驻最近的可进驻建筑/攻城车/运载船
+func _garrison_nearest():
+	if not renderer: return
+	var best_dist = 30.0 * 30.0; var best_target = null; var best_id = -1
+	for node in renderer.entity_nodes.values():
+		if not node.has_meta("snapshot_info"): continue
+		var info = node.get_meta("snapshot_info")
+		var eid = info.get("entity_id", -1)
+		# 建筑(有进驻槽)、攻城车、运载船
+		var garrisonable = (info.get("type") == 1 and eid in [20,21,22,23,24,25,26,29,41,42,52,53,54]) or eid == 18 or eid == 9
+		if not garrisonable: continue
+		# 检查是否是己方
+		var friendly = (renderer.my_peer_id != -1 and info.get("owner_peer_id", -1) == renderer.my_peer_id)
+		if not friendly and renderer.my_peer_id == -1: friendly = info.get("team", -1) == renderer.player_team
+		if not friendly: continue
+		var d = node.global_position.distance_squared_to(_get_avg_selected_pos())
+		if d < best_dist: best_dist = d; best_target = node; best_id = info["id"]
+	if best_target:
+		var cmd = {"action":"right_click","selected_ids":client_selected_ids.duplicate(),"target_id":best_id,"pos_x":best_target.global_position.x,"pos_y":best_target.global_position.y,"pos_z":best_target.global_position.z,"shift_held":false,"formation_offsets":[]}
+		NetworkManager.send_command.rpc_id(1, cmd)
+
+func _get_avg_selected_pos() -> Vector3:
+	var pos = Vector3.ZERO; var cnt = 0
+	for sid in client_selected_ids:
+		var node = renderer.entity_nodes.get(sid)
+		if node: pos += node.global_position; cnt += 1
+	return pos / cnt if cnt > 0 else Vector3.ZERO
+
+# 巡逻模式切换
+var _patrol_mode: bool = false
+func _toggle_patrol_mode():
+	_patrol_mode = not _patrol_mode
+	var chud = _get_client_hud()
+	if chud and chud.has_method("show_alert_message"):
+		chud.show_alert_message("巡逻模式: " + ("开启(点击设置巡逻点)" if _patrol_mode else "关闭"), Color(0.3, 1.0, 0.5) if _patrol_mode else Color(0.5,0.5,0.5))
+
+func _send_produce(bid: int, uid: int):
+	NetworkManager.send_command.rpc_id(1, {"action":"produce","building_id":bid,"unit_id":uid,"ctrl_held":false,"shift_held":false})
+
+# Tab: 同类循环选择
+func _cycle_same_type():
+	if client_selected_ids.is_empty():
+		select_all_military()
+		return
+	var current_eid = -1
+	if client_selected_ids.size() == 1:
+		current_eid = _get_entity_info(client_selected_ids[0]).get("entity_id", -1)
+	var candidates = []
+	for node in renderer.entity_nodes.values():
+		if not node.has_meta("snapshot_info"): continue
+		var inf = node.get_meta("snapshot_info")
+		if inf.get("type") != 2: continue
+		if inf.get("health",0) <= 0: continue
+		if renderer.my_peer_id != -1 and inf.get("owner_peer_id",-1) != renderer.my_peer_id: continue
+		if inf.get("entity_id") == current_eid: candidates.append(inf["id"])
+	if candidates.size() > 0:
+		client_selected_ids = [candidates[0] if current_eid == -1 else candidates[(candidates.find(client_selected_ids[0])+1) % candidates.size()]]
+		_update_selection_visuals()
+		emit_signal("selection_changed", client_selected_ids.duplicate())
+
+# M: 跳转主城
+func _jump_to_castle():
+	var cam = get_viewport().get_camera_3d(); if not cam: return
+	for node in renderer.entity_nodes.values():
+		if not node.has_meta("snapshot_info"): continue
+		var inf = node.get_meta("snapshot_info")
+		if inf.get("entity_id") == 20 and inf.get("type") == 1:
+			if renderer.my_peer_id != -1 and inf.get("owner_peer_id",-1) != renderer.my_peer_id: continue
+			cam.global_position = Vector3(node.global_position.x, cam.global_position.y, node.global_position.z); return
+
+# Space: 单击跳警报 / 双击居中选中
+var _last_space_time: float = 0.0
+func _handle_space() -> bool:
+	var now = Time.get_ticks_msec() / 1000.0
+	if now - _last_space_time < DOUBLE_TAP_THRESHOLD and not client_selected_ids.is_empty():
+		_last_space_time = 0.0
+		var cam = get_viewport().get_camera_3d(); if not cam: return true
+		var avg = Vector3.ZERO; var cnt = 0
+		for sid in client_selected_ids:
+			var node = renderer.entity_nodes.get(sid)
+			if node: avg += node.global_position; cnt += 1
+		if cnt > 0: cam.global_position = Vector3(avg.x/cnt, cam.global_position.y, avg.z/cnt)
+		return true
+	_last_space_time = now
+	# 单击：跳警报
+	var minimap = renderer.get_node_or_null("../Minimap")
+	if minimap and minimap.has_method("_on_jump_to_alert"):
+		return false  # let HUD handle it
+	var chud = _get_client_hud()
+	if chud and chud.has_method("_on_jump_to_alert"):
+		chud._on_jump_to_alert()
+	return true
+
+# , 循环闲置农民 / . 循环闲置军事
+var _idle_idx: Dictionary = {}
+func _cycle_idle(filter_id: int):
+	if not _idle_idx.has(filter_id): _idle_idx[filter_id] = -1
+	var candidates = []
+	for node in renderer.entity_nodes.values():
+		if not node.has_meta("snapshot_info"): continue
+		var inf = node.get_meta("snapshot_info")
+		if inf.get("type") != 2: continue
+		if inf.get("health",0) <= 0: continue
+		if renderer.my_peer_id != -1 and inf.get("owner_peer_id",-1) != renderer.my_peer_id: continue
+		var eid = inf.get("entity_id", -1)
+		if filter_id == 10 and eid != 10: continue  # 仅农民
+		if filter_id == -1 and (eid == 10 or eid == 14): continue  # 非农民/采集船
+		if inf.get("current_order","") in ["idle",""]: candidates.append(inf["id"])
+	if candidates.size() == 0: return
+	_idle_idx[filter_id] = (_idle_idx[filter_id] + 1) % candidates.size()
+	client_selected_ids = [candidates[_idle_idx[filter_id]]]
+	_update_selection_visuals()
+	emit_signal("selection_changed", client_selected_ids.duplicate())
+
+# F5: 切换统计面板
+func _toggle_stats_panel():
+	var hud = _get_client_hud()
+	if hud and hud.has_method("_on_toggle_stats_pressed"): hud._on_toggle_stats_pressed()

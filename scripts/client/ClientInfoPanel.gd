@@ -121,7 +121,10 @@ func update_info(entity_id: int):
 		bt_str += "\n[color=purple]升级中[/color]:  %.0f%%" % (100.0 * (1.0 - ut / mut))
 	var t = "[color=%s]HP[/color]:  [color=white]%d / %d[/color]%s\n" % [hc, info["health"], info["max_health"], bt_str]
 	t += "[color=orange]ATK[/color]:  [color=white]%d[/color]" % info["attack"]
-	if info.get("armor", 0) > 0: t += "\n[color=steelblue]ARMOR[/color]:  [color=white]%d[/color]" % info["armor"]
+	if info.get("melee_armor", 0) > 0 or info.get("shield_armor", 0) > 0:
+		t += "
+		
+	[color=steelblue]铠甲/盾牌[/color]:  [color=white]%d/%d[/color]" % [info.get("melee_armor", 0), info.get("shield_armor", 0)]
 	t += "\n[color=gold]RANGE[/color]:  [color=white]%.1f[/color]" % info.get("attack_range", 0.0)
 	t += "\n[color=royalblue]SPEED[/color]:  [color=white]%.1f[/color]" % info.get("speed", 0.0)
 	stats_rtl.text = t

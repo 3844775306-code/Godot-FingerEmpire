@@ -1,6 +1,6 @@
 class_name ClientRenderer
 extends Node3D
-enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ATTACK_SPEED, ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH, GARRISONED }
+enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ATTACK_SPEED, MELEE_ARMOR, SHIELD_ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH, GARRISONED }
 enum EB { UPGRADE=0, MAX_UPGRADE, CAN_UPGRADE, BUILD_TIMER, MAX_BUILD, PROD_CURRENT, PROD_PROGRESS, PROD_QSIZE, UPGRADE_TIMER, MAX_UPGRADE_TIME, GARRISON_COUNT }
 var last_applied_seq = -1
 # ==================== 玩家信息 ====================
@@ -97,6 +97,11 @@ func _ready():
 		add_child(_snap_time_label)
 	_init_fog_grids()
 
+	# 小地图右下角
+	await get_tree().process_frame
+	var mm = get_node_or_null("UI/Minimap")
+	if mm: mm.position = Vector2(2000, 10)
+
 	# 建造预览体
 	placement_preview = MeshInstance3D.new()
 	var box = BoxMesh.new()
@@ -117,63 +122,72 @@ func _ready():
 	# 将预览体移到所有子节点的最上层（在场景树中）
 	move_child(placement_preview, get_child_count() - 1)
 
-	# 选择信号 → InfoPanel
+	# 命令卡覆盖层
+	var card = CommandCard.new(); card.name = "CommandCard"
+	$UI.add_child(card)
+
+	# 选择信号 → InfoPanel + CommandCard
 	if $ClientInput:
 		$ClientInput.selection_changed.connect(func(ids: Array):
 			var panel = $UI/InfoPanel as ClientInfoPanel
 			if panel:
 				if ids.size() == 1:
 					panel.update_info(ids[0])
-				
 				elif ids.size() > 1:
 					panel.show_multi_selection(ids)
 				else:
 					panel.visible = false
+			var cc = $UI.get_node_or_null("CommandCard")
+			if cc: _update_command_card(cc, ids)
 			)
 
-		# 建造请求信号
-		$ClientInput.build_requested.connect(func(wpos: Vector3):
-			var menu = $UI/BuildMenu as ClientBuildMenu
-			if menu:
-				var cam = get_viewport().get_camera_3d()
-				if cam:
-					menu.popup_at(wpos, cam.unproject_position(wpos))
+	# O键切换命令卡
+	set_process_input(true)
+
+	# 建造请求信号
+	$ClientInput.build_requested.connect(func(wpos: Vector3):
+		var menu = $UI/BuildMenu as ClientBuildMenu
+		if menu:
+			var cam = get_viewport().get_camera_3d()
+			if cam:
+				menu.popup_at(wpos, cam.unproject_position(wpos))
+	)
+
+	# 建造菜单发射“放置开始”信号
+	if $UI/BuildMenu:
+		$UI/BuildMenu.build_placement_started.connect(func(bid: int):
+			start_build_placement(bid)
 		)
 
-		# 建造菜单发射“放置开始”信号
-		if $UI/BuildMenu:
-			$UI/BuildMenu.build_placement_started.connect(func(bid: int):
-				placement_mode = true
-				placement_building_id = bid
-				var cfg = EntityDatabase.get_config(bid)
-				if cfg.is_empty(): return
-				# Remove old model children
-				for c in placement_preview.get_children():
-					c.queue_free()
-				# Load 3D model
-				var model_path = RTSConfig.get_entity_model(bid)
-				if model_path != "" and ResourceLoader.exists(model_path):
-					var s = load(model_path)
-					if s:
-						var inst = s.instantiate()
-						inst.name = "PreviewModel"
-						placement_preview.mesh = null
-						placement_preview.add_child(inst)
-				# Fallback BoxMesh
-				if placement_preview.get_child_count() == 0:
-					box = BoxMesh.new()
-					box.size = Vector3(cfg.body_radius*2, cfg.body_radius*1.5, cfg.body_radius*2)
-					placement_preview.mesh = box
-				# Scale to match building size
-				var target_size = cfg.body_radius * 2.0
-				var aabb = _get_model_aabb(placement_preview)
-				var current_size = max(aabb.size.x, max(aabb.size.y, aabb.size.z))
-				if current_size > 0.01: placement_preview.scale = Vector3.ONE * (target_size / current_size)
-				if bid in [22, 27, 28]: placement_preview.rotation.y = deg_to_rad(90)
-				if bid == 18: placement_preview.rotation.y = deg_to_rad(-90)
-				_tint_preview(placement_preview, Color(0, 1, 0))
-				placement_preview.visible = true
-			)
+func start_build_placement(bid: int):
+	placement_mode = true
+	placement_building_id = bid
+	var cfg = EntityDatabase.get_config(bid)
+	if cfg.is_empty(): return
+	for c in placement_preview.get_children():
+		c.queue_free()
+	var model_path = RTSConfig.get_entity_model(bid)
+	if model_path != "" and ResourceLoader.exists(model_path):
+		var s = load(model_path)
+		if s:
+			var inst = s.instantiate()
+			inst.name = "PreviewModel"
+			placement_preview.mesh = null
+			placement_preview.add_child(inst)
+	if placement_preview.get_child_count() == 0:
+		var box = BoxMesh.new()
+		box.size = Vector3(cfg.body_radius*2, cfg.body_radius*1.5, cfg.body_radius*2)
+		placement_preview.mesh = box
+	var target_size = cfg.body_radius * 2.0
+	var aabb = _get_model_aabb(placement_preview)
+	var current_size = max(aabb.size.x, max(aabb.size.y, aabb.size.z))
+	if current_size > 0.01: placement_preview.scale = Vector3.ONE * (target_size / current_size)
+	if bid in [22, 27, 28]: placement_preview.rotation.y = deg_to_rad(90)
+	if bid == 18: placement_preview.rotation.y = deg_to_rad(-90)
+	_tint_preview(placement_preview, Color(0, 1, 0))
+	placement_preview.visible = true
+
+			
 
 	# Start battle music
 	AudioManager.play_music("battle")
@@ -217,6 +231,27 @@ func get_player_castle_level() -> int:
 			if lv > max_lv:
 				max_lv = lv
 	return max_lv
+
+func _update_command_card(cc, ids: Array):
+	if ids.size() == 1:
+		var info = get_entity_info(ids[0])
+		if info.get("type") == 1:
+			var cfg = EntityDatabase.get_config(info.get("entity_id",-1))
+			cc.show_building(cfg.get("produces",[]), ids[0], info.get("entity_id",-1), null)
+		elif info.get("type") == 2:
+			cc.show_army()
+		else:
+			cc.hide_all()
+	elif ids.is_empty():
+		var clv = get_player_castle_level()
+		cc.show_construct({"gold":get_player_resource("gold"),"wood":get_player_resource("wood"),"stone":get_player_resource("stone"),"food":get_player_resource("food"),"oil":get_player_resource("oil")}, clv, null)
+	else:
+		cc.hide_all()
+
+func _input(event):
+	if event is InputEventKey and event.pressed and event.keycode == KEY_O:
+		var cc = $UI.get_node_or_null("CommandCard")
+		if cc: cc.visible = not cc.visible
 
 func get_entity_info(id: int) -> Dictionary:
 	var node = entity_nodes.get(id)
@@ -470,7 +505,8 @@ func _update_single_entity(info):
 			"id": arr[E.ID], "entity_id": arr[E.EID], "type": arr[E.TYPE],
 			"team": arr[E.TEAM], "x": arr[E.X], "y": arr[E.Y], "z": arr[E.Z],
 			"health": arr[E.HEALTH], "max_health": arr[E.MAX_HEALTH],
-			"attack": arr[E.ATTACK], "attack_speed": arr[E.ATTACK_SPEED] if arr.size() > E.ATTACK_SPEED else 1.0, "armor": arr[E.ARMOR], "speed": arr[E.SPEED],
+				"attack": arr[E.ATTACK], "attack_speed": arr[E.ATTACK_SPEED] if arr.size() > E.ATTACK_SPEED else 1.0,
+				"melee_armor": arr[E.MELEE_ARMOR], "shield_armor": arr[E.SHIELD_ARMOR],
 			"vision_range": arr[E.VISION], "body_radius": arr[E.BODY_R],
 			"target_type": arr[E.TARGET_TYPE], "owner_peer_id": arr[E.OWNER],
 			"level": arr[E.LEVEL], "current_order": arr[E.ORDER],
@@ -753,8 +789,10 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 		elif info.get("entity_id", 0) == 16: loaded_model.rotation.y = deg_to_rad(180)
 		elif info.get("entity_id", 0) == 17: loaded_model.rotation.y = deg_to_rad(90)
 		elif info.get("entity_id", 0) == 18: loaded_model.rotation.y = deg_to_rad(90)
-		if info.get("entity_id", 0) in [25, 26, 33]: loaded_model.scale *= 2.0
-		# Towers bigger
+		if info.get("entity_id", 0) in [25, 26]: loaded_model.scale *= 0.5
+		# 诸葛连弩保持放大
+		if info.get("entity_id", 0) == 33: loaded_model.scale *= 2.0
+		if info.get("entity_id", 0) == 33: loaded_model.scale *= 1.5
 		if info.get("entity_id", 0) in [25, 26, 33]: loaded_model.scale *= 1.5
 		entity.add_child(loaded_model)
 		# 队伍色着色

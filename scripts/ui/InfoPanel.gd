@@ -120,7 +120,9 @@ func update_info(entity: GameEntity):
 	var hc = _hc(pct)
 	var t = "[color=%s]HP[/color]:  [color=white]%d / %d[/color]\n" % [hc, entity.health, entity.max_health]
 	t += "[color=orange]ATK[/color]:  [color=white]%d[/color]" % entity.attack
-	if entity.armor > 0: t += "\n[color=steelblue]ARMOR[/color]:  [color=white]%d[/color]" % entity.armor
+	if entity.melee_armor > 0 or entity.shield_armor > 0:
+		t += "
+	[color=steelblue]铠甲[/color]:  [color=white]%d[/color]  [color=darkgray]盾牌[/color]:  [color=white]%d[/color]" % [entity.melee_armor, entity.shield_armor]
 	t += "\n[color=gold]RANGE[/color]:  [color=white]%.1f[/color]" % entity.attack_range
 	t += "\n[color=royalblue]SPEED[/color]:  [color=white]%.1f[/color]" % entity.speed
 	stats_rtl.text = t

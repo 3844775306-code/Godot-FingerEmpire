@@ -5,7 +5,7 @@ extends RTSBattleManager
 var game_mode: int = NetworkManager.GameMode.ONEvONE
 
 # Compact entity array indices (no string keys = faster + smaller)
-enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ATTACK_SPEED, ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH, GARRISONED }
+enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ATTACK_SPEED, MELEE_ARMOR, SHIELD_ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH, GARRISONED }
 enum EB { UPGRADE=0, MAX_UPGRADE, CAN_UPGRADE, BUILD_TIMER, MAX_BUILD, PROD_CURRENT, PROD_PROGRESS, PROD_QSIZE, UPGRADE_TIMER, MAX_UPGRADE_TIME, GARRISON_COUNT }
 const SNAP_VERSION = 4  # 4 = added GARRISONED (Army) + GARRISON_COUNT (Building)
 
@@ -1343,7 +1343,6 @@ func _broadcast_1v1():
 		var data = build_snapshot_for_team(team)
 		data["bullets"] = bullets_data
 		data["seq"] = snapshot_seq
-		data["audio_events"] = AudioManager.drain_net_audio()
 		snapshot_seq += 1
 		NetworkManager._client_receive_snapshot.rpc_id(pid, data)
 		var _elapsed_p = (Time.get_ticks_usec() - _pt_build) / 1000.0
@@ -1363,7 +1362,8 @@ func _serialize_entity_compact(entity: GameEntity) -> Array:
 	a[E.MAX_HEALTH] = entity.max_health
 	a[E.ATTACK] = entity.attack
 	a[E.ATTACK_SPEED] = entity.attack_speed
-	a[E.ARMOR] = entity.armor
+	a[E.MELEE_ARMOR] = entity.melee_armor
+	a[E.SHIELD_ARMOR] = entity.shield_armor
 	a[E.SPEED] = entity.speed
 	a[E.VISION] = entity.vision_range
 	a[E.BODY_R] = entity.body_radius
@@ -1419,7 +1419,8 @@ func _serialize_entity(entity: GameEntity) -> Dictionary:
 		"attack": entity.attack,
 		"attack_speed": entity.attack_speed,
 		"attack_range": entity.attack_range,
-		"armor": entity.armor,
+			"melee_armor": entity.melee_armor,
+			"shield_armor": entity.shield_armor,
 		"speed": entity.speed,
 		"vision_range": entity.vision_range,
 		"target_type": entity.target_type,

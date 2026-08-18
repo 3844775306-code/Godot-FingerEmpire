@@ -192,7 +192,8 @@ func _finish_construction():
 		vision_range = building_data["vision_range"]
 	else:
 		vision_range = 10.0
-	armor = building_data.get("armor", 0)
+		melee_armor = building_data.get("melee_armor", building_data.get("armor", 0))
+		shield_armor = building_data.get("shield_armor", building_data.get("armor", 0))
 	attack = building_data.get("attack", 0)
 	garrison_max = get_garrison_limit()
 	# Inherit global building type level - apply bonuses on top of base
@@ -205,7 +206,8 @@ func _finish_construction():
 					var ug = upgrade_data[lv - 1]
 					max_health += ug.get("health_bonus", 0)
 					health += ug.get("health_bonus", 0)
-					armor += ug.get("armor_bonus", 0)
+					melee_armor += ug.get("melee_armor_bonus", ug.get("armor_bonus", 0))
+					shield_armor += ug.get("shield_armor_bonus", ug.get("armor_bonus", 0))
 					attack += ug.get("attack_bonus", 0)
 			upgrade_level = glv
 			level = glv

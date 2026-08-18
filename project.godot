@@ -25,6 +25,7 @@ ThemeHelper="*res://scripts/ui/ThemeHelper.gd"
 GameSettings="*res://scripts/core/GameSettings.gd"
 AudioManager="*res://scripts/core/AudioManager.gd"
 Profiler="*res://scripts/core/Profiler.gd"
+SteamManager="*res://scripts/core/SteamManager.gd"
 
 [display]
 
@@ -37,6 +38,10 @@ window/stretch/aspect="expand"
 
 version_control/plugin_name="GitPlugin"
 version_control/autoload_on_startup=true
+
+[editor_plugins]
+
+enabled=PackedStringArray("res://addons/git_describe/plugin.cfg", "res://addons/godot_mcp/plugin.cfg")
 
 [gui]
 
@@ -72,7 +77,7 @@ pointing/android/enable_pan_and_scale_gestures=true
 
 [network]
 
-limits/packet_peer_stream/max_buffer_po2=32
+limits/packet_peer_stream/max_buffer_po2=20
 limits/debugger/max_chars_per_second=65536
 limits/debugger/max_queued_messages=4096
 

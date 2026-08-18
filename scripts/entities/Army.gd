@@ -111,7 +111,8 @@ func setup(config: Dictionary):
 	max_health = int(max_health * scale)
 	health = max_health
 	attack = int(attack * scale)
-	if armor > 0: armor = int(armor * scale)
+	if melee_armor > 0: melee_armor = (melee_armor * scale)
+	if shield_armor > 0: shield_armor = (shield_armor * scale)
 
 	# ÉèÖÃÀàÐÍ£ºÅ©Ãñ=0£¬Õ½¶·µ¥Î»=1
 	if entity_id in [10, 14]:
@@ -134,8 +135,10 @@ func _apply_nation_bonus():
 		health = max_health
 	if mults.has("attack"):
 		attack = int(attack * mults["attack"])
-	if mults.has("armor"):
-		armor += int(mults["armor"])
+		if mults.has("melee_armor"):
+			melee_armor += int(mults["melee_armor"])
+		if mults.has("shield_armor"):
+			shield_armor += int(mults["shield_armor"])
 	if mults.has("speed"):
 		speed *= mults["speed"]
 		original_speed = speed
@@ -656,20 +659,21 @@ func _attack(target, delta):
 
 # ==================== 特殊攻击 ====================
 
-# 僧侣：治疗周围5格内血量最低的己方军队
+# 僧侣：治疗周围范围内血量百分比最低的己方军队（百分比回血）
 func _monk_heal(_target, delta):
 	if attack_timer > 0:
 		attack_timer -= delta
 		return
 	var lowest = null
-	var lowest_hp = INF
+	var lowest_pct: float = 2.0
 	for entity in get_tree().get_nodes_in_group("entities"):
 		if not (entity is Army) or entity == self or entity.health <= 0: continue
 		if entity.team != team: continue
 		var dist = global_position.distance_to(entity.global_position)
 		if dist <= attack_range + entity.body_radius:
-			if entity.health < lowest_hp:
-				lowest_hp = entity.health
+			var hp_pct = entity.health / entity.max_health
+			if hp_pct < lowest_pct and hp_pct < 1.0:
+				lowest_pct = hp_pct
 				lowest = entity
 	if lowest:
 		var heal_amt = min(attack, lowest.max_health - lowest.health)
@@ -747,7 +751,7 @@ func _gather(resource_node: WorldResource, delta):
 		var res_type = resource_node.resource_type
 		if gatherable_resources.size() > 0 and not res_type in gatherable_resources:
 			return
-		var amount = attack
+		var amount = int(attack)
 		if GameSettings.fast_mode: amount *= 3
 		var bm = get_tree().get_first_node_in_group("battle_manager")
 		if bm and bm.has_method("get_team_nation"):
@@ -1303,7 +1307,8 @@ func _do_garrison(building: Building):
 				return
 	
 	_garrison_building = weakref(building)
-	building.set_meta("_orig_armor_%d" % entity_id, building.armor)
+	building.set_meta("_orig_melee_armor_%d" % entity_id, building.melee_armor)
+	building.set_meta("_orig_shield_armor_%d" % entity_id, building.shield_armor)
 	building.set_meta("_orig_speed_%d" % entity_id, building.attack_speed)
 	if not building.died.is_connected(_on_garrison_building_died):
 		building.died.connect(_on_garrison_building_died.bind(get_instance_id()))
@@ -1323,7 +1328,8 @@ func _do_garrison(building: Building):
 				building.set_meta("_orig_storage", building.building_data.get("storage_bonus", 500))
 				building.building_data["storage_bonus"] = int(building.building_data.get("storage_bonus", 500) * (1.0 + 0.5 * eff))
 		47:
-			building.armor += int(80 * eff)
+				building.melee_armor += int(5 * eff)
+				building.shield_armor += int(5 * eff)
 		48:
 			for prod in building.production_list:
 				prod["cooldown"] = prod["cooldown"] * max(0.1, 1.0 - 0.5 * eff)
@@ -1362,8 +1368,9 @@ func _ungarrison_official():
 							e.remove_meta("_clerk_bonus_%d" % my_id)
 							e.attack_speed /= 0.8
 			47:
-				if building.has_meta("_orig_armor_%d" % entity_id):
-					building.armor = building.get_meta("_orig_armor_%d" % entity_id)
+				if building.has_meta("_orig_melee_armor_%d" % entity_id):
+					building.melee_armor = building.get_meta("_orig_melee_armor_%d" % entity_id)
+					building.shield_armor = building.get_meta("_orig_shield_armor_%d" % entity_id)
 			48:
 				for prod in building.production_list:
 					prod["cooldown"] = prod["cooldown"] / max(0.1, 1.0 - 0.5 * eff)

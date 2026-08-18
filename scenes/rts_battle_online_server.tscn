@@ -41,7 +41,7 @@ environment = SubResource("Environment_opw4b")
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
 transform = Transform3D(0.70710677, -0.35355338, 0.6123724, 0, 0.8660254, 0.5, -0.70710677, -0.35355338, 0.6123724, 0, 0, 0)
-light_energy = 5.0
+light_energy = 3.0
 shadow_enabled = true
 
 [node name="Camera3D" type="Camera3D" parent="."]
@@ -84,9 +84,10 @@ offset_bottom = 40.0
 
 [node name="InfoPanel" type="Panel" parent="UI"]
 z_index = 10
-offset_top = 600.0
+offset_top = 550.0
 offset_right = 100.0
-offset_bottom = 700.0
+offset_bottom = 850.0
+scale = Vector2(2, 2)
 script = ExtResource("6_1capu")
 
 [node name="VBox" type="VBoxContainer" parent="UI/InfoPanel"]

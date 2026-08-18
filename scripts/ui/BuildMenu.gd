@@ -11,7 +11,7 @@ const RC = {"wood": "green", "stone": "gray", "gold": "gold", "food": "orange", 
 const BUILDING_REQUIRED_CASTLE: Dictionary = {
 	23: 2, 25: 2, 26: 2,   # 船坞、箭塔、炮塔 → 2级
 	24: 3, 29: 3, 52: 3,    # 攻城车间、重装武器厂、集市 → 3级
-	42: 4, 53: 4, 54: 4             # 书院/城堡 → 4级
+	42: 3, 53: 4, 54: 4             # 书院→3级 城堡→4级
 }
 
 func _ready():
@@ -43,7 +43,10 @@ func _ready():
 		for res in ["wood", "stone", "gold", "food", "oil"]:
 			if cost.get(res, 0) > 0:
 				var need = cost[res]
-				var have = bm.player_resources[res] if bm else 0
+				var res_dict = bm.player_resources
+				if bm and bm.has_method("get_host_resources"):
+					res_dict = bm.get_host_resources()
+				var have = res_dict.get(res, 0)
 				if have < need: affordable = false
 				var rc = RC.get(res, "white")
 				var cc = "white" if have >= need else "red"

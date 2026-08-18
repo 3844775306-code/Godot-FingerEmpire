@@ -18,8 +18,8 @@ var last_attack_time: float = -999.0
 const ATTACK_COOLDOWN: float = 120.0
 var production_step: int = 0
 
-var wanted_buildings: Array = [20, 21, 23, 25, 42, 26, 24, 29, 41, 52, 53]
-var wanted_units: Array = [11,12,15,16,17,18,35,36,37,38,39,40,13,43,44,45,46,47,48,49,50,58,59,5,6,9,64]
+var wanted_buildings: Array = [20, 21, 23, 25, 42, 54, 26, 24, 29, 41, 52, 53]
+var wanted_units: Array = [11,12,15,16,17,18,35,36,37,38,39,40,13,43,44,45,46,47,48,49,50,58,59,5,6,9]
 var target_army_count: int = 7
 var target_house_count: int = 8
 var desired_worker_count: int = 8
@@ -220,8 +220,10 @@ func _ai_can_build(building_id: int) -> bool:
 			return cl >= 2
 		24, 29, 52:   # 攻城车间、重装武器厂、集市 → 城堡3级
 			return cl >= 3
-		42, 54, 53:   # 书院、修道院、城堡 → 4级
+		53:   # 城堡→4级
 			return cl >= 4
+		42:   # 书院→3级
+			return cl >= 3
 	return true
 
 func can_afford(unit_id: int) -> bool:
@@ -465,6 +467,7 @@ func _state_development(_delta):
 	_process_line_3()
 	_ensure_merchants()
 	var _did_merchant = _try_produce_merchants_or_officials()
+	_try_produce_monks()
 	if not _did_merchant:
 		if not _priority_upgrade():
 			_process_line_upgrade()
@@ -481,9 +484,11 @@ func _state_assault(_delta):
 	_process_line_military()
 	_process_line_1()
 	_process_line_3()
+	_process_line_4()
 	_ensure_merchants()
 	_rally_land_army_to_castle()
 	_try_produce_merchants_or_officials()
+	_try_produce_monks()
 	_manage_shipyards()
 	_process_line_5()
 	_ai_hunt_animals(_delta)
@@ -664,7 +669,7 @@ func attack_move(target_position: Vector3, max_units: int):
 	var sent = 0
 	for entity in battle.entities.get_children():
 		if sent >= max_units: break
-		if entity is Army and entity.health > 0 and entity.entity_id not in [10,14] and entity_belongs_to_me(entity):
+		if entity is Army and entity.health > 0 and entity.entity_id not in [10,14,45,46,47,48,50] and entity_belongs_to_me(entity):
 			entity.attack_move_to(target_position)
 			sent += 1
 
@@ -1219,7 +1224,7 @@ func _process_line_1():
 func _priority_upgrade():
 	var castle = get_peer_castle(my_peer_id)
 	if not castle: return false
-	for i in [21,23,24,29]:
+	for i in [21,23,24,29,54]:
 	# 城堡等级不够兵营4级（兵营>=4需要城堡>=4）
 		for entity in battle.entities.get_children():
 			if entity is Building and entity.entity_id == i and entity_belongs_to_me(entity):
@@ -1248,6 +1253,14 @@ func _try_produce_merchants_or_officials() -> bool:
 			if count_unit(oid) < 1 and can_afford(oid) and _can_train_unit():
 				if produce_unit(oid): return true
 	return false
+
+# 修道院生产僧侣/长老/宗师
+func _try_produce_monks():
+	if count_building(54) == 0: return
+	var monk_order = [55, 56, 57]  # 僧侣→长老→宗师
+	for mid in monk_order:
+		if count_unit(mid) < 2 and can_afford(mid) and _can_train_unit():
+			produce_unit(mid); return
 
 func _process_line_military():
 	var priority = get_counter_priority()
@@ -1490,6 +1503,8 @@ func _create_debug_panel():
 	vb.add_child(_make_section("军队")); _mil_rtl = _make_rtl(); vb.add_child(_mil_rtl)
 	vb.add_child(_make_section("建筑")); _bld_rtl = _make_rtl(); vb.add_child(_bld_rtl)
 	var hud = battle.get_node("UI") as CanvasLayer; hud.add_child(debug_panel)
+	if not OS.is_debug_build():
+		debug_panel.visible = false
 
 func _make_rtl() -> RichTextLabel:
 	var r = RichTextLabel.new(); r.bbcode_enabled = true; r.fit_content = true; r.clip_contents = true

@@ -14,7 +14,7 @@ static var BONUSES: Dictionary = {
 	},
 	RTSConfig.Nation.FRANCE: {
 		"description": "法兰西",
-		"unit_mult_all": { "armor": 25 },                  # 所有单位 +15 护甲
+		"unit_mult_all": { "melee_armor": 1, "shield_armor": 3 },                  # 所有单位 +2 双护甲
 		"castle_start_level": 2                             # 城堡初始 2 级
 	},
 	RTSConfig.Nation.CHINA: {
@@ -25,7 +25,7 @@ static var BONUSES: Dictionary = {
 	   
 	RTSConfig.Nation.HUNGARY: {
 		"description": "匈牙利",
-		"unit_mult_all": { "armor": 15 },          # 所有单位 +20 护甲
+		"unit_mult_all": { "melee_armor": 2, "shield_armor": 1 },          # 所有单位 +1 双护甲
 		"gather_mult": { "stone": 1.15, "gold": 1.1 }, # 食物+15%, 黄金+10%
 		"population_bonus": 5                       # 额外 +5 人口上限
 	}
@@ -64,7 +64,8 @@ static func get_description(nation: int) -> String:
 			var attr_name = attr.capitalize()
 			if attr == "health": attr_name = "生命"
 			elif attr == "attack": attr_name = "攻击"
-			elif attr == "armor": attr_name = "护甲"
+			elif attr == "melee_armor": attr_name = "铠甲"
+			elif attr == "shield_armor": attr_name = "盾牌"
 			elif attr == "speed": attr_name = "速度"
 			elif attr == "attack_speed": attr_name = "攻速"
 			elif attr == "attack_range": attr_name = "射程"
