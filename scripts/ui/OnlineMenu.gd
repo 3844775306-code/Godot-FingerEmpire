@@ -5,6 +5,7 @@ var red_ai_spin: SpinBox
 var blue_ai_spin: SpinBox
 var mode_1v1_btn: Button
 var mode_2v2_btn: Button
+var mode_3v3_btn: Button
 var status_label: Label
 var ip_input: LineEdit
 var enet_toggle_btn: Button
@@ -75,6 +76,10 @@ func _ready():
 	mode_2v2_btn.toggle_mode = true
 	mode_2v2_btn.pressed.connect(func(): _select_mode(NetworkManager.GameMode.TWOVTWO))
 	panel.add_child(mode_2v2_btn)
+	mode_3v3_btn = _make_btn("3v3", Color(0.15, 0.4, 0.15), Vector2(x0 + 350, y + 38), Vector2(160, 50))
+	mode_3v3_btn.toggle_mode = true
+	mode_3v3_btn.pressed.connect(func(): _select_mode(NetworkManager.GameMode.THREEvTHREE))
+	panel.add_child(mode_3v3_btn)
 
 	y += 115
 	_lb.call("AI PLAYERS", y)
@@ -222,6 +227,13 @@ func _select_mode(mode: int):
 	NetworkManager.selected_mode = mode
 	mode_1v1_btn.button_pressed = (mode == NetworkManager.GameMode.ONEvONE)
 	mode_2v2_btn.button_pressed = (mode == NetworkManager.GameMode.TWOVTWO)
+	mode_3v3_btn.button_pressed = (mode == NetworkManager.GameMode.THREEvTHREE)
+	# AI 数量上限随每队人数调整（3v3 每队最多 3 个 AI），并收缩当前值防止越界
+	var max_ai = NetworkManager.get_team_size()
+	red_ai_spin.max_value = max_ai
+	blue_ai_spin.max_value = max_ai
+	red_ai_spin.value = mini(int(red_ai_spin.value), max_ai)
+	blue_ai_spin.value = mini(int(blue_ai_spin.value), max_ai)
 
 func _on_transport_changed(use_ws: bool):
 	NetworkManager.use_websocket = use_ws

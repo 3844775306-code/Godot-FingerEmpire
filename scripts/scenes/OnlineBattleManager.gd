@@ -221,7 +221,7 @@ func _ready():
 		await _init_1v1()
 	else:
 		RTSConfig.MAP_SIZE = 150
-		await _init_2v2()
+		await _init_team_mode()
 
 # ---------- 1v1 初始化 ----------
 func _init_1v1():
@@ -300,9 +300,9 @@ func _wait_for_nations_1v1():
 			return
 		await get_tree().process_frame
 
-# ---------- 2v2 初始化 ----------
-func _init_2v2():
-	
+# ---------- 组队模式初始化（2v2 / 3v3 共用） ----------
+func _init_team_mode():
+
 	RTSConfig.MAP_SIZE = 150
 
 	# 完全重新生成地图（不依赖旧的 Map 节点状态）
@@ -319,15 +319,16 @@ func _init_2v2():
 	# 手动调用 _ready 来生成地形、城堡、资源
 	map_node._ready()
 	# 确保 terrain_grid 已经填充
-	print("[服务器] 2v2 地图已重建，尺寸:", RTSConfig.MAP_SIZE, " 地形网格大小:", map_node.terrain_grid.size())
+	print("[服务器] 组队地图已重建，尺寸:", RTSConfig.MAP_SIZE, " 地形网格大小:", map_node.terrain_grid.size())
 	# 计算所需人类玩家数量
-	
-	var red_slots_free = 2 - NetworkManager.red_ai_count
-	var blue_slots_free = 2 - NetworkManager.blue_ai_count
+
+	var team_size = NetworkManager.get_team_size()
+	var red_slots_free = team_size - NetworkManager.red_ai_count
+	var blue_slots_free = team_size - NetworkManager.blue_ai_count
 	var required_humans = red_slots_free + blue_slots_free
 	var required_remote = maxi(0, required_humans - 1)  # 减去房主
 
-	print("[2v2] 需要人类玩家数:", required_humans, " 远程:", required_remote)
+	print("[组队] 需要人类玩家数:", required_humans, " 远程:", required_remote)
 
 	# 等待足够的人类玩家连接
 	while multiplayer.get_peers().size() < required_remote:
@@ -351,7 +352,7 @@ func _init_2v2():
 	player_population[1] = {"current": 3, "max": 20}
 	if host_team == RTSConfig.Team.RED: red_assigned += 1
 	else: blue_assigned += 1
-	print("[2v2] 房主 peer_id=1 队伍", "红" if host_team == RTSConfig.Team.RED else "蓝")
+	print("[组队] 房主 peer_id=1 队伍", "红" if host_team == RTSConfig.Team.RED else "蓝")
 
 	# ---------- 分配远程人类玩家 ----------
 	for i in range(peers.size()):
@@ -378,26 +379,26 @@ func _init_2v2():
 		else:
 			blue_assigned += 1
 
-		print("[2v2] 分配人类 ", peers[i], " 到队伍 ", "红" if team == RTSConfig.Team.RED else "蓝", " 槽位", slot)
+		print("[组队] 分配人类 ", peers[i], " 到队伍 ", "红" if team == RTSConfig.Team.RED else "蓝", " 槽位", slot)
 
 	# ---------- 补充 AI 玩家（完全按照菜单设置的数量） ----------
 	# 红方 AI
 	for i in range(NetworkManager.red_ai_count):
-		if red_assigned >= 2: break   # 保险
+		if red_assigned >= team_size: break   # 保险
 		var ai_id = _generate_ai_id(RTSConfig.Team.RED, red_assigned)
 		_create_ai_player(ai_id, RTSConfig.Team.RED, red_assigned)
 		red_assigned += 1
-		print("[2v2] 添加红方AI, peer_id=", ai_id, " slot=", red_assigned-1)
+		print("[组队] 添加红方AI, peer_id=", ai_id, " slot=", red_assigned-1)
 
 	# 蓝方 AI
 	for i in range(NetworkManager.blue_ai_count):
-		if blue_assigned >= 2: break
+		if blue_assigned >= team_size: break
 		var ai_id = _generate_ai_id(RTSConfig.Team.BLUE, blue_assigned)
 		_create_ai_player(ai_id, RTSConfig.Team.BLUE, blue_assigned)
 		blue_assigned += 1
-		print("[2v2] 添加蓝方AI, peer_id=", ai_id, " slot=", blue_assigned-1)
+		print("[组队] 添加蓝方AI, peer_id=", ai_id, " slot=", blue_assigned-1)
 
-	print("[2v2] 最终分配: 红方", red_assigned, "人, 蓝方", blue_assigned, "人")
+	print("[组队] 最终分配: 红方", red_assigned, "人, 蓝方", blue_assigned, "人")
 
 	# 广播颜色、地图、队伍信息等（保持不变）
 	var all_player_colors = {}
@@ -422,7 +423,7 @@ func _init_2v2():
 	has_game_started = true
 	
 
-	_init_all_castles_2v2()
+	_init_all_castles_team()
 	_debug_print_colors()
 	set_process(true)
 	broadcast_enabled = true
@@ -544,26 +545,28 @@ func _send_map_data(peers: Array):
 	for pid in peers:
 		NetworkManager.receive_map_data.rpc_id(pid, terrain_copy, height_copy, res_data)
 
-# ---------- 2v2 城堡生成 ----------
-func _init_all_castles_2v2():
+# ---------- 组队模式城堡生成（2v2 / 3v3 共用） ----------
+func _init_all_castles_team():
 	_debug_print_colors()
 	var map = $Map
 	if not map: return
 
-	var positions = map.get_four_castle_positions()   # 返回 [blue1, blue2, red1, red2]
-	var blue1 = positions[0]
-	var blue2 = positions[1]
-	var red1 = positions[2]
-	var red2 = positions[3]
+	var team_size = NetworkManager.get_team_size()
+	# 2v2: [blue1, blue2, red1, red2]；3v3: [blue1, blue2, blue3, red1, red2, red3]
+	var positions: Array
+	if team_size == 3:
+		positions = map.get_six_castle_positions()
+	else:
+		positions = map.get_four_castle_positions()
 
 	# 给每位玩家分配城堡
 	for pid in player_info.keys():
 		var info = player_info[pid]
 		var pos: Vector3
 		if info.team == RTSConfig.Team.BLUE:
-			pos = blue1 if info.slot == 0 else blue2
+			pos = positions[info.slot]
 		else:
-			pos = red1 if info.slot == 0 else red2
+			pos = positions[team_size + info.slot]
 
 		_player_colors[pid] = info.color  # 确保城堡创建时颜色可用
 		_create_player_castle(pid, info.team, pos)
@@ -592,7 +595,7 @@ func _create_player_castle(peer_id: int, team: int, pos: Vector3):
 	var castle = spawn_entity(cfg, team, pos, 1)   # 移除了多余的 peer_id 参数
 	castle.owner_peer_id = peer_id
 	if castle:
-		castle.died.connect(_on_castle_died_2v2.bind(peer_id))
+		castle.died.connect(_on_castle_died_team.bind(peer_id))
 		player_castles[peer_id] = castle
 
 func _get_team_players(team: int) -> Array:
@@ -997,24 +1000,24 @@ func _on_castle_died(team: int):
 	print("[GameOver-1v1] Castle died: team=%d, winner=%d, notifying..." % [team, winner])
 	for pid in multiplayer.get_peers():
 		NetworkManager.notify_game_over.rpc_id(pid, winner)
-func _on_castle_died_2v2(peer_id: int):
+func _on_castle_died_team(peer_id: int):
 	if not player_info.has(peer_id): return
 	player_info[peer_id].alive = false
 	var team = player_info[peer_id].team
-	print("[GameOver-2v2] Castle died: peer=%d team=%d, checking team..." % [peer_id, team])
+	print("[GameOver-组队] Castle died: peer=%d team=%d, checking team..." % [peer_id, team])
 	var _alive_count = 0
 	for _pid in player_info.keys():
 		if player_info[_pid].team == team and player_info[_pid].alive:
 			_alive_count += 1
-	print("[GameOver-2v2] Team %d alive players: %d" % [team, _alive_count])
-	
+	print("[GameOver-组队] Team %d alive players: %d" % [team, _alive_count])
+
 	# 整队检查
 	for pid in player_info.keys():
 		if player_info[pid].team == team and player_info[pid].alive:
 			return   # 还有存活，不结束
 	# 全队阵亡
 	game_over = true
-	print("[GameOver-2v2] GAME OVER! Winner team=%d, notifying players..." % [RTSConfig.Team.BLUE if team == RTSConfig.Team.RED else RTSConfig.Team.RED])
+	print("[GameOver-组队] GAME OVER! Winner team=%d, notifying players..." % [RTSConfig.Team.BLUE if team == RTSConfig.Team.RED else RTSConfig.Team.RED])
 	var winner = RTSConfig.Team.BLUE if team == RTSConfig.Team.RED else RTSConfig.Team.RED
 	for pid in player_info.keys():
 		if pid >= 1000: continue

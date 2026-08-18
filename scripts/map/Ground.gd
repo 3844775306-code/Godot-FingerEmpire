@@ -28,6 +28,7 @@ var enemy_castle_pos: Vector3 = Vector3.ZERO
 # 资源生成列表
 var resource_positions: Array = []
 var _cached_four_castle_positions: Array = []  # cached for consistency
+var _cached_six_castle_positions: Array = []  # 3v3 用，缓存保证一致性
 
 # 自定义地图种子（为0则随机）
 var custom_seed: int = 0
@@ -148,6 +149,30 @@ func get_four_castle_positions() -> Array:
 	_cached_four_castle_positions = [blue1, blue2, red1, red2]
 	return _cached_four_castle_positions
 
+# 3v3 六城堡选址：每边 3 个，沿南北两侧三分分布，返回 [blue1, blue2, blue3, red1, red2, red3]
+func get_six_castle_positions() -> Array:
+	if not _cached_six_castle_positions.is_empty():
+		return _cached_six_castle_positions
+	var size = _get_map_size()
+	var half = size / 2.0
+	var third = size / 3.0
+	var margin = 10
+	var ps = 5
+	var blue1 = _find_flat_plain(margin, half + ps, third - ps, size - margin, ps)
+	if blue1 == Vector3.ZERO: blue1 = grid_to_world(third / 2.0, half + 20)
+	var blue2 = _find_flat_plain(third + ps, half + ps, third * 2 - ps, size - margin, ps)
+	if blue2 == Vector3.ZERO: blue2 = grid_to_world(third * 1.5, half + 20)
+	var blue3 = _find_flat_plain(third * 2 + ps, half + ps, size - margin, size - margin, ps)
+	if blue3 == Vector3.ZERO: blue3 = grid_to_world(third * 2.5, half + 20)
+	var red1 = _find_flat_plain(margin, margin, third - ps, half - ps, ps)
+	if red1 == Vector3.ZERO: red1 = grid_to_world(third / 2.0, half - 20)
+	var red2 = _find_flat_plain(third + ps, margin, third * 2 - ps, half - ps, ps)
+	if red2 == Vector3.ZERO: red2 = grid_to_world(third * 1.5, half - 20)
+	var red3 = _find_flat_plain(third * 2 + ps, margin, size - margin, half - ps, ps)
+	if red3 == Vector3.ZERO: red3 = grid_to_world(third * 2.5, half - 20)
+	_cached_six_castle_positions = [blue1, blue2, blue3, red1, red2, red3]
+	return _cached_six_castle_positions
+
 func _force_flat_spot(gx: int, gy: int, safe_size: int) -> Vector3:
 	var size = _get_map_size()
 	for dx in range(-safe_size, safe_size + 1):
@@ -223,8 +248,9 @@ func _place_resources():
 	var size = _get_map_size()
 	var placed = {}
 
-	var is_2v2 = NetworkManager.selected_mode == NetworkManager.GameMode.TWOVTWO
-	var mult = 1.5 if is_2v2 else 1.0
+	var is_3v3 = NetworkManager.selected_mode == NetworkManager.GameMode.THREEvTHREE
+	var is_team_mode = NetworkManager.selected_mode != NetworkManager.GameMode.ONEvONE
+	var mult = 2.0 if is_3v3 else (1.5 if is_team_mode else 1.0)
 
 	# Castle positions in grid coordinates
 	var player_gx = int(player_castle_pos.x + size/2.0)
@@ -232,10 +258,10 @@ func _place_resources():
 	var enemy_gx = int(enemy_castle_pos.x + size/2.0)
 	var enemy_gy = int(enemy_castle_pos.z + size/2.0)
 	var castles = [[player_gx, player_gy, "player"], [enemy_gx, enemy_gy, "enemy"]]
-	if is_2v2:
-		var four_pos = get_four_castle_positions()
+	if is_team_mode:
+		var team_pos = get_six_castle_positions() if is_3v3 else get_four_castle_positions()
 		castles = []
-		for fp in four_pos:
+		for fp in team_pos:
 			var fgx = int(fp.x + size/2.0)
 			var fgy = int(fp.z + size/2.0)
 			castles.append([fgx, fgy])
@@ -259,8 +285,8 @@ func _place_resources():
 		{"type":0, "min_sz":2, "max_sz":3, "dist":12, "terrain":0},  # gold
 	]
 	if GameSettings.ai_difficulty >= GameSettings.AIDifficulty.HARD or GameSettings.red_ai_difficulty >= GameSettings.AIDifficulty.HARD or GameSettings.blue_ai_difficulty >= GameSettings.AIDifficulty.HARD:
-		# Only for enemy/AI castles (index 1+ or red team castles in 2v2)
-		var ai_castles = castles.slice(1) if castles.size() == 2 else castles.slice(2) if castles.size() == 4 else []
+		# Only for enemy/AI castles（1v1 敌方 = 后半；2v2/3v3 红队城堡 = 后半）
+		var ai_castles = castles.slice(castles.size() / 2)
 		for cs in ai_castles:
 			for gu in hard_extra:
 				_place_group_near(gu.type, gu.min_sz, gu.max_sz, cs[0], cs[1], gu.dist, gu.terrain, placed, size, gu.get("near_mountain", false))

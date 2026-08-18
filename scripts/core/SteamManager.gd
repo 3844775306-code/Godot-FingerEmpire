@@ -13,7 +13,7 @@ var _steam_tick: float = 0.0
 var _p2p_session_count: int = 0
 var _using_steam_sockets: bool = false  # true = steam-multiplayer-peer (Steam Sockets), false = GodotSteam 内置
 
-const MAX_MEMBERS: int = 4
+const MAX_MEMBERS: int = 6
 const STEAM_APP_ID: int = 480  # Spacewar test App ID（正式发布需替换）
 
 # 信号
@@ -89,7 +89,12 @@ func _on_lobby_created(connect: int, id: int):
 		lobby_state = LobbyState.IN_LOBBY
 		# 设置大厅数据
 		Steam.setLobbyData(lobby_id, "game", "FingerEmpire")
-		Steam.setLobbyData(lobby_id, "mode", "1v1" if NetworkManager.selected_mode == NetworkManager.GameMode.ONEvONE else "2v2")
+		var mode_str = "1v1"
+		if NetworkManager.selected_mode == NetworkManager.GameMode.TWOVTWO:
+			mode_str = "2v2"
+		elif NetworkManager.selected_mode == NetworkManager.GameMode.THREEvTHREE:
+			mode_str = "3v3"
+		Steam.setLobbyData(lobby_id, "mode", mode_str)
 		Steam.setLobbyData(lobby_id, "host_name", Steam.getPersonaName())
 		_refresh_members()
 		print("[Steam] 大厅创建成功: ", lobby_id)

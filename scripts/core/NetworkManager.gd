@@ -10,8 +10,20 @@ var ws_peer: WebSocketMultiplayerPeer = null
 const PORT = 9000
 const WS_PORT = 8080
 
-enum GameMode { ONEvONE, TWOVTWO }
+enum GameMode { ONEvONE, TWOVTWO, THREEvTHREE }
 static var selected_mode: int = GameMode.ONEvONE
+
+# 每队人数（1v1 无队伍概念，沿用 2 作为 AI 上限参考）
+static func get_team_size() -> int:
+	return 3 if selected_mode == GameMode.THREEvTHREE else 2
+
+# 总槽位数：1v1=2，2v2=4，3v3=6
+static func get_total_slots() -> int:
+	return 2 if selected_mode == GameMode.ONEvONE else get_team_size() * 2
+
+# 需要的人类玩家数（总槽位 - AI 数量）
+static func get_max_players() -> int:
+	return get_total_slots() - red_ai_count - blue_ai_count
 static var use_steam: bool = false
 enum TransportMode { ENET, WEBSOCKET }
 static var use_websocket: bool = false
@@ -66,7 +78,7 @@ func _invalidate_cache():
 
 func start_steam_server():
 	use_steam = true
-	max_players = (2 if selected_mode == GameMode.ONEvONE else 4) - red_ai_count - blue_ai_count
+	max_players = get_max_players()
 	var impl = SteamManager.get_implementation_info()
 	print("[Steam] Starting P2P server, impl=", impl)
 	peer = SteamMultiplayerPeer.new()
@@ -134,7 +146,7 @@ func _p2p_error_string(err: int) -> String:
 		_: return "unknown"
 
 func start_server():
-	max_players = (2 if selected_mode == GameMode.ONEvONE else 4) - red_ai_count - blue_ai_count
+	max_players = get_max_players()
 	var err = peer.create_server(PORT, max_players)
 	if err != OK:
 		emit_signal("connection_failed", "创建服务器失败: " + str(err))
@@ -147,7 +159,7 @@ func start_server():
 
 func start_ws_server():
 	use_websocket = true
-	max_players = (2 if selected_mode == GameMode.ONEvONE else 4) - red_ai_count - blue_ai_count
+	max_players = get_max_players()
 	ws_peer = WebSocketMultiplayerPeer.new()
 	var err = ws_peer.create_server(WS_PORT)
 	if err != OK:
