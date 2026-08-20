@@ -332,7 +332,7 @@ func send_command(data: Dictionary):
 		else:
 			print("错误：未找到 online_battle_manager！")
 
-@rpc("authority", "call_remote", "unreliable")
+@rpc("authority", "call_remote", "unreliable", 1)
 func _client_receive_snapshot(data: Dictionary):
 	if mode == Mode.CLIENT:
 		var renderer = _get_renderer()

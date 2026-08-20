@@ -548,9 +548,17 @@ func _update_single_entity(info):
 		var prev = node.get_meta("_prev_pos")
 		var dist = target.distance_to(prev)
 		if dist > 10.0: prev = target  # teleport if too far
-		node.global_position = prev.lerp(target, 0.3)
+		# 时间基准插值：按真实经过时间计算收敛系数，快照间隔拉长（丢包/relay 抖动）时
+		# 自动加速收敛，避免固定 0.3 系数造成的滞后放大（原方案在 300ms 间隔下滞后约 1 秒）
+		var now_ms = Time.get_ticks_msec()
+		var prev_ms = node.get_meta("_prev_interp_ms", now_ms - 40)
+		var dt = maxf(0.001, float(now_ms - prev_ms) / 1000.0)
+		var t = 1.0 - exp(-dt * 12.0)   # 收敛常数 12/s（时间常数 ≈ 83ms）
+		node.global_position = prev.lerp(target, t)
+		node.set_meta("_prev_interp_ms", now_ms)
 	else:
 		node.global_position = target
+		node.set_meta("_prev_interp_ms", Time.get_ticks_msec())
 	node.set_meta("_prev_pos", node.global_position)
 	node.rotation.y = info.get("rotation_y", 0.0)
 	node.visible = _should_entity_be_visible(info)

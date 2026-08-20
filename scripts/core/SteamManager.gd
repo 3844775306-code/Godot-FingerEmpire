@@ -70,10 +70,12 @@ func _connect_signals():
 func _process(_delta):
 	if not steam_initialized:
 		return
+	# run_callbacks 必须每帧调用（GodotSteam 官方要求）——节流会导致可靠消息 ack 与连接事件
+	# 延迟最多 100ms，是 Steam 联机延迟的来源之一
+	Steam.run_callbacks()
 	_steam_tick += _delta
 	if _steam_tick > 0.1:
 		_steam_tick = 0.0
-		Steam.run_callbacks()
 		_read_p2p_packets()
 
 # ═══ 大厅创建 ═══
