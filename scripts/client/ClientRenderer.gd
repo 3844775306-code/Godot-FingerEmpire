@@ -432,7 +432,15 @@ func _process_snapshot(data: Dictionary):
 			if not node:
 				node = _create_bullet_node(b)
 				entity_nodes[id] = node
-			node.global_position = Vector3(b["x"], b["y"], b["z"])
+			var new_pos = Vector3(b["x"], b["y"], b["z"])
+			# 用与上一快照位置的差确定飞行朝向，让箭模型指向运动方向
+			if node.has_meta("prev_pos"):
+				var dir = new_pos - node.get_meta("prev_pos")
+				if dir.length_squared() > 0.0001:
+					var up = Vector3.UP if absf(dir.y) < 0.99 * dir.length() else Vector3.FORWARD
+					node.look_at(new_pos + dir, up)
+			node.set_meta("prev_pos", new_pos)
+			node.global_position = new_pos
 			node.visible = true
 
 		for id in entity_nodes.keys():
@@ -887,7 +895,8 @@ func _create_bullet_node(info: Dictionary) -> Node3D:
 		var arrow_scene = load("res://models/forest/weapon-arrow.glb")
 		if arrow_scene:
 			var arrow = arrow_scene.instantiate()
-			if arrow: arrow.rotation.x = deg_to_rad(-90); arrow.scale = Vector3.ONE; n.add_child(arrow); loaded = true
+			# 模型本身沿 Z 轴水平（顶点包围盒在 Z 方向最长），无需额外旋转
+			if arrow: arrow.scale = Vector3.ONE; n.add_child(arrow); loaded = true
 	if not loaded:
 		var mesh = MeshInstance3D.new()
 		var s = SphereMesh.new()

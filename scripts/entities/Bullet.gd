@@ -30,7 +30,8 @@ func _ready():
 			var arrow_scene = load("res://models/forest/weapon-arrow.glb")
 			if arrow_scene:
 				var arrow = arrow_scene.instantiate()
-				if arrow: arrow.rotation.x = deg_to_rad(-90); arrow.scale = Vector3.ONE ; add_child(arrow)
+				# 模型本身沿 Z 轴水平（顶点包围盒在 Z 方向最长），无需额外旋转
+				if arrow: arrow.scale = Vector3.ONE; add_child(arrow)
 	if get_child_count() == 0:
 		var mesh = MeshInstance3D.new()
 		var sphere = SphereMesh.new()
@@ -67,6 +68,7 @@ func _physics_process(delta):
 		if _saved_dir == Vector3.ZERO:
 			_saved_dir = (target_pos - global_position).normalized()
 		global_position += _saved_dir * speed * delta
+		_orient_to_dir(_saved_dir)
 		# 到达目标点 → 对周围敌人造成AOE伤害
 		if global_position.distance_to(target_pos) < 0.5:
 			_on_hit_pos()
@@ -75,6 +77,7 @@ func _physics_process(delta):
 	elif target and is_instance_valid(target):
 		var dir = (target.global_position - global_position).normalized()
 		global_position += dir * speed * delta
+		_orient_to_dir(dir)
 		# 检查是否足够近（命中）
 		if global_position.distance_to(target.global_position) < 0.3:
 			_on_hit(target)
@@ -132,6 +135,11 @@ func _on_hit(entity: GameEntity):
 	elif attack_type == 3: entity.freeze(3.0)
 
 	queue_free()
+
+# 让弹丸模型朝向飞行方向；方向接近竖直时换用备用 up 向量避免万向锁翻转
+func _orient_to_dir(dir: Vector3):
+	var up = Vector3.UP if absf(dir.y) < 0.99 * dir.length() else Vector3.FORWARD
+	look_at(global_position + dir, up)
 
 # 固定目标点命中：对落点周围所有敌人造成AOE伤害
 func _on_hit_pos():
