@@ -172,6 +172,8 @@ func start_build_placement(bid: int):
 		if s:
 			var inst = s.instantiate()
 			inst.name = "PreviewModel"
+			# character 与步兵模型默认朝向相反，预览同样旋转 180°
+			if RTSConfig.model_needs_flip(model_path): inst.rotation.y = deg_to_rad(180)
 			placement_preview.mesh = null
 			placement_preview.add_child(inst)
 	if placement_preview.get_child_count() == 0:
@@ -801,10 +803,12 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 		if current_size > 0.01:
 			loaded_model.scale = Vector3.ONE * (target_size / current_size)
 		# Special rotations
-		if info.get("entity_id", 0) == 10: loaded_model.rotation.y = deg_to_rad(180)
-		elif info.get("entity_id", 0) == 16: loaded_model.rotation.y = deg_to_rad(180)
+		if info.get("entity_id", 0) == 16: loaded_model.rotation.y = deg_to_rad(180)
 		elif info.get("entity_id", 0) == 17: loaded_model.rotation.y = deg_to_rad(90)
 		elif info.get("entity_id", 0) == 18: loaded_model.rotation.y = deg_to_rad(90)
+		# character 与步兵模型默认朝向相反，统一绕 Y 轴旋转 180° 掉头（entity 10 原特例已并入）
+		if RTSConfig.model_needs_flip(model_path):
+			loaded_model.rotation.y = deg_to_rad(180)
 		if info.get("entity_id", 0) in [25, 26]: loaded_model.scale *= 0.5
 		# 诸葛连弩保持放大
 		if info.get("entity_id", 0) == 33: loaded_model.scale *= 2.0

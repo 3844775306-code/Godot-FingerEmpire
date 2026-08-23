@@ -768,6 +768,9 @@ func _apply_entity_model(entity: GameEntity) -> bool:
 	if entity.entity_id == 16: model_instance.rotation.y = deg_to_rad(180)
 	elif entity.entity_id == 17: model_instance.rotation.y = deg_to_rad(90)
 	elif entity.entity_id == 18: model_instance.rotation.y = deg_to_rad(90)
+	# character 与步兵模型默认朝向相反，统一绕 Y 轴旋转 180° 掉头
+	if RTSConfig.model_needs_flip(model_path):
+		model_instance.rotation.y = deg_to_rad(180)
 	# 存储模型引用用于动画
 	entity.set_meta("_model_instance", model_instance)
 	# 角色模型启用顶点颜色（编辑器预览依赖此特性）
@@ -1586,7 +1589,10 @@ func _on_building_selected_for_build(building_id: int):
 	var model_path = RTSConfig.get_entity_model(building_id)
 	if model_path != "" and ResourceLoader.exists(model_path):
 		var s = load(model_path)
-		if s: build_preview = s.instantiate()
+		if s:
+			build_preview = s.instantiate()
+			# character 与步兵模型默认朝向相反，预览同样旋转 180°
+			if RTSConfig.model_needs_flip(model_path): build_preview.rotation.y = deg_to_rad(180)
 	if not build_preview:
 		build_preview = MeshInstance3D.new()
 		build_preview.mesh = BoxMesh.new()
