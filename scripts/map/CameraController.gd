@@ -18,12 +18,11 @@ var touch_pan_start: Vector2
 
 # ── 跟随视角（Tab 切换）──
 var _follow_target: Node3D = null    # 当前跟随的单位节点
-var _follow_saved: Dictionary = {}   # 进入跟随前的相机状态（transform + size）
+var _follow_saved: Dictionary = {}   # 进入跟随前的相机状态（transform + size + projection）
+var _follow_hidden_nodes: Array = [] # 跟随期间隐藏的单位模型节点（退出时恢复）
 
-const FOLLOW_HEIGHT: float = 8.0      # 相机相对单位的高度
-const FOLLOW_BACK: float = 12.0       # 相机在单位后方的距离
-const FOLLOW_PITCH_DEG: float = 40.0  # 俯角（度）
-const FOLLOW_SIZE: float = 18.0       # 跟随时的视野大小
+const FOLLOW_EYE_HEIGHT: float = 2.0 # 相机位于单位眼睛处的高度
+const FOLLOW_FOV: float = 70.0       # 第一人称透视视野，数值越大周围物体越小
 
 func _ready():
 	if projection == PROJECTION_ORTHOGONAL:
@@ -107,19 +106,33 @@ func toggle_follow(target: Node3D) -> bool:
 		return false
 	if target == null or not is_instance_valid(target):
 		return false
-	_follow_saved = {"transform": global_transform, "size": size}
+	_follow_saved = {"transform": global_transform, "size": size, "projection": projection}
 	_follow_target = target
-	size = FOLLOW_SIZE
+	# 隐藏单位自身的模型（含选择环等），第一人称画面中不出现单位本身
+	_follow_hidden_nodes = _collect_visible_meshes(target)
+	for n in _follow_hidden_nodes:
+		n.visible = false
+	# 切换透视投影，营造第一人称近大远小、周围物体偏大的效果
+	projection = PROJECTION_PERSPECTIVE
+	fov = FOLLOW_FOV
 	return true
 
 # 恢复进入跟随前的相机状态
 func stop_follow():
 	if _follow_target == null:
 		return
+	var dead = _target_is_dead()
 	_follow_target = null
 	global_transform = _follow_saved.get("transform", global_transform)
 	size = _follow_saved.get("size", size)
+	projection = _follow_saved.get("projection", PROJECTION_ORTHOGONAL)
 	_follow_saved = {}
+	# 恢复被隐藏的单位模型；单位已死亡则保持隐藏（交给毁坏模型展示）
+	if not dead:
+		for n in _follow_hidden_nodes:
+			if is_instance_valid(n):
+				n.visible = true
+	_follow_hidden_nodes.clear()
 
 func _update_follow():
 	# 单位被销毁/移除 → 自动恢复原视角
@@ -127,16 +140,30 @@ func _update_follow():
 		stop_follow()
 		return
 	# 死亡检测：在线节点用快照 health，单机节点用实体 health 属性（死亡后立即恢复，不等节点销毁）
-	if _follow_target.has_meta("snapshot_info"):
-		var info = _follow_target.get_meta("snapshot_info", {})
-		if info.get("health", 1.0) <= 0.0:
-			stop_follow()
-			return
-	elif "health" in _follow_target and _follow_target.get("health") <= 0.0:
+	if _target_is_dead():
 		stop_follow()
 		return
-	# 相机位于单位后方上方：水平朝向与单位朝向一致，俯角固定
-	# 注意绕 X 轴取负角度才是俯视（Godot 右手系正旋转为抬头）
-	var basis = Basis(Vector3.UP, _follow_target.rotation.y) * Basis(Vector3.RIGHT, -deg_to_rad(FOLLOW_PITCH_DEG))
+	# 第一人称：相机位于单位眼睛处，水平朝向与单位朝向完全一致（平视前方）
+	var basis = Basis(Vector3.UP, _follow_target.rotation.y)
 	global_transform.basis = basis
-	global_position = _follow_target.global_position + basis.z * FOLLOW_BACK + Vector3.UP * FOLLOW_HEIGHT
+	global_position = _follow_target.global_position + Vector3.UP * FOLLOW_EYE_HEIGHT
+
+# 目标是否已死亡（在线用快照 health，单机用实体 health 属性；目标失效视为死亡）
+func _target_is_dead() -> bool:
+	if not is_instance_valid(_follow_target):
+		return true
+	if _follow_target.has_meta("snapshot_info"):
+		return _follow_target.get_meta("snapshot_info", {}).get("health", 1.0) <= 0.0
+	elif "health" in _follow_target:
+		return _follow_target.get("health") <= 0.0
+	return false
+
+# 递归收集节点子树中当前可见的 MeshInstance3D（单位模型及其子部件）
+# 跳过 SelectionRing：选择环的显隐由选中逻辑管理，避免恢复时与选中状态冲突
+func _collect_visible_meshes(root: Node) -> Array:
+	var result: Array = []
+	for child in root.get_children():
+		if child is MeshInstance3D and child.visible and child.name != "SelectionRing":
+			result.append(child)
+		result.append_array(_collect_visible_meshes(child))
+	return result
