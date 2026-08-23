@@ -63,6 +63,17 @@ func _input(event):
 		var ctrl = event.ctrl_pressed
 		var shift = event.shift_pressed
 
+		# Tab：跟随视角切换（仅单选时；再按 Tab 恢复原视角）
+		if key == KEY_TAB:
+			var cam = get_viewport().get_camera_3d()
+			if cam and cam.has_method("toggle_follow"):
+				var target: Node3D = null
+				if not cam.is_following() and selected_entities.size() == 1:
+					target = selected_entities[0]
+				cam.toggle_follow(target)
+				get_viewport().set_input_as_handled()
+			return
+
 		# U键升级
 		if key == KEY_U:
 			_upgrade_selected()
