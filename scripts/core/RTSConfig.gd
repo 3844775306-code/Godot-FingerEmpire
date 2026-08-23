@@ -99,9 +99,9 @@ static func get_entity_model(entity_id: int, level: int = 1) -> String:
 		return "res://models/survival/rocks-c.glb" if level >= 4 else ("res://models/survival/rocks-b.glb" if level >= 2 else "res://models/survival/rocks-a.glb")
 	return ENTITY_MODELS.get(entity_id, "")
 
-# character 与步兵模型（arena/soldier）的默认朝向与游戏逻辑相反，加载后需绕 Y 轴旋转 180° 掉头
+# character、步兵（arena/soldier）与弓箭手（forest/archer）模型的默认朝向与游戏逻辑相反，加载后需绕 Y 轴旋转 180° 掉头
 static func model_needs_flip(model_path: String) -> bool:
-	return model_path.contains("models/characters/") or model_path.ends_with("soldier.glb")
+	return model_path.contains("models/characters/") or model_path.ends_with("soldier.glb") or model_path.ends_with("archer.glb")
 
 const DEMOLISHED_MODELS = {
 	17: "res://models/castle/siege-catapult-demolished.glb",
