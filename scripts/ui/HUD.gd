@@ -747,6 +747,19 @@ func _update_health_bars():
 	for entity in entities:
 		if not is_instance_valid(entity) or entity.health <= 0:
 			continue
+		# 第一人称跟随视角：被跟随单位自身的血条锚点位于相机处，会悬浮在画面中央——隐藏
+		if cam.has_method("get_follow_target") and cam.get_follow_target() == entity:
+			if entity in unit_bars:
+				unit_bars[entity].bar.visible = false
+				unit_bars[entity].label.visible = false
+				if unit_bars[entity].has("prod_bar"):
+					unit_bars[entity].prod_bar.visible = false
+					unit_bars[entity].prod_label.visible = false
+				if unit_bars[entity].has("upgrade_bar"):
+					unit_bars[entity].upgrade_bar.visible = false
+				if unit_bars[entity].has("upgrade_label"):
+					unit_bars[entity].upgrade_label.visible = false
+			continue
 		if not entity.visible:
 			if entity in unit_bars:
 				unit_bars[entity].bar.visible = false
@@ -774,6 +787,18 @@ func _update_health_bars():
 
 		# 世界转屏幕
 		var world_pos = entity.global_position + Vector3.UP * (entity.body_radius * 2 + 0.5)
+		# 透视投影下相机后方的实体会 unproject 出翻转坐标——隐藏血条
+		if cam.projection != Camera3D.PROJECTION_ORTHOGONAL and cam.is_position_behind(world_pos):
+			bar.visible = false
+			label.visible = false
+			if prod_bar:
+				prod_bar.visible = false
+				prod_label.visible = false
+			if data.has("upgrade_bar") and data.upgrade_bar:
+				data.upgrade_bar.visible = false
+			if data.has("upgrade_label") and data.upgrade_label:
+				data.upgrade_label.visible = false
+			continue
 		var screen_pos = cam.unproject_position(world_pos)
 		bar.position = screen_pos - bar_size / 2
 

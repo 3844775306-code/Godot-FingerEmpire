@@ -99,6 +99,9 @@ func _process(delta):
 func is_following() -> bool:
 	return _follow_target != null
 
+func get_follow_target() -> Node3D:
+	return _follow_target
+
 # 切换跟随视角：传入单位节点开始跟随；已在跟随时调用则恢复原视角。返回是否进入跟随
 func toggle_follow(target: Node3D) -> bool:
 	if _follow_target:

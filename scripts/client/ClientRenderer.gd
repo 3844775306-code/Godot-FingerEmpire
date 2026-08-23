@@ -1203,15 +1203,17 @@ func _update_health_bars():
 		if not info: continue
 		if not info.has("health") or not info.has("type"): continue
 		if info["health"] <= 0: continue  # 已死亡实体不显示血条
+		# 第一人称跟随视角：被跟随单位自身的血条锚点位于相机处，会悬浮在画面中央——隐藏
+		if cam.has_method("get_follow_target") and cam.get_follow_target() == node:
+			_hide_unit_bars(id)
+			continue
+		# 透视投影下相机后方的实体会 unproject 出翻转坐标——隐藏其血条
+		var bar_world_pos = node.global_position + Vector3.UP * (info["body_radius"]*2 + 0.5)
+		if cam.projection != Camera3D.PROJECTION_ORTHOGONAL and cam.is_position_behind(bar_world_pos):
+			_hide_unit_bars(id)
+			continue
 		if not _should_entity_be_visible(info):
-			if unit_bars.has(id):
-				var bd = unit_bars[id]
-				if bd.get("bar"): bd.bar.visible = false
-				if bd.get("label"): bd.label.visible = false
-				if bd.get("prod_bar"): bd.prod_bar.visible = false
-				if bd.get("prod_label"): bd.prod_label.visible = false
-				if bd.get("upgrade_bar"): bd.upgrade_bar.visible = false
-				if bd.get("upgrade_label"): bd.upgrade_label.visible = false
+			_hide_unit_bars(id)
 			continue
 		var hp = info["health"]
 		var max_hp = info.get("max_health", hp)
@@ -1335,6 +1337,17 @@ func _update_health_bars():
 				lab.position = screen_pos - Vector2(30, 15)
 				lab.visible = true
 			else: lab.visible = false
+
+# 隐藏某实体的所有血条/标签控件
+func _hide_unit_bars(id):
+	if unit_bars.has(id):
+		var bd = unit_bars[id]
+		if bd.get("bar"): bd.bar.visible = false
+		if bd.get("label"): bd.label.visible = false
+		if bd.get("prod_bar"): bd.prod_bar.visible = false
+		if bd.get("prod_label"): bd.prod_label.visible = false
+		if bd.get("upgrade_bar"): bd.upgrade_bar.visible = false
+		if bd.get("upgrade_label"): bd.upgrade_label.visible = false
 
 # ==================== 血条控件创建 ====================
 func _get_or_create_health_bar(id) -> HealthBarControl:
