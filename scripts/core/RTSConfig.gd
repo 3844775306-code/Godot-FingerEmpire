@@ -3,7 +3,7 @@ extends Node
 static var MAP_SIZE: int = 100
 const GRID_SIZE = 1.0
 enum Team { BLUE = 1, RED = 0, NEUTRAL = 2 }
-enum Nation { VIKING, ENGLAND, FRANCE, CHINA, HUNGARY }
+enum Nation { VIKING, ENGLAND, FRANCE, CHINA, HUNGARY, JAPAN, BYZANTINE }
 const MAX_PLAYERS = 6
 
 enum PlayerSlot { SLOT_0 = 0, SLOT_1 = 1, SLOT_2 = 2 }
@@ -63,6 +63,8 @@ const ENTITY_MODELS = {
 	36: "res://models/arena/soldier.glb",
 	37: "res://models/arena/soldier.glb",
 	38: "res://models/arena/soldier.glb",
+	65: "res://models/arena/soldier.glb",
+	66: "res://models/arena/soldier.glb",
 	39: "res://models/pirate/ship-large.glb",
 	9: "res://models/pirate/ship-wreck.glb",
 	40: "res://models/pirate/ship-small.glb",

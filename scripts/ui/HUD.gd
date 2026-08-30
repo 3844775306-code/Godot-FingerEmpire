@@ -51,6 +51,8 @@ func _get_nation_name(nation: int) -> String:
 		RTSConfig.Nation.FRANCE: return "法兰西"
 		RTSConfig.Nation.CHINA: return "中国"
 		RTSConfig.Nation.HUNGARY: return "匈牙利"
+		RTSConfig.Nation.JAPAN: return "日本"
+		RTSConfig.Nation.BYZANTINE: return "拜占庭"
 		_: return "未知"
 
 # 缓存 battle_manager / selection_manager 引用，避免每帧场景树遍历

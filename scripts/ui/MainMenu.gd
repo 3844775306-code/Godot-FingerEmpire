@@ -70,6 +70,8 @@ func _ready():
 	nation_select.add_item("  法兰西  +25护甲  城堡2级起始")
 	nation_select.add_item("  中国    食物+20%  黄金+10%  人口+10")
 	nation_select.add_item("  匈牙利  +15护甲  石材+15%  黄金+10%  人口+5")
+	nation_select.add_item("  日本    +15%攻速  +10%攻击")
+	nation_select.add_item("  拜占庭  +2双护甲  黄金+10%")
 	nation_select.position = Vector2(750, center_y - 55)
 	nation_select.size = Vector2(900, 55)
 	nation_select.add_theme_font_size_override("font_size", 22)
@@ -184,7 +186,7 @@ func _make_menu_button(text: String, pos: Vector2, color: Color) -> Button:
 
 func _on_play_pressed():
 	GameSettings.player_nation = nation_select.selected
-	GameSettings.enemy_nation = randi() % 5
+	GameSettings.enemy_nation = randi() % RTSConfig.Nation.size()
 	var ds = get_node_or_null("DiffSelect")
 	if ds: GameSettings.ai_difficulty = ds.selected
 	var fc = get_node_or_null("FastCheck")

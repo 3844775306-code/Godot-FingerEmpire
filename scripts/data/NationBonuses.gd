@@ -28,6 +28,15 @@ static var BONUSES: Dictionary = {
 		"unit_mult_all": { "melee_armor": 2, "shield_armor": 1 },          # 所有单位 +1 双护甲
 		"gather_mult": { "stone": 1.15, "gold": 1.1 }, # 食物+15%, 黄金+10%
 		"population_bonus": 5                       # 额外 +5 人口上限
+	},
+	RTSConfig.Nation.JAPAN: {
+		"description": "日本",
+		"unit_mult_all": { "attack_speed": 1.15, "attack": 1.1 }           # 所有单位 +15%攻速, +10%攻击
+	},
+	RTSConfig.Nation.BYZANTINE: {
+		"description": "拜占庭",
+		"unit_mult_all": { "melee_armor": 2, "shield_armor": 2 },          # 所有单位 +2 双护甲
+		"gather_mult": { "gold": 1.1 }                    # 黄金采集 +10%
 	}
 }
 

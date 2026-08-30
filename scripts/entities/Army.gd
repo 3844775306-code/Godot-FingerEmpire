@@ -135,10 +135,10 @@ func _apply_nation_bonus():
 		health = max_health
 	if mults.has("attack"):
 		attack = int(attack * mults["attack"])
-		if mults.has("melee_armor"):
-			melee_armor += int(mults["melee_armor"])
-		if mults.has("shield_armor"):
-			shield_armor += int(mults["shield_armor"])
+	if mults.has("melee_armor"):
+		melee_armor += int(mults["melee_armor"])
+	if mults.has("shield_armor"):
+		shield_armor += int(mults["shield_armor"])
 	if mults.has("speed"):
 		speed *= mults["speed"]
 		original_speed = speed
@@ -214,7 +214,7 @@ func _add_weapon():
 	# Spear
 	elif entity_id == 35: wpath = "res://models/arena/weapon-spear.glb"
 	# Sword: all infantry + cavalry + specials
-	elif entity_id in [11, 15, 19, 30, 32, 34, 36, 38]:
+	elif entity_id in [11, 15, 19, 30, 32, 34, 36, 38, 65, 66]:
 		wpath = "res://models/arena/weapon-sword.glb"
 	if wpath != "" and ResourceLoader.exists(wpath):
 		var ws = load(wpath)
@@ -229,8 +229,8 @@ func _add_weapon():
 		var sh = load("res://models/arena/shield-round.glb")
 		if sh: var s = sh.instantiate(); if s: s.position = Vector3(-0.3, body_radius * 0.6, 0); s.scale = Vector3.ONE * 0.8; add_child(s)
 	var mpath = ""
-	if entity_id in [15, 19, 38]: mpath = "res://models/pets/animal-dog.glb"
-		
+	if entity_id in [15, 19, 38, 66]: mpath = "res://models/pets/animal-dog.glb"
+
 	elif entity_id == 34: mpath = "res://models/pets/animal-elephant.glb"
 	if mpath != "" and ResourceLoader.exists(mpath):
 		var ms = load(mpath)

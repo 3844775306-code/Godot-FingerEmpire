@@ -445,7 +445,7 @@ func _generate_ai_id(team: int, index: int) -> int:
 	return 1000 + team * 10 + index
 
 func _create_ai_player(peer_id: int, team: int, slot: int):
-	var ai_nation = randi() % 5
+	var ai_nation = randi() % RTSConfig.Nation.size()
 	player_info[peer_id] = {
 		"team": team,
 		"slot": slot,

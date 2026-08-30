@@ -447,9 +447,9 @@ func _init_2v2_single():
 	# 定义四个玩家：玩家槽0(蓝)、AI槽1(蓝)、AI槽0(红)、AI槽1(红)
 	var setup = [
 		{ "peer_id": 1, "team": RTSConfig.Team.BLUE, "slot": 0, "is_human": true, "nation": GameSettings.player_nation },
-		{ "peer_id": 2, "team": RTSConfig.Team.BLUE, "slot": 1, "is_human": false, "nation": randi() % 5 },
-		{ "peer_id": 3, "team": RTSConfig.Team.RED, "slot": 0, "is_human": false, "nation": randi() % 5 },
-		{ "peer_id": 4, "team": RTSConfig.Team.RED, "slot": 1, "is_human": false, "nation": randi() % 5 },
+		{ "peer_id": 2, "team": RTSConfig.Team.BLUE, "slot": 1, "is_human": false, "nation": randi() % RTSConfig.Nation.size() },
+		{ "peer_id": 3, "team": RTSConfig.Team.RED, "slot": 0, "is_human": false, "nation": randi() % RTSConfig.Nation.size() },
+		{ "peer_id": 4, "team": RTSConfig.Team.RED, "slot": 1, "is_human": false, "nation": randi() % RTSConfig.Nation.size() },
 	]
 
 	var map = $Map
@@ -671,8 +671,8 @@ func _init_entities_deferred():
 	# 获取国家
 	var player_nation = GameSettings.player_nation
 	var enemy_nation = GameSettings.enemy_nation
-	if enemy_nation < 0 or enemy_nation > 4:
-		enemy_nation = randi() % 5
+	if enemy_nation < 0 or enemy_nation >= RTSConfig.Nation.size():
+		enemy_nation = randi() % RTSConfig.Nation.size()
 
 	team_nations = {
 		RTSConfig.Team.BLUE: player_nation,

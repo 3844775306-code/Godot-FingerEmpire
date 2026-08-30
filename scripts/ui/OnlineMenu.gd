@@ -102,6 +102,8 @@ func _ready():
 	nation_select.add_item("  France     +25 Armor  Castle Lv.2")
 	nation_select.add_item("  China      Food+20%  Gold+10%  Pop+10")
 	nation_select.add_item("  Hungary    +15 Armor  Stone+15%  Gold+10%  Pop+5")
+	nation_select.add_item("  Japan      +15% ATK Speed  +10% ATK")
+	nation_select.add_item("  Byzantine  +2 Armor  Gold+10%")
 	nation_select.position = Vector2(x0, y + 38); nation_select.size = Vector2(500, 44)
 	nation_select.add_theme_font_size_override("font_size", 16)
 	panel.add_child(nation_select)

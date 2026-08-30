@@ -311,7 +311,23 @@ func _init_data():
 			"body_radius": 0.45, "melee_armor": 3, "shield_armor": 1, "can_move": true,
 			"ignore_armor": true, "piercing": true
 		},
-		# ==================== 重装武器厂 (ID 29) ====================
+		# ==================== 日本武士 (ID 65) ====================
+		{
+			"id": 65, "type": 2, "name": "日本武士", "team": 0,
+			"cost": {"food": 90, "gold": 30},
+			"max_health": 190, "attack": 20, "attack_speed": 0.7, "speed": 1.9,
+			"vision_range": 14, "attack_range": 0.5, "damage_radius": 0, "target_type": 2,
+			"body_radius": 0.5, "melee_armor": 2, "shield_armor": 1, "can_move": true
+		},
+		# ==================== 拜占庭甲胄骑兵 (ID 66) ====================
+		{
+			"id": 66, "type": 2, "name": "甲胄骑兵", "team": 0,
+			"cost": {"food": 110, "gold": 60},
+			"max_health": 320, "attack": 28, "attack_speed": 1.8, "speed": 1.8,
+			"vision_range": 15, "attack_range": 0.5, "damage_radius": 1.5, "target_type": 2,
+			"body_radius": 0.7, "melee_armor": 4, "shield_armor": 4, "can_move": true
+		},
+	# ==================== 重装武器厂 (ID 29) ====================
 		{
 			"id": 29, "type": 1, "name": "重装武器厂", "team": 0,
 			"cost": {"wood": 150, "stone": 200, "oil": 100},
