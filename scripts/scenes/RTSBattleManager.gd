@@ -442,8 +442,8 @@ func _ready():
 	if not is_online:
 		if game_mode_2v2:
 			_init_2v2_single()
-		elif GameSettings.ai_player_count >= 2:
-			_init_multi_single(GameSettings.ai_player_count)
+		elif GameSettings.ai_mode >= 2:
+			_init_multi_single(GameSettings.ai_mode)
 		else:
 			call_deferred("_init_entities_deferred")   # 单机1v1原逻辑
 	if info_panel: info_panel.battle = self
@@ -557,12 +557,13 @@ func _init_2v2_single():
 		if cam:
 			cam.global_position = Vector3(player_castle.global_position.x, cam.global_position.y, player_castle.global_position.z)
 
-# 单机多AI混战：1个玩家 + N个红队AI（peer 1000+i），各自独立资源/人口/上限
-func _init_multi_single(ai_count: int):
+# 单机对称团队战：玩家+蓝方AI vs 红方AI（2V2/3V3），每方人数=模式值
+func _init_multi_single(mode: int):
 	var map = $Map
 	if not map: return
-	ai_count = clampi(ai_count, 1, 5)
-	var positions = map.get_six_castle_positions()   # [blue1,blue2,blue3,red1,red2,red3]
+	mode = clampi(mode, 2, 3)
+	var layout = map.get_four_castle_positions() if mode == 2 else map.get_six_castle_positions()
+	# layout 顺序: [blue1, blue2, (blue3), red1, red2, (red3)]
 
 	player_owner_id = 1
 	player_resources = {"gold": 500, "wood": 500, "stone": 300, "food": 500, "oil": 0}
@@ -570,15 +571,19 @@ func _init_multi_single(ai_count: int):
 	player_resource_limits = {"gold": 500, "wood": 500, "stone": 500, "food": 500, "oil": 0}
 	team_nations[RTSConfig.Team.BLUE] = GameSettings.player_nation
 
-	_team_castle_count[RTSConfig.Team.BLUE] = 1
-	_team_castle_count[RTSConfig.Team.RED] = ai_count
+	_team_castle_count[RTSConfig.Team.BLUE] = mode
+	_team_castle_count[RTSConfig.Team.RED] = mode
 
-	# 玩家城堡（blue1 位置）
+	# 红方所有 AI 统一一个随机国家（写入 team_nations[RED]）
+	var red_nation = randi() % RTSConfig.Nation.size()
+	team_nations[RTSConfig.Team.RED] = red_nation
+
+	# 玩家城堡（layout[0]，蓝方主城）
 	var player_castle = null
 	var player_cfg = EntityDatabase.get_config(20)
 	player_cfg["owner_peer_id"] = player_owner_id
 	player_cfg["team"] = RTSConfig.Team.BLUE
-	player_castle = spawn_entity(player_cfg, RTSConfig.Team.BLUE, positions[0], 1)
+	player_castle = spawn_entity(player_cfg, RTSConfig.Team.BLUE, layout[0], 1)
 	if player_castle:
 		player_castle.owner_peer_id = player_owner_id
 		player_castle.died.connect(_on_2v2_castle_died.bind(RTSConfig.Team.BLUE))
@@ -587,57 +592,59 @@ func _init_multi_single(ai_count: int):
 		player_castle.level = start_lv
 		if start_lv >= 3:
 			player_castle._unlock_nation_units(GameSettings.player_nation)
+	ai_players[player_owner_id] = {"castle": player_castle, "team": RTSConfig.Team.BLUE, "slot": 0, "nation": GameSettings.player_nation}
 
 	# 玩家初始农民
 	var peasant_cfg = EntityDatabase.get_config(10)
 	for i in range(3):
 		var cfg = peasant_cfg.duplicate()
 		cfg["owner_peer_id"] = player_owner_id
-		spawn_entity(cfg, RTSConfig.Team.BLUE, positions[0] + Vector3(randf_range(-3,3), 0, randf_range(-3,3)), 1)
+		spawn_entity(cfg, RTSConfig.Team.BLUE, layout[0] + Vector3(randf_range(-3,3), 0, randf_range(-3,3)), 1)
 
-	# 每个 AI：独立资源/人口/上限/国家/颜色/AI控制器
-	var ai_colors = [
-		Color(1.0, 0.3, 0.2), Color(1.0, 0.7, 0.2), Color(1.0, 0.4, 0.7),
-		Color(0.85, 0.2, 0.5), Color(0.95, 0.55, 0.3),
-	]
-	for i in range(ai_count):
-		var pid = 1000 + i
-		var team = RTSConfig.Team.RED
-		var nation = randi() % RTSConfig.Nation.size()
-		var castle_pos = positions[i + 1]
-		team_nations[RTSConfig.Team.RED] = nation
-		_player_colors[pid] = ai_colors[i]
+	# 蓝方 AI（队友，与玩家同国）与红方 AI（对手），各自独立资源/人口/上限/颜色/AI控制器
+	var blue_colors = [Color(0.35, 0.6, 1.0), Color(0.5, 0.75, 1.0)]
+	var red_colors = [Color(1.0, 0.3, 0.25), Color(1.0, 0.5, 0.25), Color(1.0, 0.35, 0.55)]
+	for team in [RTSConfig.Team.BLUE, RTSConfig.Team.RED]:
+		var count = (mode - 1) if team == RTSConfig.Team.BLUE else mode
+		var base_pid = 1000 if team == RTSConfig.Team.BLUE else 2000
+		var nation = GameSettings.player_nation if team == RTSConfig.Team.BLUE else red_nation
+		var colors = blue_colors if team == RTSConfig.Team.BLUE else red_colors
+		for ai_index in range(count):
+			var pid = base_pid + ai_index
+			# 位置：蓝方 AI 占 layout[1..mode-1]，红方 AI 占 layout[mode..2*mode-1]
+			var castle_pos = layout[ai_index + 1] if team == RTSConfig.Team.BLUE else layout[mode + ai_index]
+			_player_colors[pid] = colors[ai_index % colors.size()]
 
-		ai_resources[pid] = {"gold": 500, "wood": 500, "stone": 300, "food": 500, "oil": 0}
-		ai_population[pid] = {"current": 0, "max": 20}
-		ai_limits[pid] = {"gold": 500, "wood": 500, "stone": 500, "food": 500, "oil": 0}
+			ai_resources[pid] = {"gold": 500, "wood": 500, "stone": 300, "food": 500, "oil": 0}
+			ai_population[pid] = {"current": 0, "max": 20}
+			ai_limits[pid] = {"gold": 500, "wood": 500, "stone": 500, "food": 500, "oil": 0}
 
-		var castle_cfg = EntityDatabase.get_config(20)
-		castle_cfg["owner_peer_id"] = pid
-		castle_cfg["team"] = team
-		var castle = spawn_entity(castle_cfg, team, castle_pos, 1)
-		if castle:
-			castle.owner_peer_id = pid
-			castle.died.connect(_on_2v2_castle_died.bind(team))
-			var start_lv_ai = NationBonuses.get_castle_start_level(nation)
-			castle.upgrade_level = start_lv_ai
-			castle.level = start_lv_ai
-			if start_lv_ai >= 3:
-				castle._unlock_nation_units(nation)
-		ai_players[pid] = {"castle": castle, "team": team, "slot": i + 1, "nation": nation}
+			var castle_cfg = EntityDatabase.get_config(20)
+			castle_cfg["owner_peer_id"] = pid
+			castle_cfg["team"] = team
+			var castle = spawn_entity(castle_cfg, team, castle_pos, 1)
+			if castle:
+				castle.owner_peer_id = pid
+				castle.died.connect(_on_2v2_castle_died.bind(team))
+				var start_lv_ai = NationBonuses.get_castle_start_level(nation)
+				castle.upgrade_level = start_lv_ai
+				castle.level = start_lv_ai
+				if start_lv_ai >= 3:
+					castle._unlock_nation_units(nation)
+			ai_players[pid] = {"castle": castle, "team": team, "slot": ai_index + 1, "nation": nation}
 
-		# AI初始农民
-		for j in range(3):
-			var cfg = peasant_cfg.duplicate()
-			cfg["owner_peer_id"] = pid
-			spawn_entity(cfg, team, castle_pos + Vector3(randf_range(-3,3), 0, randf_range(-3,3)), 1)
+			# AI初始农民
+			for j in range(3):
+				var cfg = peasant_cfg.duplicate()
+				cfg["owner_peer_id"] = pid
+				spawn_entity(cfg, team, castle_pos + Vector3(randf_range(-3,3), 0, randf_range(-3,3)), 1)
 
-		# 创建AI控制器
-		var ai = AIController.new()
-		ai.my_peer_id = pid
-		ai.my_team = team
-		ai.name = "AIController_%d" % pid
-		add_child(ai)
+			# 创建AI控制器
+			var ai = AIController.new()
+			ai.my_peer_id = pid
+			ai.my_team = team
+			ai.name = "AIController_%d" % pid
+			add_child(ai)
 
 	# 禁用 1v1 静态 AI（my_peer_id=-1），避免作为额外红队AI乱跑
 	var static_ai = get_node_or_null("AIController")

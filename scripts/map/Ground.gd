@@ -211,12 +211,13 @@ func _place_castles():
 	var half = size / 2.0
 	var margin = 10
 	var ps = 5
-	# 单机多AI：六城堡布局前 N+1 个位置（玩家=位置0，AI=位置1..N）
-	if NetworkManager.mode == NetworkManager.Mode.NONE and GameSettings.ai_player_count >= 2:
-		var six = get_six_castle_positions()
-		multi_castle_positions = six.slice(0, GameSettings.ai_player_count + 1)
-		player_castle_pos = six[0]
-		enemy_castle_pos = six[GameSettings.ai_player_count]
+	# 单机对称团队战（2V2/3V3）：2V2 用四城堡布局，3V3 用六城堡布局；玩家=layout[0]，首个红方=layout[mode]
+	if NetworkManager.mode == NetworkManager.Mode.NONE and GameSettings.ai_mode >= 2:
+		var mode = clampi(GameSettings.ai_mode, 2, 3)
+		var layout = get_four_castle_positions() if mode == 2 else get_six_castle_positions()
+		multi_castle_positions = layout
+		player_castle_pos = layout[0]
+		enemy_castle_pos = layout[mode]
 		return
 	player_castle_pos = _find_flat_plain(half/2+margin, half+ps, half-ps, size-margin, ps)
 	if player_castle_pos == Vector3.ZERO:
@@ -257,11 +258,11 @@ func _place_resources():
 	var placed = {}
 
 	var is_3v3 = NetworkManager.selected_mode == NetworkManager.GameMode.THREEvTHREE
-	var is_team_mode = NetworkManager.selected_mode != NetworkManager.GameMode.ONEvONE
-	var is_multi_single = NetworkManager.mode == NetworkManager.Mode.NONE and GameSettings.ai_player_count >= 2
+	var is_single_team = NetworkManager.mode == NetworkManager.Mode.NONE and GameSettings.ai_mode >= 2
+	if is_single_team:
+		is_3v3 = GameSettings.ai_mode >= 3
+	var is_team_mode = NetworkManager.selected_mode != NetworkManager.GameMode.ONEvONE or is_single_team
 	var mult = 2.0 if is_3v3 else (1.5 if is_team_mode else 1.0)
-	if is_multi_single:
-		mult = 1.0 + (GameSettings.ai_player_count - 1) * 0.6
 
 	# Castle positions in grid coordinates
 	var player_gx = int(player_castle_pos.x + size/2.0)
@@ -276,10 +277,6 @@ func _place_resources():
 			var fgx = int(fp.x + size/2.0)
 			var fgy = int(fp.z + size/2.0)
 			castles.append([fgx, fgy])
-	elif is_multi_single:
-		castles = []
-		for fp in multi_castle_positions:
-			castles.append([int(fp.x + size/2.0), int(fp.z + size/2.0)])
 
 	# ── Guaranteed resources near each castle ──
 	# [type, group_size_min, group_size_max, max_dist, terrain, label]
@@ -300,8 +297,8 @@ func _place_resources():
 		{"type":0, "min_sz":2, "max_sz":3, "dist":12, "terrain":0},  # gold
 	]
 	if GameSettings.ai_difficulty >= GameSettings.AIDifficulty.HARD or GameSettings.red_ai_difficulty >= GameSettings.AIDifficulty.HARD or GameSettings.blue_ai_difficulty >= GameSettings.AIDifficulty.HARD:
-		# Only for enemy/AI castles（1v1 敌方 = 后半；2v2/3v3 红队城堡 = 后半；单机多AI = 索引1..N）
-		var ai_castles = castles.slice(1) if is_multi_single else castles.slice(castles.size() / 2)
+		# Only for enemy/AI castles（1v1 敌方 = 后半；2v2/3v3 红队城堡 = 后半）
+		var ai_castles = castles.slice(castles.size() / 2)
 		for cs in ai_castles:
 			for gu in hard_extra:
 				_place_group_near(gu.type, gu.min_sz, gu.max_sz, cs[0], cs[1], gu.dist, gu.terrain, placed, size, gu.get("near_mountain", false))

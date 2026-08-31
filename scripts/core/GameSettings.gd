@@ -3,7 +3,7 @@ enum AIDifficulty { EASY, NORMAL, HARD, HELL }
 var player_nation: int = RTSConfig.Nation.VIKING
 var enemy_nation: int = RTSConfig.Nation.ENGLAND
 var ai_difficulty: int = AIDifficulty.EASY
-var ai_player_count: int = 1   # 单机AI数量（1=标准1v1，2-5=多AI混战）
+var ai_mode: int = 1   # 单机模式：1=1V1, 2=2V2, 3=3V3（对称团队战，每方人数=模式值）
 var blue_ai_difficulty: int = AIDifficulty.EASY  # 2v2 蓝方 AI
 var red_ai_difficulty: int = AIDifficulty.EASY   # 2v2 红方 AI
 var is_single_2v2: bool = false

@@ -97,24 +97,25 @@ func _ready():
 	diff_select.add_theme_font_size_override("font_size", 18)
 	add_child(diff_select)
 
-	# AI数量选择
-	var ai_count_label = Label.new()
-	ai_count_label.text = "AI数量"
-	ai_count_label.position = Vector2(700, center_y + 55)
-	ai_count_label.size = Vector2(200, 30)
-	ai_count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	ai_count_label.add_theme_font_size_override("font_size", 20)
-	ai_count_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
-	add_child(ai_count_label)
-	var ai_count_select = OptionButton.new()
-	ai_count_select.name = "AiCountSelect"
-	for i in range(1, 6):
-		ai_count_select.add_item("  %d 个对手" % i)
-	ai_count_select.selected = 0   # 默认 1 个对手
-	ai_count_select.position = Vector2(910, center_y + 53)
-	ai_count_select.size = Vector2(740, 45)
-	ai_count_select.add_theme_font_size_override("font_size", 18)
-	add_child(ai_count_select)
+	# 游戏模式选择（1V1 / 2V2 / 3V3 对称团队战）
+	var mode_label = Label.new()
+	mode_label.text = "游戏模式"
+	mode_label.position = Vector2(700, center_y + 55)
+	mode_label.size = Vector2(200, 30)
+	mode_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	mode_label.add_theme_font_size_override("font_size", 20)
+	mode_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+	add_child(mode_label)
+	var mode_select = OptionButton.new()
+	mode_select.name = "ModeSelect"
+	mode_select.add_item("  1V1")
+	mode_select.add_item("  2V2")
+	mode_select.add_item("  3V3")
+	mode_select.selected = 0   # 默认 1V1
+	mode_select.position = Vector2(910, center_y + 53)
+	mode_select.size = Vector2(740, 45)
+	mode_select.add_theme_font_size_override("font_size", 18)
+	add_child(mode_select)
 
 	# 快速模式
 	var fast_check = CheckBox.new()
@@ -208,8 +209,8 @@ func _on_play_pressed():
 	GameSettings.enemy_nation = randi() % RTSConfig.Nation.size()
 	var ds = get_node_or_null("DiffSelect")
 	if ds: GameSettings.ai_difficulty = ds.selected
-	var acs = get_node_or_null("AiCountSelect")
-	GameSettings.ai_player_count = (acs.selected + 1) if acs else 1
+	var ms = get_node_or_null("ModeSelect")
+	GameSettings.ai_mode = (ms.selected + 1) if ms else 1
 	var fc = get_node_or_null("FastCheck")
 	GameSettings.fast_mode = fc.button_pressed if fc else false
 	get_tree().change_scene_to_file("res://scenes/rts_battle.tscn")
@@ -217,7 +218,7 @@ func _on_play_pressed():
 func _on_multiplayer_pressed():
 	var ds = get_node_or_null("DiffSelect")
 	if ds: GameSettings.ai_difficulty = ds.selected
-	GameSettings.ai_player_count = 1   # 联机模式不使用单机AI数量
+	GameSettings.ai_mode = 1   # 联机模式不使用单机模式
 	var fc = get_node_or_null("FastCheck")
 	GameSettings.fast_mode = fc.button_pressed if fc else false
 	get_tree().change_scene_to_file("res://scenes/online_menu.tscn")
