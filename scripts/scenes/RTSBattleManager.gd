@@ -76,6 +76,13 @@ var _entity_lookup: Dictionary = {}     # instance_id → GameEntity (O(1) 查�
 var _global_wall_cache: Dictionary = {}  # cached entity positions for pathfinding
 var _wall_cache_dirty: bool = true
 var _cache_refresh_timer: float = 0.0
+# ==================== 空间索引（网格分桶，消除 O(n²) 近邻扫描） ====================
+const _SPATIAL_CELL_SIZE: float = 8.0
+var _spatial_cells: Dictionary = {}  # Vector2i -> Array[GameEntity]，随实体缓存重建
+# ==================== 墙体/梯子网格缓存（O(1) 查询，随实体缓存重建） ====================
+var _wall_cache_version: int = 0          # 每次实体缓存重建时递增，MovementController 据此判断墙集合是否失效
+var _wall_entity_grid: Dictionary = {}    # Vector2i -> Building(城墙 id==27)，供 process_move 高度平滑 O(1) 查询
+var _ladder_entity_grid: Dictionary = {}  # Vector2i -> Building(梯子 id==8)，供 _has_adjacent_ladder O(8) 查询
 
 # ==================== 诊断工具 ====================
 var _diag_timer: float = 5.0
@@ -136,6 +143,24 @@ func _rebuild_entity_cache():
 		if not _entities_by_team.has(t):
 			_entities_by_team[t] = []
 		_entities_by_team[t].append(child)
+	# 同步构建空间索引（网格分桶）
+	_spatial_cells.clear()
+	for e in _all_entities:
+		var key = Vector2i(int(floor(e.global_position.x / _SPATIAL_CELL_SIZE)), int(floor(e.global_position.z / _SPATIAL_CELL_SIZE)))
+		if not _spatial_cells.has(key):
+			_spatial_cells[key] = []
+		_spatial_cells[key].append(e)
+	# 同步构建墙体/梯子网格（MovementController 寻路与高度平滑的 O(1)/O(8) 缓存）
+	_wall_entity_grid.clear()
+	_ladder_entity_grid.clear()
+	for b in _buildings:
+		if b.health <= 0:
+			continue
+		if b.entity_id == 27:
+			_wall_entity_grid[world_to_grid(b.global_position)] = b
+		elif b.entity_id == 8:
+			_ladder_entity_grid[world_to_grid(b.global_position)] = b
+	_wall_cache_version += 1
 	_entity_cache_dirty = false
 	if Engine.get_process_frames() % 120 == 0: print("[Profile-Cache] %.1fms entities=%d" % [(Time.get_ticks_usec() - _pt) / 1000.0, _all_entities.size()])
 
@@ -146,29 +171,48 @@ func _ensure_cache_fresh():
 	if _entity_cache_dirty:
 		_rebuild_entity_cache()
 
-# 获取范围内敌军实体（仅搜索非己方队伍）
-func get_nearby_enemies(from_pos: Vector3, search_range: float, my_team: int) -> Array:
+# 空间索引：返回 from_pos 周围 search_range + 1 格内的全部存活实体候选
+# （桶范围外扩 1 格覆盖缓存期内实体移动，外层函数再做精确距离过滤）
+func _spatial_query(from_pos: Vector3, search_range: float) -> Array:
 	_ensure_cache_fresh()
 	var result: Array = []
-	for t in _entities_by_team.keys():
-		if t == my_team or t == RTSConfig.Team.NEUTRAL:
-			continue
-		for entity in _entities_by_team[t]:
-			if not is_instance_valid(entity) or entity.health <= 0:
+	var csize = _SPATIAL_CELL_SIZE
+	var extend = search_range + csize  # 覆盖实体在缓存期内的位移
+	var min_x = floori((from_pos.x - extend) / csize)
+	var max_x = floori((from_pos.x + extend) / csize)
+	var min_z = floori((from_pos.z - extend) / csize)
+	var max_z = floori((from_pos.z + extend) / csize)
+	for cx in range(min_x, max_x + 1):
+		for cz in range(min_z, max_z + 1):
+			var bucket = _spatial_cells.get(Vector2i(cx, cz))
+			if bucket == null:
 				continue
-			var dist = from_pos.distance_squared_to(entity.global_position)
-			var max_dist = search_range + entity.body_radius + 1.0
-			if dist <= max_dist * max_dist:
+			for entity in bucket:
+				if not is_instance_valid(entity) or entity.health <= 0:
+					continue
 				result.append(entity)
 	return result
 
-# 获取最近资源
+# 获取范围内敌军实体（仅搜索非己方队伍）— 空间索引加速
+func get_nearby_enemies(from_pos: Vector3, search_range: float, my_team: int) -> Array:
+	var result: Array = []
+	for entity in _spatial_query(from_pos, search_range):
+		if entity.team == my_team or entity.team == RTSConfig.Team.NEUTRAL:
+			continue
+		var dist = from_pos.distance_squared_to(entity.global_position)
+		var max_dist = search_range + entity.body_radius + 1.0
+		if dist <= max_dist * max_dist:
+			result.append(entity)
+	return result
+
+# 获取最近资源 — 空间索引加速
 func get_nearest_resource(from_pos: Vector3, search_range: float, resource_types: Array = []) -> WorldResource:
-	_ensure_cache_fresh()
 	var best_dist = search_range * search_range
 	var best: WorldResource = null
-	for res in _resources:
-		if not is_instance_valid(res) or res.health <= 0:
+	for res in _spatial_query(from_pos, search_range):
+		if not (res is WorldResource):
+			continue
+		if res.health <= 0:
 			continue
 		if resource_types.size() > 0 and not res.resource_type in resource_types:
 			continue
@@ -191,10 +235,9 @@ func get_global_wall_cache() -> Dictionary:
 	_wall_cache_dirty = false
 	return _global_wall_cache
 func get_nearby_entities(from_pos: Vector3, search_range: float) -> Array:
-	_ensure_cache_fresh()
 	var result: Array = []
 	var sq_range = search_range * search_range
-	for entity in _all_entities:
+	for entity in _spatial_query(from_pos, search_range):
 		if not is_instance_valid(entity): continue
 		if entity.health <= 0:
 			continue
@@ -399,6 +442,8 @@ func _ready():
 	if not is_online:
 		if game_mode_2v2:
 			_init_2v2_single()
+		elif GameSettings.ai_player_count >= 2:
+			_init_multi_single(GameSettings.ai_player_count)
 		else:
 			call_deferred("_init_entities_deferred")   # 单机1v1原逻辑
 	if info_panel: info_panel.battle = self
@@ -511,6 +556,107 @@ func _init_2v2_single():
 		var cam = get_viewport().get_camera_3d()
 		if cam:
 			cam.global_position = Vector3(player_castle.global_position.x, cam.global_position.y, player_castle.global_position.z)
+
+# 单机多AI混战：1个玩家 + N个红队AI（peer 1000+i），各自独立资源/人口/上限
+func _init_multi_single(ai_count: int):
+	var map = $Map
+	if not map: return
+	ai_count = clampi(ai_count, 1, 5)
+	var positions = map.get_six_castle_positions()   # [blue1,blue2,blue3,red1,red2,red3]
+
+	player_owner_id = 1
+	player_resources = {"gold": 500, "wood": 500, "stone": 300, "food": 500, "oil": 0}
+	player_pop = 0; player_max_pop = 20
+	player_resource_limits = {"gold": 500, "wood": 500, "stone": 500, "food": 500, "oil": 0}
+	team_nations[RTSConfig.Team.BLUE] = GameSettings.player_nation
+
+	_team_castle_count[RTSConfig.Team.BLUE] = 1
+	_team_castle_count[RTSConfig.Team.RED] = ai_count
+
+	# 玩家城堡（blue1 位置）
+	var player_castle = null
+	var player_cfg = EntityDatabase.get_config(20)
+	player_cfg["owner_peer_id"] = player_owner_id
+	player_cfg["team"] = RTSConfig.Team.BLUE
+	player_castle = spawn_entity(player_cfg, RTSConfig.Team.BLUE, positions[0], 1)
+	if player_castle:
+		player_castle.owner_peer_id = player_owner_id
+		player_castle.died.connect(_on_2v2_castle_died.bind(RTSConfig.Team.BLUE))
+		var start_lv = NationBonuses.get_castle_start_level(GameSettings.player_nation)
+		player_castle.upgrade_level = start_lv
+		player_castle.level = start_lv
+		if start_lv >= 3:
+			player_castle._unlock_nation_units(GameSettings.player_nation)
+
+	# 玩家初始农民
+	var peasant_cfg = EntityDatabase.get_config(10)
+	for i in range(3):
+		var cfg = peasant_cfg.duplicate()
+		cfg["owner_peer_id"] = player_owner_id
+		spawn_entity(cfg, RTSConfig.Team.BLUE, positions[0] + Vector3(randf_range(-3,3), 0, randf_range(-3,3)), 1)
+
+	# 每个 AI：独立资源/人口/上限/国家/颜色/AI控制器
+	var ai_colors = [
+		Color(1.0, 0.3, 0.2), Color(1.0, 0.7, 0.2), Color(1.0, 0.4, 0.7),
+		Color(0.85, 0.2, 0.5), Color(0.95, 0.55, 0.3),
+	]
+	for i in range(ai_count):
+		var pid = 1000 + i
+		var team = RTSConfig.Team.RED
+		var nation = randi() % RTSConfig.Nation.size()
+		var castle_pos = positions[i + 1]
+		team_nations[RTSConfig.Team.RED] = nation
+		_player_colors[pid] = ai_colors[i]
+
+		ai_resources[pid] = {"gold": 500, "wood": 500, "stone": 300, "food": 500, "oil": 0}
+		ai_population[pid] = {"current": 0, "max": 20}
+		ai_limits[pid] = {"gold": 500, "wood": 500, "stone": 500, "food": 500, "oil": 0}
+
+		var castle_cfg = EntityDatabase.get_config(20)
+		castle_cfg["owner_peer_id"] = pid
+		castle_cfg["team"] = team
+		var castle = spawn_entity(castle_cfg, team, castle_pos, 1)
+		if castle:
+			castle.owner_peer_id = pid
+			castle.died.connect(_on_2v2_castle_died.bind(team))
+			var start_lv_ai = NationBonuses.get_castle_start_level(nation)
+			castle.upgrade_level = start_lv_ai
+			castle.level = start_lv_ai
+			if start_lv_ai >= 3:
+				castle._unlock_nation_units(nation)
+		ai_players[pid] = {"castle": castle, "team": team, "slot": i + 1, "nation": nation}
+
+		# AI初始农民
+		for j in range(3):
+			var cfg = peasant_cfg.duplicate()
+			cfg["owner_peer_id"] = pid
+			spawn_entity(cfg, team, castle_pos + Vector3(randf_range(-3,3), 0, randf_range(-3,3)), 1)
+
+		# 创建AI控制器
+		var ai = AIController.new()
+		ai.my_peer_id = pid
+		ai.my_team = team
+		ai.name = "AIController_%d" % pid
+		add_child(ai)
+
+	# 禁用 1v1 静态 AI（my_peer_id=-1），避免作为额外红队AI乱跑
+	var static_ai = get_node_or_null("AIController")
+	if static_ai:
+		static_ai.set_process(false)
+		static_ai.set_physics_process(false)
+		static_ai.queue_free()
+
+	# 资源点
+	for res in map.resource_positions:
+		var cfg = EntityDatabase.get_config(res.type)
+		var e = spawn_entity(cfg, RTSConfig.Team.NEUTRAL, res.pos)
+
+	_init_fog_grid()
+	# 聚焦玩家城堡
+	if player_castle:
+		var cam = get_viewport().get_camera_3d()
+		if cam:
+			cam.global_position = Vector3(player_castle.global_position.x, cam.global_position.y, player_castle.global_position.z)
 # 获取房主队伍的统一入口（子类 OnlineBattleManager 重写为实际队伍）
 func get_host_team() -> int:
 	return RTSConfig.Team.BLUE
@@ -592,6 +738,60 @@ func get_limits_for(owner_id: int) -> Dictionary:
 	if owner_id == player_owner_id:
 		return player_resource_limits
 	return ai_limits.get(owner_id, {})
+
+# 单机多AI：指定 owner 交付资源（AI难度资源倍率）
+func deliver_player_resources(owner_id: int, cargo: Dictionary):
+	var mult = 1.0
+	if owner_id != player_owner_id:
+		if GameSettings.ai_difficulty == GameSettings.AIDifficulty.NORMAL: mult = 2.0
+		elif GameSettings.ai_difficulty >= GameSettings.AIDifficulty.HARD: mult = 3.0
+	for t in cargo:
+		add_resource_for(owner_id, t, int(cargo[t] * mult))
+
+# 单机多AI：人口增减（统一走 owner API）
+func decrease_player_population(owner_id: int, amount: int = 1):
+	decrease_population_for(owner_id, amount)
+
+func increase_player_population(owner_id: int, amount: int = 1):
+	increase_population_for(owner_id, amount)
+
+# 单机多AI：生产检查（人口 < 上限）
+func can_player_train(owner_id: int) -> bool:
+	return can_train_for(owner_id)
+
+# 单机多AI：按 owner 刷新资源上限（建筑/仓库/船坞）
+func update_player_limits(owner_id: int):
+	var limits = get_limits_for(owner_id)
+	if limits.is_empty(): return
+	var castle = 0
+	var warehouse = 0
+	var shipyard = 0
+	for e in get_tree().get_nodes_in_group("storage_buildings"):
+		if e.owner_peer_id == owner_id and e.health > 0:
+			if e.entity_id == 20: castle += 1
+			elif e.entity_id == 22 and e.build_timer <= 0: warehouse += e.building_data.get("storage_bonus", 0)
+			elif e.entity_id == 23: shipyard += 1
+	limits["gold"] = 500 + castle*300 + warehouse
+	limits["wood"] = 500 + castle*300 + warehouse
+	limits["stone"] = 500 + castle*300 + warehouse
+	limits["food"] = 500 + castle*300 + warehouse
+	limits["oil"] = shipyard * 700
+
+# 单机多AI：按 owner 刷新人口上限（城堡+房屋+国家加成）
+func update_player_population(owner_id: int):
+	var p_max = 0
+	for entity in get_tree().get_nodes_in_group("pop_buildings"):
+		if entity.owner_peer_id == owner_id and entity.health > 0 and entity.build_timer <= 0:
+			if entity.entity_id == 20: p_max += 20
+			elif entity.entity_id == 28: p_max += 10
+	var nation = team_nations.get(RTSConfig.Team.BLUE, -1) if owner_id == player_owner_id else ai_players.get(owner_id, {}).get("nation", -1)
+	p_max += NationBonuses.get_population_bonus(nation)
+	if owner_id == player_owner_id:
+		player_max_pop = p_max
+	else:
+		var pop = ai_population.get(owner_id)
+		if pop:
+			pop["max"] = p_max
 # Global building type upgrade (2v2: per-player via owner_peer_id, 1v1: per-team)
 func get_building_type_level(team: int, building_id: int, peer_id: int = -1) -> int:
 	var key = peer_id if peer_id != -1 else team
@@ -916,11 +1116,17 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 		entity.global_position.y = h
 
 
-	# 人口管理
+	# 人口管理（单机多AI按 owner 增加，1v1 沿用团队级）
 	if entity is Army and entity.entity_id < 60:
-		increase_population(team, 1)
+		if entity.owner_peer_id != -1:
+			increase_population_for(entity.owner_peer_id, 1)
+		else:
+			increase_population(team, 1)
 	elif entity is Building and (entity.entity_id == 25 or entity.entity_id == 26):
-		increase_population(team, 1)
+		if entity.owner_peer_id != -1:
+			increase_population_for(entity.owner_peer_id, 1)
+		else:
+			increase_population(team, 1)
 
 	return entity
 
@@ -1784,9 +1990,10 @@ func _process(delta):
 		update_resource_limits(get_host_team())
 		update_resource_limits(RTSConfig.Team.RED)
 		_update_command_card_sp()
-		if game_mode_2v2:
+		if ai_players.size() > 0:
 			for pid in ai_players.keys():
-				update_resource_limits(ai_players[pid].team)
+				update_player_limits(pid)
+				update_player_population(pid)
 
 		var mm = $UI/Minimap
 		if mm:

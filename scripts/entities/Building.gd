@@ -99,7 +99,7 @@ func _process(delta):
 		var bm = _get_bm()
 		if owner_peer_id == -1:
 			can_produce = bm.can_train_unit(team)
-		elif bm.has_method("can_player_train") and bm.player_population.has(owner_peer_id):
+		elif bm.has_method("can_player_train"):
 			can_produce = bm.can_player_train(owner_peer_id)
 		else:
 			can_produce = bm.can_train_unit(team)  # 1v1 fallback

@@ -78,28 +78,43 @@ var _naval_patrol_timer: float = 0.0
 
 # ═══ Resource wrappers ═══
 func _get_resources() -> Dictionary:
-	if battle is OnlineBattleManager and my_peer_id != -1:
-		return battle.player_resources.get(my_peer_id, {})
+	if my_peer_id != -1:
+		if battle is OnlineBattleManager:
+			return battle.player_resources.get(my_peer_id, {})
+		if battle.has_method("get_resources_for"):
+			return battle.get_resources_for(my_peer_id)
 	return battle.enemy_resources
 
 func _get_limits() -> Dictionary:
-	if battle is OnlineBattleManager and my_peer_id != -1:
-		return battle.player_limits_dict.get(my_peer_id, {})
+	if my_peer_id != -1:
+		if battle is OnlineBattleManager:
+			return battle.player_limits_dict.get(my_peer_id, {})
+		if battle.has_method("get_limits_for"):
+			return battle.get_limits_for(my_peer_id)
 	return battle.enemy_resource_limits
 
 func _get_population() -> Dictionary:
-	if battle is OnlineBattleManager and my_peer_id != -1:
-		return battle.player_population.get(my_peer_id, {"current":0,"max":30})
+	if my_peer_id != -1:
+		if battle is OnlineBattleManager:
+			return battle.player_population.get(my_peer_id, {"current":0,"max":30})
+		if battle.has_method("get_population_for"):
+			return battle.get_population_for(my_peer_id)
 	return {"current": battle.enemy_pop, "max": battle.enemy_max_pop}
 
 func _can_train_unit() -> bool:
-	if battle is OnlineBattleManager and my_peer_id != -1:
-		return battle.can_player_train(my_peer_id)
+	if my_peer_id != -1:
+		if battle is OnlineBattleManager:
+			return battle.can_player_train(my_peer_id)
+		if battle.has_method("can_train_for"):
+			return battle.can_train_for(my_peer_id)
 	return battle.can_train_unit(RTSConfig.Team.RED)
 
 func _deduct_resources(cost: Dictionary) -> bool:
-	if battle is OnlineBattleManager and my_peer_id != -1:
-		return battle.deduct_player_resources(my_peer_id, cost)
+	if my_peer_id != -1:
+		if battle is OnlineBattleManager:
+			return battle.deduct_player_resources(my_peer_id, cost)
+		if battle.has_method("deduct_resources_for"):
+			return battle.deduct_resources_for(my_peer_id, cost)
 	var res = battle.enemy_resources
 	for k in cost:
 		if res[k] < cost[k]: return false
@@ -115,6 +130,8 @@ func entity_belongs_to_me(entity: GameEntity) -> bool:
 func _add_nation_special_unit():
 	if battle is OnlineBattleManager:
 		nation = battle.player_info.get(my_peer_id, {}).get("nation", -1)
+	elif battle.ai_players.has(my_peer_id):
+		nation = battle.ai_players[my_peer_id].get("nation", GameSettings.enemy_nation)
 	else:
 		nation = GameSettings.enemy_nation
 	if nation < 0: return
@@ -362,7 +379,9 @@ func _ready():
 func _process(delta):
 	# Set think interval based on difficulty (once)
 	if think_interval == 2.0:
-		var diff = GameSettings.red_ai_difficulty if my_team == RTSConfig.Team.RED else GameSettings.blue_ai_difficulty
+		var diff = GameSettings.ai_difficulty
+		if battle is OnlineBattleManager and my_peer_id != -1:
+			diff = GameSettings.red_ai_difficulty if my_team == RTSConfig.Team.RED else GameSettings.blue_ai_difficulty
 		if diff == GameSettings.AIDifficulty.EASY: think_interval = 2.0
 		elif diff == GameSettings.AIDifficulty.NORMAL: think_interval = 1.75
 		elif diff == GameSettings.AIDifficulty.HARD: think_interval = 1.5
@@ -500,7 +519,7 @@ func decide(_delta):
 	var _pt = Time.get_ticks_usec()
 	_last_delta = _delta
 	if not battle: return
-	if battle is OnlineBattleManager and my_peer_id != -1:
+	if my_peer_id != -1 and battle.has_method("update_player_limits"):
 		battle.update_player_limits(my_peer_id)
 		battle.update_player_population(my_peer_id)
 	else:

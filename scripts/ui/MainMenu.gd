@@ -97,21 +97,40 @@ func _ready():
 	diff_select.add_theme_font_size_override("font_size", 18)
 	add_child(diff_select)
 
+	# AI数量选择
+	var ai_count_label = Label.new()
+	ai_count_label.text = "AI数量"
+	ai_count_label.position = Vector2(700, center_y + 55)
+	ai_count_label.size = Vector2(200, 30)
+	ai_count_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	ai_count_label.add_theme_font_size_override("font_size", 20)
+	ai_count_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+	add_child(ai_count_label)
+	var ai_count_select = OptionButton.new()
+	ai_count_select.name = "AiCountSelect"
+	for i in range(1, 6):
+		ai_count_select.add_item("  %d 个对手" % i)
+	ai_count_select.selected = 0   # 默认 1 个对手
+	ai_count_select.position = Vector2(910, center_y + 53)
+	ai_count_select.size = Vector2(740, 45)
+	ai_count_select.add_theme_font_size_override("font_size", 18)
+	add_child(ai_count_select)
+
 	# 快速模式
 	var fast_check = CheckBox.new()
 	fast_check.name = "FastCheck"
 	fast_check.text = "快速模式（采集×3）"
-	fast_check.position = Vector2(910, center_y + 440)
+	fast_check.position = Vector2(910, center_y + 530)
 	fast_check.add_theme_font_size_override("font_size", 18)
 	fast_check.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
 	add_child(fast_check)
 
 	# 按钮
 	var btn_data = [
-		["单人游戏", Vector2(850, center_y + 40), _on_play_pressed, Color(0.15, 0.5, 0.2)],
-		["联机对战", Vector2(850, center_y + 135), _on_multiplayer_pressed, Color(0.15, 0.3, 0.55)],
-		["设  置", Vector2(850, center_y + 230), _on_settings_pressed, Color(0.25, 0.25, 0.4)],
-		["退出游戏", Vector2(850, center_y + 325), _on_quit_pressed, Color(0.35, 0.15, 0.15)],
+		["单人游戏", Vector2(850, center_y + 122), _on_play_pressed, Color(0.15, 0.5, 0.2)],
+		["联机对战", Vector2(850, center_y + 217), _on_multiplayer_pressed, Color(0.15, 0.3, 0.55)],
+		["设  置", Vector2(850, center_y + 312), _on_settings_pressed, Color(0.25, 0.25, 0.4)],
+		["退出游戏", Vector2(850, center_y + 407), _on_quit_pressed, Color(0.35, 0.15, 0.15)],
 	]
 
 	for data in btn_data:
@@ -189,6 +208,8 @@ func _on_play_pressed():
 	GameSettings.enemy_nation = randi() % RTSConfig.Nation.size()
 	var ds = get_node_or_null("DiffSelect")
 	if ds: GameSettings.ai_difficulty = ds.selected
+	var acs = get_node_or_null("AiCountSelect")
+	GameSettings.ai_player_count = (acs.selected + 1) if acs else 1
 	var fc = get_node_or_null("FastCheck")
 	GameSettings.fast_mode = fc.button_pressed if fc else false
 	get_tree().change_scene_to_file("res://scenes/rts_battle.tscn")
@@ -196,6 +217,7 @@ func _on_play_pressed():
 func _on_multiplayer_pressed():
 	var ds = get_node_or_null("DiffSelect")
 	if ds: GameSettings.ai_difficulty = ds.selected
+	GameSettings.ai_player_count = 1   # 联机模式不使用单机AI数量
 	var fc = get_node_or_null("FastCheck")
 	GameSettings.fast_mode = fc.button_pressed if fc else false
 	get_tree().change_scene_to_file("res://scenes/online_menu.tscn")
