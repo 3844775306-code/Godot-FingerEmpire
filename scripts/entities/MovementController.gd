@@ -171,16 +171,14 @@ func process_move(delta, bm: RTSBattleManager):
 		var map = bm.get_node("Map")
 		if map and map.has_method("get_height_at"):
 			var target_height = map.get_height_at(_army.global_position)
-			# Climb friendly walls + laddered enemy walls
+			# Climb friendly walls + laddered enemy walls (O(1) 墙体网格查询，替代每帧全量遍历)
 			var gpos2 = bm.world_to_grid(_army.global_position)
-			for e in bm.entities.get_children():
-				if e is Building and e.entity_id == 27 and e.health > 0:
-					var wg = bm.world_to_grid(e.global_position)
-					if wg.x == gpos2.x and wg.y == gpos2.y:
-						if e.team == _army.team:
-							target_height += 4.5; break  # friendly wall
-						elif _has_adjacent_ladder(bm, wg, _army.team):
-							target_height += 4.5; break  # laddered enemy wall
+			var wall_b = bm._wall_entity_grid.get(gpos2)
+			if wall_b:
+				if wall_b.team == _army.team:
+					target_height += 4.5  # friendly wall
+				elif _has_adjacent_ladder(bm, gpos2, _army.team):
+					target_height += 4.5  # laddered enemy wall
 			_army.global_position.y = move_toward(_army.global_position.y, target_height, 5.0 * delta)
 
 # ==================== Collision separation ====================
@@ -291,17 +289,20 @@ class MinHeap extends RefCounted:
 			var tmp = _data[idx]; _data[idx] = _data[smallest]; _data[smallest] = tmp
 			idx = smallest
 
-# Shared frame-level wall cache — keyed by (frame, bm_id, team, exclude_tile).
-# Only blocks stationary entities (buildings + resources), not armies.
-# Armies use collision separation for local avoidance.
+# Shared wall cache — keyed by (bm_id, wall_cache_version, team).
+# Stationary entities (buildings + resources) only move on build/destroy, so the
+# wall set is rebuilt only when the battle manager's entity cache version bumps
+# (NOT per frame, NOT per target — `end_tile` no longer invalidates it; the A*
+# loop already skips wall checks for the goal tile).
 static var _wall_set: Dictionary = {}    # Vector2i -> true
-static var _wall_exclude: Vector2i = Vector2i(-999, -999)
-static var _wall_frame: int = -1
+static var _wall_ver: int = -1
 static var _wall_bm_id: int = -1
 static var _wall_team: int = -1  # friendly-wall passability is team-dependent
 static var _bridge_set: Dictionary = {}          # 桥所在格子
 static var _ladder_set: Dictionary = {}          # 梯子使该敌方城墙格可通行
 static var _transport_water: Dictionary = {}     # 运载船周围3格水域(陆军可通行)
+static var _transport_frame: int = -1            # 运载船是移动的，水域标记单独做帧级缓存
+static var _transport_team: int = -1
 
 func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Array:
 	var _pt = Time.get_ticks_usec()
@@ -313,15 +314,37 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 
 	if start_tile == end_tile and stop_range <= 0: return []
 
-	# Build shared wall cache once per frame (only buildings + resources — stationary)
+	# 静态墙集合按实体缓存版本号重建（建造/摧毁时才变化），运载船水域单独做帧级缓存
 	var frame = Engine.get_process_frames()
 	var bm_id = bm.get_instance_id()
-	if _wall_frame != frame or _wall_bm_id != bm_id or _wall_team != _army.team or _wall_exclude != end_tile:
+	if _wall_bm_id != bm_id or _wall_ver != bm._wall_cache_version or _wall_team != _army.team:
 		_wall_set.clear()
 		_bridge_set.clear()
 		_ladder_set.clear()
+		for e in bm.entities.get_children():
+			if not (e is GameEntity) or e.health <= 0: continue
+			if not (e is Building or e is WorldResource): continue
+			var eg = bm.world_to_grid(e.global_position)
+			# 桥不阻挡通行，单独记录
+			if e is Building and e.entity_id == 7:
+				_bridge_set[eg] = true
+				continue
+			# 梯子不阻挡通行，且使其相邻敌方城墙可通行
+			if e is Building and e.entity_id == 8:
+				# 标记梯子相邻的敌方城墙格为可通行（O(8) 查墙体网格，替代 O(8×n) 全量扫描）
+				for dx in range(-1, 2):
+					for dy in range(-1, 2):
+						if dx == 0 and dy == 0: continue
+						var wall_b = bm._wall_entity_grid.get(Vector2i(eg.x + dx, eg.y + dy))
+						if wall_b and wall_b.team != _army.team:
+							_ladder_set[Vector2i(eg.x + dx, eg.y + dy)] = true
+				continue
+			if e is Building and e.entity_id == 27 and e.team == _army.team: continue
+			_wall_set[eg] = true
+		_wall_bm_id = bm_id; _wall_ver = bm._wall_cache_version; _wall_team = _army.team
+	# 运载船会移动：水域标记做帧级缓存（同一帧多个单位寻路只算一次）
+	if _transport_frame != frame or _transport_team != _army.team:
 		_transport_water.clear()
-		# 运载船：周围3格水域标记为陆军可通行
 		for e in bm.entities.get_children():
 			if e is Army and e.entity_id == 9 and e.health > 0 and e.team == _army.team:
 				var tg = bm.world_to_grid(e.global_position)
@@ -331,33 +354,7 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 						if tx >= 0 and tx < RTSConfig.MAP_SIZE and ty >= 0 and ty < RTSConfig.MAP_SIZE:
 							if bm.get_terrain_at_grid(tx, ty) == 2:
 								_transport_water[Vector2i(tx, ty)] = true
-		for e in bm.entities.get_children():
-			if not (e is GameEntity) or e.health <= 0: continue
-			if not (e is Building or e is WorldResource): continue
-			var eg = bm.world_to_grid(e.global_position)
-			if eg == end_tile: continue
-			# 桥不阻挡通行，单独记录
-			if e is Building and e.entity_id == 7:
-				_bridge_set[eg] = true
-				continue
-			# 梯子不阻挡通行，且使其相邻敌方城墙可通行
-			if e is Building and e.entity_id == 8:
-				# 标记梯子相邻的敌方城墙格为可通行
-				for dx in range(-1, 2):
-					for dy in range(-1, 2):
-						if dx == 0 and dy == 0: continue
-						var nx = eg.x + dx; var ny = eg.y + dy
-						if nx < 0 or nx >= RTSConfig.MAP_SIZE or ny < 0 or ny >= RTSConfig.MAP_SIZE: continue
-						# 检查相邻格是否有敌方城墙
-						for e2 in bm.entities.get_children():
-							if e2 is Building and e2.entity_id == 27 and e2.team != _army.team and e2.health > 0:
-								var wg = bm.world_to_grid(e2.global_position)
-								if wg.x == nx and wg.y == ny:
-									_ladder_set[wg] = true
-				continue
-			if e is Building and e.entity_id == 27 and e.team == _army.team: continue
-			_wall_set[eg] = true
-		_wall_frame = frame; _wall_bm_id = bm_id; _wall_team = _army.team; _wall_exclude = end_tile
+		_transport_frame = frame; _transport_team = _army.team
 	var wall_cache = _wall_set
 
 	# A* data structures — Vector2i keys (fast int hash, no string allocs)
@@ -463,14 +460,12 @@ func _reconstruct_path(came_from: Dictionary, end_tile: Vector2i) -> Array:
 	path.reverse()
 	return path
 
-# 检查指定城墙格是否有己方梯子相邻
+# 检查指定城墙格是否有己方梯子相邻（O(8) 查梯子网格，替代 O(8×n) 全量扫描）
 func _has_adjacent_ladder(bm: RTSBattleManager, wall_tile: Vector2i, my_team: int) -> bool:
 	for dx in range(-1, 2):
 		for dy in range(-1, 2):
 			if dx == 0 and dy == 0: continue
-			for e in bm.entities.get_children():
-				if e is Building and e.entity_id == 8 and e.health > 0 and e.team == my_team:
-					var lt = bm.world_to_grid(e.global_position)
-					if lt.x == wall_tile.x + dx and lt.y == wall_tile.y + dy:
-						return true
+			var ladder_b = bm._ladder_entity_grid.get(Vector2i(wall_tile.x + dx, wall_tile.y + dy))
+			if ladder_b and ladder_b.health > 0 and ladder_b.team == my_team:
+				return true
 	return false
