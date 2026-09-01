@@ -13,55 +13,78 @@ func _ready():
 	var old_box = get_node_or_null("VBoxContainer")
 	if old_box: old_box.visible = false
 
-	# 全屏暗色背景
+	# 全屏暖黑背景（羊皮纸皇庭底色）
 	var bg = ColorRect.new()
-	bg.color = Color(0.06, 0.06, 0.1)
+	bg.color = Color(0.10, 0.08, 0.06)
 	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	add_child(bg)
 	move_child(bg, 0)
 
-	# 装饰性顶部横条
+	# 顶部皇庭金饰横条
 	var top_bar = ColorRect.new()
-	top_bar.color = Color(0.2, 0.45, 0.8, 0.3)
+	top_bar.color = Color(UITheme.GOLD)
 	top_bar.position = Vector2(0, 0)
-	top_bar.size = Vector2(2400, 4)
+	top_bar.size = Vector2(2400, 6)
 	add_child(top_bar)
+	var top_bar2 = ColorRect.new()
+	top_bar2.color = Color(UITheme.GOLD, 0.35)
+	top_bar2.position = Vector2(0, 6)
+	top_bar2.size = Vector2(2400, 3)
+	add_child(top_bar2)
 
-	# 中央内容垂直居中容器
 	var center_y = 350  # 整体上移
 
-	# 标题
+	# 主标题（皇庭金徽章）
 	var title = Label.new()
-	title.text = "FINGER EMPIRE"
+	title.text = "👑 FINGER EMPIRE 👑"
 	title.position = Vector2(0, center_y - 300)
-	title.size = Vector2(2400, 80)
+	title.size = Vector2(2400, 90)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_font_size_override("font_size", 96)
-	title.add_theme_color_override("font_color", Color(0.9, 0.75, 0.1))
-	title.add_theme_color_override("font_shadow_color", Color.BLACK)
+	title.add_theme_color_override("font_color", UITheme.GOLD.lightened(0.15))
+	title.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.9))
 	title.add_theme_constant_override("shadow_offset_x", 3)
 	title.add_theme_constant_override("shadow_offset_y", 3)
-	title.add_theme_constant_override("shadow_size", 8)
+	title.add_theme_constant_override("shadow_size", 10)
 	add_child(title)
+
+	# 标题下方金色装饰线
+	var gold_line = ColorRect.new()
+	gold_line.color = Color(UITheme.GOLD, 0.7)
+	gold_line.position = Vector2(860, center_y - 196)
+	gold_line.size = Vector2(680, 3)
+	add_child(gold_line)
 
 	# 副标题
 	var subtitle = Label.new()
-	subtitle.text = "即时战略"
-	subtitle.position = Vector2(0, center_y - 200)
+	subtitle.text = "即时战略 · 帝国纷争"
+	subtitle.position = Vector2(0, center_y - 185)
 	subtitle.size = Vector2(2400, 40)
 	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	subtitle.add_theme_font_size_override("font_size", 40)
-	subtitle.add_theme_color_override("font_color", Color(0.5, 0.6, 0.7))
+	UITheme.apply_label(subtitle, 34, UITheme.PARCHMENT)
 	add_child(subtitle)
+
+	# 中央皇庭面板
+	var panel = Panel.new()
+	panel.position = Vector2(620, 205)
+	panel.size = Vector2(1160, 725)
+	panel.add_theme_stylebox_override("panel", UITheme.card_style(UITheme.GOLD))
+	add_child(panel)
+
+	# 面板内分区标题
+	var section = UITheme.make_section_title("⚔️ 战役配置 ⚔️", UITheme.GOLD, 28)
+	section.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	section.position = Vector2(620, 218)
+	section.size = Vector2(1160, 36)
+	add_child(section)
 
 	# 国家选择区
 	var nation_label = Label.new()
 	nation_label.text = "选择国家"
-	nation_label.position = Vector2(700, center_y - 100)
-	nation_label.size = Vector2(1000, 36)
+	nation_label.position = Vector2(620, 262)
+	nation_label.size = Vector2(1160, 30)
 	nation_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	nation_label.add_theme_font_size_override("font_size", 26)
-	nation_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+	UITheme.apply_label(nation_label, 24, UITheme.PARCHMENT)
 	add_child(nation_label)
 
 	nation_select = OptionButton.new()
@@ -72,19 +95,18 @@ func _ready():
 	nation_select.add_item("  匈牙利  +15护甲  石材+15%  黄金+10%  人口+5")
 	nation_select.add_item("  日本    +15%攻速  +10%攻击")
 	nation_select.add_item("  拜占庭  +2双护甲  黄金+10%")
-	nation_select.position = Vector2(750, center_y - 55)
-	nation_select.size = Vector2(900, 55)
-	nation_select.add_theme_font_size_override("font_size", 22)
+	nation_select.position = Vector2(750, 296)
+	nation_select.size = Vector2(900, 50)
+	_style_option(nation_select, 20)
 	add_child(nation_select)
 
 	# AI难度选择
 	var diff_label = Label.new()
 	diff_label.text = "AI难度"
-	diff_label.position = Vector2(700, center_y + 0)
+	diff_label.position = Vector2(700, 366)
 	diff_label.size = Vector2(200, 30)
 	diff_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	diff_label.add_theme_font_size_override("font_size", 20)
-	diff_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+	UITheme.apply_label(diff_label, 20, UITheme.PARCHMENT)
 	add_child(diff_label)
 	var diff_select = OptionButton.new()
 	diff_select.name = "DiffSelect"
@@ -92,19 +114,18 @@ func _ready():
 	diff_select.add_item("  普通（AI资源×2）")
 	diff_select.add_item("  困难（AI资源×3+额外资源）")
 	diff_select.add_item("  地狱（困难+速度+20%）")
-	diff_select.position = Vector2(910, center_y - 2)
-	diff_select.size = Vector2(740, 45)
-	diff_select.add_theme_font_size_override("font_size", 18)
+	diff_select.position = Vector2(910, 364)
+	diff_select.size = Vector2(740, 46)
+	_style_option(diff_select, 16)
 	add_child(diff_select)
 
 	# 游戏模式选择（1V1 / 2V2 / 3V3 对称团队战）
 	var mode_label = Label.new()
 	mode_label.text = "游戏模式"
-	mode_label.position = Vector2(700, center_y + 55)
+	mode_label.position = Vector2(700, 428)
 	mode_label.size = Vector2(200, 30)
 	mode_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	mode_label.add_theme_font_size_override("font_size", 20)
-	mode_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+	UITheme.apply_label(mode_label, 20, UITheme.PARCHMENT)
 	add_child(mode_label)
 	var mode_select = OptionButton.new()
 	mode_select.name = "ModeSelect"
@@ -112,97 +133,105 @@ func _ready():
 	mode_select.add_item("  2V2")
 	mode_select.add_item("  3V3")
 	mode_select.selected = 0   # 默认 1V1
-	mode_select.position = Vector2(910, center_y + 53)
-	mode_select.size = Vector2(740, 45)
-	mode_select.add_theme_font_size_override("font_size", 18)
+	mode_select.position = Vector2(910, 426)
+	mode_select.size = Vector2(740, 46)
+	_style_option(mode_select, 16)
 	add_child(mode_select)
 
 	# 快速模式
 	var fast_check = CheckBox.new()
 	fast_check.name = "FastCheck"
 	fast_check.text = "快速模式（采集×3）"
-	fast_check.position = Vector2(910, center_y + 530)
+	fast_check.position = Vector2(1000, 500)
 	fast_check.add_theme_font_size_override("font_size", 18)
-	fast_check.add_theme_color_override("font_color", Color(0.7, 0.7, 0.7))
+	fast_check.add_theme_color_override("font_color", UITheme.PARCHMENT)
+	fast_check.add_theme_color_override("font_hover_color", UITheme.GOLD)
+	fast_check.add_theme_color_override("icon_normal_color", UITheme.GOLD)
+	fast_check.add_theme_color_override("icon_hover_color", UITheme.GOLD.lightened(0.2))
 	add_child(fast_check)
 
-	# 按钮
+	# 按钮（三级体系：金主 / 石次 / 朱红危险）
 	var btn_data = [
-		["单人游戏", Vector2(850, center_y + 122), _on_play_pressed, Color(0.15, 0.5, 0.2)],
-		["联机对战", Vector2(850, center_y + 217), _on_multiplayer_pressed, Color(0.15, 0.3, 0.55)],
-		["设  置", Vector2(850, center_y + 312), _on_settings_pressed, Color(0.25, 0.25, 0.4)],
-		["退出游戏", Vector2(850, center_y + 407), _on_quit_pressed, Color(0.35, 0.15, 0.15)],
+		["单人游戏", Vector2(900, center_y + 220), _on_play_pressed, "primary"],
+		["联机对战", Vector2(900, center_y + 300), _on_multiplayer_pressed, "primary"],
+		["设  置", Vector2(900, center_y + 380), _on_settings_pressed, "muted"],
+		["退出游戏", Vector2(900, center_y + 460), _on_quit_pressed, "danger"],
 	]
 
 	for data in btn_data:
 		var btn = _make_menu_button(data[0], data[1], data[3])
 		btn.pressed.connect(data[2])
 		add_child(btn)
+		if data[3] == "primary" and data[0] == "单人游戏":
+			UITheme.pulse(btn, 1.03, 0.9)   # 主 CTA 呼吸高亮
+		else:
+			UITheme.hover_scale(btn)
 
-	# 底部装饰面板
+	# 中央面板淡入
+	UITheme.fade_in(panel, 0.4)
+
+	# 底部提示面板
 	var bot_panel = Panel.new()
-	bot_panel.position = Vector2(300, 1050)
+	bot_panel.position = Vector2(300, 1020)
 	bot_panel.size = Vector2(1800, 250)
-	var bot_style = StyleBoxFlat.new()
-	bot_style.bg_color = Color(0.08, 0.09, 0.14, 0.7)
-	bot_style.corner_radius_top_left = 10; bot_style.corner_radius_top_right = 10
-	bot_style.corner_radius_bottom_left = 10; bot_style.corner_radius_bottom_right = 10
-	bot_style.border_width_left = 1; bot_style.border_width_right = 1
-	bot_style.border_width_top = 1; bot_style.border_width_bottom = 1
-	bot_style.border_color = Color(0.25, 0.4, 0.6, 0.3)
-	bot_panel.add_theme_stylebox_override("panel", bot_style)
+	bot_panel.add_theme_stylebox_override("panel", UITheme.card_style(UITheme.GOLD))
 	add_child(bot_panel)
+	UITheme.fade_in(bot_panel, 0.5)
 
 	var tip_label = Label.new()
 	tip_label.text = "快捷键: Ctrl+[1-9] 编队  |  [1-9] 选择编队  |  Shift+右键 连续指令  |  H 暂停采集  |  P 原地防守"
 	tip_label.position = Vector2(0, 30)
-	tip_label.size = Vector2(1600, 30)
+	tip_label.size = Vector2(1800, 30)
 	tip_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	tip_label.add_theme_font_size_override("font_size", 20)
-	tip_label.add_theme_color_override("font_color", Color(0.4, 0.5, 0.6))
+	UITheme.apply_label(tip_label, 20, UITheme.PARCHMENT)
 	bot_panel.add_child(tip_label)
 
 	var tip2 = Label.new()
-	tip2.text = "维京 +25%HP +10%速 | 英格兰 +15%攻 +20%视野 | 法兰西 +25护甲 城堡2级 | 中国 食物+20% 金+10% 人口+10 | 匈牙利 +15护甲 石+15% 金+10%"
+	tip2.text = "维京 +25%HP +10%速 | 英格兰 +15%攻 +20%视野 | 法兰西 +25护甲 城堡2级 | 中国 食物+20% 金+10% 人口+10 | 匈牙利 +15护甲 石+15% 金+10% | 日本 +15%攻速 +10%攻 | 拜占庭 +2护甲 金+10%"
 	tip2.position = Vector2(0, 80)
-	tip2.size = Vector2(1600, 30)
+	tip2.size = Vector2(1800, 30)
 	tip2.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	tip2.add_theme_font_size_override("font_size", 18)
-	tip2.add_theme_color_override("font_color", Color(0.35, 0.4, 0.5))
+	UITheme.apply_label(tip2, 18, Color(UITheme.STONE).lightened(0.3))
 	bot_panel.add_child(tip2)
 
 	# 底部版本号
 	var version = Label.new()
 	version.text = "v1.0 - Godot 4.5"
-	version.position = Vector2(0, 1350)
+	version.position = Vector2(0, 1340)
 	version.size = Vector2(2400, 30)
 	version.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	version.add_theme_font_size_override("font_size", 18)
-	version.add_theme_color_override("font_color", Color(0.3, 0.3, 0.4))
+	UITheme.apply_label(version, 18, Color(UITheme.STONE).lightened(0.2))
 	add_child(version)
+	UITheme.fade_in(version, 0.6)
 
-func _make_menu_button(text: String, pos: Vector2, color: Color) -> Button:
+## 主题化 OptionButton（含弹出列表）
+func _style_option(o: OptionButton, font_size: int) -> void:
+	o.add_theme_font_size_override("font_size", font_size)
+	o.add_theme_color_override("font_color", UITheme.PARCHMENT)
+	o.add_theme_color_override("font_hover_color", UITheme.GOLD)
+	var pop = o.get_popup()
+	pop.add_theme_font_size_override("font_size", font_size)
+	pop.add_theme_color_override("font_color", UITheme.PARCHMENT)
+	pop.add_theme_color_override("font_hover_color", UITheme.GOLD)
+
+## 三级体系菜单按钮
+func _make_menu_button(text: String, pos: Vector2, kind: String) -> Button:
 	var btn = Button.new()
 	btn.text = text
 	btn.position = pos
-	btn.size = Vector2(600, 80)
-
-	var style = StyleBoxFlat.new()
-	style.bg_color = color
-	style.corner_radius_top_left = 8; style.corner_radius_top_right = 8
-	style.corner_radius_bottom_left = 8; style.corner_radius_bottom_right = 8
-	style.border_width_left = 2; style.border_width_right = 2
-	style.border_width_top = 2; style.border_width_bottom = 2
-	style.border_color = Color(color.r * 1.4, color.g * 1.4, color.b * 1.4, 0.6)
-	style.content_margin_left = 10; style.content_margin_top = 5
-
-	var hover = style.duplicate()
-	hover.bg_color = Color(color.r * 1.3, color.g * 1.3, color.b * 1.3)
-
-	btn.add_theme_stylebox_override("normal", style)
-	btn.add_theme_stylebox_override("hover", hover)
-	btn.add_theme_font_size_override("font_size", 30)
+	btn.size = Vector2(600, 62)
+	match kind:
+		"primary": UITheme.apply_primary_button(btn, UITheme.FONT_XXL)
+		"danger": UITheme.apply_danger_button(btn, UITheme.FONT_XXL)
+		_: UITheme.apply_muted_button(btn, UITheme.FONT_XXL)
 	return btn
+
+## 命令模式分段切换样式
+func _set_cmd_toggle(btn: Button, on: bool) -> void:
+	if on:
+		UITheme.apply_primary_button(btn, UITheme.FONT_SM)
+	else:
+		UITheme.apply_muted_button(btn, UITheme.FONT_SM)
 
 func _on_play_pressed():
 	GameSettings.player_nation = nation_select.selected
@@ -236,32 +265,23 @@ func _create_settings_panel():
 	panel.name = "SettingsPanel"
 	panel.position = Vector2(750, 400)
 	panel.size = Vector2(900, 420)
-	var s = StyleBoxFlat.new()
-	s.bg_color = Color(0.08, 0.09, 0.16, 0.95)
-	s.corner_radius_top_left = 12; s.corner_radius_top_right = 12
-	s.corner_radius_bottom_left = 12; s.corner_radius_bottom_right = 12
-	s.border_width_left = 2; s.border_width_right = 2
-	s.border_width_top = 2; s.border_width_bottom = 2
-	s.border_color = Color(0.3, 0.5, 0.7, 0.6)
-	panel.add_theme_stylebox_override("panel", s)
+	panel.add_theme_stylebox_override("panel", UITheme.card_style(UITheme.GOLD))
 	add_child(panel)
+	UITheme.fade_in(panel, 0.3)
 
 	# Title
-	var ttl = Label.new()
-	ttl.text = "音量设置"
+	var ttl = UITheme.make_section_title("⚙️ 音量设置", UITheme.GOLD, 30)
+	ttl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	ttl.position = Vector2(0, 15)
 	ttl.size = Vector2(900, 40)
-	ttl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	ttl.add_theme_font_size_override("font_size", 30)
-	ttl.add_theme_color_override("font_color", Color(0.8, 0.8, 0.9))
 	panel.add_child(ttl)
 
 	# Close button
 	var close = Button.new()
-	close.text = "X"
+	close.text = "✕"
 	close.position = Vector2(840, 10)
 	close.size = Vector2(50, 50)
-	close.add_theme_font_size_override("font_size", 24)
+	UITheme.apply_muted_button(close, UITheme.FONT_SM)
 	close.pressed.connect(func(): panel.visible = false)
 	panel.add_child(close)
 
@@ -270,13 +290,12 @@ func _create_settings_panel():
 	ml.text = "音乐音量"
 	ml.position = Vector2(50, 90)
 	ml.size = Vector2(200, 30)
-	ml.add_theme_font_size_override("font_size", 22)
-	ml.add_theme_color_override("font_color", Color(0.7, 0.7, 0.8))
+	UITheme.apply_label(ml, 22, UITheme.PARCHMENT)
 	panel.add_child(ml)
 
 	var mv = HSlider.new()
 	mv.name = "MusicSlider"
-	mv.position = Vector2(280, 90)
+	mv.position = Vector2(280, 92)
 	mv.size = Vector2(500, 30)
 	mv.min_value = 0; mv.max_value = 100
 	mv.value = AudioManager._music_volume * 100
@@ -288,8 +307,7 @@ func _create_settings_panel():
 	mvl.text = "%d%%" % int(mv.value)
 	mvl.position = Vector2(790, 90)
 	mvl.size = Vector2(80, 30)
-	mvl.add_theme_font_size_override("font_size", 20)
-	mvl.add_theme_color_override("font_color", Color(0.5, 0.7, 0.5))
+	UITheme.apply_label(mvl, 20, UITheme.RES_GOLD)
 	panel.add_child(mvl)
 	mv.value_changed.connect(func(v: float): mvl.text = "%d%%" % int(v))
 
@@ -298,13 +316,12 @@ func _create_settings_panel():
 	sl.text = "音效音量"
 	sl.position = Vector2(50, 160)
 	sl.size = Vector2(200, 30)
-	sl.add_theme_font_size_override("font_size", 22)
-	sl.add_theme_color_override("font_color", Color(0.7, 0.7, 0.8))
+	UITheme.apply_label(sl, 22, UITheme.PARCHMENT)
 	panel.add_child(sl)
 
 	var sv = HSlider.new()
 	sv.name = "SFXSlider"
-	sv.position = Vector2(280, 160)
+	sv.position = Vector2(280, 162)
 	sv.size = Vector2(500, 30)
 	sv.min_value = 0; sv.max_value = 100
 	sv.value = AudioManager._sfx_volume * 100
@@ -316,8 +333,7 @@ func _create_settings_panel():
 	svl.text = "%d%%" % int(sv.value)
 	svl.position = Vector2(790, 160)
 	svl.size = Vector2(80, 30)
-	svl.add_theme_font_size_override("font_size", 20)
-	svl.add_theme_color_override("font_color", Color(0.5, 0.7, 0.5))
+	UITheme.apply_label(svl, 20, UITheme.RES_GOLD)
 	panel.add_child(svl)
 	sv.value_changed.connect(func(v: float): svl.text = "%d%%" % int(v))
 
@@ -326,74 +342,49 @@ func _create_settings_panel():
 	test.text = "测试音效"
 	test.position = Vector2(280, 230)
 	test.size = Vector2(180, 45)
-	test.add_theme_font_size_override("font_size", 20)
+	UITheme.apply_muted_button(test, UITheme.FONT_SM)
 	test.pressed.connect(func(): AudioManager.play_sfx("ui_click"))
 	panel.add_child(test)
 
 	# --- 命令模式 ---
 	var cmd_label = Label.new()
 	cmd_label.text = "命令模式"
-	cmd_label.position = Vector2(50, 290)
+	cmd_label.position = Vector2(50, 292)
 	cmd_label.size = Vector2(200, 30)
-	cmd_label.add_theme_font_size_override("font_size", 22)
-	cmd_label.add_theme_color_override("font_color", Color(0.7, 0.7, 0.8))
+	UITheme.apply_label(cmd_label, 22, UITheme.PARCHMENT)
 	panel.add_child(cmd_label)
 
 	var cmd_single = Button.new()
 	cmd_single.text = "单次命令"
-	cmd_single.position = Vector2(280, 290)
+	cmd_single.position = Vector2(280, 292)
 	cmd_single.size = Vector2(140, 40)
-	cmd_single.add_theme_font_size_override("font_size", 18)
 
-	# 提前声明所有样式变量，确保闭包可捕获
-	var style_single_on = StyleBoxFlat.new()
-	style_single_on.bg_color = Color(0.25, 0.5, 0.25)
-	style_single_on.corner_radius_top_left = 6; style_single_on.corner_radius_top_right = 0
-	style_single_on.corner_radius_bottom_left = 6; style_single_on.corner_radius_bottom_right = 0
-	style_single_on.border_width_left = 1; style_single_on.border_width_top = 1; style_single_on.border_width_bottom = 1
-	style_single_on.border_color = Color(0.4, 0.7, 0.4)
-	var style_single_off = style_single_on.duplicate()
-	style_single_off.bg_color = Color(0.12, 0.12, 0.18)
-	style_single_off.border_color = Color(0.2, 0.2, 0.3)
-
-	var style_cont_on = StyleBoxFlat.new()
-	style_cont_on.bg_color = Color(0.15, 0.35, 0.55)
-	style_cont_on.corner_radius_top_left = 0; style_cont_on.corner_radius_top_right = 6
-	style_cont_on.corner_radius_bottom_left = 0; style_cont_on.corner_radius_bottom_right = 6
-	style_cont_on.border_width_right = 1; style_cont_on.border_width_top = 1; style_cont_on.border_width_bottom = 1
-	style_cont_on.border_color = Color(0.3, 0.5, 0.7)
-	var style_cont_off = style_cont_on.duplicate()
-	style_cont_off.bg_color = Color(0.12, 0.12, 0.18)
-	style_cont_off.border_color = Color(0.2, 0.2, 0.3)
 	var cmd_cont = Button.new()
-	cmd_single.add_theme_stylebox_override("normal", style_single_on if GameSettings.command_mode == 0 else style_single_off)
+	cmd_cont.text = "连续命令"
+	cmd_cont.position = Vector2(430, 292)
+	cmd_cont.size = Vector2(140, 40)
+
+	_set_cmd_toggle(cmd_single, GameSettings.command_mode == 0)
+	_set_cmd_toggle(cmd_cont, GameSettings.command_mode == 1)
 	cmd_single.pressed.connect(func():
 		GameSettings.command_mode = 0
-		cmd_single.add_theme_stylebox_override("normal", style_single_on)
-		cmd_cont.add_theme_stylebox_override("normal", style_cont_off)
+		_set_cmd_toggle(cmd_single, true)
+		_set_cmd_toggle(cmd_cont, false)
 	)
-	panel.add_child(cmd_single)
-
-	
-	cmd_cont.text = "连续命令"
-	cmd_cont.position = Vector2(420, 290)
-	cmd_cont.size = Vector2(140, 40)
-	cmd_cont.add_theme_font_size_override("font_size", 18)
-	cmd_cont.add_theme_stylebox_override("normal", style_cont_off if GameSettings.command_mode == 0 else style_cont_on)
 	cmd_cont.pressed.connect(func():
 		GameSettings.command_mode = 1
-		cmd_single.add_theme_stylebox_override("normal", style_single_off)
-		cmd_cont.add_theme_stylebox_override("normal", style_cont_on)
+		_set_cmd_toggle(cmd_single, false)
+		_set_cmd_toggle(cmd_cont, true)
 	)
+	panel.add_child(cmd_single)
 	panel.add_child(cmd_cont)
 
 	# Hint
 	var hint = Label.new()
 	hint.text = "音效距离衰减：50米内可听到 | 单次命令：下令后取消选择"
-	hint.position = Vector2(50, 350)
+	hint.position = Vector2(50, 356)
 	hint.size = Vector2(800, 25)
-	hint.add_theme_font_size_override("font_size", 16)
-	hint.add_theme_color_override("font_color", Color(0.4, 0.4, 0.5))
+	UITheme.apply_label(hint, 16, Color(UITheme.STONE).lightened(0.25))
 	panel.add_child(hint)
 
 func _on_quit_pressed():
