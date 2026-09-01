@@ -385,7 +385,7 @@ static func card_style(accent: Color = GOLD) -> StyleBoxFlat:
 	var s := panel_style(RADIUS_MD, BORDER_THIN, 0.85)
 	s.border_width_top = BORDER_THICK + 1
 	s.border_color = Color(GOLD, 0.4)
-	s.border_top_color = accent
+	s.border_color_top = accent
 	return s
 
 # ── 图标映射 ─────────────────────────────────────────────
