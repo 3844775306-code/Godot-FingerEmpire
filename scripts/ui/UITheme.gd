@@ -132,10 +132,16 @@ static func button_styles(font_size: int = FONT_LG) -> Dictionary:
 	pressed.bg_color = Color(INK)
 	pressed.border_color = Color(GOLD)
 
+	var disabled := normal.duplicate() as StyleBoxFlat
+	disabled.bg_color = Color(INK, 0.4)
+	disabled.border_color = Color(STONE, 0.25)
+	disabled.shadow_size = 0
+
 	return {
 		"normal": normal,
 		"hover": hover,
 		"pressed": pressed,
+		"disabled": disabled,
 		"font_size": font_size,
 		"font_color": PARCHMENT,
 	}
@@ -146,8 +152,10 @@ static func apply_button(btn: Button, font_size: int = FONT_LG) -> void:
 	btn.add_theme_stylebox_override("normal", styles["normal"])
 	btn.add_theme_stylebox_override("hover", styles["hover"])
 	btn.add_theme_stylebox_override("pressed", styles["pressed"])
+	btn.add_theme_stylebox_override("disabled", styles["disabled"])
 	btn.add_theme_font_size_override("font_size", font_size)
 	btn.add_theme_color_override("font_color", PARCHMENT)
+	btn.add_theme_color_override("font_disabled_color", Color(STONE).lightened(0.35))
 	btn.add_theme_color_override("font_hover_color", GOLD)
 	btn.add_theme_color_override("font_pressed_color", PARCHMENT)
 
@@ -172,3 +180,271 @@ static func hex_str(c: Color) -> String:
 		clampi(int(c.g * 255), 0, 255),
 		clampi(int(c.b * 255), 0, 255),
 	]
+
+# ════════════════════════════════════════════════════════
+# 组件工厂 — 三级按钮体系
+# ════════════════════════════════════════════════════════
+# 主按钮（金）    → 高优先级动作（升级 / 开始 / 确认）
+# 危险按钮（朱红）→ 破坏性动作（拆除 / 退出 / 清除）
+# 次要按钮（灰）  → 辅助操作
+const GOLD_TEXT := Color(0.35, 0.25, 0.08)   # 金色按钮上的深色文字
+
+## 金色主按钮四态样式
+static func primary_button_styles(font_size: int = FONT_LG) -> Dictionary:
+	var normal := StyleBoxFlat.new()
+	normal.bg_color = Color(GOLD)
+	normal.set_corner_radius_all(RADIUS_MD)
+	normal.set_border_width_all(BORDER_MED)
+	normal.border_color = GOLD.lightened(0.35)
+	normal.shadow_size = 4
+	normal.shadow_color = Color(0, 0, 0, 0.5)
+	normal.shadow_offset = Vector2(2, 2)
+
+	var hover := normal.duplicate() as StyleBoxFlat
+	hover.bg_color = GOLD.lightened(0.15)
+	hover.border_color = Color.WHITE
+
+	var pressed := normal.duplicate() as StyleBoxFlat
+	pressed.bg_color = GOLD.darkened(0.18)
+	pressed.border_color = GOLD.darkened(0.1)
+
+	var disabled := normal.duplicate() as StyleBoxFlat
+	disabled.bg_color = Color(STONE, 0.30)
+	disabled.border_color = Color(STONE, 0.20)
+	disabled.shadow_size = 0
+
+	return {
+		"normal": normal, "hover": hover, "pressed": pressed, "disabled": disabled,
+		"font_size": font_size, "font_color": GOLD_TEXT,
+	}
+
+## 朱红危险按钮四态样式
+static func danger_button_styles(font_size: int = FONT_LG) -> Dictionary:
+	var normal := StyleBoxFlat.new()
+	normal.bg_color = Color(VERMILION)
+	normal.set_corner_radius_all(RADIUS_MD)
+	normal.set_border_width_all(BORDER_MED)
+	normal.border_color = VERMILION.lightened(0.4)
+	normal.shadow_size = 4
+	normal.shadow_color = Color(0, 0, 0, 0.5)
+	normal.shadow_offset = Vector2(2, 2)
+
+	var hover := normal.duplicate() as StyleBoxFlat
+	hover.bg_color = VERMILION.lightened(0.15)
+	hover.border_color = Color.WHITE
+
+	var pressed := normal.duplicate() as StyleBoxFlat
+	pressed.bg_color = VERMILION.darkened(0.2)
+	pressed.border_color = VERMILION.darkened(0.1)
+
+	var disabled := normal.duplicate() as StyleBoxFlat
+	disabled.bg_color = Color(STONE, 0.30)
+	disabled.border_color = Color(STONE, 0.20)
+	disabled.shadow_size = 0
+
+	return {
+		"normal": normal, "hover": hover, "pressed": pressed, "disabled": disabled,
+		"font_size": font_size, "font_color": PARCHMENT,
+	}
+
+## 石板灰次要按钮四态样式
+static func muted_button_styles(font_size: int = FONT_MD) -> Dictionary:
+	var normal := StyleBoxFlat.new()
+	normal.bg_color = Color(INK, ALPHA_OVERLAY)
+	normal.set_corner_radius_all(RADIUS_MD)
+	normal.set_border_width_all(BORDER_THIN)
+	normal.border_color = Color(STONE, ALPHA_BORDER)
+
+	var hover := normal.duplicate() as StyleBoxFlat
+	hover.bg_color = Color(INK, 0.9)
+	hover.border_color = Color(PARCHMENT, 0.6)
+
+	var pressed := normal.duplicate() as StyleBoxFlat
+	pressed.bg_color = Color(INK)
+	pressed.border_color = Color(PARCHMENT, 0.9)
+
+	var disabled := normal.duplicate() as StyleBoxFlat
+	disabled.bg_color = Color(INK, 0.3)
+	disabled.border_color = Color(STONE, 0.15)
+
+	return {
+		"normal": normal, "hover": hover, "pressed": pressed, "disabled": disabled,
+		"font_size": font_size, "font_color": PARCHMENT,
+	}
+
+## 将按钮四态字典应用到任意按钮
+static func apply_button_styles(btn: Button, styles: Dictionary) -> void:
+	btn.add_theme_stylebox_override("normal", styles["normal"])
+	btn.add_theme_stylebox_override("hover", styles["hover"])
+	btn.add_theme_stylebox_override("pressed", styles["pressed"])
+	btn.add_theme_stylebox_override("disabled", styles["disabled"])
+	btn.add_theme_font_size_override("font_size", styles["font_size"])
+	btn.add_theme_color_override("font_color", styles["font_color"])
+	btn.add_theme_color_override("font_hover_color", styles["font_color"])
+	btn.add_theme_color_override("font_pressed_color", styles["font_color"])
+	btn.add_theme_color_override("font_disabled_color", Color(STONE).lightened(0.35))
+
+## 金色主按钮（升级 / 开始 / 确认）
+static func apply_primary_button(btn: Button, font_size: int = FONT_LG) -> void:
+	apply_button_styles(btn, primary_button_styles(font_size))
+
+## 朱红危险按钮（拆除 / 退出）
+static func apply_danger_button(btn: Button, font_size: int = FONT_LG) -> void:
+	apply_button_styles(btn, danger_button_styles(font_size))
+
+## 石板灰次要按钮（辅助操作）
+static func apply_muted_button(btn: Button, font_size: int = FONT_MD) -> void:
+	apply_button_styles(btn, muted_button_styles(font_size))
+
+## 列表行按钮四态样式（左侧强调色描边 — 多选统计分组行）
+static func row_button_styles(accent: Color, font_size: int = FONT_SM) -> Dictionary:
+	var normal := StyleBoxFlat.new()
+	normal.bg_color = Color(INK, 0.85)
+	normal.set_corner_radius_all(RADIUS_SM)
+	normal.set_border_width_all(BORDER_THIN)
+	normal.border_width_left = BORDER_THICK
+	normal.border_color = accent
+
+	var hover := normal.duplicate() as StyleBoxFlat
+	hover.bg_color = Color(INK)
+	hover.border_color = accent.lightened(0.3)
+
+	var pressed := normal.duplicate() as StyleBoxFlat
+	pressed.bg_color = Color(accent.r, accent.g, accent.b, 0.30)
+	pressed.border_color = accent.lightened(0.5)
+
+	return {
+		"normal": normal, "hover": hover, "pressed": pressed, "disabled": normal,
+		"font_size": font_size, "font_color": accent,
+	}
+
+## 应用列表行按钮样式（多选统计行）
+static func apply_row_button(btn: Button, accent: Color) -> void:
+	var s := row_button_styles(accent)
+	btn.add_theme_stylebox_override("normal", s["normal"])
+	btn.add_theme_stylebox_override("hover", s["hover"])
+	btn.add_theme_stylebox_override("pressed", s["pressed"])
+	btn.add_theme_stylebox_override("disabled", s["disabled"])
+	btn.add_theme_font_size_override("font_size", s["font_size"])
+	btn.add_theme_color_override("font_color", s["font_color"])
+	btn.add_theme_color_override("font_hover_color", accent.lightened(0.3))
+	btn.add_theme_color_override("font_pressed_color", accent.lightened(0.5))
+	btn.add_theme_color_override("font_disabled_color", accent)
+
+## 分区标题（在线菜单 / 主菜单区块标题）
+static func make_section_title(text: String, color: Color = GOLD, font_size: int = FONT_XL) -> Label:
+	var l := Label.new()
+	l.text = text
+	l.add_theme_font_size_override("font_size", font_size)
+	l.add_theme_color_override("font_color", color)
+	l.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.6))
+	l.add_theme_constant_override("shadow_offset_x", 1)
+	l.add_theme_constant_override("shadow_offset_y", 1)
+	return l
+
+## 资源筹码样式（黑底 + 资源色描边）
+static func chip_style(accent: Color) -> StyleBoxFlat:
+	var s := StyleBoxFlat.new()
+	s.bg_color = Color(0, 0, 0, 0.45)
+	s.set_corner_radius_all(14)
+	s.set_border_width_all(BORDER_THIN)
+	s.border_color = Color(accent, 0.55)
+	return s
+
+## 卡片样式（顶部强调色粗描边 — 信息卡）
+static func card_style(accent: Color = GOLD) -> StyleBoxFlat:
+	var s := panel_style(RADIUS_MD, BORDER_THIN, 0.85)
+	s.border_width_top = BORDER_THICK + 1
+	s.border_color = Color(GOLD, 0.4)
+	s.border_top_color = accent
+	return s
+
+# ── 图标映射 ─────────────────────────────────────────────
+const RESOURCE_ICONS := {
+	"gold":  "💰",
+	"wood":  "🌲",
+	"stone": "⛰️",
+	"food":  "🌾",
+	"oil":   "🛢️",
+}
+
+## 实体图标 — 按 id 映射到中世纪羊皮纸风格 emoji
+static func entity_emoji(entity_id: int, entity_type: int = -1) -> String:
+	match entity_id:
+		0: return "💰"   # 金矿
+		1: return "🌲"   # 树林
+		2: return "⛰️"  # 石矿
+		3: return "🌾"   # 农田
+		4: return "🛢️"  # 油田
+	if entity_type == 1:  # 建筑
+		match entity_id:
+			20: return "🏰"   # 主城
+			21: return "⚔️"  # 兵营
+			22: return "📦"   # 仓库
+			23: return "⚓"   # 船坞
+			24: return "🛠️"  # 攻城车间
+			25, 41: return "🏹"  # 箭塔 / 瞭望塔
+			26: return "🧨"   # 炮塔
+			27: return "🧱"   # 城墙
+			28: return "🏠"   # 民居
+			29: return "🏭"   # 重装武器厂
+			42: return "📜"   # 书院
+			52: return "🏛️"  # 议会
+			64: return "🛡️"  # 堡垒
+			7: return "🌉"    # 桥
+			8: return "🪜"    # 梯子
+			_: return "🏰"
+	match entity_id:
+		5, 6: return "🛒"   # 商人
+		9: return "⛵"       # 渔船
+		10: return "🌾"     # 农民
+		11: return "⚔️"    # 步兵
+		12: return "🏹"    # 弓箭手
+		13: return "🚢"    # 战船
+		14: return "🎣"    # 渔民
+		15: return "🐎"    # 骑兵
+		16: return "🧨"    # 爆破兵
+		17: return "🪨"    # 投石车
+		18: return "🏗️"   # 工程兵
+		19: return "🔎"    # 侦察兵
+		30: return "💪"    # 狂战士
+		31: return "🏹"    # 长弓兵
+		32: return "🐴"    # 法式骑兵
+		33: return "🎯"    # 诸葛连弩
+		34: return "🐘"    # 象骑兵
+		35: return "🔱"    # 长枪兵
+		39: return "🚢"    # 运输船
+		40: return "💥"    # 火船
+		43, 44, 45, 51: return "🏪"  # 商人
+		46, 47, 48, 49, 50: return "📜"  # 县吏
+		_: return "⚔️"
+
+# ── 轻量动效库 ───────────────────────────────────────────
+## 淡入（0.3s 二次缓出）— 进场语义
+static func fade_in(node: CanvasItem, dur: float = 0.3) -> void:
+	node.modulate.a = 0.0
+	node.create_tween() \
+		.tween_property(node, "modulate:a", 1.0, dur) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+
+## 悬停微放大（1.04，0.12s）— 可点按反馈
+static func hover_scale(btn: Button, amount: float = 1.04, dur: float = 0.12) -> void:
+	var base := btn.scale
+	btn.mouse_entered.connect(func():
+		btn.create_tween() \
+			.tween_property(btn, "scale", base * amount, dur) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	)
+	btn.mouse_exited.connect(func():
+		btn.create_tween() \
+			.tween_property(btn, "scale", base, dur) \
+			.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+	)
+
+## 呼吸脉冲（循环 1.0 ↔ 1.05）— 主菜单高亮按钮
+static func pulse(node: CanvasItem, amount: float = 1.05, dur: float = 0.7) -> void:
+	var tw := node.create_tween().set_loops()
+	tw.tween_property(node, "scale", Vector2.ONE * amount, dur) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_property(node, "scale", Vector2.ONE, dur) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)

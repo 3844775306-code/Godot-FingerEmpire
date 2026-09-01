@@ -12,8 +12,7 @@ var hp_bar: ColorRect
 var observed_entity: GameEntity = null
 var battle: RTSBattleManager = null
 var demolish_btn: Button = null
-
-const RC = {"wood": "green", "stone": "gray", "gold": "gold", "food": "orange", "oil": "saddlebrown"}
+var hp_bar_bg: ColorRect = null
 # 统一资源获取：在线模式用 get_host_resources()，单机用 player_resources
 func _get_res() -> Dictionary:
 	if not battle:
@@ -23,34 +22,40 @@ func _get_res() -> Dictionary:
 	return battle.player_resources
 func _ready():
 	visible = false
-	var s = StyleBoxFlat.new()
-	s.bg_color = Color(0.06, 0.07, 0.13, 0.93)
-	s.corner_radius_top_left = 8; s.corner_radius_top_right = 8
-	s.corner_radius_bottom_left = 8; s.corner_radius_bottom_right = 8
-	s.border_width_left = 2; s.border_width_right = 2
-	s.border_width_top = 2; s.border_width_bottom = 2
-	s.border_color = Color(0.25, 0.5, 0.8, 0.6)
-	add_theme_stylebox_override("panel", s)
-	custom_minimum_size = Vector2(200, 0)
+	add_theme_stylebox_override("panel", UITheme.panel_style(UITheme.RADIUS_LG, UITheme.BORDER_MED))
+	custom_minimum_size = Vector2(360, 0)
 
 	_swap_rtl("NameLabel"); _swap_rtl("StatsLabel")
 	name_rtl = $VBox.get_node("NameLabel")
 	stats_rtl = $VBox.get_node("StatsLabel")
+	name_rtl.add_theme_font_size_override("font_size", UITheme.FONT_XL)
+	name_rtl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	stats_rtl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 
+	# 血条：黑色背景条 + 锚点前景（宽度 = 血量比例）
+	hp_bar_bg = ColorRect.new(); hp_bar_bg.name = "HPBarBg"
+	hp_bar_bg.custom_minimum_size = Vector2(1, 16)
+	hp_bar_bg.color = Color(0, 0, 0, 0.55)
+	hp_bar_bg.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	hp_bar = ColorRect.new(); hp_bar.name = "HPBar"
-	hp_bar.custom_minimum_size = Vector2(1, 14); hp_bar.color = Color.GREEN
-	var vb = $VBox; vb.add_child(hp_bar); vb.move_child(hp_bar, 1)
+	hp_bar.color = Color.GREEN
+	hp_bar.anchor_top = 0; hp_bar.anchor_bottom = 1
+	hp_bar.anchor_left = 0; hp_bar.anchor_right = 1
+	hp_bar_bg.add_child(hp_bar)
+	var vb = $VBox; vb.add_child(hp_bar_bg); vb.move_child(hp_bar_bg, 1)
 	close_btn.pressed.connect(_on_close_pressed)
+	close_btn.text = "✕ 关闭"
+	UITheme.apply_muted_button(close_btn, UITheme.FONT_SM)
+	UITheme.apply_primary_button(upgrade_btn, UITheme.FONT_MD)
 
-	# 拆除按钮
+	# 拆除按钮 — 危险红
 	demolish_btn = Button.new()
 	demolish_btn.name = "DemolishBtn"
-	demolish_btn.text = "拆除建筑"
-	demolish_btn.add_theme_font_size_override("font_size", 13)
-	demolish_btn.custom_minimum_size = Vector2(180, 32)
-	demolish_btn.add_theme_color_override("font_color", Color.RED)
+	demolish_btn.text = "💥 拆除建筑"
+	demolish_btn.custom_minimum_size = Vector2(180, 36)
 	demolish_btn.visible = false
 	demolish_btn.pressed.connect(_on_demolish_pressed)
+	UITheme.apply_danger_button(demolish_btn, UITheme.FONT_SM)
 	$VBox.add_child(demolish_btn)
 
 	set_process(true)
@@ -66,18 +71,15 @@ func _swap_rtl(nm: String):
 	p.add_child(r); p.move_child(r, i)
 
 func _bc(pct: float) -> Color:
-	if pct > 0.6: return Color(0.15, 0.75, 0.15)
-	if pct > 0.3: return Color(0.85, 0.75, 0.1)
-	return Color(0.85, 0.15, 0.1)
+	return UITheme.health_bar_color(pct)
 
 func _hc(pct: float) -> String:
-	if pct > 0.6: return "green"
-	if pct > 0.3: return "yellow"
-	return "red"
+	return UITheme.hex_str(UITheme.health_bar_color(pct))
 
 func _make_rtl_label() -> RichTextLabel:
 	var l = RichTextLabel.new(); l.bbcode_enabled = true; l.fit_content = true; l.autowrap_mode = TextServer.AUTOWRAP_OFF
-	l.add_theme_font_size_override("font_size", 10)
+	l.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	l.add_theme_color_override("default_color", UITheme.PARCHMENT)
 	return l
 
 func _get_same_type_buildings(entity: Building) -> Array[Building]:
@@ -108,23 +110,30 @@ func update_info(entity: GameEntity):
 		var e = observed_entity if observed_entity else null
 		var groups = sm.get_node("SelectionManager").get_entity_groups(e)
 		for g in groups:
-			group_prefix += "[color=red]T%d[/color] " % g
-	var nm = group_prefix + "%s  [color=royalblue]Lv.%d[/color]" % [entity.display_name, entity.level]
+			group_prefix += "[color=%s]T%d[/color] " % [UITheme.hex_str(UITheme.VERMILION), g]
+	var nm = group_prefix + "%s  [color=%s]Lv.%d[/color]" % [
+		UITheme.entity_emoji(entity.entity_id, entity.entity_type),
+		UITheme.hex_str(UITheme.GOLD), entity.level]
 	if batch_count > 1:
-		nm += "  [color=orange][Ctrl+x%d][/color]" % batch_count
+		nm += "  [color=%s][Ctrl + x%d][/color]" % [UITheme.hex_str(UITheme.ALERT_WARNING), batch_count]
 	name_rtl.text = nm
 
 	var pct = float(entity.health) / max(float(entity.max_health), 1.0)
-	hp_bar.color = _bc(pct); hp_bar.size.x = 180 * pct; hp_bar.visible = true
+	hp_bar.color = _bc(pct)
+	hp_bar.anchor_right = pct
+	if hp_bar_bg: hp_bar_bg.visible = true
+	hp_bar.visible = true
 
 	var hc = _hc(pct)
 	var t = "[color=%s]HP[/color]:  [color=white]%d / %d[/color]\n" % [hc, entity.health, entity.max_health]
-	t += "[color=orange]ATK[/color]:  [color=white]%d[/color]" % entity.attack
+	t += "[color=%s]ATK[/color]:  [color=white]%d[/color]" % [UITheme.hex_str(UITheme.GOLD), entity.attack]
 	if entity.melee_armor > 0 or entity.shield_armor > 0:
 		t += "
-	[color=steelblue]铠甲[/color]:  [color=white]%d[/color]  [color=darkgray]盾牌[/color]:  [color=white]%d[/color]" % [entity.melee_armor, entity.shield_armor]
-	t += "\n[color=gold]RANGE[/color]:  [color=white]%.1f[/color]" % entity.attack_range
-	t += "\n[color=royalblue]SPEED[/color]:  [color=white]%.1f[/color]" % entity.speed
+	[color=%s]铠甲[/color]:  [color=white]%d[/color]  [color=%s]盾牌[/color]:  [color=white]%d[/color]" % [
+		UITheme.hex_str(UITheme.SAPPHIRE), entity.melee_armor,
+		UITheme.hex_str(UITheme.STONE), entity.shield_armor]
+	t += "\n[color=%s]RANGE[/color]:  [color=white]%.1f[/color]" % [UITheme.hex_str(UITheme.GOLD), entity.attack_range]
+	t += "\n[color=%s]SPEED[/color]:  [color=white]%.1f[/color]" % [UITheme.hex_str(UITheme.EMERALD), entity.speed]
 	stats_rtl.text = t
 
 	# Always detach old upgrade box first (avoid deferred-deletion residue)
@@ -143,6 +152,7 @@ func update_info(entity: GameEntity):
 			upgrade_btn.pressed.connect(_on_upgrade_pressed)
 
 			var box = VBoxContainer.new(); box.name = "UpgradeInfoBox"; $VBox.add_child(box)
+			box.add_theme_constant_override("separation", 2)
 
 			# Show cost per building * batch count
 			var cost = entity.get_upgrade_cost()
@@ -150,17 +160,19 @@ func update_info(entity: GameEntity):
 				if cost.get(res, 0) > 0:
 					var need = cost[res]
 					var have = _get_res().get(res, 0)
-					var rc = RC.get(res, "white")
-					var cc = "white" if have >= need else "red"
+					var rc = UITheme.hex_str(UITheme.RESOURCE_COLORS.get(res, UITheme.PARCHMENT))
+					var cc = "white" if have >= need else UITheme.hex_str(UITheme.VERMILION)
 					var l = _make_rtl_label()
-					l.text = "[color=%s]%s[/color]:  [color=%s]%d/%d[/color]" % [rc, res, cc, need, have]
+					l.text = "%s [color=%s]%s[/color]:  [color=%s]%d / %d[/color]" % [
+						UITheme.RESOURCE_ICONS.get(res, ""), rc,
+						UITheme.RESOURCE_NAMES.get(res, res), cc, have, need]
 					box.add_child(l)
 
 			if entity.entity_id != 20:
 				var cl = entity.get_castle_level()
 				if entity.upgrade_level + 1 > cl:
 					var l = _make_rtl_label()
-					l.text = "[color=red]Need Castle Lv.%d[/color]" % (entity.upgrade_level + 1)
+					l.text = "[color=%s]🏰 需主城 Lv.%d[/color]" % [UITheme.hex_str(UITheme.VERMILION), entity.upgrade_level + 1]
 					box.add_child(l)
 		else:
 			upgrade_btn.visible = false
@@ -174,7 +186,8 @@ func update_info(entity: GameEntity):
 				seen[prod.unit_id] = true
 				var uc = EntityDatabase.get_config(prod.unit_id)
 				if not uc: continue
-				var btn = Button.new(); btn.text = ""; btn.add_theme_font_size_override("font_size", 13); btn.custom_minimum_size = Vector2(180, 32); btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				var btn = Button.new(); btn.text = ""; btn.custom_minimum_size = Vector2(200, 40); btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				UITheme.apply_button(btn, UITheme.FONT_SM)
 				var ok = true; var cs = []
 				var lv = entity.level
 				for res in uc.get("cost", {}):
@@ -188,12 +201,14 @@ func update_info(entity: GameEntity):
 				var rtl = RichTextLabel.new(); rtl.bbcode_enabled = true; rtl.fit_content = true; rtl.autowrap_mode = TextServer.AUTOWRAP_OFF
 				rtl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 				rtl.anchor_left = 0; rtl.anchor_right = 1; rtl.anchor_top = 0; rtl.anchor_bottom = 1
+				rtl.add_theme_color_override("default_color", UITheme.PARCHMENT)
 				var ct = ""
 				for ci in cs:
-					var rc = RC.get(ci.res, "white")
-					var cc = "white" if _get_res().get(ci.res, 0) >= ci.need else "red"
-					ct += "[color=%s]%s[/color]:[color=%s]%d[/color] " % [rc, ci.res, cc, ci.need]
-				rtl.text = "%s  [%s]" % [uc.get("name", "?"), ct.strip_edges()]
+					var cc = "white" if _get_res().get(ci.res, 0) >= ci.need else UITheme.hex_str(UITheme.VERMILION)
+					ct += "%s[color=%s]%d[/color] " % [UITheme.RESOURCE_ICONS.get(ci.res, ""), cc, ci.need]
+				rtl.text = "%s %s  [%s]" % [
+					UITheme.entity_emoji(int(uc.get("id", -1)), int(uc.get("type", 2))),
+					uc.get("name", "?"), ct.strip_edges()]
 				btn.add_child(rtl)
 				btn.pressed.connect(func(): _on_produce_pressed(prod.unit_id))
 				produce_vbox.add_child(btn)
@@ -254,7 +269,8 @@ func show_multi_selection(entities: Array):
 	if demolish_btn: demolish_btn.visible = false
 	produce_vbox.visible = true
 	hp_bar.visible = false
-	name_rtl.text = "[color=white]选中 %d 个单位[/color]" % entities.size()
+	if hp_bar_bg: hp_bar_bg.visible = false
+	name_rtl.text = "[color=%s]⚔️ 选中 %d 个单位[/color]" % [UITheme.hex_str(UITheme.GOLD), entities.size()]
 	stats_rtl.text = ""
 	for c in produce_vbox.get_children(): c.queue_free()
 
@@ -286,38 +302,15 @@ func show_multi_selection(entities: Array):
 		var row_color = ROW_COLORS[i % ROW_COLORS.size()]
 
 		var btn = Button.new()
-		btn.custom_minimum_size = Vector2(180, 36)
-		btn.add_theme_font_size_override("font_size", 14)
+		btn.custom_minimum_size = Vector2(200, 40)
 		btn.toggle_mode = true
+		UITheme.apply_row_button(btn, row_color)
 
-		var sb = StyleBoxFlat.new()
-		sb.bg_color = Color(row_color.r * 0.15, row_color.g * 0.15, row_color.b * 0.15, 0.9)
-		sb.border_width_left = 3
-		sb.border_color = row_color
-		sb.corner_radius_top_left = 4; sb.corner_radius_top_right = 4
-		sb.corner_radius_bottom_left = 4; sb.corner_radius_bottom_right = 4
-		btn.add_theme_stylebox_override("normal", sb)
-
-		var hover_sb = StyleBoxFlat.new()
-		hover_sb.bg_color = Color(row_color.r * 0.25, row_color.g * 0.25, row_color.b * 0.25, 0.95)
-		hover_sb.border_width_left = 3
-		hover_sb.border_color = row_color.lightened(0.3)
-		hover_sb.corner_radius_top_left = 4; hover_sb.corner_radius_top_right = 4
-		hover_sb.corner_radius_bottom_left = 4; hover_sb.corner_radius_bottom_right = 4
-		btn.add_theme_stylebox_override("hover", hover_sb)
-
-		var pressed_sb = StyleBoxFlat.new()
-		pressed_sb.bg_color = Color(row_color.r * 0.4, row_color.g * 0.4, row_color.b * 0.4, 0.95)
-		pressed_sb.border_width_left = 3
-		pressed_sb.border_color = row_color.lightened(0.5)
-		pressed_sb.corner_radius_top_left = 4; pressed_sb.corner_radius_top_right = 4
-		pressed_sb.corner_radius_bottom_left = 4; pressed_sb.corner_radius_bottom_right = 4
-		btn.add_theme_stylebox_override("pressed", pressed_sb)
-
+		var etype: int = 2
+		if g["entities"].size() > 0:
+			etype = g["entities"][0].get("entity_type", 2)
 		var lvl_text = " Lv.%d" % g["min_level"] if g["min_level"] == g["max_level"] else " Lv.%d~%d" % [g["min_level"], g["max_level"]]
-		btn.text = "%d x %s%s" % [g["count"], g["name"], lvl_text]
-		btn.add_theme_color_override("font_color", row_color)
-		btn.add_theme_color_override("font_pressed_color", row_color.lightened(0.3))
+		btn.text = "%s %d x %s%s" % [UITheme.entity_emoji(g["entity_id"], etype), g["count"], g["name"], lvl_text]
 
 		var row_entities = g["entities"].duplicate()
 		btn.pressed.connect(func():
