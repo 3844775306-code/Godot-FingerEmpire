@@ -47,21 +47,25 @@ func _refresh_ui():
 			var need = cost[res]
 			var have = renderer.get_player_resource(res) if renderer else 0
 			if have < need: affordable = false
-			var rc = RC.get(res, "white")
-			var cc = "white" if have >= need else "red"
+			var rc = RC.get(res, "#D4C5A9")
+			var cc = "#D4C5A9" if have >= need else "#C0392B"
 			ct += "[color=%s]%s[/color]:[color=%s]%d[/color] " % [rc, res, cc, need]
 		if cfg.id == 25 or cfg.id == 26:
 			if pop_current >= pop_max: affordable = false
 
+		UITheme.apply_row_button(btn, UITheme.GOLD)
 		btn.disabled = not affordable or is_locked
+		btn.modulate = Color(0.55, 0.55, 0.55) if (not affordable or is_locked) else Color.WHITE
 		btn.custom_minimum_size = Vector2(180, 42)
 		btn.add_theme_font_size_override("font_size", 14)
 		var rtl = RichTextLabel.new(); rtl.bbcode_enabled = true; rtl.fit_content = true
 		rtl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		rtl.add_theme_color_override("default_color", UITheme.PARCHMENT)
+		rtl.add_theme_font_size_override("normal_font_size", 13)
 		rtl.anchor_left = 0; rtl.anchor_right = 1; rtl.anchor_top = 0; rtl.anchor_bottom = 1
 		if is_locked:
 			var req_lv = BUILDING_REQUIRED_CASTLE[bid]
-			rtl.text = "%s\n[color=red]城堡Lv.%d解锁[/color]" % [cfg.name, req_lv]
+			rtl.text = "%s\n[color=#C0392B]城堡Lv.%d解锁[/color]" % [cfg.name, req_lv]
 		else:
 			rtl.text = "%s\n%s" % [cfg.name, ct.strip_edges()]
 		btn.add_child(rtl)
@@ -70,18 +74,13 @@ func _refresh_ui():
 		vbox.add_child(btn)
 
 	var close_btn = Button.new()
-	close_btn.text = "Cancel"; close_btn.add_theme_font_size_override("font_size", 14)
+	close_btn.text = "取消"
+	UITheme.apply_muted_button(close_btn, UITheme.FONT_MD)
 	close_btn.pressed.connect(hide)
 	vbox.add_child(close_btn)
 
 	var panel = Panel.new()
-	var ps = StyleBoxFlat.new()
-	ps.bg_color = Color(0.06, 0.07, 0.13, 0.94)
-	ps.corner_radius_top_left = 8; ps.corner_radius_top_right = 8
-	ps.corner_radius_bottom_left = 8; ps.corner_radius_bottom_right = 8
-	ps.border_width_left = 2; ps.border_width_right = 2; ps.border_width_top = 2; ps.border_width_bottom = 2
-	ps.border_color = Color(0.25, 0.5, 0.8, 0.6)
-	panel.add_theme_stylebox_override("panel", ps)
+	panel.add_theme_stylebox_override("panel", UITheme.card_style(UITheme.GOLD))
 	panel.size = Vector2(200, vbox.get_child_count() * 48 + 20)
 	panel.add_child(vbox)
 	add_child(panel)

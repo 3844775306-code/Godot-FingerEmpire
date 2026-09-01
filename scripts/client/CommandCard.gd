@@ -10,12 +10,7 @@ var _bg: Panel
 
 func _ready():
 	_bg = Panel.new(); _bg.size = Vector2(BTN_W*COLS + 16, BTN_H*ROWS + 16)
-	var sb = StyleBoxFlat.new(); sb.bg_color = Color(0.08, 0.08, 0.12, 0.9)
-	sb.corner_radius_top_left = 6; sb.corner_radius_top_right = 6
-	sb.corner_radius_bottom_left = 6; sb.corner_radius_bottom_right = 6
-	sb.border_width_left = 1; sb.border_width_right = 1; sb.border_width_top = 1; sb.border_width_bottom = 1
-	sb.border_color = Color(0.8, 0.66, 0.3, 0.5)
-	_bg.add_theme_stylebox_override("panel", sb); add_child(_bg)
+	_bg.add_theme_stylebox_override("panel", UITheme.card_style(UITheme.GOLD)); add_child(_bg)
 
 	_grid = GridContainer.new(); _grid.position = Vector2(8, 8)
 	_grid.columns = COLS
@@ -29,18 +24,8 @@ func _ready():
 
 func _make_btn() -> Button:
 	var b = Button.new(); b.custom_minimum_size = Vector2(BTN_W, BTN_H)
-	b.add_theme_font_size_override("font_size", 12)
-	b.add_theme_color_override("font_color", Color(0.9, 0.85, 0.7)); b.disabled = true
-	var sn = StyleBoxFlat.new(); sn.bg_color = Color(0.15,0.14,0.12,0.9)
-	sn.border_width_left = 1; sn.border_width_right = 1; sn.border_width_top = 1; sn.border_width_bottom = 1
-	sn.border_color = Color(0.8,0.66,0.3,0.3); sn.corner_radius_top_left = 3; sn.corner_radius_top_right = 3
-	b.add_theme_stylebox_override("normal", sn)
-	var sh = sn.duplicate(); sh.bg_color = Color(0.25,0.22,0.16,0.95); sh.border_color = Color(0.9,0.7,0.3,0.6)
-	b.add_theme_stylebox_override("hover", sh)
-	var sp = sn.duplicate(); sp.bg_color = Color(0.35,0.30,0.18,1.0); sp.border_color = Color(1.0,0.8,0.3,0.8)
-	b.add_theme_stylebox_override("pressed", sp)
-	var sd = sn.duplicate(); sd.bg_color = Color(0.08,0.07,0.06,0.7); sd.border_color = Color(0.3,0.3,0.3,0.3)
-	b.add_theme_stylebox_override("disabled", sd)
+	UITheme.apply_command_button(b, UITheme.FONT_XS)
+	b.disabled = true
 	return b
 
 const COST_NAMES = {"food":"食","wood":"木","stone":"石","gold":"金","oil":"油"}

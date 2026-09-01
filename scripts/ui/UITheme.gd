@@ -331,6 +331,35 @@ static func apply_row_button(btn: Button, accent: Color) -> void:
 	btn.add_theme_color_override("font_pressed_color", accent.lightened(0.5))
 	btn.add_theme_color_override("font_disabled_color", accent)
 
+## 命令卡按钮四态样式（CommandCard 网格 — 石板底 + 金边，禁用态明显变暗）
+static func command_button_styles(font_size: int = FONT_XS) -> Dictionary:
+	var normal := StyleBoxFlat.new()
+	normal.bg_color = Color(INK, 0.9)
+	normal.set_corner_radius_all(RADIUS_SM)
+	normal.set_border_width_all(BORDER_THIN)
+	normal.border_color = Color(GOLD, 0.35)
+
+	var hover := normal.duplicate() as StyleBoxFlat
+	hover.bg_color = Color(INK)
+	hover.border_color = Color(GOLD, 0.7)
+
+	var pressed := normal.duplicate() as StyleBoxFlat
+	pressed.bg_color = Color(GOLD, 0.25)
+	pressed.border_color = Color(GOLD)
+
+	var disabled := normal.duplicate() as StyleBoxFlat
+	disabled.bg_color = Color(0, 0, 0, 0.35)
+	disabled.border_color = Color(STONE, 0.2)
+
+	return {
+		"normal": normal, "hover": hover, "pressed": pressed, "disabled": disabled,
+		"font_size": font_size, "font_color": PARCHMENT,
+	}
+
+## 应用命令卡按钮样式（CommandCard 网格按钮）
+static func apply_command_button(btn: Button, font_size: int = FONT_XS) -> void:
+	apply_button_styles(btn, command_button_styles(font_size))
+
 ## 分区标题（在线菜单 / 主菜单区块标题）
 static func make_section_title(text: String, color: Color = GOLD, font_size: int = FONT_XL) -> Label:
 	var l := Label.new()
