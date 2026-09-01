@@ -382,10 +382,11 @@ static func chip_style(accent: Color) -> StyleBoxFlat:
 
 ## 卡片样式（顶部强调色粗描边 — 信息卡）
 static func card_style(accent: Color = GOLD) -> StyleBoxFlat:
+	# StyleBoxFlat 仅支持统一 border_color（无 per-side 颜色），
+	# 用「整体 accent 边框 + 顶部 4px 加粗」实现顶部强调描边效果
 	var s := panel_style(RADIUS_MD, BORDER_THIN, 0.85)
 	s.border_width_top = BORDER_THICK + 1
-	s.border_color = Color(GOLD, 0.4)
-	s.border_color_top = accent
+	s.border_color = Color(accent, 0.55)
 	return s
 
 # ── 图标映射 ─────────────────────────────────────────────
