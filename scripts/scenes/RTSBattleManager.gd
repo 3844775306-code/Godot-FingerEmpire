@@ -22,6 +22,7 @@ var ai_players: Dictionary = {}               # { peer_id: { "team":, "slot":, "
 var ai_resources: Dictionary = {}             # peer_id -> resources dict
 var ai_population: Dictionary = {}            # peer_id -> population dict
 var ai_limits: Dictionary = {}                # peer_id -> limits dict
+var diplomacy: DiplomacyManager = null        # 乱斗模式外交核心（子节点），非乱斗为 null
 # ==================== 建造 ====================
 var building_defs: Array = []
 var build_mode: bool = false
@@ -492,11 +493,174 @@ func _print_anim(path, label):
 	print("==============================")
 
 # ==================== 乱斗模式（FFA） ====================
+# 开局：N 国环绕布局，各国独立 team/owner/颜色/国家加成/AI控制器。
+# 玩家为 layout[0]（地图正下方，蓝队 BLUE=1）；其余 AI 国依次分到 team 3..（避开
+# RED=0 与 NEUTRAL=2），保证"同队即友军"的既有判定在 FFA 里各国默认互敌。
 func _init_ffa_single(_nation_count: int):
-	# 第1段占位：正式的多国开局（开国/结盟/进贡/决裂/背叛）在后续段实现。
-	# 现在临时回退到 1v1 原逻辑，保证乱斗入口可运行、不崩场景。
-	push_warning("[FFA] 乱斗初始化未完成，临时回退 1v1")
-	call_deferred("_init_entities_deferred")
+	is_ffa = true
+	var map = $Map
+	if not map: return
+	var count = clampi(_nation_count, 3, 5)
+	var layout = map.get_ffa_castle_positions(count)
+	if layout.size() < count: return
+
+	# —— 外交管理器（先建，各国注册进关系表） ——
+	diplomacy = DiplomacyManager.new()
+	diplomacy.setup(self)
+	diplomacy.name = "Diplomacy"
+	add_child(diplomacy)
+
+	player_owner_id = 1
+	player_resources = {"gold": 500, "wood": 500, "stone": 300, "food": 500, "oil": 0}
+	player_pop = 0; player_max_pop = 20
+	player_resource_limits = {"gold": 500, "wood": 500, "stone": 500, "food": 500, "oil": 0}
+	team_nations[RTSConfig.Team.BLUE] = GameSettings.player_nation
+
+	# 其余 count-1 个 AI 国家：从国家池随机抽不重复国家（不含玩家所选国家）
+	var ai_nation_pool: Array = []
+	for n in range(RTSConfig.Nation.size()):
+		if n != GameSettings.player_nation:
+			ai_nation_pool.append(n)
+	ai_nation_pool.shuffle()
+	var ai_nations = ai_nation_pool.slice(0, count - 1)
+
+	# AI 独立配色（避开玩家蓝），4 色足够覆盖最多 4 个 AI
+	var ai_color_pool: Array = [
+		RTSConfig.COLOR_POOL[0],   # 红
+		RTSConfig.COLOR_POOL[2],   # 橙
+		RTSConfig.COLOR_POOL[3],   # 紫
+		RTSConfig.COLOR_POOL[4],   # 绿
+	]
+	_player_colors[player_owner_id] = RTSConfig.COLOR_POOL[1]   # 玩家蓝色
+
+	# —— 玩家城堡 ——
+	var player_castle = null
+	var player_cfg = EntityDatabase.get_config(20)
+	player_cfg["owner_peer_id"] = player_owner_id
+	player_cfg["team"] = RTSConfig.Team.BLUE
+	player_castle = spawn_entity(player_cfg, RTSConfig.Team.BLUE, layout[0], 1)
+	if player_castle:
+		player_castle.owner_peer_id = player_owner_id
+		player_castle.died.connect(_on_ffa_castle_died.bind(player_owner_id))
+		var start_lv = NationBonuses.get_castle_start_level(GameSettings.player_nation)
+		player_castle.upgrade_level = start_lv
+		player_castle.level = start_lv
+		if start_lv >= 3:
+			player_castle._unlock_nation_units(GameSettings.player_nation)
+	ai_players[player_owner_id] = {"castle": player_castle, "team": RTSConfig.Team.BLUE, "slot": 0, "nation": GameSettings.player_nation}
+	diplomacy.register_nation(player_owner_id, RTSConfig.Team.BLUE, GameSettings.player_nation, true, RTSConfig.COLOR_POOL[1])
+
+	# 玩家初始农民
+	var peasant_cfg = EntityDatabase.get_config(10)
+	for i in range(3):
+		var cfg = peasant_cfg.duplicate()
+		cfg["owner_peer_id"] = player_owner_id
+		spawn_entity(cfg, RTSConfig.Team.BLUE, layout[0] + Vector3(randf_range(-3, 3), 0, randf_range(-3, 3)), 1)
+
+	# —— AI 国家循环：独立资源/人口/上限/唯一 team/颜色/AI 控制器 ——
+	for ai_index in range(ai_nations.size()):
+		var pid = 3000 + ai_index        # AI owner_peer_id（乱斗独立段，不与 2v2/3v3 冲突）
+		var team = 3 + ai_index          # 唯一 team：3..（避开 RED=0/NEUTRAL=2/BLUE=1）
+		var nation = ai_nations[ai_index]
+		var castle_pos = layout[1 + ai_index]
+		var col = ai_color_pool[ai_index % ai_color_pool.size()]
+		_player_colors[pid] = col
+
+		ai_resources[pid] = {"gold": 500, "wood": 500, "stone": 300, "food": 500, "oil": 0}
+		ai_population[pid] = {"current": 0, "max": 20}
+		ai_limits[pid] = {"gold": 500, "wood": 500, "stone": 500, "food": 500, "oil": 0}
+
+		var castle_cfg = EntityDatabase.get_config(20)
+		castle_cfg["owner_peer_id"] = pid
+		castle_cfg["team"] = team
+		var castle = spawn_entity(castle_cfg, team, castle_pos, 1)
+		if castle:
+			castle.owner_peer_id = pid
+			castle.died.connect(_on_ffa_castle_died.bind(pid))
+			var start_lv_ai = NationBonuses.get_castle_start_level(nation)
+			castle.upgrade_level = start_lv_ai
+			castle.level = start_lv_ai
+			if start_lv_ai >= 3:
+				castle._unlock_nation_units(nation)
+		ai_players[pid] = {"castle": castle, "team": team, "slot": ai_index + 1, "nation": nation}
+		diplomacy.register_nation(pid, team, nation, false, col)
+
+		for j in range(3):
+			var cfg = peasant_cfg.duplicate()
+			cfg["owner_peer_id"] = pid
+			spawn_entity(cfg, team, castle_pos + Vector3(randf_range(-3, 3), 0, randf_range(-3, 3)), 1)
+
+		var ai = AIController.new()
+		ai.my_peer_id = pid
+		ai.my_team = team
+		ai.name = "AIController_%d" % pid
+		add_child(ai)
+
+	# 禁用 1v1 静态 AI（my_peer_id=-1），避免作为额外红队 AI 乱跑
+	var static_ai = get_node_or_null("AIController")
+	if static_ai:
+		static_ai.set_process(false)
+		static_ai.set_physics_process(false)
+		static_ai.queue_free()
+
+	# 资源点
+	for res in map.resource_positions:
+		var cfg = EntityDatabase.get_config(res.type)
+		spawn_entity(cfg, RTSConfig.Team.NEUTRAL, res.pos)
+
+	_init_fog_grid()
+	# 聚焦玩家城堡
+	if player_castle:
+		var cam = get_viewport().get_camera_3d()
+		if cam:
+			cam.global_position = Vector3(player_castle.global_position.x, cam.global_position.y, player_castle.global_position.z)
+
+# 乱斗：某国城堡被摧毁 → 该国淘汰。玩家被灭即败；存活国剩 1 时判定胜者。
+func _on_ffa_castle_died(owner: int):
+	if game_over: return
+	var remaining: Array = diplomacy.notify_castle_died(owner) if diplomacy else []
+	# 清除该国残余军队/建筑（健康<=0 的正在播放死亡动画，交给各自 die() 自清理）
+	var to_free: Array = []
+	for e in entities.get_children():
+		if e is GameEntity and (e as GameEntity).owner_peer_id == owner and (e as GameEntity).health > 0:
+			to_free.append(e)
+	for e in to_free:
+		if is_instance_valid(e):
+			e.queue_free()
+	# 停掉该国 AI 控制器
+	for c in get_children():
+		if c is AIController and c.my_peer_id == owner:
+			c.set_process(false)
+			c.set_physics_process(false)
+			c.queue_free()
+	# 清理该国经济表，避免每帧继续刷新
+	ai_players.erase(owner)
+	ai_resources.erase(owner)
+	ai_population.erase(owner)
+	ai_limits.erase(owner)
+
+	# 玩家被消灭 → 直接结束
+	if owner == player_owner_id:
+		game_over = true
+		AudioManager.play_music("defeat")
+		game_over_label.text = "你被消灭了！"
+		game_over_label.add_theme_color_override("font_color", Color.RED)
+		game_over_panel.visible = true
+		return
+	# 只剩最后一个国家 → 判定胜者
+	if remaining.size() <= 1:
+		game_over = true
+		if remaining.size() == 1 and remaining[0] == player_owner_id:
+			AudioManager.play_music("victory")
+			game_over_label.text = "你赢得了乱斗！"
+			game_over_label.add_theme_color_override("font_color", Color.GREEN)
+		else:
+			AudioManager.play_music("defeat")
+			var winner_name = diplomacy.get_display_name(remaining[0]) if remaining.size() == 1 else "无人"
+			game_over_label.text = "%s 赢得了乱斗！" % winner_name
+			game_over_label.add_theme_color_override("font_color", Color(1.0, 0.6, 0.2))
+		game_over_panel.visible = true
+
 
 func _init_2v2_single():
 	# 定义四个玩家：玩家槽0(蓝)、AI槽1(蓝)、AI槽0(红)、AI槽1(红)
@@ -1938,6 +2102,9 @@ func _process(delta):
 				if not Input.is_key_pressed(KEY_SHIFT):
 					_exit_build_mode()
 	game_time += delta
+	# 乱斗外交推进（联盟到期 / 二人存活强制解除等）
+	if diplomacy:
+		diplomacy.tick(game_time)
 	if game_time_label:
 		var mins = int(game_time / 60)
 		var secs = int(game_time) % 60

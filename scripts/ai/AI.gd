@@ -312,9 +312,14 @@ func build_building(building_id: int, pos: Vector3):
 	var cost = cfg.get("cost", {})
 	if not _deduct_resources(cost): return
 	cfg["owner_peer_id"] = my_peer_id
+	# 队伍判定：在线走 player_info；本地乱斗/多人各 AI 有唯一 team(my_team)，
+	# 若始终用 RED 会让 AI 建筑建错阵营，被自己和盟友攻击。
 	var team = RTSConfig.Team.RED
-	if battle is OnlineBattleManager and my_peer_id != -1:
-		team = battle.player_info[my_peer_id].team
+	if my_peer_id != -1:
+		if battle is OnlineBattleManager:
+			team = battle.player_info[my_peer_id].team
+		else:
+			team = my_team
 	var b = battle.spawn_entity(cfg, team, pos)
 	if b:
 		b.start_construction(5.0, cfg)
