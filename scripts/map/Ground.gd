@@ -30,6 +30,7 @@ var multi_castle_positions: Array = []  # 单机多AI：所有基地位置（含
 var resource_positions: Array = []
 var _cached_four_castle_positions: Array = []  # cached for consistency
 var _cached_six_castle_positions: Array = []  # 3v3 用，缓存保证一致性
+var _cached_ffa_castle_positions: Dictionary = {}  # 乱斗 N 国环绕布局缓存（n -> Array）
 
 # 自定义地图种子（为0则随机）
 var custom_seed: int = 0
@@ -174,6 +175,58 @@ func get_six_castle_positions() -> Array:
 	_cached_six_castle_positions = [blue1, blue2, blue3, red1, red2, red3]
 	return _cached_six_castle_positions
 
+# 乱斗模式（FFA）N 国环绕布局：N 个城堡绕地图中心均匀排布，玩家=layout[0]（地图正下方），
+# 其余 AI 国沿圆周逆时针依次分布；每点在目标附近找平坦处，找不到则强制压平兜底。
+func get_ffa_castle_positions(n: int) -> Array:
+	var count = clampi(n, 3, 5)
+	if _cached_ffa_castle_positions.has(count):
+		return _cached_ffa_castle_positions[count]
+	var size = _get_map_size()
+	var center = size / 2.0
+	var radius = size * 0.30
+	var layout: Array = []
+	for i in range(count):
+		# i=0 从正下方（gy 增大方向）出发，逆时针均匀环绕一圈
+		var theta = PI / 2.0 - TAU * float(i) / float(count)
+		var cx = int(center + radius * cos(theta))
+		var cy = int(center + radius * sin(theta))
+		var spot = _find_flat_near_point(cx, cy, 8)
+		if spot == Vector3.ZERO:
+			spot = _force_flat_spot(clampi(cx, 5, size - 6), clampi(cy, 5, size - 6), 5)
+		layout.append(spot)
+	_cached_ffa_castle_positions[count] = layout
+	return layout
+
+# 以 (cx, cy) 为中心、search_radius 为半径随机采样：5×5 全平原且高度差 < 0.8
+func _find_flat_near_point(cx: int, cy: int, search_radius: int) -> Vector3:
+	var size = _get_map_size()
+	for _try in range(200):
+		var tx = cx + randi_range(-search_radius, search_radius)
+		var ty = cy + randi_range(-search_radius, search_radius)
+		if tx < 5 or ty < 5 or tx > size - 6 or ty > size - 6:
+			continue
+		var ok = true
+		for dx in range(-2, 3):
+			for dy in range(-2, 3):
+				var nx = tx + dx
+				var ny = ty + dy
+				if terrain_grid[nx][ny] != 0:
+					ok = false
+					break
+				var h0 = height_grid[nx][ny]
+				for nd in [Vector2i(1, 0), Vector2i(0, 1)]:
+					var ax = nx + nd.x
+					var ay = ny + nd.y
+					if ax >= 0 and ax < size and ay >= 0 and ay < size:
+						if abs(height_grid[ax][ay] - h0) >= 0.8:
+							ok = false
+							break
+			if not ok:
+				break
+		if ok:
+			return grid_to_world(tx, ty)
+	return Vector3.ZERO
+
 func _force_flat_spot(gx: int, gy: int, safe_size: int) -> Vector3:
 	var size = _get_map_size()
 	for dx in range(-safe_size, safe_size + 1):
@@ -211,6 +264,13 @@ func _place_castles():
 	var half = size / 2.0
 	var margin = 10
 	var ps = 5
+	# 乱斗模式（FFA）：N 国环绕布局，玩家=layout[0]，其余 AI 国依次分布
+	if NetworkManager.mode == NetworkManager.Mode.NONE and GameSettings.is_ffa:
+		var ffa_layout = get_ffa_castle_positions(clampi(GameSettings.ffa_nation_count, 3, 5))
+		multi_castle_positions = ffa_layout
+		player_castle_pos = ffa_layout[0]
+		enemy_castle_pos = ffa_layout[1]  # 阶段2 临时敌人指针（阶段3 起按国 spawn，不再依赖该字段）
+		return
 	# 单机对称团队战（2V2/3V3）：2V2 用四城堡布局，3V3 用六城堡布局；玩家=layout[0]，首个红方=layout[mode]
 	if NetworkManager.mode == NetworkManager.Mode.NONE and GameSettings.ai_mode >= 2:
 		var mode = clampi(GameSettings.ai_mode, 2, 3)
@@ -261,8 +321,10 @@ func _place_resources():
 	var is_single_team = NetworkManager.mode == NetworkManager.Mode.NONE and GameSettings.ai_mode >= 2
 	if is_single_team:
 		is_3v3 = GameSettings.ai_mode >= 3
+	var is_ffa_single = NetworkManager.mode == NetworkManager.Mode.NONE and GameSettings.is_ffa
 	var is_team_mode = NetworkManager.selected_mode != NetworkManager.GameMode.ONEvONE or is_single_team
-	var mult = 2.0 if is_3v3 else (1.5 if is_team_mode else 1.0)
+	var ffa_n = clampi(GameSettings.ffa_nation_count, 3, 5) if is_ffa_single else 3
+	var mult = 2.0 if is_3v3 else (2.0 if (is_ffa_single and ffa_n >= 4) else (1.5 if (is_team_mode or is_ffa_single) else 1.0))
 
 	# Castle positions in grid coordinates
 	var player_gx = int(player_castle_pos.x + size/2.0)
@@ -270,7 +332,11 @@ func _place_resources():
 	var enemy_gx = int(enemy_castle_pos.x + size/2.0)
 	var enemy_gy = int(enemy_castle_pos.z + size/2.0)
 	var castles = [[player_gx, player_gy, "player"], [enemy_gx, enemy_gy, "enemy"]]
-	if is_team_mode:
+	if is_ffa_single:
+		castles = []
+		for fp in multi_castle_positions:
+			castles.append([int(fp.x + size/2.0), int(fp.z + size/2.0)])
+	elif is_team_mode:
 		var team_pos = get_six_castle_positions() if is_3v3 else get_four_castle_positions()
 		castles = []
 		for fp in team_pos:
@@ -297,8 +363,8 @@ func _place_resources():
 		{"type":0, "min_sz":2, "max_sz":3, "dist":12, "terrain":0},  # gold
 	]
 	if GameSettings.ai_difficulty >= GameSettings.AIDifficulty.HARD or GameSettings.red_ai_difficulty >= GameSettings.AIDifficulty.HARD or GameSettings.blue_ai_difficulty >= GameSettings.AIDifficulty.HARD:
-		# Only for enemy/AI castles（1v1 敌方 = 后半；2v2/3v3 红队城堡 = 后半）
-		var ai_castles = castles.slice(castles.size() / 2)
+		# Only for enemy/AI castles（1v1 敌方 = 后半；2v2/3v3 红队城堡 = 后半；乱斗 = 玩家之外全部 AI）
+		var ai_castles = castles.slice(1) if is_ffa_single else castles.slice(castles.size() / 2)
 		for cs in ai_castles:
 			for gu in hard_extra:
 				_place_group_near(gu.type, gu.min_sz, gu.max_sz, cs[0], cs[1], gu.dist, gu.terrain, placed, size, gu.get("near_mountain", false))
