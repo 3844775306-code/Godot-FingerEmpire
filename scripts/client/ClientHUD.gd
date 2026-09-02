@@ -49,7 +49,7 @@ const ALERT_INFO = UITheme.ALERT_INFO
 const ALERT_GROUP = UITheme.ALERT_GROUP
 
 var _alert_label: Label = null
-var _alert_bg: ColorRect = null
+var _alert_bg: Panel = null
 var _alert_timer: float = 0.0
 
 
@@ -68,24 +68,22 @@ func _get_nation_name(nation: int) -> String:
 func set_nations(p_nation: int, e_nation: int):
 	player_nation = p_nation
 	enemy_nation = e_nation
-	player_nation_label.text = "我方国家: %s" % _get_nation_name(p_nation)
-	enemy_nation_label.text = "敌方国家: %s" % _get_nation_name(e_nation)
+	player_nation_label.text = "👑 我方国家: %s" % _get_nation_name(p_nation)
+	enemy_nation_label.text = "⚔️ 敌方国家: %s" % _get_nation_name(e_nation)
 
 
 # ==================== 单位统计面板创建 ====================
 func _create_stats_toggle_button():
-	var btn_theme = Theme.new()
-	btn_theme.set_font_size("font_size", "Button", 18)
-
 	_toggle_stats_btn = Button.new()
 	_toggle_stats_btn.text = "📊 统计"
 	_toggle_stats_btn.position = Vector2(10, 660)
-	_toggle_stats_btn.theme = btn_theme
 	_toggle_stats_btn.toggle_mode = true
 	_toggle_stats_btn.button_pressed = true
-	_toggle_stats_btn.custom_minimum_size = Vector2(180, 50)
+	_toggle_stats_btn.custom_minimum_size = Vector2(200, 50)
+	UITheme.apply_muted_button(_toggle_stats_btn, UITheme.FONT_LG)
 	_toggle_stats_btn.pressed.connect(_on_toggle_stats_pressed)
 	add_child(_toggle_stats_btn)
+	UITheme.hover_scale(_toggle_stats_btn)
 
 func _on_toggle_stats_pressed():
 	unit_stats_visible = _toggle_stats_btn.button_pressed
@@ -99,21 +97,10 @@ func _create_unit_stats_panel():
 	unit_stats_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	unit_stats_panel.position = Vector2(1960, 950)
 
-	# 背景
+	# 背景（皇庭卡：羊皮纸底 + 金边 + 顶部金强调条）
 	var bg = Panel.new()
 	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	var bg_style = StyleBoxFlat.new()
-	bg_style.bg_color = Color(UITheme.INK, UITheme.ALPHA_BG)
-	bg_style.corner_radius_top_left = 8
-	bg_style.corner_radius_top_right = 8
-	bg_style.corner_radius_bottom_left = 8
-	bg_style.corner_radius_bottom_right = 8
-	bg_style.border_width_left = 2
-	bg_style.border_width_right = 2
-	bg_style.border_width_top = 2
-	bg_style.border_width_bottom = 2
-	bg_style.border_color = Color(UITheme.GOLD, UITheme.ALPHA_BORDER)
-	bg.add_theme_stylebox_override("panel", bg_style)
+	bg.add_theme_stylebox_override("panel", UITheme.card_style(UITheme.GOLD))
 	unit_stats_panel.add_child(bg)
 
 	var vb = VBoxContainer.new()
@@ -123,7 +110,7 @@ func _create_unit_stats_panel():
 
 	# 标题
 	var title = _make_stats_rtl()
-	title.text = "[color=#5af]◈ 我方军力统计[/color]"
+	title.text = "[color=#C9A84C]◈ 我方军力统计[/color]"
 	title.add_theme_font_size_override("font_size", 20)
 	vb.add_child(title)
 
@@ -135,7 +122,7 @@ func _create_unit_stats_panel():
 	_stats_pop_label.text = "人口: 0/0"
 	pop_hbox.add_child(_stats_pop_label)
 
-	_stats_pop_bar = _make_stats_bar(Color(0.25, 0.65, 1.0))
+	_stats_pop_bar = _make_stats_bar(UITheme.RES_POP)
 	_stats_pop_bar.custom_minimum_size = Vector2(200, 8)
 	pop_hbox.add_child(_stats_pop_bar)
 	vb.add_child(pop_hbox)
@@ -188,7 +175,7 @@ func _make_stats_section(title: String) -> RichTextLabel:
 	var r = RichTextLabel.new()
 	r.bbcode_enabled = true
 	r.fit_content = true
-	r.text = "[color=#5af]▸ %s[/color]" % title
+	r.text = "[color=#C9A84C]▸ %s[/color]" % title
 	r.add_theme_font_size_override("font_size", 15)
 	return r
 
@@ -363,39 +350,45 @@ func _on_retreat_all_pressed():
 
 func show_alert_message(msg: String, color: Color = ALERT_DANGER):
 	if not _alert_label:
-		# 半透明黑色背景
-		_alert_bg = ColorRect.new()
-		_alert_bg.color = Color(0, 0, 0, 0.55)
+		# 皇庭横幅背景：暖黑底 + 警报色细边 + 顶部警报色强调条
+		_alert_bg = Panel.new()
 		_alert_bg.position = Vector2(755, 196)
-		_alert_bg.size = Vector2(810, 44)
+		_alert_bg.size = Vector2(810, 46)
 		add_child(_alert_bg)
 		# 文字标签
 		_alert_label = Label.new()
 		_alert_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		_alert_label.add_theme_font_size_override("font_size", 24)
+		_alert_label.add_theme_font_size_override("font_size", UITheme.FONT_XXL)
 		_alert_label.add_theme_color_override("font_outline_color", Color.BLACK)
 		_alert_label.add_theme_constant_override("outline_size", 3)
-		_alert_label.position = Vector2(760, 200)
+		_alert_label.position = Vector2(760, 202)
 		_alert_label.size = Vector2(800, 40)
 		add_child(_alert_label)
 	_alert_label.text = msg
 	_alert_label.add_theme_color_override("font_color", color)
+	# 横幅边框色跟随警报类型（危险红 / 警告黄 / 信息绿 / 编队蓝）
+	var ab := StyleBoxFlat.new()
+	ab.bg_color = Color(UITheme.INK, 0.88)
+	ab.set_corner_radius_all(UITheme.RADIUS_MD)
+	ab.set_border_width_all(UITheme.BORDER_THIN)
+	ab.border_color = Color(color, 0.5)
+	ab.border_width_top = UITheme.BORDER_THICK
+	_alert_bg.add_theme_stylebox_override("panel", ab)
 	_alert_label.visible = true
 	_alert_bg.visible = true
 	_alert_timer = 3.0
 
 func _ready():
-	# 创建资源标签（字号28，背景扩大）
+	# 创建资源标签（皇庭筹码：图标 + 名称 + 数值 + 采集速率 + 进度条）
 	const RES_CFG = [
-		{name="黄金", key="gold", color=UITheme.RES_GOLD},
-		{name="木材", key="wood", color=UITheme.RES_WOOD},
-		{name="石头", key="stone", color=UITheme.RES_STONE},
-		{name="食物", key="food", color=UITheme.RES_FOOD},
-		{name="石油", key="oil", color=UITheme.RES_OIL},
-		{name="人口", key="pop", color=UITheme.RES_POP},
+		{name="黄金", key="gold", color=UITheme.RES_GOLD, icon="💰"},
+		{name="木材", key="wood", color=UITheme.RES_WOOD, icon="🌲"},
+		{name="石头", key="stone", color=UITheme.RES_STONE, icon="⛰️"},
+		{name="食物", key="food", color=UITheme.RES_FOOD, icon="🌾"},
+		{name="石油", key="oil", color=UITheme.RES_OIL, icon="🛢️"},
+		{name="人口", key="pop", color=UITheme.RES_POP, icon="👥"},
 	]
-	const BASE_BG = Color(0.12, 0.12, 0.12, 0.75)
-	const ROW_H = 44; const ROW_W = 290; const FONT_SZ = 18
+	const ROW_H = 44; const ROW_W = 290
 	var _res_lbls = {}
 
 	for i in range(RES_CFG.size()):
@@ -403,54 +396,58 @@ func _ready():
 		var y = 1100 + i * (ROW_H + 5)
 		var col = cfg.color
 
+		# 筹码卡背景：暖黑半透明 + 资源色细边 + 顶部资源色强调条
 		var bg = Panel.new()
 		bg.position = Vector2(6, y); bg.size = Vector2(ROW_W, ROW_H)
-		var s = StyleBoxFlat.new()
-		s.bg_color = BASE_BG
-		s.corner_radius_top_left = 5; s.corner_radius_top_right = 5
-		s.corner_radius_bottom_left = 5; s.corner_radius_bottom_right = 5
-		s.border_width_left = 2; s.border_width_right = 2; s.border_width_top = 2; s.border_width_bottom = 2
-		s.border_color = Color(col.r * 0.35, col.g * 0.35, col.b * 0.35, 0.45)
+		var s := UITheme.panel_style(UITheme.RADIUS_MD, UITheme.BORDER_THIN, 0.78)
+		s.border_color = Color(col, 0.4)
+		s.border_width_top = 2
 		bg.add_theme_stylebox_override("panel", s)
 		add_child(bg)
 
+		# 名称行：图标 + 资源名（update_data 会补充采集人数/速率）
 		var nl = Label.new()
-		nl.position = Vector2(14, y + 10); nl.text = cfg.name
-		nl.add_theme_font_size_override("font_size", FONT_SZ)
+		nl.position = Vector2(14, y + 4); nl.text = "%s %s" % [cfg.icon, cfg.name]
+		nl.add_theme_font_size_override("font_size", UITheme.FONT_MD)
 		nl.add_theme_color_override("font_color", col)
 		nl.add_theme_color_override("font_outline_color", Color.BLACK)
 		nl.add_theme_constant_override("outline_size", 1)
 		add_child(nl)
+		cli_res_name_lbls[cfg.key] = nl  # Store for later update
 
+		# 数值行：当前/上限，右对齐
 		var vl = Label.new()
-		vl.position = Vector2(100, y + 10); vl.size = Vector2(ROW_W - 110, 22)
+		vl.position = Vector2(96, y + 4); vl.size = Vector2(ROW_W - 110, 22)
 		vl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-		vl.add_theme_font_size_override("font_size", FONT_SZ)
-		vl.add_theme_color_override("font_color", Color.WHITE)
+		vl.add_theme_font_size_override("font_size", UITheme.FONT_LG)
+		vl.add_theme_color_override("font_color", UITheme.PARCHMENT)
 		vl.add_theme_color_override("font_outline_color", Color.BLACK)
 		vl.add_theme_constant_override("outline_size", 1)
 		add_child(vl)
 		_res_lbls[cfg.key] = vl
-		cli_res_name_lbls[cfg.key] = nl  # Store for later update
 
-		# Gatherer count label
+		# 采集信息行：人数 + 速率（小字灰色）
 		var gl = Label.new()
-		gl.position = Vector2(14, y + ROW_H - 24)
+		gl.position = Vector2(14, y + 26)
 		gl.size = Vector2(ROW_W - 28, 14)
-		gl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-		gl.add_theme_font_size_override("font_size", 10)
+		gl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 		gl.add_theme_color_override("font_color", UITheme.STONE)
 		add_child(gl)
 		gather_labels[cfg.key] = gl
 
-		# Progress bar
+		# 资源进度条：亮色 fill + 暖黑底细边
 		var pbar = ProgressBar.new()
-		pbar.position = Vector2(14, y + ROW_H - 10)
-		pbar.size = Vector2(ROW_W - 28, 6)
+		pbar.position = Vector2(14, y + ROW_H - 9)
+		pbar.size = Vector2(ROW_W - 28, 5)
 		pbar.max_value = 100; pbar.show_percentage = false
-		var fs = StyleBoxFlat.new(); fs.bg_color = col.darkened(0.15); fs.corner_radius_top_left = 2; fs.corner_radius_top_right = 2; fs.corner_radius_bottom_left = 2; fs.corner_radius_bottom_right = 2
+		var fs := StyleBoxFlat.new(); fs.bg_color = col.lightened(0.1)
+		fs.corner_radius_top_left = 3; fs.corner_radius_top_right = 3
+		fs.corner_radius_bottom_left = 3; fs.corner_radius_bottom_right = 3
 		pbar.add_theme_stylebox_override("fill", fs)
-		var bs = StyleBoxFlat.new(); bs.bg_color = Color(0.08,0.08,0.08,0.8); bs.corner_radius_top_left = 2; bs.corner_radius_top_right = 2; bs.corner_radius_bottom_left = 2; bs.corner_radius_bottom_right = 2
+		var bs := StyleBoxFlat.new(); bs.bg_color = Color(0.06, 0.05, 0.04, 0.85)
+		bs.corner_radius_top_left = 3; bs.corner_radius_top_right = 3
+		bs.corner_radius_bottom_left = 3; bs.corner_radius_bottom_right = 3
+		bs.set_border_width_all(1); bs.border_color = Color(col, 0.25)
 		pbar.add_theme_stylebox_override("background", bs)
 		add_child(pbar)
 		match cfg.key:
@@ -459,6 +456,7 @@ func _ready():
 			"stone": res_bars["stone"] = pbar
 			"food": res_bars["food"] = pbar
 			"oil": res_bars["oil"] = pbar
+			"pop": pop_bar = pbar
 
 	gold_label = _res_lbls["gold"]
 	wood_label = _res_lbls["wood"]
@@ -467,64 +465,51 @@ func _ready():
 	oil_label = _res_lbls["oil"]
 	pop_label = _res_lbls["pop"]
 
-	# Population progress bar
-	pop_bar = ProgressBar.new()
-	pop_bar.position = Vector2(14, 10 + 5 * (ROW_H + 5) + ROW_H - 10)
-	pop_bar.size = Vector2(ROW_W - 28, 6)
-	pop_bar.max_value = 100; pop_bar.show_percentage = false
-	var pfs2 = StyleBoxFlat.new(); pfs2.bg_color = Color(0.25, 0.65, 1.0).darkened(0.15)
-	pfs2.corner_radius_top_left = 2; pfs2.corner_radius_top_right = 2
-	pfs2.corner_radius_bottom_left = 2; pfs2.corner_radius_bottom_right = 2
-	pop_bar.add_theme_stylebox_override("fill", pfs2)
-	var pbs2 = StyleBoxFlat.new(); pbs2.bg_color = Color(0.08,0.08,0.08,0.8)
-	pbs2.corner_radius_top_left = 2; pbs2.corner_radius_top_right = 2
-	pbs2.corner_radius_bottom_left = 2; pbs2.corner_radius_bottom_right = 2
-	pop_bar.add_theme_stylebox_override("background", pbs2)
-	add_child(pop_bar)
+	# 国家及加成面板（皇庭卡：羊皮纸底 + 金边 + 顶部金强调条）
+	var nation_panel := Panel.new()
+	nation_panel.position = Vector2(6, 316); nation_panel.size = Vector2(430, 168)
+	nation_panel.add_theme_stylebox_override("panel", UITheme.card_style(UITheme.GOLD))
+	add_child(nation_panel)
 
-	# 国家及加成标签（字号24，带描边）
 	player_nation_label = Label.new()
-	player_nation_label.position = Vector2(10, 330)
-	player_nation_label.add_theme_font_size_override("font_size", 24)
-	player_nation_label.add_theme_color_override("font_color", Color.WHITE)
+	player_nation_label.position = Vector2(16, 8)
+	player_nation_label.add_theme_font_size_override("font_size", UITheme.FONT_XL)
+	player_nation_label.add_theme_color_override("font_color", UITheme.SAPPHIRE.lightened(0.15))
 	player_nation_label.add_theme_color_override("font_outline_color", Color.BLACK)
 	player_nation_label.add_theme_constant_override("outline_size", 1)
-	add_child(player_nation_label)
+	nation_panel.add_child(player_nation_label)
 
 	enemy_nation_label = Label.new()
-	enemy_nation_label.position = Vector2(10, 360)
-	enemy_nation_label.add_theme_font_size_override("font_size", 24)
-	enemy_nation_label.add_theme_color_override("font_color", Color.WHITE)
+	enemy_nation_label.position = Vector2(16, 48)
+	enemy_nation_label.add_theme_font_size_override("font_size", UITheme.FONT_XL)
+	enemy_nation_label.add_theme_color_override("font_color", UITheme.VERMILION.lightened(0.1))
 	enemy_nation_label.add_theme_color_override("font_outline_color", Color.BLACK)
 	enemy_nation_label.add_theme_constant_override("outline_size", 1)
-	add_child(enemy_nation_label)
+	nation_panel.add_child(enemy_nation_label)
 
 	nation_bonus_label = Label.new()
-	nation_bonus_label.position = Vector2(10, 400)
-	nation_bonus_label.add_theme_font_size_override("font_size", 22)
-	nation_bonus_label.add_theme_color_override("font_color", Color.LIGHT_GRAY)
+	nation_bonus_label.position = Vector2(16, 92)
+	nation_bonus_label.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	nation_bonus_label.add_theme_color_override("font_color", UITheme.PARCHMENT)
 	nation_bonus_label.add_theme_color_override("font_outline_color", Color.BLACK)
 	nation_bonus_label.add_theme_constant_override("outline_size", 1)
 	nation_bonus_label.text = "加成:\n" + NationBonuses.get_description(GameSettings.player_nation)
-	add_child(nation_bonus_label)
+	nation_panel.add_child(nation_bonus_label)
 
-	# 按钮主题（字号24）
-	var btn_theme = Theme.new()
-	btn_theme.set_font_size("font_size", "Button", 24)
-
+	# 全军指令：进攻=朱红危险钮，撤退=金色主钮
 	attack_all_btn = Button.new()
-	attack_all_btn.text = "全军进攻 (F2)"
-	attack_all_btn.position = Vector2(10, 470)
-	attack_all_btn.theme = btn_theme
-	attack_all_btn.custom_minimum_size = Vector2(180, 50)
+	attack_all_btn.text = "⚔️ 全军进攻 (F2)"
+	attack_all_btn.position = Vector2(10, 506)
+	attack_all_btn.custom_minimum_size = Vector2(200, 50)
+	UITheme.apply_danger_button(attack_all_btn, UITheme.FONT_XL)
 	attack_all_btn.pressed.connect(_on_attack_all_pressed)
 	add_child(attack_all_btn)
 
 	retreat_all_btn = Button.new()
-	retreat_all_btn.text = "全军撤退 (F3)"
-	retreat_all_btn.position = Vector2(210, 470)
-	retreat_all_btn.theme = btn_theme
-	retreat_all_btn.custom_minimum_size = Vector2(180, 50)
+	retreat_all_btn.text = "🛡️ 全军撤退 (F3)"
+	retreat_all_btn.position = Vector2(220, 506)
+	retreat_all_btn.custom_minimum_size = Vector2(200, 50)
+	UITheme.apply_primary_button(retreat_all_btn, UITheme.FONT_XL)
 	retreat_all_btn.pressed.connect(_on_retreat_all_pressed)
 	add_child(retreat_all_btn)
 
@@ -570,14 +555,16 @@ func update_data(resources: Dictionary, population: Dictionary, limits: Dictiona
 	oil_label.text = "%d/%d" % [resources.get("oil", 0), limits.get("oil", 0)]
 	pop_label.text = "%d/%d" % [population.get("current", 0), population.get("max", 0)]
 
-	# Display server-computed gather counts and income rates
-	var rn = {"gold": "黄金", "wood": "木材", "stone": "石头", "food": "食物", "oil": "石油"}
+	# 名称行保持固定「图标 + 资源名」，采集人数/速率显示在独立速率行
 	for rk in ["gold", "wood", "stone", "food", "oil"]:
 		var nl = cli_res_name_lbls.get(rk)
+		var gc = gather_counts.get(rk, 0)
+		var rate = income_rate.get(rk, 0.0)
 		if nl:
-			var gc = gather_counts.get(rk, 0)
-			var rate = income_rate.get(rk, 0.0)
-			nl.text = "%s %d人 %+.1f/s" % [rn[rk], gc, rate]
+			nl.text = "%s %s" % [UITheme.RESOURCE_ICONS.get(rk, "◆"), UITheme.RESOURCE_NAMES.get(rk, rk)]
+		var gl = gather_labels.get(rk)
+		if gl:
+			gl.text = "%d人  %+.1f/s" % [gc, rate]
 
 	if pop_bar:
 		pop_bar.value = min(float(population.get("current",1))/max(population.get("max",1),1)*100, 100)

@@ -7,18 +7,27 @@ var current_value: float = 100.0
 var team_color: Color = Color.WHITE
 var _last_health: float = -1.0
 var _last_max_health: float = -1.0
+var _last_color: Color = Color(-1, -1, -1, -1)
 
 func _ready():
 	custom_minimum_size = Vector2(80, 12)
 
-func update_bar(health: float, max_health: float, team: int):
-	# 队伍固定颜色（始终更新，避免外部 set_team_color 干扰）
-	team_color = Color(1.0, 0.33, 0.264, 1.0) if team == 0 else Color(0.0, 0.886, 1.0, 1.0)if team == 1 else Color(0.0, 0.886, 0.431, 1.0)if team == 2 else Color(0.945, 0.925, 0.251, 1.0)
+func update_bar(health: float, max_health: float, team: int, color: Color = Color.NAN):
+	# 传入 color 时（建造=金、升级=紫）优先使用；否则按队伍映射到皇庭语义色
+	if color.is_nan():
+		match team:
+			0: team_color = UITheme.VERMILION
+			1: team_color = UITheme.SAPPHIRE
+			2: team_color = UITheme.EMERALD
+			_: team_color = UITheme.GOLD
+	else:
+		team_color = color
 	# 脏检查：仅在值改变时才重绘
-	if health == _last_health and max_health == _last_max_health:
+	if health == _last_health and max_health == _last_max_health and team_color == _last_color:
 		return
 	_last_health = health
 	_last_max_health = max_health
+	_last_color = team_color
 	max_value = max_health
 	current_value = health
 	queue_redraw()
@@ -32,8 +41,8 @@ func _draw():
 	var ratio = clamp(current_value / max_value, 0.0, 1.0)
 	var fill_width = w * ratio
 
-	# 半透明背景
-	draw_rect(Rect2(Vector2.ZERO, size), Color(0, 0, 0, 0.4))
+	# 暖黑半透明背景
+	draw_rect(Rect2(Vector2.ZERO, size), Color(UITheme.INK, 0.55))
 
 	# 上半部分（浅色）
 	var top_color = team_color.lightened(0.2)

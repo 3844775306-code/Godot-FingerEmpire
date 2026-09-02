@@ -117,6 +117,8 @@ func _draw():
 	if _terrain_tex:
 		draw_texture(_terrain_tex, Vector2.ZERO)
 
+	# 双层边框：内层暖黑细边 + 外层金粗边（镶金宝镜徽章感）
+	draw_rect(Rect2(Vector2(2, 2), Vector2(MINIMAP_SIZE - 4, MINIMAP_SIZE - 4)), Color(UITheme.INK, 0.4), false, UITheme.BORDER_MED)
 	draw_rect(Rect2(Vector2.ZERO, Vector2(MINIMAP_SIZE, MINIMAP_SIZE)), Color(UITheme.GOLD, UITheme.ALPHA_BG), false, UITheme.BORDER_THICK)
 
 	# 每次绘制时实时查询颜色，和战场实体同源
@@ -142,21 +144,21 @@ func _draw():
 		var owner = ent.get("owner_peer_id", -1)
 		var eid = ent.get("entity_id", -1)
 		var dot_color: Color
-		# 动物白色
+		# 动物羊皮纸白
 		if eid >= 60 and eid <= 63:
-			dot_color = Color(0.9, 0.9, 0.85, 1.0)
-		# 资源暗色
+			dot_color = UITheme.PARCHMENT
+		# 资源点：按实体 id 区分资源种类（0金 1木 2石 3食 4油）
 		elif ent.get("type", -1) == 0:
-			var rc = {"gold":Color(0.7,0.6,0.1),"wood":Color(0.15,0.5,0.1),"stone":Color(0.35,0.35,0.35),"food":Color(0.55,0.3,0.1),"oil":Color(0.15,0.1,0.05)}
-			dot_color = rc.get("gold", Color(0.4,0.4,0.2))
+			var rkey = ["gold", "wood", "stone", "food", "oil"][eid] if eid >= 0 and eid <= 4 else "gold"
+			dot_color = UITheme.RESOURCE_COLORS.get(rkey, Color(0.4, 0.4, 0.2)).darkened(0.15)
 		elif owner != -1 and pc.has(owner):
 			dot_color = pc[owner].lightened(0.25)
 		elif ent["team"] == player_team:
-			dot_color = Color(0.3, 1.0, 1.0, 1.0)
+			dot_color = UITheme.SAPPHIRE.lightened(0.25)
 		elif ent["team"] == RTSConfig.Team.RED:
-			dot_color = Color(1.0, 0.5, 0.3, 1.0)
+			dot_color = UITheme.VERMILION.lightened(0.15)
 		else:
-			dot_color = Color(1.0, 1.0, 0.4, 1.0)
+			dot_color = UITheme.GOLD.lightened(0.2)
 		var pos = Vector2(gx * cell, gz * cell)
 		draw_rect(Rect2(pos - Vector2(2, 2), Vector2(5, 5)), dot_color)
 

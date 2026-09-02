@@ -1241,7 +1241,7 @@ func _update_health_bars():
 			var bar = _get_or_create_health_bar(id)
 			var lab = _get_or_create_label(id)
 			bar.visible = true; lab.visible = true
-			bar.update_bar(info["build_timer"], info["max_build_time"], -1)
+			bar.update_bar(info["build_timer"], info["max_build_time"], -1, UITheme.GOLD)
 			var nm2 = info["name"]
 			var _gpfx3 = _get_entity_group_prefix(info["id"])
 			lab.text = _gpfx3 + "%s (建造中)" % nm2
@@ -1263,9 +1263,9 @@ func _update_health_bars():
 			var upbar = _get_or_create_upgrade_bar(id)
 			var uplab = _get_or_create_upgrade_label(id)
 			upbar.visible = true; uplab.visible = true
-			upbar.update_bar(info["upgrade_timer"], info["max_upgrade_time"], -1)
+			upbar.update_bar(info["upgrade_timer"], info["max_upgrade_time"], -1, UITheme.PURPLE)
 			uplab.text = "升级中"
-			uplab.add_theme_color_override("font_color", Color(1.0, 0.65, 0.0))
+			uplab.add_theme_color_override("font_color", UITheme.PURPLE.lightened(0.25))
 			var uwp = node.global_position + Vector3.UP * (info["body_radius"]*2 + 0.5)
 			var usp = cam.unproject_position(uwp)
 			if viewport_rect.has_point(usp):
@@ -1394,6 +1394,16 @@ func _get_or_create_prod_bar(id) -> ProgressBar:
 		p.custom_minimum_size = Vector2(60, 6)
 		p.max_value = 1.0
 		p.show_percentage = false
+		# 皇庭生产条：金墨 fill + 暖黑底金细边（圆角）
+		var pfs := StyleBoxFlat.new(); pfs.bg_color = UITheme.GOLD.lightened(0.15)
+		pfs.corner_radius_top_left = 3; pfs.corner_radius_top_right = 3
+		pfs.corner_radius_bottom_left = 3; pfs.corner_radius_bottom_right = 3
+		p.add_theme_stylebox_override("fill", pfs)
+		var pbs := StyleBoxFlat.new(); pbs.bg_color = Color(UITheme.INK, 0.8)
+		pbs.corner_radius_top_left = 3; pbs.corner_radius_top_right = 3
+		pbs.corner_radius_bottom_left = 3; pbs.corner_radius_bottom_right = 3
+		pbs.set_border_width_all(1); pbs.border_color = Color(UITheme.GOLD, 0.35)
+		p.add_theme_stylebox_override("background", pbs)
 		add_child(p)
 		unit_bars[id].prod_bar = p
 	return unit_bars[id].prod_bar
