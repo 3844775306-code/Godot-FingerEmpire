@@ -27,7 +27,10 @@ var desired_worker_count: int = 8
 var cached_shipyard_pos: Vector3 = Vector3.ZERO
 var defense_line_built: bool = false
 var defense_check_timer: float = 0.0
+var defense_initialized: bool = false   # 防线位置已规划（进入分批建造阶段）
+var _defense_queue: Array = []          # 待建防线队列：[{"id": 建筑id, "pos": 位置}]
 const DEFENSE_CHECK_INTERVAL: float = 120.0
+const DEFENSE_STEP_MAX: int = 3         # 每个 think tick 至多尝试建造的防线建筑数
 var _upgrade_cycle_timer: float = 20.0   # 每20秒切换
 var _in_upgrade_cycle: bool = true     # 前20秒为升级周期
 var _castle_rush_done: Array = [false, false, false]  # 3/6/10min castle rush
@@ -292,7 +295,9 @@ func build_building(building_id: int, pos: Vector3):
 	if not cfg: return
 	# Check castle level requirement (matches RTSBattleManager.is_building_unlocked)
 	if not _ai_can_build(building_id): return
-	if count_building(building_id) >= 10: return
+	# 城墙允许建 WALL_COUNT 面（防线需求），其余建筑上限 10
+	var _cap = WALL_COUNT if building_id == 27 else 10
+	if count_building(building_id) >= _cap: return
 	# Non-shipyard buildings: must be within AI vision range
 	if building_id != 23:
 		var world_pos = Vector3(pos.x, 0, pos.z)
@@ -496,6 +501,7 @@ func _state_development(_delta):
 	_ai_hunt_animals(_delta)
 	_check_hunt_cleanup()
 	_ai_garrison_officials()
+	_manage_defense(_delta)
 	update_tactic(_delta)
 
 # -- ASSAULT: execute tactical attacks --
@@ -513,6 +519,7 @@ func _state_assault(_delta):
 	_ai_hunt_animals(_delta)
 	_check_hunt_cleanup()
 	_ai_garrison_officials()
+	_manage_defense(_delta)
 	update_tactic(_delta)
 # ═══ State Machine Dispatcher ═══
 func decide(_delta):
@@ -1091,6 +1098,113 @@ func upgrade_defense_to_max():
 			while entity.can_upgrade() and can_afford_upgrade(entity.entity_id) and _upg_attempts < 10:
 				upgrade_building(entity.entity_id)
 				_upg_attempts += 1
+
+# ── 渐进式防线建造（每个 think 调用）──
+# 城堡升至2级后：先规划防线（记录位置），再每 tick 分批建造数座，
+# 资源不足时留待后续 tick；周期检查被打掉的墙/塔并自动补建。
+func _manage_defense(_delta):
+	if phase == Phase.PRODUCTION:
+		return
+	var castle = get_peer_castle(my_peer_id)
+	if not castle:
+		return
+	# 箭塔/炮塔需城堡2级解锁，城墙与其配合才能成防线
+	if castle.upgrade_level < 2:
+		return
+	# 周期补建：防线建筑被摧毁/拆除后重新加入待建队列
+	defense_check_timer -= _delta
+	if defense_check_timer <= 0.0:
+		defense_check_timer = DEFENSE_CHECK_INTERVAL
+		_queue_defense_gaps()
+	# 首次规划防线位置（不做一次性批量建造）
+	if not defense_initialized:
+		if _plan_defense_line():
+			defense_initialized = true
+	# 每 tick 分批建造待建队列
+	if not _defense_queue.is_empty():
+		_build_defense_step()
+
+# 计算并缓存防线各建筑位置；至少有一个可行位置才视为规划成功
+func _plan_defense_line() -> bool:
+	var castle = get_peer_castle(my_peer_id)
+	if not castle:
+		return false
+	var enemy_dir = _get_enemy_army_direction(castle.global_position).normalized()
+	var front_center = castle.global_position + enemy_dir * DEFENSE_FRONT_DIST
+	var right_dir = enemy_dir.cross(Vector3.UP).normalized()
+	wall_positions.clear(); tower_positions.clear(); _defense_queue.clear()
+	var tower_front = front_center - enemy_dir * 1.8
+	for i in range(4):
+		var offset = (i - 1.5) * TOWER_SPACING
+		var tp = tower_front + right_dir * offset
+		if _is_valid_build_ground(tp):
+			tower_positions.append(tp); _defense_queue.append({"id": 26, "pos": tp})
+		var apos = tower_front + right_dir * (offset + 0.3)
+		if _is_valid_build_ground(apos):
+			tower_positions.append(apos); _defense_queue.append({"id": 25, "pos": apos})
+	for i in range(WALL_COUNT):
+		var bp = front_center + right_dir * ((i - WALL_COUNT / 2.0) * WALL_SPACING)
+		if _is_valid_build_ground(bp):
+			wall_positions.append(bp); _defense_queue.append({"id": 27, "pos": bp})
+	return not _defense_queue.is_empty()
+
+# 每 tick 至多尝试建造 DEFENSE_STEP_MAX 座；已建/在建的跳过，资源不足等待下轮
+func _build_defense_step():
+	if _defense_queue.is_empty():
+		return
+	var res = _get_resources()
+	var built = 0
+	var i = 0
+	while i < _defense_queue.size() and built < DEFENSE_STEP_MAX:
+		var item = _defense_queue[i]
+		var b_id = int(item["id"])
+		var b_pos: Vector3 = item["pos"]
+		if _pos_has_building(b_id, b_pos):
+			_defense_queue.remove_at(i)
+			continue
+		var cost = EntityDatabase.get_config(b_id).get("cost", {})
+		var can_now = true
+		for k in cost:
+			if res.get(k, 0) < cost[k]:
+				can_now = false
+				break
+		if not can_now:
+			if built == 0:
+				break  # 当前资源不足以开工任何一座，留待下轮
+			i += 1
+			continue
+		build_building(b_id, b_pos)
+		# build_building 无返回值：以建筑是否实际落成判定（未落成则出队，留待周期补建）
+		if _pos_has_building(b_id, b_pos):
+			built += 1
+		_defense_queue.remove_at(i)
+
+# 防线中缺失的建筑（被打掉/拆除）重新入队待建
+func _queue_defense_gaps():
+	var need: Array = []
+	for pos in wall_positions:
+		if not _pos_has_building(27, pos):
+			need.append({"id": 27, "pos": pos})
+	for td in tower_positions:
+		if not _pos_has_building(int(td["id"]), td["pos"]):
+			need.append({"id": int(td["id"]), "pos": td["pos"]})
+	for item in need:
+		if not _queue_has_item(item):
+			_defense_queue.append(item)
+
+func _queue_has_item(item: Dictionary) -> bool:
+	for q in _defense_queue:
+		if int(q["id"]) == int(item["id"]) and (q["pos"] - item["pos"]).length() < 0.5:
+			return true
+	return false
+
+# 指定位置是否已有同类型建筑（含建造中）
+func _pos_has_building(b_id: int, pos: Vector3) -> bool:
+	for e in battle.entities.get_children():
+		if e is Building and e.health > 0 and e.entity_id == b_id and entity_belongs_to_me(e):
+			if e.global_position.distance_to(pos) < 1.0:
+				return true
+	return false
 
 # ═══ Shipyard ═══
 func _cache_shipyard_location(): 

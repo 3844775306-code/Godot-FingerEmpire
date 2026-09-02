@@ -1430,8 +1430,8 @@ func die_official_cleanup():
 		for u in _boarded_units:
 			if is_instance_valid(u): u.health = 0; u.die()
 		_boarded_units.clear()
-	# Merchant cleanup
-	if entity_id >= 43 and entity_id <= 45:
+	# Merchant cleanup（油/木/石/粮商人）
+	if entity_id in [43, 44, 45, 51]:
 		_on_merchant_die()
 	if entity_id >= 46 and entity_id <= 50:
 		_ungarrison_official()

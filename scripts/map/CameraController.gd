@@ -24,6 +24,12 @@ var _follow_hidden_nodes: Array = [] # 跟随期间隐藏的单位模型节点�
 const FOLLOW_EYE_HEIGHT: float = 2.0 # 相机位于单位眼睛处的高度
 const FOLLOW_FOV: float = 70.0       # 第一人称透视视野，数值越大周围物体越小
 
+# ── 滚轮缩放联动：越近越低越平、越远越高越俯视 ──
+const PITCH_NEAR_DEG: float = 38.0   # size 最小时（贴近地面）的相机俯角
+const PITCH_FAR_DEG: float = 78.0    # size 最大时（全景俯瞰）的相机俯角
+const HEIGHT_AT_MIN: float = 10.0    # size 最小时相机的离地高度
+const HEIGHT_AT_MAX: float = 95.0    # size 最大时相机的离地高度
+
 func _ready():
 	if projection == PROJECTION_ORTHOGONAL:
 		size = 30.0
@@ -40,9 +46,9 @@ func _input(event):
 			if event.pressed:
 				drag_start = event.position
 		elif event.button_index == MOUSE_BUTTON_WHEEL_UP:
-			size = max(min_zoom, size - zoom_speed)
+			_apply_zoom_to(size - zoom_speed)
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
-			size = min(max_zoom, size + zoom_speed)
+			_apply_zoom_to(size + zoom_speed)
 
 	elif event is InputEventMouseMotion and is_dragging:
 		# 鼠标中键拖拽移动相机
@@ -78,7 +84,7 @@ func _input(event):
 	if event is InputEventMagnifyGesture:
 		# factor > 1 表示放大（两指分开），factor < 1 表示缩小
 		# 通常放大应减小视野大小（size），缩小应增大视野
-		size = clamp(size / event.factor, min_zoom, max_zoom)
+		_apply_zoom_to(size / event.factor)
 
 func _process(delta):
 	# 跟随视角模式：相机位置/朝向由跟随目标决定，禁用键盘移动
@@ -94,6 +100,45 @@ func _process(delta):
 	if Input.is_action_pressed("ui_down"): direction.z += 1
 	var factor = size / 30.0
 	global_translate(direction * move_speed * delta * factor)
+
+# ═══ 缩放联动（视野大小 ↔ 相机高度/俯角）═══
+# 应用缩放：保持屏幕中心的地面点不变，同步调整相机高度与俯角
+func _apply_zoom_to(target_size: float):
+	var new_size = clamp(target_size, min_zoom, max_zoom)
+	if absf(new_size - size) < 0.01:
+		return
+	var center = _screen_center_ground()
+	size = new_size
+	_rig_over_center(center)
+
+# 重新摆放相机：以地面焦点 center 为轴，随 size 改变高度与俯角
+func _rig_over_center(center: Vector3):
+	var t = clamp((size - min_zoom) / max(1.0, max_zoom - min_zoom), 0.0, 1.0)
+	var pitch = deg_to_rad(lerpf(PITCH_NEAR_DEG, PITCH_FAR_DEG, t))
+	var height = lerpf(HEIGHT_AT_MIN, HEIGHT_AT_MAX, t)
+	# 水平朝向沿用当前相机相对焦点的方向（仅俯仰角与高度变化）
+	var to_center = center - global_position
+	var horiz = Vector3(to_center.x, 0.0, to_center.z)
+	var fwd = horiz.normalized() if horiz.length() > 0.01 else Vector3(0.0, 0.0, 1.0)
+	var back = height / tan(pitch)  # 相机沿 fwd 反方向退后，使俯角与高度匹配
+	global_position = center - fwd * back + Vector3.UP * height
+	look_at(center, Vector3.UP)
+
+# 计算屏幕中心投射到地面的点（作为缩放时保持的焦点）
+func _screen_center_ground() -> Vector3:
+	var vp = get_viewport()
+	var vp_size = vp.get_visible_rect().size
+	if vp_size.x <= 0.0 or vp_size.y <= 0.0:
+		vp_size = Vector2(1280.0, 720.0)
+	var center_px = vp_size * 0.5
+	var from = project_ray_origin(center_px)
+	var dir = project_ray_normal(center_px)
+	if dir.y >= -0.0001:
+		return Vector3(from.x, 0.0, from.z)
+	var dist = -from.y / dir.y
+	if dist < 0.0:
+		dist = 0.0
+	return from + dir * dist
 
 # ═══ 跟随视角 ═══
 func is_following() -> bool:

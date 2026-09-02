@@ -235,6 +235,26 @@ func die():
 				bm2.add_resource("food", reward, reward_team)
 			if _animal_is_baby:
 				bm2.add_resource("food", int(reward * 0.3), reward_team)
+	# 商人运输途中被击杀 → 击杀者获得其贸易货物（全量；仅往返途中掉落）
+	if self is Army and entity_id in [43, 44, 45, 51]:
+		var _m_state = self.get("_merchant_state")
+		if _m_state != null and (int(_m_state) == 2 or int(_m_state) == 4):
+			var bm_merch = get_tree().get_first_node_in_group("battle_manager")
+			if bm_merch:
+				var _m_res = str(self.get("_merchant_resource"))
+				var _m_amt = int(self.get("_merchant_trade_volume"))
+				if _m_res != "" and _m_amt > 0:
+					# 货物归击杀者（而非商人所属阵营）
+					var loot_team = team
+					var loot_owner = owner_peer_id
+					if _last_damager and is_instance_valid(_last_damager):
+						loot_team = _last_damager.team
+						loot_owner = _last_damager.owner_peer_id
+					if loot_owner != -1:
+						if bm_merch.has_method("add_resource_for"):
+							bm_merch.add_resource_for(loot_owner, _m_res, _m_amt)
+					else:
+						bm_merch.add_resource(_m_res, _m_amt, loot_team)
 	if self is Army or (self is Building and (entity_id == 25 or entity_id == 26)):
 		var bm = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
 		if owner_peer_id != -1:
