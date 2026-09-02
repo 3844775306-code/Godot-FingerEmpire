@@ -119,7 +119,7 @@ func _ready():
 	_style_option(diff_select, 16)
 	add_child(diff_select)
 
-	# 游戏模式选择（1V1 / 2V2 / 3V3 对称团队战）
+	# 游戏模式选择（1V1 / 2V2 / 3V3 对称团队战 / 乱斗3-5国）
 	var mode_label = Label.new()
 	mode_label.text = "游戏模式"
 	mode_label.position = Vector2(700, 428)
@@ -132,6 +132,9 @@ func _ready():
 	mode_select.add_item("  1V1")
 	mode_select.add_item("  2V2")
 	mode_select.add_item("  3V3")
+	mode_select.add_item("  乱斗·3国")
+	mode_select.add_item("  乱斗·4国")
+	mode_select.add_item("  乱斗·5国")
 	mode_select.selected = 0   # 默认 1V1
 	mode_select.position = Vector2(910, 426)
 	mode_select.size = Vector2(740, 46)
@@ -239,7 +242,15 @@ func _on_play_pressed():
 	var ds = get_node_or_null("DiffSelect")
 	if ds: GameSettings.ai_difficulty = ds.selected
 	var ms = get_node_or_null("ModeSelect")
-	GameSettings.ai_mode = (ms.selected + 1) if ms else 1
+	var mode_idx = ms.selected if ms else 0
+	GameSettings.is_ffa = mode_idx >= 3   # 3/4/5 国乱斗
+	if GameSettings.is_ffa:
+		# 乱斗项自 index 3 起，index 值恰好等于国家数（3/4/5）
+		GameSettings.ffa_nation_count = mode_idx
+		GameSettings.ai_mode = 1   # 乱斗不套用 1v1/2v2 语义
+	else:
+		GameSettings.ffa_nation_count = 3
+		GameSettings.ai_mode = mode_idx + 1
 	var fc = get_node_or_null("FastCheck")
 	GameSettings.fast_mode = fc.button_pressed if fc else false
 	get_tree().change_scene_to_file("res://scenes/rts_battle.tscn")

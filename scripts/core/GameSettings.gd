@@ -7,6 +7,8 @@ var ai_mode: int = 1   # 单机模式：1=1V1, 2=2V2, 3=3V3（对称团队战，
 var blue_ai_difficulty: int = AIDifficulty.EASY  # 2v2 蓝方 AI
 var red_ai_difficulty: int = AIDifficulty.EASY   # 2v2 红方 AI
 var is_single_2v2: bool = false
+var is_ffa: bool = false           # 单机乱斗模式：N国自由结盟/进贡/决裂/背叛
+var ffa_nation_count: int = 3      # 乱斗模式总国家数（3-5）
 # UI scaling for mobile
 const DESIGN_WIDTH: int = 1920
 const DESIGN_HEIGHT: int = 1080

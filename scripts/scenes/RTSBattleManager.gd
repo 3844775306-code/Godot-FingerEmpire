@@ -16,6 +16,7 @@ var player_max_pop: int = 50
 var enemy_pop: int = 0
 var enemy_max_pop: int = 50
 var game_mode_2v2: bool = false               # 是否单机2v2模式
+var is_ffa: bool = false                      # 是否乱斗模式（多国自由结盟/进贡/决裂/背叛）
 var player_owner_id: int = 1                  # 玩家自己的owner_peer_id (单机2v2=1, 1v1=-1)
 var ai_players: Dictionary = {}               # { peer_id: { "team":, "slot":, "castle": } }
 var ai_resources: Dictionary = {}             # peer_id -> resources dict
@@ -440,7 +441,9 @@ func _ready():
 	add_to_group("battle_manager")
 	_init_building_defs()
 	if not is_online:
-		if game_mode_2v2:
+		if GameSettings.is_ffa:
+			_init_ffa_single(GameSettings.ffa_nation_count)
+		elif game_mode_2v2:
 			_init_2v2_single()
 		elif GameSettings.ai_mode >= 2:
 			_init_multi_single(GameSettings.ai_mode)
@@ -487,6 +490,13 @@ func _print_anim(path, label):
 		fname = dir.get_next()
 	dir.list_dir_end()
 	print("==============================")
+
+# ==================== 乱斗模式（FFA） ====================
+func _init_ffa_single(_nation_count: int):
+	# 第1段占位：正式的多国开局（开国/结盟/进贡/决裂/背叛）在后续段实现。
+	# 现在临时回退到 1v1 原逻辑，保证乱斗入口可运行、不崩场景。
+	push_warning("[FFA] 乱斗初始化未完成，临时回退 1v1")
+	call_deferred("_init_entities_deferred")
 
 func _init_2v2_single():
 	# 定义四个玩家：玩家槽0(蓝)、AI槽1(蓝)、AI槽0(红)、AI槽1(红)
