@@ -670,11 +670,12 @@ func _process(delta):
 			for rk in ["gold","wood","stone","food","oil"]:
 				income_rate[rk] = res_income.get(rk, 0) / 10.0
 				res_income[rk] = 0
-		var res_names = {"gold":"黄金","wood":"木材","stone":"石头","food":"食物","oil":"石油"}
-		for rk in ["gold","wood","stone","food","oil"]:
+		for rk in ["gold", "wood", "stone", "food", "oil"]:
 			var nl = res_name_labels.get(rk)
 			if nl:
-				nl.text = "%s %d人 %+.1f/s" % [res_names[rk], gather_counts[rk], income_rate.get(rk, 0.0)]
+				var icon = UITheme.RESOURCE_ICONS.get(rk, "◆")
+				var nm = UITheme.RESOURCE_NAMES.get(rk, rk)
+				nl.text = "%s %s  %d人 %+.1f/s" % [icon, nm, gather_counts[rk], income_rate.get(rk, 0.0)]
 
 
 	minimap_timer -= delta

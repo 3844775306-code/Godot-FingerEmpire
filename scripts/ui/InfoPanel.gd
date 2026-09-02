@@ -198,15 +198,15 @@ func update_info(entity: GameEntity):
 	hp_bar.visible = true
 
 	var hc = _hc(pct)
-	var t = "[color=%s]HP[/color]:  [color=white]%d / %d[/color]\n" % [hc, entity.health, entity.max_health]
-	t += "[color=%s]ATK[/color]:  [color=white]%d[/color]" % [UITheme.hex_str(UITheme.GOLD), entity.attack]
+	var t = "❤️ [color=%s]HP[/color]:  [color=white]%d / %d[/color]\n" % [hc, entity.health, entity.max_health]
+	t += "⚔️ [color=%s]ATK[/color]:  [color=white]%d[/color]" % [UITheme.hex_str(UITheme.GOLD), entity.attack]
 	if entity.melee_armor > 0 or entity.shield_armor > 0:
 		t += "
-	[color=%s]铠甲[/color]:  [color=white]%d[/color]  [color=%s]盾牌[/color]:  [color=white]%d[/color]" % [
+	⛓️ [color=%s]铠甲[/color]:  [color=white]%d[/color]  🛡️ [color=%s]盾牌[/color]:  [color=white]%d[/color]" % [
 		UITheme.hex_str(UITheme.SAPPHIRE), entity.melee_armor,
 		UITheme.hex_str(UITheme.STONE), entity.shield_armor]
-	t += "\n[color=%s]RANGE[/color]:  [color=white]%.1f[/color]" % [UITheme.hex_str(UITheme.GOLD), entity.attack_range]
-	t += "\n[color=%s]SPEED[/color]:  [color=white]%.1f[/color]" % [UITheme.hex_str(UITheme.EMERALD), entity.speed]
+	t += "\n🎯 [color=%s]RANGE[/color]:  [color=white]%.1f[/color]" % [UITheme.hex_str(UITheme.GOLD), entity.attack_range]
+	t += "\n👟 [color=%s]SPEED[/color]:  [color=white]%.1f[/color]" % [UITheme.hex_str(UITheme.EMERALD), entity.speed]
 	stats_rtl.text = t
 
 	# Always detach old upgrade box first (avoid deferred-deletion residue)
