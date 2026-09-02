@@ -209,6 +209,11 @@ func take_damage(amount: float, source: GameEntity = null):
 						msg = "我方%s正遭受攻击 %s%s" % [display_name, loc_str, group_str]
 					bm._show_hud_alert(msg, Color(1.0, 0.2, 0.1), team)
 					bm._set_alert_cooldown(cooldown_key, 3.0)
+	# 乱斗 FFA 军事伤害背叛上报：军队对当前仍结盟的盟友造成军事伤害 → 揭发背叛。
+	# notify_military_attack 内部会再校验 is_ally；非盟/同国/中立伤害均不产生副作用。
+	if actual_damage > 0 and bm and bm.diplomacy and bm.diplomacy.active:
+		if source and is_instance_valid(source) and source.owner_peer_id >= 0 and owner_peer_id >= 0 and source.owner_peer_id != owner_peer_id and not (self is WorldResource):
+			bm.diplomacy.notify_military_attack(source.owner_peer_id, owner_peer_id)
 	if health <= 0:
 		die()
 func die():

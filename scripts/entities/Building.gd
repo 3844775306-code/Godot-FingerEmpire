@@ -128,9 +128,12 @@ func _find_enemy_in_range():
 	var best = null
 	var best_dist = attack_range + 1
 	var bm = _get_bm()
-	var candidates = bm.get_nearby_enemies(global_position, attack_range, team) if bm else get_tree().get_nodes_in_group("entities")
+	var candidates = bm.get_nearby_enemies(global_position, attack_range, team, owner_peer_id) if bm else get_tree().get_nodes_in_group("entities")
 	for entity in candidates:
-		if not (entity is Army) or entity.team == team or entity.health <= 0: continue
+		if not (entity is Army) or entity.health <= 0: continue
+		# 无外交管理器（非乱斗）→ 退化为纯队伍过滤；乱斗已由 get_nearby_enemies 按 owner 过滤
+		if not bm:
+			if entity.team == team: continue
 		# Buildings don't attack animals
 		if str(entity.get("_animal_type")) != "": continue
 		var dist = global_position.distance_to(entity.global_position) - body_radius - entity.body_radius
@@ -153,6 +156,7 @@ func _attack(target, delta):
 	if damage_radius > 0 or attack_range > 1.0:
 		var bullet = Bullet.new()
 		bullet.team = team
+		bullet.owner_peer_id = owner_peer_id
 		bullet.damage = attack
 		bullet.speed = 6.0
 		bullet.target = target

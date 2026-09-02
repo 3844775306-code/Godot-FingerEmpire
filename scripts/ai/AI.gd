@@ -54,6 +54,7 @@ var _visible_enemies: Array = []  # enemies visible to AI (refreshed each think 
 
 var my_peer_id: int = -1
 var my_team: int = RTSConfig.Team.RED
+var _primary_enemy_owner: int = -1   # 乱斗 FFA 主敌国家 owner_peer_id（每 think 刷新；-1=未确定/非乱斗）
 
 const WAREHOUSE_MAX_COUNT: int = 5
 const HOME_ASSEMBLE_RANGE: float = 50.0
@@ -539,6 +540,7 @@ func decide(_delta):
 		battle.update_population_limits()
 	clear_invalid_targets()
 	_refresh_visibility()
+	_refresh_primary_enemy()
 	if Engine.get_process_frames() % 60 == 0:
 		var _w = count_unit(10)
 	# State dispatch
@@ -560,6 +562,54 @@ func get_peer_castle(peer) -> Building:
 			if my_peer_id != -1 and entity.owner_peer_id == peer: return entity
 			if my_peer_id == -1 and entity.team == my_team: return entity
 	return null
+
+# ═══ 乱斗 FFA 主敌解析 ═══
+# 非乱斗（1v1 / 在线 2v2）的对手就是红蓝对位的另一个队伍，行为与原逻辑完全一致；
+# 乱斗 FFA 中每个国家独立成队（team 从 3 起），"1-my_team" 会解析到空队导致 AI 永不进攻，
+# 故以"仍存活 + 与我有外交敌意（盟友除外）的国家"为候选，取其城堡距我最远者为主敌。
+# _primary_enemy_owner 每 think 周期由 decide() 顶部刷新一次，查询均为 O(1)。
+
+func _refresh_primary_enemy():
+	_primary_enemy_owner = -1
+	if my_peer_id == -1: return
+	if not (battle and battle.diplomacy and battle.diplomacy.active): return
+	var self_castle = get_peer_castle(my_peer_id)
+	var base = self_castle.global_position if self_castle else Vector3.ZERO
+	var best_d = INF
+	for o in battle.diplomacy.get_alive_owners():
+		if o == my_peer_id: continue
+		if not battle.diplomacy.is_hostile(my_peer_id, o): continue  # 盟友/中立 → 不为主敌
+		var oc = get_peer_castle(o)
+		if not oc: continue
+		var d = base.distance_squared_to(oc.global_position)
+		if d < best_d:
+			best_d = d
+			_primary_enemy_owner = o
+
+func _primary_enemy_team() -> int:
+	if _primary_enemy_owner != -1 and battle and battle.diplomacy and battle.diplomacy.active:
+		return battle.diplomacy.get_team_of(_primary_enemy_owner)
+	# 非乱斗经典红蓝对位；乱斗下全盟友无主敌时回退（BLUE/RED 无独立国时自然为空，不会误打盟友）
+	return RTSConfig.Team.BLUE if my_team == RTSConfig.Team.RED else RTSConfig.Team.RED
+
+# 该实体是否对我构成敌对（owner 感知）。无外交管理器时退化为纯队伍判定，资源恒非敌。
+func _entity_is_enemy(e) -> bool:
+	if not (e is GameEntity) or e.health <= 0: return false
+	if battle and battle.diplomacy and battle.diplomacy.active and my_peer_id != -1:
+		var eo: int = -1
+		if "owner_peer_id" in e: eo = e.owner_peer_id
+		return eo >= 0 and eo != my_peer_id and battle.diplomacy.is_hostile(my_peer_id, eo)
+	return e.team != my_team and not (e is WorldResource)
+
+func _enemy_total_military() -> int:
+	if my_peer_id != -1 and battle and battle.diplomacy and battle.diplomacy.active:
+		var total = 0
+		for o in battle.diplomacy.get_alive_owners():
+			if o == my_peer_id: continue
+			if not battle.diplomacy.is_hostile(my_peer_id, o): continue
+			total += count_military(o)
+		return total
+	return count_military_by_team(_primary_enemy_team())
 
 func find_valid_build_position(near_pos: Vector3, building_id: int) -> Vector3:
 	var cfg = EntityDatabase.get_config(building_id)
@@ -684,14 +734,13 @@ func clear_invalid_targets():
 
 func find_best_resource_for_worker(worker: Army, priority_score: Dictionary) -> WorldResource:
 	var best = null; var best_score = -1
-	var enemy_team = RTSConfig.Team.BLUE if my_team == RTSConfig.Team.RED else RTSConfig.Team.RED
 	for entity in battle.entities.get_children():
 		if entity is WorldResource and entity.health > 0:
 			var type = entity.resource_type
 			if type in priority_score:
 				var score = priority_score[type] - worker.global_position.distance_to(entity.global_position) * 0.01
 				for e in battle.entities.get_children():
-					if e is Army and e.team == enemy_team and e.health > 0 and e.entity_id not in [10,14,43,44,45]:
+					if e is Army and e.entity_id not in [10,14,43,44,45] and _entity_is_enemy(e):
 						if e.global_position.distance_to(entity.global_position) < 10.0: score -= 500; break
 				if score > best_score: best_score = score; best = entity
 	return best
@@ -770,9 +819,8 @@ func _is_valid_build_ground(world_pos: Vector3) -> bool:
 	for e in battle.entities.get_children():
 		if e is Building and e.team == my_team and e.health > 0:
 			if e.global_position.distance_to(world_pos) < (e.body_radius + 3.0): return false
-	var enemy_team = RTSConfig.Team.BLUE if my_team == RTSConfig.Team.RED else RTSConfig.Team.RED
 	for e in battle.entities.get_children():
-		if e is GameEntity and e.team == enemy_team and e.health > 0:
+		if _entity_is_enemy(e):
 			if e.global_position.distance_to(world_pos) < 10.0: return false
 	return true
 
@@ -911,8 +959,7 @@ func update_tactic(_delta):
 	var now = Time.get_ticks_msec() / 1000.0
 	var my_key = my_peer_id if my_peer_id != -1 else my_team
 	var my_mil = count_military(my_key)
-	var enemy_team = RTSConfig.Team.BLUE if my_team == RTSConfig.Team.RED else RTSConfig.Team.RED
-	var player_mil = count_military_by_team(enemy_team)
+	var player_mil = _enemy_total_military()
 
 	if current_tactic == LateTactic.DEFEND:
 		if my_mil > player_mil  and my_mil > 10:
@@ -934,7 +981,8 @@ func update_tactic(_delta):
 	last_tactic_time = now
 
 func execute_harass():
-	var enemy_castle = get_team_castle(1 - my_team)
+	var enemy_team = _primary_enemy_team()
+	var enemy_castle = get_team_castle(enemy_team)
 	if not enemy_castle: return
 	#for i in range(10 - count_unit(15)):
 		#if can_afford(15) and _can_train_unit(): produce_unit(15)
@@ -942,7 +990,7 @@ func execute_harass():
 		#if can_afford(13) and _can_train_unit(): produce_unit(13)
 	var best_warehouse: Building = null; var best_dist = 0.0
 	for entity in battle.entities.get_children():
-		if entity is Building and entity.team == 1-my_team and entity.entity_id == 22 and entity.health > 0:
+		if entity is Building and entity.team == enemy_team and entity.entity_id == 22 and entity.health > 0:
 			var dist = entity.global_position.distance_to(enemy_castle.global_position)
 			if dist > 15 and dist > best_dist: best_warehouse = entity; best_dist = dist
 	if best_warehouse:
@@ -951,14 +999,14 @@ func execute_harass():
 				entity.attack_move_to(best_warehouse.global_position)
 	var player_shipyard: Building = null
 	for entity in battle.entities.get_children():
-		if entity is Building and entity.team == 1-my_team and entity.entity_id == 23 and entity.health > 0: player_shipyard = entity; break
+		if entity is Building and entity.team == enemy_team and entity.entity_id == 23 and entity.health > 0: player_shipyard = entity; break
 	if player_shipyard:
 		for entity in battle.entities.get_children():
 			if entity is Army and entity.team == my_team and entity.health > 0 and entity.entity_id not in [10,14,46,47,48,50] and entity_belongs_to_me(entity):
 				entity.attack_move_to(player_shipyard.global_position)
 
 func execute_overwhelm():
-	var enemy_castle = get_team_castle(1 - my_team)
+	var enemy_castle = get_team_castle(_primary_enemy_team())
 	if not enemy_castle: return
 	var rally = enemy_castle.global_position + Vector3(0, 0, 5)
 	#if wall_positions.size() > 0: rally = wall_positions[wall_positions.size()/2] + Vector3(0, 0, 2)
@@ -981,10 +1029,10 @@ func execute_overwhelm():
 func execute_raid():
 	var self_castle = get_peer_castle(my_peer_id)
 	if not self_castle or self_castle.level < 3: return
-	var enemy_castle = get_team_castle(1 - my_team)
+	var enemy_team = _primary_enemy_team()
+	var enemy_castle = get_team_castle(enemy_team)
 	if not enemy_castle or not is_instance_valid(enemy_castle): return
 	var enemy_pos = enemy_castle.global_position
-	var enemy_team = RTSConfig.Team.BLUE if my_team == RTSConfig.Team.RED else RTSConfig.Team.RED
 	var special_uid = RAID_UNIT
 	if NationData.NATION_UNITS.has(nation) and NationData.NATION_UNITS.get(nation).size() >= 2:
 		special_uid = NationData.NATION_UNITS.get(nation)[1]["unit_id"]
@@ -1015,9 +1063,10 @@ func execute_raid():
 		if is_instance_valid(u) and is_instance_valid(enemy_castle): u.attack_move_to(enemy_castle.global_position)
 
 func _get_enemy_army_direction(center: Vector3) -> Vector3:
+	var enemy_team = _primary_enemy_team()
 	var sum = Vector3.ZERO; var cnt = 0
 	for e in battle.entities.get_children():
-		if e is Army and e.team == 1-my_team and e.health > 0:
+		if e is Army and e.team == enemy_team and e.health > 0:
 			var d = e.global_position - center
 			if d.length() > 12: sum += d.normalized(); cnt += 1
 	return Vector3.FORWARD if cnt == 0 else sum.normalized()
@@ -1418,7 +1467,7 @@ func _process_line_3():
 func _process_line_4():
 	var my_key = my_peer_id if my_peer_id != -1 else my_team
 	if count_military(my_key) >= 15 and an_attack():
-		var target = get_team_castle(1-my_team)
+		var target = get_team_castle(_primary_enemy_team())
 		if target: attack_move(target.global_position, 30)
 
 func _process_line_5():

@@ -597,7 +597,7 @@ func _attack(target, delta):
 		for entity in all_entities:
 			if entity == self or not (entity is GameEntity) or entity.health <= 0:
 				continue
-			if entity.team == team or entity is WorldResource:
+			if not _is_hostile_to(entity):
 				continue
 			var dist = global_position.distance_to(entity.global_position) - body_radius - entity.body_radius
 			if dist <= damage_radius:
@@ -622,6 +622,7 @@ func _attack(target, delta):
 		for i in range(bullet_count):
 			var bullet = Bullet.new()
 			bullet.team = team
+			bullet.owner_peer_id = owner_peer_id
 			bullet.damage = attack
 			bullet.speed = 8.0
 			bullet.source = self
@@ -824,7 +825,7 @@ func _find_nearest_entity(search_range: float, filter_func: Callable, use_cache:
 	var bm = _get_bm()
 	var candidates: Array = []
 	if bm and use_cache:
-		candidates = bm.get_nearby_enemies(global_position, search_range, team)
+		candidates = bm.get_nearby_enemies(global_position, search_range, team, owner_peer_id)
 	else:
 		candidates = get_tree().get_nodes_in_group("entities")
 	for entity in candidates:
@@ -843,7 +844,7 @@ func _find_enemy_in_range():
 	var bm = _get_bm()
 	var enemies: Array = []
 	if bm:
-		enemies = bm.get_nearby_enemies(global_position, vision_range, team)
+		enemies = bm.get_nearby_enemies(global_position, vision_range, team, owner_peer_id)
 	else:
 		enemies = get_tree().get_nodes_in_group("entities")
 	for entity in enemies:
@@ -1567,6 +1568,13 @@ func die_cart_cleanup():
 
 # ==================== Attack filtering ====================
 
+# owner 感知敌对判定（乱斗 FFA：同国/盟友/中立一律不可攻击；无外交管理器时按队伍）
+func _is_hostile_to(entity) -> bool:
+	var bm = _get_bm()
+	if bm and bm.has_method("is_hostile_to"):
+		return bm.is_hostile_to(team, owner_peer_id, entity)
+	return entity.team != team and not (entity is WorldResource)
+
 func _can_attack_target(target: GameEntity) -> bool:
 	if not is_instance_valid(target) or target.health <= 0: return false
 	# 近战不能攻击城墙上的敌人（包括炮台）
@@ -1611,7 +1619,7 @@ func _find_nearest_enemy_in_vision():
 	for entity in get_tree().get_nodes_in_group("entities"):
 		if entity == self or not is_instance_valid(entity) or entity.health <= 0: continue
 		if entity is WorldResource: continue
-		if entity.team == team: continue
+		if not _is_hostile_to(entity): continue
 		if not (entity is GameEntity): continue
 		if entity.get("_animal_type") != null and str(entity.get("_animal_type")) != "": continue  # 不自动攻击动物
 		var h_diff = Vector2(entity.global_position.x - global_position.x, entity.global_position.z - global_position.z)

@@ -3,6 +3,7 @@ class_name Bullet
 extends Area3D
 
 var team: int
+var owner_peer_id: int = -1   # 发射方 owner_peer_id（乱斗 FFA 溅射/命中按 owner 过滤敌对）
 var damage: float
 var speed: float = 6.0
 var target: GameEntity = null
@@ -88,7 +89,7 @@ func _physics_process(delta):
 	# 使用缓存的 battle_manager 做碰撞检测
 	var bm = _get_bm()
 	if bm:
-		var nearby = bm.get_nearby_enemies(global_position, 0.5, team)
+		var nearby = bm.get_nearby_enemies(global_position, 0.5, team, owner_peer_id)
 		for entity in nearby:
 			if entity == self or entity == source: continue
 			if global_position.distance_to(entity.global_position) < 0.3:
@@ -119,7 +120,7 @@ func _on_hit(entity: GameEntity):
 	if damage_radius > 0:
 		var bm = _get_bm()
 		if bm:
-			var nearby = bm.get_nearby_enemies(global_position, damage_radius, team)
+			var nearby = bm.get_nearby_enemies(global_position, damage_radius, team, owner_peer_id)
 			for e in nearby:
 				if e == entity or e == src: continue
 				if e.global_position.distance_to(global_position) <= damage_radius:
@@ -151,7 +152,7 @@ func _on_hit_pos():
 	if damage_radius > 0:
 		var bm = _get_bm()
 		if bm:
-			var nearby = bm.get_nearby_enemies(global_position, damage_radius, team)
+			var nearby = bm.get_nearby_enemies(global_position, damage_radius, team, owner_peer_id)
 			for e in nearby:
 				if e == src: continue
 				if e.global_position.distance_to(global_position) <= damage_radius:

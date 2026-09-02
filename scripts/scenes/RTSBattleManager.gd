@@ -195,11 +195,26 @@ func _spatial_query(from_pos: Vector3, search_range: float) -> Array:
 				result.append(entity)
 	return result
 
-# 获取范围内敌军实体（仅搜索非己方队伍）— 空间索引加速
-func get_nearby_enemies(from_pos: Vector3, search_range: float, my_team: int) -> Array:
+# 权威敌对判定（乱斗 FFA 按国家 owner 关系，其余模式按队伍）。
+# my_owner 为 -1（未划分国家的 1v1 等）时退化为纯队伍判定；
+# 中立资源/同国/存活盟友一律不可攻击 → false。
+func is_hostile_to(my_team: int, my_owner: int, entity) -> bool:
+	if entity == null or not is_instance_valid(entity):
+		return false
+	if entity.team == RTSConfig.Team.NEUTRAL:
+		return false
+	var e_owner: int = -1
+	if "owner_peer_id" in entity:
+		e_owner = entity.owner_peer_id
+	if diplomacy and diplomacy.active and my_owner >= 0 and e_owner >= 0:
+		return diplomacy.is_hostile(my_owner, e_owner)
+	return entity.team != my_team
+
+# 获取范围内敌军实体（仅搜索敌对实体）— 空间索引加速
+func get_nearby_enemies(from_pos: Vector3, search_range: float, my_team: int, my_owner: int = -1) -> Array:
 	var result: Array = []
 	for entity in _spatial_query(from_pos, search_range):
-		if entity.team == my_team or entity.team == RTSConfig.Team.NEUTRAL:
+		if not is_hostile_to(my_team, my_owner, entity):
 			continue
 		var dist = from_pos.distance_squared_to(entity.global_position)
 		var max_dist = search_range + entity.body_radius + 1.0
@@ -1671,8 +1686,8 @@ func _command_selected_units(screen_pos: Vector2):
 						u.gather_at(target)
 					else:
 						u.attack_move_to(target.global_position)
-				elif target.team != u.team:
-					# 攻击过滤：不可攻击目标改为移动
+				elif is_hostile_to(u.team, u.owner_peer_id, target):
+					# 攻击过滤：不可攻击目标（同国/盟友/中立）改为移动
 					if u.has_method("_can_attack_target") and u._can_attack_target(target):
 						u.attack_target(target)
 					else:
