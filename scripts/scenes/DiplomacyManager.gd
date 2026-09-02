@@ -148,7 +148,11 @@ func alliance_block_reason(a: int, b: int) -> String:
 func propose_alliance(from_owner: int, to_owner: int) -> bool:
 	if alliance_block_reason(from_owner, to_owner) != "":
 		return false
+	var prev = _pending_proposals.get(from_owner, -1)
 	_pending_proposals[from_owner] = to_owner
+	# 面向玩家的新提议弹一次横幅，玩家不盯面板也能第一时间看到
+	if battle and to_owner == battle.player_owner_id and prev != to_owner:
+		_alert("%s 向你提议结盟（请在右侧外交部处理）" % get_display_name(from_owner), Color(0.3, 0.9, 1.0))
 	return true
 
 # 返回曾向 owner 发起提议、尚待 owner 接受的国家

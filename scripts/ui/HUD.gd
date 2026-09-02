@@ -43,6 +43,14 @@ var _alert_bg: ColorRect = null
 var _alert_timer: float = 0.0
 var _unit_stats_timer: float = 1.0
 
+# ==================== FFA 外交部面板 ====================
+var _diplo_panel: Control = null            # 面板根（右侧外交部）
+var _diplo_scroll: ScrollContainer = null
+var _diplo_content: VBoxContainer = null    # 滚动区内容（重建式渲染）
+var _diplo_timer: float = 0.0               # 内容重建节流
+var _diplo_hash: String = ""                # 上次渲染快照（变化才重建）
+var _diplo_visible: bool = true             # 面板开关
+var _diplo_toggle_btn: Button = null        # 左侧切换按钮
 
 func _get_nation_name(nation: int) -> String:
 	match nation:
@@ -608,6 +616,7 @@ func update_data(resources: Dictionary, population: Dictionary, limits: Dictiona
 	
 
 func _process(delta):
+	_tick_ffa_diplo(delta)
 	_unit_stats_timer -= delta
 	var bm = _get_bm()
 	
@@ -1007,3 +1016,355 @@ func _on_stop_gather_pressed():
 func _on_hold_position_pressed():
 	var bm = _get_bm() as RTSBattleManager
 	if bm: bm.toggle_hold_position()
+
+
+# ==================== FFA 外交部面板 ====================
+
+# 规范对键（小|大），与 DiplomacyManager 一致
+func _diplo_pair_key(a: int, b: int) -> String:
+	var lo := a if a < b else b
+	var hi := b if a < b else a
+	return "%d|%d" % [lo, hi]
+
+# 每帧驱动：仅单机 FFA 生效；面板未建则建，节流重建
+func _tick_ffa_diplo(delta: float):
+	var bm := _get_bm() as RTSBattleManager
+	if bm == null or not bm.is_ffa or bm.diplomacy == null:
+		return
+	if _diplo_panel == null:
+		_build_diplo_panel()
+	if _diplo_toggle_btn == null:
+		_build_diplo_toggle()
+	_diplo_toggle_btn.visible = true
+	_diplo_panel.visible = _diplo_visible and not bm.game_over
+	if not _diplo_panel.visible:
+		return
+	_diplo_timer -= delta
+	if _diplo_timer > 0.0:
+		return
+	_diplo_timer = 0.4
+	var snap := _diplo_snapshot()
+	if snap != _diplo_hash:
+		_diplo_hash = snap
+		_rebuild_diplo_content()
+
+func _build_diplo_panel():
+	if _diplo_panel != null:
+		return
+	var panel := Panel.new()
+	panel.name = "DiploPanel"
+	panel.z_index = 120
+	panel.anchor_left = 1.0
+	panel.anchor_right = 1.0
+	panel.offset_left = -455
+	panel.offset_right = -10
+	panel.offset_top = 86
+	panel.offset_bottom = 800
+	panel.add_theme_stylebox_override("panel", UITheme.panel_style(UITheme.RADIUS_LG, UITheme.BORDER_MED, 0.92))
+	add_child(panel)
+	_diplo_panel = panel
+
+	var title := UITheme.make_section_title("🕊️ 外交部", UITheme.GOLD, UITheme.FONT_XL)
+	title.position = Vector2(14, 8)
+	panel.add_child(title)
+
+	var scroll := ScrollContainer.new()
+	scroll.name = "DiploScroll"
+	scroll.position = Vector2(10, 44)
+	scroll.size = Vector2(435, 664)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	panel.add_child(scroll)
+	_diplo_scroll = scroll
+
+	var content := VBoxContainer.new()
+	content.name = "DiploContent"
+	content.add_theme_constant_override("separation", 6)
+	scroll.add_child(content)
+	_diplo_content = content
+	_rebuild_diplo_content()
+
+# 外交部另一入口：左侧切换按钮
+func _build_diplo_toggle():
+	if _diplo_toggle_btn != null:
+		return
+	var btn := Button.new()
+	btn.name = "DiploToggle"
+	btn.text = "🕊️ 外交"
+	btn.position = Vector2(176, 540)
+	btn.toggle_mode = true
+	btn.button_pressed = true
+	UITheme.apply_muted_button(btn, UITheme.FONT_LG)
+	btn.pressed.connect(_diplo_toggle_pressed)
+	add_child(btn)
+	_diplo_toggle_btn = btn
+
+func _diplo_toggle_pressed():
+	if _diplo_toggle_btn == null:
+		return
+	_diplo_visible = _diplo_toggle_btn.button_pressed
+	if _diplo_panel:
+		_diplo_panel.visible = _diplo_visible
+
+# 外交状态快照：任何字段变化都会改变 hash → 触发重建
+func _diplo_snapshot() -> String:
+	var bm := _get_bm() as RTSBattleManager
+	if bm == null or bm.diplomacy == null:
+		return ""
+	var d: DiplomacyManager = bm.diplomacy
+	var player: int = bm.player_owner_id
+	var parts: Array = []
+	parts.append(str(player))
+	var ally: int = d.get_ally(player)
+	parts.append(str(ally))
+	var inc: Array = d.get_incoming_proposals(player)
+	inc.sort()
+	parts.append(str(inc))
+	if ally != -1:
+		parts.append(str(max(int(d.alliance_remaining(player)), 0)))
+		var key := _diplo_pair_key(player, ally)
+		var al: Dictionary = d.alliances.get(key, {})
+		parts.append(str(al.get("total_tribute", 0)))
+	else:
+		parts.append("-1")
+		parts.append("0")
+	parts.append(str(int(d._pending_proposals.get(player, -1))))
+	var keys: Array = d.nations.keys()
+	keys.sort()
+	for owner in keys:
+		var o: int = int(owner)
+		if o == player or not d.is_nation_alive(o):
+			continue
+		var st: String = d.get_display_name(o)
+		if d.is_ruptured_pair(player, o):
+			st += "·裂"
+		if d.is_betrayer(o):
+			st += "·叛"
+		st += "·" + str(int(d._pending_proposals.get(o, -1) == player))
+		parts.append(st)
+	return str(parts)
+
+# 重建外交部滚动内容（三节：收到的提议 / 我的盟约 / 可结盟国家）
+func _rebuild_diplo_content():
+	if _diplo_content == null:
+		return
+	for c in _diplo_content.get_children():
+		c.free()
+	var bm := _get_bm() as RTSBattleManager
+	if bm == null or bm.diplomacy == null:
+		return
+	var d: DiplomacyManager = bm.diplomacy
+	var player: int = bm.player_owner_id
+	var ally: int = d.get_ally(player)
+
+	_add_diplo_section("📨 收到的提议")
+	var inc: Array = d.get_incoming_proposals(player)
+	inc.sort()
+	if inc.is_empty():
+		_add_diplo_card("暂无国家向你提议", UITheme.STONE)
+	else:
+		for proposer in inc:
+			_add_proposal_row(d, player, int(proposer))
+
+	_add_diplo_section("🤝 我的盟约")
+	if ally == -1:
+		_add_diplo_card("当前没有盟约", UITheme.STONE)
+	else:
+		_add_alliance_card(d, player, ally)
+
+	_add_diplo_section("⚔️ 可结盟国家")
+	if ally != -1:
+		_add_diplo_card("你已结盟 —— 决裂前无法再结盟", UITheme.ALERT_WARNING)
+	else:
+		var my_pending: int = int(d._pending_proposals.get(player, -1))
+		var keys: Array = d.nations.keys()
+		keys.sort()
+		for owner in keys:
+			var o: int = int(owner)
+			if o == player or not d.is_nation_alive(o):
+				continue
+			_add_ally_option_row(d, player, o, o == my_pending)
+
+func _add_diplo_section(text: String) -> void:
+	var lb: Label = UITheme.make_section_title(text, UITheme.PARCHMENT, UITheme.FONT_LG)
+	_diplo_content.add_child(lb)
+
+func _add_diplo_card(text: String, accent: Color) -> void:
+	var lb := Label.new()
+	lb.text = text
+	lb.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UITheme.apply_label(lb, UITheme.FONT_SM)
+	_diplo_content.add_child(_wrap_card(lb, accent))
+
+# 卡片包裹：内容 + 内边距 + 顶部强调色边框
+func _wrap_card(content: Control, accent: Color) -> PanelContainer:
+	var pc := PanelContainer.new()
+	pc.add_theme_stylebox_override("panel", UITheme.card_style(accent))
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 8)
+	margin.add_theme_constant_override("margin_right", 8)
+	margin.add_theme_constant_override("margin_top", 6)
+	margin.add_theme_constant_override("margin_bottom", 6)
+	pc.add_child(margin)
+	margin.add_child(content)
+	return pc
+
+# 一条收到的结盟提议：[国家] 请求与你结盟  [接受] [拒绝]
+func _add_proposal_row(d: DiplomacyManager, player: int, proposer: int) -> void:
+	var hb := HBoxContainer.new()
+	hb.custom_minimum_size = Vector2(0, 36)
+	hb.add_theme_constant_override("separation", 8)
+	var lb := Label.new()
+	lb.text = "%s 请求与你结盟" % d.get_display_name(proposer)
+	lb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UITheme.apply_label(lb, UITheme.FONT_SM)
+	hb.add_child(lb)
+	var accept := Button.new()
+	accept.text = "接受"
+	UITheme.apply_primary_button(accept, UITheme.FONT_SM)
+	accept.pressed.connect(_diplo_accept.bind(proposer))
+	hb.add_child(accept)
+	var decline := Button.new()
+	decline.text = "拒绝"
+	UITheme.apply_danger_button(decline, UITheme.FONT_SM)
+	decline.pressed.connect(_diplo_decline.bind(proposer))
+	hb.add_child(decline)
+	_diplo_content.add_child(_wrap_card(hb, UITheme.ALERT_GROUP))
+
+# 我的盟约卡：盟友 / 剩余时间 / 累计进贡 / 四种资源进贡按钮 / 决裂
+func _add_alliance_card(d: DiplomacyManager, player: int, ally: int) -> void:
+	var ally_name: String = d.get_display_name(ally)
+	var remaining: float = d.alliance_remaining(player)
+	var secs: int = maxi(int(remaining), 0)
+	var mm: int = secs / 60
+	var ss: int = secs % 60
+	var key := _diplo_pair_key(player, ally)
+	var al: Dictionary = d.alliances.get(key, {})
+	var tribute: int = int(al.get("total_tribute", 0))
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 6)
+	var info := Label.new()
+	info.text = "盟友：%s\n剩余时间：%02d:%02d\n累计进贡：%d" % [ally_name, mm, ss, tribute]
+	info.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UITheme.apply_label(info, UITheme.FONT_MD)
+	vb.add_child(info)
+	var trib_lb := Label.new()
+	trib_lb.text = "进贡 %d（选择资源，可延长盟约）:" % DiplomacyManager.TRIBUTE_DELIVERY
+	UITheme.apply_label(trib_lb, UITheme.FONT_SM, UITheme.STONE)
+	vb.add_child(trib_lb)
+	var res_row := HBoxContainer.new()
+	res_row.add_theme_constant_override("separation", 6)
+	for rk in ["gold", "wood", "stone", "food"]:
+		var rb := Button.new()
+		var rname: String = str(UITheme.RESOURCE_NAMES.get(rk, rk))
+		rb.text = "%s %d" % [rname, DiplomacyManager.TRIBUTE_DELIVERY]
+		UITheme.apply_row_button(rb, UITheme.RESOURCE_COLORS.get(rk, UITheme.PARCHMENT))
+		rb.pressed.connect(_diplo_send_tribute.bind(rk))
+		res_row.add_child(rb)
+	vb.add_child(res_row)
+	var rupture_btn := Button.new()
+	rupture_btn.text = "💥 决裂断交（永久封禁该对）"
+	UITheme.apply_danger_button(rupture_btn, UITheme.FONT_SM)
+	rupture_btn.pressed.connect(_diplo_rupture.bind())
+	vb.add_child(rupture_btn)
+	_diplo_content.add_child(_wrap_card(vb, UITheme.EMERALD))
+
+# 可结盟国家行：名字 + [提议结盟 / 撤回提议 / 不可结盟]
+func _add_ally_option_row(d: DiplomacyManager, player: int, owner: int, is_pending: bool) -> void:
+	var name_str: String = d.get_display_name(owner)
+	var reason: String = d.alliance_block_reason(player, owner)
+	var hb := HBoxContainer.new()
+	hb.custom_minimum_size = Vector2(0, 36)
+	hb.add_theme_constant_override("separation", 8)
+	var lb := Label.new()
+	lb.text = name_str
+	lb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UITheme.apply_label(lb, UITheme.FONT_MD)
+	hb.add_child(lb)
+	var btn := Button.new()
+	if reason != "":
+		btn.disabled = true
+		btn.text = "不可结盟"
+		btn.tooltip_text = reason
+		UITheme.apply_muted_button(btn, UITheme.FONT_SM)
+	elif is_pending:
+		btn.text = "撤回提议"
+		UITheme.apply_muted_button(btn, UITheme.FONT_SM)
+		btn.pressed.connect(_diplo_cancel_proposal.bind())
+	else:
+		btn.text = "提议结盟"
+		UITheme.apply_primary_button(btn, UITheme.FONT_SM)
+		btn.pressed.connect(_diplo_propose_to.bind(owner))
+	hb.add_child(btn)
+	_diplo_content.add_child(_wrap_card(hb, UITheme.STONE))
+
+# ==================== 外交部动作回调 ====================
+func _diplo_accept(proposer: int):
+	var bm := _get_bm() as RTSBattleManager
+	if bm == null or bm.diplomacy == null:
+		return
+	var d: DiplomacyManager = bm.diplomacy
+	var player: int = bm.player_owner_id
+	if d.accept_alliance(player, proposer):
+		show_alert_message("✅ 已与 %s 结盟" % d.get_display_name(proposer), ALERT_INFO)
+	else:
+		var reason: String = d.alliance_block_reason(player, proposer)
+		show_alert_message(reason if reason != "" else "结盟失败", ALERT_WARNING)
+
+func _diplo_decline(proposer: int):
+	var bm := _get_bm() as RTSBattleManager
+	if bm == null or bm.diplomacy == null:
+		return
+	var d: DiplomacyManager = bm.diplomacy
+	d.decline_alliance(bm.player_owner_id, proposer)
+	show_alert_message("已拒绝 %s 的结盟提议" % d.get_display_name(proposer), ALERT_WARNING)
+
+func _diplo_propose_to(owner: int):
+	var bm := _get_bm() as RTSBattleManager
+	if bm == null or bm.diplomacy == null:
+		return
+	var d: DiplomacyManager = bm.diplomacy
+	var player: int = bm.player_owner_id
+	if d.propose_alliance(player, owner):
+		show_alert_message("已向 %s 发出结盟提议" % d.get_display_name(owner), ALERT_INFO)
+	else:
+		var reason: String = d.alliance_block_reason(player, owner)
+		show_alert_message(reason if reason != "" else "提议失败", ALERT_WARNING)
+
+func _diplo_cancel_proposal():
+	var bm := _get_bm() as RTSBattleManager
+	if bm == null or bm.diplomacy == null:
+		return
+	var d: DiplomacyManager = bm.diplomacy
+	var player: int = bm.player_owner_id
+	var target: int = int(d._pending_proposals.get(player, -1))
+	if target == -1:
+		return
+	d.cancel_proposal(player)
+	show_alert_message("已撤回对 %s 的结盟提议" % d.get_display_name(target), ALERT_WARNING)
+
+func _diplo_send_tribute(res_type: String):
+	var bm := _get_bm() as RTSBattleManager
+	if bm == null or bm.diplomacy == null:
+		return
+	var d: DiplomacyManager = bm.diplomacy
+	var player: int = bm.player_owner_id
+	var ally: int = d.get_ally(player)
+	if ally == -1:
+		return
+	if d.deliver_tribute(player, ally, res_type):
+		var rname: String = str(UITheme.RESOURCE_NAMES.get(res_type, res_type))
+		show_alert_message("已向 %s 进贡 %d %s" % [d.get_display_name(ally), DiplomacyManager.TRIBUTE_DELIVERY, rname], ALERT_INFO)
+	else:
+		show_alert_message("进贡失败：资源不足或对方仓库已满", ALERT_WARNING)
+
+func _diplo_rupture():
+	var bm := _get_bm() as RTSBattleManager
+	if bm == null or bm.diplomacy == null:
+		return
+	var d: DiplomacyManager = bm.diplomacy
+	var player: int = bm.player_owner_id
+	var ally: int = d.get_ally(player)
+	if d.rupture_alliance(player):
+		show_alert_message("💥 你已与 %s 决裂，双方永久无法再结盟" % d.get_display_name(ally), ALERT_WARNING)
+	else:
+		show_alert_message("当前没有盟约可决裂", ALERT_WARNING)
