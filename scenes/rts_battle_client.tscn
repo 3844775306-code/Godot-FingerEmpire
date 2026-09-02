@@ -99,16 +99,20 @@ offset_bottom = 40.0
 
 [node name="InfoPanel" type="Panel" parent="UI"]
 z_index = 10
-offset_top = 550.0
-offset_right = 100.0
-offset_bottom = 850.0
-scale = Vector2(2, 2)
+offset_left = 16.0
+offset_top = 590.0
+offset_right = 400.0
+offset_bottom = 1110.0
 script = ExtResource("6_j6f5n")
 
 [node name="VBox" type="VBoxContainer" parent="UI/InfoPanel"]
 layout_mode = 0
-offset_right = 100.0
-offset_bottom = 100.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = 14.0
+offset_top = 12.0
+offset_right = -14.0
+offset_bottom = -12.0
 
 [node name="NameLabel" type="Label" parent="UI/InfoPanel/VBox"]
 layout_mode = 2
@@ -127,10 +131,12 @@ layout_mode = 1
 anchors_preset = 1
 anchor_left = 1.0
 anchor_right = 1.0
-offset_left = -100.0
-offset_bottom = 31.0
+offset_left = -92.0
+offset_top = 0.0
+offset_right = -8.0
+offset_bottom = 30.0
 grow_horizontal = 0
-text = "关闭"
+text = "✕ 关闭"
 
 [node name="ClientInput" type="Node3D" parent="."]
 script = ExtResource("7_j6f5n")

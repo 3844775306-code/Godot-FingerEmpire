@@ -114,19 +114,17 @@ func update_info(entity_id: int):
 	var mbt = info.get("max_build_time", 0.0)
 	var bt_str = ""
 	if bt > 0 and mbt > 0:
-		bt_str = "\n[color=orange]建造中[/color]:  %.0f%%" % (100.0 * (1.0 - bt / mbt))
+		bt_str = "\n🔨 [color=orange]建造中[/color]:  %.0f%%" % (100.0 * (1.0 - bt / mbt))
 	var ut = info.get("upgrade_timer", 0.0)
 	var mut = info.get("max_upgrade_time", 0.0)
 	if ut > 0 and mut > 0:
-		bt_str += "\n[color=purple]升级中[/color]:  %.0f%%" % (100.0 * (1.0 - ut / mut))
-	var t = "[color=%s]HP[/color]:  [color=white]%d / %d[/color]%s\n" % [hc, info["health"], info["max_health"], bt_str]
-	t += "[color=orange]ATK[/color]:  [color=white]%d[/color]" % info["attack"]
+		bt_str += "\n⬆️ [color=purple]升级中[/color]:  %.0f%%" % (100.0 * (1.0 - ut / mut))
+	var t = "❤️ [color=%s]HP[/color]:  [color=white]%d / %d[/color]%s\n" % [hc, info["health"], info["max_health"], bt_str]
+	t += "⚔️ [color=%s]ATK[/color]:  [color=white]%d[/color]" % [UITheme.hex_str(UITheme.GOLD), info["attack"]]
 	if info.get("melee_armor", 0) > 0 or info.get("shield_armor", 0) > 0:
-		t += "
-		
-	[color=steelblue]铠甲/盾牌[/color]:  [color=white]%d/%d[/color]" % [info.get("melee_armor", 0), info.get("shield_armor", 0)]
-	t += "\n[color=gold]RANGE[/color]:  [color=white]%.1f[/color]" % info.get("attack_range", 0.0)
-	t += "\n[color=royalblue]SPEED[/color]:  [color=white]%.1f[/color]" % info.get("speed", 0.0)
+		t += "\n⛓️ [color=%s]铠甲[/color]:  [color=white]%d[/color]  🛡️ [color=%s]盾牌[/color]:  [color=white]%d[/color]" % [UITheme.hex_str(UITheme.SAPPHIRE), info.get("melee_armor", 0), UITheme.hex_str(UITheme.STONE), info.get("shield_armor", 0)]
+	t += "\n🎯 [color=%s]RANGE[/color]:  [color=white]%.1f[/color]" % [UITheme.hex_str(UITheme.GOLD), info.get("attack_range", 0.0)]
+	t += "\n👟 [color=%s]SPEED[/color]:  [color=white]%.1f[/color]" % [UITheme.hex_str(UITheme.EMERALD), info.get("speed", 0.0)]
 	stats_rtl.text = t
 
 	# Always detach old upgrade box first (avoid deferred-deletion residue)
@@ -153,12 +151,12 @@ func update_info(entity_id: int):
 					var need = cost[res]; var have = resources.get(res, 0)
 					var rc = RC.get(res, "white"); var cc = "white" if have >= need else "red"
 					var l = _make_rtl_label()
-					l.text = "[color=%s]%s[/color]:  [color=%s]%d/%d[/color]" % [rc, res, cc, need, have]
+					l.text = "%s [color=%s]%s[/color]:  [color=%s]%d/%d[/color]" % [UITheme.RESOURCE_ICONS.get(res, ""), rc, UITheme.RESOURCE_NAMES.get(res, res), cc, need, have]
 					box.add_child(l)
 
 			if info.get("castle_level_required", 0) > 0 and info.get("current_castle_level", 1) < info["castle_level_required"]:
 				var l = _make_rtl_label()
-				l.text = "[color=red]Need Castle Lv.%d[/color]" % info["castle_level_required"]
+				l.text = "[color=red]🏰 需主城 Lv.%d[/color]" % info["castle_level_required"]
 				box.add_child(l)
 			upgrade_btn.disabled = false
 		else:
@@ -190,7 +188,7 @@ func update_info(entity_id: int):
 				for ci in cs:
 					var rc = RC.get(ci.res, "white")
 					var cc = "white" if ci.have >= ci.need else "red"
-					ct += "[color=%s]%s[/color]:[color=%s]%d[/color] " % [rc, ci.res, cc, ci.need]
+					ct += "%s[color=%s]%d[/color] " % [UITheme.RESOURCE_ICONS.get(ci.res, ""), cc, ci.need]
 				rtl.text = "%s  [%s]" % [uc.get("name", "?"), ct.strip_edges()]
 				btn.add_child(rtl)
 				btn.pressed.connect(func(): _on_produce_pressed(prod["unit_id"]))

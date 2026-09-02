@@ -119,7 +119,7 @@ func _create_unit_stats_panel():
 
 	# 标题
 	var title = _make_stats_rtl()
-	title.text = "[color=#5af]◈ 我方军力统计[/color]"
+	title.text = "[color=#5af]👑 ◈ 我方军力统计[/color]"
 	title.add_theme_font_size_override("font_size", 20)
 	vb.add_child(title)
 
@@ -128,7 +128,7 @@ func _create_unit_stats_panel():
 	_stats_pop_label = Label.new()
 	_stats_pop_label.add_theme_font_size_override("font_size", 15)
 	_stats_pop_label.add_theme_color_override("font_color", Color.WHITE)
-	_stats_pop_label.text = "人口: 0/0"
+	_stats_pop_label.text = "👥 人口: 0/0"
 	pop_hbox.add_child(_stats_pop_label)
 
 	_stats_pop_bar = _make_stats_bar(Color(0.25, 0.65, 1.0))
@@ -137,13 +137,13 @@ func _create_unit_stats_panel():
 	vb.add_child(pop_hbox)
 
 	# 军队
-	vb.add_child(_make_stats_section("军队"))
+	vb.add_child(_make_stats_section("⚔️ 军队"))
 	_stats_mil_rtl = _make_stats_rtl()
 	_stats_mil_rtl.add_theme_font_size_override("font_size", 14)
 	vb.add_child(_stats_mil_rtl)
 
 	# 建筑
-	vb.add_child(_make_stats_section("建筑"))
+	vb.add_child(_make_stats_section("🏰 建筑"))
 	_stats_bld_rtl = _make_stats_rtl()
 	_stats_bld_rtl.add_theme_font_size_override("font_size", 14)
 	vb.add_child(_stats_bld_rtl)
@@ -206,7 +206,7 @@ func _update_unit_stats():
 
 	# 更新人口
 	if _stats_pop_label and _stats_pop_bar:
-		_stats_pop_label.text = "人口: %d/%d" % [pop, max_pop]
+		_stats_pop_label.text = "👥 人口: %d/%d" % [pop, max_pop]
 		_stats_pop_bar.value = min(float(pop) / max(max_pop, 1) * 100, 100)
 
 	var unit_names = {
@@ -255,28 +255,28 @@ func _update_unit_stats():
 		var cnt = unit_counts.get(uid, 0)
 		if cnt > 0:
 			var name = unit_names.get(uid, str(uid))
-			eco_lines.append("[color=#8c8]%s[/color]:[color=white]%d[/color]" % [name, cnt])
+			eco_lines.append("[color=#8c8]%s %s[/color]:[color=white]%d[/color]" % [UITheme.entity_emoji(uid, 2), name, cnt])
 	# 战斗单位
 	var unit_order = [11, 12, 15, 16, 17, 18, 19, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40]
 	for uid in unit_order:
 		var cnt = unit_counts.get(uid, 0)
 		if cnt > 0:
 			var name = unit_names.get(uid, str(uid))
-			military_lines.append("[color=#aaa]%s[/color]:[color=white]%d[/color]" % [name, cnt])
+			military_lines.append("[color=#aaa]%s %s[/color]:[color=white]%d[/color]" % [UITheme.entity_emoji(uid, 2), name, cnt])
 
 	var merchant_lines = []
 	for uid in [43, 44, 45, 51]:
 		var cnt = unit_counts.get(uid, 0)
 		if cnt > 0:
 			var name = unit_names.get(uid, str(uid))
-			merchant_lines.append("[color=#ffa]%s[/color]:[color=white]%d[/color]" % [name, cnt])
+			merchant_lines.append("[color=#ffa]%s %s[/color]:[color=white]%d[/color]" % [UITheme.entity_emoji(uid, 2), name, cnt])
 
 	var official_lines = []
 	for uid in [46, 47, 48, 49, 50]:
 		var cnt = unit_counts.get(uid, 0)
 		if cnt > 0:
 			var name = unit_names.get(uid, str(uid))
-			official_lines.append("[color=#f8a]%s[/color]:[color=white]%d[/color]" % [name, cnt])
+			official_lines.append("[color=#f8a]%s %s[/color]:[color=white]%d[/color]" % [UITheme.entity_emoji(uid, 2), name, cnt])
 
 	if military_lines.is_empty() and official_lines.is_empty() and eco_lines.is_empty() and merchant_lines.is_empty():
 		_stats_mil_rtl.text = "[color=gray](无军队)[/color]"
@@ -286,13 +286,13 @@ func _update_unit_stats():
 			text = " ".join(eco_lines)
 		if not military_lines.is_empty():
 			if text != "": text += "\n"
-			text += "[color=#8cf]战斗: %d[/color] | " % military_total + " ".join(military_lines)
+			text += "[color=#8cf]⚔️ 战斗: %d[/color] | " % military_total + " ".join(military_lines)
 		if not merchant_lines.is_empty():
 			if text != "": text += "\n"
-			text += "[color=#ffa]商人:[/color] " + " ".join(merchant_lines)
+			text += "[color=#ffa]🛒 商人:[/color] " + " ".join(merchant_lines)
 		if not official_lines.is_empty():
 			if text != "": text += "\n"
-			text += "[color=#a8f]官员:[/color] " + " ".join(official_lines)
+			text += "[color=#a8f]🎖️ 官员:[/color] " + " ".join(official_lines)
 		_stats_mil_rtl.text = text if text != "" else "[color=gray](无军队)[/color]"
 
 	# 建筑统计
@@ -303,7 +303,7 @@ func _update_unit_stats():
 		if cnt > 0:
 			var lv = building_levels.get(bid, 1)
 			var name = building_names.get(bid, str(bid))
-			building_lines.append("[color=#888]【%d】%s[/color]:[color=white]%d[/color]" % [lv, name, cnt])
+			building_lines.append("[color=#888]%s【%d】%s[/color]:[color=white]%d[/color]" % [UITheme.entity_emoji(bid, 1), lv, name, cnt])
 
 	if building_lines.is_empty():
 		_stats_bld_rtl.text = "[color=gray](无建筑)[/color]"

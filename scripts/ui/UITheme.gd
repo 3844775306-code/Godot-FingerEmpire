@@ -446,10 +446,17 @@ static func entity_emoji(entity_id: int, entity_type: int = -1) -> String:
 		33: return "🎯"    # 诸葛连弩
 		34: return "🐘"    # 象骑兵
 		35: return "🔱"    # 长枪兵
+		36: return "🛡️"    # 重装步兵
+		37: return "🏹"    # 重装弓箭手
+		38: return "🏇"    # 重装骑兵
 		39: return "🚢"    # 运输船
 		40: return "💥"    # 火船
 		43, 44, 45, 51: return "🏪"  # 商人
-		46, 47, 48, 49, 50: return "📜"  # 县吏
+		46: return "📜"    # 县吏
+		47: return "🎖️"    # 上校
+		48: return "🪶"    # 尚书
+		49: return "🚩"    # 统帅
+		50: return "🐉"    # 丞相
 		_: return "⚔️"
 
 # ── 轻量动效库 ───────────────────────────────────────────

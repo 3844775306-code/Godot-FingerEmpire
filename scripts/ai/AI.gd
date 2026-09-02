@@ -1419,12 +1419,13 @@ func _find_water_patrol_point(near_pos: Vector3) -> Vector3:
 func update_debug_label():
 	if not debug_panel: return
 	var res = _get_resources(); var pop = _get_population()
-	_header_rtl.text = "[color=#%s]%s[/color]  |  %s" % [(Color.GREEN if phase == Phase.ASSAULT else (Color(1,0.7,0) if phase == Phase.DEVELOPMENT else Color.CYAN)).to_html(), Phase.keys()[phase], _get_tactic_name(current_tactic)]
+	var _pe = {"PRODUCTION": "🌱", "DEVELOPMENT": "🏗️", "ASSAULT": "⚔️"}
+	_header_rtl.text = "%s [color=#%s]%s[/color]  |  %s" % [_pe.get(Phase.keys()[phase], "▶️"), (Color.GREEN if phase == Phase.ASSAULT else (Color(1,0.7,0) if phase == Phase.DEVELOPMENT else Color.CYAN)).to_html(), Phase.keys()[phase], _get_tactic_name(current_tactic)]
 	var pop_pct = float(pop.current) / max(pop.max, 1)
 	_pop_bar.value = pop_pct * 100
 	var pfs = _pop_bar.get_theme_stylebox("fill")
 	if pfs: pfs.bg_color = Color.GREEN if pop_pct < 0.8 else Color(1,0.5,0)
-	_pop_label.text = "人口 %d/%d" % [pop.current, pop.max]
+	_pop_label.text = "👥 人口 %d/%d" % [pop.current, pop.max]
 	var res_list = [
 		{"k":"gold","n":"金","c":Color(1.0,0.84,0.1)}, {"k":"wood","n":"木","c":Color(0.25,0.82,0.2)},
 		{"k":"stone","n":"石","c":Color(0.62,0.62,0.62)}, {"k":"food","n":"食","c":Color(1.0,0.55,0.1)},
@@ -1434,7 +1435,7 @@ func update_debug_label():
 	for i in range(5):
 		var r = res_list[i]; var val = res.get(r.k, 0); var lim = limits.get(r.k, 500)
 		_res_bars[i].value = min(float(val)/max(lim,1)*100, 100)
-		_res_labels[i].text = "%s %d" % [r.n, val]
+		_res_labels[i].text = "%d" % val
 		var gc = 0
 		for entity in battle.entities.get_children():
 			if entity is Army and entity.health > 0 and entity.entity_id in [10,14] and entity.current_order in ["gather","deliver"]:
@@ -1464,7 +1465,7 @@ func update_debug_label():
 				if entity.upgrade_level > max_lv: max_lv = entity.upgrade_level
 		if cnt > 0: bld_lines.append("[color=#888]【%d】%s[/color]:[color=white]%d[/color]" % [max_lv, b[1], cnt])
 	_bld_rtl.text = "[color=gray](无建筑)[/color]" if bld_lines.is_empty() else " ".join(bld_lines)
-	var hunt_info = "[color=#ffa]狩猎: %.0fs[/color]" % max(0, _hunt_timer)
+	var hunt_info = "[color=#ffa]🏹 狩猎: %.0fs[/color]" % max(0, _hunt_timer)
 	if _hunt_target and is_instance_valid(_hunt_target):
 		var hc = 0
 		for e in battle.entities.get_children():
@@ -1498,8 +1499,8 @@ func _create_debug_panel():
 	bg.add_theme_stylebox_override("panel", bg_style); debug_panel.add_child(bg)
 	var vb = VBoxContainer.new(); vb.position = Vector2(10, 8); vb.add_theme_constant_override("separation", 3)
 	debug_panel.add_child(vb)
-	var title_text = "[color=#4af]◈ AI 决策中心[/color]"
-	if battle is OnlineBattleManager: title_text = "[color=#4af]◈ AI-%d 决策中心[/color]" % my_peer_id
+	var title_text = "[color=#4af]🤖 ◈ AI 决策中心[/color]"
+	if battle is OnlineBattleManager: title_text = "[color=#4af]🤖 ◈ AI-%d 决策中心[/color]" % my_peer_id
 	var title = _make_rtl(); title.text = title_text; title.add_theme_font_size_override("font_size", 22); vb.add_child(title)
 	_header_rtl = _make_rtl(); _header_rtl.add_theme_font_size_override("font_size", 19); vb.add_child(_header_rtl)
 	var pop_hbox = HBoxContainer.new()
@@ -1507,20 +1508,21 @@ func _create_debug_panel():
 	pop_hbox.add_child(_pop_label)
 	_pop_bar = _make_bar(Color.GREEN); _pop_bar.custom_minimum_size = Vector2(370, 10); pop_hbox.add_child(_pop_bar)
 	vb.add_child(pop_hbox)
-	vb.add_child(_make_section("资源"))
+	vb.add_child(_make_section("💰 资源"))
 	var res_grid = GridContainer.new(); res_grid.columns = 5
 	var res_cfg = [["金",Color(1.0,0.84,0.1)],["木",Color(0.25,0.82,0.2)],["石",Color(0.62,0.62,0.62)],["食",Color(1.0,0.55,0.1)],["油",Color(0.4,0.25,0.1)]]
+	var res_keys = ["gold", "wood", "stone", "food", "oil"]
 	for i in range(5):
 		var col = VBoxContainer.new()
-		var bl = Label.new(); bl.text = res_cfg[i][0]; bl.add_theme_font_size_override("font_size", 13); bl.add_theme_color_override("font_color", res_cfg[i][1])
+		var bl = Label.new(); bl.text = UITheme.RESOURCE_ICONS.get(res_keys[i], res_cfg[i][0]); bl.add_theme_font_size_override("font_size", 13); bl.add_theme_color_override("font_color", res_cfg[i][1])
 		bl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; col.add_child(bl)
 		var br = _make_bar(res_cfg[i][1]); br.custom_minimum_size = Vector2(85, 8); _res_bars.append(br); col.add_child(br)
 		var ll = Label.new(); ll.add_theme_font_size_override("font_size", 11); ll.add_theme_color_override("font_color", Color.WHITE)
 		ll.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; ll.clip_text = true; ll.custom_minimum_size = Vector2(85, 0)
 		_res_labels.append(ll); col.add_child(ll); res_grid.add_child(col)
 	vb.add_child(res_grid)
-	vb.add_child(_make_section("军队")); _mil_rtl = _make_rtl(); vb.add_child(_mil_rtl)
-	vb.add_child(_make_section("建筑")); _bld_rtl = _make_rtl(); vb.add_child(_bld_rtl)
+	vb.add_child(_make_section("⚔️ 军队")); _mil_rtl = _make_rtl(); vb.add_child(_mil_rtl)
+	vb.add_child(_make_section("🏰 建筑")); _bld_rtl = _make_rtl(); vb.add_child(_bld_rtl)
 	var hud = battle.get_node("UI") as CanvasLayer; hud.add_child(debug_panel)
 	if not OS.is_debug_build():
 		debug_panel.visible = false
@@ -1547,8 +1549,8 @@ func _make_section(title: String) -> RichTextLabel:
 func _get_tactic_name(tactic: int) -> String:
 	match tactic:
 		LateTactic.NONE: return "无"
-		LateTactic.HARASS: return "骚扰"
-		LateTactic.OVERWHELM: return "压制"
-		LateTactic.RAID: return "突袭"
-		LateTactic.DEFEND: return "防守"
+		LateTactic.HARASS: return "🔥 骚扰"
+		LateTactic.OVERWHELM: return "⚔️ 压制"
+		LateTactic.RAID: return "⚡ 突袭"
+		LateTactic.DEFEND: return "🛡️ 防守"
 		_: return "未知"
