@@ -381,12 +381,12 @@ func show_alert_message(msg: String, color: Color = ALERT_DANGER):
 func _ready():
 	# 创建资源标签（皇庭筹码：图标 + 名称 + 数值 + 采集速率 + 进度条）
 	const RES_CFG = [
-		{name="黄金", key="gold", color=UITheme.RES_GOLD, icon="💰"},
-		{name="木材", key="wood", color=UITheme.RES_WOOD, icon="🌲"},
-		{name="石头", key="stone", color=UITheme.RES_STONE, icon="⛰️"},
-		{name="食物", key="food", color=UITheme.RES_FOOD, icon="🌾"},
-		{name="石油", key="oil", color=UITheme.RES_OIL, icon="🛢️"},
-		{name="人口", key="pop", color=UITheme.RES_POP, icon="👥"},
+		{name="黄金", key="gold", color=UITheme.RES_GOLD},
+		{name="木材", key="wood", color=UITheme.RES_WOOD},
+		{name="石头", key="stone", color=UITheme.RES_STONE},
+		{name="食物", key="food", color=UITheme.RES_FOOD},
+		{name="石油", key="oil", color=UITheme.RES_OIL},
+		{name="人口", key="pop", color=UITheme.RES_POP},
 	]
 	const ROW_H = 44; const ROW_W = 290
 	var _res_lbls = {}
@@ -407,7 +407,7 @@ func _ready():
 
 		# 名称行：图标 + 资源名（update_data 会补充采集人数/速率）
 		var nl = Label.new()
-		nl.position = Vector2(14, y + 4); nl.text = "%s %s" % [cfg.icon, cfg.name]
+		nl.position = Vector2(14, y + 4); nl.text = "%s %s" % [UITheme.RESOURCE_ICONS.get(cfg.key, ""), cfg.name]
 		nl.add_theme_font_size_override("font_size", UITheme.FONT_MD)
 		nl.add_theme_color_override("font_color", col)
 		nl.add_theme_color_override("font_outline_color", Color.BLACK)

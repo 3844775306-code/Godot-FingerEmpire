@@ -83,6 +83,7 @@ const RESOURCE_COLORS := {
 	"stone": RES_STONE,
 	"food":  RES_FOOD,
 	"oil":   RES_OIL,
+	"pop":   RES_POP,
 }
 
 const RESOURCE_NAMES := {
@@ -91,6 +92,7 @@ const RESOURCE_NAMES := {
 	"stone": "石头",
 	"food":  "食物",
 	"oil":   "石油",
+	"pop":   "人口",
 }
 
 # ── 工厂方法 ────────────────────────────────────────────
@@ -396,6 +398,7 @@ const RESOURCE_ICONS := {
 	"stone": "⛰️",
 	"food":  "🌾",
 	"oil":   "🛢️",
+	"pop":   "👥",
 }
 
 ## 实体图标 — 按 id 映射到中世纪羊皮纸风格 emoji

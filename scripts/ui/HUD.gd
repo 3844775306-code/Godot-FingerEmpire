@@ -420,10 +420,11 @@ func _ready():
 		bg.add_theme_stylebox_override("panel", bg_style)
 		add_child(bg)
 
-		# 资源名称
+		# 资源名称（前面加 emoji 图标）
+		var icon_text = UITheme.RESOURCE_ICONS.get(cfg.key, "")
 		var name_lbl = Label.new()
-		name_lbl.position = Vector2(14, y + 6)
-		name_lbl.text = cfg.name
+		name_lbl.position = Vector2(12, y + 5)
+		name_lbl.text = "%s %s" % [icon_text, cfg.name]
 		name_lbl.add_theme_font_size_override("font_size", 15)
 		name_lbl.add_theme_color_override("font_color", col)
 		name_lbl.add_theme_color_override("font_outline_color", Color.BLACK)
