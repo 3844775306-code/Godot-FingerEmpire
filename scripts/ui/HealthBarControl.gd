@@ -12,9 +12,10 @@ var _last_color: Color = Color(-1, -1, -1, -1)
 func _ready():
 	custom_minimum_size = Vector2(80, 12)
 
-func update_bar(health: float, max_health: float, team: int, color: Color = Color.NAN):
+func update_bar(health: float, max_health: float, team: int, color: Color = Color(-1, -1, -1, -1)):
 	# 传入 color 时（建造=金、升级=紫）优先使用；否则按队伍映射到皇庭语义色
-	if color.is_nan():
+	# 哨兵约定：分量 -1 表示"未传入颜色"（_last_color 初始值即 Color(-1,-1,-1,-1)），Godot 4.5 无 Color.NAN
+	if color.r < 0.0:
 		match team:
 			0: team_color = UITheme.VERMILION
 			1: team_color = UITheme.SAPPHIRE
