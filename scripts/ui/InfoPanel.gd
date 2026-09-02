@@ -382,7 +382,7 @@ func show_multi_selection(entities: Array):
 
 		var etype: int = 2
 		if g["entities"].size() > 0:
-			etype = g["entities"][0].get("entity_type", 2)
+			etype = g["entities"][0].entity_type
 		var lvl_text = " Lv.%d" % g["min_level"] if g["min_level"] == g["max_level"] else " Lv.%d~%d" % [g["min_level"], g["max_level"]]
 		btn.text = "%s %d x %s%s" % [UITheme.entity_emoji(g["entity_id"], etype), g["count"], g["name"], lvl_text]
 
