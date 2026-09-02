@@ -56,6 +56,14 @@ var my_peer_id: int = -1
 var my_team: int = RTSConfig.Team.RED
 var _primary_enemy_owner: int = -1   # 乱斗 FFA 主敌国家 owner_peer_id（每 think 刷新；-1=未确定/非乱斗）
 
+# ── 乱斗 FFA 外交状态 ──（仅 _diplo_enabled() 时使用）
+var _diplo_last_decide: float = -999.0      # 上次外交决策 game_time
+var _diplo_propose_target: int = -1         # 我方提案等待中的目标 owner；-1=无
+var _diplo_propose_at: float = -1.0         # 发起提案时的 game_time
+var _diplo_last_propose_time: float = -999.0  # 上次发起提案的 game_time（最小间隔）
+var _diplo_last_tribute_time: float = -999.0  # 上次进贡续期的 game_time（最小间隔）
+var _diplo_propose_history: Dictionary = {} # owner -> game_time（冷却期内不重复骚扰同一国家）
+
 const WAREHOUSE_MAX_COUNT: int = 5
 const HOME_ASSEMBLE_RANGE: float = 50.0
 const MILITARY_PRODUCER_TARGETS = {21: 3, 24: 2, 29: 2}
@@ -541,6 +549,7 @@ func decide(_delta):
 	clear_invalid_targets()
 	_refresh_visibility()
 	_refresh_primary_enemy()
+	_diplo_decide()
 	if Engine.get_process_frames() % 60 == 0:
 		var _w = count_unit(10)
 	# State dispatch
@@ -610,6 +619,167 @@ func _enemy_total_military() -> int:
 			total += count_military(o)
 		return total
 	return count_military_by_team(_primary_enemy_team())
+
+# ═══ 乱斗 FFA 外交策略 ═══
+# AI 外交以 owner_peer_id 为国别，按自身相对强弱决定结盟意愿与对象：
+#   · 顶级战力（≥ 全场最强 × 0.8）独行清场，不接受也不主动结盟；
+#   · 其余国家寻求盟友：优先接受价值达标的提案，无盟时主动向"军力匹配且邻近"的国家提案；
+#   · 一旦结盟便守约到自然到期（永不公开决裂——违约对战力无益），临到期若仍需此盟且资源富余，进贡 500 续期；
+#   · 只依赖 DiplomacyManager 公开查询与 count_military / get_peer_castle，不触碰任何实体所有权。
+# 非乱斗（diplomacy 未激活 / my_peer_id == -1）时本区块整体禁用，AI 行为与以往完全一致。
+const DIPLO_DECIDE_INTERVAL: float = 12.0        # 外交思考节流（game_time 秒）
+const DIPLO_EARLY_START: float = 90.0            # 开局发育期不外交
+const PROPOSE_WAIT_MAX: float = 45.0             # 提案无人响应的最长等待，超时取消换人
+const PROPOSE_MIN_INTERVAL: float = 20.0         # 连续两次主动提案的最小间隔
+const PROPOSE_COOLDOWN_SECONDS: float = 90.0     # 对被拒/被无视对象的重提冷却
+const TRIBUTE_RENEW_SECONDS: float = 60.0        # 联盟剩余少于此值则考虑进贡续期
+const TRIBUTE_SEND_INTERVAL: float = 40.0        # 连续两次进贡的最小间隔
+const ALLY_MIN_RATIO: float = 0.35               # 盟友军力不足我此比例则停止投入续期
+const ACCEPT_VALUE_MIN: float = 0.40             # 接受提案所需的最低盟友价值（近邻强者拉拢约 0.45，需留浮点余量）
+const TARGET_VALUE_MIN: float = 0.35             # 主动提案的最低目标价值
+const TOP_DOMINATE_RATIO: float = 0.8            # 我 ≥ 全场最强 × 此值 → 视为顶级独行
+const BALANCE_DOM_RATIO: float = 1.5             # 最强方达到此倍数视为"独裁者"，弱者之间价值加成
+
+# 外交是否在本 AI 上生效（仅乱斗 FFA）。
+func _diplo_enabled() -> bool:
+	return battle != null and battle.diplomacy != null and battle.diplomacy.active and my_peer_id != -1
+
+# 外交主决策：在 decide() 每 think 调用，内部按 game_time 节流。
+# 有盟 → 维护续期；无盟 → 先响应来盟提案，再考虑主动提案。
+func _diplo_decide():
+	if not _diplo_enabled(): return
+	var gt: float = battle.game_time
+	if gt < DIPLO_EARLY_START: return
+	if gt - _diplo_last_decide < DIPLO_DECIDE_INTERVAL: return
+	_diplo_last_decide = gt
+	var ally: int = battle.diplomacy.get_ally(my_peer_id)
+	if ally >= 0:
+		_diplo_maintain(ally)
+		return
+	_diplo_respond_incoming()
+	if battle.diplomacy.has_active_alliance(my_peer_id):
+		_diplo_propose_target = -1
+		return
+	_diplo_consider_propose(gt)
+
+# 该国家当前战力估值：军力（含生产队列）+ 城堡等级 × 2。
+func _diplo_strength(owner: int) -> int:
+	var s := count_military(owner)
+	var c := get_peer_castle(owner)
+	if c: s += c.upgrade_level * 2
+	return s
+
+# 全场存活国家中的最强战力。
+func _diplo_top_strength() -> int:
+	var best := 0
+	for o in battle.diplomacy.get_alive_owners():
+		var s := _diplo_strength(o)
+		if s > best: best = s
+	return best
+
+# 我是否"需要盟友"：场上存活 ≤2（决战）或我已是顶级独行 → 不需要。
+func _diplo_wants_ally() -> bool:
+	var alive: Array = battle.diplomacy.get_alive_owners()
+	if alive.size() <= 2: return false
+	var top := _diplo_top_strength()
+	if top <= 0: return true
+	return _diplo_strength(my_peer_id) < top * TOP_DOMINATE_RATIO
+
+# owner 作为潜在盟友对我的价值（0..1）。
+#   · 邻近 +0.35：城堡距离近便于协同；
+#   · 军力匹配 +0.45：强于我则可能反过来吞并我、弱于我则拖后腿，势均最稳；
+#   · 抗强平衡 +0.2：全场存在独裁者且我弱小时，同弱者结盟共抗更强。
+func _diplo_ally_value(owner: int) -> float:
+	var me: int = maxi(1, _diplo_strength(my_peer_id))
+	var them: int = maxi(0, _diplo_strength(owner))
+	var a = get_peer_castle(my_peer_id)
+	var b = get_peer_castle(owner)
+	var d := 9999.0
+	if a and b: d = a.global_position.distance_to(b.global_position)
+	var d_norm := clampf(1.0 - d / 120.0, 0.0, 1.0)
+	var ratio: float = them / float(me)
+	var power: float
+	if ratio >= 1.0:
+		power = clampf(1.0 - (ratio - 1.0) * 0.6, 0.45, 1.0)
+	else:
+		power = clampf(ratio * 1.1, 0.0, 1.0)
+	var top := _diplo_top_strength()
+	var balance := 0.0
+	if top > maxi(me, them) * BALANCE_DOM_RATIO and me < top * TOP_DOMINATE_RATIO:
+		balance = 0.2
+	return clampf(d_norm * 0.35 + power * 0.45 + balance, 0.0, 1.0)
+
+# 响应发给我方（acceptor=me）的待处理提案。每轮最多接受一位；其余一律 decline 并记入重提冷却。
+func _diplo_respond_incoming():
+	if not _diplo_wants_ally():
+		for p in battle.diplomacy.get_incoming_proposals(my_peer_id):
+			battle.diplomacy.decline_alliance(my_peer_id, p)
+			_diplo_propose_history[p] = battle.game_time
+		return
+	for p in battle.diplomacy.get_incoming_proposals(my_peer_id):
+		if battle.diplomacy.has_active_alliance(my_peer_id):
+			battle.diplomacy.decline_alliance(my_peer_id, p)  # 已有盟，其余提案拒绝
+			continue
+		if battle.diplomacy.alliance_block_reason(p, my_peer_id) != "":
+			battle.diplomacy.decline_alliance(my_peer_id, p)
+			continue
+		if _diplo_ally_value(p) >= ACCEPT_VALUE_MIN:
+			if battle.diplomacy.accept_alliance(my_peer_id, p):
+				_diplo_propose_target = -1
+		else:
+			battle.diplomacy.decline_alliance(my_peer_id, p)
+			_diplo_propose_history[p] = battle.game_time
+
+# 主动提案：处理等待中超时/冷却，然后按最高盟友价值（过阈值）向一位尚未拒绝过的国家提案。
+func _diplo_consider_propose(gt: float):
+	if _diplo_propose_target >= 0:
+		if gt - _diplo_propose_at > PROPOSE_WAIT_MAX:
+			battle.diplomacy.cancel_proposal(my_peer_id)
+			_diplo_propose_history[_diplo_propose_target] = gt
+			_diplo_propose_target = -1
+		else:
+			return  # 等待既有提案，不重复发起
+	if gt - _diplo_last_propose_time < PROPOSE_MIN_INTERVAL: return
+	if not _diplo_wants_ally(): return
+	var best := -1
+	var best_v := TARGET_VALUE_MIN
+	for o in battle.diplomacy.get_alive_owners():
+		if o == my_peer_id: continue
+		if battle.diplomacy.alliance_block_reason(my_peer_id, o) != "": continue
+		if _diplo_propose_history.has(o) and gt - _diplo_propose_history[o] < PROPOSE_COOLDOWN_SECONDS: continue
+		var v := _diplo_ally_value(o)
+		if v > best_v: best_v = v; best = o
+	if best < 0: return
+	if battle.diplomacy.propose_alliance(my_peer_id, best):
+		_diplo_propose_target = best
+		_diplo_propose_at = gt
+		_diplo_last_propose_time = gt
+
+# 维护既有盟约：盟期将尽（<60s）时若我仍需要此盟、盟友军力未崩坏且资源够，进贡续期；否则守约到自然到期。
+func _diplo_maintain(ally: int):
+	_diplo_propose_target = -1
+	var rem: float = battle.diplomacy.alliance_remaining(my_peer_id)
+	if rem <= 0.0: return
+	if not _diplo_wants_ally(): return
+	var me := _diplo_strength(my_peer_id)
+	var them := _diplo_strength(ally)
+	if them < me * ALLY_MIN_RATIO: return
+	if rem >= TRIBUTE_RENEW_SECONDS: return
+	if battle.game_time - _diplo_last_tribute_time < TRIBUTE_SEND_INTERVAL: return
+	_diplo_send_tribute(ally)
+
+# 从自身余额最多的资源里送出 500（与外交系统的 TRIBUTE_DELIVERY=500 一致），送成则记录冷却。
+func _diplo_send_tribute(ally: int):
+	var res: Dictionary = battle.get_resources_for(my_peer_id)
+	var order := ["gold", "wood", "stone", "food", "oil"]
+	var best := ""
+	var best_v := 500
+	for k in order:
+		var v: int = res.get(k, 0)
+		if v >= best_v: best_v = v; best = k
+	if best == "": return
+	if battle.diplomacy.deliver_tribute(my_peer_id, ally, best):
+		_diplo_last_tribute_time = battle.game_time
 
 func find_valid_build_position(near_pos: Vector3, building_id: int) -> Vector3:
 	var cfg = EntityDatabase.get_config(building_id)
