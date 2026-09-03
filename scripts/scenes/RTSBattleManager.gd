@@ -447,7 +447,7 @@ func decrease_population(team: int, amount: int = 1):
 		enemy_pop = max(0, enemy_pop - amount)
 
 func can_train_unit(team: int) -> bool:
-	return (team == RTSConfig.Team.BLUE and player_pop < player_max_pop) or (team == RTSConfig.Team.RED and enemy_pop < enemy_max_pop*2)
+	return (team == RTSConfig.Team.BLUE and player_pop < player_max_pop) or (team == RTSConfig.Team.RED and enemy_pop < enemy_max_pop)
 
 	
 # ==================== 初始化 ====================
@@ -701,11 +701,11 @@ func _init_2v2_single():
 		# 初始化资源
 		if info.is_human:
 			player_resources = {"gold": 500, "wood": 500, "stone": 300, "food": 500, "oil": 0}
-			player_pop = 3; player_max_pop = 20
+			player_pop = 0; player_max_pop = 20
 			player_owner_id = pid
 		else:
 			ai_resources[pid] = {"gold": 500, "wood": 500, "stone": 300, "food": 500, "oil": 0}
-			ai_population[pid] = {"current": 3, "max": 20}
+			ai_population[pid] = {"current": 0, "max": 20}
 			ai_limits[pid] = {"gold": 500, "wood": 500, "stone": 500, "food": 500, "oil": 0}
 			# 创建AI控制器
 			var ai = AIController.new()
