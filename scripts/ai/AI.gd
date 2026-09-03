@@ -299,14 +299,14 @@ func produce_unit(unit_id: int) -> bool:
 					produced += 1
 		return produced > 0
 
-func build_building(building_id: int, pos: Vector3):
+func build_building(building_id: int, pos: Vector3) -> bool:
 	var cfg = EntityDatabase.get_config(building_id)
-	if not cfg: return
+	if not cfg: return false
 	# Check castle level requirement (matches RTSBattleManager.is_building_unlocked)
-	if not _ai_can_build(building_id): return
+	if not _ai_can_build(building_id): return false
 	# 城墙允许建 WALL_COUNT 面（防线需求），其余建筑上限 10
 	var _cap = WALL_COUNT if building_id == 27 else 10
-	if count_building(building_id) >= _cap: return
+	if count_building(building_id) >= _cap: return false
 	# Non-shipyard buildings: must be within AI vision range
 	if building_id != 23:
 		var world_pos = Vector3(pos.x, 0, pos.z)
@@ -317,9 +317,9 @@ func build_building(building_id: int, pos: Vector3):
 					visible = true
 					break
 		if not visible:
-			return  # cannot build outside vision
+			return false  # cannot build outside vision
 	var cost = cfg.get("cost", {})
-	if not _deduct_resources(cost): return
+	if not _deduct_resources(cost): return false
 	cfg["owner_peer_id"] = my_peer_id
 	# 队伍判定：在线走 player_info；本地乱斗/多人各 AI 有唯一 team(my_team)，
 	# 若始终用 RED 会让 AI 建筑建错阵营，被自己和盟友攻击。
@@ -332,6 +332,7 @@ func build_building(building_id: int, pos: Vector3):
 	var b = battle.spawn_entity(cfg, team, pos)
 	if b:
 		b.start_construction(5.0, cfg)
+	return b != null
 
 func upgrade_building(building_id: int):
 	for entity in battle.entities.get_children():
@@ -462,10 +463,11 @@ func _state_production(_delta):
 				if castle and castle.upgrade_level >= 1:
 					production_step = 1
 	elif production_step == 1:
-		if count_building(23) < 1 and can_afford_building(23):
+		if count_building(23) < 1 and _ai_can_build(23) and can_afford_building(23):
 			_cache_shipyard_location()
 			if cached_shipyard_pos != Vector3.ZERO:
-				build_building(23, cached_shipyard_pos)
+				if build_building(23, cached_shipyard_pos):
+					built_shipyard_pos.append(cached_shipyard_pos)
 		elif count_unit(14) < 3 and count_building(23) > 0 and can_afford(14) and _can_train_unit():
 			produce_unit(14)
 		elif warehouses < WAREHOUSE_MAX_COUNT and can_afford_building(22):
@@ -1431,10 +1433,7 @@ func _pos_has_building(b_id: int, pos: Vector3) -> bool:
 	return false
 
 # ═══ Shipyard ═══
-func _cache_shipyard_location(): 
-	cached_shipyard_pos = _find_best_water_adjacent_plain()
-
-
+func _cache_shipyard_location():
 	cached_shipyard_pos = _find_best_water_adjacent_plain()
 
 func _find_best_water_adjacent_plain() -> Vector3:
@@ -1458,7 +1457,6 @@ func _find_best_water_adjacent_plain() -> Vector3:
 			if not reach_oil: continue
 			var dis = wp.distance_to(castle.global_position)
 			if dis < best_dist: best_dist = dis; best_pos = wp
-	if best_pos != Vector3.ZERO: built_shipyard_pos.append(best_pos)
 	return best_pos
 
 func _check_near_water(gx: int, gz: int) -> bool:
