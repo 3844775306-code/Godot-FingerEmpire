@@ -772,18 +772,9 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 		col_shape.shape = sphere
 	body.add_child(col_shape)
 
-	# 获取实体颜色：统一使用 player_colors 按 owner_peer_id 着色
-	var entity_color: Color
+	# 获取实体颜色：统一使用 player_colors 按 owner_peer_id 着色（血条/模型一致）
+	var entity_color = _get_entity_color(info)
 	var owner_id = info.get("owner_peer_id", -1)
-
-	if owner_id != -1 and player_colors.has(owner_id):
-		entity_color = player_colors[owner_id]
-	elif info["team"] == RTSConfig.Team.BLUE:
-		entity_color = Color(0.3, 0.5, 1.0)   # 蓝队基础色
-	elif info["team"] == RTSConfig.Team.RED:
-		entity_color = Color(1.0, 0.25, 0.2)   # 红队基础色
-	else:
-		entity_color = Color(0.7, 0.7, 0.7)    # 中立灰色
 
 	# 模型
 	var mesh: MeshInstance3D
@@ -1151,6 +1142,20 @@ const GROUP_LABEL_COLORS = {
 	9: Color(0.5, 1.0, 0.5),   # Mint
 }
 
+# 实体专属颜色：按 owner_peer_id 查玩家色（血条/模型/小地图统一着色）；
+# 无 owner 或未登记颜色时按队伍基础色兜底，中立/未知返回灰色
+func _get_entity_color(info: Dictionary) -> Color:
+	var owner_id = info.get("owner_peer_id", -1)
+	if owner_id != -1 and player_colors.has(owner_id):
+		return player_colors[owner_id]
+	match info.get("team", -1):
+		RTSConfig.Team.BLUE:
+			return Color(0.3, 0.5, 1.0)   # 蓝队基础色
+		RTSConfig.Team.RED:
+			return Color(1.0, 0.25, 0.2)  # 红队基础色
+		_:
+			return Color(0.7, 0.7, 0.7)   # 中立灰色
+
 # Helper: get color for entity label (by control group first, then owner/team)
 func _get_entity_label_color(info: Dictionary) -> Color:
 	var eid = info["id"]
@@ -1299,7 +1304,8 @@ func _update_health_bars():
 			if hp < max_hp:
 				var bar = _get_or_create_health_bar(id)
 				bar.visible = true
-				bar.update_bar(hp, max_hp, team)
+				# 血条颜色与模型一致：按 owner_peer_id 取该玩家专属阵营色
+				bar.update_bar(hp, max_hp, team, _get_entity_color(info))
 				if viewport_rect.has_point(screen_pos):
 					bar.position = screen_pos - Vector2(30, 5) + Vector2(0, -22)
 				else: bar.visible = false
@@ -1327,7 +1333,8 @@ func _update_health_bars():
 		if hp < max_hp:
 			var bar = _get_or_create_health_bar(id)
 			bar.visible = true
-			bar.update_bar(hp, max_hp, team)
+			# 血条颜色与模型一致：按 owner_peer_id 取该玩家专属阵营色
+			bar.update_bar(hp, max_hp, team, _get_entity_color(info))
 			if viewport_rect.has_point(screen_pos):
 				bar.position = screen_pos - Vector2(30, 5)
 				lab.position = bar.position + Vector2(0, -22)

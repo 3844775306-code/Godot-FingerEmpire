@@ -301,6 +301,22 @@ func get_entity_nation(entity) -> int:
 		return int(info.get("nation", -1))
 	return get_team_nation(entity.team)
 
+# 返回实体所属玩家的阵营颜色（血条与模型统一着色）：
+# owner 感知优先取 _player_colors[owner_peer_id]（乱斗/2v2/3v3 各 AI 颜色各不相同）；
+# 无 owner 或未登记颜色时按队伍推断默认色，中立/未知返回灰色
+func get_entity_color(entity) -> Color:
+	if entity == null:
+		return Color(0.7, 0.7, 0.7)
+	if entity.owner_peer_id != -1 and _player_colors.has(entity.owner_peer_id):
+		return _player_colors[entity.owner_peer_id]
+	match entity.team:
+		RTSConfig.Team.BLUE:
+			return Color(0.2, 0.6, 1.0)   # 蓝方默认色（_player_colors[1]）
+		RTSConfig.Team.RED:
+			return Color(1.0, 0.3, 0.2)   # 红方默认色（_player_colors[3]）
+		_:
+			return Color(0.7, 0.7, 0.7)   # 中立灰色
+
 # ==================== 获取主城堡 ====================
 func get_player_castle() -> Building:
 	_ensure_cache_fresh()

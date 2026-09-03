@@ -844,8 +844,7 @@ func _update_health_bars():
 			up_bar.custom_minimum_size = bar_size
 			up_lbl.add_theme_font_size_override("font_size", font_size)
 			up_bar.visible = true; up_lbl.visible = true
-			up_bar.set_team_color(Color(0.6, 0.2, 0.8))
-			up_bar.update_bar(entity.upgrade_timer, entity.max_upgrade_time, -1)
+			up_bar.update_bar(entity.upgrade_timer, entity.max_upgrade_time, -1, Color(0.6, 0.2, 0.8))
 			up_lbl.text = "升级中"
 			up_bar.position = screen_pos - bar_size / 2 + Vector2(0, -bar_size.y * 2 - 6)
 			up_lbl.position = up_bar.position + Vector2(0, -bar_size.y - 4)
@@ -859,9 +858,8 @@ func _update_health_bars():
 		if entity is Building and entity.has_method("is_under_construction") and entity.is_under_construction():
 			bar.visible = true
 			label.visible = true
-			bar.set_team_color(Color.YELLOW)
 			var progress = 1.0 - (entity.build_timer / entity.max_build_time)
-			bar.update_bar(progress * entity.max_health, entity.max_health, entity.team)
+			bar.update_bar(progress * entity.max_health, entity.max_health, entity.team, Color.YELLOW)
 			label.text = "%s (建造中)" % entity.display_name
 			# Color label
 			var _hlc2 = _get_hud_label_color(entity)
@@ -937,8 +935,12 @@ func _update_health_bars():
 			continue
 
 		bar.visible = true
-		bar.set_team_color(Color.RED if entity.team == 0 else Color.BLUE)
-		bar.update_bar(entity.health, entity.max_health, entity.team)
+		# 血条颜色与模型一致：按 owner_peer_id 取该 AI/玩家专属阵营色（乱斗/2v2 各阵营颜色不同）
+		var bm2 = _get_bm()
+		var bar_color: Color = Color(0.2, 0.6, 1.0)
+		if bm2 and bm2.has_method("get_entity_color"):
+			bar_color = bm2.get_entity_color(entity)
+		bar.update_bar(entity.health, entity.max_health, entity.team, bar_color)
 
 
 func _create_health_bar(entity):
