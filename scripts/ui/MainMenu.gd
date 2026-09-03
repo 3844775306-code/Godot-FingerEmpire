@@ -153,12 +153,13 @@ func _ready():
 	fast_check.add_theme_color_override("icon_hover_color", UITheme.GOLD.lightened(0.2))
 	add_child(fast_check)
 
-	# 按钮（三级体系：金主 / 石次 / 朱红危险）
+	# 按钮（金主 CTA / 蓝书图鉴 / 石次 / 朱红危险）
 	var btn_data = [
-		["单人游戏", Vector2(900, center_y + 220), _on_play_pressed, "primary"],
-		["联机对战", Vector2(900, center_y + 300), _on_multiplayer_pressed, "primary"],
-		["设  置", Vector2(900, center_y + 380), _on_settings_pressed, "muted"],
-		["退出游戏", Vector2(900, center_y + 460), _on_quit_pressed, "danger"],
+		["单人游戏", Vector2(900, center_y + 216), _on_play_pressed, "primary"],
+		["联机对战", Vector2(900, center_y + 290), _on_multiplayer_pressed, "primary"],
+		["📖 单位图鉴", Vector2(900, center_y + 364), _on_units_pressed, "book"],
+		["设  置", Vector2(900, center_y + 438), _on_settings_pressed, "muted"],
+		["退出游戏", Vector2(900, center_y + 512), _on_quit_pressed, "danger"],
 	]
 
 	for data in btn_data:
@@ -217,7 +218,7 @@ func _style_option(o: OptionButton, font_size: int) -> void:
 	pop.add_theme_color_override("font_color", UITheme.PARCHMENT)
 	pop.add_theme_color_override("font_hover_color", UITheme.GOLD)
 
-## 三级体系菜单按钮
+## 菜单按钮（金主 / 蓝书图鉴 / 石次 / 朱红危险）
 func _make_menu_button(text: String, pos: Vector2, kind: String) -> Button:
 	var btn = Button.new()
 	btn.text = text
@@ -226,6 +227,27 @@ func _make_menu_button(text: String, pos: Vector2, kind: String) -> Button:
 	match kind:
 		"primary": UITheme.apply_primary_button(btn, UITheme.FONT_XXL)
 		"danger": UITheme.apply_danger_button(btn, UITheme.FONT_XXL)
+		"book":
+			# 图鉴专用「宝石蓝」书页风格，与金色 CTA 区分
+			var sb = StyleBoxFlat.new()
+			sb.bg_color = Color(UITheme.SAPPHIRE, 0.16)
+			sb.border_color = Color(UITheme.SAPPHIRE, 0.95)
+			sb.set_corner_radius_all(10)
+			sb.set_border_width_all(2)
+			sb.set_content_margin_all(6)
+			btn.add_theme_stylebox_override("normal", sb)
+			var hover = sb.duplicate()
+			hover.bg_color = Color(UITheme.SAPPHIRE, 0.30)
+			btn.add_theme_stylebox_override("hover", hover)
+			var pressed = hover.duplicate()
+			pressed.bg_color = Color(UITheme.SAPPHIRE, 0.44)
+			btn.add_theme_stylebox_override("pressed", pressed)
+			var focus = StyleBoxEmpty.new()
+			btn.add_theme_stylebox_override("focus", focus)
+			btn.add_theme_font_size_override("font_size", UITheme.FONT_XXL)
+			btn.add_theme_color_override("font_color", UITheme.PARCHMENT)
+			btn.add_theme_color_override("font_hover_color", Color(UITheme.GOLD, 1.0))
+			btn.add_theme_color_override("font_pressed_color", UITheme.GOLD.lightened(0.2))
 		_: UITheme.apply_muted_button(btn, UITheme.FONT_XXL)
 	return btn
 
@@ -262,6 +284,10 @@ func _on_multiplayer_pressed():
 	var fc = get_node_or_null("FastCheck")
 	GameSettings.fast_mode = fc.button_pressed if fc else false
 	get_tree().change_scene_to_file("res://scenes/online_menu.tscn")
+
+func _on_units_pressed():
+	# 打开单位图鉴页面
+	get_tree().change_scene_to_file("res://scenes/unit_view.tscn")
 
 func _on_settings_pressed():
 	# Toggle settings panel
