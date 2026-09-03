@@ -1820,9 +1820,21 @@ func _create_debug_panel():
 	debug_panel = Control.new(); debug_panel.name = "AIDebugPanel"; debug_panel.z_index = 100
 	debug_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var offset_y = 10
-	if battle is OnlineBattleManager:
-		var info = battle.player_info.get(my_peer_id)
-		if info: offset_y = 10 + (info.team * 2 + info.slot) * 340
+	var panel_title = "[color=#4af]🤖 ◈ AI 决策中心[/color]"
+	if my_peer_id != -1:
+		if battle is OnlineBattleManager:
+			var info = battle.player_info.get(my_peer_id)
+			if info:
+				offset_y = 10 + (info.team * 2 + info.slot) * 340
+				panel_title = "[color=#4af]🤖 ◈ AI-%d 决策中心[/color]" % my_peer_id
+		else:
+			# 单机乱斗：各 AI 的 pid 唯一且随创建递增，按更小 pid 的 AI 数量定纵向行，面板不再叠在左上角
+			var ai_row := 0
+			for c in battle.get_children():
+				if c is AIController and c != self and c.my_peer_id > 0 and c.my_peer_id < my_peer_id:
+					ai_row += 1
+			offset_y = 10 + ai_row * 340
+			panel_title = "[color=#4af]🤖 ◈ AI-%d 决策中心[/color]" % (ai_row + 1)
 	debug_panel.position = Vector2(400, offset_y)
 	debug_panel.custom_minimum_size = Vector2(540, 380); debug_panel.size = Vector2(540, 380)
 	var bg = Panel.new(); bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -1835,9 +1847,7 @@ func _create_debug_panel():
 	bg.add_theme_stylebox_override("panel", bg_style); debug_panel.add_child(bg)
 	var vb = VBoxContainer.new(); vb.position = Vector2(10, 8); vb.add_theme_constant_override("separation", 3)
 	debug_panel.add_child(vb)
-	var title_text = "[color=#4af]🤖 ◈ AI 决策中心[/color]"
-	if battle is OnlineBattleManager: title_text = "[color=#4af]🤖 ◈ AI-%d 决策中心[/color]" % my_peer_id
-	var title = _make_rtl(); title.text = title_text; title.add_theme_font_size_override("font_size", 22); vb.add_child(title)
+	var title = _make_rtl(); title.text = panel_title; title.add_theme_font_size_override("font_size", 22); vb.add_child(title)
 	_header_rtl = _make_rtl(); _header_rtl.add_theme_font_size_override("font_size", 19); vb.add_child(_header_rtl)
 	var pop_hbox = HBoxContainer.new()
 	_pop_label = Label.new(); _pop_label.add_theme_font_size_override("font_size", 16); _pop_label.add_theme_color_override("font_color", Color.WHITE)
