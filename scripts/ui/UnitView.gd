@@ -9,6 +9,37 @@ const DESIGN_H := 1400
 # 类型中文名（type: 0=资源 1=建筑 2=单位）
 const TYPE_NAMES := { 0: "资源", 1: "建筑", 2: "单位" }
 
+# 详情属性行图标：标题 → emoji（在 _add_pair 输出时自动前置，便于扫读）
+const ATTR_ICONS := {
+	"耐久 / 生命": "❤️",
+	"攻击 / 间隔": "⚔️",
+	"秒伤 DPS": "💥",
+	"范围 / 视野": "📏",
+	"护甲": "🛡️",
+	"移动速度": "👣",
+	"溅射半径": "💣",
+	"占地半径": "📐",
+	"生产价格": "🪙",
+	"建造价格": "🪙",
+	"产出资源": "⛏️",
+	"单次采集量": "🧺",
+	"恢复速率": "♻️",
+	"训练来源": "🏫",
+	"类型": "🐾",
+	"狩猎产出": "🍖",
+	"可采集": "🧺",
+	"载货量": "📦",
+	"贸易品类": "🛒",
+	"官职": "🎖️",
+	"俸禄": "🪙",
+	"光环": "✨",
+	"定位": "🧭",
+	"特殊机制": "⚙️",
+	"战斗标签": "🏷️",
+	"索敌倾向": "🎯",
+	"特性": "⚜️",
+}
+
 # 分类 → 成员 ID（分类用线性数组 + 查表，稳定且一目了然）
 const GROUP_RESOURCE := [0, 1, 2, 3, 4]
 const GROUP_BUILDING := [7, 8, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 41, 42, 52, 53, 54, 64]
@@ -195,7 +226,7 @@ func _prepare_data() -> void:
 			var pid: int = p.get("unit_id", -1)
 			if not _producers.has(pid):
 				_producers[pid] = []
-			_producers[pid].append({ "name": bname, "kind": "produce", "note": p.get("cooldown", 0.0) })
+			_producers[pid].append({ "name": bname, "kind": "produce", "note": p.get("cooldown", 0.0), "icon": _icon_for(b_id) })
 		for up in bc.get("upgrades", []):
 			var u_id: int = up.get("unlocks_unit", -1)
 			if u_id < 0:
@@ -210,7 +241,7 @@ func _prepare_data() -> void:
 				continue
 			if not _producers.has(u_id):
 				_producers[u_id] = []
-			_producers[u_id].append({ "name": bname, "kind": "unlock", "note": up.get("level", 0) })
+			_producers[u_id].append({ "name": bname, "kind": "unlock", "note": up.get("level", 0), "icon": _icon_for(b_id) })
 
 
 # ═══════════ 画布 ═══════════
@@ -457,9 +488,9 @@ func _add_row(id: int) -> void:
 func _row_summary(cfg: Dictionary) -> String:
 	var parts: Array[String] = []
 	if cfg.has("max_health"):
-		parts.append("HP %s" % _num(cfg.max_health))
+		parts.append("❤️ %s" % _num(cfg.max_health))
 	if cfg.get("attack", 0) > 0:
-		parts.append("攻 %s" % _num(cfg.attack))
+		parts.append("⚔️ %s" % _num(cfg.attack))
 	if parts.is_empty():
 		parts.append("无战斗属性")
 	return "   ".join(parts)
@@ -700,7 +731,11 @@ func _add_line(text: String, color: Color, fs: int = 20, min_h: int = 40) -> voi
 func _add_pair(title: String, value: String) -> void:
 	var l := Label.new()
 	UITheme.apply_label(l, 18, UITheme.PARCHMENT)
-	l.text = "%s：%s" % [title, value]
+	var icon := ATTR_ICONS.get(title, "")
+	if icon != "":
+		l.text = "%s %s：%s" % [icon, title, value]
+	else:
+		l.text = "%s：%s" % [title, value]
 	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	l.custom_minimum_size = Vector2(0, 32)
@@ -788,12 +823,13 @@ func _unit_produce_note(cfg: Dictionary, id: int) -> String:
 	var parts: Array[String] = []
 	for s in srcs:
 		var n: String = s.name
+		var icon: String = str(s.get("icon", ""))
 		var note: String = ""
 		if s.kind == "produce":
 			note = "%s 秒" % _fmt_cd(s.note)
-			parts.append("%s（训练 %s）" % [n, note])
+			parts.append("%s %s（训练 %s）" % [icon, n, note])
 		else:
-			parts.append("%s（升级解锁）" % n)
+			parts.append("%s %s（升级解锁）" % [icon, n])
 	if parts.is_empty():
 		return ""
 	return "，".join(parts)
@@ -818,7 +854,7 @@ func _add_building_lines(cfg: Dictionary, id: int) -> void:
 			prod_ids.append(pid)
 			var pc: Dictionary = _cfg.get(pid, {})
 			var nm := str(pc.get("name", "单位 %d" % pid))
-			_add_pair("  · " + nm, "冷却 %s 秒，队列上限 %s" % [_fmt_cd(p.get("cooldown", 0)), p.get("queue_limit", 1)])
+			_add_pair("  · " + _icon_for(pid) + " " + nm, "冷却 %s 秒，队列上限 %s" % [_fmt_cd(p.get("cooldown", 0)), p.get("queue_limit", 1)])
 
 	# 升级解锁：produces 里已能训练的单位不重复列出
 	var ups: Array = cfg.get("upgrades", [])
@@ -835,7 +871,7 @@ func _add_building_lines(cfg: Dictionary, id: int) -> void:
 			var uid2: int = u.get("unlocks_unit", -1)
 			var uc: Dictionary = _cfg.get(uid2, {})
 			var unm := str(uc.get("name", "单位 %d" % uid2))
-			_add_pair("  · Lv.%s" % u.get("level", 1), unm)
+			_add_pair("  · Lv.%s %s" % [u.get("level", 1), _icon_for(uid2)], unm)
 	elif prods.size() == 0 and ups.size() > 0:
 		# 无新增兵种的建筑：仅提示可升级强化
 		var l3 := _add_info_header("📈 可升级 %d 级（强化）" % ups.size())
