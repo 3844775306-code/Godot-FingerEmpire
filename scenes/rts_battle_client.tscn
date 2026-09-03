@@ -1,4 +1,4 @@
-[gd_scene load_steps=16 format=3 uid="uid://dj63q7kjm6vln"]
+[gd_scene load_steps=17 format=3 uid="uid://dj63q7kjm6vln"]
 
 [ext_resource type="Script" uid="uid://b81a0lcm1nao3" path="res://scripts/client/ClientRenderer.gd" id="1_13id7"]
 [ext_resource type="Script" uid="uid://y3juibmibwfb" path="res://scripts/map/CameraController.gd" id="2_iwg4n"]
@@ -8,6 +8,7 @@
 [ext_resource type="Script" uid="uid://cn007ft5a15hj" path="res://scripts/client/ClientInfoPanel.gd" id="6_j6f5n"]
 [ext_resource type="Script" uid="uid://cwosj0mjw2wwc" path="res://scripts/ui/ClientBuildMenu.gd" id="7_iwg4n"]
 [ext_resource type="Script" uid="uid://cnuevma7jdo8w" path="res://scripts/client/ClientInput.gd" id="7_j6f5n"]
+[ext_resource type="Script" uid="uid://c9v4h2t8kyw3r" path="res://scripts/ui/VirtualStick.gd" id="8_vstick"]
 
 [sub_resource type="Gradient" id="Gradient_3m0ah"]
 offsets = PackedFloat32Array(0.02631579, 0.5701754)
@@ -137,6 +138,13 @@ offset_right = -8.0
 offset_bottom = 30.0
 grow_horizontal = 0
 text = "✕ 关闭"
+
+[node name="VirtualStick" type="Control" parent="UI"]
+offset_left = 14.0
+offset_top = 1120.0
+offset_right = 326.0
+offset_bottom = 1400.0
+script = ExtResource("8_vstick")
 
 [node name="ClientInput" type="Node3D" parent="."]
 script = ExtResource("7_j6f5n")

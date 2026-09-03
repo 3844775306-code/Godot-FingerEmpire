@@ -1,4 +1,4 @@
-[gd_scene load_steps=15 format=3 uid="uid://cef6alp40hbts"]
+[gd_scene load_steps=16 format=3 uid="uid://cef6alp40hbts"]
 
 [ext_resource type="Script" uid="uid://bxlgpwrqx32ye" path="res://scripts/scenes/OnlineBattleManager.gd" id="1_nppef"]
 [ext_resource type="Script" uid="uid://y3juibmibwfb" path="res://scripts/map/CameraController.gd" id="2_6afou"]
@@ -7,6 +7,7 @@
 [ext_resource type="Script" uid="uid://d178itb4ttdku" path="res://scripts/map/Minimap.gd" id="5_8haon"]
 [ext_resource type="Script" uid="uid://cdi0kvctnhdy3" path="res://scripts/ui/InfoPanel.gd" id="6_1capu"]
 [ext_resource type="Script" uid="uid://domon4xnxr3f6" path="res://scripts/ui/SelectionManager.gd" id="7_msvwx"]
+[ext_resource type="Script" uid="uid://c9v4h2t8kyw3r" path="res://scripts/ui/VirtualStick.gd" id="8_vstick"]
 
 [sub_resource type="Gradient" id="Gradient_3m0ah"]
 offsets = PackedFloat32Array(0.02631579, 0.5701754)
@@ -122,6 +123,13 @@ offset_right = -8.0
 offset_bottom = 30.0
 grow_horizontal = 0
 text = "✕ 关闭"
+
+[node name="VirtualStick" type="Control" parent="UI"]
+offset_left = 14.0
+offset_top = 1120.0
+offset_right = 326.0
+offset_bottom = 1400.0
+script = ExtResource("8_vstick")
 
 [node name="SelectionManager" type="Node3D" parent="."]
 script = ExtResource("7_msvwx")

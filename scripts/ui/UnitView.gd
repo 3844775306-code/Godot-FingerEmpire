@@ -567,6 +567,12 @@ func _render_detail(id: int) -> void:
 	ident_l.custom_minimum_size = Vector2(0, 30)
 	_detail_body.add_child(ident_l)
 
+	# ── 生产 / 建造价格 ──
+	var cost_txt := _cost_string(cfg)
+	if cost_txt != "":
+		var cost_tag := "建造价格" if int(cfg.get("type", 2)) == 1 else "生产价格"
+		_add_pair(cost_tag, cost_txt)
+
 	# ── 分隔线 ──
 	_add_rule()
 
@@ -650,6 +656,29 @@ func _icon_for(id: int) -> String:
 	return UITheme.entity_emoji(id, _cfg.get(id, {}).get("type", -1))
 
 
+# 生成 "资源图标 数量" 串；无 cost（野外资源/野生动物等）返回空串
+func _cost_string(cfg: Dictionary) -> String:
+	var cost = cfg.get("cost")
+	if not (cost is Dictionary) or cost.is_empty():
+		return ""
+	var parts: Array[String] = []
+	var order := ["gold", "wood", "stone", "food", "oil"]
+	for r in order:
+		if cost.has(r):
+			parts.append("%s %s" % [
+				str(UITheme.RESOURCE_ICONS.get(r, "·")),
+				_num(cost[r]),
+			])
+	# 兜底：未在常规顺序里的资源键（如人口/特殊资源）补在末尾，避免漏显示
+	for key in cost.keys():
+		if not order.has(key):
+			parts.append("%s %s" % [
+				str(UITheme.RESOURCE_ICONS.get(key, "·")),
+				_num(cost[key]),
+			])
+	return "　".join(parts)
+
+
 # ── 详情辅助 ──
 func _add_rule() -> void:
 	var r := ColorRect.new()
@@ -680,14 +709,14 @@ func _add_pair(title: String, value: String) -> void:
 
 # ── 属性数值 ──
 func _add_stats(cfg: Dictionary) -> void:
-	var t := cfg.get("type", 2)
+	var t = cfg.get("type", 2)
 	if t == 0:
 		return
-	var atk := cfg.get("attack", 0)
-	var as := cfg.get("attack_speed", 0.0)
+	var atk = cfg.get("attack", 0)
+	var ass = cfg.get("attack_speed", 0.0)
 	var dps := 0.0
-	if atk > 0 and as > 0:
-		dps = float(atk) / float(as)
+	if atk > 0 and ass > 0:
+		dps = float(atk) / float(ass)
 	var arm_parts: Array[String] = []
 	if cfg.get("melee_armor", 0) > 0:
 		arm_parts.append("近战护甲 %s" % _num(cfg.melee_armor))
@@ -708,7 +737,7 @@ func _add_stats(cfg: Dictionary) -> void:
 		_add_pair("耐久 / 生命", "%s" % _num(cfg.max_health))
 	else:
 		_add_pair("耐久 / 生命", "—")
-	_add_pair("攻击 / 间隔", "%s  /  %.1f 秒" % [(_num(atk) if atk > 0 else "—"), as])
+	_add_pair("攻击 / 间隔", "%s  /  %.1f 秒" % [(_num(atk) if atk > 0 else "—"), ass])
 	_add_pair("秒伤 DPS", ("%.1f" % dps if dps > 0 else "—"))
 	_add_pair("范围 / 视野", rng)
 	if def != "":
@@ -900,7 +929,7 @@ func _add_unit_lines(cfg: Dictionary, id: int) -> void:
 		_add_pair("战斗标签", "，".join(combat))
 
 	# 目标类型说明
-	var tt := cfg.get("target_type", -1)
+	var tt = cfg.get("target_type", -1)
 	var tt_text := ""
 	match tt:
 		0: tt_text = "仅能攻击建筑 / 资源"

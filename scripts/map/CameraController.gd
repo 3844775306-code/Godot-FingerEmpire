@@ -2,9 +2,12 @@ extends Camera3D
 
 # 相机移动速度（基础值）
 var move_speed: float = 30.0
-var zoom_speed: float = 5.0
-var min_zoom: float = 5.0
-var max_zoom: float = 80.0
+var zoom_speed: float = 0.5
+
+# 虚拟摇杆平移量（世界平面分量：x 向东、y 向南，与方向键同向），每帧叠加进平移
+var external_pan: Vector2 = Vector2.ZERO
+var min_zoom: float = 15.0
+var max_zoom: float = 20.0
 var edge_margin: int = 20   # 保留边缘滚动（可选）
 
 # 鼠标中键拖拽相关
@@ -25,7 +28,7 @@ const FOLLOW_EYE_HEIGHT: float = 2.0 # 相机位于单位眼睛处的高度
 const FOLLOW_FOV: float = 70.0       # 第一人称透视视野，数值越大周围物体越小
 
 # ── 滚轮缩放联动：越近越低越平、越远越高越俯视 ──
-const PITCH_NEAR_DEG: float = 38.0   # size 最小时（贴近地面）的相机俯角
+const PITCH_NEAR_DEG: float = 28.0   # size 最小时（贴近地面）的相机俯角
 const PITCH_FAR_DEG: float = 78.0    # size 最大时（全景俯瞰）的相机俯角
 const HEIGHT_AT_MIN: float = 10.0    # size 最小时相机的离地高度
 const HEIGHT_AT_MAX: float = 95.0    # size 最大时相机的离地高度
@@ -98,6 +101,10 @@ func _process(delta):
 	if Input.is_action_pressed("ui_right"): direction.x += 1
 	if Input.is_action_pressed("ui_up"): direction.z -= 1
 	if Input.is_action_pressed("ui_down"): direction.z += 1
+	# 虚拟摇杆平移（左下摇杆）：分量已归一化，与世界坐标轴同向
+	if external_pan != Vector2.ZERO:
+		direction.x += external_pan.x
+		direction.z += external_pan.y
 	var factor = size / 30.0
 	global_translate(direction * move_speed * delta * factor)
 
