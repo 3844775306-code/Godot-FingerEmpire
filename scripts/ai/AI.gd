@@ -1754,6 +1754,8 @@ func _find_water_patrol_point(near_pos: Vector3) -> Vector3:
 # ═══ Debug panel ═══
 func update_debug_label():
 	if not debug_panel: return
+	if _title_rtl:
+		_title_rtl.text = _panel_title_base + _my_nation_tag()
 	var res = _get_resources(); var pop = _get_population()
 	var _pe = {"PRODUCTION": "🌱", "DEVELOPMENT": "🏗️", "ASSAULT": "⚔️"}
 	_header_rtl.text = "%s [color=#%s]%s[/color]  |  %s" % [_pe.get(Phase.keys()[phase], "▶️"), (Color.GREEN if phase == Phase.ASSAULT else (Color(1,0.7,0) if phase == Phase.DEVELOPMENT else Color.CYAN)).to_html(), Phase.keys()[phase], _get_tactic_name(current_tactic)]
@@ -1812,9 +1814,26 @@ func update_debug_label():
 
 var debug_panel: Control = null
 var _header_rtl: RichTextLabel
+
+# 面板标题上显示本国名称：owner 优先，其次队伍默认（静态 1v1 红方 AI 用敌方国家）
+func _my_nation_tag() -> String:
+	if not battle or not battle.has_method("get_nation_name"):
+		return ""
+	var nat := -1
+	if battle is OnlineBattleManager:
+		nat = int(battle.player_info.get(my_peer_id, {}).get("nation", -1))
+	elif my_peer_id != -1 and battle.ai_players.has(my_peer_id):
+		nat = int(battle.ai_players[my_peer_id].get("nation", -1))
+	else:
+		nat = int(GameSettings.enemy_nation)
+	if nat >= 0:
+		return " [color=#ffd34f]「%s」[/color]" % battle.get_nation_name(nat)
+	return ""
 var _pop_bar: ProgressBar; var _pop_label: Label
 var _res_bars: Array = []; var _res_labels: Array = []
 var _mil_rtl: RichTextLabel; var _bld_rtl: RichTextLabel
+var _title_rtl: RichTextLabel = null       # 面板标题（用于追加国家名）
+var _panel_title_base: String = ""         # 不含国家名的原始标题
 
 func _create_debug_panel():
 	debug_panel = Control.new(); debug_panel.name = "AIDebugPanel"; debug_panel.z_index = 100
@@ -1847,7 +1866,8 @@ func _create_debug_panel():
 	bg.add_theme_stylebox_override("panel", bg_style); debug_panel.add_child(bg)
 	var vb = VBoxContainer.new(); vb.position = Vector2(10, 8); vb.add_theme_constant_override("separation", 3)
 	debug_panel.add_child(vb)
-	var title = _make_rtl(); title.text = panel_title; title.add_theme_font_size_override("font_size", 22); vb.add_child(title)
+	var title = _make_rtl(); _title_rtl = title; _panel_title_base = panel_title
+	title.text = panel_title; title.add_theme_font_size_override("font_size", 22); vb.add_child(title)
 	_header_rtl = _make_rtl(); _header_rtl.add_theme_font_size_override("font_size", 19); vb.add_child(_header_rtl)
 	var pop_hbox = HBoxContainer.new()
 	_pop_label = Label.new(); _pop_label.add_theme_font_size_override("font_size", 16); _pop_label.add_theme_color_override("font_color", Color.WHITE)

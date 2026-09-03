@@ -63,6 +63,15 @@ func _get_nation_name(nation: int) -> String:
 		RTSConfig.Nation.BYZANTINE: return "拜占庭"
 		_: return "未知"
 
+# 单位血条上方的“国家类别”前缀：由 battle_manager 的 owner/队伍解析，未知国家返回空串
+func _nat_tag(entity: GameEntity) -> String:
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if bm and bm.has_method("get_entity_nation") and bm.has_method("get_nation_name"):
+		var nat = bm.get_entity_nation(entity)
+		if nat >= 0:
+			return "「%s」" % bm.get_nation_name(nat)
+	return ""
+
 # 缓存 battle_manager / selection_manager 引用，避免每帧场景树遍历
 func _get_bm():
 	if not is_instance_valid(_bm):
@@ -915,7 +924,7 @@ func _update_health_bars():
 			elif entity.entity_id in [43, 44, 45]:
 				_res_info = "
 交易量:%d" % entity._merchant_trade_volume
-			label.text = group_prefix + "%s Lv.%d%s\n%d/%d" % [entity.display_name, entity.level, _res_info, int(entity.health), int(entity.max_health)]
+			label.text = group_prefix + _nat_tag(entity) + "%s Lv.%d%s\n%d/%d" % [entity.display_name, entity.level, _res_info, int(entity.health), int(entity.max_health)]
 			label.position = bar.position + Vector2(0, -22)
 
 			# Color label by owner/team

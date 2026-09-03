@@ -280,6 +280,27 @@ func get_player_colors() -> Dictionary:
 func get_team_nation(team: int) -> int:
 	return team_nations.get(team, -1)
 
+# 国家索引 -> 中文名（供 AI 决策面板 / 单位血条等处显示）
+func get_nation_name(nation: int) -> String:
+	match nation:
+		RTSConfig.Nation.VIKING: return "维京"
+		RTSConfig.Nation.ENGLAND: return "英格兰"
+		RTSConfig.Nation.FRANCE: return "法兰西"
+		RTSConfig.Nation.CHINA: return "中国"
+		RTSConfig.Nation.HUNGARY: return "匈牙利"
+		RTSConfig.Nation.JAPAN: return "日本"
+		RTSConfig.Nation.BYZANTINE: return "拜占庭"
+	return "未知"
+
+# 返回实体所属国家的索引（owner 感知优先；无 owner 时按队伍推断），未知返回 -1
+func get_entity_nation(entity) -> int:
+	if entity == null:
+		return -1
+	if entity.owner_peer_id != -1:
+		var info = ai_players.get(entity.owner_peer_id, {})
+		return int(info.get("nation", -1))
+	return get_team_nation(entity.team)
+
 # ==================== 获取主城堡 ====================
 func get_player_castle() -> Building:
 	_ensure_cache_fresh()
@@ -722,7 +743,7 @@ func _init_2v2_single():
 		castle.owner_peer_id = pid
 		if castle:
 			castle.died.connect(_on_2v2_castle_died.bind(team))
-			ai_players[pid] = {"castle": castle, "team": team, "slot": slot}
+			ai_players[pid] = {"castle": castle, "team": team, "slot": slot, "nation": info.get("nation", -1)}
 
 		# 生成3个农民
 		var peasant_cfg = EntityDatabase.get_config(10)
@@ -988,6 +1009,45 @@ func update_player_population(owner_id: int):
 		var pop = ai_population.get(owner_id)
 		if pop:
 			pop["max"] = p_max
+
+# 直接重算“当前人口”：以“存活且占人口额度”的实体为准，按 owner（或队伍）统计，
+# 避免 spawn/die 的事件式 ±1 记录出现漂移（例如中立动物的死亡被误减）
+func recount_current_population():
+	if is_online:
+		return
+	_ensure_cache_fresh()
+	var counts := {}
+	var team_blue := 0
+	var team_red := 0
+	for e in _all_entities:
+		if not is_instance_valid(e) or e.health <= 0:
+			continue
+		if not _occupies_population(e):
+			continue
+		if e.owner_peer_id != -1:
+			counts[e.owner_peer_id] = counts.get(e.owner_peer_id, 0) + 1
+		elif e.team == RTSConfig.Team.BLUE:
+			team_blue += 1
+		elif e.team == RTSConfig.Team.RED:
+			team_red += 1
+	if ai_players.is_empty():
+		# 纯队伍制（离线 1v1）：玩家/敌方各维护一份
+		player_pop = team_blue
+		enemy_pop = team_red
+	else:
+		# owner 制（单机 FFA / 2V2 / 多 AI）：玩家映射 player_owner_id，AI 各自入账
+		player_pop = counts.get(player_owner_id, 0)
+		for pid in ai_population:
+			ai_population[pid]["current"] = counts.get(pid, 0)
+
+# 该实体是否占用人口额度 —— 口径与 spawn_entity 的增减、GameEntity.die 的扣除保持一致
+func _occupies_population(e) -> bool:
+	if e is Army:
+		return e.entity_id < 60
+	if e is Building:
+		return e.entity_id == 25 or e.entity_id == 26
+	return false
+
 # Global building type upgrade (2v2: per-player via owner_peer_id, 1v1: per-team)
 func get_building_type_level(team: int, building_id: int, peer_id: int = -1) -> int:
 	var key = peer_id if peer_id != -1 else team
@@ -1048,8 +1108,12 @@ func upgrade_building_type(team: int, building_id: int, from_building: Building)
 				var nation = get_team_nation(team)
 				if nation >= 0:
 					e._unlock_nation_units(nation)
-	update_resource_limits(team)
-	update_population_limits()
+	if pid != -1:
+		update_player_limits(pid)
+		update_player_population(pid)
+	else:
+		update_resource_limits(team)
+		update_population_limits()
 
 func _init_building_defs():
 	building_defs.clear()
@@ -1351,8 +1415,13 @@ func demolish_building(building: Building) -> bool:
 	
 
 	building.die()
-	update_resource_limits(building.team)
-	update_population_limits()
+	var _b_owner = building.owner_peer_id
+	if _b_owner != -1:
+		update_player_limits(_b_owner)
+		update_player_population(_b_owner)
+	else:
+		update_resource_limits(building.team)
+		update_population_limits()
 	return true
 
 # ==================== 资源系统 ====================
@@ -2180,7 +2249,12 @@ func _process(delta):
 		fog_timer = 0.5
 		_update_fog_visibility()
 		_apply_fog()
-		update_population_limits()
+		# 队伍制（纯离线1v1 / 联机）才整队刷新人口上限；owner 制由下方 1s 循环按 owner 刷新，
+		# 避免 0.5s 的全蓝方统计把队友房屋算进玩家上限
+		if ai_players.is_empty():
+			update_population_limits()
+		# 每 0.5s 直接重算“当前人口”= 存活且占人口额度的实体数，纠正事件式 ±1 记录的漂移
+		recount_current_population()
 
 	# Update resource limits every second
 	_limit_update_timer -= delta

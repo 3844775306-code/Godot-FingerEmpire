@@ -217,6 +217,10 @@ func take_damage(amount: float, source: GameEntity = null):
 	if health <= 0:
 		die()
 func die():
+	# 死亡状态立即定案：即使后续走“毁坏模型/死亡动画”延迟删除，
+	# 从此刻起也按不存活处理（health<=0 是全项目的死亡判据，
+	# 缓存重建、人口重算、上限统计、寻敌过滤都据此排除本实体）
+	health = 0
 	_play_sfx_if_visible("unit_die")
 	# 音效触发时立即同步死亡动画
 	var _bm_anim = _get_bm()
@@ -260,7 +264,8 @@ func die():
 							bm_merch.add_resource_for(loot_owner, _m_res, _m_amt)
 					else:
 						bm_merch.add_resource(_m_res, _m_amt, loot_team)
-	if self is Army or (self is Building and (entity_id == 25 or entity_id == 26)):
+	# 只有“占用人口额度”的实体死亡才扣人口（动物 id>=60 是 Army 但从不占人口，见 spawn 口径）
+	if (self is Army and entity_id < 60) or (self is Building and (entity_id == 25 or entity_id == 26)):
 		var bm = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
 		if owner_peer_id != -1:
 			if bm.has_method("decrease_player_population"):
