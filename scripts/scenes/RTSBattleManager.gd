@@ -1544,10 +1544,6 @@ func _place_building_at(pos: Vector3):
 		return false
 	
 
-	# 每种建筑最多10个
-	if _count_buildings_of_type(selected_building_id, get_host_team()) >= 10:
-		_show_hud_alert("该建筑已达上限(10个)！", Color(1.0, 0.4, 0.3))
-		return
 	# 扣资源
 	for k in cost:
 		res[k] -= cost[k]
@@ -1883,6 +1879,32 @@ func _is_terrain_flat(pos: Vector3, radius: float) -> bool:
 				if abs(h1 - h0) >= 1.0: return false
 	return true
 
+# 桥(7)的选址校验：只能在水上，不能与其他实体重叠（已有桥除外），
+# 且至少有一侧正交邻格是陆地或已有桥 —— 单机与联机服务端共用同一套规则
+func is_valid_bridge_position(pos: Vector3) -> bool:
+	if get_terrain_at(pos) != 2: return false
+	for e in entities.get_children():
+		if e is GameEntity and e.health > 0:
+			if e is Building and e.entity_id == 7: continue  # 允许邻接已有桥
+			if e.global_position.distance_to(pos) < (e.body_radius + 0.5):
+				return false
+	# 至少一侧邻接陆地或已有桥
+	var g = world_to_grid(pos)
+	var has_land = false
+	for dx in [-1, 0, 1]:
+		for dy in [-1, 0, 1]:
+			if dx == 0 and dy == 0: continue
+			if abs(dx) + abs(dy) != 1: continue
+			var nx = g.x + dx; var ny = g.y + dy
+			if nx < 0 or nx >= RTSConfig.MAP_SIZE or ny < 0 or ny >= RTSConfig.MAP_SIZE: continue
+			if get_terrain_at_grid(nx, ny) != 2: has_land = true
+			for e in entities.get_children():
+				if e is Building and e.entity_id == 7 and e.health > 0:
+					var bg = world_to_grid(e.global_position)
+					if bg.x == nx and bg.y == ny: has_land = true
+	if not has_land: return false
+	return true
+
 func _is_valid_build_position(pos: Vector3) -> bool:
 	# Cannot build near enemy units (10 unit radius)
 	for e in entities.get_children():
@@ -1892,28 +1914,7 @@ func _is_valid_build_position(pos: Vector3) -> bool:
 	var t = get_terrain_at(pos)
 	# 桥：只能在水上建造
 	if selected_building_id == 7:
-		if t != 2: return false
-		for e in entities.get_children():
-			if e is GameEntity and e.health > 0:
-				if e is Building and e.entity_id == 7: continue  # 允许邻接已有桥
-				if e.global_position.distance_to(pos) < (e.body_radius + 0.5):
-					return false
-		# 至少一侧邻接陆地或已有桥
-		var g = world_to_grid(pos)
-		var has_land = false
-		for dx in [-1, 0, 1]:
-			for dy in [-1, 0, 1]:
-				if dx == 0 and dy == 0: continue
-				if abs(dx) + abs(dy) != 1: continue
-				var nx = g.x + dx; var ny = g.y + dy
-				if nx < 0 or nx >= RTSConfig.MAP_SIZE or ny < 0 or ny >= RTSConfig.MAP_SIZE: continue
-				if get_terrain_at_grid(nx, ny) != 2: has_land = true
-				for e in entities.get_children():
-					if e is Building and e.entity_id == 7 and e.health > 0:
-						var bg = world_to_grid(e.global_position)
-						if bg.x == nx and bg.y == ny: has_land = true
-		if not has_land: return false
-		return true
+		return is_valid_bridge_position(pos)
 	# 梯子：必须在敌方城墙裸露侧建造
 	if selected_building_id == 8:
 		if t == 2: return false
@@ -2004,10 +2005,6 @@ func _place_building():
 	if is_defense and not can_train_unit(get_host_team()): return
 
 
-	# 每种建筑最多10个
-	if _count_buildings_of_type(selected_building_id, get_host_team()) >= 10:
-		_show_hud_alert("该建筑已达上限(10个)！", Color(1.0, 0.4, 0.3))
-		return
 	# 扣费
 	for k in cost:
 		res[k] -= cost[k]

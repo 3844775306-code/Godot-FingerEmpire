@@ -210,8 +210,13 @@ func _input(event):
 		if client_selected_ids.size() == 1 and not ctrl and not shift:
 			var sel_info = _get_entity_info(client_selected_ids[0])
 			if sel_info.get("type") == 1:
-				var b_cfg = EntityDatabase.get_config(sel_info.get("entity_id", -1))
-				var produces = b_cfg.get("produces", [])
+				# 优先用快照里已按等级解锁的 production_list，回退到配置里的完整 produces，
+				# 否则会向服务端发送尚未解锁的单位（服务端静默拒绝，表现为“按了没反应”）
+				var produces = []
+				if sel_info.has("production_list"):
+					produces = sel_info.get("production_list", [])
+				else:
+					produces = EntityDatabase.get_config(sel_info.get("entity_id", -1)).get("produces", [])
 				var bid = client_selected_ids[0]
 				match key:
 					KEY_Q: if produces.size() >= 1: _send_produce(bid, produces[0]["unit_id"])
@@ -720,6 +725,8 @@ func _update_placement_preview(screen_pos: Vector2):
 		var terrain_ok = renderer.get_terrain_at(pos) != 2
 		if renderer.placement_building_id == 23:
 			terrain_ok = renderer.get_terrain_at(pos) == 0 and _check_adjacent_water(pos)
+		elif renderer.placement_building_id == 7:
+			terrain_ok = _check_bridge_placement(pos)
 
 		renderer.placement_preview.global_position = pos
 		renderer.placement_preview.visible = true
@@ -739,6 +746,9 @@ func _confirm_placement():
 	var valid = renderer.is_in_player_vision(pos) and renderer.get_terrain_at(pos) != 2 and no_enemy_nearby
 	if renderer.placement_building_id == 23:
 		valid = valid and renderer.get_terrain_at(pos) == 0 and _check_adjacent_water(pos)
+	elif renderer.placement_building_id == 7:
+		# 桥允许建在水上，地形/邻接条件全部交给 _check_bridge_placement
+		valid = renderer.is_in_player_vision(pos) and no_enemy_nearby and _check_bridge_placement(pos)
 	if not valid: return
 	var cmd = {
 		"action": "build",
@@ -765,6 +775,34 @@ func _check_adjacent_water(world_pos: Vector3) -> bool:
 				return true
 	return false
 
+# 桥(7)：只能建在水上，不能与其他实体重叠（已有桥除外），
+# 且至少有一侧正交邻格是陆地或已有桥（与单机 RTSBattleManager._is_valid_build_position 一致）
+func _check_bridge_placement(world_pos: Vector3) -> bool:
+	if renderer.get_terrain_at(world_pos) != 2: return false
+	var gx = int(world_pos.x + RTSConfig.MAP_SIZE / 2)
+	var gz = int(world_pos.z + RTSConfig.MAP_SIZE / 2)
+	for node in renderer.entity_nodes.values():
+		if not is_instance_valid(node) or not node.has_meta("snapshot_info"): continue
+		var info = node.get_meta("snapshot_info")
+		if info.is_empty() or info.get("health", 0) <= 0: continue
+		if info.get("type") == 1 and info.get("entity_id", -1) == 7: continue
+		if node.global_position.distance_to(world_pos) < float(info.get("body_radius", 0.0)) + 0.5:
+			return false
+	for dx in [-1, 0, 1]:
+		for dy in [-1, 0, 1]:
+			if abs(dx) + abs(dy) != 1: continue
+			var nx = gx + dx; var ny = gz + dy
+			if nx < 0 or nx >= RTSConfig.MAP_SIZE or ny < 0 or ny >= RTSConfig.MAP_SIZE: continue
+			if renderer.get_terrain_at_grid(nx, ny) != 2: return true
+			for node in renderer.entity_nodes.values():
+				if not is_instance_valid(node) or not node.has_meta("snapshot_info"): continue
+				var info = node.get_meta("snapshot_info")
+				if info.get("type") != 1 or info.get("entity_id", -1) != 7 or info.get("health", 0) <= 0: continue
+				var bgx = int(node.global_position.x + RTSConfig.MAP_SIZE / 2)
+				var bgz = int(node.global_position.z + RTSConfig.MAP_SIZE / 2)
+				if bgx == nx and bgz == ny: return true
+	return false
+
 # ---------- 集结模式 ----------
 
 # 检查是否负担得起建筑
@@ -773,7 +811,7 @@ func _can_afford_building(build_id: int) -> bool:
 	if cfg.is_empty(): return false
 	# 解锁检查
 	var clv = renderer.get_player_castle_level() if renderer else 1
-	const REQ = {23:2, 25:2, 26:2, 24:3, 29:3, 52:3, 42:3, 53:4, 54:4}
+	const REQ = {64:2, 23:2, 25:2, 26:2, 24:3, 29:3, 52:3, 42:3, 53:4, 54:4}
 	if REQ.has(build_id) and clv < REQ[build_id]: return false
 	var cost = cfg.get("cost", {})
 	if cost.is_empty(): return true

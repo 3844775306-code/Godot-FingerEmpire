@@ -482,23 +482,7 @@ func try_produce(unit_id: int) -> bool:
 	if not bm:
 		return false
 
-	# 每种单位最多生产20个（含已存在+队列中，按 owner_peer_id 或 team 归属）
-	var _total_of_type = 0
-	for _e in bm.entities.get_children():
-		if _e is Army and _e.health > 0 and _e.entity_id == unit_id:
-			if owner_peer_id != -1 and _e.owner_peer_id != owner_peer_id: continue
-			if owner_peer_id == -1 and _e.team != team: continue
-			_total_of_type += 1
-	for _e in bm.entities.get_children():
-		if _e is Building and _e.health > 0:
-			if owner_peer_id != -1 and _e.owner_peer_id != owner_peer_id: continue
-			if owner_peer_id == -1 and _e.team != team: continue
-			for _pid in _e.production_queue:
-				if _pid == unit_id: _total_of_type += 1
-	if _total_of_type >= 20:
-		return false
-	
-		# 根据建筑所属队伍和 owner_peer_id 选择资源库
+	# 根据建筑所属队伍和 owner_peer_id 选择资源库
 	var res_dict = null
 	if owner_peer_id != -1 and bm.has_method("deduct_player_resources"):
 		

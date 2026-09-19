@@ -234,19 +234,43 @@ func get_player_castle_level() -> int:
 				max_lv = lv
 	return max_lv
 
+# 供 CommandCard 复用：客户端没有本地资源库，用最近一次快照里的己方资源。
+# 快照到达前返回空字典（按钮置灰），不要乐观放行，否则点了会被服务端拒绝
+func get_host_resources() -> Dictionary:
+	return last_resources
+
+func get_host_team() -> int:
+	return player_team
+
+# 与 RTSBattleManager.is_building_unlocked 保持一致的城堡等级解锁表
+func is_building_unlocked(building_id: int) -> bool:
+	var cl = get_player_castle_level()
+	match building_id:
+		23, 25, 26, 64:
+			return cl >= 2
+		24, 29, 52:
+			return cl >= 3
+		42, 54:
+			return cl >= 3
+		53:
+			return cl >= 4
+	return true
+
 func _update_command_card(cc, ids: Array):
 	if ids.size() == 1:
 		var info = get_entity_info(ids[0])
 		if info.get("type") == 1:
-			var cfg = EntityDatabase.get_config(info.get("entity_id",-1))
-			cc.show_building(cfg.get("produces",[]), ids[0], info.get("entity_id",-1), null)
+			# 用快照里已按等级截断的 production_list，而不是配置里的完整 produces，
+			# 否则未解锁的单位也会画出按钮，点了会被服务端静默拒绝
+			var pl = info.get("production_list", [])
+			cc.show_building(pl, ids[0], info.get("entity_id",-1), self)
 		elif info.get("type") == 2:
 			cc.show_army()
 		else:
 			cc.hide_all()
 	elif ids.is_empty():
 		var clv = get_player_castle_level()
-		cc.show_construct({"gold":get_player_resource("gold"),"wood":get_player_resource("wood"),"stone":get_player_resource("stone"),"food":get_player_resource("food"),"oil":get_player_resource("oil")}, clv, null)
+		cc.show_construct({"gold":get_player_resource("gold"),"wood":get_player_resource("wood"),"stone":get_player_resource("stone"),"food":get_player_resource("food"),"oil":get_player_resource("oil")}, clv, self)
 	else:
 		cc.hide_all()
 

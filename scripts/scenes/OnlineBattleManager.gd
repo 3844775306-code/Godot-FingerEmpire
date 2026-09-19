@@ -744,6 +744,8 @@ func _1v1_build(team: int, data: Dictionary):
 	var cfg = EntityDatabase.get_config(building_id)
 	if cfg.is_empty(): return
 	if not is_building_unlocked(building_id): return
+	# 桥：必须邻接陆地或已建成的桥，且不能与其他实体重叠
+	if building_id == 7 and not is_valid_bridge_position(pos): return
 	# Cannot build near enemies
 	for e in entities.get_children():
 		if e is GameEntity and e.team != team and e.team != RTSConfig.Team.NEUTRAL and e.health > 0:
@@ -753,12 +755,6 @@ func _1v1_build(team: int, data: Dictionary):
 	for r in cost.keys():
 		if res[r] < cost[r]: return
 
-	# 每种建筑最多10个
-	var _bld_cnt = 0
-	for _e in entities.get_children():
-		if _e is Building and _e.health > 0 and _e.entity_id == building_id and _e.team == team:
-			_bld_cnt += 1
-	if _bld_cnt >= 10: return
 	for r in cost.keys():
 		res[r] -= cost[r]
 	if building_id == 64:
@@ -855,17 +851,13 @@ func _2v2_build(peer_id: int, data: Dictionary):
 	for e in entities.get_children():
 		if e is GameEntity and e.team != player_info[peer_id].team and e.team != RTSConfig.Team.NEUTRAL and e.health > 0:
 			if e.global_position.distance_to(pos) < 10.0: return
+	# 桥：必须邻接陆地或已建成的桥，且不能与其他实体重叠
+	if building_id == 7 and not is_valid_bridge_position(pos): return
 	# 人口检查（防御塔）
 	var is_defense = (building_id == 25 or building_id == 26)
 	if is_defense and not can_player_train(peer_id):
 		return
 
-	# 每种建筑最多10个（按 owner_peer_id 统计）
-	var _bld_cnt = 0
-	for _e in entities.get_children():
-		if _e is Building and _e.health > 0 and _e.entity_id == building_id and _e.owner_peer_id == peer_id:
-			_bld_cnt += 1
-	if _bld_cnt >= 10: return
 	# 扣除个人资源
 	if not deduct_player_resources(peer_id, cost): return
 	cfg["owner_peer_id"] = peer_id

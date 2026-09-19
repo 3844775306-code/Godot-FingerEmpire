@@ -71,7 +71,8 @@ func show_building(produces: Array, bid: int, eid: int, bm):
 		var btn = _buttons[i]; btn.visible = true
 		if i < produces.size():
 			var pid = produces[i]["unit_id"]; var uc = EntityDatabase.get_config(pid)
-			var cost = uc.get("cost",{})
+			# production_list 里带的是按建筑等级加成后的 current_cost，优先用它
+			var cost = produces[i].get("current_cost", uc.get("cost",{}))
 			var hk = ["Q","W","E","R","F"][min(i,4)]
 			var ok = true; for k in cost: if res.get(k,0) < cost[k]: ok = false
 			btn.disabled = not ok; btn.modulate = Color.WHITE if ok else Color(0.5,0.5,0.5)
