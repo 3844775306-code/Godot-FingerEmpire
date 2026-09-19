@@ -1033,6 +1033,16 @@ var _entity_state_hashes: Dictionary = {}   # key -> {entity_id: hash}
 var _full_snapshot_counters: Dictionary = {} # key -> counter
 const FULL_SNAPSHOT_EVERY: int = 30          # 每 30 个 delta (~3秒) 发一次全量基线
 
+# 快照走 unreliable 通道（见 NetworkManager._client_receive_snapshot），丢包不会重传。
+# 只发一次的"死亡 ID"和"状态变化"一旦丢包，客户端就会永久停留在错误状态
+# （残留尸体 / 建造进度条走到底却仍显示"建造中"），所以这里做有限次重发兜底。
+const FORCE_RESEND_EVERY: int = 25           # 每个实体至少每 25 次广播(~1秒)重发一次
+const DEAD_ID_RESEND_SNAPSHOTS: int = 50     # 死亡 ID 在 ~2 秒内每次广播都重发
+const DEAD_ID_MAX: int = 64                  # 单次快照最多携带的死亡 ID 数
+var _snap_tick: int = 0                      # 单调递增的广播序号（_snap_sent 每秒会清零，不能当钟用）
+var _entity_last_sent: Dictionary = {}       # key -> {entity_id: 最后一次发送时的广播序号}
+var _recent_dead_ids: Dictionary = {}        # key -> {entity_id: 过期广播序号}
+
 # ==================== 快照视野网格（复用，仅分配一次） ====================
 var _snap_vis_grid: PackedByteArray = []  # flat byte grid (contiguous memory, faster)
 var _snap_vis_version: int = 0       # monotonically increasing version counter
@@ -1086,13 +1096,50 @@ func _should_include_in_delta(snapshot_key, entity_id: int, new_hash: int) -> bo
 	if not _entity_state_hashes.has(snapshot_key):
 		_entity_state_hashes[snapshot_key] = {}
 	var hashes = _entity_state_hashes[snapshot_key]
+	if not _entity_last_sent.has(snapshot_key):
+		_entity_last_sent[snapshot_key] = {}
+	var last_sent = _entity_last_sent[snapshot_key]
 	if not hashes.has(entity_id):
 		hashes[entity_id] = new_hash
+		last_sent[entity_id] = _snap_tick
 		return true  # 新实体，必须发送
+	# 超时强制重发：delta 只发一次，丢包后客户端状态会永久卡死（例如建筑完工后
+	# 一直显示"建造中"）。用 entity_id 取模错开相位，避免同一帧集中重发一大批实体。
+	if _snap_tick % FORCE_RESEND_EVERY == entity_id % FORCE_RESEND_EVERY and _snap_tick != int(last_sent.get(entity_id, -1)):
+		hashes[entity_id] = new_hash
+		last_sent[entity_id] = _snap_tick
+		return true
 	if hashes[entity_id] != new_hash:
 		hashes[entity_id] = new_hash
+		last_sent[entity_id] = _snap_tick
 		return true  # 状态变化，需要发送
 	return false  # 无变化，跳过
+
+# 汇总本次要下发的死亡实体 ID：本次新死亡的 + 仍在重发窗口内的历史死亡 ID。
+# 客户端删除是幂等的（节点已不存在就跳过），重复下发没有副作用；
+# 这样单次快照丢包也不会让客户端留下"尸体"节点。
+func _collect_dead_ids(snapshot_key, dead: Array) -> Array:
+	if not _recent_dead_ids.has(snapshot_key):
+		_recent_dead_ids[snapshot_key] = {}
+	var recent = _recent_dead_ids[snapshot_key]
+	var expire_at = _snap_tick + DEAD_ID_RESEND_SNAPSHOTS
+	for id in dead:
+		recent[id] = expire_at
+	var expired = []
+	for id in recent.keys():
+		if int(recent[id]) <= _snap_tick:
+			expired.append(id)
+	for id in expired:
+		recent.erase(id)
+	# 大规模阵亡时限制单次携带的数量，避免快照包体过大被整包丢弃
+	if recent.size() > DEAD_ID_MAX:
+		var ids = recent.keys()
+		ids.sort_custom(func(a, b): return int(recent[a]) > int(recent[b]))
+		for i in range(DEAD_ID_MAX, ids.size()):
+			recent.erase(ids[i])
+	if recent.is_empty():
+		return dead
+	return recent.keys()
 
 func _is_full_snapshot(snapshot_key) -> bool:
 	# 第一次快照一定是全量的（客户端还没有任何实体）
@@ -1116,6 +1163,11 @@ func _cleanup_dead_entity_hashes(snapshot_key, alive_ids: Dictionary):
 			to_erase.append(eid)
 	for eid in to_erase:
 		hashes.erase(eid)
+	# 同步清理"最后发送序号"，避免实体 ID 复用时残留旧时间戳
+	if _entity_last_sent.has(snapshot_key):
+		var last_sent = _entity_last_sent[snapshot_key]
+		for eid in to_erase:
+			last_sent.erase(eid)
 
 func _update_gather_stats(delta: float):
 	_gather_stat_timer -= delta
@@ -1214,6 +1266,7 @@ func _process(delta):
 
 func broadcast_snapshot():
 	_snap_sent += 1
+	_snap_tick += 1
 	# Ensure entity cache is fresh for this snap
 	_ensure_cache_fresh()
 	# Lazy-init the reusable vis_grid
@@ -1325,7 +1378,7 @@ func build_snapshot_for_team(team: int) -> Dictionary:
 	_cleanup_dead_entity_hashes(snapshot_key, current_entities)
 
 	var e = (_snap_sent % 10 == 0)  # 资源数据1Hz降频
-	var r = {"delta": delta, "dead_ids": dead, "game_time": game_time}
+	var r = {"delta": delta, "dead_ids": _collect_dead_ids(snapshot_key, dead), "full": is_full, "game_time": game_time}
 	if e or is_full:
 		r["resources"] = {"player": player_resources, "enemy": enemy_resources}
 		r["limits"] = {"player": player_resource_limits, "enemy": enemy_resource_limits}
@@ -1632,7 +1685,8 @@ func build_snapshot_for_player(peer_id: int) -> Dictionary:
 	var e2 = (_snap_sent % 10 == 0)  # 资源数据1Hz降频
 	var result = {
 		"delta": delta,
-		"dead_ids": dead,
+		"dead_ids": _collect_dead_ids(snapshot_key, dead),
+		"full": is_full,
 		"game_time": game_time,
 	}
 	if e2 or is_full:

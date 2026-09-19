@@ -312,8 +312,13 @@ func _process_snapshot(data: Dictionary):
 	
 	
 	# ---- 实体更新 ----
+	# 全量快照：记录本帧下发的全部实体 ID，用于下面的兜底清理
+	var is_full_snap: bool = data.get("full", false)
+	var full_ids: Dictionary = {}
 	if data.has("delta"):
 		for ent in data["delta"]:
+			if is_full_snap and ent is Array and ent.size() > E.ID:
+				full_ids[ent[E.ID]] = true
 			_update_single_entity(ent)
 	elif data.has("entities"):
 		for ent in data["entities"]:
@@ -350,6 +355,10 @@ func _process_snapshot(data: Dictionary):
 					for m in all_wp[id]:
 						if is_instance_valid(m): m.queue_free()
 					all_wp.erase(id)
+
+	# 兜底清理：全量快照里缺失的己方实体一律删除（防止死亡 ID 丢失导致残留尸体）
+	if is_full_snap:
+		_prune_missing_own_entities(full_ids)
 	var my_res = {}
 	var my_limits = {}
 	var my_pop = last_population
@@ -1207,6 +1216,29 @@ func _cleanup_stale_entities():
 		for id in to_remove:
 			entity_nodes.erase(id)
 			_remove_all_bars(id)
+
+# 全量快照兜底清理：己方阵营的实体在任何全量快照里都是完整的（服务端不做视野剔除），
+# 因此全量快照中缺失的己方节点就是漏删的"尸体"（快照走 unreliable，
+# 死亡 ID 在长时间卡顿/丢包时可能全部丢失）。误删的节点下一帧会重新创建，代价很低。
+func _prune_missing_own_entities(seen_ids: Dictionary):
+	if player_team == -1: return
+	var to_remove = []
+	for id in entity_nodes.keys():
+		if seen_ids.has(id): continue
+		var node = entity_nodes.get(id)
+		if not is_instance_valid(node):
+			to_remove.append(id)
+			continue
+		if node.has_meta("is_bullet"): continue  # 子弹不在实体快照里，由 bullets 分支单独清理
+		var info = node.get_meta("snapshot_info", null)
+		if info and int(info.get("team", -1)) == player_team:
+			to_remove.append(id)
+	if to_remove.is_empty(): return
+	for id in to_remove:
+		var node = entity_nodes.get(id)
+		if is_instance_valid(node): node.queue_free()
+		entity_nodes.erase(id)
+		_remove_all_bars(id)
 
 func _update_health_bars():
 	var cam = get_viewport().get_camera_3d()
