@@ -71,13 +71,8 @@ func apply_received_map(p_terrain: Array, p_height: Array, p_resources: Array):
 	for x in range(size):
 		var color_col = []
 		for y in range(size):
-			var t = terrain_grid[x][y]
-			var c: Color
-			match t:
-				0: c = Color.DARK_GREEN
-				1: c = Color.SADDLE_BROWN
-				2: c = Color.DEEP_SKY_BLUE
-			color_col.append(c)
+			# 与本地生成走同一个着色函数：只用类型 + 高度，客户端与主机配色一致
+			color_col.append(_terrain_color_for(terrain_grid[x][y], height_grid[x][y], x, y))
 		base_colors.append(color_col)
 
 	# 覆盖资源列表
@@ -107,30 +102,79 @@ func _generate_terrain():
 	terrain_grid.clear()
 	height_grid.clear()
 	base_colors.clear()
+	# 第一趟：类型与高度。上色要查邻域（水域深浅靠岸线推断），所以先把整张网格填满
 	for x in range(size):
 		var col = []
-		var color_col = []
 		var height_col = []
 		for y in range(size):
 			var val = noise.get_noise_2d(x, y)
 			var type = 0
-			var color: Color
 			if val > 0.3:
-				type = 1; color = Color.SADDLE_BROWN
+				type = 1
 			elif val < -0.25:
-				type = 2; color = Color.DEEP_SKY_BLUE
-			else:
-				type = 0; color = Color.DARK_GREEN
-			col.append(type)
-			color_col.append(color)
+				type = 2
 			var h = 0.0
 			if type == 1: h = val * height_scale * 5.0
 			elif type == 0: h = val * 0.3
 			else: h = -height_scale * 0.5
+			col.append(type)
 			height_col.append(h)
 		terrain_grid.append(col)
-		base_colors.append(color_col)
 		height_grid.append(height_col)
+	# 第二趟：上色
+	for x in range(size):
+		var color_col = []
+		for y in range(size):
+			color_col.append(_terrain_color_for(terrain_grid[x][y], height_grid[x][y], x, y))
+		base_colors.append(color_col)
+
+# ---------- 地形着色 ----------
+# 两端共用的着色函数：只由 (类型, 高度) 推导颜色，不依赖原始噪声值。
+# 主机用噪声算出的高度，客户端用服务器同步来的高度网格，因此同一块地两端配色完全一致。
+# 纯观感，不参与任何寻路/建造判定（那些只认 terrain_grid 的类型）。
+func _terrain_color_for(terrain_type: int, h: float, gx: int, gy: int) -> Color:
+	var color: Color
+	match terrain_type:
+		1:  # 山地：山脚土棕 -> 高处灰岩
+			color = Color(0.40, 0.30, 0.18).lerp(Color(0.64, 0.62, 0.58), clamp(h / (height_scale * 5.0), 0.0, 1.0))
+		2:  # 水域：深度没有进高度网格，改用邻域陆地量当靠岸程度 —— 近岸浅亮、远海深暗
+			color = Color(0.10, 0.28, 0.50).lerp(Color(0.24, 0.58, 0.72), _shore_amount(gx, gy))
+		_:  # 草原：低地深绿 -> 高地黄绿
+			color = Color(0.12, 0.33, 0.14).lerp(Color(0.42, 0.51, 0.22), clamp((h + 0.075) / 0.165, 0.0, 1.0))
+	# 高频细节噪声：明暗微扰打散整片纯色，远看是自然纹理而不是塑料色块
+	var d := _get_detail_noise().get_noise_2d(float(gx), float(gy))
+	if d > 0.0:
+		color = color.lightened(d * 0.09)
+	else:
+		color = color.darkened(-d * 0.09)
+	return color
+
+# 靠岸程度：3x3 邻域里陆地格占比（0=远海，1=贴岸）。水深不会同步给客户端，
+# 用邻域陆地量代替，两端都能算，靠岸浅亮、远海深暗的观感就出来了。
+func _shore_amount(gx: int, gy: int) -> float:
+	var size = _get_map_size()
+	if terrain_grid.size() < size or terrain_grid[0].size() < size:
+		return 0.0
+	var land := 0
+	for dx in range(-1, 2):
+		for dy in range(-1, 2):
+			var nx = gx + dx
+			var ny = gy + dy
+			if nx < 0 or ny < 0 or nx >= size or ny >= size:
+				continue
+			if terrain_grid[nx][ny] != 2:
+				land += 1
+	return float(land) / 9.0
+
+var _detail_noise: FastNoiseLite = null
+# 细节噪声用固定种子，两端各自独立计算也得到同样的结果，无需同步
+func _get_detail_noise() -> FastNoiseLite:
+	if _detail_noise == null:
+		_detail_noise = FastNoiseLite.new()
+		_detail_noise.seed = 20240917
+		_detail_noise.frequency = 0.33
+		_detail_noise.fractal_octaves = 2
+	return _detail_noise
 
 # ---------- 城堡选址 ----------
 func get_four_castle_positions() -> Array:

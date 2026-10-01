@@ -1756,6 +1756,8 @@ func update_debug_label():
 	if not debug_panel: return
 	if _title_rtl:
 		_title_rtl.text = _panel_title_base + _my_nation_tag()
+	# 收起状态：主体不可见，跳过整块内容刷新，省掉每帧的统计与遍历开销
+	if _panel_collapsed: return
 	var res = _get_resources(); var pop = _get_population()
 	var _pe = {"PRODUCTION": "🌱", "DEVELOPMENT": "🏗️", "ASSAULT": "⚔️"}
 	_header_rtl.text = "%s [color=#%s]%s[/color]  |  %s" % [_pe.get(Phase.keys()[phase], "▶️"), (Color.GREEN if phase == Phase.ASSAULT else (Color(1,0.7,0) if phase == Phase.DEVELOPMENT else Color.CYAN)).to_html(), Phase.keys()[phase], _get_tactic_name(current_tactic)]
@@ -1834,6 +1836,12 @@ var _res_bars: Array = []; var _res_labels: Array = []
 var _mil_rtl: RichTextLabel; var _bld_rtl: RichTextLabel
 var _title_rtl: RichTextLabel = null       # 面板标题（用于追加国家名）
 var _panel_title_base: String = ""         # 不含国家名的原始标题
+var _collapse_btn: Button = null           # 标题栏右侧的隐藏/展开按钮
+var _body_vb: VBoxContainer = null         # 面板主体（隐藏时整块不可见）
+var _panel_collapsed: bool = false         # 面板是否已收起为标题条
+const PANEL_WIDTH: float = 540.0
+const PANEL_HEIGHT: float = 380.0
+const PANEL_COLLAPSED_HEIGHT: float = 44.0
 
 func _create_debug_panel():
 	debug_panel = Control.new(); debug_panel.name = "AIDebugPanel"; debug_panel.z_index = 100
@@ -1855,7 +1863,7 @@ func _create_debug_panel():
 			offset_y = 10 + ai_row * 340
 			panel_title = "[color=#4af]🤖 ◈ AI-%d 决策中心[/color]" % (ai_row + 1)
 	debug_panel.position = Vector2(400, offset_y)
-	debug_panel.custom_minimum_size = Vector2(540, 380); debug_panel.size = Vector2(540, 380)
+	debug_panel.custom_minimum_size = Vector2(PANEL_WIDTH, PANEL_HEIGHT); debug_panel.size = Vector2(PANEL_WIDTH, PANEL_HEIGHT)
 	var bg = Panel.new(); bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	var bg_style = StyleBoxFlat.new(); bg_style.bg_color = Color(0.05, 0.06, 0.12, 0.92)
 	bg_style.corner_radius_top_left = 8; bg_style.corner_radius_top_right = 8
@@ -1866,15 +1874,28 @@ func _create_debug_panel():
 	bg.add_theme_stylebox_override("panel", bg_style); debug_panel.add_child(bg)
 	var vb = VBoxContainer.new(); vb.position = Vector2(10, 8); vb.add_theme_constant_override("separation", 3)
 	debug_panel.add_child(vb)
+	# 标题行：左侧标题 + 右侧隐藏按钮（点一下整块收起，只留标题条，不再遮挡战场）
+	var title_hbox = HBoxContainer.new(); vb.add_child(title_hbox)
 	var title = _make_rtl(); _title_rtl = title; _panel_title_base = panel_title
-	title.text = panel_title; title.add_theme_font_size_override("font_size", 22); vb.add_child(title)
-	_header_rtl = _make_rtl(); _header_rtl.add_theme_font_size_override("font_size", 19); vb.add_child(_header_rtl)
+	title.text = panel_title; title.add_theme_font_size_override("font_size", 22)
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL; title_hbox.add_child(title)
+	_collapse_btn = Button.new(); _collapse_btn.text = "▼"
+	_collapse_btn.tooltip_text = "隐藏 AI 决策面板"
+	_collapse_btn.toggle_mode = true
+	_collapse_btn.custom_minimum_size = Vector2(34, 28)
+	UITheme.apply_muted_button(_collapse_btn, UITheme.FONT_MD)
+	_collapse_btn.pressed.connect(_on_collapse_pressed)
+	title_hbox.add_child(_collapse_btn)
+	# 面板主体：全部内容挂这里，隐藏按钮关闭整块
+	var body = VBoxContainer.new(); body.add_theme_constant_override("separation", 3)
+	vb.add_child(body); _body_vb = body
+	_header_rtl = _make_rtl(); _header_rtl.add_theme_font_size_override("font_size", 19); body.add_child(_header_rtl)
 	var pop_hbox = HBoxContainer.new()
 	_pop_label = Label.new(); _pop_label.add_theme_font_size_override("font_size", 16); _pop_label.add_theme_color_override("font_color", Color.WHITE)
 	pop_hbox.add_child(_pop_label)
 	_pop_bar = _make_bar(Color.GREEN); _pop_bar.custom_minimum_size = Vector2(370, 10); pop_hbox.add_child(_pop_bar)
-	vb.add_child(pop_hbox)
-	vb.add_child(_make_section("💰 资源"))
+	body.add_child(pop_hbox)
+	body.add_child(_make_section("💰 资源"))
 	var res_grid = GridContainer.new(); res_grid.columns = 5
 	var res_cfg = [["金",Color(1.0,0.84,0.1)],["木",Color(0.25,0.82,0.2)],["石",Color(0.62,0.62,0.62)],["食",Color(1.0,0.55,0.1)],["油",Color(0.4,0.25,0.1)]]
 	var res_keys = ["gold", "wood", "stone", "food", "oil"]
@@ -1886,12 +1907,24 @@ func _create_debug_panel():
 		var ll = Label.new(); ll.add_theme_font_size_override("font_size", 11); ll.add_theme_color_override("font_color", Color.WHITE)
 		ll.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; ll.clip_text = true; ll.custom_minimum_size = Vector2(85, 0)
 		_res_labels.append(ll); col.add_child(ll); res_grid.add_child(col)
-	vb.add_child(res_grid)
-	vb.add_child(_make_section("⚔️ 军队")); _mil_rtl = _make_rtl(); vb.add_child(_mil_rtl)
-	vb.add_child(_make_section("🏰 建筑")); _bld_rtl = _make_rtl(); vb.add_child(_bld_rtl)
+	body.add_child(res_grid)
+	body.add_child(_make_section("⚔️ 军队")); _mil_rtl = _make_rtl(); body.add_child(_mil_rtl)
+	body.add_child(_make_section("🏰 建筑")); _bld_rtl = _make_rtl(); body.add_child(_bld_rtl)
 	var hud = battle.get_node("UI") as CanvasLayer; hud.add_child(debug_panel)
 	if not OS.is_debug_build():
 		debug_panel.visible = false
+
+# ▼/▲：隐藏或展开面板主体。收起后仅保留标题条，面板高度同步压缩，不再长期遮挡战场
+func _on_collapse_pressed():
+	if _collapse_btn == null or _body_vb == null or debug_panel == null:
+		return
+	_panel_collapsed = _collapse_btn.button_pressed
+	_body_vb.visible = not _panel_collapsed
+	_collapse_btn.text = "▲" if _panel_collapsed else "▼"
+	_collapse_btn.tooltip_text = "展开 AI 决策面板" if _panel_collapsed else "隐藏 AI 决策面板"
+	var h = PANEL_COLLAPSED_HEIGHT if _panel_collapsed else PANEL_HEIGHT
+	debug_panel.custom_minimum_size = Vector2(PANEL_WIDTH, h)
+	debug_panel.size = Vector2(PANEL_WIDTH, h)
 
 func _make_rtl() -> RichTextLabel:
 	var r = RichTextLabel.new(); r.bbcode_enabled = true; r.fit_content = true; r.clip_contents = true
