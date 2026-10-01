@@ -12,6 +12,8 @@ var stone_label: Label
 var food_label: Label
 var oil_label: Label
 var unit_bars: Dictionary = {}
+# 血条文字开关（L 键切换）：关闭后只保留血条色条，隐藏名称/血量/生产/升级文字
+var show_unit_text: bool = true
 var res_bars: Dictionary = {}
 var pop_bar: ProgressBar = null
 var pop_label: Label
@@ -346,6 +348,12 @@ func _input(event):
 			KEY_S: _on_retreat_all_pressed()
 			KEY_DELETE: _on_demolish_selected()
 			KEY_SPACE: _on_space_pressed()
+			KEY_L: _toggle_unit_text()
+
+# L 键：切换血条文字显示（隐藏后画面上只剩血条色条）
+func _toggle_unit_text():
+	show_unit_text = not show_unit_text
+	show_alert_message("单位血条文字：%s" % ("显示" if show_unit_text else "隐藏"), ALERT_INFO)
 
 func _on_space_pressed():
 	# 优先：释放选中建筑的进驻单位
@@ -843,7 +851,7 @@ func _update_health_bars():
 				up_lbl.z_index = -1
 			up_bar.custom_minimum_size = bar_size
 			up_lbl.add_theme_font_size_override("font_size", font_size)
-			up_bar.visible = true; up_lbl.visible = true
+			up_bar.visible = true; up_lbl.visible = show_unit_text
 			up_bar.update_bar(entity.upgrade_timer, entity.max_upgrade_time, -1, Color(0.6, 0.2, 0.8))
 			up_lbl.text = "升级中"
 			up_bar.position = screen_pos - bar_size / 2 + Vector2(0, -bar_size.y * 2 - 6)
@@ -857,7 +865,7 @@ func _update_health_bars():
 
 		if entity is Building and entity.has_method("is_under_construction") and entity.is_under_construction():
 			bar.visible = true
-			label.visible = true
+			label.visible = show_unit_text
 			var progress = 1.0 - (entity.build_timer / entity.max_build_time)
 			bar.update_bar(progress * entity.max_health, entity.max_health, entity.team, Color.YELLOW)
 			label.text = "%s (建造中)" % entity.display_name
@@ -874,7 +882,7 @@ func _update_health_bars():
 		if prod_bar and prod_label:
 			if has_production:
 				prod_bar.visible = true
-				prod_label.visible = true
+				prod_label.visible = show_unit_text
 				var current_id = entity.production_queue[0]
 				var unit_cfg = EntityDatabase.get_config(current_id)
 				var unit_name = unit_cfg.get("name", "?")
@@ -904,7 +912,7 @@ func _update_health_bars():
 			label.visible = false
 			continue
 
-		label.visible = true
+		label.visible = show_unit_text
 		var group_prefix = ""
 		var sm = get_tree().get_first_node_in_group("battle_manager")
 		if sm and sm.has_node("SelectionManager") and sm.get_node("SelectionManager").has_method("get_entity_groups"):

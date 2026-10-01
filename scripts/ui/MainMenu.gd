@@ -183,7 +183,7 @@ func _ready():
 	UITheme.fade_in(bot_panel, 0.5)
 
 	var tip_label = Label.new()
-	tip_label.text = "快捷键: Ctrl+[1-9] 编队  |  [1-9] 选择编队  |  Shift+右键 连续指令  |  H 暂停采集  |  P 原地防守"
+	tip_label.text = "快捷键: Ctrl+[1-9] 编队  |  [1-9] 选择编队  |  Shift+右键 连续指令  |  H 暂停采集  |  P 原地防守  |  L 隐藏单位血条文字"
 	tip_label.position = Vector2(0, 30)
 	tip_label.size = Vector2(1800, 30)
 	tip_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER

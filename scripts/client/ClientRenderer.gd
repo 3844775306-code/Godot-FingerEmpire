@@ -17,6 +17,8 @@ var local_visible_grid: Array = []
 
 # ==================== 血条池 ====================
 var unit_bars: Dictionary = {}
+# 血条文字开关（L 键切换）：关闭后只保留血条色条，隐藏名称/血量/生产/升级文字
+var show_unit_text: bool = true
 
 # ==================== 缓存数据 ====================
 var last_resources: Dictionary = {}
@@ -278,6 +280,12 @@ func _input(event):
 	if event is InputEventKey and event.pressed and event.keycode == KEY_O:
 		var cc = $UI.get_node_or_null("CommandCard")
 		if cc: cc.visible = not cc.visible
+	elif event is InputEventKey and event.pressed and event.keycode == KEY_L:
+		# L：切换血条文字显示（隐藏后画面上只剩血条色条）
+		show_unit_text = not show_unit_text
+		var hud = get_tree().get_first_node_in_group("client_hud")
+		if hud and hud.has_method("show_alert_message"):
+			hud.show_alert_message("单位血条文字：%s" % ("显示" if show_unit_text else "隐藏"), UITheme.ALERT_INFO)
 
 func get_entity_info(id: int) -> Dictionary:
 	var node = entity_nodes.get(id)
@@ -1301,7 +1309,7 @@ func _update_health_bars():
 				AudioManager.play_sfx_3d("build_loop", node.global_position, _get_cam_pos())
 			var bar = _get_or_create_health_bar(id)
 			var lab = _get_or_create_label(id)
-			bar.visible = true; lab.visible = true
+			bar.visible = true; lab.visible = show_unit_text
 			bar.update_bar(info["build_timer"], info["max_build_time"], -1, UITheme.GOLD)
 			var nm2 = info["name"]
 			var _gpfx3 = _get_entity_group_prefix(info["id"])
@@ -1313,7 +1321,7 @@ func _update_health_bars():
 			if viewport_rect.has_point(screen_pos):
 				bar.position = screen_pos - Vector2(30, 5)
 				lab.position = bar.position + Vector2(0, -22)
-				lab.visible = true
+				lab.visible = show_unit_text
 			else:
 				bar.visible = false; lab.visible = false
 			continue
@@ -1323,7 +1331,7 @@ func _update_health_bars():
 		if info.get("upgrade_timer", 0) > 0:
 			var upbar = _get_or_create_upgrade_bar(id)
 			var uplab = _get_or_create_upgrade_label(id)
-			upbar.visible = true; uplab.visible = true
+			upbar.visible = true; uplab.visible = show_unit_text
 			upbar.update_bar(info["upgrade_timer"], info["max_upgrade_time"], -1, UITheme.PURPLE)
 			uplab.text = "升级中"
 			uplab.add_theme_color_override("font_color", UITheme.PURPLE.lightened(0.25))
@@ -1332,7 +1340,7 @@ func _update_health_bars():
 			if viewport_rect.has_point(usp):
 				upbar.position = usp - Vector2(30, 5) + Vector2(0, -20)
 				uplab.position = upbar.position + Vector2(0, -14)
-				uplab.visible = true
+				uplab.visible = show_unit_text
 			else:
 				upbar.visible = false; uplab.visible = false
 		else:
@@ -1341,7 +1349,7 @@ func _update_health_bars():
 		if type == 1 and info.get("production_current_unit", -1) != -1 and info.get("production_current_unit") != null:
 			var pbar = _get_or_create_prod_bar(id)
 			var plab = _get_or_create_prod_label(id)
-			pbar.visible = true; plab.visible = true
+			pbar.visible = true; plab.visible = show_unit_text
 			var prog = info.get("production_progress")
 			pbar.value = prog if prog != null else 0.0
 			var pcu = info.get("production_current_unit")
@@ -1353,7 +1361,7 @@ func _update_health_bars():
 			if viewport_rect.has_point(screen_pos):
 				pbar.position = screen_pos - Vector2(30, 0) + Vector2(0, 6)
 				plab.position = pbar.position + Vector2(0, -12)
-				plab.visible = true
+				plab.visible = show_unit_text
 			else:
 				pbar.visible = false; plab.visible = false
 
@@ -1394,7 +1402,7 @@ func _update_health_bars():
 			if viewport_rect.has_point(screen_pos):
 				bar.position = screen_pos - Vector2(30, 5)
 				lab.position = bar.position + Vector2(0, -22)
-				lab.visible = true
+				lab.visible = show_unit_text
 				var _gpfx2 = _get_entity_group_prefix(info["id"])
 				var _res_info = ""
 				if info.get("entity_id") in [10, 14]:
@@ -1411,7 +1419,7 @@ func _update_health_bars():
 			if unit_bars.has(id) and unit_bars[id].bar: unit_bars[id].bar.visible = false
 			if viewport_rect.has_point(screen_pos):
 				lab.position = screen_pos - Vector2(30, 15)
-				lab.visible = true
+				lab.visible = show_unit_text
 			else: lab.visible = false
 
 # 隐藏某实体的所有血条/标签控件
