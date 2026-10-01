@@ -17,7 +17,7 @@ const CLIFF_THRESHOLD: float = 2.0     # height diff > this = impassable
 var base_colors: Array = []           # 原始颜色 (MAP_SIZE x MAP_SIZE)
 var terrain_image: Image
 var terrain_texture: ImageTexture
-var _base_image: Image = null          # 无雾底图（已含草丛点彩图案）
+var _base_image: Image = null          # 无雾底图（按格平铺的纯色地形）
 var _dark_image: Image = null          # “已探索但当前不可见”用的压暗版底图
 var terrain_mesh_instance: MeshInstance3D
 var vertex_grid: Array = []           # 存储顶点高度，用于快速查询
@@ -135,89 +135,22 @@ func _generate_terrain():
 # 主机用噪声算出的高度，客户端用服务器同步来的高度网格，因此同一块地两端配色完全一致。
 # 纯观感，不参与任何寻路/建造判定（那些只认 terrain_grid 的类型）。
 
-# 草地配色：土色作底、绿色小点铺面。绿点覆盖率略高于土色，远看整体是绿色，
-# 近看才透出土底 —— 比整片平涂的绿更像草地。图案由 _tile_pixel_color 逐像素生成
-const GRASS_SOIL := Color(0.34, 0.27, 0.18)        # 草点之间的裸土底
-const GRASS_GREEN_LOW := Color(0.13, 0.32, 0.12)   # 低地草色
-const GRASS_GREEN_HIGH := Color(0.42, 0.54, 0.19)  # 高地草色
-const GRASS_GREEN_DRY := Color(0.52, 0.50, 0.20)   # 偏枯黄的草株
-const GRASS_GREEN_DEEP := Color(0.07, 0.21, 0.09)  # 背阴处的深绿草株
-const GRASS_PATCH_RATIO := 0.80                    # 草皮内部的绿点覆盖率
-const GRASS_CLUMP_SOFT := 0.15                     # 成片遮罩的锐化半宽，越小草皮边界越干脆
-# 一株草占 2x2 像素。同株共享色相、株内再分明暗，单株才看得出是一株有体积的草，
-# 而不是四个各不相干的噪点 —— 精细感来自株内的明暗结构，不是把像素改小
-const GRASS_BLADE_CELL := 2
-# 草丛由密转疏、再到彻底消失的海拔（原始噪声值；0.3 是山地类型的起点）
-const GRASS_SPARSE_START := 0.08
-const GRASS_SPARSE_END := 0.46
-# 荒漠：更低频的大块噪声，高处成片荒漠化。荒漠格寸草不生，农田也不许落在里面及其近旁
-const DESERT_SAND := Color(0.60, 0.51, 0.33)       # 荒漠沙土
-const DESERT_START := 0.22                         # 噪声高于此值开始荒漠化
-const DESERT_FULL := 0.54                          # 高于此值完全荒漠
-const DESERT_NO_FARM := 0.30                       # 荒漠程度超过它，附近就禁止放农田
-const DESERT_FARM_CLEARANCE := 2                   # 农田与荒漠之间至少要留几格
-
-# 草色随高度变化：低地深绿，高地偏黄绿
-func _grass_green_at(h: float) -> Color:
-	return GRASS_GREEN_LOW.lerp(GRASS_GREEN_HIGH, clamp((h + 0.075) / 0.165, 0.0, 1.0))
-
-# 从 (类型, 高度) 反推原始噪声值。高度对每种地形都是噪声的线性映射，所以可逆 ——
-# 客户端只拿得到类型和高度网格，靠这个还原出“这块地有多接近山地”。
-# 必须用连续的 val 而不是 terrain_type 判断疏密，否则草地会在类型边界上一刀切没
-func _terrain_val(terrain_type: int, h: float) -> float:
-	match terrain_type:
-		1:  # 山地 h = val * height_scale * 5.0
-			return h / (height_scale * 5.0)
-		2:  # 水面高度是常量，不含噪声信息
-			return -1.0
-		_:  # 平原 h = val * 0.3
-			return h / 0.3
-
-# 荒漠程度 0..1。只有平原会荒漠化，水面和山石不受影响。
-# 用固定种子的细节噪声、把坐标乘 0.10 压到低频，于是荒漠是整片而不是胡椒面；
-# 两端各自独立算得到同一结果，不需要走网络同步
-func _desert_amount(terrain_type: int, gx: int, gy: int) -> float:
-	if terrain_type != 0:
-		return 0.0
-	var n := _get_detail_noise().get_noise_2d(float(gx) * 0.10 + 4096.0, float(gy) * 0.10 + 4096.0)
-	return smoothstep(DESERT_START, DESERT_FULL, n)
-
-# 草地密度（0=无草，1=满草）：从平原一路到丘陵连续衰减，山头彻底没草；
-# 再乘上荒漠系数，荒漠里一株不剩。两段都是连续过渡，不会在类型边界上一刀切
-func _grass_density(terrain_type: int, h: float, gx: int, gy: int) -> float:
-	if terrain_type == 2:
-		return 0.0
-	var alt := 1.0 - smoothstep(GRASS_SPARSE_START, GRASS_SPARSE_END, _terrain_val(terrain_type, h))
-	return alt * (1.0 - _desert_amount(terrain_type, gx, gy))
-
-# 裸地底色：草丛之间露出来的土 / 岩石 / 水。点彩画法就是拿它当画布
-func _terrain_base_color(terrain_type: int, h: float, gx: int, gy: int) -> Color:
-	var desert := _desert_amount(terrain_type, gx, gy)
+func _terrain_color_for(terrain_type: int, h: float, gx: int, gy: int) -> Color:
 	var color: Color
 	match terrain_type:
 		1:  # 山地：山脚土棕 -> 高处灰岩
 			color = Color(0.40, 0.30, 0.18).lerp(Color(0.64, 0.62, 0.58), clamp(h / (height_scale * 5.0), 0.0, 1.0))
 		2:  # 水域：深度没有进高度网格，改用邻域陆地量当靠岸程度 —— 近岸浅亮、远海深暗
 			color = Color(0.10, 0.28, 0.50).lerp(Color(0.24, 0.58, 0.72), _shore_amount(gx, gy))
-		_:  # 草原：草丛之间露出的裸土；荒漠化之后逐渐变成沙地
-			color = GRASS_SOIL.lerp(DESERT_SAND, desert)
-	# 高频细节噪声：明暗微扰打散整片纯色，远看是自然纹理而不是塑料色块。
-	# 荒漠处扰动幅度加大 —— 一大片死平的沙地比草地的破绽更明显
+		_:  # 草原：低地深绿 -> 高地黄绿
+			color = Color(0.12, 0.33, 0.14).lerp(Color(0.42, 0.51, 0.22), clamp((h + 0.075) / 0.165, 0.0, 1.0))
+	# 高频细节噪声：明暗微扰打散整片纯色，远看是自然纹理而不是塑料色块
 	var d := _get_detail_noise().get_noise_2d(float(gx), float(gy))
-	var amp := 0.09 + desert * 0.13
 	if d > 0.0:
-		color = color.lightened(d * amp)
+		color = color.lightened(d * 0.09)
 	else:
-		color = color.darkened(-d * amp)
+		color = color.darkened(-d * 0.09)
 	return color
-
-# 一格的平均色 = 裸地底色按该格实际绿点覆盖率混入草色。
-# base_colors 供 minimap 与远景使用，所以必须跟着疏密一起变淡，near/far 才不打架
-func _terrain_color_for(terrain_type: int, h: float, gx: int, gy: int) -> Color:
-	var base := _terrain_base_color(terrain_type, h, gx, gy)
-	if terrain_type == 2:
-		return base
-	return base.lerp(_grass_green_at(h), _grass_dot_ratio(terrain_type, h, gx, gy))
 
 # 靠岸程度：3x3 邻域里陆地格占比（0=远海，1=贴岸）。水深不会同步给客户端，
 # 用邻域陆地量代替，两端都能算，靠岸浅亮、远海深暗的观感就出来了。
@@ -246,63 +179,8 @@ func _get_detail_noise() -> FastNoiseLite:
 		_detail_noise.fractal_octaves = 2
 	return _detail_noise
 
-# ---------- 草丛点彩 ----------
-# 单格内某个像素的颜色。草地走点彩画法：土色作底，绿色小点按 ratio 铺面，
-# 覆盖率略高于土色，所以远看整片是绿的、近看才透出土底。
-# 哈希只吃格子种子和格内像素偏移，是纯函数 —— 主机和客户端各自算都得到同一张图，
-# 草丛图案完全不需要走网络同步。
-func _tile_pixel_color(base: Color, h: float, ratio: float, tile_seed: int, lx: int, ly: int) -> Color:
-	if ratio <= 0.0:
-		return base
-	# 以 GRASS_BLADE_CELL × GRASS_BLADE_CELL 像素为一株：先按株决定长不长草，
-	# 长了再由 _grass_blade_color 画株内明暗，单株于是是"一株"而不是几个独立噪点
-	var bx := lx / GRASS_BLADE_CELL
-	var by := ly / GRASS_BLADE_CELL
-	if _tile_hash01(tile_seed, bx, by) >= ratio:
-		return base  # 这个草位没长草：草原露土、荒漠露沙、山地露岩、水就还是水
-	return _grass_blade_color(h, tile_seed, bx, by, lx % GRASS_BLADE_CELL, ly % GRASS_BLADE_CELL)
-
-# 单株草的颜色。色相（基准草色 / 枯黄 / 背阴深绿）由株坐标定一次、整株共用，
-# 所以同一株是一株而不是四块碎色；株内再按像素位置压出明暗梯度：
-# 上部是受光的草尖、下部是背光的草根、右侧再压一档当侧影，单株因此有了体积感。
-# 精细感来自这层株内结构，不是来自把像素改小
-func _grass_blade_color(h: float, tile_seed: int, bx: int, by: int, ix: int, iy: int) -> Color:
-	var c := _grass_green_at(h)
-	# 色相：少数偏枯黄、少数偏背阴深绿，其余保持基准草色
-	var tone := _tile_hash01(tile_seed + 2654435761, bx, by)
-	if tone < 0.30:
-		c = c.lerp(GRASS_GREEN_DRY, 0.22 + tone * 1.5)
-	elif tone > 0.72:
-		c = c.lerp(GRASS_GREEN_DEEP, (tone - 0.72) * 1.7)
-	# 株内明暗：左上最亮、右下最暗，两个方向权重相当，于是是一道对角受光的斜面
-	var lift := 0.14 - float(iy) * 0.22 - float(ix) * 0.14
-	# 再叠一点逐像素碎抖，免得同一株的四个像素明暗过于规整
-	lift += (_tile_hash01(tile_seed + 40503, bx * GRASS_BLADE_CELL + ix, by * GRASS_BLADE_CELL + iy) - 0.5) * 0.10
-	if lift >= 0.0:
-		return c.lerp(Color(1.0, 1.0, 1.0), lift)
-	return c.lerp(Color(0.0, 0.0, 0.0), -lift)
-
-# 每格实际绿点覆盖率。低频噪声先被锐化成 0/1 的"草皮遮罩"——直接线性使用噪声只会得到
-# "到处都半草"的均色，锐化之后才有一块块草皮和大片裸地，这就是草"成片"的来源。
-# 最后乘地形草密度（海拔衰减 × 荒漠系数），荒漠和山头一个草点都不撒
-func _grass_dot_ratio(terrain_type: int, h: float, gx: int, gy: int) -> float:
-	var density := _grass_density(terrain_type, h, gx, gy)
-	if density <= 0.0:
-		return 0.0
-	var clump := _get_detail_noise().get_noise_2d(float(gx) * 0.18, float(gy) * 0.18)
-	var mask := smoothstep(-GRASS_CLUMP_SOFT, GRASS_CLUMP_SOFT, clump)
-	return clamp(mask * GRASS_PATCH_RATIO, 0.0, 0.95) * density
-
-# 整数哈希 -> [0,1)。同一个 (格子, 格内像素) 永远得到同一个值，
-# 不依赖任何随机数状态，因此两端画出的草丛逐像素一致
-func _tile_hash01(tile_seed: int, lx: int, ly: int) -> float:
-	var h: int = tile_seed + lx * 374761393 + ly * 668265263
-	h = (h ^ (h >> 13)) * 1274126177
-	h = h ^ (h >> 16)
-	return float(h & 0xFFFF) / 65536.0
-
 # 画两张地形底图：base 是正常亮度，dark 是迷雾里“已探索但当前不可见”用的压暗版。
-# 两张都在这里逐像素画一次，之后 apply_fog 只做整块拷贝，不再重算点彩图案
+# 两张都在这里逐格画一次，之后 apply_fog 只做整块拷贝，不再重算
 func _build_terrain_images() -> void:
 	var size = _get_map_size()
 	_base_image = Image.create(TEX_SIZE, TEX_SIZE, false, Image.FORMAT_RGBA8)
@@ -313,21 +191,15 @@ func _build_terrain_images() -> void:
 		for y in range(size):
 			var y_start = int(floor(float(y) / size * TEX_SIZE))
 			var y_end = int(floor(float(y + 1) / size * TEX_SIZE))
-			var type: int = terrain_grid[x][y]
-			var h: float = height_grid[x][y]
-			# 画布用裸地色（不是 base_colors 里那个已经混过草的平均色）
-			var base := _terrain_base_color(type, h, x, y)
-			var ratio := _grass_dot_ratio(type, h, x, y)
-			# 格子种子只由格坐标决定，两端一致
-			var tile_seed := x * 73856093 ^ y * 19349663
+			# 一格一个颜色，整格平铺 —— 着色只由 (类型, 高度) 决定，两端一致
+			var c := _terrain_color_for(terrain_grid[x][y], height_grid[x][y], x, y)
+			var d := c.darkened(0.7)
+			d.a = 1.0
 			for px in range(x_start, x_end):
 				for py in range(y_start, y_end):
 					if px >= TEX_SIZE or py >= TEX_SIZE:
 						continue
-					var c := _tile_pixel_color(base, h, ratio, tile_seed, px - x_start, py - y_start)
 					_base_image.set_pixel(px, py, c)
-					var d := c.darkened(0.7)
-					d.a = 1.0
 					_dark_image.set_pixel(px, py, d)
 
 # ---------- 城堡选址 ----------
@@ -601,24 +473,8 @@ func _place_resources():
 							resource_positions.append({"pos": grid_to_world(ax, ay), "type": atype})
 							placed["a%d,%d" % [ax, ay]] = true
 
-# 农田的选址禁令：荒漠里不种，荒漠近旁 DESERT_FARM_CLEARANCE 格内也不种。
-# 半荒漠上摆一片农田最出戏，所以留一段缓冲带而不是只挡住荒漠核心。
-# 其他资源不受这条限制。rtype 3 即农田
-func _farmland_blocked(rtype, gx: int, gy: int, size: int) -> bool:
-	if rtype != 3:
-		return false
-	for dx in range(-DESERT_FARM_CLEARANCE, DESERT_FARM_CLEARANCE + 1):
-		for dy in range(-DESERT_FARM_CLEARANCE, DESERT_FARM_CLEARANCE + 1):
-			var nx = gx + dx
-			var ny = gy + dy
-			if nx < 0 or ny < 0 or nx >= size or ny >= size:
-				continue
-			if _desert_amount(terrain_grid[nx][ny], nx, ny) > DESERT_NO_FARM:
-				return true
-	return false
-
 # ── Helper: place a group near a position ──
-func _place_group_near(rtype, min_sz, max_sz, cx, cy, max_dist, terrain, placed, size, near_mountain=false, adjacent_mountains=0, avoid_desert=true):
+func _place_group_near(rtype, min_sz, max_sz, cx, cy, max_dist, terrain, placed, size, near_mountain=false, adjacent_mountains=0):
 	var best_x = -1; var best_y = -1
 	for _attempt in range(200):
 		var tx = cx + randi_range(-max_dist, max_dist)
@@ -626,15 +482,10 @@ func _place_group_near(rtype, min_sz, max_sz, cx, cy, max_dist, terrain, placed,
 		if tx < 0 or tx >= size or ty < 0 or ty >= size: continue
 		if terrain_grid[tx][ty] != terrain: continue
 		if placed.has("g%d,%d,%d" % [rtype, tx, ty]): continue
-		if avoid_desert and _farmland_blocked(rtype, tx, ty, size): continue
 		if near_mountain and not _has_nearby_terrain(tx, ty, 1, 3, size): continue
 		if adjacent_mountains > 0 and _count_adjacent_terrain(tx, ty, 1, size) < adjacent_mountains: continue
 		best_x = tx; best_y = ty; break
 	if best_x < 0:
-		# 城堡整圈恰好都是荒漠时的兜底：这一组是保底资源，宁可让农田贴着荒漠边缘，
-		# 也不能让玩家一开局没有农田。只对农田放宽，其余资源照旧不迁就
-		if avoid_desert and rtype == 3:
-			_place_group_near(rtype, min_sz, max_sz, cx, cy, max_dist, terrain, placed, size, near_mountain, adjacent_mountains, false)
 		return
 	placed["g%d,%d,%d" % [rtype, best_x, best_y]] = true
 	_spawn_group(rtype, min_sz, max_sz, best_x, best_y, terrain, placed, size, adjacent_mountains)
@@ -646,8 +497,6 @@ func _place_group_random(rtype, min_sz, max_sz, terrain, placed, size, castles, 
 		var tx = randi_range(5, size - 6); var ty = randi_range(5, size - 6)
 		if terrain_grid[tx][ty] != terrain: continue
 		if placed.has("g%d,%d,%d" % [rtype, tx, ty]): continue
-		# 农田不落在荒漠及其近旁（散落组不是保底资源，找不到就跳过，不兜底）
-		if _farmland_blocked(rtype, tx, ty, size): continue
 		# Away from castles (min 8)
 		var too_close = false
 		for cs in castles:
@@ -678,7 +527,6 @@ func _spawn_group(rtype, min_sz, max_sz, cx, cy, terrain, placed, size, adjacent
 		var mx = cx + randi_range(-4, 4); var my = cy + randi_range(-4, 4)
 		if mx < 0 or mx >= size or my < 0 or my >= size: continue
 		if terrain_grid[mx][my] != terrain: continue
-		if _farmland_blocked(rtype, mx, my, size): continue
 		if adjacent_mountains > 0 and _count_adjacent_terrain(mx, my, 1, size) < adjacent_mountains: continue
 		if placed.has("r%d,%d" % [mx, my]): continue
 		placed["r%d,%d" % [mx, my]] = true
