@@ -140,22 +140,46 @@ func _generate_terrain():
 const GRASS_SOIL := Color(0.34, 0.27, 0.18)        # 草点之间的裸土底
 const GRASS_GREEN_LOW := Color(0.13, 0.32, 0.12)   # 低地草色
 const GRASS_GREEN_HIGH := Color(0.42, 0.54, 0.19)  # 高地草色
+const GRASS_GREEN_DRY := Color(0.52, 0.50, 0.20)   # 偏枯黄的草株
+const GRASS_GREEN_DEEP := Color(0.07, 0.21, 0.09)  # 背阴处的深绿草株
 const GRASS_DOT_RATIO := 0.66                      # 绿点基准覆盖率
+# 草丛由密转疏、再到彻底消失的海拔（原始噪声值；0.3 是山地类型的起点）
+const GRASS_SPARSE_START := 0.08
+const GRASS_SPARSE_END := 0.46
 
 # 草色随高度变化：低地深绿，高地偏黄绿
 func _grass_green_at(h: float) -> Color:
 	return GRASS_GREEN_LOW.lerp(GRASS_GREEN_HIGH, clamp((h + 0.075) / 0.165, 0.0, 1.0))
 
-func _terrain_color_for(terrain_type: int, h: float, gx: int, gy: int) -> Color:
+# 从 (类型, 高度) 反推原始噪声值。高度对每种地形都是噪声的线性映射，所以可逆 ——
+# 客户端只拿得到类型和高度网格，靠这个还原出“这块地有多接近山地”。
+# 必须用连续的 val 而不是 terrain_type 判断疏密，否则草地会在类型边界上一刀切没
+func _terrain_val(terrain_type: int, h: float) -> float:
+	match terrain_type:
+		1:  # 山地 h = val * height_scale * 5.0
+			return h / (height_scale * 5.0)
+		2:  # 水面高度是常量，不含噪声信息
+			return -1.0
+		_:  # 平原 h = val * 0.3
+			return h / 0.3
+
+# 草地密度（0=无草，1=满草）：从平原一路到丘陵连续衰减，山头彻底没草。
+# 阈值刻意错开山地类型的边界 0.3 —— 山脚还留得下零星几株，过渡才不显生硬
+func _grass_density(terrain_type: int, h: float) -> float:
+	if terrain_type == 2:
+		return 0.0
+	return 1.0 - smoothstep(GRASS_SPARSE_START, GRASS_SPARSE_END, _terrain_val(terrain_type, h))
+
+# 裸地底色：草丛之间露出来的土 / 岩石 / 水。点彩画法就是拿它当画布
+func _terrain_base_color(terrain_type: int, h: float, gx: int, gy: int) -> Color:
 	var color: Color
 	match terrain_type:
 		1:  # 山地：山脚土棕 -> 高处灰岩
 			color = Color(0.40, 0.30, 0.18).lerp(Color(0.64, 0.62, 0.58), clamp(h / (height_scale * 5.0), 0.0, 1.0))
 		2:  # 水域：深度没有进高度网格，改用邻域陆地量当靠岸程度 —— 近岸浅亮、远海深暗
 			color = Color(0.10, 0.28, 0.50).lerp(Color(0.24, 0.58, 0.72), _shore_amount(gx, gy))
-		_:  # 草原：取“土底 + 草点”按覆盖率混合后的平均色。base_colors 供 minimap 与远景使用，
-			# 真正的近景点彩图案在 _tile_pixel_color 里逐像素生成
-			color = GRASS_SOIL.lerp(_grass_green_at(h), GRASS_DOT_RATIO)
+		_:  # 草原：草丛之间露出的裸土
+			color = GRASS_SOIL
 	# 高频细节噪声：明暗微扰打散整片纯色，远看是自然纹理而不是塑料色块
 	var d := _get_detail_noise().get_noise_2d(float(gx), float(gy))
 	if d > 0.0:
@@ -163,6 +187,14 @@ func _terrain_color_for(terrain_type: int, h: float, gx: int, gy: int) -> Color:
 	else:
 		color = color.darkened(-d * 0.09)
 	return color
+
+# 一格的平均色 = 裸地底色按该格实际绿点覆盖率混入草色。
+# base_colors 供 minimap 与远景使用，所以必须跟着疏密一起变淡，near/far 才不打架
+func _terrain_color_for(terrain_type: int, h: float, gx: int, gy: int) -> Color:
+	var base := _terrain_base_color(terrain_type, h, gx, gy)
+	if terrain_type == 2:
+		return base
+	return base.lerp(_grass_green_at(h), _grass_dot_ratio(terrain_type, h, gx, gy))
 
 # 靠岸程度：3x3 邻域里陆地格占比（0=远海，1=贴岸）。水深不会同步给客户端，
 # 用邻域陆地量代替，两端都能算，靠岸浅亮、远海深暗的观感就出来了。
@@ -196,18 +228,35 @@ func _get_detail_noise() -> FastNoiseLite:
 # 覆盖率略高于土色，所以远看整片是绿的、近看才透出土底。
 # 哈希只吃格子种子和格内像素偏移，是纯函数 —— 主机和客户端各自算都得到同一张图，
 # 草丛图案完全不需要走网络同步。
-func _tile_pixel_color(type: int, base: Color, h: float, ratio: float, tile_seed: int, lx: int, ly: int) -> Color:
-	if type != 0:
-		return base
-	if _tile_hash01(tile_seed, lx, ly) >= ratio:
-		return GRASS_SOIL
-	# 草点本身再在“混了土的绿”和“纯绿”之间抖一档，免得整片纯色看着像塑料草皮
-	return _grass_green_at(h).lerp(GRASS_SOIL, _tile_hash01(tile_seed + 104729, lx, ly) * 0.35)
+func _tile_pixel_color(base: Color, h: float, ratio: float, tile_seed: int, lx: int, ly: int) -> Color:
+	if ratio <= 0.0 or _tile_hash01(tile_seed, lx, ly) >= ratio:
+		return base  # 这一像素没长草：草原露土、山地露岩、水就还是水
+	return _grass_blade_color(h, tile_seed, lx, ly)
 
-# 每格的草丛疏密：叠一层低频噪声让草点成片，避免全图均匀得像雪花屏
-func _grass_dot_ratio(gx: int, gy: int) -> float:
+# 单株草的颜色：以该海拔的基准草色为心，色调（枯黄 / 背阴深绿）和明暗各随机抖一档。
+# 草点之间因此有肉眼可见的差异，不会糊成一片均匀的绿噪点
+func _grass_blade_color(h: float, tile_seed: int, lx: int, ly: int) -> Color:
+	var c := _grass_green_at(h)
+	# 色调：少数偏枯黄、少数偏背阴深绿，其余保持基准草色
+	var tone := _tile_hash01(tile_seed + 2654435761, lx, ly)
+	if tone < 0.30:
+		c = c.lerp(GRASS_GREEN_DRY, 0.22 + tone * 1.5)
+	elif tone > 0.72:
+		c = c.lerp(GRASS_GREEN_DEEP, (tone - 0.72) * 1.7)
+	# 明暗：每株再抖 ±15%
+	var shade := (_tile_hash01(tile_seed + 40503, lx, ly) - 0.5) * 0.30
+	if shade >= 0.0:
+		return c.lerp(Color(1.0, 1.0, 1.0), shade)
+	return c.lerp(Color(0.0, 0.0, 0.0), -shade)
+
+# 每格实际绿点覆盖率：基准覆盖率 × 地形草密度，再叠一层低频噪声让草点成片，
+# 避免全图均匀得像雪花屏。密度为 0 的格子（水面、山头）直接返回 0，一个草点都不撒
+func _grass_dot_ratio(terrain_type: int, h: float, gx: int, gy: int) -> float:
+	var density := _grass_density(terrain_type, h)
+	if density <= 0.0:
+		return 0.0
 	var n: float = _get_detail_noise().get_noise_2d(float(gx) * 0.6, float(gy) * 0.6)
-	return clamp(GRASS_DOT_RATIO + n * 0.16, 0.4, 0.92)
+	return clamp(GRASS_DOT_RATIO + n * 0.16, 0.4, 0.92) * density
 
 # 整数哈希 -> [0,1)。同一个 (格子, 格内像素) 永远得到同一个值，
 # 不依赖任何随机数状态，因此两端画出的草丛逐像素一致
@@ -230,20 +279,22 @@ func _build_terrain_images() -> void:
 			var y_start = int(floor(float(y) / size * TEX_SIZE))
 			var y_end = int(floor(float(y + 1) / size * TEX_SIZE))
 			var type: int = terrain_grid[x][y]
-			var base: Color = base_colors[x][y]
 			var h: float = height_grid[x][y]
-			var ratio := _grass_dot_ratio(x, y)
+			# 画布用裸地色（不是 base_colors 里那个已经混过草的平均色）
+			var base := _terrain_base_color(type, h, x, y)
+			var ratio := _grass_dot_ratio(type, h, x, y)
 			# 格子种子只由格坐标决定，两端一致
 			var tile_seed := x * 73856093 ^ y * 19349663
 			for px in range(x_start, x_end):
 				for py in range(y_start, y_end):
 					if px >= TEX_SIZE or py >= TEX_SIZE:
 						continue
-					var c := _tile_pixel_color(type, base, h, ratio, tile_seed, px - x_start, py - y_start)
+					var c := _tile_pixel_color(base, h, ratio, tile_seed, px - x_start, py - y_start)
 					_base_image.set_pixel(px, py, c)
 					var d := c.darkened(0.7)
 					d.a = 1.0
 					_dark_image.set_pixel(px, py, d)
+
 # ---------- 城堡选址 ----------
 func get_four_castle_positions() -> Array:
 	if not _cached_four_castle_positions.is_empty():
