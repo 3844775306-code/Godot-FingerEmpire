@@ -17,6 +17,8 @@ const CLIFF_THRESHOLD: float = 2.0     # height diff > this = impassable
 var base_colors: Array = []           # 原始颜色 (MAP_SIZE x MAP_SIZE)
 var terrain_image: Image
 var terrain_texture: ImageTexture
+var _base_image: Image = null          # 无雾底图（已含草丛点彩图案）
+var _dark_image: Image = null          # “已探索但当前不可见”用的压暗版底图
 var terrain_mesh_instance: MeshInstance3D
 var vertex_grid: Array = []           # 存储顶点高度，用于快速查询
 var height_scale: float = 2.0         # 高度缩放系数
@@ -132,6 +134,18 @@ func _generate_terrain():
 # 两端共用的着色函数：只由 (类型, 高度) 推导颜色，不依赖原始噪声值。
 # 主机用噪声算出的高度，客户端用服务器同步来的高度网格，因此同一块地两端配色完全一致。
 # 纯观感，不参与任何寻路/建造判定（那些只认 terrain_grid 的类型）。
+
+# 草地配色：土色作底、绿色小点铺面。绿点覆盖率略高于土色，远看整体是绿色，
+# 近看才透出土底 —— 比整片平涂的绿更像草地。图案由 _tile_pixel_color 逐像素生成
+const GRASS_SOIL := Color(0.34, 0.27, 0.18)        # 草点之间的裸土底
+const GRASS_GREEN_LOW := Color(0.13, 0.32, 0.12)   # 低地草色
+const GRASS_GREEN_HIGH := Color(0.42, 0.54, 0.19)  # 高地草色
+const GRASS_DOT_RATIO := 0.66                      # 绿点基准覆盖率
+
+# 草色随高度变化：低地深绿，高地偏黄绿
+func _grass_green_at(h: float) -> Color:
+	return GRASS_GREEN_LOW.lerp(GRASS_GREEN_HIGH, clamp((h + 0.075) / 0.165, 0.0, 1.0))
+
 func _terrain_color_for(terrain_type: int, h: float, gx: int, gy: int) -> Color:
 	var color: Color
 	match terrain_type:
@@ -139,8 +153,9 @@ func _terrain_color_for(terrain_type: int, h: float, gx: int, gy: int) -> Color:
 			color = Color(0.40, 0.30, 0.18).lerp(Color(0.64, 0.62, 0.58), clamp(h / (height_scale * 5.0), 0.0, 1.0))
 		2:  # 水域：深度没有进高度网格，改用邻域陆地量当靠岸程度 —— 近岸浅亮、远海深暗
 			color = Color(0.10, 0.28, 0.50).lerp(Color(0.24, 0.58, 0.72), _shore_amount(gx, gy))
-		_:  # 草原：低地深绿 -> 高地黄绿
-			color = Color(0.12, 0.33, 0.14).lerp(Color(0.42, 0.51, 0.22), clamp((h + 0.075) / 0.165, 0.0, 1.0))
+		_:  # 草原：取“土底 + 草点”按覆盖率混合后的平均色。base_colors 供 minimap 与远景使用，
+			# 真正的近景点彩图案在 _tile_pixel_color 里逐像素生成
+			color = GRASS_SOIL.lerp(_grass_green_at(h), GRASS_DOT_RATIO)
 	# 高频细节噪声：明暗微扰打散整片纯色，远看是自然纹理而不是塑料色块
 	var d := _get_detail_noise().get_noise_2d(float(gx), float(gy))
 	if d > 0.0:
@@ -176,6 +191,59 @@ func _get_detail_noise() -> FastNoiseLite:
 		_detail_noise.fractal_octaves = 2
 	return _detail_noise
 
+# ---------- 草丛点彩 ----------
+# 单格内某个像素的颜色。草地走点彩画法：土色作底，绿色小点按 ratio 铺面，
+# 覆盖率略高于土色，所以远看整片是绿的、近看才透出土底。
+# 哈希只吃格子种子和格内像素偏移，是纯函数 —— 主机和客户端各自算都得到同一张图，
+# 草丛图案完全不需要走网络同步。
+func _tile_pixel_color(type: int, base: Color, h: float, ratio: float, tile_seed: int, lx: int, ly: int) -> Color:
+	if type != 0:
+		return base
+	if _tile_hash01(tile_seed, lx, ly) >= ratio:
+		return GRASS_SOIL
+	# 草点本身再在“混了土的绿”和“纯绿”之间抖一档，免得整片纯色看着像塑料草皮
+	return _grass_green_at(h).lerp(GRASS_SOIL, _tile_hash01(tile_seed + 104729, lx, ly) * 0.35)
+
+# 每格的草丛疏密：叠一层低频噪声让草点成片，避免全图均匀得像雪花屏
+func _grass_dot_ratio(gx: int, gy: int) -> float:
+	var n: float = _get_detail_noise().get_noise_2d(float(gx) * 0.6, float(gy) * 0.6)
+	return clamp(GRASS_DOT_RATIO + n * 0.16, 0.4, 0.92)
+
+# 整数哈希 -> [0,1)。同一个 (格子, 格内像素) 永远得到同一个值，
+# 不依赖任何随机数状态，因此两端画出的草丛逐像素一致
+func _tile_hash01(tile_seed: int, lx: int, ly: int) -> float:
+	var h: int = tile_seed + lx * 374761393 + ly * 668265263
+	h = (h ^ (h >> 13)) * 1274126177
+	h = h ^ (h >> 16)
+	return float(h & 0xFFFF) / 65536.0
+
+# 画两张地形底图：base 是正常亮度，dark 是迷雾里“已探索但当前不可见”用的压暗版。
+# 两张都在这里逐像素画一次，之后 apply_fog 只做整块拷贝，不再重算点彩图案
+func _build_terrain_images() -> void:
+	var size = _get_map_size()
+	_base_image = Image.create(TEX_SIZE, TEX_SIZE, false, Image.FORMAT_RGBA8)
+	_dark_image = Image.create(TEX_SIZE, TEX_SIZE, false, Image.FORMAT_RGBA8)
+	for x in range(size):
+		var x_start = int(floor(float(x) / size * TEX_SIZE))
+		var x_end = int(floor(float(x + 1) / size * TEX_SIZE))
+		for y in range(size):
+			var y_start = int(floor(float(y) / size * TEX_SIZE))
+			var y_end = int(floor(float(y + 1) / size * TEX_SIZE))
+			var type: int = terrain_grid[x][y]
+			var base: Color = base_colors[x][y]
+			var h: float = height_grid[x][y]
+			var ratio := _grass_dot_ratio(x, y)
+			# 格子种子只由格坐标决定，两端一致
+			var tile_seed := x * 73856093 ^ y * 19349663
+			for px in range(x_start, x_end):
+				for py in range(y_start, y_end):
+					if px >= TEX_SIZE or py >= TEX_SIZE:
+						continue
+					var c := _tile_pixel_color(type, base, h, ratio, tile_seed, px - x_start, py - y_start)
+					_base_image.set_pixel(px, py, c)
+					var d := c.darkened(0.7)
+					d.a = 1.0
+					_dark_image.set_pixel(px, py, d)
 # ---------- 城堡选址 ----------
 func get_four_castle_positions() -> Array:
 	if not _cached_four_castle_positions.is_empty():
@@ -563,22 +631,9 @@ func _create_visual_and_texture():
 
 	
 
-	terrain_image = Image.create(TEX_SIZE, TEX_SIZE, false, Image.FORMAT_RGBA8)
-	var image_w = TEX_SIZE
-	var image_h = TEX_SIZE
-	for x in range(size):
-		for y in range(size):
-			var src_color = base_colors[x][y]
-			# 计算当前格子对应的纹理像素范围
-			var x_start = int(floor(float(x) / size * image_w))
-			var y_start = int(floor(float(y) / size * image_h))
-			var x_end = int(floor(float(x + 1) / size * image_w))
-			var y_end = int(floor(float(y + 1) / size * image_h))
-			for px in range(x_start, x_end):
-				for py in range(y_start, y_end):
-					if px < image_w and py < image_h:
-						terrain_image.set_pixel(px, py, src_color)
-
+	# 底图逐像素画一次（草地点彩就在这里生成），之后迷雾阶段只做整块拷贝
+	_build_terrain_images()
+	terrain_image = Image.create_from_data(TEX_SIZE, TEX_SIZE, false, Image.FORMAT_RGBA8, _base_image.get_data())
 	terrain_texture = ImageTexture.create_from_image(terrain_image)
 	var mat = StandardMaterial3D.new()
 	mat.albedo_texture = terrain_texture
@@ -636,30 +691,22 @@ func apply_fog(explored: Array, visible: Array):
 	if base_colors.is_empty() or terrain_grid.is_empty(): return
 	if explored.size() != size or visible.size() != size: return
 	if explored[0].size() != size or visible[0].size() != size: return
+	if _base_image == null or _dark_image == null: return
 
-	var image_w = TEX_SIZE
-	var image_h = TEX_SIZE
 	for x in range(size):
+		var x_start = int(floor(float(x) / size * TEX_SIZE))
+		var x_end = int(floor(float(x + 1) / size * TEX_SIZE))
 		for y in range(size):
-			var explored_val = explored[x][y]
-			var visible_val = visible[x][y]
-			var base = base_colors[x][y]
-			var block_color: Color
-			if not explored_val:
-				block_color = Color(0.1, 0.1, 0.1, 1.0)
-			elif not visible_val:
-				block_color = base.darkened(0.7)
-				block_color.a = 1.0
+			var y_start = int(floor(float(y) / size * TEX_SIZE))
+			var y_end = int(floor(float(y + 1) / size * TEX_SIZE))
+			var rect := Rect2i(x_start, y_start, x_end - x_start, y_end - y_start)
+			if not explored[x][y]:
+				terrain_image.fill_rect(rect, Color(0.1, 0.1, 0.1, 1.0))
+			elif not visible[x][y]:
+				# 整块拷贝预生成的压暗底图：比逐像素重算颜色快得多，同时保住草丛图案
+				terrain_image.blit_rect(_dark_image, rect, Vector2i(x_start, y_start))
 			else:
-				block_color = base
-				block_color.a = 1.0
-
-			# 用 fill_rect 替代逐像素 set_pixel
-			var x_start = int(floor(float(x) / size * image_w))
-			var y_start = int(floor(float(y) / size * image_h))
-			var x_end = int(floor(float(x + 1) / size * image_w))
-			var y_end = int(floor(float(y + 1) / size * image_h))
-			terrain_image.fill_rect(Rect2i(x_start, y_start, x_end - x_start, y_end - y_start), block_color)
+				terrain_image.blit_rect(_base_image, rect, Vector2i(x_start, y_start))
 
 	terrain_texture.update(terrain_image)
 
