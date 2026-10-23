@@ -305,6 +305,51 @@ func produce_unit(unit_id: int) -> bool:
 					produced += 1
 		return produced > 0
 
+# 最终落位校验：AI 的所有建造入口（随机仓库、防线规划、补建队列）都必须过这一关，
+# 防止建筑重叠、建到水面/山坡上，或直接压住资源点。
+func _can_place_ai_building(building_id: int, pos: Vector3) -> bool:
+	var half = RTSConfig.MAP_SIZE / 2.0
+	var gx = int(round(pos.x + half))
+	var gz = int(round(pos.z + half))
+	if gx < 0 or gx >= RTSConfig.MAP_SIZE or gz < 0 or gz >= RTSConfig.MAP_SIZE:
+		return false
+	var terrain = battle.get_terrain_at_grid(gx, gz)
+	if terrain == 2:
+		return false
+	# 船坞：必须放在陆地且至少邻接一格水面
+	if building_id == 23:
+		if terrain != 0:
+			return false
+		var water_adj = 0
+		for dx in [-1, 0, 1]:
+			for dz in [-1, 0, 1]:
+				if dx == 0 and dz == 0: continue
+				if battle.get_terrain_at_grid(gx + dx, gz + dz) == 2:
+					water_adj += 1
+		if water_adj < 1:
+			return false
+	else:
+		if terrain != 0:
+			return false
+		var cfg_t = EntityDatabase.get_config(building_id)
+		var br_t = float(cfg_t.get("body_radius", 1.0)) if cfg_t else 1.0
+		if battle.has_method("_is_terrain_flat") and not battle._is_terrain_flat(pos, maxf(0.5, br_t * 0.5)):
+			return false
+	var cfg = EntityDatabase.get_config(building_id)
+	if not cfg: return false
+	var radius = maxf(0.5, float(cfg.get("body_radius", 1.0)))
+	# 与所有存活建筑/资源点做实际体积相交检测；单位可以移动，不在这里卡建造
+	for e in battle.entities.get_children():
+		if not (e is Building or e is WorldResource) or e.health <= 0: continue
+		var other_radius = maxf(0.3, float(e.body_radius))
+		var min_dist = radius + other_radius + 0.15
+		# 城墙本来就是首尾相接的连续墙段，允许墙与墙贴紧；墙和其他建筑仍按体积避让
+		if building_id == 27 and e is Building and e.entity_id == 27:
+			min_dist = 0.9
+		if e.global_position.distance_to(pos) < min_dist:
+			return false
+	return true
+
 func build_building(building_id: int, pos: Vector3) -> bool:
 	var cfg = EntityDatabase.get_config(building_id)
 	if not cfg: return false
@@ -324,6 +369,8 @@ func build_building(building_id: int, pos: Vector3) -> bool:
 					break
 		if not visible:
 			return false  # cannot build outside vision
+	if not _can_place_ai_building(building_id, pos):
+		return false
 	var cost = cfg.get("cost", {})
 	if not _deduct_resources(cost): return false
 	cfg["owner_peer_id"] = my_peer_id
@@ -487,7 +534,9 @@ func _state_production(_delta):
 						if e.global_position.distance_to(castle.global_position) < 25.0: near_count += 1
 				# More warehouses nearby = lower priority, but still build if < 5 total
 				if near_count < 3:
-					build_building(22, castle.global_position + Vector3(randf_range(-10,10), 0, randf_range(-10,10)))
+					var wpos = find_valid_build_position(castle.global_position, 22)
+					if wpos != Vector3.ZERO:
+						build_building(22, wpos)
 		# 工人已补齐（进入 step1 的前提）或已经过开局阶段，就直接进入 DEVELOPMENT
 		if count_unit(10) >= desired_worker_count or battle.game_time >= 120.0:
 			phase = Phase.DEVELOPMENT
@@ -805,11 +854,11 @@ func find_valid_build_position(near_pos: Vector3, building_id: int) -> Vector3:
 					overlap = true; break
 			if not overlap and _is_valid_build_ground(test):
 				return test
-	# Fallback: guaranteed offset from castle with terrain check
+	# 兜底也要走地形校验；找不到就返回 ZERO 让调用方跳过，绝不能盲目偏移硬塞
 	for _fb in range(10):
 		var fp = near_pos + Vector3(cos(randf_range(0, TAU))*20, 0, sin(randf_range(0, TAU))*20)
 		if _is_valid_build_ground(fp): return fp
-	return near_pos + Vector3(20, 0, 0)
+	return Vector3.ZERO
 	
 	
 
@@ -1666,7 +1715,9 @@ func _process_line_1():
 	for b_id in wanted_buildings:
 		var target = MILITARY_PRODUCER_TARGETS.get(b_id, 1)
 		if count_building(b_id) < target and can_afford_building(b_id):
-			build_building(b_id, _get_build_position(b_id))
+			var bpos = _get_build_position(b_id)
+			if bpos != Vector3.ZERO:
+				build_building(b_id, bpos)
 			
 	_ai_expand_territory()
 

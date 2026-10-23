@@ -356,9 +356,6 @@ func _defense_slot_clear(pos: Vector3, radius: float, b_id: int) -> bool:
 		# 城墙是一段接一段的，墙体之间可以贴得更近
 		if b_id == 27 and int(s["id"]) == 27:
 			min_sep = 0.9
-		# 炮塔本来就贴着外墙内侧，允许墙与炮塔的占地略微交叠
-		elif (b_id == 26 and int(s["id"]) == 27) or (b_id == 27 and int(s["id"]) == 26):
-			min_sep = radius + other_r - 0.2
 		if (s["pos"] - pos).length() < min_sep:
 			return false
 	return true
