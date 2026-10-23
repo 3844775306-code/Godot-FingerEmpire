@@ -1,0 +1,311 @@
+class_name BattleStatsPanel
+extends Control
+
+const BattleStatsData = preload("res://scripts/core/BattleStats.gd")
+const BattleStatsChartScript = preload("res://scripts/ui/BattleStatsChart.gd")
+
+var stats = null
+var mode: String = "nation"
+var metric: String = "gathered"
+
+var result_label: Label = null
+var duration_label: Label = null
+var chart_title: Label = null
+var chart = null
+var legend_box: VBoxContainer = null
+var legend_title: Label = null
+var mode_buttons: Dictionary = {}
+var metric_buttons: Dictionary = {}
+var restart_scene_path: String = "res://scenes/rts_battle.tscn"
+var _result_panel: Panel = null
+
+func _init() -> void:
+	_build_ui()
+
+func _ready() -> void:
+	resized.connect(_fit_panel)
+	_fit_panel()
+
+func _fit_panel() -> void:
+	if _result_panel == null:
+		return
+	var w := minf(1900.0, maxf(900.0, size.x - 80.0))
+	var h := minf(1140.0, maxf(620.0, size.y - 80.0))
+	_result_panel.position = (size - Vector2(w, h)) * 0.5
+	_result_panel.size = Vector2(w, h)
+
+func _build_ui() -> void:
+	name = "BattleStatsPanel"
+	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	mouse_filter = Control.MOUSE_FILTER_STOP
+	visible = false
+
+	var dim := ColorRect.new()
+	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	dim.color = Color(0.005, 0.008, 0.018, 0.82)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(dim)
+
+	var panel := Panel.new()
+	panel.name = "ResultPanel"
+	panel.anchor_left = 0.0
+	panel.anchor_top = 0.0
+	panel.anchor_right = 0.0
+	panel.anchor_bottom = 0.0
+	panel.position = Vector2(250, 130)
+	panel.size = Vector2(1900, 1140)
+	_result_panel = panel
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.028, 0.04, 0.07, 0.98)
+	style.border_color = Color(0.32, 0.55, 0.82, 0.9)
+	style.border_width_left = 2
+	style.border_width_right = 2
+	style.border_width_top = 2
+	style.border_width_bottom = 2
+	style.corner_radius_top_left = 12
+	style.corner_radius_top_right = 12
+	style.corner_radius_bottom_left = 12
+	style.corner_radius_bottom_right = 12
+	panel.add_theme_stylebox_override("panel", style)
+	add_child(panel)
+
+	var margin := MarginContainer.new()
+	margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	margin.add_theme_constant_override("margin_left", 28)
+	margin.add_theme_constant_override("margin_right", 28)
+	margin.add_theme_constant_override("margin_top", 20)
+	margin.add_theme_constant_override("margin_bottom", 18)
+	panel.add_child(margin)
+
+	var root := VBoxContainer.new()
+	root.add_theme_constant_override("separation", 12)
+	margin.add_child(root)
+
+	# ── 标题栏 ──
+	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 18)
+	root.add_child(header)
+
+	var title_box := VBoxContainer.new()
+	title_box.add_theme_constant_override("separation", 0)
+	header.add_child(title_box)
+
+	var title := Label.new()
+	title.text = "🏆  战 斗 结 算"
+	title.add_theme_font_size_override("font_size", 38)
+	title.add_theme_color_override("font_color", Color(1.0, 0.84, 0.38))
+	title_box.add_child(title)
+
+	result_label = Label.new()
+	result_label.text = "战斗结束"
+	result_label.add_theme_font_size_override("font_size", 28)
+	result_label.add_theme_color_override("font_color", Color(0.82, 0.9, 1.0))
+	title_box.add_child(result_label)
+
+	var spacer := Control.new()
+	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_child(spacer)
+
+	duration_label = Label.new()
+	duration_label.text = "对局时长 00:00"
+	duration_label.add_theme_font_size_override("font_size", 20)
+	duration_label.add_theme_color_override("font_color", Color(0.66, 0.76, 0.9))
+	duration_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	header.add_child(duration_label)
+
+	var close_btn := _make_button("关闭", 94)
+	close_btn.pressed.connect(func() -> void: visible = false)
+	header.add_child(close_btn)
+	var restart_btn := _make_button("重新开始", 128)
+	restart_btn.pressed.connect(func() -> void: get_tree().change_scene_to_file(restart_scene_path))
+	header.add_child(restart_btn)
+	var menu_btn := _make_button("返回主菜单", 138)
+	menu_btn.pressed.connect(func() -> void: get_tree().change_scene_to_file("res://scenes/main_menu.tscn"))
+	header.add_child(menu_btn)
+
+	var line := HSeparator.new()
+	root.add_child(line)
+
+	# ── 控制栏 ──
+	var controls := HBoxContainer.new()
+	controls.add_theme_constant_override("separation", 10)
+	root.add_child(controls)
+
+	var mode_label := Label.new()
+	mode_label.text = "查看方式"
+	mode_label.add_theme_font_size_override("font_size", 17)
+	mode_label.add_theme_color_override("font_color", Color(0.78, 0.86, 0.98))
+	mode_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	controls.add_child(mode_label)
+
+	var group := ButtonGroup.new()
+	for item in [["nation", "按国家"], ["team", "按阵营"]]:
+		var b := _make_button(item[1], 116)
+		b.toggle_mode = true
+		b.button_group = group
+		b.button_pressed = item[0] == mode
+		b.pressed.connect(_on_mode_pressed.bind(item[0]))
+		mode_buttons[item[0]] = b
+		controls.add_child(b)
+
+	var vline := VSeparator.new()
+	controls.add_child(vline)
+	var metric_label := Label.new()
+	metric_label.text = "指标"
+	metric_label.add_theme_font_size_override("font_size", 17)
+	metric_label.add_theme_color_override("font_color", Color(0.78, 0.86, 0.98))
+	metric_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	controls.add_child(metric_label)
+
+	var metric_grid := GridContainer.new()
+	metric_grid.columns = 4
+	metric_grid.add_theme_constant_override("h_separation", 8)
+	metric_grid.add_theme_constant_override("v_separation", 6)
+	metric_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	controls.add_child(metric_grid)
+	var metric_group := ButtonGroup.new()
+	for m in BattleStatsData.METRICS:
+		var b := _make_button(m["short"], 156)
+		b.toggle_mode = true
+		b.button_group = metric_group
+		b.button_pressed = m["id"] == metric
+		b.pressed.connect(_on_metric_pressed.bind(m["id"]))
+		metric_buttons[m["id"]] = b
+		metric_grid.add_child(b)
+
+	# ── 图表与图例 ──
+	var body := HBoxContainer.new()
+	body.add_theme_constant_override("separation", 18)
+	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	root.add_child(body)
+
+	var chart_box := VBoxContainer.new()
+	chart_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	chart_box.add_theme_constant_override("separation", 6)
+	body.add_child(chart_box)
+
+	chart_title = Label.new()
+	chart_title.text = "资源累计获取  ·  按国家"
+	chart_title.add_theme_font_size_override("font_size", 22)
+	chart_title.add_theme_color_override("font_color", Color(0.9, 0.95, 1.0))
+	chart_box.add_child(chart_title)
+
+	chart = BattleStatsChartScript.new()
+	chart.custom_minimum_size = Vector2(760, 420)
+	chart.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	chart_box.add_child(chart)
+
+	var side := VBoxContainer.new()
+	side.custom_minimum_size = Vector2(420, 0)
+	side.add_theme_constant_override("separation", 8)
+	body.add_child(side)
+
+	legend_title = Label.new()
+	legend_title.text = "图例 / 最终值"
+	legend_title.add_theme_font_size_override("font_size", 20)
+	legend_title.add_theme_color_override("font_color", Color(0.92, 0.96, 1.0))
+	side.add_child(legend_title)
+
+	var scroll := ScrollContainer.new()
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	side.add_child(scroll)
+
+	legend_box = VBoxContainer.new()
+	legend_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	legend_box.add_theme_constant_override("separation", 7)
+	scroll.add_child(legend_box)
+
+	var hint := Label.new()
+	hint.text = "曲线每 5 秒采样一次。累计指标只增不减；实时指标显示该时刻的总量。"
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.add_theme_font_size_override("font_size", 13)
+	hint.add_theme_color_override("font_color", Color(0.58, 0.68, 0.82))
+	side.add_child(hint)
+
+func _make_button(text: String, min_width: float) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.custom_minimum_size = Vector2(min_width, 36)
+	b.add_theme_font_size_override("font_size", 16)
+	b.focus_mode = Control.FOCUS_NONE
+	return b
+
+func show_stats(p_stats) -> void:
+	stats = p_stats
+	if stats:
+		var mins := int(stats.duration / 60.0)
+		var secs := int(stats.duration) % 60
+		duration_label.text = "对局时长 %02d:%02d" % [mins, secs]
+	_refresh()
+	visible = true
+
+func _on_mode_pressed(p_mode: String) -> void:
+	mode = p_mode
+	_refresh()
+
+func _on_metric_pressed(p_metric: String) -> void:
+	metric = p_metric
+	_refresh()
+
+func _refresh() -> void:
+	if stats == null:
+		return
+	var def: Dictionary = stats.get_metric(metric)
+	var series: Array = stats.get_series(metric, mode)
+	chart.set_data(series, stats.duration, metric)
+	var mode_name := "按国家" if mode == "nation" else "按阵营"
+	chart_title.text = "%s  ·  %s" % [def["label"], mode_name]
+	for id in mode_buttons.keys():
+		mode_buttons[id].button_pressed = id == mode
+	for id in metric_buttons.keys():
+		metric_buttons[id].button_pressed = id == metric
+	_rebuild_legend(series)
+
+func _rebuild_legend(series: Array) -> void:
+	for c in legend_box.get_children():
+		c.queue_free()
+	if series.is_empty():
+		var empty := Label.new()
+		empty.text = "暂无数据"
+		empty.add_theme_font_size_override("font_size", 16)
+		empty.add_theme_color_override("font_color", Color(0.6, 0.68, 0.8))
+		legend_box.add_child(empty)
+		return
+	for s in series:
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 8)
+		legend_box.add_child(row)
+
+		var swatch := ColorRect.new()
+		swatch.custom_minimum_size = Vector2(16, 16)
+		swatch.color = s.get("color", Color.WHITE)
+		swatch.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		row.add_child(swatch)
+
+		var name_label := Label.new()
+		name_label.text = String(s.get("name", "?"))
+		name_label.add_theme_font_size_override("font_size", 17)
+		name_label.add_theme_color_override("font_color", Color(0.9, 0.95, 1.0))
+		name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(name_label)
+
+		var peak := 0.0
+		for p in s.get("points", []):
+			peak = maxf(peak, float(p.get("y", 0.0)))
+		var value_box := VBoxContainer.new()
+		value_box.add_theme_constant_override("separation", -2)
+		row.add_child(value_box)
+		var final_label := Label.new()
+		final_label.text = "最终 %s" % stats.format_value(metric, float(s.get("final", 0.0)))
+		final_label.add_theme_font_size_override("font_size", 15)
+		final_label.add_theme_color_override("font_color", s.get("color", Color.WHITE))
+		final_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		value_box.add_child(final_label)
+		var peak_label := Label.new()
+		peak_label.text = "峰值 %s" % stats.format_value(metric, peak)
+		peak_label.add_theme_font_size_override("font_size", 12)
+		peak_label.add_theme_color_override("font_color", Color(0.6, 0.68, 0.8))
+		peak_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		value_box.add_child(peak_label)

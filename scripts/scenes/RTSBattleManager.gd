@@ -1,5 +1,7 @@
 class_name RTSBattleManager
 extends Node3D
+const BattleStatsScript = preload("res://scripts/core/BattleStats.gd")
+const BattleStatsPanelScript = preload("res://scripts/ui/BattleStatsPanel.gd")
 var previous_emulate_mouse: bool
 # ==================== 资源 ====================
 var player_resources: Dictionary = {"gold": 100, "wood": 100, "stone": 100 ,"food": 100, "oil": 0}
@@ -49,6 +51,7 @@ const CLICK_DELAY: float = 0.1
 var game_over_panel: Control = null
 var game_over_label: Label = null
 var game_over: bool = false
+var battle_stats = null          # 战斗统计器（累计 + 实时采样）
 var _team_castle_count: Dictionary = {}   # 单机2v2: 每队存活城堡数
 var game_time: float = 0.0
 var game_time_label: Label = null
@@ -421,43 +424,24 @@ func _apply_auto_attack_to_entity(entity: GameEntity) -> void:
 
 # ==================== 游戏结束界面 ====================
 func _create_game_over_panel():
-	game_over_panel = Control.new()
+	var panel = BattleStatsPanelScript.new()
+	game_over_panel = panel
 	game_over_panel.name = "GameOverPanel"
-	game_over_panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	game_over_panel.mouse_filter = Control.MOUSE_FILTER_STOP
 	game_over_panel.visible = false
-
-	var bg = ColorRect.new()
-	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	bg.color = Color(0, 0, 0, 0.7)
-	game_over_panel.add_child(bg)
-
-	var vbox = VBoxContainer.new()
-	vbox.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
-	vbox.custom_minimum_size = Vector2(300, 200)
-	game_over_panel.add_child(vbox)
-
-	game_over_label = Label.new()
-	game_over_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	game_over_label.add_theme_font_size_override("font_size", 36)
-	vbox.add_child(game_over_label)
-
-	var restart_btn = Button.new()
-	restart_btn.text = "重新开始"
-	restart_btn.custom_minimum_size = Vector2(150, 40)
-	restart_btn.pressed.connect(func(): get_tree().change_scene_to_file("res://scenes/rts_battle.tscn"))
-	vbox.add_child(restart_btn)
-
-	var quit_btn = Button.new()
-	quit_btn.text = "返回主菜单"
-	quit_btn.custom_minimum_size = Vector2(150, 40)
-	quit_btn.pressed.connect(func(): get_tree().change_scene_to_file("res://scenes/main_menu.tscn"))
-	vbox.add_child(quit_btn)
-
 	if has_node("UI"):
 		$UI.add_child(game_over_panel)
 	else:
 		add_child(game_over_panel)
+	game_over_label = panel.result_label
+
+# 结算：先固定最后一帧统计，再交给结算面板绘制全部曲线
+func _show_battle_stats() -> void:
+	if battle_stats:
+		battle_stats.finalize()
+	if game_over_panel and game_over_panel.has_method("show_stats"):
+		game_over_panel.show_stats(battle_stats)
+	if game_over_panel:
+		game_over_panel.visible = true
 
 func _create_game_timer():
 	game_time_label = Label.new()
@@ -583,6 +567,8 @@ func _eliminate_ai_player(owner: int) -> void:
 # 单机2v2：检查同队所有城堡是否全部死亡
 func _on_2v2_castle_died(team: int, owner: int = -1):
 	if game_over: return
+	if battle_stats:
+		battle_stats.sample_now()
 	# 单个 AI 的城堡被摧毁：立即通知并清场，即使本队还有其他城堡存活
 	if owner != -1:
 		_eliminate_ai_player(owner)
@@ -598,9 +584,11 @@ func _on_2v2_castle_died(team: int, owner: int = -1):
 		_show_hud_alert("敌军基地已被摧毁！", Color(0.2, 1.0, 0.3))
 		game_over_label.text = "你赢了！"
 		game_over_label.add_theme_color_override("font_color", Color.GREEN)
-	game_over_panel.visible = true
+	_show_battle_stats()
 func _on_castle_died(team: int):
 	if game_over: return
+	if battle_stats:
+		battle_stats.sample_now()
 	game_over = true
 	AudioManager.play_music("defeat" if team == RTSConfig.Team.BLUE else "victory")
 
@@ -613,7 +601,7 @@ func _on_castle_died(team: int):
 		game_over_label.text = "你赢了！"
 		game_over_label.add_theme_color_override("font_color", Color.GREEN)
 
-	game_over_panel.visible = true
+	_show_battle_stats()
 
 # ==================== 人口上限更新 ====================
 func update_population_limits():
@@ -655,6 +643,7 @@ func _ready():
 	
 	add_to_group("battle_manager")
 	_init_building_defs()
+	battle_stats = BattleStatsScript.new(self)
 	if not is_online:
 		if GameSettings.is_ffa:
 			_init_ffa_single(GameSettings.ffa_nation_count)
@@ -801,6 +790,8 @@ func _init_ffa_single(_nation_count: int):
 # 乱斗：某国城堡被摧毁 → 该国淘汰。玩家被灭即败；存活国剩 1 时判定胜者。
 func _on_ffa_castle_died(owner: int):
 	if game_over: return
+	if battle_stats:
+		battle_stats.sample_now()
 	var remaining: Array = diplomacy.notify_castle_died(owner) if diplomacy else []
 	# 清除该国残余军队/建筑（AI 走统一清场流程并发送通知；玩家则清场后判负）
 	if owner != player_owner_id:
@@ -824,7 +815,7 @@ func _on_ffa_castle_died(owner: int):
 		AudioManager.play_music("defeat")
 		game_over_label.text = "你被消灭了！"
 		game_over_label.add_theme_color_override("font_color", Color.RED)
-		game_over_panel.visible = true
+		_show_battle_stats()
 		return
 	# 只剩最后一个国家 → 判定胜者
 	if remaining.size() <= 1:
@@ -838,7 +829,7 @@ func _on_ffa_castle_died(owner: int):
 			var winner_name = diplomacy.get_display_name(remaining[0]) if remaining.size() == 1 else "无人"
 			game_over_label.text = "%s 赢得了乱斗！" % winner_name
 			game_over_label.add_theme_color_override("font_color", Color(1.0, 0.6, 0.2))
-		game_over_panel.visible = true
+		_show_battle_stats()
 
 
 func _init_2v2_single():
@@ -1127,7 +1118,10 @@ func deliver_player_resources(owner_id: int, cargo: Dictionary):
 		if GameSettings.ai_difficulty == GameSettings.AIDifficulty.NORMAL: mult = 2.0
 		elif GameSettings.ai_difficulty >= GameSettings.AIDifficulty.HARD: mult = 3.0
 	for t in cargo:
-		add_resource_for(owner_id, t, int(cargo[t] * mult))
+		var amount = int(cargo[t] * mult)
+		if battle_stats:
+			battle_stats.record_gathered(owner_id, -1, amount)
+		add_resource_for(owner_id, t, amount)
 
 # 单机多AI：人口增减（统一走 owner API）
 func decrease_player_population(owner_id: int, amount: int = 1):
@@ -1635,7 +1629,10 @@ func deliver_resources(cargo: Dictionary, team: int):
 		if GameSettings.ai_difficulty == GameSettings.AIDifficulty.NORMAL: mult = 2.0
 		elif GameSettings.ai_difficulty >= GameSettings.AIDifficulty.HARD: mult = 3.0
 	for t in cargo:
-		add_resource(t, int(cargo[t] * mult), team)
+		var amount = int(cargo[t] * mult)
+		if battle_stats:
+			battle_stats.record_gathered(-1, team, amount)
+		add_resource(t, amount, team)
 
 func _input(event):
 	# O键切换命令卡
@@ -2387,6 +2384,8 @@ func _process(delta):
 				if not Input.is_key_pressed(KEY_SHIFT):
 					_exit_build_mode()
 	game_time += delta
+	if battle_stats:
+		battle_stats.tick(delta)
 	# 乱斗外交推进（联盟到期 / 二人存活强制解除等）
 	if diplomacy:
 		diplomacy.tick(game_time)

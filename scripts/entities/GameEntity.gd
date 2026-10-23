@@ -178,6 +178,11 @@ func take_damage(amount: float, source: GameEntity = null):
 		# 减法护甲：实际伤害 = max(攻击力 - 护甲, 1)
 	var actual_damage = max(amount - eff_armor, 1.0)
 	health -= actual_damage
+	# 战斗统计：只记录对敌方军队/建筑造成的有效伤害
+	if source and actual_damage > 0.0 and source.team != team and source.team != RTSConfig.Team.NEUTRAL and self.team != RTSConfig.Team.NEUTRAL and (self is Army or self is Building):
+		var _stats_bm = _get_bm()
+		if _stats_bm and _stats_bm.battle_stats:
+			_stats_bm.battle_stats.record_damage(source.owner_peer_id, source.team, actual_damage)
 	if source and source.attack_range <= 2.0 and actual_damage > 0 and not (self is WorldResource): _play_sfx_if_visible("sword_hit")
 	# 战事警报：己方单位被攻击时通知小地图和屏幕提示
 	var bm = get_tree().get_first_node_in_group("battle_manager")
@@ -224,6 +229,13 @@ func take_damage(amount: float, source: GameEntity = null):
 func die():
 	if _is_dead:
 		return
+	# 战斗统计：击杀归属最后造成伤害的敌方单位（动物不计入歼敌）
+	if _last_damager and is_instance_valid(_last_damager) and self.team != RTSConfig.Team.NEUTRAL:
+		if (self is Army or self is Building) and _last_damager.team != team and _last_damager.team != RTSConfig.Team.NEUTRAL:
+			if not (self is Army and entity_id >= 60):
+				var _stats_bm_kill = _get_bm()
+				if _stats_bm_kill and _stats_bm_kill.battle_stats:
+					_stats_bm_kill.battle_stats.record_kill(_last_damager.owner_peer_id, _last_damager.team, 1)
 	_is_dead = true
 	# 死亡状态立即定案：即使后续走“毁坏模型/死亡动画”延迟删除，
 	# 从此刻起也按不存活处理（health<=0 是全项目的死亡判据，
@@ -373,6 +385,8 @@ func _spawn_produced_unit():
 	var entity = bm.spawn_entity(config, team, spawn_pos, self.level)
 	if entity:
 		entity.owner_peer_id = self.owner_peer_id   # 继承建筑所有权
+		if bm.battle_stats:
+			bm.battle_stats.record_produced(self.owner_peer_id, team, 1)
 
 		# 在线模式：按玩家统计人口（单人模式 spawn_entity 已处理，避免双计）
 		if owner_peer_id != -1 and bm is OnlineBattleManager:

@@ -173,7 +173,10 @@ func deliver_player_resources(peer_id: int, cargo: Dictionary):
 		if diff == GameSettings.AIDifficulty.NORMAL: mult = 2.0
 		elif diff >= GameSettings.AIDifficulty.HARD: mult = 3.0
 	for type in cargo:
-		add_player_resource(peer_id, type, int(cargo[type] * mult))
+		var amount = int(cargo[type] * mult)
+		if battle_stats:
+			battle_stats.record_gathered(peer_id, int(player_info.get(peer_id, {}).get("team", -1)), amount)
+		add_player_resource(peer_id, type, amount)
 
 # 减少玩家资源
 func deduct_player_resources(peer_id: int, cost: Dictionary) -> bool:
@@ -1091,8 +1094,9 @@ func _on_castle_died(team: int):
 	var winner = RTSConfig.Team.BLUE if team == RTSConfig.Team.RED else RTSConfig.Team.RED
 	print("[GameOver-1v1] Castle died: team=%d, winner=%d, notifying..." % [team, winner])
 	_show_host_game_over(winner)
+	var stats_payload: Dictionary = battle_stats.export_payload() if battle_stats else {}
 	for pid in multiplayer.get_peers():
-		NetworkManager.notify_game_over.rpc_id(pid, winner)
+		NetworkManager.notify_game_over.rpc_id(pid, winner, stats_payload)
 
 # 房主也是玩家：RPC 只发给远程客户端，本地必须自己显示结算面板
 func _show_host_game_over(winner_team: int) -> void:
@@ -1107,6 +1111,11 @@ func _show_host_game_over(winner_team: int) -> void:
 		game_over_label.text = "你赢了！" if host_won else "你输了！"
 		game_over_label.add_theme_color_override("font_color", Color.GREEN if host_won else Color.RED)
 	if game_over_panel:
+		if battle_stats:
+			battle_stats.sample_now()
+			battle_stats.finalize()
+		if game_over_panel.has_method("show_stats"):
+			game_over_panel.show_stats(battle_stats)
 		game_over_panel.visible = true
 
 func _on_castle_died_team(peer_id: int):
@@ -1129,9 +1138,10 @@ func _on_castle_died_team(peer_id: int):
 	print("[GameOver-组队] GAME OVER! Winner team=%d, notifying players..." % [RTSConfig.Team.BLUE if team == RTSConfig.Team.RED else RTSConfig.Team.RED])
 	var winner = RTSConfig.Team.BLUE if team == RTSConfig.Team.RED else RTSConfig.Team.RED
 	_show_host_game_over(winner)
+	var stats_payload: Dictionary = battle_stats.export_payload() if battle_stats else {}
 	for pid in player_info.keys():
 		if pid >= 1000 or pid == 1: continue   # 跳过 AI 与房主（房主已本地结算）
-		NetworkManager.notify_game_over.rpc_id(pid, winner)
+		NetworkManager.notify_game_over.rpc_id(pid, winner, stats_payload)
 
 # 1v1 的城堡死亡已在 RTSBattleManager 中通过 _on_castle_died 处理（游戏结束通知玩家）
 

@@ -392,10 +392,10 @@ func show_results(history: Array, player_is_blue: bool):
 		var _t = get_tree(); if _t: _t.change_scene_to_file("res://scenes/main_menu.tscn")
 
 @rpc("authority", "call_remote", "reliable")
-func notify_game_over(winner_team: int):
+func notify_game_over(winner_team: int, stats_payload: Dictionary = {}):
 	if mode == Mode.CLIENT:
 		var renderer = _get_renderer()
-		if renderer: renderer.show_game_over(winner_team)
+		if renderer: renderer.show_game_over(winner_team, stats_payload)
 
 @rpc("authority", "call_remote", "reliable")
 func notify_castle_pos(pos: Vector3):

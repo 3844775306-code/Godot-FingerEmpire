@@ -1,5 +1,7 @@
 class_name ClientRenderer
 extends Node3D
+const StatsScript = preload("res://scripts/core/BattleStats.gd")
+const StatsPanelScript = preload("res://scripts/ui/BattleStatsPanel.gd")
 enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ATTACK_SPEED, MELEE_ARMOR, SHIELD_ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH, GARRISONED }
 enum EB { UPGRADE=0, MAX_UPGRADE, CAN_UPGRADE, BUILD_TIMER, MAX_BUILD, PROD_CURRENT, PROD_PROGRESS, PROD_QSIZE, UPGRADE_TIMER, MAX_UPGRADE_TIME, GARRISON_COUNT }
 var last_applied_seq = -1
@@ -1652,10 +1654,31 @@ func get_terrain_height(world_pos: Vector3) -> float:
 	return 0.0
 
 # ==================== 游戏结束面板 ====================
-func show_game_over(winner_team: int):
+func show_game_over(winner_team: int, stats_payload: Dictionary = {}):
 	AudioManager.play_music("victory" if winner_team == player_team else "defeat")
 	var existing = get_node_or_null("UI/GameOverPanel")
 	if existing: existing.queue_free()
+
+	var ui = get_node_or_null("UI")
+	if not ui: ui = get_tree().root
+
+	# 优先使用房主发来的完整统计采样；没有数据时保留简易结算兜底
+	if not stats_payload.is_empty():
+		var stats = StatsScript.new(null)
+		stats.load_payload(stats_payload)
+		var stats_panel = StatsPanelScript.new()
+		stats_panel.name = "GameOverPanel"
+		stats_panel.restart_scene_path = "res://scenes/online_menu.tscn"
+		if winner_team == player_team:
+			stats_panel.result_label.text = "胜利！"
+			stats_panel.result_label.add_theme_color_override("font_color", Color.GREEN)
+		else:
+			stats_panel.result_label.text = "失败！"
+			stats_panel.result_label.add_theme_color_override("font_color", Color.RED)
+		ui.add_child(stats_panel)
+		stats_panel.show_stats(stats)
+		stats_panel.visible = true
+		return
 
 	var panel = Control.new()
 	panel.name = "GameOverPanel"
@@ -1696,8 +1719,6 @@ func show_game_over(winner_team: int):
 	btn_quit.pressed.connect(func(): get_tree().change_scene_to_file("res://scenes/main_menu.tscn"))
 	vbox.add_child(btn_quit)
 
-	var ui = get_node_or_null("UI")
-	if not ui: ui = get_tree().root
 	ui.add_child(panel)
 func _process(delta):
 	# 1. 快照处理 —— 始终优先（带崩溃循环保护）
