@@ -16,3 +16,14 @@ desktop.ini
 
 # macOS
 .DS_Store
+
+# 插件/编辑器写入失败残留的临时文件（如 ~xxx.dll~RF123456.TMP）
+*~RF*.TMP
+*.tmp
+
+# 临时截图与日志
+.tmp_shots/
+*.log
+
+# Claude Code 本地配置（技能与检查脚本仍纳入版本管理）
+.claude/settings.local.json
