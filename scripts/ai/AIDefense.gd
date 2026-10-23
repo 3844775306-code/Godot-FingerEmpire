@@ -561,6 +561,9 @@ func _manage_home_guard(castle, delta: float) -> void:
 			break
 		if not is_instance_valid(u) or u.health <= 0:
 			continue
+		# 已经在执行主攻的单位不能再被拉回主城驻扎；否则 attack_move 会被守军调度覆盖
+		if threat_level < 2 and (u.is_attack_moving or u.current_order == "attack_move"):
+			continue
 		var uid: int = u.get_instance_id()
 		var special: bool = u.has_meta("ai_resource_guard") or u.has_meta("ai_harass")
 		if special and threat_level < 3 and now >= _force_guard_until:
@@ -583,6 +586,14 @@ func _manage_home_guard(castle, delta: float) -> void:
 	extra.sort_custom(func(a, b): return float(a["d"]) > float(b["d"]))
 	for item in extra:
 		_release_guard(int(item["id"]))
+
+# 主攻前调用：解除主城守军的驻扎，避免 attack_move 被 garrison_point 拉回主城
+func release_guards_for_attack() -> void:
+	_force_guard_until = -999.0
+	_guard_timer = 0.0
+	for uid in _home_guard_ids.keys():
+		_release_guard(int(uid))
+	_home_guard_ids.clear()
 
 func _assign_home_guard(castle, force: bool) -> void:
 	var own: Array = _land_combat_units()
@@ -801,6 +812,8 @@ func _defend_resources(castle) -> void:
 			var candidates: Array = []
 			for u in _land_combat_units():
 				if u.has_meta("ai_home_guard") or u.has_meta("ai_harass"):
+					continue
+				if u.is_attack_moving or u.current_order == "attack_move":
 					continue
 				if _resource_guard_ids.has(u.get_instance_id()):
 					continue

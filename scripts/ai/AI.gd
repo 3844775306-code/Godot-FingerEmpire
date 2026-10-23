@@ -1368,6 +1368,7 @@ func execute_overwhelm():
 	if not enemy_castle:
 		current_tactic = LateTactic.NONE
 		return
+	_release_guards_for_main_attack()
 	var rally = enemy_castle.global_position + Vector3(0, 0, 5)
 	#if wall_positions.size() > 0: rally = wall_positions[wall_positions.size()/2] + Vector3(0, 0, 2)
 	var self_castle = get_peer_castle(my_peer_id)
@@ -1401,6 +1402,7 @@ func execute_raid():
 	if not enemy_castle or not is_instance_valid(enemy_castle):
 		current_tactic = LateTactic.NONE
 		return
+	_release_guards_for_main_attack()
 	var enemy_team: int = int(enemy_castle.team)
 	var enemy_pos = enemy_castle.global_position
 	var special_uid = RAID_UNIT
@@ -1832,6 +1834,11 @@ func _process_line_3():
 			var hp2 = find_valid_build_position(castle.global_position, 28)
 			if hp2 != Vector3.ZERO: build_building(28, hp2)
 
+# 主攻前解除守军驻扎；否则带 garrison_point 的部队会被持续拉回主城
+func _release_guards_for_main_attack() -> void:
+	if _defense != null and _defense.has_method("release_guards_for_attack"):
+		_defense.release_guards_for_attack()
+
 func _process_line_4():
 	# 威胁上升 / 防守姿态时不再把主力送出去；骚扰、突袭、全军压上时仍允许补发主攻
 	if _defense != null and int(_defense.threat_level) >= 2:
@@ -1846,7 +1853,9 @@ func _process_line_4():
 	var my_key = my_peer_id if my_peer_id != -1 else my_team
 	if count_military(my_key) >= 12 and an_attack():
 		var target = _get_attack_target_castle()
-		if target: attack_move(target.global_position, 30)
+		if target:
+			_release_guards_for_main_attack()
+			attack_move(target.global_position, 30)
 
 func _process_line_5():
 	var shipyards = []
