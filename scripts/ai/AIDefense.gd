@@ -126,8 +126,11 @@ func _evaluate_threat(castle) -> void:
 	var center_sum: Vector3 = Vector3.ZERO
 	var weight_sum: float = 0.0
 
+	# 威胁只来自 AI 当前视野内、确实能看到的敌军；不做全图侦测
 	for e in ai._visible_enemies:
 		if not (e is Army) or e.health <= 0:
+			continue
+		if not ai._is_visible_to_ai(e):
 			continue
 		if not _is_combat_enemy(e):
 			continue

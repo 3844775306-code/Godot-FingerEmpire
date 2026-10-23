@@ -226,7 +226,11 @@ func _is_visible_to_ai(target: GameEntity) -> bool:
 		if e is GameEntity and e.health > 0:
 			if my_peer_id != -1 and e.owner_peer_id != my_peer_id: continue
 			if my_peer_id == -1 and e.team != my_team: continue
-			if e.global_position.distance_to(target.global_position) <= e.vision_range:
+			var vision: float = float(e.vision_range)
+			# 用实际有效视野（地图倍率、高地、森林遮蔽），而不是裸视野半径
+			if battle.has_method("get_effective_vision"):
+				vision = float(battle.get_effective_vision(e))
+			if e.global_position.distance_to(target.global_position) <= vision:
 				return true
 	return false
 
@@ -670,15 +674,17 @@ func _entity_is_enemy(e) -> bool:
 		return eo >= 0 and eo != my_peer_id and battle.diplomacy.is_hostile(my_peer_id, eo)
 	return e.team != my_team and not (e is WorldResource)
 
-func _enemy_total_military() -> int:
-	if my_peer_id != -1 and battle and battle.diplomacy and battle.diplomacy.active:
-		var total = 0
-		for o in battle.diplomacy.get_alive_owners():
-			if o == my_peer_id: continue
-			if not battle.diplomacy.is_hostile(my_peer_id, o): continue
-			total += count_military(o)
-		return total
-	return count_military_by_team(_primary_enemy_team())
+# 只统计 AI 当前视野内能看到的敌军，避免用全图信息做防守/进攻判断
+func _visible_enemy_military() -> int:
+	var total: int = 0
+	for e in _visible_enemies:
+		if not is_instance_valid(e) or e.health <= 0: continue
+		if not (e is Army): continue
+		if not _entity_is_enemy(e): continue
+		if not _is_visible_to_ai(e): continue
+		if e.entity_id != 10 and e.entity_id != 14 and int(e.entity_id) not in [43,44,45,46,47,48,49,50,51]:
+			total += 1
+	return total
 
 # ═══ 乱斗 FFA 外交策略 ═══
 # AI 外交以 owner_peer_id 为国别，按自身相对强弱决定结盟意愿与对象：
@@ -1168,7 +1174,8 @@ func update_tactic(_delta):
 	var now = Time.get_ticks_msec() / 1000.0
 	var my_key = my_peer_id if my_peer_id != -1 else my_team
 	var my_mil = count_military(my_key)
-	var player_mil = _enemy_total_military()
+	# 战术判断只看当前视野内看到的敌军，不读取全图敌人军力
+	var player_mil = _visible_enemy_military()
 	_cleanup_harass_squad(float(battle.game_time))
 
 	var threat: int = 0
