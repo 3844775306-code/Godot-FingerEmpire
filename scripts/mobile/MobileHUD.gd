@@ -124,8 +124,21 @@ func _relayout_shared_nodes() -> void:
 
 	var info := _find_ui_node("InfoPanel")
 	if info is Control:
-		UILayout.place_dp(info, "bl", 200.0, 150.0)
+		UILayout.place_dp(info, "bl", 260.0, 200.0)
 		info.mouse_filter = Control.MOUSE_FILTER_STOP
+		_scale_shared_fonts(info)
+
+# 信息面板是桌面节点，字号按 2400 宽屏定死；手机上要按 dp 比例整体放大，否则读不出来
+func _scale_shared_fonts(root: Control) -> void:
+	var stack: Array = [root]
+	while not stack.is_empty():
+		var node: Node = stack.pop_back()
+		for child in node.get_children():
+			stack.append(child)
+			if child is Label or child is Button or child is RichTextLabel:
+				var cur: int = int(child.get_theme_font_size("font_size"))
+				if cur > 0:
+					child.add_theme_font_size_override("font_size", int(round(cur * UILayout.DP_RATIO)))
 
 # ==================== 数据 ====================
 
@@ -192,9 +205,35 @@ func _process(delta: float) -> void:
 	if drawer:
 		drawer.refresh(_collect_selection())
 	if capsule:
-		if not _last_resources.is_empty():
-			capsule.apply_data(_last_resources, _last_population, _last_limits)
+		_refresh_resources()
 		capsule.set_time_text(_format_game_time())
+
+# 资源数据来源分两种：
+#   单机 —— battle_manager 里有 player_resources，直接读（桌面 HUD 的 update_data 只服务桌面标签）
+#   联机 —— 客户端没有 battle_manager，数据由 ClientHUD.update_data 转发进来
+func _refresh_resources() -> void:
+	var bm := _get_bm()
+	if bm != null:
+		var res = bm.get("player_resources")
+		if res is Dictionary and not res.is_empty():
+			var pop := {
+				"current": int(bm.get("player_pop")),
+				"max": int(bm.get("player_max_pop")),
+			}
+			var gather: Dictionary = {}
+			var rate: Dictionary = {}
+			if hud:
+				var g = hud.get("gather_counts")
+				if g is Dictionary:
+					gather = g
+				var r = hud.get("income_rate")
+				if r is Dictionary:
+					rate = r
+			capsule.apply_data(res, pop)
+			capsule.apply_rates(gather, rate)
+			return
+	if not _last_resources.is_empty():
+		capsule.apply_data(_last_resources, _last_population, _last_limits)
 
 func _format_game_time() -> String:
 	var bm := _get_bm()

@@ -43,7 +43,7 @@ func _build() -> void:
 
 	_title = Label.new()
 	_title.text = "📊 国家统计"
-	_title.add_theme_font_size_override("font_size", 20)
+	_title.add_theme_font_size_override("font_size", UILayout.font_dp(16.0))
 	_title.add_theme_color_override("font_color", Color(UITheme.PARCHMENT))
 	_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header.add_child(_title)
@@ -51,7 +51,7 @@ func _build() -> void:
 	_close_btn = Button.new()
 	_close_btn.text = "关闭"
 	_close_btn.custom_minimum_size = Vector2(UILayout.dp(64.0), UILayout.dp(32.0))
-	UITheme.apply_button(_close_btn, 14)
+	UITheme.apply_button(_close_btn, UILayout.font_dp(13.0))
 	_close_btn.pressed.connect(close)
 	header.add_child(_close_btn)
 
@@ -80,7 +80,7 @@ func _build() -> void:
 
 	_diplo_hint = Label.new()
 	_diplo_hint.text = "外交：仅乱斗模式可用"
-	_diplo_hint.add_theme_font_size_override("font_size", 13)
+	_diplo_hint.add_theme_font_size_override("font_size", UILayout.font_dp(10.0))
 	_diplo_hint.add_theme_color_override("font_color", Color(UITheme.PARCHMENT, 0.6))
 	_diplo_host.add_child(_diplo_hint)
 
@@ -169,13 +169,13 @@ func _make_card(entry: Dictionary) -> PanelContainer:
 	var owner := int(entry.get("owner", -1))
 	var owner_tag := "玩家" if owner == 0 or owner == 1 else ("AI-%d" % owner)
 	title.text = "  %s · %s" % [nation_name, team_name]
-	title.add_theme_font_size_override("font_size", 16)
+	title.add_theme_font_size_override("font_size", UILayout.font_dp(13.0))
 	title.add_theme_color_override("font_color", team_color)
 	header.add_child(title)
 
 	var tag := Label.new()
 	tag.text = owner_tag
-	tag.add_theme_font_size_override("font_size", 11)
+	tag.add_theme_font_size_override("font_size", UILayout.font_dp(9.0))
 	tag.add_theme_color_override("font_color", Color(UITheme.PARCHMENT, 0.6))
 	header.add_child(tag)
 
@@ -183,14 +183,14 @@ func _make_card(entry: Dictionary) -> PanelContainer:
 	live.text = "🏰%d  ⚔️%d  🪙%d  👁%d" % [
 		int(entry.get("buildings", 0)), int(entry.get("army", 0)),
 		int(entry.get("resources", 0)), int(entry.get("vision", 0))]
-	live.add_theme_font_size_override("font_size", 12)
+	live.add_theme_font_size_override("font_size", UILayout.font_dp(10.0))
 	vb.add_child(live)
 
 	var accum := Label.new()
 	accum.text = "采集 %d · 生产 %d · 歼敌 %d · 伤害 %d" % [
 		int(entry.get("gathered", 0)), int(entry.get("produced", 0)),
 		int(entry.get("kills", 0)), int(entry.get("damage", 0))]
-	accum.add_theme_font_size_override("font_size", 11)
+	accum.add_theme_font_size_override("font_size", UILayout.font_dp(9.0))
 	accum.add_theme_color_override("font_color", Color(UITheme.PARCHMENT, 0.75))
 	vb.add_child(accum)
 	return card

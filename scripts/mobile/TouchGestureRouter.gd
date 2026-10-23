@@ -181,6 +181,9 @@ func _pan_camera(delta: Vector2) -> void:
 
 # ==================== 鼠标事件合成 ====================
 
+# 注意 push_input 第二参数必须为 true（in_local_coords）：
+# 触摸事件的 position 已经是视口坐标，若按窗口坐标处理会被 stretch 变换二次缩放，
+# 合成出来的点击位置就会整体偏移，表现为「点了选不中」。
 func _push_left_button(pos: Vector2, pressed: bool) -> void:
 	var ev := InputEventMouseButton.new()
 	ev.button_index = MOUSE_BUTTON_LEFT
@@ -188,7 +191,7 @@ func _push_left_button(pos: Vector2, pressed: bool) -> void:
 	ev.position = pos
 	ev.global_position = pos
 	ev.button_mask = MOUSE_BUTTON_MASK_LEFT if pressed else 0
-	get_viewport().push_input(ev)
+	get_viewport().push_input(ev, true)
 
 func _push_motion(pos: Vector2, relative: Vector2) -> void:
 	var ev := InputEventMouseMotion.new()
@@ -196,4 +199,4 @@ func _push_motion(pos: Vector2, relative: Vector2) -> void:
 	ev.global_position = pos
 	ev.relative = relative
 	ev.button_mask = MOUSE_BUTTON_MASK_LEFT if _mode != Mode.IDLE else 0
-	get_viewport().push_input(ev)
+	get_viewport().push_input(ev, true)

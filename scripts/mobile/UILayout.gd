@@ -115,11 +115,16 @@ static func place_dp(ctrl: Control, corner: String, width_dp: float, height_dp: 
 static func touch_min() -> Vector2:
 	return Vector2(dp(48), dp(48))
 
+# 字号：必须同样走 dp 换算。设计空间是 2400x1400，直接写 13 这种小数字
+# 在手机上折合约 3.6dp，肉眼几乎看不清。
+static func font_dp(size_dp: float) -> int:
+	return maxi(8, int(round(dp(size_dp))))
+
 static func font_body() -> int:
-	return 16
+	return font_dp(14.0)
 
 static func font_title() -> int:
-	return 20
+	return font_dp(18.0)
 
 static func font_small() -> int:
-	return 14
+	return font_dp(11.0)

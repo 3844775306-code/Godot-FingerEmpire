@@ -6,8 +6,8 @@ extends Control
 
 signal focus_requested(entity)
 
-const HEIGHT_DP: float = 44.0
-const ITEM_W_DP: float = 58.0
+const HEIGHT_DP: float = 48.0
+const ITEM_W_DP: float = 62.0
 const MAX_ITEMS: int = 8
 
 var selection_provider: Callable = Callable()
@@ -121,7 +121,7 @@ func _make_item(entity: Node) -> Control:
 
 	var name_lbl := Label.new()
 	name_lbl.text = str(entity.get("display_name")) if entity.get("display_name") != null else "单位"
-	name_lbl.add_theme_font_size_override("font_size", 11)
+	name_lbl.add_theme_font_size_override("font_size", UILayout.font_dp(10.0))
 	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	name_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	vb.add_child(name_lbl)

@@ -4,8 +4,8 @@ extends Control
 # 右下角指令区：框选模式开关 + 五个全局指令（与电脑端按钮一一对应）。
 # 所有动作都转发给桌面 HUD 的既有函数，不新增任何玩法逻辑。
 
-const WIDTH_DP: float = 176.0
-const BTN_H_DP: float = 36.0
+const WIDTH_DP: float = 190.0
+const BTN_H_DP: float = 40.0
 const GAP_DP: float = 5.0
 
 var hud: Node = null
@@ -20,7 +20,7 @@ func _ready() -> void:
 	_build()
 
 func _build() -> void:
-	UILayout.place_dp(self, "br", WIDTH_DP, 150.0)
+	UILayout.place_dp(self, "br", WIDTH_DP, 186.0)
 
 	_panel = Panel.new()
 	_panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -42,22 +42,22 @@ func _build() -> void:
 	vb.add_theme_constant_override("separation", int(UILayout.dp(GAP_DP)))
 	add_child(vb)
 
-	_box_mode_btn = _make_button("框选：关", 13)
+	_box_mode_btn = _make_button("框选：关", UILayout.font_dp(12.0))
 	_box_mode_btn.toggle_mode = true
 	_box_mode_btn.toggled.connect(_on_box_mode_toggled)
 	vb.add_child(_box_mode_btn)
 
 	var row1 := _make_row()
-	row1.add_child(_make_command_button("屏幕全选", 13, "_on_select_screen_pressed"))
-	row1.add_child(_make_command_button("全军全选", 13, "_on_select_all_pressed"))
+	row1.add_child(_make_command_button("屏幕全选", UILayout.font_dp(12.0), "_on_select_screen_pressed"))
+	row1.add_child(_make_command_button("全军全选", UILayout.font_dp(12.0), "_on_select_all_pressed"))
 	vb.add_child(row1)
 
 	var row2 := _make_row()
-	row2.add_child(_make_command_button("屏幕撤退", 13, "_on_retreat_screen_pressed"))
-	row2.add_child(_make_command_button("全军撤退", 13, "_on_retreat_all_pressed"))
+	row2.add_child(_make_command_button("屏幕撤退", UILayout.font_dp(12.0), "_on_retreat_screen_pressed"))
+	row2.add_child(_make_command_button("全军撤退", UILayout.font_dp(12.0), "_on_retreat_all_pressed"))
 	vb.add_child(row2)
 
-	_auto_btn = _make_command_button("自动进攻：关", 13, "_on_attack_all_pressed")
+	_auto_btn = _make_command_button("自动进攻：关", UILayout.font_dp(12.0), "_on_attack_all_pressed")
 	vb.add_child(_auto_btn)
 	sync_auto_attack()
 	set_process(true)

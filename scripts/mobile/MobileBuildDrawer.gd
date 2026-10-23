@@ -10,9 +10,9 @@ signal build_requested(building_id: int)
 signal produce_requested(building: Node, unit_id: int)
 
 const WIDTH_DP: float = 360.0
-const HANDLE_H_DP: float = 34.0
-const EXPANDED_H_DP: float = 190.0
-const CARD_H_DP: float = 40.0
+const HANDLE_H_DP: float = 40.0
+const EXPANDED_H_DP: float = 208.0
+const CARD_H_DP: float = 50.0
 
 var battle_manager_provider: Callable = Callable()
 
@@ -59,7 +59,7 @@ func _build() -> void:
 	_handle_btn = Button.new()
 	_handle_btn.text = "🔨 建造 ▲"
 	_handle_btn.custom_minimum_size = Vector2(0.0, UILayout.dp(HANDLE_H_DP))
-	UITheme.apply_button(_handle_btn, 14)
+	UITheme.apply_button(_handle_btn, UILayout.font_dp(13.0))
 	_handle_btn.pressed.connect(_on_handle_pressed)
 	_vbox.add_child(_handle_btn)
 
@@ -72,7 +72,7 @@ func _build() -> void:
 	_build_tab.text = "建造"
 	_build_tab.custom_minimum_size = Vector2(0.0, UILayout.dp(30.0))
 	_build_tab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	UITheme.apply_primary_button(_build_tab, 13)
+	UITheme.apply_primary_button(_build_tab, UILayout.font_dp(12.0))
 	_build_tab.pressed.connect(func(): _set_page("build"))
 	_tab_row.add_child(_build_tab)
 
@@ -80,7 +80,7 @@ func _build() -> void:
 	_produce_tab.text = "生产"
 	_produce_tab.custom_minimum_size = Vector2(0.0, UILayout.dp(30.0))
 	_produce_tab.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	UITheme.apply_button(_produce_tab, 13)
+	UITheme.apply_button(_produce_tab, UILayout.font_dp(12.0))
 	_produce_tab.pressed.connect(func(): _set_page("produce"))
 	_tab_row.add_child(_produce_tab)
 
@@ -233,13 +233,16 @@ func _make_card(title: String, cost: Dictionary, enabled: bool, locked: bool) ->
 
 	var title_lbl := Label.new()
 	title_lbl.text = title + ("  🔒" if locked else "")
-	title_lbl.add_theme_font_size_override("font_size", 13)
+	title_lbl.add_theme_font_size_override("font_size", UILayout.font_dp(12.0))
 	title_lbl.add_theme_color_override("font_color", Color(UITheme.PARCHMENT))
 	title_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	vb.add_child(title_lbl)
 
-	var cost_row := HBoxContainer.new()
-	cost_row.add_theme_constant_override("separation", int(UILayout.dp(4.0)))
+	# 造价最多 5 项，字号放大后单行放不下，改成 3 列两行
+	var cost_row := GridContainer.new()
+	cost_row.columns = 3
+	cost_row.add_theme_constant_override("h_separation", int(UILayout.dp(5.0)))
+	cost_row.add_theme_constant_override("v_separation", 0)
 	cost_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	vb.add_child(cost_row)
 	for key in ["gold", "wood", "stone", "food", "oil"]:
@@ -248,7 +251,7 @@ func _make_card(title: String, cost: Dictionary, enabled: bool, locked: bool) ->
 			continue
 		var cl := Label.new()
 		cl.text = "%s%d" % [String(UITheme.RESOURCE_ICONS.get(key, "◆")), need]
-		cl.add_theme_font_size_override("font_size", 10)
+		cl.add_theme_font_size_override("font_size", UILayout.font_dp(8.0))
 		cl.add_theme_color_override("font_color", UITheme.PARCHMENT if _affordable(key, need) else Color(1.0, 0.42, 0.38))
 		cl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		cost_row.add_child(cl)
