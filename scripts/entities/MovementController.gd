@@ -10,6 +10,10 @@ var astar_path: Array = []
 var astar_target: Vector3 = Vector3.ZERO
 var astar_recalc_timer: float = 0.0
 const ASTAR_RECALC_INTERVAL: float = 2.0
+# 追击移动目标时目标位置每帧都在变；若每次变化都重算 A*（最多 1000 节点），
+# 大部队交战时每帧会跑数百次寻路。按单位错峰限频，保留路径跟随和最终接近。
+const ATTACK_PATH_COOLDOWN_MS: int = 500
+var _last_attack_path_ms: int = -100000
 
 var _path_sphere: SphereMesh = null
 var _path_mat: StandardMaterial3D = null
@@ -44,6 +48,21 @@ func set_move_target(pos: Vector3, stop_range: float = 0.0):
 	if _blacklist.has(key):
 		return  # permanently blacklisted (cleared on building placement)
 
+	var is_attack_move := stop_range > 0.0
+	if is_attack_move:
+		var now_ms := Time.get_ticks_msec()
+		# 首次追击按 unit id 分 16 个相位错峰，避免全军在同一帧集中跑 A*；
+		# 后续只加少量抖动，保证追击路径不会滞后太久。
+		var phase_ms := int(_army.get_instance_id() % 16) * 30
+		var cooldown_ms := ATTACK_PATH_COOLDOWN_MS + int(_army.get_instance_id() % 5) * 15
+		if _last_attack_path_ms < 0:
+			_last_attack_path_ms = now_ms - cooldown_ms + phase_ms
+		if now_ms - _last_attack_path_ms < cooldown_ms:
+			# 注意：这里不能写 astar_target，否则下一次调用会被开头的
+			# distance_to < 0.5 提前返回，永远不再生成路径。
+			return
+		_last_attack_path_ms = now_ms
+
 	# Only cache normal movement (stop_range==0). Attacks recalc every time.
 	#var use_cache = (stop_range == 0.0)
 	#if use_cache and _path_cache.has(key):
@@ -54,7 +73,11 @@ func set_move_target(pos: Vector3, stop_range: float = 0.0):
 	astar_target = pos
 	astar_path = _calculate_astar_path(pos, stop_range)
 	if astar_path.size() > 0:
-		_path_cache[key] = astar_path
+		if not is_attack_move:
+			_path_cache[key] = astar_path
+	elif is_attack_move:
+		# 追击目标寻路失败时不写永久黑名单；重置目标，让冷却后还能重试
+		astar_target = Vector3.ZERO
 	else:
 		_blacklist[key] = true
 	if _is_selected: _show_path()
@@ -63,6 +86,7 @@ func recalculate():
 	
 	_path_cache.clear()  # new building may block cached paths
 	_blacklist.clear()  # new building may open paths
+	_last_attack_path_ms = -100000  # 建筑变化后允许立即重算追击路径
 	# building recalc - cached paths cleared
 	if astar_target != Vector3.ZERO and _army.current_order == "move":
 		var key = Vector2i(int(astar_target.x), int(astar_target.z))
@@ -305,7 +329,6 @@ static var _transport_frame: int = -1            # 运载船是移动的，水�
 static var _transport_team: int = -1
 
 func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Array:
-	var _pt = Time.get_ticks_usec()
 	var bm = _army.get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
 	if not bm: return []
 	var start = _army.global_position
@@ -417,11 +440,6 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 					g_score[neighbor] = tentative_g
 					open_list.push(neighbor, tentative_g + _heuristic(neighbor, end_tile) * 1.2)
 
-	var _elapsed = (Time.get_ticks_usec() - _pt) / 1000.0
-	if _elapsed > 3.0 or Engine.get_process_frames() % 120 == 0:
-		var gm = _army.get_tree().get_first_node_in_group("battle_manager")
-		var gt = gm.game_time if gm else 0.0
-		print("[A*] t=%.1fs elapsed=%.1fms nodes=%d" % [gt, _elapsed, nodes_explored])
 	return []
 
 func _heuristic(a: Vector2i, b: Vector2i) -> float:

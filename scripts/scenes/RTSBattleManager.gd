@@ -126,7 +126,6 @@ func _create_diag_label():
 	add_child(canvas)
 
 func _rebuild_entity_cache():
-	var _pt = Time.get_ticks_usec()
 	_all_entities.clear()
 	_armies.clear()
 	_buildings.clear()
@@ -171,7 +170,6 @@ func _rebuild_entity_cache():
 			_ladder_entity_grid[world_to_grid(b.global_position)] = b
 	_wall_cache_version += 1
 	_entity_cache_dirty = false
-	if Engine.get_process_frames() % 120 == 0: print("[Profile-Cache] %.1fms entities=%d" % [(Time.get_ticks_usec() - _pt) / 1000.0, _all_entities.size()])
 
 func mark_entity_cache_dirty():
 	_entity_cache_dirty = true
@@ -2314,7 +2312,6 @@ func _init_fog_grid():
 		visible_grid.append(col_vis)
 
 func _update_fog_visibility():
-	var _pt = Time.get_ticks_usec()
 	if visible_grid.is_empty():
 		_init_fog_grid()
 	for x in range(RTSConfig.MAP_SIZE):
@@ -2424,7 +2421,6 @@ func _detect_enemy_near_base():
 # ==================== 每帧更新 ====================
 var _limit_update_timer: float = 0.0
 func _process(delta):
-	var _pt = Time.get_ticks_usec()
 	# 延迟左键处理：建造模式下直接放置建筑
 	if _pending_left_click:
 		_left_click_timer -= delta

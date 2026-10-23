@@ -7,6 +7,9 @@ var _sm: Node = null
 var _mobile_hud = null    # 移动端界面装配器（仅触屏设备创建）
 
 var health_bar_timer = 0.0
+const HEALTH_BAR_UPDATE_INTERVAL: float = 0.05
+var _health_text_tick: int = 0
+var _last_health_scale: float = -1.0
 var gold_label: Label
 var wood_label: Label
 var stone_label: Label
@@ -100,7 +103,7 @@ func _find_local_castle(bm) -> Building:
 
 # 单位血条上方的“国家类别”前缀：由 battle_manager 的 owner/队伍解析，未知国家返回空串
 func _nat_tag(entity: GameEntity) -> String:
-	var bm = get_tree().get_first_node_in_group("battle_manager")
+	var bm = _get_bm()
 	if bm and bm.has_method("get_entity_nation") and bm.has_method("get_nation_name"):
 		var nat = bm.get_entity_nation(entity)
 		if nat >= 0:
@@ -768,7 +771,10 @@ func _process(delta):
 			if _alert_bg:
 				_alert_bg.visible = false
 
-	_update_health_bars()
+	health_bar_timer -= delta
+	if health_bar_timer <= 0:
+		health_bar_timer = HEALTH_BAR_UPDATE_INTERVAL
+		_update_health_bars()
 	# 更新单位统计（每秒一次）
 	if _unit_stats_timer <= 0:
 		_unit_stats_timer = 1.0
@@ -790,6 +796,14 @@ func _update_health_bars():
 		scale_factor = ref_ortho_size / cam.size
 	var bar_size = base_size * scale_factor
 	var font_size = int(base_font * scale_factor)
+	var cam_rect := get_viewport().get_visible_rect()
+	var refresh_style := absf(scale_factor - _last_health_scale) > 0.001
+	if refresh_style:
+		_last_health_scale = scale_factor
+	_health_text_tick += 1
+	# 位置/血条 20Hz 刷新，文字与阵营色 5Hz 刷新，避免每帧重建大量 Label 主题
+	var refresh_text := (_health_text_tick % 4 == 0)
+	var sm = _get_sm()
 
 	# 移除失效实体
 	var to_remove = []
@@ -817,60 +831,44 @@ func _update_health_bars():
 			continue
 		# 第一人称跟随视角：被跟随单位自身的血条锚点位于相机处，会悬浮在画面中央——隐藏
 		if cam.has_method("get_follow_target") and cam.get_follow_target() == entity:
-			if entity in unit_bars:
-				unit_bars[entity].bar.visible = false
-				unit_bars[entity].label.visible = false
-				if unit_bars[entity].has("prod_bar"):
-					unit_bars[entity].prod_bar.visible = false
-					unit_bars[entity].prod_label.visible = false
-				if unit_bars[entity].has("upgrade_bar"):
-					unit_bars[entity].upgrade_bar.visible = false
-				if unit_bars[entity].has("upgrade_label"):
-					unit_bars[entity].upgrade_label.visible = false
-				_hide_build_bar(entity)
+			_hide_entity_health_bars(entity)
 			continue
 		if not entity.visible:
-			if entity in unit_bars:
-				unit_bars[entity].bar.visible = false
-				unit_bars[entity].label.visible = false
-				if unit_bars[entity].has("prod_bar"):
-					unit_bars[entity].prod_bar.visible = false
-					unit_bars[entity].prod_label.visible = false
-				_hide_build_bar(entity)
+			_hide_entity_health_bars(entity)
 			continue
 
-		if entity not in unit_bars:
-			_create_health_bar(entity)
+		# 先做屏幕裁剪：离屏实体不创建血条/文字节点，已有节点直接隐藏
+		var world_pos = entity.global_position + Vector3.UP * (entity.body_radius * 2 + 0.5)
+		# 透视投影下相机后方的实体会 unproject 出翻转坐标——隐藏血条
+		if cam.projection != Camera3D.PROJECTION_ORTHOGONAL and cam.is_position_behind(world_pos):
+			_hide_entity_health_bars(entity)
+			continue
+		var screen_pos = cam.unproject_position(world_pos)
+		if not cam_rect.has_point(screen_pos):
+			_hide_entity_health_bars(entity)
+			continue
 
-		var data = unit_bars[entity]
+		var data = unit_bars.get(entity)
+		var created := false
+		if data == null:
+			_create_health_bar(entity)
+			data = unit_bars[entity]
+			created = true
+
 		var bar: HealthBarControl = data.bar
 		var label: Label = data.label
 		var prod_bar: ProgressBar = data.prod_bar if data.has("prod_bar") else null
 		var prod_label: Label = data.prod_label if data.has("prod_label") else null
 
-		# 动态调整尺寸与字体
-		bar.size = bar_size
-		label.add_theme_font_size_override("font_size", font_size)
-		if prod_bar:
-			prod_bar.custom_minimum_size = Vector2(bar_size.x, 8 * scale_factor)
-			prod_label.add_theme_font_size_override("font_size", max(int(font_size * 0.8), 12))
-
-		# 世界转屏幕
-		var world_pos = entity.global_position + Vector3.UP * (entity.body_radius * 2 + 0.5)
-		# 透视投影下相机后方的实体会 unproject 出翻转坐标——隐藏血条
-		if cam.projection != Camera3D.PROJECTION_ORTHOGONAL and cam.is_position_behind(world_pos):
-			bar.visible = false
-			label.visible = false
+		# 动态调整尺寸与字体（仅相机缩放变化或新建时）
+		if refresh_style or created:
+			bar.size = bar_size
+			label.add_theme_font_size_override("font_size", font_size)
 			if prod_bar:
-				prod_bar.visible = false
-				prod_label.visible = false
-			if data.has("upgrade_bar") and data.upgrade_bar:
-				data.upgrade_bar.visible = false
-			if data.has("upgrade_label") and data.upgrade_label:
-				data.upgrade_label.visible = false
-			_hide_build_bar(entity)
-			continue
-		var screen_pos = cam.unproject_position(world_pos)
+				prod_bar.custom_minimum_size = Vector2(bar_size.x, 8 * scale_factor)
+				prod_label.add_theme_font_size_override("font_size", max(int(font_size * 0.8), 12))
+
+		var refresh_text_now := refresh_text or created
 		_hide_build_bar(entity)
 		bar.position = screen_pos - bar_size / 2
 
@@ -898,7 +896,8 @@ func _update_health_bars():
 			var up_total := maxf(entity.max_upgrade_time, 0.001)
 			var up_pct := clampf(1.0 - entity.upgrade_timer / up_total, 0.0, 1.0)
 			up_bar.value = up_pct
-			up_lbl.text = "升级中 %d%%" % int(up_pct * 100.0)
+			if refresh_text_now:
+				up_lbl.text = "升级中 %d%%" % int(up_pct * 100.0)
 			up_bar.position = screen_pos - bar_size / 2 + Vector2(0, -bar_size.y * 2 - 6)
 			up_lbl.position = up_bar.position + Vector2(0, -bar_size.y - 4)
 		else:
@@ -924,11 +923,12 @@ func _update_health_bars():
 			build_bar.value = build_pct
 			bar.visible = false
 			label.visible = show_unit_text
-			label.text = "%s (建造中 %d%%)" % [entity.display_name, int(build_pct * 100.0)]
-			# Color label
-			var _hlc2 = _get_hud_label_color(entity)
-			label.add_theme_color_override("font_color", _hlc2)
-			_apply_hud_label_outline(label, entity)
+			if refresh_text_now:
+				label.text = "%s (建造中 %d%%)" % [entity.display_name, int(build_pct * 100.0)]
+				# Color label
+				var _hlc2 = _get_hud_label_color(entity)
+				label.add_theme_color_override("font_color", _hlc2)
+				_apply_hud_label_outline(label, entity)
 			label.position = build_bar.position + Vector2(0, -22)
 			if prod_bar:
 				prod_bar.visible = false
@@ -942,8 +942,6 @@ func _update_health_bars():
 				prod_bar.visible = true
 				prod_label.visible = show_unit_text
 				var current_id = entity.production_queue[0]
-				var unit_cfg = EntityDatabase.get_config(current_id)
-				var unit_name = unit_cfg.get("name", "?")
 				var prod_cfg = null
 				for p in entity.production_list:
 					if p.unit_id == current_id:
@@ -954,7 +952,10 @@ func _update_health_bars():
 					progress = clampf(progress, 0.0, 1.0)
 					prod_bar.max_value = 1.0
 					prod_bar.value = progress
-					prod_label.text = "%s x%d %d%%" % [unit_name, entity.production_queue.size(), int(progress * 100.0)]
+					if refresh_text_now:
+						var unit_cfg = EntityDatabase.get_config(current_id)
+						var unit_name = unit_cfg.get("name", "?")
+						prod_label.text = "%s x%d %d%%" % [unit_name, entity.production_queue.size(), int(progress * 100.0)]
 					prod_bar.position = bar.position + Vector2(0, bar_size.y + 4)
 					prod_label.position = prod_bar.position + Vector2(0, -14)
 				else:
@@ -964,20 +965,13 @@ func _update_health_bars():
 				prod_bar.visible = false
 				prod_label.visible = false
 
-		# 屏幕裁剪检查
-		var cam_rect = get_viewport().get_visible_rect()
-		if not cam_rect.has_point(screen_pos):
-			bar.visible = false
-			label.visible = false
-			continue
-
 		label.visible = show_unit_text
-		var group_prefix = ""
-		var sm = get_tree().get_first_node_in_group("battle_manager")
-		if sm and sm.has_node("SelectionManager") and sm.get_node("SelectionManager").has_method("get_entity_groups"):
-			var groups = sm.get_node("SelectionManager").get_entity_groups(entity)
-			for g in groups:
-				group_prefix += "T%d " % g
+		if refresh_text_now:
+			var group_prefix = ""
+			if sm and sm.has_method("get_entity_groups"):
+				var groups = sm.get_entity_groups(entity)
+				for g in groups:
+					group_prefix += "T%d " % g
 			var _res_info = ""
 			if entity.entity_id in [10, 14]:
 				var _tgt = entity.current_target
@@ -987,11 +981,8 @@ func _update_health_bars():
 				elif entity.current_order == "deliver":
 					_res_info = "\n返回"
 			elif entity.entity_id in [43, 44, 45]:
-				_res_info = "
-交易量:%d" % entity._merchant_trade_volume
+				_res_info = "\n交易量:%d" % entity._merchant_trade_volume
 			label.text = group_prefix + _nat_tag(entity) + "%s Lv.%d%s\n%d/%d" % [entity.display_name, entity.level, _res_info, int(entity.health), int(entity.max_health)]
-			label.position = bar.position + Vector2(0, -22)
-
 			# Color label by owner/team
 			var _hlc = _get_hud_label_color(entity)
 			label.add_theme_color_override("font_color", _hlc)
@@ -1010,6 +1001,22 @@ func _update_health_bars():
 			bar_color = bm2.get_entity_color(entity)
 		bar.update_bar(entity.health, entity.max_health, entity.team, bar_color)
 
+
+func _hide_entity_health_bars(entity):
+	var d = unit_bars.get(entity)
+	if d == null:
+		return
+	d.bar.visible = false
+	d.label.visible = false
+	if d.has("prod_bar") and d.prod_bar:
+		d.prod_bar.visible = false
+	if d.has("prod_label") and d.prod_label:
+		d.prod_label.visible = false
+	if d.has("upgrade_bar") and d.upgrade_bar:
+		d.upgrade_bar.visible = false
+	if d.has("upgrade_label") and d.upgrade_label:
+		d.upgrade_label.visible = false
+	_hide_build_bar(entity)
 
 func _hide_build_bar(entity):
 	if entity in unit_bars:
@@ -1032,21 +1039,24 @@ func _create_health_bar(entity):
 	label.z_index = -1
 	add_child(label)
 
-	unit_bars[entity] = {"bar": bar, "label": label}
+	var data := {"bar": bar, "label": label}
+	unit_bars[entity] = data
 
-	var prod_bar = ProgressBar.new()
-	UITheme.style_progress_bar(prod_bar, UITheme.SAPPHIRE, 8.0)
-	prod_bar.visible = false
-	prod_bar.z_index = -1
-	add_child(prod_bar)
+	# 只有建筑需要生产进度条；单位/资源不要为每一条血条额外创建 ProgressBar + Label
+	if entity is Building:
+		var prod_bar = ProgressBar.new()
+		UITheme.style_progress_bar(prod_bar, UITheme.SAPPHIRE, 8.0)
+		prod_bar.visible = false
+		prod_bar.z_index = -1
+		add_child(prod_bar)
+		data["prod_bar"] = prod_bar
 
-	var prod_label = Label.new()
-	prod_label.add_theme_font_size_override("font_size", 12)
-	prod_label.z_index = -1
-	add_child(prod_label)
-	prod_label.visible = false
-
-	unit_bars[entity] = {"bar": bar, "label": label, "prod_bar": prod_bar, "prod_label": prod_label}
+		var prod_label = Label.new()
+		prod_label.add_theme_font_size_override("font_size", 12)
+		prod_label.z_index = -1
+		add_child(prod_label)
+		prod_label.visible = false
+		data["prod_label"] = prod_label
 
 
 # Control-group label colors
@@ -1064,9 +1074,9 @@ const GROUP_LABEL_COLORS = {
 
 # Helper: get label color for entity (by control group first, then team)
 func _get_hud_label_color(entity: GameEntity) -> Color:
-	var sm = _get_bm()
-	if sm and sm.has_node("SelectionManager") and sm.get_node("SelectionManager").has_method("get_entity_groups"):
-		var groups = sm.get_node("SelectionManager").get_entity_groups(entity)
+	var sm = _get_sm()
+	if sm and sm.has_method("get_entity_groups"):
+		var groups = sm.get_entity_groups(entity)
 		if groups.size() > 0:
 			var g = groups[0]
 			if GROUP_LABEL_COLORS.has(g):

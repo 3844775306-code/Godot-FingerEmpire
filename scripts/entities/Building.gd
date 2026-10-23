@@ -106,10 +106,8 @@ func _process(delta):
 		if can_produce:
 			production_timer -= delta
 			if production_timer <= 0.0:
-				print("[Spawn] queue=", production_queue.size(), " unit=", production_queue[0] if production_queue.size() > 0 else -1)
 				_spawn_produced_unit()
-		else:
-			print("[Spawn] BLOCKED can_produce=false owner_peer_id=", owner_peer_id)
+		# 注意：人口满时这里不能每帧 print，否则成百上千座兵营会把日志刷爆并拖死主线程
 	else:
 		production_timer = 0.0
 

@@ -19,6 +19,12 @@ var _saved_dir: Vector3 = Vector3.ZERO
 
 func _ready():
 	add_to_group("bullets")
+	# 弹丸命中由 _physics_process 里的空间索引查询判定，不依赖物理碰撞信号。
+	# 关闭 Area3D 的物理监测，避免大量弹丸每帧进入物理 broadphase。
+	monitoring = false
+	monitorable = false
+	collision_layer = 0
+	collision_mask = 0
 	# 快照序列化时 source 可能已被销毁，创建时先缓存发射方 entity_id
 	if source and is_instance_valid(source):
 		source_entity_id = source.entity_id

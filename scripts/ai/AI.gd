@@ -680,7 +680,7 @@ func decide(_delta):
 		var army_count = count_military(my_peer_id if my_peer_id != -1 else my_team)
 		if army_count >= 30:
 			phase = Phase.ASSAULT
-	if OS.is_debug_build() and Engine.get_process_frames() % 10 == 0:
+	if OS.is_debug_build() and Engine.get_process_frames() % 30 == 0:
 		update_debug_label()
 func get_team_castle(tm) -> Building:
 	for entity in battle.entities.get_children():
@@ -2062,6 +2062,33 @@ func update_debug_label():
 		_trait_rtl.text = "[color=#cba]%s[/color]" % NationBonuses.get_trait_full(_my_nation_index())
 	# 收起状态：主体不可见，跳过整块内容刷新，省掉每帧的统计与遍历开销
 	if _panel_collapsed: return
+
+	# 面板统计只遍历一次实体：原实现对每种资源/单位/建筑各扫一遍全实体，
+	# 7 个 AI 面板同时展开时每 10 帧会产生数百次全量扫描，是后期掉帧大户。
+	var own_unit_counts: Dictionary = {}
+	var own_build_counts: Dictionary = {}
+	var own_build_levels: Dictionary = {}
+	var gather_counts_by_res: Dictionary = {}
+	var hunt_count: int = 0
+	for entity in battle.entities.get_children():
+		if not (entity is GameEntity) or entity.health <= 0:
+			continue
+		if not entity_belongs_to_me(entity):
+			continue
+		if entity is Army:
+			var uid := int(entity.entity_id)
+			own_unit_counts[uid] = int(own_unit_counts.get(uid, 0)) + 1
+			if entity.entity_id in [10, 14] and entity.current_order in ["gather", "deliver"]:
+				var gather_target = entity.current_target
+				if is_instance_valid(gather_target) and gather_target is WorldResource:
+					gather_counts_by_res[gather_target.resource_type] = int(gather_counts_by_res.get(gather_target.resource_type, 0)) + 1
+			if _hunt_target and is_instance_valid(_hunt_target) and entity.current_target == _hunt_target:
+				hunt_count += 1
+		elif entity is Building and entity.build_timer <= 0:
+			var bid := int(entity.entity_id)
+			own_build_counts[bid] = int(own_build_counts.get(bid, 0)) + 1
+			own_build_levels[bid] = maxi(int(own_build_levels.get(bid, 1)), int(entity.upgrade_level))
+
 	var res = _get_resources(); var pop = _get_population()
 	var _pe = {"PRODUCTION": "🌱", "DEVELOPMENT": "🏗️", "ASSAULT": "⚔️"}
 	_header_rtl.text = "%s [color=#%s]%s[/color]  |  %s" % [_pe.get(Phase.keys()[phase], "▶️"), (Color.GREEN if phase == Phase.ASSAULT else (Color(1,0.7,0) if phase == Phase.DEVELOPMENT else Color.CYAN)).to_html(), Phase.keys()[phase], _get_tactic_name(current_tactic)]
@@ -2092,12 +2119,7 @@ func update_debug_label():
 		var r = res_list[i]; var val = res.get(r.k, 0); var lim = limits.get(r.k, 500)
 		_res_bars[i].value = min(float(val)/max(lim,1)*100, 100)
 		_res_labels[i].text = "%d" % val
-		var gc = 0
-		for entity in battle.entities.get_children():
-			if entity is Army and entity.health > 0 and entity.entity_id in [10,14] and entity.current_order in ["gather","deliver"]:
-				var tgt = entity.current_target
-				if is_instance_valid(tgt) and tgt is WorldResource and tgt.resource_type == r.k and entity_belongs_to_me(entity):
-					gc += 1
+		var gc = int(gather_counts_by_res.get(r.k, 0))
 		_res_labels[i].text += " %d人" % gc
 		_res_labels[i].text += " %+.1f/s" % _ai_income_rate[r.k]
 		var s = _res_bars[i].get_theme_stylebox("fill")
@@ -2107,7 +2129,7 @@ func update_debug_label():
 	var eco_lines = []
 	var eco_total = 0
 	for u in eco_units:
-		var cnt = count_unit(u[0], false)
+		var cnt = int(own_unit_counts.get(u[0], 0))
 		eco_total += cnt
 		if cnt > 0: eco_lines.append("[color=#8c8]%s%s[/color]:[color=white]%d[/color]" % [UITheme.entity_emoji(u[0], 2), u[1], cnt])
 	_eco_rtl.text = "[color=gray](无经济单位)[/color]" if eco_lines.is_empty() else " ".join(eco_lines)
@@ -2119,7 +2141,7 @@ func update_debug_label():
 	var mil_lines = []
 	var mil_total = 0
 	for u in mil_units:
-		var cnt = count_unit(u[0], false)
+		var cnt = int(own_unit_counts.get(u[0], 0))
 		mil_total += cnt
 		if cnt > 0: mil_lines.append("[color=#aaa]%s%s[/color]:[color=white]%d[/color]" % [UITheme.entity_emoji(u[0], 2), u[1], cnt])
 	_mil_rtl.text = "[color=gray](无军队)[/color]" if mil_lines.is_empty() else " ".join(mil_lines)
@@ -2128,21 +2150,15 @@ func update_debug_label():
 	var bld_lines = []
 	var bld_total = 0
 	for b in all_blds:
-		var cnt = 0; var max_lv = 1
-		for entity in battle.entities.get_children():
-			if entity is Building and entity.entity_id == b[0] and entity_belongs_to_me(entity) and entity.health > 0 and entity.build_timer <= 0:
-				cnt += 1
-				if entity.upgrade_level > max_lv: max_lv = entity.upgrade_level
+		var cnt = int(own_build_counts.get(b[0], 0))
+		var max_lv = int(own_build_levels.get(b[0], 1))
 		bld_total += cnt
 		if cnt > 0: bld_lines.append("[color=#888]%s【%d】%s[/color]:[color=white]%d[/color]" % [UITheme.entity_emoji(b[0], 1), max_lv, b[1], cnt])
 	_bld_rtl.text = "[color=gray](无建筑)[/color]" if bld_lines.is_empty() else " ".join(bld_lines)
 	if _bld_title: _bld_title.text = "[color=#5af]▸ 🏰 建筑 %d[/color]" % bld_total
 	var hunt_info = "[color=#ffa]🏹 狩猎: %.0fs[/color]" % max(0, _hunt_timer)
 	if _hunt_target and is_instance_valid(_hunt_target):
-		var hc = 0
-		for e in battle.entities.get_children():
-			if e is Army and entity_belongs_to_me(e) and e.current_target == _hunt_target: hc += 1
-		hunt_info += " [color=#f88]目标:%s 猎人:%d/5[/color]" % [_hunt_target.get("_animal_type"), hc]
+		hunt_info += " [color=#f88]目标:%s 猎人:%d/5[/color]" % [_hunt_target.get("_animal_type"), hunt_count]
 	else: hunt_info += " [color=gray](待命)[/color]"
 	_bld_rtl.text = hunt_info + "\n" + _bld_rtl.text
 
