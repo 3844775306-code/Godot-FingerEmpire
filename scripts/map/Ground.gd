@@ -150,6 +150,12 @@ func _generate_classic(size: int):
 
 	terrain_grid.clear()
 	height_grid.clear()
+	overlay_grid.clear()
+	for x in range(size):
+		var orow := []
+		orow.resize(size)
+		orow.fill(0)
+		overlay_grid.append(orow)
 	base_colors.clear()
 	# 第一趟：类型与高度。上色要查邻域（水域深浅靠岸线推断），所以先把整张网格填满
 	for x in range(size):
@@ -329,6 +335,8 @@ func _op_fords(size: int, params: Dictionary) -> void:
 			var yy := clampi(fy + dy, 0, size - 1)
 			for x in range(left, right + 1):
 				overlay_grid[x][yy] = 3
+				# 浅滩略高于水面：沙洲露出水线，玩家能一眼看出这里可以涉水
+				height_grid[x][yy] = -height_scale * 0.25
 
 # 森林：低频噪声圈出成片林地（按分位阈值保证覆盖率），再用另一层噪声挖出林间空地
 func _op_forest(size: int, params: Dictionary) -> void:
@@ -388,11 +396,18 @@ func _terrain_color_for(terrain_type: int, h: float, gx: int, gy: int, overlay: 
 			color = Color(0.10, 0.28, 0.50).lerp(Color(0.24, 0.58, 0.72), _shore_amount(gx, gy))
 		_:  # 草原：低地深绿 -> 高地黄绿
 			color = Color(0.12, 0.33, 0.14).lerp(Color(0.42, 0.51, 0.22), clamp((h + 0.075) / 0.165, 0.0, 1.0))
-	# 覆盖层着色：森林压暗偏绿、浅滩提亮偏沙青
+	# 覆盖层着色：森林压暗偏绿、浅滩撒沙
 	if overlay == 1:
 		color = color.lerp(Color(0.10, 0.26, 0.12), 0.55)
 	elif overlay == 3:
-		color = color.lerp(Color(0.34, 0.60, 0.60), 0.60)
+		# 浅滩：沙底为主，按格哈希撒出深浅不一的沙粒与偶发水色
+		var hv := float(absi(hash(Vector2i(gx, gy))) % 1000) / 1000.0
+		var sand := Color(0.66, 0.60, 0.42).lerp(Color(0.82, 0.75, 0.55), hv)
+		if hv < 0.18:
+			sand = Color(0.50, 0.45, 0.32)     # 深色湿沙
+		elif hv > 0.94:
+			sand = Color(0.38, 0.52, 0.50)     # 偶发水色
+		color = color.lerp(sand, 0.82)
 	# 高频细节噪声：明暗微扰打散整片纯色，远看是自然纹理而不是塑料色块
 	var d := _get_detail_noise().get_noise_2d(float(gx), float(gy))
 	if d > 0.0:
@@ -700,6 +715,10 @@ func _place_resources():
 	var wood_near_any := String(prof.get("wood_near", "mountain")) == "any"
 	# 森林图山地稀少，"靠山才有石"会大面积落空，同样放开
 	var stone_near_any := String(prof.get("stone_near", "mountain")) == "any"
+	# 黑森林：木材只在林缘（多）与林内（少）生成，不再随机撒
+	var wood_forest := String(prof.get("wood_near", "mountain")) == "forest"
+	# 山脊图：所有金矿集中在隘口
+	var gold_at_passes := bool(prof.get("gold_at_passes", false))
 
 	# Castle positions in grid coordinates
 	var player_gx = int(player_castle_pos.x + size/2.0)
@@ -735,6 +754,11 @@ func _place_resources():
 		for gu in guaranteed:
 			if int(gu["type"]) == 2:
 				gu["adjacent_mountains"] = 0
+	# 特殊规则：金矿只在隘口 / 木材只在林区，先摘掉常规条目
+	if gold_at_passes:
+		guaranteed = guaranteed.filter(func(e): return int(e["type"]) != 0)
+	if wood_forest:
+		guaranteed = guaranteed.filter(func(e): return int(e["type"]) != 1)
 	for castle in castles:
 		for gu in guaranteed:
 			_place_group_near(gu.type, gu.min_sz, gu.max_sz, castle[0], castle[1], gu.dist, gu.terrain, placed, size, gu.get("near_mountain", false), gu.get("adjacent_mountains", 0))
@@ -753,6 +777,10 @@ func _place_resources():
 		for gu in hard_extra:
 			if int(gu["type"]) == 2:
 				gu["adjacent_mountains"] = 0
+	if gold_at_passes:
+		hard_extra = hard_extra.filter(func(e): return int(e["type"]) != 0)
+	if wood_forest:
+		hard_extra = hard_extra.filter(func(e): return int(e["type"]) != 1)
 	if GameSettings.ai_difficulty >= GameSettings.AIDifficulty.HARD or GameSettings.red_ai_difficulty >= GameSettings.AIDifficulty.HARD or GameSettings.blue_ai_difficulty >= GameSettings.AIDifficulty.HARD:
 		# Only for enemy/AI castles（1v1 敌方 = 后半；2v2/3v3 红队城堡 = 后半；乱斗 = 玩家之外全部 AI）
 		var ai_castles = castles.slice(1) if is_ffa_single else castles.slice(castles.size() / 2)
@@ -776,13 +804,25 @@ func _place_resources():
 		for g in remaining:
 			if int(g["type"]) == 2:
 				g["adjacent_mountains"] = 0
+	if gold_at_passes:
+		remaining = remaining.filter(func(g): return int(g["type"]) != 0)
+	if wood_forest:
+		remaining = remaining.filter(func(g): return int(g["type"]) != 1)
 	for g in remaining:
 		for _gi in range(g.count):
 			_place_group_random(g.type, g.min_sz, g.max_sz, g.terrain, placed, size, castles, g.get("near_mountain", false), g.get("away_mountain", false), g.get("adjacent_mountains", 0))
 
+	# 黑森林：林缘木材多、林内木材少
+	if wood_forest:
+		_place_forest_wood(size, castles, placed, mult)
+
 	# 特殊地图：隘口上的争议金矿，逼双方争夺通道
+	# 山脊图全图金矿只在隘口：每处固定 2 组
 	for pc in _pass_centers:
-		_place_group_near(0, 2, 3, pc.x, pc.y, 8, 0, placed, size)
+		var per_pass := 2 if gold_at_passes else 1
+		var gold_dist := 6 if gold_at_passes else 10
+		for _i in range(per_pass):
+			_place_group_near(0, 2, 3, pc.x, pc.y, gold_dist, 0, placed, size)
 
 	# ── Animals ──
 	for _i in range(int(8 * mult)):
@@ -805,6 +845,85 @@ func _place_resources():
 						if not placed.has("a%d,%d" % [ax, ay]):
 							resource_positions.append({"pos": grid_to_world(ax, ay), "type": atype})
 							placed["a%d,%d" % [ax, ay]] = true
+
+	# 常规地图：木材所在地改为森林覆盖层（树林在地图上可见，进入后按森林算视野/移速）
+	if String(map_preset.get("id", "classic")) == "classic":
+		_mark_wood_as_forest(size)
+		_colorize_grid(size)
+
+# 黑森林木材：林缘（平原且 2 格内有森林）多、林内（本身是森林）少
+func _place_forest_wood(size: int, castles: Array, placed: Dictionary, mult: float) -> void:
+	# 每座基地附近先保证 2 组林缘木材，避免开局无木
+	for cs in castles:
+		for _i in range(2):
+			_place_group_where(1, 5, 6, 0, placed, size, func(x, y): return _forest_edge(x, y, size), Vector2i(int(cs[0]), int(cs[1])), 26)
+	for _i in range(int(round(8.0 * mult))):
+		_place_group_where(1, 5, 6, 0, placed, size, func(x, y): return _forest_edge(x, y, size), Vector2i(-1, -1), 0)
+	for _i in range(int(round(3.0 * mult))):
+		_place_group_where(1, 5, 6, 0, placed, size, func(x, y): return get_overlay(x, y) == 1, Vector2i(-1, -1), 0)
+
+func _forest_edge(x: int, y: int, size: int) -> bool:
+	if get_overlay(x, y) != 0:
+		return false
+	for dx in range(-2, 3):
+		for dy in range(-2, 3):
+			if dx == 0 and dy == 0:
+				continue
+			var nx: int = x + dx
+			var ny: int = y + dy
+			if nx < 0 or ny < 0 or nx >= size or ny >= size:
+				continue
+			if overlay_grid[nx][ny] == 1:
+				return true
+	return false
+
+# 按判定函数找点并生成一组资源（center.x < 0 表示不限位置）
+func _place_group_where(rtype, min_sz, max_sz, terrain, placed, size, pred: Callable, center: Vector2i, max_dist: int) -> bool:
+	for _attempt in range(400):
+		var tx := randi_range(3, size - 4)
+		var ty := randi_range(3, size - 4)
+		if center.x >= 0 and Vector2(tx - center.x, ty - center.y).length() > float(max_dist):
+			continue
+		if terrain_grid[tx][ty] != terrain:
+			continue
+		if placed.has("g%d,%d,%d" % [rtype, tx, ty]):
+			continue
+		if not pred.call(tx, ty):
+			continue
+		# 与同类资源保持间距，避免堆叠
+		var dup := false
+		for k in placed.keys():
+			if k.begins_with("g%d," % rtype):
+				var ox := int(k.split(",")[1])
+				var oy := int(k.split(",")[2])
+				if Vector2(tx - ox, ty - oy).length() < 10.0:
+					dup = true
+					break
+		if dup:
+			continue
+		placed["g%d,%d,%d" % [rtype, tx, ty]] = true
+		_spawn_group(rtype, min_sz, max_sz, tx, ty, terrain, placed, size, 0)
+		return true
+	return false
+
+# 常规地图：木材节点所在格及周围一格改为森林覆盖层
+func _mark_wood_as_forest(size: int) -> void:
+	if overlay_grid.is_empty():
+		return
+	for r in resource_positions:
+		if int(r["type"]) != 1:
+			continue
+		var gx := int(r["pos"].x + size / 2.0)
+		var gy := int(r["pos"].z + size / 2.0)
+		for dx in range(-1, 2):
+			for dy in range(-1, 2):
+				var nx := gx + dx
+				var ny := gy + dy
+				if nx < 0 or ny < 0 or nx >= size or ny >= size:
+					continue
+				if terrain_grid[nx][ny] != 0:
+					continue
+				overlay_grid[nx][ny] = 1
 
 # ── Helper: place a group near a position ──
 func _place_group_near(rtype, min_sz, max_sz, cx, cy, max_dist, terrain, placed, size, near_mountain=false, adjacent_mountains=0):

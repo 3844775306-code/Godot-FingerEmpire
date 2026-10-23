@@ -125,6 +125,47 @@ func _report(g, s: int) -> void:
 		str(_cross_connected(g, size, g.player_castle_pos, g.enemy_castle_pos, true)),
 		str(_cross_connected(g, size, g.player_castle_pos, g.enemy_castle_pos, false))])
 
+	# 资源统计 + 地形一致性（木材是否落在森林、金矿是否都在隘口）
+	var type_counts := {}
+	var wood_total := 0
+	var wood_in_forest := 0
+	var gold_total := 0
+	var gold_at_passes := 0
+	for r in g.resource_positions:
+		var t: int = int(r["type"])
+		if t > 4:
+			continue
+		type_counts[t] = int(type_counts.get(t, 0)) + 1
+		var wx := int(r["pos"].x + size / 2.0)
+		var wy := int(r["pos"].z + size / 2.0)
+		if t == 1:
+			wood_total += 1
+			if g.get_overlay(wx, wy) == 1:
+				wood_in_forest += 1
+		elif t == 0:
+			gold_total += 1
+			for pc in g._pass_centers:
+				# 组心落在隘口 6 格内，成员±4 散开，用 14 判定整组都在隘口
+				if Vector2(wx - pc.x, wy - pc.y).length() <= 14.0:
+					gold_at_passes += 1
+					break
+	print("  RES %s" % str(type_counts))
+	print("  WOOD total=%d in_forest=%d" % [wood_total, wood_in_forest])
+	if not g._pass_centers.is_empty():
+		print("  GOLD total=%d at_passes=%d" % [gold_total, gold_at_passes])
+	# 浅滩沙色抽样：应当是多种深浅不同的沙色，而不是单一纯色
+	var ford_cols := {}
+	for x in range(size):
+		for y in range(size):
+			if g.get_overlay(x, y) == 3:
+				ford_cols[g.base_colors[x][y].to_html(false)] = true
+	if not ford_cols.is_empty():
+		var keys := ford_cols.keys()
+		var sample := []
+		for i in range(mini(4, keys.size())):
+			sample.append(keys[i])
+		print("  FORD_COLORS distinct=%d sample=%s" % [keys.size(), str(sample)])
+
 # 2 倍降采样的字符画：. 平原  ^ 山地  ~ 水域  P/E 城堡  | 隘口
 func _ascii(g, size: int) -> void:
 	var step := 2
