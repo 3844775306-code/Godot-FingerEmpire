@@ -441,9 +441,9 @@ func _process(delta):
 		_naval_patrol_timer = NAVAL_PATROL_INTERVAL
 		if phase >= Phase.DEVELOPMENT:
 			_patrol_navy_around_water()
-	# Troop accumulation: assault when army >= 30
+	# 部队成型后转入进攻；不必等到 30 人，否则经济和船坞问题会让 AI 长期不出门
 	var army_count = count_military(my_peer_id if my_peer_id != -1 else my_team)
-	if army_count >= 30 and phase == Phase.DEVELOPMENT:
+	if phase == Phase.DEVELOPMENT and army_count >= 12 and battle.game_time >= 120.0:
 		phase = Phase.ASSAULT
 
 # ═══ Decide ═══
@@ -470,14 +470,15 @@ func _state_production(_delta):
 				if castle and castle.upgrade_level >= 1:
 					production_step = 1
 	elif production_step == 1:
+		# 船坞/渔船/仓库都只是可选开局动作，任何一项失败都不能让 AI 永远停在 PRODUCTION
 		if count_building(23) < 1 and _ai_can_build(23) and can_afford_building(23):
 			_cache_shipyard_location()
 			if cached_shipyard_pos != Vector3.ZERO:
 				if build_building(23, cached_shipyard_pos):
 					built_shipyard_pos.append(cached_shipyard_pos)
-		elif count_unit(14) < 3 and count_building(23) > 0 and can_afford(14) and _can_train_unit():
+		if count_building(23) > 0 and count_unit(14) < 3 and can_afford(14) and _can_train_unit():
 			produce_unit(14)
-		elif warehouses < WAREHOUSE_MAX_COUNT and can_afford_building(22):
+		if warehouses < WAREHOUSE_MAX_COUNT and can_afford_building(22):
 			var castle = get_peer_castle(my_peer_id)
 			if castle:
 				var near_count = 0
@@ -487,10 +488,10 @@ func _state_production(_delta):
 				# More warehouses nearby = lower priority, but still build if < 5 total
 				if near_count < 3:
 					build_building(22, castle.global_position + Vector3(randf_range(-10,10), 0, randf_range(-10,10)))
-		else:
-			if count_building(23) >= 1:
-				phase = Phase.DEVELOPMENT
-			_process_line_military()
+		# 工人已补齐（进入 step1 的前提）或已经过开局阶段，就直接进入 DEVELOPMENT
+		if count_unit(10) >= desired_worker_count or battle.game_time >= 120.0:
+			phase = Phase.DEVELOPMENT
+		_process_line_military()
 
 # -- DEVELOPMENT: expand base, counter enemy, upgrade --
 func _state_development(_delta):
@@ -1135,11 +1136,12 @@ func update_tactic(_delta):
 			last_tactic_time = now
 		return
 
-	# 防守姿态：威胁未完全解除前不出击；解除后仍需一定兵力优势
+	# 防守姿态：威胁未完全解除前不出击；解除后兵力成型就恢复进攻，
+	# 不能因为敌方军力略高就永远缩在城里
 	if current_tactic == LateTactic.DEFEND:
 		if threat >= 1:
 			return
-		if my_mil > player_mil * 1.15 and my_mil > 12:
+		if my_mil >= 12 and player_mil <= my_mil * 1.35:
 			current_tactic = LateTactic.NONE
 			last_tactic_time = now
 		return
@@ -1727,13 +1729,14 @@ func _process_line_3():
 			if hp2 != Vector3.ZERO: build_building(28, hp2)
 
 func _process_line_4():
-	# 威胁上升 / 已进入防守或骚扰姿态时，不再把主力整队送出去
+	# 威胁上升 / 防守 / 已经全队压上时，不再重复派出主力
 	if _defense != null and int(_defense.threat_level) >= 1:
 		return
-	if current_tactic != LateTactic.NONE:
+	if current_tactic == LateTactic.DEFEND or current_tactic == LateTactic.OVERWHELM or current_tactic == LateTactic.RAID:
 		return
+	# 骚扰小队出门时主力仍可进攻；attack_move 会跳过 ai_harass 单位
 	var my_key = my_peer_id if my_peer_id != -1 else my_team
-	if count_military(my_key) >= 15 and an_attack():
+	if count_military(my_key) >= 12 and an_attack():
 		var target = get_team_castle(_primary_enemy_team())
 		if target: attack_move(target.global_position, 30)
 
