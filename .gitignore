@@ -27,3 +27,11 @@ desktop.ini
 
 # Claude Code 本地配置（技能与检查脚本仍纳入版本管理）
 .claude/settings.local.json
+
+# Windows 导出产物（export_presets.cfg 当前输出到项目根目录）
+/FingerEmpire.exe
+/FingerEmpire.console.exe
+/FingerEmpire.pck
+/libgodotsteam.*.dll
+/steam-multiplayer-peer.*.dll
+/steam_api64.dll
