@@ -127,7 +127,25 @@ func _draw():
 	if bm and bm.has_method("get_player_colors"):
 		pc = bm.get_player_colors()
 
+	# —— 资源点：先画、弱化为 2x2 暗点，避免与单位方块混淆 ——
 	for ent in entity_snapshots:
+		if ent.get("type", -1) != 0: continue
+		var gx = int(ent["x"] + ms / 2)
+		var gz = int(ent["z"] + ms / 2)
+		if gx < 0 or gx >= ms or gz < 0 or gz >= ms: continue
+		if gx >= explored_grid.size() or gz >= explored_grid[gx].size(): continue
+		if not explored_grid[gx][gz]: continue
+		var eid = ent.get("entity_id", -1)
+		var rkey = ["gold", "wood", "stone", "food", "oil"][eid] if eid >= 0 and eid <= 4 else "gold"
+		var rc: Color = UITheme.RESOURCE_COLORS.get(rkey, Color(0.4, 0.4, 0.2)).darkened(0.35)
+		var res_visible = visible_grid[gx][gz] if gx < visible_grid.size() and gz < visible_grid[gx].size() else false
+		rc.a = 0.5 if res_visible else 0.28
+		var rpos = Vector2(gx * cell, gz * cell)
+		draw_rect(Rect2(rpos - Vector2(1, 1), Vector2(2, 2)), rc)
+
+	# —— 单位/建筑：后画，保持 5x5 色块并加深色描边 ——
+	for ent in entity_snapshots:
+		if ent.get("type", -1) == 0: continue
 		var gx = int(ent["x"] + ms / 2)
 		var gz = int(ent["z"] + ms / 2)
 		if gx < 0 or gx >= ms or gz < 0 or gz >= ms: continue
@@ -147,10 +165,6 @@ func _draw():
 		# 动物羊皮纸白
 		if eid >= 60 and eid <= 63:
 			dot_color = UITheme.PARCHMENT
-		# 资源点：按实体 id 区分资源种类（0金 1木 2石 3食 4油）
-		elif ent.get("type", -1) == 0:
-			var rkey = ["gold", "wood", "stone", "food", "oil"][eid] if eid >= 0 and eid <= 4 else "gold"
-			dot_color = UITheme.RESOURCE_COLORS.get(rkey, Color(0.4, 0.4, 0.2)).darkened(0.15)
 		elif owner != -1 and pc.has(owner):
 			dot_color = pc[owner].lightened(0.25)
 		elif ent["team"] == player_team:
@@ -160,6 +174,7 @@ func _draw():
 		else:
 			dot_color = UITheme.GOLD.lightened(0.2)
 		var pos = Vector2(gx * cell, gz * cell)
+		draw_rect(Rect2(pos - Vector2(3, 3), Vector2(7, 7)), Color(0, 0, 0, 0.55))
 		draw_rect(Rect2(pos - Vector2(2, 2), Vector2(5, 5)), dot_color)
 
 	# 战事警报
