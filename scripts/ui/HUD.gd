@@ -1013,12 +1013,18 @@ func _get_hud_label_color(entity: GameEntity) -> Color:
 	
 	return Color.WHITE
 
-# 血条标签镶边：用实体所属国家/阵营色描边，便于快速区分敌我与国家
+# 血条标签镶边：玩家自己的单位用绿色，友军/敌军仍用所属国家/阵营色
 func _apply_hud_label_outline(label: Label, entity: GameEntity) -> void:
 	var bm = _get_bm()
-	if bm and bm.has_method("get_entity_color"):
-		label.add_theme_color_override("font_outline_color", bm.get_entity_color(entity))
-		label.add_theme_constant_override("outline_size", 2)
+	if not bm: return
+	var is_own := false
+	if entity.owner_peer_id != -1:
+		is_own = entity.owner_peer_id == bm.player_owner_id
+	else:
+		is_own = entity.team == bm.get_host_team()
+	var outline: Color = Color(0.25, 1.0, 0.35) if is_own else bm.get_entity_color(entity)
+	label.add_theme_color_override("font_outline_color", outline)
+	label.add_theme_constant_override("outline_size", 2)
 
 func _on_demolish_selected():
 	var bm = _get_bm() as RTSBattleManager

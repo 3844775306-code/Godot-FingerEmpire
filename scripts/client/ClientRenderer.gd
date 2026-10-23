@@ -1208,9 +1208,21 @@ func _get_entity_color(info: Dictionary) -> Color:
 		_:
 			return Color(0.7, 0.7, 0.7)   # 中立灰色
 
-# 血条标签镶边：用所属国家/阵营色描边，便于快速区分敌我与国家
+# 是否玩家自己的单位：2v2/3v3 按 owner_peer_id，1v1 没有 owner 时按队伍兜底
+func _is_own_entity(info: Dictionary) -> bool:
+	var oid = int(info.get("owner_peer_id", -1))
+	if my_peer_id != -1:
+		if oid != -1:
+			return oid == my_peer_id
+		return int(info.get("team", -1)) == player_team
+	if player_team != -1:
+		return int(info.get("team", -1)) == player_team
+	return false
+
+# 血条标签镶边：玩家自己的单位用绿色，友军/敌军仍用所属国家/阵营色
 func _apply_label_nation_outline(lab: Label, info: Dictionary) -> void:
-	lab.add_theme_color_override("font_outline_color", _get_entity_color(info))
+	var outline := Color(0.25, 1.0, 0.35) if _is_own_entity(info) else _get_entity_color(info)
+	lab.add_theme_color_override("font_outline_color", outline)
 	lab.add_theme_constant_override("outline_size", 3)
 
 # Helper: get color for entity label (by control group first, then owner/team)
