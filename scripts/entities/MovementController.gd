@@ -389,7 +389,13 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 	g_score[start_tile] = 0.0
 	open_list.push(start_tile, _heuristic(start_tile, end_tile) * 1.2)
 
-	var max_nodes = 1000; var nodes_explored = 0
+	var max_nodes: int = 1000
+	# 固定 1000 节点在 100×100 地图上不够跨河：桥头堡等地图的浅滩偏离起点/终点连线时，
+	# A* 会沿着河岸展开 1500~1800 个节点才找到渡口，旧上限会提前返回空路径。
+	# 表现就是 AI 部队堵在集结点、永远不发起进攻。按起终点距离放宽预算，同时保留硬上限。
+	var tile_span: int = absi(start_tile.x - end_tile.x) + absi(start_tile.y - end_tile.y)
+	max_nodes = clampi(1200 + tile_span * 40, 1200, 8000)
+	var nodes_explored := 0
 	var from_height := _get_tile_height(start_tile, bm)
 
 	while not open_list.is_empty() and nodes_explored < max_nodes:
@@ -477,7 +483,8 @@ func _reconstruct_path(came_from: Dictionary, end_tile: Vector2i) -> Array:
 	var current = end_tile
 	var half = RTSConfig.MAP_SIZE / 2.0
 	path.append(Vector3(current.x - half, 0, current.y - half))
-	for _i in range(200):
+	# 远距离/绕河路径可能超过 200 格，必须按实际 came_from 链回溯，不能截断
+	for _i in range(RTSConfig.MAP_SIZE * 4):
 		if not came_from.has(current): break
 		current = came_from[current]
 		path.append(Vector3(current.x - half, 0, current.y - half))
