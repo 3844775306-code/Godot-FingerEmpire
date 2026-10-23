@@ -76,6 +76,7 @@ func set_nations(p_nation: int, e_nation: int):
 # ==================== 单位统计面板创建 ====================
 func _create_stats_toggle_button():
 	_toggle_stats_btn = Button.new()
+	_toggle_stats_btn.name = "StatsToggleButton"
 	_toggle_stats_btn.text = "📊 统计"
 	_toggle_stats_btn.position = Vector2(10, 660)
 	_toggle_stats_btn.toggle_mode = true
@@ -90,6 +91,15 @@ func _on_toggle_stats_pressed():
 	unit_stats_visible = _toggle_stats_btn.button_pressed
 	if unit_stats_panel:
 		unit_stats_panel.visible = unit_stats_visible
+
+# 联机客户端结算时隐藏统计面板与切换按钮
+func hide_stat_panels() -> void:
+	unit_stats_visible = false
+	if unit_stats_panel:
+		unit_stats_panel.visible = false
+	if _toggle_stats_btn:
+		_toggle_stats_btn.button_pressed = false
+		_toggle_stats_btn.visible = false
 
 func _create_unit_stats_panel():
 	unit_stats_panel = Control.new()

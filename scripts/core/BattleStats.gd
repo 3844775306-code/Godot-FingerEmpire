@@ -127,6 +127,15 @@ func record_gathered(owner: int, team: int, amount: float) -> void:
 func record_produced(owner: int, team: int, amount: int = 1) -> void:
 	_record(owner, team, "produced", float(amount))
 
+# 军队生产累计只统计作战单位：农民、商队、官员、采集船等 target_type=0 不计入
+func record_produced_unit(owner: int, team: int, unit_id: int) -> void:
+	var cfg: Dictionary = EntityDatabase.get_config(unit_id)
+	if cfg.is_empty():
+		return
+	if int(cfg.get("target_type", 0)) <= 0:
+		return
+	_record(owner, team, "produced", 1.0)
+
 func record_kill(owner: int, team: int, amount: int = 1) -> void:
 	_record(owner, team, "kills", float(amount))
 
@@ -245,6 +254,7 @@ func sample_now() -> void:
 	var owner_vision: Dictionary = {}
 	var team_vision: Dictionary = {}
 	var nation_vision: Dictionary = {}
+	var nation_team_vision: Dictionary = {}
 	var map_size: int = int(RTSConfig.MAP_SIZE)
 	for e in battle.get_tree().get_nodes_in_group("vision_providers"):
 		if not (e is GameEntity) or e.health <= 0 or e.team == RTSConfig.Team.NEUTRAL:
@@ -261,6 +271,7 @@ func sample_now() -> void:
 		var oset := _ensure_vision(owner_vision, key)
 		var tset := _ensure_vision(team_vision, "t:%d" % team)
 		var nset := _ensure_vision(nation_vision, "n:%d" % nation)
+		var ntset := _ensure_vision(nation_team_vision, "n:%d:t:%d" % [nation, team])
 		var g: Vector2i = battle.world_to_grid(e.global_position)
 		var radius := int(ceil(vr))
 		for dx in range(-radius, radius + 1):
@@ -275,6 +286,7 @@ func sample_now() -> void:
 				oset[idx] = true
 				tset[idx] = true
 				nset[idx] = true
+				ntset[idx] = true
 
 	for key in owner_data.keys():
 		var meta: Dictionary = metas.get(key, {})
@@ -288,6 +300,7 @@ func sample_now() -> void:
 		"owners": {},
 		"team_vision": {},
 		"nation_vision": {},
+		"nation_team_vision": {},
 	}
 	for key in owner_data.keys():
 		var meta: Dictionary = metas.get(key, {})
@@ -317,6 +330,8 @@ func sample_now() -> void:
 		sample["team_vision"][String(team_key).trim_prefix("t:")] = team_vision[team_key].size()
 	for nation_key in nation_vision.keys():
 		sample["nation_vision"][String(nation_key).trim_prefix("n:")] = nation_vision[nation_key].size()
+	for nt_key in nation_team_vision.keys():
+		sample["nation_team_vision"][nt_key] = nation_team_vision[nt_key].size()
 
 	if not samples.is_empty() and absf(float(samples[-1].get("time", -999.0)) - duration_now) < 0.01:
 		samples[-1] = sample
@@ -341,8 +356,11 @@ func get_series(metric_id: String, mode: String) -> Array:
 			var color: Color
 			if mode == "nation":
 				var nation := int(o.get("nation", -1))
-				gkey = "n:%d" % nation
+				var team := int(o.get("team", -1))
+				gkey = "n:%d:t:%d" % [nation, team]
 				name = _nation_label(nation)
+				if team >= 0:
+					name += " · " + _team_label(team)
 				color = _nation_color(nation)
 			else:
 				var team := int(o.get("team", -1))
@@ -353,6 +371,7 @@ func get_series(metric_id: String, mode: String) -> Array:
 				groups[gkey] = {
 					"key": gkey, "name": name, "color": color,
 					"points": [], "final": 0.0, "nation": o.get("nation", -1), "team": o.get("team", -1),
+					"team_label": _team_label(int(o.get("team", -1))) if int(o.get("team", -1)) >= 0 else "",
 				}
 				group_order.append(gkey)
 
@@ -362,18 +381,25 @@ func get_series(metric_id: String, mode: String) -> Array:
 			var value := 0.0
 			var vision_key := ""
 			if mode == "nation":
-				vision_key = str(int(group["nation"]))
+				var nation := int(group["nation"])
+				var team := int(group["team"])
 				for key in s["owners"].keys():
 					var o: Dictionary = s["owners"][key]
-					if int(o.get("nation", -1)) == int(group["nation"]):
+					if int(o.get("nation", -1)) == nation and int(o.get("team", -1)) == team:
 						value += float(o.get(metric_id, 0))
 				if metric_id == "vision":
-					value = float(s["nation_vision"].get(vision_key, 0))
+					var nt_map: Dictionary = s.get("nation_team_vision", {})
+					var nt_key := "n:%d:t:%d" % [nation, team]
+					if nt_map.has(nt_key):
+						value = float(nt_map[nt_key])
+					else:
+						value = float(s["nation_vision"].get(str(nation), 0))
 			else:
-				vision_key = str(int(group["team"]))
+				var team := int(group["team"])
+				vision_key = str(team)
 				for key in s["owners"].keys():
 					var o: Dictionary = s["owners"][key]
-					if int(o.get("team", -1)) == int(group["team"]):
+					if int(o.get("team", -1)) == team:
 						value += float(o.get(metric_id, 0))
 				if metric_id == "vision":
 					value = float(s["team_vision"].get(vision_key, 0))

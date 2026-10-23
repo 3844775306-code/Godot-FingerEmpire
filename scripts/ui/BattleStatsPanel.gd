@@ -37,6 +37,7 @@ func _fit_panel() -> void:
 func _build_ui() -> void:
 	name = "BattleStatsPanel"
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	z_index = 500
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	visible = false
 

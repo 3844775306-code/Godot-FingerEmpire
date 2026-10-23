@@ -124,6 +124,7 @@ func _create_stats_toggle_button():
 	btn_theme.set_font_size("font_size", "Button", 18)
 
 	_toggle_stats_btn = Button.new()
+	_toggle_stats_btn.name = "StatsToggleButton"
 	_toggle_stats_btn.text = "📊 统计"
 	_toggle_stats_btn.position = Vector2(620, 10)
 	_toggle_stats_btn.theme = btn_theme
@@ -136,6 +137,17 @@ func _on_toggle_stats_pressed():
 	unit_stats_visible = _toggle_stats_btn.button_pressed
 	if unit_stats_panel:
 		unit_stats_panel.visible = unit_stats_visible
+
+# 战斗结算面板弹出时，隐藏所有统计/决策类面板，避免压在结算层上
+func hide_stat_panels() -> void:
+	unit_stats_visible = false
+	if unit_stats_panel:
+		unit_stats_panel.visible = false
+	if _toggle_stats_btn:
+		_toggle_stats_btn.button_pressed = false
+		_toggle_stats_btn.visible = false
+	if _diplo_panel:
+		_diplo_panel.visible = false
 
 func _create_unit_stats_panel():
 	unit_stats_panel = Control.new()
@@ -711,6 +723,8 @@ func _process(delta):
 	var bm = _get_bm()
 	if bm == null:
 		return
+	if bm.game_over and unit_stats_visible:
+		hide_stat_panels()
 	minimap_timer -= delta
 	if minimap_timer <= 0:
 		minimap_timer = 0.5

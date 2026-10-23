@@ -386,7 +386,7 @@ func _spawn_produced_unit():
 	if entity:
 		entity.owner_peer_id = self.owner_peer_id   # 继承建筑所有权
 		if bm.battle_stats:
-			bm.battle_stats.record_produced(self.owner_peer_id, team, 1)
+			bm.battle_stats.record_produced_unit(self.owner_peer_id, team, unit_id)
 
 		# 在线模式：按玩家统计人口（单人模式 spawn_entity 已处理，避免双计）
 		if owner_peer_id != -1 and bm is OnlineBattleManager:

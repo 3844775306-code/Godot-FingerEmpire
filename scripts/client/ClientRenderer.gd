@@ -1654,6 +1654,14 @@ func get_terrain_height(world_pos: Vector3) -> float:
 	return 0.0
 
 # ==================== 游戏结束面板 ====================
+# 结算层出现前，先隐藏客户端统计面板，避免压在全屏结算层之上
+func _hide_client_stat_panels(ui: Node) -> void:
+	if ui == null:
+		return
+	var hud = ui.get_node_or_null("HUD")
+	if hud and hud.has_method("hide_stat_panels"):
+		hud.hide_stat_panels()
+
 func show_game_over(winner_team: int, stats_payload: Dictionary = {}):
 	AudioManager.play_music("victory" if winner_team == player_team else "defeat")
 	var existing = get_node_or_null("UI/GameOverPanel")
@@ -1661,6 +1669,7 @@ func show_game_over(winner_team: int, stats_payload: Dictionary = {}):
 
 	var ui = get_node_or_null("UI")
 	if not ui: ui = get_tree().root
+	_hide_client_stat_panels(ui)
 
 	# 优先使用房主发来的完整统计采样；没有数据时保留简易结算兜底
 	if not stats_payload.is_empty():

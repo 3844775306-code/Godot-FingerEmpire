@@ -434,8 +434,18 @@ func _create_game_over_panel():
 		add_child(game_over_panel)
 	game_over_label = panel.result_label
 
+# 结算时统一隐藏统计面板：玩家军力统计、统计开关以及所有 AI 决策面板
+func hide_all_stat_panels() -> void:
+	var hud = get_node_or_null("UI")
+	if hud and hud.has_method("hide_stat_panels"):
+		hud.hide_stat_panels()
+	for child in get_children():
+		if child is AIController and is_instance_valid(child.debug_panel):
+			child.debug_panel.visible = false
+
 # 结算：先固定最后一帧统计，再交给结算面板绘制全部曲线
 func _show_battle_stats() -> void:
+	hide_all_stat_panels()
 	if battle_stats:
 		battle_stats.finalize()
 	if game_over_panel and game_over_panel.has_method("show_stats"):

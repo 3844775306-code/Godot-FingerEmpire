@@ -1107,6 +1107,7 @@ func _show_host_game_over(winner_team: int) -> void:
 		host_team = player_teams[1]
 	var host_won := winner_team == host_team
 	AudioManager.play_music("victory" if host_won else "defeat")
+	hide_all_stat_panels()
 	if game_over_label:
 		game_over_label.text = "你赢了！" if host_won else "你输了！"
 		game_over_label.add_theme_color_override("font_color", Color.GREEN if host_won else Color.RED)
