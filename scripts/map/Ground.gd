@@ -928,8 +928,8 @@ func _place_forest_wood(size: int, castles: Array, placed: Dictionary, mult: flo
 				continue
 			cands.append(Vector2i(x, y))
 	cands.shuffle()
-	# 密度：林线要连成一片树墙，1V1 约 600 株，团队按规模放大（上限 900 防止实体爆炸）
-	var target := mini(900, int(round(600.0 * mult)))
+	# 密度：林线要连成一片树墙，1V1 约 400 株，团队按规模放大（上限 900 防止实体爆炸）
+	var target := mini(900, int(round(400.0 * mult)))
 	var nodes: Array = []
 	# 每座基地附近先各取 30 株，保证开局能采到木
 	for cs in castles:
