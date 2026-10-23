@@ -128,3 +128,22 @@ static func font_title() -> int:
 
 static func font_small() -> int:
 	return font_dp(11.0)
+
+# 手机端 ScrollContainer 不响应转发进来的鼠标拖动（只认触摸拖动与滚轮），
+# 统一由这里按触摸位置找到最上层的滚动容器，直接驱动它的滚动值。
+static func scroll_at(root_node: Node, pos: Vector2, delta_y: float) -> bool:
+	var target: ScrollContainer = null
+	target = _find_scroll(root_node, pos, target)
+	if target == null:
+		return false
+	target.scroll_vertical -= int(round(delta_y))
+	return true
+
+static func _find_scroll(node: Node, pos: Vector2, best: ScrollContainer) -> ScrollContainer:
+	if node is ScrollContainer:
+		var sc := node as ScrollContainer
+		if sc.is_visible_in_tree() and sc.get_global_rect().has_point(pos):
+			best = sc
+	for c in node.get_children():
+		best = _find_scroll(c, pos, best)
+	return best

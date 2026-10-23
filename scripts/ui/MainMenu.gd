@@ -8,6 +8,14 @@ var _map_button: Button = null
 var _last_map_id: String = "classic"
 var _map_allowed: bool = true
 
+# 主菜单场景没有战斗内的 TouchGestureRouter：触摸拖动直接驱动 ScrollContainer 滚动
+# （手机点击仍由引擎模拟鼠标完成，这里只管滑动）。
+func _input(event: InputEvent) -> void:
+	if not InputSource.use_mobile_ui():
+		return
+	if event is InputEventScreenDrag:
+		UILayout.scroll_at(self, event.position, event.relative.y)
+
 func _ready():
 	AudioManager.play_music("menu")
 	# Scale to fit screen (design: 2400x1400)
@@ -15,6 +23,12 @@ func _ready():
 	var s = min(vs.x / 2400.0, vs.y / 1400.0)
 	scale = Vector2(s, s)
 	position = (vs - Vector2(2400, 1400) * s) / 2.0
+	# 手机端：桌面绝对布局在 674×393dp 的屏幕上字只有 5~7dp，改用竖排滚动布局
+	if InputSource.use_mobile_ui():
+		# 根 Control 默认 size 为 0，anchors 布局会整体塌成 0 高，必须先给设计尺寸
+		size = Vector2(2400, 1400)
+		_build_mobile_layout()
+		return
 	# 隐藏旧的场景节点，全部用代码重建
 	var old_box = get_node_or_null("VBoxContainer")
 	if old_box: old_box.visible = false
@@ -371,7 +385,10 @@ func _on_settings_pressed():
 	if existing:
 		existing.visible = !existing.visible
 		return
-	_create_settings_panel()
+	if InputSource.use_mobile_ui():
+		_create_settings_panel_mobile()
+	else:
+		_create_settings_panel()
 
 func _create_settings_panel():
 	var panel = Panel.new()
@@ -502,3 +519,314 @@ func _create_settings_panel():
 
 func _on_quit_pressed():
 	get_tree().quit()
+
+# ==================== 手机端布局 ====================
+# 桌面版是 2400×1400 绝对定位；手机屏只有 674×393dp，字号与按钮必须按 dp 重排。
+# 结构：标题 + 可滚动竖排配置区（国家/AI 难度/模式/地图/快速模式/按钮）。
+
+func _build_mobile_layout() -> void:
+	var bg := ColorRect.new()
+	bg.color = Color(0.10, 0.08, 0.06)
+	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	add_child(bg)
+
+	var top_bar := ColorRect.new()
+	top_bar.color = Color(UITheme.GOLD)
+	top_bar.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
+	top_bar.offset_bottom = UILayout.dp(2.0)
+	add_child(top_bar)
+
+	var title := Label.new()
+	title.text = "👑 FINGER EMPIRE 👑"
+	title.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
+	title.offset_top = UILayout.dp(6.0)
+	title.offset_bottom = UILayout.dp(28.0)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", UILayout.font_dp(15.0))
+	title.add_theme_color_override("font_color", UITheme.GOLD.lightened(0.15))
+	title.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.9))
+	title.add_theme_constant_override("shadow_offset_x", 3)
+	title.add_theme_constant_override("shadow_offset_y", 3)
+	add_child(title)
+
+	var subtitle := Label.new()
+	subtitle.text = "即时战略 · 帝国纷争"
+	subtitle.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
+	subtitle.offset_top = UILayout.dp(28.0)
+	subtitle.offset_bottom = UILayout.dp(41.0)
+	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	UITheme.apply_label(subtitle, UILayout.font_dp(9.0), UITheme.PARCHMENT)
+	add_child(subtitle)
+
+	# 滚动区：配置区内容超过一屏时上下滑动
+	var scroll := ScrollContainer.new()
+	scroll.name = "MobileScroll"
+	scroll.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	scroll.offset_top = UILayout.dp(44.0)
+	scroll.offset_left = UILayout.dp(10.0)
+	scroll.offset_right = -UILayout.dp(10.0)
+	scroll.offset_bottom = -UILayout.dp(6.0)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	# 触摸拖动由 MainMenu._input 驱动；容器自身忽略鼠标事件，避免它把 scroll 值又算回 0
+	scroll.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(scroll)
+
+	var vb := VBoxContainer.new()
+	vb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vb.add_theme_constant_override("separation", int(UILayout.dp(6.0)))
+	scroll.add_child(vb)
+
+	# 国家选择（选项文本较长，字号用 10dp 防止截断过多）
+	var nation_title := _mobile_section("⚔️ 战役配置 ⚔️", UITheme.GOLD)
+	vb.add_child(nation_title)
+
+	nation_select = OptionButton.new()
+	nation_select.add_item("  维京    +25%生命  +10%速度")
+	nation_select.add_item("  英格兰  +15%攻击  +20%视野  采木+10%")
+	nation_select.add_item("  法兰西  +25护甲  城堡2级起始")
+	nation_select.add_item("  中国    食物+20%  黄金+10%  人口+10")
+	nation_select.add_item("  匈牙利  +15护甲  石材+15%  黄金+10%  人口+5")
+	nation_select.add_item("  日本    +15%攻速  +10%攻击")
+	nation_select.add_item("  拜占庭  +2双护甲  黄金+10%")
+	nation_select.custom_minimum_size = Vector2(0, UILayout.dp(38.0))
+	nation_select.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_option(nation_select, UILayout.font_dp(10.0))
+	vb.add_child(nation_select)
+
+	var diff_select := OptionButton.new()
+	diff_select.name = "DiffSelect"
+	diff_select.add_item("  AI 难度：简单")
+	diff_select.add_item("  AI 难度：普通（资源×2）")
+	diff_select.add_item("  AI 难度：困难（资源×3+额外）")
+	diff_select.add_item("  AI 难度：地狱（困难+速度+20%）")
+	diff_select.custom_minimum_size = Vector2(0, UILayout.dp(36.0))
+	diff_select.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_option(diff_select, UILayout.font_dp(10.0))
+	vb.add_child(diff_select)
+
+	var mode_select := OptionButton.new()
+	mode_select.name = "ModeSelect"
+	mode_select.add_item("  模式：1V1")
+	mode_select.add_item("  模式：2V2")
+	mode_select.add_item("  模式：3V3")
+	mode_select.add_item("  乱斗·3国")
+	mode_select.add_item("  乱斗·4国")
+	mode_select.add_item("  乱斗·5国")
+	mode_select.selected = 0
+	mode_select.custom_minimum_size = Vector2(0, UILayout.dp(36.0))
+	mode_select.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_option(mode_select, UILayout.font_dp(10.0))
+	vb.add_child(mode_select)
+
+	var map_btn := Button.new()
+	map_btn.name = "MapButton"
+	map_btn.custom_minimum_size = Vector2(0, UILayout.dp(36.0))
+	map_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UITheme.apply_muted_button(map_btn, UILayout.font_dp(10.0))
+	map_btn.pressed.connect(_open_map_dialog)
+	vb.add_child(map_btn)
+	_map_button = map_btn
+	_refresh_map_button()
+	mode_select.item_selected.connect(_update_map_availability)
+	_update_map_availability(mode_select.selected)
+
+	var fast_check := CheckBox.new()
+	fast_check.name = "FastCheck"
+	fast_check.text = "快速模式（采集×3）"
+	fast_check.custom_minimum_size = Vector2(0, UILayout.dp(34.0))
+	fast_check.add_theme_font_size_override("font_size", UILayout.font_dp(10.0))
+	fast_check.add_theme_color_override("font_color", UITheme.PARCHMENT)
+	fast_check.add_theme_color_override("font_hover_color", UITheme.GOLD)
+	fast_check.add_theme_color_override("icon_normal_color", UITheme.GOLD)
+	vb.add_child(fast_check)
+
+	var sep := HSeparator.new()
+	vb.add_child(sep)
+
+	var btn_data := [
+		["⚔️ 单人游戏", _on_play_pressed, "primary"],
+		["🌐 联机对战", _on_multiplayer_pressed, "primary"],
+		["📖 单位图鉴", _on_units_pressed, "book"],
+		["⚙️ 设  置", _on_settings_pressed, "muted"],
+		["🚪 退出游戏", _on_quit_pressed, "danger"],
+	]
+	for data in btn_data:
+		var btn := Button.new()
+		btn.text = data[0]
+		btn.custom_minimum_size = Vector2(0, UILayout.dp(42.0))
+		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_mobile_style_button(btn, data[2], UILayout.font_dp(13.0))
+		btn.pressed.connect(data[1])
+		vb.add_child(btn)
+
+	var tip := Label.new()
+	tip.text = "手机操作：点按选择 / 拖动平移视角 / 双指缩放 / 长按空地呼出建造菜单 / 右上角小地图切换统计"
+	tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	tip.add_theme_font_size_override("font_size", UILayout.font_dp(8.0))
+	tip.add_theme_color_override("font_color", Color(UITheme.STONE).lightened(0.25))
+	vb.add_child(tip)
+
+	vb.add_child(_mobile_section("v1.0 - Godot 4.7", Color(UITheme.STONE).lightened(0.2)))
+
+func _mobile_section(text: String, color: Color) -> Label:
+	var lbl := Label.new()
+	lbl.text = text
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lbl.add_theme_font_size_override("font_size", UILayout.font_dp(11.0))
+	lbl.add_theme_color_override("font_color", color)
+	return lbl
+
+# 菜单按钮样式（primary / danger / book / muted），字号由调用方按 dp 传入
+func _mobile_style_button(btn: Button, kind: String, font_size: int) -> void:
+	match kind:
+		"primary":
+			UITheme.apply_primary_button(btn, font_size)
+		"danger":
+			UITheme.apply_danger_button(btn, font_size)
+		"book":
+			var sb := StyleBoxFlat.new()
+			sb.bg_color = Color(UITheme.SAPPHIRE, 0.16)
+			sb.border_color = Color(UITheme.SAPPHIRE, 0.95)
+			sb.set_corner_radius_all(10)
+			sb.set_border_width_all(2)
+			sb.set_content_margin_all(6)
+			btn.add_theme_stylebox_override("normal", sb)
+			var hover := sb.duplicate()
+			hover.bg_color = Color(UITheme.SAPPHIRE, 0.30)
+			btn.add_theme_stylebox_override("hover", hover)
+			var pressed := hover.duplicate()
+			pressed.bg_color = Color(UITheme.SAPPHIRE, 0.44)
+			btn.add_theme_stylebox_override("pressed", pressed)
+			btn.add_theme_stylebox_override("focus", StyleBoxEmpty.new())
+			btn.add_theme_font_size_override("font_size", font_size)
+			btn.add_theme_color_override("font_color", UITheme.PARCHMENT)
+			btn.add_theme_color_override("font_hover_color", Color(UITheme.GOLD, 1.0))
+			btn.add_theme_color_override("font_pressed_color", UITheme.GOLD.lightened(0.2))
+		_:
+			UITheme.apply_muted_button(btn, font_size)
+
+# 手机端设置面板：全屏滚动卡片，控件按 dp 放大
+func _create_settings_panel_mobile() -> void:
+	var panel := Panel.new()
+	panel.name = "SettingsPanel"
+	panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	panel.offset_left = UILayout.dp(6.0)
+	panel.offset_right = -UILayout.dp(6.0)
+	panel.offset_top = UILayout.dp(8.0)
+	panel.offset_bottom = -UILayout.dp(8.0)
+	panel.add_theme_stylebox_override("panel", UITheme.card_style(UITheme.GOLD))
+	panel.z_index = 50
+	add_child(panel)
+	UITheme.fade_in(panel, 0.3)
+
+	var scroll := ScrollContainer.new()
+	scroll.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	scroll.offset_left = UILayout.dp(8.0)
+	scroll.offset_right = -UILayout.dp(8.0)
+	scroll.offset_top = UILayout.dp(8.0)
+	scroll.offset_bottom = -UILayout.dp(8.0)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	panel.add_child(scroll)
+
+	var vb := VBoxContainer.new()
+	vb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vb.add_theme_constant_override("separation", int(UILayout.dp(6.0)))
+	scroll.add_child(vb)
+
+	var ttl := UITheme.make_section_title("⚙️ 音量设置", UITheme.GOLD, UILayout.font_dp(12.0))
+	ttl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vb.add_child(ttl)
+
+	vb.add_child(_mobile_volume_row("音乐音量", AudioManager._music_volume,
+		func(v: float): AudioManager.set_music_volume(v), "MusicSlider"))
+	vb.add_child(_mobile_volume_row("音效音量", AudioManager._sfx_volume,
+		func(v: float): AudioManager.set_sfx_volume(v), "SFXSlider"))
+
+	var test := Button.new()
+	test.text = "🔊 测试音效"
+	test.custom_minimum_size = Vector2(0, UILayout.dp(36.0))
+	UITheme.apply_muted_button(test, UILayout.font_dp(11.0))
+	test.pressed.connect(func(): AudioManager.play_sfx("ui_click"))
+	vb.add_child(test)
+
+	vb.add_child(_mobile_section("命令模式", UITheme.PARCHMENT))
+
+	var cmd_row := HBoxContainer.new()
+	cmd_row.add_theme_constant_override("separation", int(UILayout.dp(6.0)))
+	vb.add_child(cmd_row)
+	var cmd_single := Button.new()
+	cmd_single.text = "单次命令"
+	cmd_single.custom_minimum_size = Vector2(0, UILayout.dp(36.0))
+	cmd_single.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	var cmd_cont := Button.new()
+	cmd_cont.text = "连续命令"
+	cmd_cont.custom_minimum_size = Vector2(0, UILayout.dp(36.0))
+	cmd_cont.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_set_cmd_toggle(cmd_single, GameSettings.command_mode == 0)
+	_set_cmd_toggle(cmd_cont, GameSettings.command_mode == 1)
+	cmd_single.add_theme_font_size_override("font_size", UILayout.font_dp(11.0))
+	cmd_cont.add_theme_font_size_override("font_size", UILayout.font_dp(11.0))
+	cmd_single.pressed.connect(func():
+		GameSettings.command_mode = 0
+		_set_cmd_toggle(cmd_single, true)
+		_set_cmd_toggle(cmd_cont, false)
+	)
+	cmd_cont.pressed.connect(func():
+		GameSettings.command_mode = 1
+		_set_cmd_toggle(cmd_single, false)
+		_set_cmd_toggle(cmd_cont, true)
+	)
+	cmd_row.add_child(cmd_single)
+	cmd_row.add_child(cmd_cont)
+
+	var hint := Label.new()
+	hint.text = "音效距离衰减：50米内可听到 | 单次命令：下令后取消选择"
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.add_theme_font_size_override("font_size", UILayout.font_dp(8.0))
+	hint.add_theme_color_override("font_color", Color(UITheme.STONE).lightened(0.25))
+	vb.add_child(hint)
+
+	var close := Button.new()
+	close.text = "关闭"
+	close.custom_minimum_size = Vector2(0, UILayout.dp(40.0))
+	UITheme.apply_danger_button(close, UILayout.font_dp(12.0))
+	close.pressed.connect(func(): panel.visible = false)
+	vb.add_child(close)
+
+# 手机端音量行：标签 + 滑块 + 百分比
+func _mobile_volume_row(label_text: String, value: float, setter: Callable, slider_name: String) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", int(UILayout.dp(4.0)))
+	var lbl := Label.new()
+	lbl.text = label_text
+	lbl.custom_minimum_size = Vector2(UILayout.dp(62.0), 0)
+	lbl.add_theme_font_size_override("font_size", UILayout.font_dp(10.0))
+	lbl.add_theme_color_override("font_color", UITheme.PARCHMENT)
+	lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(lbl)
+
+	var slider := HSlider.new()
+	slider.name = slider_name
+	slider.custom_minimum_size = Vector2(0, UILayout.dp(28.0))
+	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	slider.min_value = 0
+	slider.max_value = 100
+	slider.value = value * 100.0
+	row.add_child(slider)
+
+	var val := Label.new()
+	val.text = "%d%%" % int(slider.value)
+	val.custom_minimum_size = Vector2(UILayout.dp(34.0), 0)
+	val.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	val.add_theme_font_size_override("font_size", UILayout.font_dp(10.0))
+	val.add_theme_color_override("font_color", UITheme.RES_GOLD)
+	val.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	row.add_child(val)
+
+	slider.value_changed.connect(func(v: float):
+		val.text = "%d%%" % int(v)
+		setter.call(v / 100.0)
+	)
+	return row

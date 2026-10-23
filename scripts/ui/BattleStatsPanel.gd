@@ -18,10 +18,15 @@ var mode_buttons: Dictionary = {}
 var metric_buttons: Dictionary = {}
 var restart_scene_path: String = "res://scenes/rts_battle.tscn"
 var _result_panel: Panel = null
+var _mobile: bool = false
 var _perf_fps_chart = null
 var _perf_units_chart = null
 var _perf_fps_summary: Label = null
 var _perf_units_summary: Label = null
+
+# 手机端字号放大倍率：设计空间 2400 宽 ≈ 674dp，桌面 13 号字只有约 3.6dp，按 2.6 倍放到约 9.5dp
+func _fs(base: int) -> int:
+	return int(round(float(base) * 2.6)) if _mobile else base
 
 func _init() -> void:
 	_build_ui()
@@ -35,10 +40,15 @@ func _fit_panel() -> void:
 		return
 	var w := minf(1900.0, maxf(900.0, size.x - 80.0))
 	var h := minf(1140.0, maxf(620.0, size.y - 80.0))
+	if _mobile:
+		# 手机端铺满全屏，空间都让给放大的文字
+		w = size.x - UILayout.dp(12.0)
+		h = size.y - UILayout.dp(12.0)
 	_result_panel.position = (size - Vector2(w, h)) * 0.5
 	_result_panel.size = Vector2(w, h)
 
 func _build_ui() -> void:
+	_mobile = InputSource.use_mobile_ui()
 	name = "BattleStatsPanel"
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	z_index = 500
@@ -83,12 +93,31 @@ func _build_ui() -> void:
 	panel.add_child(margin)
 
 	var root := VBoxContainer.new()
-	root.add_theme_constant_override("separation", 12)
-	margin.add_child(root)
+	root.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	root.add_theme_constant_override("separation", int(UILayout.dp(6.0)) if _mobile else 12)
+	if _mobile:
+		# 手机上内容超过一屏，整页可上下滑动
+		var page := ScrollContainer.new()
+		page.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+		page.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+		page.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		margin.add_child(page)
+		page.add_child(root)
+	else:
+		margin.add_child(root)
 
 	# ── 标题栏 ──
-	var header := HBoxContainer.new()
-	header.add_theme_constant_override("separation", 18)
+	var header: Container
+	if _mobile:
+		# 窄屏放不下标题+时长+三个按钮，用流式容器自动换行
+		var flow := HFlowContainer.new()
+		flow.add_theme_constant_override("h_separation", int(UILayout.dp(5.0)))
+		flow.add_theme_constant_override("v_separation", int(UILayout.dp(4.0)))
+		header = flow
+	else:
+		var hb := HBoxContainer.new()
+		hb.add_theme_constant_override("separation", 18)
+		header = hb
 	root.add_child(header)
 
 	var title_box := VBoxContainer.new()
@@ -97,13 +126,13 @@ func _build_ui() -> void:
 
 	var title := Label.new()
 	title.text = "🏆  战 斗 结 算"
-	title.add_theme_font_size_override("font_size", 38)
+	title.add_theme_font_size_override("font_size", _fs(38))
 	title.add_theme_color_override("font_color", Color(1.0, 0.84, 0.38))
 	title_box.add_child(title)
 
 	result_label = Label.new()
 	result_label.text = "战斗结束"
-	result_label.add_theme_font_size_override("font_size", 28)
+	result_label.add_theme_font_size_override("font_size", _fs(28))
 	result_label.add_theme_color_override("font_color", Color(0.82, 0.9, 1.0))
 	title_box.add_child(result_label)
 
@@ -113,7 +142,7 @@ func _build_ui() -> void:
 
 	duration_label = Label.new()
 	duration_label.text = "对局时长 00:00"
-	duration_label.add_theme_font_size_override("font_size", 20)
+	duration_label.add_theme_font_size_override("font_size", _fs(20))
 	duration_label.add_theme_color_override("font_color", Color(0.66, 0.76, 0.9))
 	duration_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	header.add_child(duration_label)
@@ -132,13 +161,21 @@ func _build_ui() -> void:
 	root.add_child(line)
 
 	# ── 控制栏 ──
-	var controls := HBoxContainer.new()
-	controls.add_theme_constant_override("separation", 10)
+	var controls: Container
+	if _mobile:
+		var cflow := HFlowContainer.new()
+		cflow.add_theme_constant_override("h_separation", int(UILayout.dp(4.0)))
+		cflow.add_theme_constant_override("v_separation", int(UILayout.dp(3.0)))
+		controls = cflow
+	else:
+		var chb := HBoxContainer.new()
+		chb.add_theme_constant_override("separation", 10)
+		controls = chb
 	root.add_child(controls)
 
 	var mode_label := Label.new()
 	mode_label.text = "查看方式"
-	mode_label.add_theme_font_size_override("font_size", 17)
+	mode_label.add_theme_font_size_override("font_size", _fs(17))
 	mode_label.add_theme_color_override("font_color", Color(0.78, 0.86, 0.98))
 	mode_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	controls.add_child(mode_label)
@@ -157,13 +194,13 @@ func _build_ui() -> void:
 	controls.add_child(vline)
 	var metric_label := Label.new()
 	metric_label.text = "指标"
-	metric_label.add_theme_font_size_override("font_size", 17)
+	metric_label.add_theme_font_size_override("font_size", _fs(17))
 	metric_label.add_theme_color_override("font_color", Color(0.78, 0.86, 0.98))
 	metric_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	controls.add_child(metric_label)
 
 	var metric_grid := GridContainer.new()
-	metric_grid.columns = 4
+	metric_grid.columns = 3 if _mobile else 4
 	metric_grid.add_theme_constant_override("h_separation", 8)
 	metric_grid.add_theme_constant_override("v_separation", 6)
 	metric_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -179,9 +216,17 @@ func _build_ui() -> void:
 		metric_grid.add_child(b)
 
 	# ── 图表与图例 ──
-	var body := HBoxContainer.new()
-	body.add_theme_constant_override("separation", 18)
-	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	var body: Container
+	if _mobile:
+		# 手机上图表与图例上下堆叠，图例单独一屏高
+		var bv := VBoxContainer.new()
+		bv.add_theme_constant_override("separation", int(UILayout.dp(5.0)))
+		body = bv
+	else:
+		var bh := HBoxContainer.new()
+		bh.add_theme_constant_override("separation", 18)
+		bh.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		body = bh
 	root.add_child(body)
 
 	var chart_box := VBoxContainer.new()
@@ -191,28 +236,30 @@ func _build_ui() -> void:
 
 	chart_title = Label.new()
 	chart_title.text = "资源累计获取  ·  按国家"
-	chart_title.add_theme_font_size_override("font_size", 22)
+	chart_title.add_theme_font_size_override("font_size", _fs(22))
 	chart_title.add_theme_color_override("font_color", Color(0.9, 0.95, 1.0))
 	chart_box.add_child(chart_title)
 
 	chart = BattleStatsChartScript.new()
-	chart.custom_minimum_size = Vector2(760, 420)
+	chart.custom_minimum_size = Vector2(0, UILayout.dp(165.0)) if _mobile else Vector2(760, 420)
 	chart.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	chart_box.add_child(chart)
 
 	var side := VBoxContainer.new()
-	side.custom_minimum_size = Vector2(420, 0)
+	side.custom_minimum_size = Vector2(0, 0) if _mobile else Vector2(420, 0)
 	side.add_theme_constant_override("separation", 8)
 	body.add_child(side)
 
 	legend_title = Label.new()
 	legend_title.text = "图例 / 最终值"
-	legend_title.add_theme_font_size_override("font_size", 20)
+	legend_title.add_theme_font_size_override("font_size", _fs(20))
 	legend_title.add_theme_color_override("font_color", Color(0.92, 0.96, 1.0))
 	side.add_child(legend_title)
 
 	var scroll := ScrollContainer.new()
 	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	if _mobile:
+		scroll.custom_minimum_size = Vector2(0, UILayout.dp(110.0))
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 	side.add_child(scroll)
@@ -225,13 +272,13 @@ func _build_ui() -> void:
 	var hint := Label.new()
 	hint.text = "曲线每 5 秒采样一次。累计指标只增不减；实时指标显示该时刻的总量。"
 	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	hint.add_theme_font_size_override("font_size", 13)
+	hint.add_theme_font_size_override("font_size", _fs(13))
 	hint.add_theme_color_override("font_color", Color(0.58, 0.68, 0.82))
 	side.add_child(hint)
 
 	# ── 性能专栏：帧率 / 总单位数 ──
 	var perf_panel := PanelContainer.new()
-	perf_panel.custom_minimum_size = Vector2(0, 232)
+	perf_panel.custom_minimum_size = Vector2(0, UILayout.dp(190.0)) if _mobile else Vector2(0, 232)
 	perf_panel.size_flags_vertical = Control.SIZE_SHRINK_END
 	var perf_style := StyleBoxFlat.new()
 	perf_style.bg_color = Color(0.024, 0.036, 0.06, 0.96)
@@ -264,13 +311,13 @@ func _build_ui() -> void:
 
 	var perf_title := Label.new()
 	perf_title.text = "⚙ 性能专栏"
-	perf_title.add_theme_font_size_override("font_size", 18)
+	perf_title.add_theme_font_size_override("font_size", _fs(18))
 	perf_title.add_theme_color_override("font_color", Color(1.0, 0.84, 0.38))
 	perf_header.add_child(perf_title)
 
 	var perf_hint := Label.new()
 	perf_hint.text = "帧率与总单位数 · 每 5 秒采样"
-	perf_hint.add_theme_font_size_override("font_size", 12)
+	perf_hint.add_theme_font_size_override("font_size", _fs(12))
 	perf_hint.add_theme_color_override("font_color", Color(0.58, 0.68, 0.82))
 	perf_hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	perf_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
@@ -297,19 +344,19 @@ func _build_perf_chart_box(parent: Control, title_text: String, color: Color) ->
 
 	var title := Label.new()
 	title.text = title_text
-	title.add_theme_font_size_override("font_size", 14)
+	title.add_theme_font_size_override("font_size", _fs(14))
 	title.add_theme_color_override("font_color", color)
 	box.add_child(title)
 
 	var perf_chart = BattleStatsChartScript.new()
-	perf_chart.custom_minimum_size = Vector2(0, 150)
+	perf_chart.custom_minimum_size = Vector2(0, UILayout.dp(105.0)) if _mobile else Vector2(0, 150)
 	perf_chart.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	perf_chart.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	box.add_child(perf_chart)
 
 	var summary := Label.new()
 	summary.text = "暂无数据"
-	summary.add_theme_font_size_override("font_size", 13)
+	summary.add_theme_font_size_override("font_size", _fs(13))
 	summary.add_theme_color_override("font_color", Color(0.70, 0.80, 0.92))
 	box.add_child(summary)
 
@@ -318,8 +365,11 @@ func _build_perf_chart_box(parent: Control, title_text: String, color: Color) ->
 func _make_button(text: String, min_width: float) -> Button:
 	var b := Button.new()
 	b.text = text
-	b.custom_minimum_size = Vector2(min_width, 36)
-	b.add_theme_font_size_override("font_size", 16)
+	if _mobile:
+		b.custom_minimum_size = Vector2(min_width * 1.7, UILayout.dp(34.0))
+	else:
+		b.custom_minimum_size = Vector2(min_width, 36)
+	b.add_theme_font_size_override("font_size", _fs(16))
 	b.focus_mode = Control.FOCUS_NONE
 	return b
 
@@ -396,7 +446,7 @@ func _rebuild_legend(series: Array) -> void:
 	if series.is_empty():
 		var empty := Label.new()
 		empty.text = "暂无数据"
-		empty.add_theme_font_size_override("font_size", 16)
+		empty.add_theme_font_size_override("font_size", _fs(16))
 		empty.add_theme_color_override("font_color", Color(0.6, 0.68, 0.8))
 		legend_box.add_child(empty)
 		return
@@ -413,7 +463,7 @@ func _rebuild_legend(series: Array) -> void:
 
 		var name_label := Label.new()
 		name_label.text = String(s.get("name", "?"))
-		name_label.add_theme_font_size_override("font_size", 17)
+		name_label.add_theme_font_size_override("font_size", _fs(17))
 		name_label.add_theme_color_override("font_color", Color(0.9, 0.95, 1.0))
 		name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		row.add_child(name_label)
@@ -426,13 +476,13 @@ func _rebuild_legend(series: Array) -> void:
 		row.add_child(value_box)
 		var final_label := Label.new()
 		final_label.text = "最终 %s" % stats.format_value(metric, float(s.get("final", 0.0)))
-		final_label.add_theme_font_size_override("font_size", 15)
+		final_label.add_theme_font_size_override("font_size", _fs(15))
 		final_label.add_theme_color_override("font_color", s.get("color", Color.WHITE))
 		final_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		value_box.add_child(final_label)
 		var peak_label := Label.new()
 		peak_label.text = "峰值 %s" % stats.format_value(metric, peak)
-		peak_label.add_theme_font_size_override("font_size", 12)
+		peak_label.add_theme_font_size_override("font_size", _fs(12))
 		peak_label.add_theme_color_override("font_color", Color(0.6, 0.68, 0.8))
 		peak_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
 		value_box.add_child(peak_label)

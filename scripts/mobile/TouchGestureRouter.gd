@@ -36,6 +36,8 @@ var _bm: Node = null
 # 落在移动端面板上的那根手指：只负责翻译成鼠标事件，不参与手势
 var _ui_touch_index: int = -1
 var _ui_touch_down: bool = false
+# 转发合成事件时置位，避免 router 自己再次收到合成事件造成递归
+var _forwarding: bool = false
 
 func _ready() -> void:
 	set_process_input(true)
@@ -97,7 +99,7 @@ func _point_on_ui(pos: Vector2) -> bool:
 	return false
 
 func _input(event: InputEvent) -> void:
-	if not enabled:
+	if not enabled or _forwarding:
 		return
 	if event is InputEventScreenTouch:
 		_handle_touch(event)
@@ -142,9 +144,13 @@ func _handle_touch(event: InputEventScreenTouch) -> void:
 
 func _handle_drag(event: InputEventScreenDrag) -> void:
 	if event.index == _ui_touch_index:
-		# 面板上的拖动转发成鼠标拖动，ScrollContainer 才能滚动
+		# 面板上的拖动：鼠标拖动给按钮/滑块；ScrollContainer 只认触摸拖动与滚轮，
+		# 所以滚动由 UILayout.scroll_at 直接驱动命中的滚动容器。
 		if _ui_touch_down:
+			_forwarding = true
 			_emit_ui_motion(event.position, event.relative)
+			UILayout.scroll_at(get_tree().root, event.position, event.relative.y)
+			_forwarding = false
 		return
 	if event.index != _touch_index:
 		return
@@ -239,6 +245,8 @@ func _emit_ui_motion(pos: Vector2, relative: Vector2) -> void:
 	ev.relative = relative
 	ev.button_mask = MOUSE_BUTTON_MASK_LEFT
 	get_viewport().push_input(ev, true)
+
+# ScrollContainer 只响应 ScreenDrag 与滚轮，鼠标拖动不会滚动，所以面板拖动由 UILayout.scroll_at 驱动。
 
 # ==================== 鼠标事件合成 ====================
 
