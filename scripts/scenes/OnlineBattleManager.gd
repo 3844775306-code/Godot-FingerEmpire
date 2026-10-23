@@ -33,6 +33,10 @@ var player_all_visible_ids: Dictionary = {}     # peer_id -> Dictionary (所有�
 var snapshot_timer: float = 0.0
 const SNAPSHOT_INTERVAL: float = 0.04
 var broadcast_enabled: bool = false
+
+# 联机只有主机跑战斗逻辑；客户端（broadcast_enabled=false）不生成/结算中立废墟
+func is_battle_authority() -> bool:
+	return broadcast_enabled
 var _snap_sent: int = 0
 var _snap_sent_rate: int = 0
 var _snap_sent_timer: float = 0.0
@@ -1219,6 +1223,9 @@ func _compute_entity_hash(entity: GameEntity) -> int:
 	h = ((h << 5) ^ (h >> 27)) ^ hash(entity.current_order)
 	h = ((h << 5) ^ (h >> 27)) ^ (1 if entity.hold_position else 0)
 	h = ((h << 5) ^ (h >> 27)) ^ int(entity.owner_peer_id)
+	# 队伍也要进哈希：中立废墟被占领时 team 会变（NEUTRAL→BLUE/RED），
+	# 不算进哈希的话增量快照会认为"没变化"，客户端永远停留在中立灰色。
+	h = ((h << 5) ^ (h >> 27)) ^ int(entity.team)
 	if entity is Building:
 		h = ((h << 5) ^ (h >> 27)) ^ entity.upgrade_level
 		h = ((h << 5) ^ (h >> 27)) ^ entity.production_queue.size()

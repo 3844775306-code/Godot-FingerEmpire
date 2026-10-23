@@ -28,6 +28,16 @@ var ai_resources: Dictionary = {}             # peer_id -> resources dict
 var ai_population: Dictionary = {}            # peer_id -> population dict
 var ai_limits: Dictionary = {}                # peer_id -> limits dict
 var diplomacy: DiplomacyManager = null        # 乱斗模式外交核心（子节点），非乱斗为 null
+# ==================== 废弃建筑（地图边缘的中立废墟） ====================
+# 开局在地图边缘随机生成若干中立建筑；任何一方单位靠近并停留 2.5 秒即归其所有，
+# 先到先得。占领后立刻获得该建筑自身的功能（瞭望视野 / 仓储上限 / 民居人口）与一次性战利品。
+const ABANDONED_TYPE_IDS := [41, 41, 41, 22, 28]   # 废弃瞭望塔(视野) / 废弃仓库(仓储) / 废弃民居(人口)
+const ABANDONED_CAPTURE_RADIUS := 4.5
+const ABANDONED_CAPTURE_TIME := 2.5
+var _abandoned_sites: Array = []                  # 尚未被占领的中立废墟（Building）
+var _abandoned_capture: Dictionary = {}           # 废墟 instance_id -> {"team": int, "time": float}
+var _abandoned_spawned: bool = false
+var _abandoned_ready_timer: float = 0.0
 # ==================== 建造 ====================
 var building_defs: Array = []
 var build_mode: bool = false
@@ -2418,6 +2428,211 @@ func _detect_enemy_near_base():
 		_show_hud_alert("敌军来袭！接近我方基地方向 %s" % loc_str, Color(1.0, 0.8, 0.1))
 		_set_alert_cooldown("enemy_approach", 5.0)
 
+# ==================== 废弃建筑：生成 / 占领 ====================
+# 只有真正跑战斗逻辑的一端（单机、联机主机）生成和结算；联机客户端靠快照还原
+func is_battle_authority() -> bool:
+	return true
+
+func _tick_abandoned_sites(delta: float) -> void:
+	if not is_battle_authority():
+		return
+	if game_over:
+		return
+	if not _abandoned_spawned:
+		# 等各方城堡/初始单位就位（联机开局加载地图有延迟），再撒废墟
+		_abandoned_ready_timer += delta
+		if _abandoned_ready_timer < 3.0:
+			return
+		_spawn_abandoned_sites()
+		return
+	if _abandoned_sites.is_empty():
+		return
+	_process_abandoned_capture(delta)
+
+# 在地图边缘随机撒中立废墟：要求 3x3 平地、远离双方基地、彼此分散
+func _spawn_abandoned_sites() -> void:
+	_ensure_cache_fresh()
+	var castles: Array = []
+	for b in _buildings:
+		if is_instance_valid(b) and b.entity_id == 20 and b.health > 0:
+			castles.append(b)
+	if castles.size() < 2:
+		return
+	_abandoned_spawned = true
+	var map = $Map
+	if map == null:
+		return
+	var size: int = int(map.terrain_grid.size())
+	var count: int = clampi(int(round(float(size) * 0.05)), 4, 8)
+	var margin: int = 5
+	var max_depth: int = maxi(6, int(float(size) * 0.08))
+	# 枚举地图四条边缘带上的候选格（深 4..max_depth），洗牌后按间距择优，
+	# 比"随机撒点+重试"更容易在群岛/多河这类地图像素上凑够数量
+	var cands: Array = []
+	for d in range(4, max_depth + 1):
+		for along in range(margin, size - margin):
+			cands.append(Vector2i(along, margin + d))
+			cands.append(Vector2i(along, size - margin - d))
+			cands.append(Vector2i(margin + d, along))
+			cands.append(Vector2i(size - margin - d, along))
+	cands.shuffle()
+	var picks: Array = []
+	# 间距从宽松到紧凑三档重试，保证任何地图都能撒满
+	for spacing in [0.14, 0.10, 0.07]:
+		if picks.size() >= count:
+			break
+		var gap: float = float(size) * float(spacing)
+		for g in cands:
+			if picks.size() >= count:
+				break
+			# 需要 3x3 平地：避免长在河面/山体/坡道上
+			var flat: bool = true
+			for dx in range(-1, 2):
+				for dy in range(-1, 2):
+					var nx: int = g.x + dx
+					var ny: int = g.y + dy
+					if nx < 0 or ny < 0 or nx >= size or ny >= size:
+						flat = false
+						break
+					if int(map.terrain_grid[nx][ny]) != 0:
+						flat = false
+						break
+				if not flat:
+					break
+			if not flat:
+				continue
+			var wp: Vector3 = grid_to_world(g.x, g.y)
+			var far_enough: bool = true
+			for b in castles:
+				if Vector2(wp.x - b.global_position.x, wp.z - b.global_position.z).length() < float(size) * 0.24:
+					far_enough = false
+					break
+			if far_enough:
+				for q in picks:
+					if Vector2(wp.x - q.x, wp.z - q.z).length() < gap:
+						far_enough = false
+						break
+			if far_enough:
+				picks.append(wp)
+	for wp in picks:
+		var type_id: int = int(ABANDONED_TYPE_IDS[randi() % ABANDONED_TYPE_IDS.size()])
+		var cfg: Dictionary = EntityDatabase.get_config(type_id)
+		if cfg.is_empty():
+			continue
+		cfg["team"] = RTSConfig.Team.NEUTRAL
+		var site = spawn_entity(cfg, RTSConfig.Team.NEUTRAL, wp, 1)
+		if site:
+			site.owner_peer_id = -1
+			_abandoned_sites.append(site)
+	if not _abandoned_sites.is_empty():
+		print("[废弃建筑] 生成 %d 座中立废墟（期待 %d 座，候选 %d 格）" % [
+			_abandoned_sites.size(), count, cands.size()])
+
+# 每帧检查：谁的单位最靠近废墟，累计停留时间；先填满 2.5 秒的一方占领
+func _process_abandoned_capture(delta: float) -> void:
+	_ensure_cache_fresh()
+	var alive: Array = []
+	for site in _abandoned_sites:
+		if not is_instance_valid(site) or site.health <= 0:
+			if is_instance_valid(site):
+				_abandoned_capture.erase(site.get_instance_id())
+			continue
+		var best_team: int = -1
+		var best_dist: float = 1e20
+		var best_army = null
+		for e in _spatial_query(site.global_position, ABANDONED_CAPTURE_RADIUS + 3.0):
+			if not (e is Army):
+				continue
+			if e.health <= 0 or e.team == RTSConfig.Team.NEUTRAL:
+				continue
+			var d: float = site.global_position.distance_to(e.global_position) - e.body_radius
+			if d > ABANDONED_CAPTURE_RADIUS:
+				continue
+			if d < best_dist:
+				best_dist = d
+				best_team = e.team
+				best_army = e
+		var sid: int = site.get_instance_id()
+		if best_team < 0:
+			_abandoned_capture.erase(sid)
+			alive.append(site)
+			continue
+		var st: Dictionary = _abandoned_capture.get(sid, {"team": -1, "time": 0.0})
+		if int(st["team"]) != best_team:
+			st = {"team": best_team, "time": 0.0}
+		st["time"] = float(st["time"]) + delta
+		_abandoned_capture[sid] = st
+		if float(st["time"]) >= ABANDONED_CAPTURE_TIME:
+			_capture_abandoned_site(site, best_army)
+			_abandoned_capture.erase(sid)
+			continue
+		alive.append(site)
+	_abandoned_sites = alive
+
+func _capture_abandoned_site(site: Building, army: Army) -> void:
+	if not is_instance_valid(site) or not is_instance_valid(army):
+		return
+	var team: int = army.team
+	var owner_id: int = int(army.owner_peer_id)
+	site.team = team
+	site.owner_peer_id = owner_id
+	# 换成占领方的队伍色，和正常建筑一致
+	var tint: Color = Color(0.3, 0.6, 1.0) if team == RTSConfig.Team.BLUE else Color(1.0, 0.4, 0.4)
+	if team != RTSConfig.Team.BLUE and team != RTSConfig.Team.RED:
+		tint = Color(0.9, 0.75, 0.3)
+	if owner_id >= 0 and _player_colors.has(owner_id):
+		var pc: Color = _player_colors[owner_id]
+		tint = Color(0.2 + pc.r * 0.8, 0.2 + pc.g * 0.8, 0.2 + pc.b * 0.8)
+	_apply_team_tint(site, tint)
+	mark_entity_cache_dirty()
+	# 废弃仓库/民居从"中立"转为"己方"，仓储与人口上限要按新队伍重算
+	if site.entity_id == 22:
+		update_resource_limits(team)
+	elif site.entity_id == 28:
+		update_population_limits()
+	var loot: Dictionary = _abandoned_loot_for(site.entity_id)
+	_grant_capture_loot(army, loot)
+	_show_hud_alert("【废弃建筑】我方占领了%s%s" % [_abandoned_label(site.entity_id), _loot_text(loot)],
+		Color(0.95, 0.85, 0.35), team)
+	print("[废弃建筑] team=%d owner=%d 占领 %s" % [team, owner_id, _abandoned_label(site.entity_id)])
+
+# 战利品按队伍/玩家入账：自建模式走 owner 资源，单机 1v1 走队伍资源
+func _grant_capture_loot(army: Army, loot: Dictionary) -> void:
+	var owner_id: int = int(army.owner_peer_id)
+	if owner_id >= 0:
+		for k in loot:
+			add_resource_for(owner_id, k, int(loot[k]))
+	else:
+		for k in loot:
+			add_resource(k, int(loot[k]), army.team)
+
+func _abandoned_loot_for(type_id: int) -> Dictionary:
+	match type_id:
+		22:
+			return {"gold": 120, "wood": 80}
+		28:
+			return {"food": 100, "gold": 60}
+		_:
+			return {"gold": 80}
+
+func _abandoned_label(type_id: int) -> String:
+	match type_id:
+		22:
+			return "废弃仓库"
+		28:
+			return "废弃民居"
+		_:
+			return "废弃瞭望塔"
+
+func _loot_text(loot: Dictionary) -> String:
+	var names: Dictionary = {"gold": "黄金", "wood": "木材", "stone": "石头", "food": "食物", "oil": "石油"}
+	var parts: Array = []
+	for k in loot:
+		parts.append("+%d %s" % [int(loot[k]), names.get(k, k)])
+	if parts.is_empty():
+		return ""
+	return "：" + "、".join(parts)
+
 # ==================== 每帧更新 ====================
 var _limit_update_timer: float = 0.0
 func _process(delta):
@@ -2431,6 +2646,7 @@ func _process(delta):
 				if not Input.is_key_pressed(KEY_SHIFT):
 					_exit_build_mode()
 	game_time += delta
+	_tick_abandoned_sites(delta)
 	_focus_camera_on_player_castle_once()
 	if battle_stats:
 		battle_stats.tick(delta)

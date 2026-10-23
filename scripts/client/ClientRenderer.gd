@@ -599,6 +599,12 @@ func _update_single_entity(info):
 		# New building placed → play placement sound
 		if info.get("type") == 1 and _is_audible(node.global_position):
 			AudioManager.play_sfx_3d("build_place", node.global_position, _get_cam_pos())
+	elif node.has_meta("snapshot_info") and int(node.get_meta("snapshot_info").get("team", -99)) != int(info.get("team", -99)):
+		# 中立废弃建筑被占领：队伍变了，重建节点以刷新队伍色/血条颜色
+		entity_nodes.erase(id)
+		node.queue_free()
+		node = _create_entity_node(info)
+		entity_nodes[id] = node
 	# 路径未变化（服务端发 null）：沿用上一次收到的路径，避免每帧重建标记
 	if ap_unchanged and node.has_meta("snapshot_info"):
 		var prev_ap = node.get_meta("snapshot_info").get("astar_path", [])
