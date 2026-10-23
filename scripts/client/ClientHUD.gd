@@ -407,20 +407,39 @@ func _on_retreat_all_pressed():
 
 
 func show_alert_message(msg: String, color: Color = ALERT_DANGER):
+	var mobile := InputSource.use_mobile_ui()
 	if not _alert_label:
 		# 皇庭横幅背景：暖黑底 + 警报色细边 + 顶部警报色强调条
 		_alert_bg = Panel.new()
-		_alert_bg.position = Vector2(755, 196)
-		_alert_bg.size = Vector2(810, 46)
-		add_child(_alert_bg)
 		# 文字标签
 		_alert_label = Label.new()
 		_alert_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		_alert_label.add_theme_font_size_override("font_size", UITheme.FONT_XXL)
+		_alert_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		_alert_label.add_theme_color_override("font_outline_color", Color.BLACK)
 		_alert_label.add_theme_constant_override("outline_size", 3)
-		_alert_label.position = Vector2(760, 202)
-		_alert_label.size = Vector2(800, 40)
+		if mobile:
+			# 手机端按 dp 放大并居中，且可点击跳转
+			var w: float = UILayout.dp(320.0)
+			var h: float = UILayout.dp(40.0)
+			_alert_bg.anchor_left = 0.5; _alert_bg.anchor_right = 0.5
+			_alert_bg.anchor_top = 0.15
+			_alert_bg.offset_left = -w; _alert_bg.offset_right = w
+			_alert_bg.offset_top = -h * 0.5; _alert_bg.offset_bottom = h * 0.5
+			_alert_bg.mouse_filter = Control.MOUSE_FILTER_STOP
+			_alert_bg.gui_input.connect(_on_alert_gui_input)
+			_alert_label.anchor_left = 0.5; _alert_label.anchor_right = 0.5
+			_alert_label.anchor_top = 0.15
+			_alert_label.offset_left = -w; _alert_label.offset_right = w
+			_alert_label.offset_top = -h * 0.5; _alert_label.offset_bottom = h * 0.5
+			_alert_label.add_theme_font_size_override("font_size", UILayout.font_dp(14.0))
+			_alert_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		else:
+			_alert_bg.position = Vector2(755, 196)
+			_alert_bg.size = Vector2(810, 46)
+			_alert_label.add_theme_font_size_override("font_size", UITheme.FONT_XXL)
+			_alert_label.position = Vector2(760, 202)
+			_alert_label.size = Vector2(800, 40)
+		add_child(_alert_bg)
 		add_child(_alert_label)
 	_alert_label.text = msg
 	_alert_label.add_theme_color_override("font_color", color)
@@ -435,6 +454,15 @@ func show_alert_message(msg: String, color: Color = ALERT_DANGER):
 	_alert_label.visible = true
 	_alert_bg.visible = true
 	_alert_timer = 3.0
+
+# 点警报条：跳到警报位置
+func _on_alert_gui_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		_on_jump_to_alert()
+		_alert_timer = 0.0
+		if _alert_label: _alert_label.visible = false
+		if _alert_bg: _alert_bg.visible = false
+		accept_event()
 
 func _ready():
 	# 创建资源标签（皇庭筹码：图标 + 名称 + 数值 + 采集速率 + 进度条）

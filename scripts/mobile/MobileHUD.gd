@@ -187,6 +187,11 @@ func is_point_over_panel(pos: Vector2) -> bool:
 	for ctrl in [capsule, command_bar]:
 		if ctrl is Control and ctrl.visible and ctrl.get_global_rect().has_point(pos):
 			return true
+	# 顶部警报条（点一下跳到警报位置）
+	if hud:
+		var alert_bg = hud.get("_alert_bg")
+		if alert_bg is Control and alert_bg.visible and alert_bg.get_global_rect().has_point(pos):
+			return true
 	var info := _find_ui_node("InfoPanel")
 	if info is Control and info.visible and info.get_global_rect().has_point(pos):
 		return true

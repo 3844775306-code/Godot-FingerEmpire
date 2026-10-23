@@ -552,6 +552,19 @@ func _on_jump_to_alert():
 			else:
 				cam.global_position = Vector3(target.x, cam.global_position.y, target.z)
 			minimap.has_latest_alert = false
+			return
+	# 没有待处理的小地图警报时兜底跳回主城，避免点击后没有任何反应
+	var bm2 = _get_bm()
+	var castle = null
+	if bm2 and bm2.has_method("get_player_castle"):
+		castle = bm2.call("get_player_castle")
+	if castle and is_instance_valid(castle):
+		var cam2 = get_viewport().get_camera_3d()
+		if cam2:
+			if cam2.has_method("focus_on_ground"):
+				cam2.focus_on_ground(castle.global_position)
+			else:
+				cam2.global_position = Vector3(castle.global_position.x, cam2.global_position.y, castle.global_position.z)
 
 
 # 本地玩家的战斗单位（排除农民/采集船/商人/推车/官员等经济单位）
@@ -687,26 +700,47 @@ const ALERT_INFO = UITheme.ALERT_INFO      # 绿色 — 建造/训练/升级完�
 const ALERT_GROUP = UITheme.ALERT_GROUP     # 蓝色 — 编队反馈
 
 func show_alert_message(msg: String, color: Color = ALERT_DANGER):
+	var mobile := InputSource.use_mobile_ui()
 	if not _alert_label:
-		# 半透明黑色背景
+		# 手机上按 dp 放大警报条：默认 24 号字在 2400 宽屏里只有约 7dp，读不出来
+		var bar_w: float = UILayout.dp(320.0) if mobile else 420.0
+		var bar_h: float = UILayout.dp(40.0) if mobile else 36.0
+		var font_sz: int = UILayout.font_dp(14.0) if mobile else 24
+		# 半透明黑色背景（可点击：点一下跳到警报位置）
 		_alert_bg = ColorRect.new()
 		_alert_bg.color = Color(0, 0, 0, 0.55)
 		_alert_bg.anchor_left = 0.5; _alert_bg.anchor_right = 0.5
 		_alert_bg.anchor_top = 0.15
-		_alert_bg.offset_left = -420; _alert_bg.offset_right = 420
-		_alert_bg.offset_top = -4
-		_alert_bg.offset_bottom = 32
+		_alert_bg.offset_left = -bar_w; _alert_bg.offset_right = bar_w
+		_alert_bg.offset_top = -bar_h * 0.5
+		_alert_bg.offset_bottom = bar_h * 0.5
+		_alert_bg.mouse_filter = Control.MOUSE_FILTER_STOP
+		_alert_bg.gui_input.connect(_on_alert_gui_input)
 		add_child(_alert_bg)
 		# 文字标签
 		_alert_label = Label.new()
 		_alert_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		_alert_label.add_theme_font_size_override("font_size", 24)
+		_alert_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		_alert_label.add_theme_font_size_override("font_size", font_sz)
 		_alert_label.add_theme_color_override("font_outline_color", Color.BLACK)
 		_alert_label.add_theme_constant_override("outline_size", 3)
 		_alert_label.anchor_left = 0.5; _alert_label.anchor_right = 0.5
 		_alert_label.anchor_top = 0.15
-		_alert_label.offset_left = -420; _alert_label.offset_right = 420
+		_alert_label.offset_left = -bar_w; _alert_label.offset_right = bar_w
+		_alert_label.offset_top = -bar_h * 0.5
+		_alert_label.offset_bottom = bar_h * 0.5
+		_alert_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		add_child(_alert_label)
+	else:
+		# 布局在创建时定死，场景重新加载/切换设备后按当前模式重新套一次尺寸
+		var bar_w2: float = UILayout.dp(320.0) if mobile else 420.0
+		var bar_h2: float = UILayout.dp(40.0) if mobile else 36.0
+		var font_sz2: int = UILayout.font_dp(14.0) if mobile else 24
+		for c in [_alert_bg, _alert_label]:
+			if c:
+				c.offset_left = -bar_w2; c.offset_right = bar_w2
+				c.offset_top = -bar_h2 * 0.5; c.offset_bottom = bar_h2 * 0.5
+		_alert_label.add_theme_font_size_override("font_size", font_sz2)
 	_alert_label.text = msg
 	_alert_label.add_theme_color_override("font_color", color)
 	_alert_label.visible = true
@@ -714,6 +748,15 @@ func show_alert_message(msg: String, color: Color = ALERT_DANGER):
 	_alert_timer = 3.0
 
 	set_process(true)
+
+# 点警报条：跳到警报位置（没有小地图警报时至少跳回主城，保证有反馈）
+func _on_alert_gui_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		_on_jump_to_alert()
+		_alert_timer = 0.0
+		if _alert_label: _alert_label.visible = false
+		if _alert_bg: _alert_bg.visible = false
+		get_viewport().set_input_as_handled()
 
 
 func update_data(resources: Dictionary, population: Dictionary, limits: Dictionary = {}):
