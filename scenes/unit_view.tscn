@@ -1,4 +1,4 @@
-[gd_scene load_steps=2 format=3 uid="uid://c9w7x5e3y1a2fq"]
+[gd_scene format=3 uid="uid://cgmcsw7gc1bpu"]
 
 [ext_resource type="Script" uid="uid://g1t6v8k9m2z4q" path="res://scripts/ui/UnitView.gd" id="1_rtun1"]
 

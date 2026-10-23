@@ -731,7 +731,7 @@ func _add_line(text: String, color: Color, fs: int = 20, min_h: int = 40) -> voi
 func _add_pair(title: String, value: String) -> void:
 	var l := Label.new()
 	UITheme.apply_label(l, 18, UITheme.PARCHMENT)
-	var icon := ATTR_ICONS.get(title, "")
+	var icon = ATTR_ICONS.get(title, "")
 	if icon != "":
 		l.text = "%s %s：%s" % [icon, title, value]
 	else:
