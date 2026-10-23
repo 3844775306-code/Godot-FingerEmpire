@@ -101,3 +101,27 @@ static func get_description(nation: int) -> String:
 		text += "人口上限+%d\n" % bonus["population_bonus"]
 
 	return text.trim_suffix("\n")
+
+# 国家特色短描述（标题行用）
+static func get_trait_short(nation: int) -> String:
+	match nation:
+		RTSConfig.Nation.VIKING: return "生命+25% 速度+10%"
+		RTSConfig.Nation.ENGLAND: return "攻击+15% 视野+20% 采木+10%"
+		RTSConfig.Nation.FRANCE: return "护甲+25 主城起始2级"
+		RTSConfig.Nation.CHINA: return "食物+20% 黄金+10% 人口+10"
+		RTSConfig.Nation.HUNGARY: return "护甲+15 石+15% 金+10% 人口+5"
+		RTSConfig.Nation.JAPAN: return "攻速+15% 攻击+10%"
+		RTSConfig.Nation.BYZANTINE: return "双护甲+2 黄金+10%"
+		_: return ""
+
+# 国家特色完整描述（面板副标题用）
+static func get_trait_full(nation: int) -> String:
+	match nation:
+		RTSConfig.Nation.VIKING: return "全军生命 +25%、移动速度 +10%，适合正面强攻。"
+		RTSConfig.Nation.ENGLAND: return "全军攻击 +15%、视野 +20%，木材采集 +10%，擅长远程压制。"
+		RTSConfig.Nation.FRANCE: return "全军护甲 +25，主城开局 2 级，重装骑兵强势。"
+		RTSConfig.Nation.CHINA: return "食物 +20%、黄金 +10%，人口上限 +10，经济与规模见长。"
+		RTSConfig.Nation.HUNGARY: return "护甲 +15，石材 +15%、黄金 +10%，人口上限 +5。"
+		RTSConfig.Nation.JAPAN: return "攻速 +15%、攻击 +10%，近战爆发更强。"
+		RTSConfig.Nation.BYZANTINE: return "双护甲 +2，黄金 +10%，防御体系稳固。"
+		_: return ""

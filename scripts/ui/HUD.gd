@@ -39,11 +39,13 @@ var _stats_title: RichTextLabel
 var _stats_bonus: Label
 var _stats_mil_rtl: RichTextLabel
 var _stats_bld_rtl: RichTextLabel
-var _stats_totals: RichTextLabel
+var _stats_mil_title: RichTextLabel
+var _stats_bld_title: RichTextLabel
 var _stats_pop_bar: ProgressBar
 var _stats_pop_label: Label
 var _stats_res_labels: Dictionary = {}
 var _stats_res_bars: Dictionary = {}
+var _stats_res_info: Dictionary = {}
 var _stats_castle_bar: HealthBarControl
 var _stats_castle_label: Label
 var _toggle_stats_btn: Button
@@ -74,26 +76,10 @@ func _get_nation_name(nation: int) -> String:
 
 # 国家特色：标题用短描述，下面一行用完整描述
 func _nation_trait_short(nation: int) -> String:
-	match nation:
-		RTSConfig.Nation.VIKING: return "生命+25% 速度+10%"
-		RTSConfig.Nation.ENGLAND: return "攻击+15% 视野+20% 采木+10%"
-		RTSConfig.Nation.FRANCE: return "护甲+25 主城起始2级"
-		RTSConfig.Nation.CHINA: return "食物+20% 黄金+10% 人口+10"
-		RTSConfig.Nation.HUNGARY: return "护甲+15 石+15% 金+10% 人口+5"
-		RTSConfig.Nation.JAPAN: return "攻速+15% 攻击+10%"
-		RTSConfig.Nation.BYZANTINE: return "双护甲+2 黄金+10%"
-		_: return ""
+	return NationBonuses.get_trait_short(nation)
 
 func _nation_trait_full(nation: int) -> String:
-	match nation:
-		RTSConfig.Nation.VIKING: return "全军生命 +25%、移动速度 +10%，适合正面强攻。"
-		RTSConfig.Nation.ENGLAND: return "全军攻击 +15%、视野 +20%，木材采集 +10%，擅长远程压制。"
-		RTSConfig.Nation.FRANCE: return "全军护甲 +25，主城开局 2 级，重装骑兵强势。"
-		RTSConfig.Nation.CHINA: return "食物 +20%、黄金 +10%，人口上限 +10，经济与规模见长。"
-		RTSConfig.Nation.HUNGARY: return "护甲 +15，石材 +15%、黄金 +10%，人口上限 +5。"
-		RTSConfig.Nation.JAPAN: return "攻速 +15%、攻击 +10%，近战爆发更强。"
-		RTSConfig.Nation.BYZANTINE: return "双护甲 +2，黄金 +10%，防御体系稳固。"
-		_: return ""
+	return NationBonuses.get_trait_full(nation)
 
 func _find_local_castle(bm) -> Building:
 	if bm == null: return null
@@ -230,6 +216,12 @@ func _create_unit_stats_panel():
 		rbar.custom_minimum_size = Vector2(100, 5)
 		col_vb.add_child(rbar)
 		_stats_res_bars[key] = rbar
+		var info = Label.new()
+		info.add_theme_font_size_override("font_size", 10)
+		info.add_theme_color_override("font_color", Color(UITheme.PARCHMENT, 0.7))
+		info.text = "0人 +0.0/s"
+		col_vb.add_child(info)
+		_stats_res_info[key] = info
 		res_grid.add_child(col_vb)
 
 	# 主城血量
@@ -245,19 +237,16 @@ func _create_unit_stats_panel():
 	castle_hbox.add_child(_stats_castle_bar)
 	vb.add_child(castle_hbox)
 
-	# 军队/建筑总数
-	_stats_totals = _make_stats_rtl()
-	_stats_totals.add_theme_font_size_override("font_size", 16)
-	vb.add_child(_stats_totals)
-
-	# 军队
-	vb.add_child(_make_stats_section("⚔️ 军队"))
+	# 军队（总数直接跟在分栏标题后）
+	_stats_mil_title = _make_stats_section("⚔️ 军队")
+	vb.add_child(_stats_mil_title)
 	_stats_mil_rtl = _make_stats_rtl()
 	_stats_mil_rtl.add_theme_font_size_override("font_size", 14)
 	vb.add_child(_stats_mil_rtl)
 
 	# 建筑
-	vb.add_child(_make_stats_section("🏰 建筑"))
+	_stats_bld_title = _make_stats_section("🏰 建筑")
+	vb.add_child(_stats_bld_title)
 	_stats_bld_rtl = _make_stats_rtl()
 	_stats_bld_rtl.add_theme_font_size_override("font_size", 14)
 	vb.add_child(_stats_bld_rtl)
@@ -348,6 +337,36 @@ func _update_unit_stats():
 		_stats_pop_label.text = "👥 人口: %d/%d" % [pop, max_pop]
 		_stats_pop_bar.value = min(float(pop) / max(max_pop, 1) * 100, 100)
 
+	# 各资源采集人数 + 增长速率
+	var gather_counts = {"gold": 0, "wood": 0, "stone": 0, "food": 0, "oil": 0}
+	for entity in bm.entities.get_children():
+		if entity is Army and entity.health > 0 and bm.is_local_player_owned(entity.owner_peer_id, entity.team):
+			if entity.entity_id in [10, 14] and entity.current_order in ["gather", "deliver"]:
+				var tgt = entity.current_target
+				if is_instance_valid(tgt) and tgt is WorldResource:
+					var rt: String = tgt.resource_type
+					if gather_counts.has(rt):
+						gather_counts[rt] += 1
+	if res_snapshot.is_empty():
+		res_snapshot = res.duplicate()
+	else:
+		for rk in ["gold", "wood", "stone", "food", "oil"]:
+			var cur = int(res.get(rk, 0))
+			var prev = int(res_snapshot.get(rk, cur))
+			if cur > prev:
+				res_income[rk] = res_income.get(rk, 0) + (cur - prev)
+			res_snapshot[rk] = cur
+	income_timer -= 1.0
+	if income_timer <= 0.0:
+		income_timer = 10.0
+		for rk in ["gold", "wood", "stone", "food", "oil"]:
+			income_rate[rk] = res_income.get(rk, 0) / 10.0
+			res_income[rk] = 0
+	for rk in ["gold", "wood", "stone", "food", "oil"]:
+		var info = _stats_res_info.get(rk)
+		if info:
+			info.text = "%d人 %+.1f/s" % [gather_counts.get(rk, 0), income_rate.get(rk, 0.0)]
+
 	var unit_names = {
 		5: "手推车", 6: "贸易车", 9: "运载船",
 		10: "农民", 11: "步兵", 12: "弓箭手", 13: "战船", 14: "采集船",
@@ -401,8 +420,10 @@ func _update_unit_stats():
 	var under_txt := ""
 	if under_construction > 0:
 		under_txt = "    [color=#caa]🏗️ 在建 %d[/color]" % under_construction
-	if _stats_totals:
-		_stats_totals.text = "[color=#8cf]⚔️ 军队 %d[/color]    [color=#e8c060]🏰 建筑 %d[/color]%s" % [military_total, building_total, under_txt]
+	if _stats_mil_title:
+		_stats_mil_title.text = "[color=#5af]▸ ⚔️ 军队 %d[/color]" % military_total
+	if _stats_bld_title:
+		_stats_bld_title.text = "[color=#5af]▸ 🏰 建筑 %d[/color]%s" % [building_total, under_txt]
 
 	var military_lines = []
 	var eco_lines = []

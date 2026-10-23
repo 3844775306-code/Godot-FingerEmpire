@@ -1758,6 +1758,8 @@ func update_debug_label():
 	if _title_rtl:
 		_title_rtl.text = _relation_tag() + _panel_title_base + _my_nation_tag()
 	_apply_panel_relation()
+	if _trait_rtl:
+		_trait_rtl.text = "[color=#cba]%s[/color]" % NationBonuses.get_trait_full(_my_nation_index())
 	# 收起状态：主体不可见，跳过整块内容刷新，省掉每帧的统计与遍历开销
 	if _panel_collapsed: return
 	var res = _get_resources(); var pop = _get_population()
@@ -1768,6 +1770,16 @@ func update_debug_label():
 	var pfs = _pop_bar.get_theme_stylebox("fill")
 	if pfs: pfs.bg_color = Color.GREEN if pop_pct < 0.8 else Color(1,0.5,0)
 	_pop_label.text = "👥 人口 %d/%d" % [pop.current, pop.max]
+	# 主城血量
+	var castle = get_peer_castle(my_peer_id) if my_peer_id != -1 else get_team_castle(my_team)
+	if _castle_bar and _castle_label:
+		if castle and is_instance_valid(castle):
+			_castle_bar.visible = true
+			_castle_bar.update_bar(castle.health, castle.max_health, -1, battle.get_entity_color(castle))
+			_castle_label.text = "🏰 主城 Lv.%d %d/%d" % [castle.upgrade_level, int(castle.health), int(castle.max_health)]
+		else:
+			_castle_bar.visible = false
+			_castle_label.text = "🏰 主城 已失守"
 	var res_list = [
 		{"k":"gold","n":"金","c":Color(1.0,0.84,0.1)}, {"k":"wood","n":"木","c":Color(0.25,0.82,0.2)},
 		{"k":"stone","n":"石","c":Color(0.62,0.62,0.62)}, {"k":"food","n":"食","c":Color(1.0,0.55,0.1)},
@@ -1793,20 +1805,26 @@ func update_debug_label():
 		[43,"油商"],[44,"木商"],[45,"石商"],[51,"食商"],[46,"县吏"],[47,"上校"],[48,"尚书"],[49,"统帅"],[50,"丞相"],
 		[58,"连弩"],[59,"巨投"],[5,"推车"],[6,"贸车"],[9,"运载"],[55,"僧侣"],[56,"长老"],[57,"宗师"],[65,"武士"],[66,"甲骑"]]
 	var mil_lines = []
+	var mil_total = 0
 	for u in all_units:
 		var cnt = count_unit(u[0], false)
-		if cnt > 0: mil_lines.append("[color=#aaa]%s[/color]:[color=white]%d[/color]" % [u[1], cnt])
+		mil_total += cnt
+		if cnt > 0: mil_lines.append("[color=#aaa]%s%s[/color]:[color=white]%d[/color]" % [UITheme.entity_emoji(u[0], 2), u[1], cnt])
 	_mil_rtl.text = "[color=gray](无军队)[/color]" if mil_lines.is_empty() else " ".join(mil_lines)
+	if _mil_title: _mil_title.text = "[color=#5af]▸ ⚔️ 军队 %d[/color]" % mil_total
 	var all_blds = [[20,"城"],[21,"营"],[22,"仓"],[23,"坞"],[24,"攻城车"],[25,"箭塔"],[26,"炮塔"],[27,"墙"],[28,"民"],[29,"重工"],[41,"瞭望"],[42,"书院"],[52,"集市"],[53,"城堡"],[64,"炮台"],[7,"桥"],[8,"梯子"],[54,"修道"]]
 	var bld_lines = []
+	var bld_total = 0
 	for b in all_blds:
 		var cnt = 0; var max_lv = 1
 		for entity in battle.entities.get_children():
 			if entity is Building and entity.entity_id == b[0] and entity_belongs_to_me(entity) and entity.health > 0 and entity.build_timer <= 0:
 				cnt += 1
 				if entity.upgrade_level > max_lv: max_lv = entity.upgrade_level
-		if cnt > 0: bld_lines.append("[color=#888]【%d】%s[/color]:[color=white]%d[/color]" % [max_lv, b[1], cnt])
+		bld_total += cnt
+		if cnt > 0: bld_lines.append("[color=#888]%s【%d】%s[/color]:[color=white]%d[/color]" % [UITheme.entity_emoji(b[0], 1), max_lv, b[1], cnt])
 	_bld_rtl.text = "[color=gray](无建筑)[/color]" if bld_lines.is_empty() else " ".join(bld_lines)
+	if _bld_title: _bld_title.text = "[color=#5af]▸ 🏰 建筑 %d[/color]" % bld_total
 	var hunt_info = "[color=#ffa]🏹 狩猎: %.0fs[/color]" % max(0, _hunt_timer)
 	if _hunt_target and is_instance_valid(_hunt_target):
 		var hc = 0
@@ -1827,22 +1845,30 @@ func _exit_tree():
 	debug_panel = null
 
 # 面板标题上显示本国名称：owner 优先，其次队伍默认（静态 1v1 红方 AI 用敌方国家）
+func _my_nation_index() -> int:
+	if not battle:
+		return -1
+	if battle is OnlineBattleManager:
+		return int(battle.player_info.get(my_peer_id, {}).get("nation", -1))
+	elif my_peer_id != -1 and battle.ai_players.has(my_peer_id):
+		return int(battle.ai_players[my_peer_id].get("nation", -1))
+	return int(GameSettings.enemy_nation)
+
 func _my_nation_tag() -> String:
 	if not battle or not battle.has_method("get_nation_name"):
 		return ""
-	var nat := -1
-	if battle is OnlineBattleManager:
-		nat = int(battle.player_info.get(my_peer_id, {}).get("nation", -1))
-	elif my_peer_id != -1 and battle.ai_players.has(my_peer_id):
-		nat = int(battle.ai_players[my_peer_id].get("nation", -1))
-	else:
-		nat = int(GameSettings.enemy_nation)
+	var nat := _my_nation_index()
 	if nat >= 0:
 		return " [color=#ffd34f]「%s」[/color]" % battle.get_nation_name(nat)
 	return ""
 var _pop_bar: ProgressBar; var _pop_label: Label
 var _res_bars: Array = []; var _res_labels: Array = []
 var _mil_rtl: RichTextLabel; var _bld_rtl: RichTextLabel
+var _trait_rtl: RichTextLabel
+var _castle_bar: HealthBarControl
+var _castle_label: Label
+var _mil_title: RichTextLabel
+var _bld_title: RichTextLabel
 var _title_rtl: RichTextLabel = null       # 面板标题（用于追加国家名）
 var _panel_title_base: String = ""         # 不含国家名的原始标题
 var _collapse_btn: Button = null           # 标题栏右侧的隐藏/展开按钮
@@ -1851,7 +1877,7 @@ var _panel_collapsed: bool = false         # 面板是否已收起为标题条
 var _panel_bg_style: StyleBoxFlat = null   # 面板底板样式（按友方/敌方着色）
 var _last_relation: int = -2               # 上次计算的敌我关系，避免每帧重设样式
 const PANEL_WIDTH: float = 540.0
-const PANEL_HEIGHT: float = 380.0
+const PANEL_HEIGHT: float = 440.0
 const PANEL_COLLAPSED_HEIGHT: float = 44.0
 
 # 当前面板实际高度（折叠后只保留标题条），供统一布局函数计算下方面板位置
@@ -1950,6 +1976,16 @@ func _create_debug_panel():
 	var body = VBoxContainer.new(); body.add_theme_constant_override("separation", 3)
 	vb.add_child(body); _body_vb = body
 	_header_rtl = _make_rtl(); _header_rtl.add_theme_font_size_override("font_size", 19); body.add_child(_header_rtl)
+	# 国家特色
+	_trait_rtl = _make_rtl(); _trait_rtl.add_theme_font_size_override("font_size", 13); body.add_child(_trait_rtl)
+	# 主城血量
+	var castle_hbox = HBoxContainer.new()
+	_castle_label = Label.new(); _castle_label.add_theme_font_size_override("font_size", 14)
+	_castle_label.add_theme_color_override("font_color", Color(UITheme.PARCHMENT))
+	castle_hbox.add_child(_castle_label)
+	_castle_bar = HealthBarControl.new(); _castle_bar.custom_minimum_size = Vector2(300, 10)
+	castle_hbox.add_child(_castle_bar)
+	body.add_child(castle_hbox)
 	var pop_hbox = HBoxContainer.new()
 	_pop_label = Label.new(); _pop_label.add_theme_font_size_override("font_size", 16); _pop_label.add_theme_color_override("font_color", Color.WHITE)
 	pop_hbox.add_child(_pop_label)
@@ -1968,8 +2004,8 @@ func _create_debug_panel():
 		ll.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; ll.clip_text = true; ll.custom_minimum_size = Vector2(85, 0)
 		_res_labels.append(ll); col.add_child(ll); res_grid.add_child(col)
 	body.add_child(res_grid)
-	body.add_child(_make_section("⚔️ 军队")); _mil_rtl = _make_rtl(); body.add_child(_mil_rtl)
-	body.add_child(_make_section("🏰 建筑")); _bld_rtl = _make_rtl(); body.add_child(_bld_rtl)
+	_mil_title = _make_section("⚔️ 军队"); body.add_child(_mil_title); _mil_rtl = _make_rtl(); body.add_child(_mil_rtl)
+	_bld_title = _make_section("🏰 建筑"); body.add_child(_bld_title); _bld_rtl = _make_rtl(); body.add_child(_bld_rtl)
 	var hud = battle.get_node("UI") as CanvasLayer; hud.add_child(debug_panel)
 	# 创建后交给管理器统一排布，避免多个面板叠放
 	if battle.has_method("layout_ai_debug_panels"):
