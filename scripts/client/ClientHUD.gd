@@ -327,6 +327,27 @@ func _update_unit_stats():
 		_stats_bld_rtl.text = " ".join(building_lines)
 
 
+func _get_client_input_node():
+	var input_node = get_tree().get_first_node_in_group("client_input")
+	if not input_node:
+		input_node = get_node_or_null("ClientRoot/ClientInput")
+	return input_node
+
+func _on_select_screen_pressed():
+	var ci = _get_client_input_node()
+	if ci and ci.has_method("select_screen_military"):
+		ci.select_screen_military()
+
+func _on_select_all_pressed():
+	var ci = _get_client_input_node()
+	if ci and ci.has_method("select_all_military"):
+		ci.select_all_military()
+
+func _on_retreat_screen_pressed():
+	var ci = _get_client_input_node()
+	if ci and ci.has_method("retreat_screen_units"):
+		ci.retreat_screen_units()
+
 func _on_rally_pressed():
 	var input_node = get_tree().get_first_node_in_group("client_input")
 	if not input_node:
@@ -520,22 +541,46 @@ func _ready():
 	nation_bonus_label.text = "加成:\n" + NationBonuses.get_description(GameSettings.player_nation)
 	nation_panel.add_child(nation_bonus_label)
 
-	# 全军指令：进攻=朱红危险钮，撤退=金色主钮
+	# 全军指令：选择 / 自动进攻 / 撤退
 	attack_all_btn = Button.new()
-	attack_all_btn.text = "⚔️ 全军进攻 (F2)"
+	attack_all_btn.text = "全选屏幕军队 (F1)"
 	attack_all_btn.position = Vector2(10, 506)
-	attack_all_btn.custom_minimum_size = Vector2(200, 50)
-	UITheme.apply_danger_button(attack_all_btn, UITheme.FONT_XL)
-	attack_all_btn.pressed.connect(_on_attack_all_pressed)
+	attack_all_btn.custom_minimum_size = Vector2(200, 44)
+	UITheme.apply_primary_button(attack_all_btn, UITheme.FONT_LG)
+	attack_all_btn.pressed.connect(_on_select_screen_pressed)
 	add_child(attack_all_btn)
 
 	retreat_all_btn = Button.new()
-	retreat_all_btn.text = "🛡️ 全军撤退 (F3)"
+	retreat_all_btn.text = "全选所有军队 (Ctrl+F1)"
 	retreat_all_btn.position = Vector2(220, 506)
-	retreat_all_btn.custom_minimum_size = Vector2(200, 50)
-	UITheme.apply_primary_button(retreat_all_btn, UITheme.FONT_XL)
-	retreat_all_btn.pressed.connect(_on_retreat_all_pressed)
+	retreat_all_btn.custom_minimum_size = Vector2(200, 44)
+	UITheme.apply_primary_button(retreat_all_btn, UITheme.FONT_LG)
+	retreat_all_btn.pressed.connect(_on_select_all_pressed)
 	add_child(retreat_all_btn)
+
+	var b_auto = Button.new()
+	b_auto.text = "⚔️ 自动进攻 (F2)"
+	b_auto.position = Vector2(10, 560)
+	b_auto.custom_minimum_size = Vector2(200, 44)
+	UITheme.apply_danger_button(b_auto, UITheme.FONT_LG)
+	b_auto.pressed.connect(_on_attack_all_pressed)
+	add_child(b_auto)
+
+	var b_ret_screen = Button.new()
+	b_ret_screen.text = "屏幕军队撤退 (F3)"
+	b_ret_screen.position = Vector2(220, 560)
+	b_ret_screen.custom_minimum_size = Vector2(200, 44)
+	UITheme.apply_primary_button(b_ret_screen, UITheme.FONT_LG)
+	b_ret_screen.pressed.connect(_on_retreat_screen_pressed)
+	add_child(b_ret_screen)
+
+	var b_ret_all = Button.new()
+	b_ret_all.text = "所有军队撤退 (Ctrl+F3)"
+	b_ret_all.position = Vector2(10, 614)
+	b_ret_all.custom_minimum_size = Vector2(200, 44)
+	UITheme.apply_primary_button(b_ret_all, UITheme.FONT_LG)
+	b_ret_all.pressed.connect(_on_retreat_all_pressed)
+	add_child(b_ret_all)
 
 	# 创建单位统计面板
 	_create_unit_stats_panel()

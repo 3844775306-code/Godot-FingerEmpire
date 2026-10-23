@@ -924,6 +924,7 @@ func _execute_command(cmd: Dictionary):
 			attack_move_target = cmd["pos"]
 			current_target = null
 			is_attack_moving = true
+			_set_order(UnitState.ATTACK_MOVING)
 			_movement.set_move_target(cmd["pos"])
 
 # ==================== Waypoint visualization ====================

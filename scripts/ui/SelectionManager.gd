@@ -80,16 +80,7 @@ func _input(event):
 			get_viewport().set_input_as_handled()
 			return
 
-		# F1~F3 全局命令
-		if key == KEY_F1:
-			select_all_military()
-			get_viewport().set_input_as_handled(); return
-		if key == KEY_F2 and bm:
-			bm.global_attack()
-			get_viewport().set_input_as_handled(); return
-		if key == KEY_F3 and bm:
-			bm.global_retreat()
-			get_viewport().set_input_as_handled(); return
+		# F1~F3 全局命令交给 HUD 处理（屏幕内选择/自动进攻/撤退）
 
 		# 无选中 → 快速建造
 		if selected_entities.is_empty() and not ctrl and not shift:

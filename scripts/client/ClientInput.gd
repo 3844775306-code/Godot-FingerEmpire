@@ -54,22 +54,73 @@ func set_client_selected_ids(ids: Array):
 	_update_selection_visuals()
 	emit_signal("selection_changed", client_selected_ids.duplicate())
 
-func select_all_military():
+func _is_node_on_screen(node: Node3D) -> bool:
+	var cam = get_viewport().get_camera_3d()
+	if cam == null: return false
+	if cam.projection != Camera3D.PROJECTION_ORTHOGONAL and cam.is_position_behind(node.global_position):
+		return false
+	return get_viewport().get_visible_rect().has_point(cam.unproject_position(node.global_position))
+
+func _select_military(screen_only: bool):
 	if not renderer: return
 	client_selected_ids.clear()
 	for node in renderer.entity_nodes.values():
 		if not node.has_meta("snapshot_info"): continue
 		var info = node.get_meta("snapshot_info")
 		if not info: continue
-		if info["type"] == 2 and info["entity_id"] not in [10, 14] and info["health"] > 0:
-			# Check ownership
-			if renderer.my_peer_id != -1 and info.get("owner_peer_id", -1) != renderer.my_peer_id:
-				continue
-			if renderer.my_peer_id == -1 and info["team"] != renderer.player_team:
-				continue
-			client_selected_ids.append(info["id"])
+		if info["type"] != 2 or info["health"] <= 0: continue
+		# 经济单位不计入军队
+		if info["entity_id"] in [10, 14, 5, 6, 9, 43, 44, 45, 51, 46, 47, 48, 49, 50]: continue
+		if renderer.my_peer_id != -1 and info.get("owner_peer_id", -1) != renderer.my_peer_id:
+			continue
+		if renderer.my_peer_id == -1 and info["team"] != renderer.player_team:
+			continue
+		if screen_only and not _is_node_on_screen(node): continue
+		client_selected_ids.append(info["id"])
 	_update_selection_visuals()
 	emit_signal("selection_changed", client_selected_ids.duplicate())
+
+func select_all_military():
+	_select_military(false)
+
+func select_screen_military():
+	_select_military(true)
+
+# 屏幕内军队撤退：向自己的主城发送移动指令
+func retreat_screen_units():
+	if not renderer: return
+	var ids: Array = []
+	for node in renderer.entity_nodes.values():
+		if not node.has_meta("snapshot_info"): continue
+		var info = node.get_meta("snapshot_info")
+		if not info or info["type"] != 2 or info["health"] <= 0: continue
+		if info["entity_id"] in [10, 14, 5, 6, 9, 43, 44, 45, 51, 46, 47, 48, 49, 50]: continue
+		if renderer.my_peer_id != -1 and info.get("owner_peer_id", -1) != renderer.my_peer_id: continue
+		if renderer.my_peer_id == -1 and info["team"] != renderer.player_team: continue
+		if not _is_node_on_screen(node): continue
+		ids.append(info["id"])
+	if ids.is_empty(): return
+	var home = _own_castle_pos()
+	if home == null: return
+	NetworkManager.send_command.rpc_id(1, {
+		"action": "right_click",
+		"selected_ids": ids,
+		"target_id": -1,
+		"pos_x": home.x, "pos_y": home.y, "pos_z": home.z,
+		"shift_held": false,
+		"formation_offsets": [],
+	})
+
+func _own_castle_pos() -> Variant:
+	if not renderer: return null
+	for node in renderer.entity_nodes.values():
+		if not node.has_meta("snapshot_info"): continue
+		var info = node.get_meta("snapshot_info")
+		if not info or info["type"] != 1 or info["entity_id"] != 20 or info["health"] <= 0: continue
+		if renderer.my_peer_id != -1 and info.get("owner_peer_id", -1) != renderer.my_peer_id: continue
+		if renderer.my_peer_id == -1 and info["team"] != renderer.player_team: continue
+		return node.global_position
+	return null
 
 func _ready():
 	set_process_input(true)
@@ -133,6 +184,21 @@ func _input(event):
 
 		# Delete键 → 拆除建筑
 
+		# F1~F3 全局命令（不受当前是否已选中影响）
+		if key == KEY_F1:
+			if ctrl: select_all_military()
+			else: select_screen_military()
+			get_viewport().set_input_as_handled(); return
+		if key == KEY_F2:
+			NetworkManager.send_command.rpc_id(1, {"action": "global_attack", "selected_ids": []})
+			get_viewport().set_input_as_handled(); return
+		if key == KEY_F3:
+			if ctrl:
+				NetworkManager.send_command.rpc_id(1, {"action": "global_retreat", "selected_ids": []})
+			else:
+				retreat_screen_units()
+			get_viewport().set_input_as_handled(); return
+
 		# 无选中时 → 快速建造快捷键
 		if client_selected_ids.is_empty() and not ctrl and not shift:
 			var build_id = -1
@@ -158,17 +224,6 @@ func _input(event):
 				renderer.start_build_placement(build_id)
 				get_viewport().set_input_as_handled()
 				return
-
-			# F1~F3 全局命令
-			if key == KEY_F1:
-				select_all_military()
-				get_viewport().set_input_as_handled(); return
-			if key == KEY_F2:
-				NetworkManager.send_command.rpc_id(1, {"action": "global_attack", "selected_ids": []})
-				get_viewport().set_input_as_handled(); return
-			if key == KEY_F3:
-				NetworkManager.send_command.rpc_id(1, {"action": "global_retreat", "selected_ids": []})
-				get_viewport().set_input_as_handled(); return
 
 			# F4 全军驻扎  F5 统计面板
 			if key == KEY_F4:
@@ -244,8 +299,6 @@ func _input(event):
 					KEY_W: NetworkManager.send_command.rpc_id(1, {"action":"toggle_attack_move","selected_ids":client_selected_ids.duplicate()})
 					KEY_E: _garrison_nearest()
 					KEY_R: _select_all_of_same_type(client_selected_ids[0], _get_entity_info(client_selected_ids[0]))
-					KEY_A: NetworkManager.send_command.rpc_id(1, {"action":"global_attack","selected_ids":client_selected_ids.duplicate()})
-					KEY_S: NetworkManager.send_command.rpc_id(1, {"action":"global_retreat","selected_ids":client_selected_ids.duplicate()})
 					KEY_D: NetworkManager.send_command.rpc_id(1, {"action":"ungarrison_soldiers","selected_ids":client_selected_ids.duplicate()})
 					KEY_F: _toggle_patrol_mode()
 					_: handled = false

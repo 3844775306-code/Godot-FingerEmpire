@@ -25,9 +25,6 @@ var res_income: Dictionary = {}
 var income_rate: Dictionary = {}
 var minimap_timer: float = 0.0
 
-var attack_all_btn: Button
-var retreat_all_btn: Button
-var rally_btn: Button
 var player_nation_label: Label
 var enemy_nation_label: Label
 var nation_bonus_label: Label
@@ -480,22 +477,18 @@ func _update_unit_stats():
 		_stats_bld_rtl.text = " ".join(building_lines)
 
 
-func _on_rally_pressed():
-	var bm = _get_bm() as RTSBattleManager
-	if bm:
-		var sel = bm.get_node("SelectionManager") as SelectionManager
-		if sel:
-			sel.select_all_military()
-
-
 func _input(event):
 	if event is InputEventKey and event.pressed:
 		match event.keycode:
+			KEY_F1:
+				if event.ctrl_pressed: _on_select_all_pressed()
+				else: _on_select_screen_pressed()
+			KEY_F2: _on_attack_all_pressed()
+			KEY_F3:
+				if event.ctrl_pressed: _on_retreat_all_pressed()
+				else: _on_retreat_screen_pressed()
 			KEY_H: _on_stop_gather_pressed()
 			KEY_P: _on_hold_position_pressed()
-			KEY_R: _on_rally_pressed()
-			KEY_A: _on_attack_all_pressed()
-			KEY_S: _on_retreat_all_pressed()
 			KEY_DELETE: _on_demolish_selected()
 			KEY_SPACE: _on_space_pressed()
 			KEY_L: _toggle_unit_text()
@@ -541,30 +534,73 @@ func _on_jump_to_alert():
 			minimap.has_latest_alert = false
 
 
+# 本地玩家的战斗单位（排除农民/采集船/商人/推车/官员等经济单位）
+func _get_local_military_units(screen_only: bool) -> Array:
+	var units: Array = []
+	var bm = _get_bm()
+	if not bm: return units
+	var cam = get_viewport().get_camera_3d()
+	var vp_rect = get_viewport().get_visible_rect()
+	for e in bm.entities.get_children():
+		if not (e is Army) or e.health <= 0: continue
+		if not bm.is_local_player_owned(e.owner_peer_id, e.team): continue
+		if e.entity_id in [10, 14, 5, 6, 9, 43, 44, 45, 51, 46, 47, 48, 49, 50]: continue
+		if screen_only:
+			if cam == null: continue
+			if cam.projection != Camera3D.PROJECTION_ORTHOGONAL and cam.is_position_behind(e.global_position): continue
+			if not vp_rect.has_point(cam.unproject_position(e.global_position)): continue
+		units.append(e)
+	return units
+
+func _select_units(units: Array):
+	var bm = _get_bm()
+	if not bm: return
+	var sm = bm.get_node_or_null("SelectionManager")
+	if not sm: return
+	sm._clear_selection()
+	for u in units:
+		if is_instance_valid(u) and u not in sm.selected_entities:
+			sm.selected_entities.append(u)
+			u.set_selected(true)
+	sm._update_info_panel()
+
+func _on_select_screen_pressed():
+	_select_units(_get_local_military_units(true))
+
+func _on_select_all_pressed():
+	_select_units(_get_local_military_units(false))
+
 func _on_attack_all_pressed():
 	var bm = _get_bm()
 	if not bm: return
 	var target = bm.get_enemy_castle()
-	if target:
-		_order_all_units("attack", target.global_position)
+	if target == null: return
+	for u in _get_local_military_units(false):
+		if u.has_method("attack_move_to"):
+			u.attack_move_to(target.global_position)
+	show_alert_message("全军自动进攻：向敌方主城推进", ALERT_WARNING)
 
-
-func _on_retreat_all_pressed():
+func _retreat_units(units: Array):
 	var bm = _get_bm()
 	if not bm: return
 	var home = bm.get_player_castle()
-	if home:
-		_order_all_units("move", home.global_position)
+	if home == null: return
+	var n = max(units.size(), 1)
+	for i in range(units.size()):
+		var u = units[i]
+		if not is_instance_valid(u): continue
+		var ang = TAU * float(i) / float(n)
+		var dest = home.global_position + Vector3(cos(ang) * 4.0, 0.0, sin(ang) * 4.0)
+		u.move_to(dest)
 
+func _on_retreat_screen_pressed():
+	_retreat_units(_get_local_military_units(true))
 
-func _order_all_units(order_type: String, destination: Vector3):
-	for unit in get_tree().get_nodes_in_group("entities"):
-		if unit is Army and unit.team == RTSConfig.Team.BLUE and unit.target_type > 0 and unit.entity_id not in [43,44,45,46,47,48,49,50,51]:
-			match order_type:
-				"attack":
-					unit.attack_move_to(destination)
-				"move":
-					unit.move_to(destination)
+func _on_retreat_all_pressed():
+	_retreat_units(_get_local_military_units(false))
+
+func _on_rally_pressed():
+	_on_select_all_pressed()
 
 
 func _ready():
@@ -572,44 +608,47 @@ func _ready():
 	_create_stats_toggle_button()
 
 	var btn_theme = Theme.new()
-	btn_theme.set_font_size("font_size", "Button", 20)
+	btn_theme.set_font_size("font_size", "Button", 16)
 
-	attack_all_btn = Button.new()
-	attack_all_btn.text = "全军进攻 (A)"
-	attack_all_btn.position = Vector2(620, 50)
-	attack_all_btn.theme = btn_theme
-	attack_all_btn.pressed.connect(_on_attack_all_pressed)
-	add_child(attack_all_btn)
+	var b_select_screen = Button.new()
+	b_select_screen.text = "全选屏幕军队 (F1)"
+	b_select_screen.position = Vector2(620, 50)
+	b_select_screen.custom_minimum_size = Vector2(210, 32)
+	b_select_screen.theme = btn_theme
+	b_select_screen.pressed.connect(_on_select_screen_pressed)
+	add_child(b_select_screen)
 
-	retreat_all_btn = Button.new()
-	retreat_all_btn.text = "全军撤退 (S)"
-	retreat_all_btn.position = Vector2(790, 50)
-	retreat_all_btn.theme = btn_theme
-	retreat_all_btn.pressed.connect(_on_retreat_all_pressed)
-	add_child(retreat_all_btn)
+	var b_select_all = Button.new()
+	b_select_all.text = "全选所有军队 (Ctrl+F1)"
+	b_select_all.position = Vector2(840, 50)
+	b_select_all.custom_minimum_size = Vector2(210, 32)
+	b_select_all.theme = btn_theme
+	b_select_all.pressed.connect(_on_select_all_pressed)
+	add_child(b_select_all)
 
-	var stop_gather_btn = Button.new()
-	stop_gather_btn.text = "暂停采集 (H)"
-	stop_gather_btn.position = Vector2(620, 90)
-	stop_gather_btn.toggle_mode = true
-	stop_gather_btn.theme = btn_theme
-	stop_gather_btn.pressed.connect(_on_stop_gather_pressed)
-	add_child(stop_gather_btn)
+	var b_auto_attack = Button.new()
+	b_auto_attack.text = "自动进攻 (F2)"
+	b_auto_attack.position = Vector2(620, 92)
+	b_auto_attack.custom_minimum_size = Vector2(210, 32)
+	b_auto_attack.theme = btn_theme
+	b_auto_attack.pressed.connect(_on_attack_all_pressed)
+	add_child(b_auto_attack)
 
-	var hold_position_btn = Button.new()
-	hold_position_btn.text = "原地防守 (P)"
-	hold_position_btn.position = Vector2(790, 90)
-	hold_position_btn.toggle_mode = true
-	hold_position_btn.theme = btn_theme
-	hold_position_btn.pressed.connect(_on_hold_position_pressed)
-	add_child(hold_position_btn)
+	var b_retreat_screen = Button.new()
+	b_retreat_screen.text = "屏幕军队撤退 (F3)"
+	b_retreat_screen.position = Vector2(840, 92)
+	b_retreat_screen.custom_minimum_size = Vector2(210, 32)
+	b_retreat_screen.theme = btn_theme
+	b_retreat_screen.pressed.connect(_on_retreat_screen_pressed)
+	add_child(b_retreat_screen)
 
-	rally_btn = Button.new()
-	rally_btn.text = "全选军队 (R)"
-	rally_btn.position = Vector2(620, 130)
-	rally_btn.theme = btn_theme
-	rally_btn.pressed.connect(_on_rally_pressed)
-	add_child(rally_btn)
+	var b_retreat_all = Button.new()
+	b_retreat_all.text = "所有军队撤退 (Ctrl+F3)"
+	b_retreat_all.position = Vector2(620, 134)
+	b_retreat_all.custom_minimum_size = Vector2(210, 32)
+	b_retreat_all.theme = btn_theme
+	b_retreat_all.pressed.connect(_on_retreat_all_pressed)
+	add_child(b_retreat_all)
 
 	set_process(true)
 const ALERT_DANGER = UITheme.ALERT_DANGER     # 红色 — 基地/建筑被攻击
