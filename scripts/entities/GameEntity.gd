@@ -51,6 +51,9 @@ var _base_speed: float = 0.0                # 驻军前原始移速（攻城车�
 
 # 缓存的 BattleManager 引用 — 避免每帧场景树遍历
 var _bm: RTSBattleManager = null
+# 死亡幂等标记：围殴时同一帧/死亡动画期间的多次命中不能重复触发 died，
+# 否则城堡计数的队伍会重复扣减，导致 2v2/3v3 提前判负
+var _is_dead: bool = false
 
 func _get_bm():
 	if not is_instance_valid(_bm):
@@ -143,6 +146,8 @@ func _process(delta):
 			bm._update_entity_animation(self)
 
 func take_damage(amount: float, source: GameEntity = null):
+	if _is_dead or health <= 0.0:
+		return
 	# Officials are immune while garrisoned
 	if entity_id >= 46 and entity_id <= 50:
 		var gb = get("_garrison_building")
@@ -217,6 +222,9 @@ func take_damage(amount: float, source: GameEntity = null):
 	if health <= 0:
 		die()
 func die():
+	if _is_dead:
+		return
+	_is_dead = true
 	# 死亡状态立即定案：即使后续走“毁坏模型/死亡动画”延迟删除，
 	# 从此刻起也按不存活处理（health<=0 是全项目的死亡判据，
 	# 缓存重建、人口重算、上限统计、寻敌过滤都据此排除本实体）

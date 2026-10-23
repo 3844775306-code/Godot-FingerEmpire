@@ -546,6 +546,8 @@ func _find_land_nearby(map) -> Vector3:
 	return global_position + Vector3(2, 0, 2)  # 兜底位置
 
 func die():
+	if _is_dead:
+		return
 	# 先释放所有进驻单位，再执行死亡逻辑
 	release_all_garrisoned()
 	super.die()

@@ -989,8 +989,25 @@ func _on_castle_died(team: int):
 	game_over = true
 	var winner = RTSConfig.Team.BLUE if team == RTSConfig.Team.RED else RTSConfig.Team.RED
 	print("[GameOver-1v1] Castle died: team=%d, winner=%d, notifying..." % [team, winner])
+	_show_host_game_over(winner)
 	for pid in multiplayer.get_peers():
 		NetworkManager.notify_game_over.rpc_id(pid, winner)
+
+# 房主也是玩家：RPC 只发给远程客户端，本地必须自己显示结算面板
+func _show_host_game_over(winner_team: int) -> void:
+	var host_team := RTSConfig.Team.BLUE
+	if player_info.has(1):
+		host_team = player_info[1].team
+	elif player_teams.has(1):
+		host_team = player_teams[1]
+	var host_won := winner_team == host_team
+	AudioManager.play_music("victory" if host_won else "defeat")
+	if game_over_label:
+		game_over_label.text = "你赢了！" if host_won else "你输了！"
+		game_over_label.add_theme_color_override("font_color", Color.GREEN if host_won else Color.RED)
+	if game_over_panel:
+		game_over_panel.visible = true
+
 func _on_castle_died_team(peer_id: int):
 	if not player_info.has(peer_id): return
 	player_info[peer_id].alive = false
@@ -1010,8 +1027,9 @@ func _on_castle_died_team(peer_id: int):
 	game_over = true
 	print("[GameOver-组队] GAME OVER! Winner team=%d, notifying players..." % [RTSConfig.Team.BLUE if team == RTSConfig.Team.RED else RTSConfig.Team.RED])
 	var winner = RTSConfig.Team.BLUE if team == RTSConfig.Team.RED else RTSConfig.Team.RED
+	_show_host_game_over(winner)
 	for pid in player_info.keys():
-		if pid >= 1000: continue
+		if pid >= 1000 or pid == 1: continue   # 跳过 AI 与房主（房主已本地结算）
 		NetworkManager.notify_game_over.rpc_id(pid, winner)
 
 # 1v1 的城堡死亡已在 RTSBattleManager 中通过 _on_castle_died 处理（游戏结束通知玩家）
