@@ -44,7 +44,7 @@ func _ready() -> void:
 	_preview_selfcheck()
 	_sync_selfcheck()
 	# 多人布局自检会改 NetworkManager 模式，放最后
-	for id in ["ridge", "ford", "forest"]:
+	for id in ["ridge", "ford", "forest", "marsh", "strait", "desert"]:
 		for k in [2, 3]:
 			_team_probe(id, k)
 	get_tree().quit()
@@ -111,33 +111,34 @@ func _team_probe(map_id: String, team_size: int) -> void:
 # 模拟联机下发：主机打包覆盖层 → 客户端解压并还原，地形/覆盖层/配色必须一致
 func _sync_selfcheck() -> void:
 	var size := 100
-	var src = GroundScript.new()
-	src.map_size_override = size
-	src.map_preset = MapPresets.get_preset("forest")
-	src.custom_seed = 12345
-	src._generate_with_stages(size, src.map_preset["stages"])
-	var overlay := PackedByteArray()
-	overlay.resize(size * size)
-	var oi := 0
-	for x in range(size):
-		for y in range(size):
-			overlay[oi] = src.get_overlay(x, y)
-			oi += 1
-	var zip := overlay.compress(FileAccess.COMPRESSION_ZSTD)
-	var unzip := zip.decompress(size * size, FileAccess.COMPRESSION_ZSTD)
-	var dst = GroundScript.new()
-	dst.map_size_override = size
-	dst.apply_received_map(src.terrain_grid, src.height_grid, [], unzip, "forest")
-	var same := var_to_bytes([src.terrain_grid, src.overlay_grid]) == var_to_bytes([dst.terrain_grid, dst.overlay_grid])
-	var same_colors := var_to_bytes(src.base_colors) == var_to_bytes(dst.base_colors)
-	print("SYNC match=%s colors=%s zip=%d raw=%d mods=%s" % [
-		str(same), str(same_colors), zip.size(), overlay.size(),
-		str(dst.map_preset.get("modifiers", {}))])
-	src.free()
-	dst.free()
+	for pid in ["marsh", "desert", "strait"]:
+		var src = GroundScript.new()
+		src.map_size_override = size
+		src.map_preset = MapPresets.get_preset(pid)
+		src.custom_seed = 12345
+		src._generate_with_stages(size, src.map_preset["stages"])
+		var overlay := PackedByteArray()
+		overlay.resize(size * size)
+		var oi := 0
+		for x in range(size):
+			for y in range(size):
+				overlay[oi] = src.get_overlay(x, y)
+				oi += 1
+		var zip := overlay.compress(FileAccess.COMPRESSION_ZSTD)
+		var unzip := zip.decompress(size * size, FileAccess.COMPRESSION_ZSTD)
+		var dst = GroundScript.new()
+		dst.map_size_override = size
+		dst.apply_received_map(src.terrain_grid, src.height_grid, [], unzip, pid)
+		var same := var_to_bytes([src.terrain_grid, src.overlay_grid]) == var_to_bytes([dst.terrain_grid, dst.overlay_grid])
+		var same_colors := var_to_bytes(src.base_colors) == var_to_bytes(dst.base_colors)
+		print("SYNC %s match=%s colors=%s zip=%d raw=%d mods=%s" % [
+			pid, str(same), str(same_colors), zip.size(), overlay.size(),
+			str(dst.map_preset.get("modifiers", {}))])
+		src.free()
+		dst.free()
 
 func _preview_selfcheck() -> void:
-	for id in ["classic", "ridge", "ford", "forest"]:
+	for id in MapPresets.all_ids():
 		var tex = MapPreview.get_texture(id, 64)
 		print("PREVIEW %s %s" % [id, str(tex.get_size()) if tex else "null"])
 
@@ -154,16 +155,16 @@ func _report(g, s: int) -> void:
 		for y in range(size):
 			counts[int(g.terrain_grid[x][y])] += 1
 	var total := float(size * size)
-	var overlay_stats := {1: 0, 3: 0}
+	var overlay_stats := {1: 0, 2: 0, 3: 0}
 	if not g.overlay_grid.is_empty():
 		for x in range(size):
 			for y in range(size):
 				var ov: int = int(g.overlay_grid[x][y])
 				if overlay_stats.has(ov):
 					overlay_stats[ov] += 1
-	print("  STATS plain=%.1f%% mountain=%.1f%% water=%.1f%% passes=%d forest=%.1f%% ford=%.1f%%" % [
+	print("  STATS plain=%.1f%% mountain=%.1f%% water=%.1f%% passes=%d forest=%.1f%% marsh=%.1f%% ford=%.1f%%" % [
 		counts[0] / total * 100.0, counts[1] / total * 100.0, counts[2] / total * 100.0,
-		g._pass_centers.size(), overlay_stats[1] / total * 100.0, overlay_stats[3] / total * 100.0])
+		g._pass_centers.size(), overlay_stats[1] / total * 100.0, overlay_stats[2] / total * 100.0, overlay_stats[3] / total * 100.0])
 
 	for label in ["PLAYER", "ENEMY"]:
 		var p: Vector3 = g.player_castle_pos if label == "PLAYER" else g.enemy_castle_pos
@@ -277,6 +278,8 @@ func _ascii(g, size: int) -> void:
 				line += "="
 			elif ov == 1:
 				line += "f"
+			elif ov == 2:
+				line += "m"
 			else:
 				line += "." if t == 0 else ("^" if t == 1 else "~")
 		rows.append(line)

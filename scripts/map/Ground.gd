@@ -50,6 +50,7 @@ var _mountain_threshold: float = 0.3
 var _water_threshold: float = -0.25
 var _pass_centers: Array = []          # 隘口中心（格坐标），用于争议资源布点
 var _river_center: Array = []          # 每行河流中心 x（格坐标），供浅滩算子使用
+var _sea_width: float = 0.0            # 海峡算子的水面宽度（格），供小岛算子参考
 
 # 防止重复生成
 var map_generated: bool = false
@@ -133,7 +134,7 @@ func _generate_terrain():
 		_generate_classic(size)
 		return
 	if not _special_map_supported():
-		push_warning("[地图] 特殊地形暂只支持 1V1，回退经典大陆")
+		push_warning("[地图] 特殊地形只支持 1V1/2V2/3V3，乱斗模式回退经典大陆")
 		_generate_classic(size)
 		return
 	_generate_with_stages(size, stages)
@@ -204,6 +205,14 @@ func _generate_with_stages(size: int, stages: Array) -> void:
 				_op_fords(size, params)
 			"forest":
 				_op_forest(size, params)
+			"marsh":
+				_op_marsh(size, params)
+			"sea":
+				_op_sea(size, params)
+			"islets":
+				_op_islets(size, params)
+			"oasis":
+				_op_oasis(size, params)
 			_:
 				push_warning("[地图] 未知生成算子: %s" % op)
 	_colorize_grid(size)
@@ -374,6 +383,134 @@ func _op_forest(size: int, params: Dictionary) -> void:
 				continue
 			overlay_grid[x][y] = 1
 
+# 沼泽：在平原上铺成片湿地（overlay 2），按分位阈值保证覆盖率；压平区会清掉覆盖层
+func _op_marsh(size: int, params: Dictionary) -> void:
+	var coverage := clampf(float(params.get("coverage", 0.32)), 0.05, 0.85)
+	var freq := float(params.get("freq", 0.05))
+	var seed_val := custom_seed if custom_seed != 0 else randi()
+	var noise := FastNoiseLite.new()
+	noise.seed = seed_val + 613
+	noise.frequency = freq
+	noise.fractal_octaves = 3
+	# 只在平地上取分位阈值，保证实际覆盖率贴近参数
+	var plains: Array = []
+	for x in range(size):
+		for y in range(size):
+			if terrain_grid[x][y] == 0:
+				plains.append(noise.get_noise_2d(x, y))
+	if plains.is_empty():
+		return
+	plains.sort()
+	var idx := clampi(int(float(plains.size()) * (1.0 - coverage)), 0, plains.size() - 1)
+	var threshold: float = plains[idx]
+	for x in range(size):
+		for y in range(size):
+			if terrain_grid[x][y] != 0:
+				continue
+			if overlay_grid[x][y] != 0:
+				continue
+			if noise.get_noise_2d(x, y) < threshold:
+				continue
+			overlay_grid[x][y] = 2
+
+# 海峡：加宽的 S 形水面纵切全图（复用 river 的河心记录，浅滩算子可直接叠加）
+func _op_sea(size: int, params: Dictionary) -> void:
+	var frac := float(params.get("width_frac", 0.16))
+	_sea_width = maxf(6.0, frac * float(size))
+	_op_river(size, {
+		"center": params.get("center", 0.5),
+		"width": _sea_width,
+		"amp": params.get("amp", 0.05),
+		"freq": params.get("freq", 0.035),
+	})
+
+# 小岛：在海峡静水里撒几块陆地，避开渡口行，避免把唯一的陆路通道堵死
+func _op_islets(size: int, params: Dictionary) -> void:
+	if _river_center.is_empty():
+		push_warning("[地图] islets 需要先执行 sea/river")
+		return
+	var count := maxi(0, int(params.get("count", 8)))
+	var avoid: Array = params.get("avoid", [])
+	var band := clampf(float(params.get("band", 0.45)), 0.05, 1.0)
+	var half_width := maxf(3.0, _sea_width * 0.5)
+	var seed_val := custom_seed if custom_seed != 0 else randi()
+	var isl := FastNoiseLite.new()
+	isl.seed = seed_val + 1327
+	isl.frequency = float(params.get("freq", 0.07))
+	isl.fractal_octaves = 2
+	var planted := 0
+	var guard := 0
+	while planted < count and guard < count * 80:
+		guard += 1
+		var gy := randi_range(int(float(size) * 0.08), int(float(size) * 0.92))
+		var skip := false
+		for p in avoid:
+			if absi(gy - int(float(p) * float(size))) <= 6:
+				skip = true
+				break
+		if skip:
+			continue
+		var cx: int = int(_river_center[clampi(gy, 0, _river_center.size() - 1)])
+		var gx := cx + int(round(half_width * band * randf_range(-1.0, 1.0)))
+		if gx < 3 or gx >= size - 3:
+			continue
+		if terrain_grid[gx][gy] != 2:
+			continue
+		if isl.get_noise_2d(gx, gy) < 0.0:
+			continue
+		var rad := randi_range(2, 3)
+		# 小岛必须整块落在水里，压到陆地就当这次没撒成
+		var ok := true
+		for dx in range(-rad - 1, rad + 2):
+			for dy in range(-rad - 1, rad + 2):
+				if dx * dx + dy * dy > (rad + 1) * (rad + 1):
+					continue
+				var nx := gx + dx
+				var ny := gy + dy
+				if nx < 0 or ny < 0 or nx >= size or ny >= size:
+					ok = false
+					break
+				if terrain_grid[nx][ny] != 2:
+					ok = false
+					break
+			if not ok:
+				break
+		if not ok:
+			continue
+		for dx in range(-rad, rad + 1):
+			for dy in range(-rad, rad + 1):
+				if dx * dx + dy * dy > rad * rad:
+					continue
+				var nx := gx + dx
+				var ny := gy + dy
+				terrain_grid[nx][ny] = 0
+				height_grid[nx][ny] = 0.1
+		planted += 1
+
+# 绿洲：在沙海上挖几眼小水面，既是油井落点也是地标；压平区会覆盖成平地
+func _op_oasis(size: int, params: Dictionary) -> void:
+	var spots: Array = params.get("spots", [[0.28, 0.32], [0.5, 0.62], [0.72, 0.38]])
+	var base_r := maxi(1, int(params.get("radius", 3)))
+	# 大图（150 格）绿洲按比例放大，否则水面占比太小放不下油井
+	var frac_r := float(params.get("radius_frac", 0.0))
+	if frac_r > 0.0:
+		base_r = maxi(2, int(round(frac_r * float(size))))
+	var seed_val := custom_seed if custom_seed != 0 else randi()
+	for s in spots:
+		var cx := int(float(s[0]) * float(size))
+		var cy := int(float(s[1]) * float(size))
+		var rad := base_r + int(absi(hash(Vector2i(cx, cy) + Vector2i(seed_val, 0))) % 2)
+		for dx in range(-rad, rad + 1):
+			for dy in range(-rad, rad + 1):
+				if dx * dx + dy * dy > rad * rad:
+					continue
+				var nx := clampi(cx + dx, 0, size - 1)
+				var ny := clampi(cy + dy, 0, size - 1)
+				terrain_grid[nx][ny] = 2
+				height_grid[nx][ny] = -height_scale * 0.5
+				if not overlay_grid.is_empty():
+					overlay_grid[nx][ny] = 0
+
 func _colorize_grid(size: int) -> void:
 	base_colors.clear()
 	for x in range(size):
@@ -389,16 +526,31 @@ func _colorize_grid(size: int) -> void:
 
 func _terrain_color_for(terrain_type: int, h: float, gx: int, gy: int, overlay: int = 0) -> Color:
 	var color: Color
+	var pal: Dictionary = map_preset.get("palette", {})
 	match terrain_type:
-		1:  # 山地：山脚土棕 -> 高处灰岩
-			color = Color(0.40, 0.30, 0.18).lerp(Color(0.64, 0.62, 0.58), clamp(h / (height_scale * 5.0), 0.0, 1.0))
+		1:  # 山地：山脚土棕 -> 高处灰岩（预设可用 palette.mountain_low/high 换山色）
+			color = _pal_color(pal, "mountain_low", Color(0.40, 0.30, 0.18)).lerp(
+				_pal_color(pal, "mountain_high", Color(0.64, 0.62, 0.58)),
+				clamp(h / (height_scale * 5.0), 0.0, 1.0))
 		2:  # 水域：深度没有进高度网格，改用邻域陆地量当靠岸程度 —— 近岸浅亮、远海深暗
-			color = Color(0.10, 0.28, 0.50).lerp(Color(0.24, 0.58, 0.72), _shore_amount(gx, gy))
-		_:  # 草原：低地深绿 -> 高地黄绿
-			color = Color(0.12, 0.33, 0.14).lerp(Color(0.42, 0.51, 0.22), clamp((h + 0.075) / 0.165, 0.0, 1.0))
-	# 覆盖层着色：森林压暗偏绿、浅滩撒沙
+			color = _pal_color(pal, "water_deep", Color(0.10, 0.28, 0.50)).lerp(
+				_pal_color(pal, "water_shallow", Color(0.24, 0.58, 0.72)), _shore_amount(gx, gy))
+		_:  # 草原：低地深绿 -> 高地黄绿（沙漠图改成沙色）
+			color = _pal_color(pal, "plain_low", Color(0.12, 0.33, 0.14)).lerp(
+				_pal_color(pal, "plain_high", Color(0.42, 0.51, 0.22)),
+				clamp((h + 0.075) / 0.165, 0.0, 1.0))
+	# 覆盖层着色：森林压暗偏绿、沼泽铺泥、浅滩撒沙
 	if overlay == 1:
 		color = color.lerp(Color(0.10, 0.26, 0.12), 0.55)
+	elif overlay == 2:
+		# 沼泽：泥地为主，按格哈希撒出水洼与草甸，远看是斑驳湿地
+		var mh := float(absi(hash(Vector2i(gx, gy))) % 1000) / 1000.0
+		var mud := Color(0.20, 0.24, 0.14).lerp(Color(0.30, 0.34, 0.20), mh)
+		if mh < 0.16:
+			mud = Color(0.15, 0.21, 0.20)
+		elif mh > 0.95:
+			mud = Color(0.34, 0.38, 0.16)
+		color = color.lerp(mud, 0.75)
 	elif overlay == 3:
 		# 浅滩：沙底为主，按格哈希撒出深浅不一的沙粒与偶发水色
 		var hv := float(absi(hash(Vector2i(gx, gy))) % 1000) / 1000.0
@@ -415,6 +567,17 @@ func _terrain_color_for(terrain_type: int, h: float, gx: int, gy: int, overlay: 
 	else:
 		color = color.darkened(-d * 0.09)
 	return color
+
+# 预设调色板取值：支持 [r,g,b] 数组（可用于 const 字典）与 Color 两种写法
+func _pal_color(pal: Dictionary, key: String, fallback: Color) -> Color:
+	if not pal.has(key):
+		return fallback
+	var v = pal[key]
+	if v is Color:
+		return v
+	if v is Array and v.size() >= 3:
+		return Color(float(v[0]), float(v[1]), float(v[2]))
+	return fallback
 
 # 靠岸程度：3x3 邻域里陆地格占比（0=远海，1=贴岸）。水深不会同步给客户端，
 # 用邻域陆地量代替，两端都能算，靠岸浅亮、远海深暗的观感就出来了。

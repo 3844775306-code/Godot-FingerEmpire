@@ -21,8 +21,18 @@ func _build() -> void:
 	add_child(dim)
 
 	var panel = Panel.new()
-	panel.position = Vector2(340, 300)
-	panel.size = Vector2(1720, 760)
+	# 卡片数量随预设增加，按每行 4 张自动换行并调整面板高度
+	var ids: Array = MapPresets.all_ids()
+	var per_row := 4
+	var rows := int(ceil(float(ids.size()) / float(per_row)))
+	var card_w := 400.0
+	var card_h := 400.0
+	var gap := 20.0
+	var panel_w := 1720.0
+	var panel_h := 104.0 + float(rows) * card_h + float(rows - 1) * gap + 24.0
+	var vp := get_viewport_rect().size
+	panel.position = Vector2(maxf(0.0, (vp.x - panel_w) * 0.5), maxf(16.0, (vp.y - panel_h) * 0.5))
+	panel.size = Vector2(panel_w, panel_h)
 	panel.add_theme_stylebox_override("panel", UITheme.card_style(UITheme.GOLD))
 	add_child(panel)
 	UITheme.fade_in(panel, 0.2)
@@ -30,86 +40,93 @@ func _build() -> void:
 	var title = Label.new()
 	title.text = "⚔️ 选择战场地形 ⚔️"
 	title.position = Vector2(0, 16)
-	title.size = Vector2(1720, 46)
+	title.size = Vector2(panel_w, 46)
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	UITheme.apply_label(title, 32, UITheme.GOLD)
 	panel.add_child(title)
 
 	var hint = Label.new()
-	hint.text = "特殊地形暂只支持 1V1；地形会改变视野、移速与资源分布"
+	hint.text = "特殊地形支持 1V1 / 2V2 / 3V3；地形会改变视野、移速与资源分布"
 	hint.position = Vector2(0, 66)
-	hint.size = Vector2(1720, 26)
+	hint.size = Vector2(panel_w, 26)
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	UITheme.apply_label(hint, 18, UITheme.STONE.lightened(0.35))
 	panel.add_child(hint)
 
-	var ids: Array = MapPresets.all_ids()
-	var card_w := 380.0
-	var gap := 24.0
-	var total_w := card_w * float(ids.size()) + gap * float(ids.size() - 1)
-	var start_x := (1720.0 - total_w) * 0.5
+	var row_w := float(per_row) * card_w + float(per_row - 1) * gap
+	var start_x := (panel_w - row_w) * 0.5
 	for i in range(ids.size()):
-		panel.add_child(_make_map_card(String(ids[i]), Vector2(start_x + float(i) * (card_w + gap), 104)))
+		var col := i % per_row
+		var row := i / per_row
+		var pos := Vector2(start_x + float(col) * (card_w + gap), 104.0 + float(row) * (card_h + gap))
+		panel.add_child(_make_map_card(String(ids[i]), pos, Vector2(card_w, card_h)))
 
 	var close = Button.new()
 	close.text = "✕"
-	close.position = Vector2(1660, 16)
+	close.position = Vector2(panel_w - 60.0, 16)
 	close.size = Vector2(44, 44)
 	UITheme.apply_muted_button(close, 20)
 	close.pressed.connect(func(): queue_free())
 	panel.add_child(close)
 
-func _make_map_card(id: String, pos: Vector2) -> Control:
+func _make_map_card(id: String, pos: Vector2, card_size: Vector2) -> Control:
 	var card_id := id
 	var info := MapPresets.get_info(id)
 	var selected := id == GameSettings.map_id
+	var cw := card_size.x
+	var thumb_size := minf(cw - 100.0, 200.0)
 
 	var card = Panel.new()
 	card.position = pos
-	card.size = Vector2(380, 620)
+	card.size = card_size
 	card.add_theme_stylebox_override("panel", UITheme.card_style(UITheme.GOLD if selected else UITheme.STONE))
 
 	var thumb = TextureRect.new()
-	thumb.position = Vector2(55, 18)
-	thumb.size = Vector2(270, 270)
+	thumb.position = Vector2((cw - thumb_size) * 0.5, 14)
+	thumb.size = Vector2(thumb_size, thumb_size)
 	thumb.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
-	thumb.texture = MapPreview.get_texture(id, 270)
+	thumb.texture = MapPreview.get_texture(id, int(thumb_size))
 	card.add_child(thumb)
+
+	var y := thumb_size + 24.0
 
 	var name_lbl = Label.new()
 	name_lbl.text = String(info["name"])
-	name_lbl.position = Vector2(10, 300)
-	name_lbl.size = Vector2(360, 36)
+	name_lbl.position = Vector2(10, y)
+	name_lbl.size = Vector2(cw - 20.0, 34)
 	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	UITheme.apply_label(name_lbl, 26, UITheme.GOLD if selected else UITheme.PARCHMENT)
+	UITheme.apply_label(name_lbl, 24, UITheme.GOLD if selected else UITheme.PARCHMENT)
 	card.add_child(name_lbl)
+	y += 32.0
 
 	var battle_lbl = Label.new()
 	battle_lbl.text = String(info["battle"])
-	battle_lbl.position = Vector2(10, 338)
-	battle_lbl.size = Vector2(360, 26)
+	battle_lbl.position = Vector2(10, y)
+	battle_lbl.size = Vector2(cw - 20.0, 24)
 	battle_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	UITheme.apply_label(battle_lbl, 17, UITheme.STONE.lightened(0.4))
+	UITheme.apply_label(battle_lbl, 16, UITheme.STONE.lightened(0.4))
 	card.add_child(battle_lbl)
+	y += 26.0
 
 	var chips = Label.new()
 	var chip_arr := PackedStringArray(info["chips"])
 	chips.text = " · ".join(chip_arr)
-	chips.position = Vector2(14, 374)
-	chips.size = Vector2(352, 60)
+	chips.position = Vector2(14, y)
+	chips.size = Vector2(cw - 28.0, 46)
 	chips.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	chips.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	UITheme.apply_label(chips, 17, UITheme.GOLD)
+	UITheme.apply_label(chips, 15, UITheme.GOLD)
 	card.add_child(chips)
+	y += 48.0
 
 	var desc = Label.new()
 	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	desc.text = String(info["desc"])
-	UITheme.apply_label(desc, 16, UITheme.PARCHMENT.darkened(0.15))
+	UITheme.apply_label(desc, 14, UITheme.PARCHMENT.darkened(0.15))
 	# 先入树再定尺寸：自动换行标签在入树前算出的宽度会按整行文本撑开
 	card.add_child(desc)
-	desc.position = Vector2(18, 442)
-	desc.size = Vector2(344, 130)
+	desc.position = Vector2(16, y)
+	desc.size = Vector2(cw - 32.0, card_size.y - y - 12.0)
 
 	var pick = Button.new()
 	pick.flat = true

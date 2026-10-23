@@ -331,6 +331,8 @@ func _physics_process(delta):
 				_cached_speed_mod = 0.01
 			elif not water_capable and here_overlay == 3:
 				_cached_speed_mod = float(bm.map_modifiers.get("ford_speed", 0.55))
+			elif not water_capable and here_overlay == 2:
+				_cached_speed_mod = float(bm.map_modifiers.get("marsh_speed", 0.6))
 			elif not water_capable and here_overlay == 1:
 				_cached_speed_mod = 0.9
 			elif _cached_terrain == 1:
