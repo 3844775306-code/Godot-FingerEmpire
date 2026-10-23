@@ -371,7 +371,7 @@ func _can_place_ai_building(building_id: int, pos: Vector3) -> bool:
 			return false
 	return true
 
-func build_building(building_id: int, pos: Vector3) -> bool:
+func build_building(building_id: int, pos: Vector3, facing: Vector3 = Vector3.ZERO) -> bool:
 	var cfg = EntityDatabase.get_config(building_id)
 	if not cfg: return false
 	# Check castle level requirement (matches RTSBattleManager.is_building_unlocked)
@@ -405,6 +405,10 @@ func build_building(building_id: int, pos: Vector3) -> bool:
 			team = my_team
 	var b = battle.spawn_entity(cfg, team, pos)
 	if b:
+		# 防御塔朝向敌方/防线正面；城墙是方形墙体，不需要额外朝向
+		if facing.length_squared() > 0.01 and building_id in [25, 26]:
+			var face_target: Vector3 = b.global_position + Vector3(facing.x, 0.0, facing.z).normalized()
+			b.look_at(face_target, Vector3.UP)
 		b.start_construction(5.0, cfg)
 	return b != null
 

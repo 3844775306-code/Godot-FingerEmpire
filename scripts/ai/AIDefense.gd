@@ -15,6 +15,11 @@ const THREAT_RADIUS: float = 15.0
 const THREAT_INTERVAL: float = 2.5
 const DEFENSE_FRONT: float = 7.2
 const DEFENSE_WALL_RADIUS: float = 12.2
+# 防线地形搜索：在城堡朝敌方向的前方扇形里找隘口/浅滩，把墙线横在通道上
+const DEFENSE_ANCHOR_MIN_DIST: int = 7
+const DEFENSE_ANCHOR_MAX_DIST: int = 14
+const DEFENSE_ANCHOR_LATERAL: int = 7
+const DEFENSE_LANE_MAX_WIDTH: int = 9
 const DEFENSE_GAP_INTERVAL: float = 25.0
 const DEFENSE_BUILD_MAX_PER_TICK: int = 2
 const DEFENSE_UPGRADE_INTERVAL: float = 9.0
@@ -52,6 +57,8 @@ var _defense_queue: Array = []        # [{"id","pos","priority","tries"}]
 var _defense_slots: Array = []        # [{"id","pos"}]
 var wall_positions: Array = []
 var tower_positions: Array = []
+var _defense_anchor: Dictionary = {}   # 选中的隘口/浅滩防线锚点
+var _defense_terrain_text: String = "" # 调试面板显示的地形类型
 var _defense_check_timer: float = 3.0
 var _next_layout_try: float = 0.0
 var _defense_retry_at: float = 0.0
@@ -115,8 +122,11 @@ func start_defense() -> void:
 func get_status_text() -> String:
 	var names: Array = ["平静", "警戒", "防守", "危急"]
 	var idx: int = clampi(threat_level, 0, names.size() - 1)
-	return "威胁:%s(敌%d) 守军:%d 资源卫:%d" % [
-		names[idx], threat_enemy_count, _home_guard_ids.size(), _resource_guard_ids.size(),
+	var terrain_txt: String = ""
+	if not _defense_anchor.is_empty():
+		terrain_txt = " 地形:%s" % str(_defense_terrain_text)
+	return "威胁:%s(敌%d) 守军:%d 资源卫:%d%s" % [
+		names[idx], threat_enemy_count, _home_guard_ids.size(), _resource_guard_ids.size(), terrain_txt,
 	]
 
 # ═══════════════════════════════════════════════════════════════
@@ -257,6 +267,197 @@ func _ensure_layout(castle) -> bool:
 	_next_layout_try = float(ai.battle.game_time) + 8.0
 	return false
 
+# ── 地形防线：在朝敌方向前方寻找隘口/浅滩 ──
+func _cell_blocks_land(gx: int, gz: int) -> bool:
+	var terrain: int = ai.battle.get_terrain_at_grid(gx, gz)
+	if terrain < 0:
+		return true
+	if terrain == 1:
+		return true
+	if terrain == 2 and ai.battle.get_overlay_at_grid(gx, gz) != 3:
+		return true
+	return false
+
+func _is_ford_cell(gx: int, gz: int) -> bool:
+	return ai.battle.get_terrain_at_grid(gx, gz) == 2 and ai.battle.get_overlay_at_grid(gx, gz) == 3
+
+# 沿垂直方向测量可通行通道宽度；两侧山/水会很快截断
+func _lane_width(pos: Vector3, perp: Vector3, max_steps: int = DEFENSE_LANE_MAX_WIDTH) -> int:
+	var left: int = 0
+	var right: int = 0
+	while left < max_steps:
+		var lc: Vector2i = ai.battle.world_to_grid(pos - perp * float(left + 1))
+		if _cell_blocks_land(lc.x, lc.y):
+			break
+		left += 1
+	while right < max_steps:
+		var rc: Vector2i = ai.battle.world_to_grid(pos + perp * float(right + 1))
+		if _cell_blocks_land(rc.x, rc.y):
+			break
+		right += 1
+	return left + right + 1
+
+func _count_nearby_barriers(pos: Vector3, radius: int = 3) -> int:
+	var total: int = 0
+	var center: Vector2i = ai.battle.world_to_grid(pos)
+	for dx in range(-radius, radius + 1):
+		for dz in range(-radius, radius + 1):
+			if dx == 0 and dz == 0:
+				continue
+			if _cell_blocks_land(center.x + dx, center.y + dz):
+				total += 1
+	return total
+
+func _find_ford_near(pos: Vector3, radius: float = 3.5) -> Vector3:
+	var center: Vector2i = ai.battle.world_to_grid(pos)
+	var r: int = int(ceil(radius))
+	var best: Vector3 = Vector3.ZERO
+	var best_d: float = INF
+	for dx in range(-r, r + 1):
+		for dz in range(-r, r + 1):
+			if not _is_ford_cell(center.x + dx, center.y + dz):
+				continue
+			var wp: Vector3 = ai.battle.grid_to_world(center.x + dx, center.y + dz)
+			var d: float = wp.distance_squared_to(pos)
+			if d < best_d:
+				best_d = d
+				best = wp
+	return best
+
+func _find_defense_anchor(castle, enemy_dir: Vector3) -> Dictionary:
+	var forward: Vector3 = enemy_dir
+	forward.y = 0.0
+	if forward.length_squared() < 0.01:
+		return {}
+	forward = forward.normalized()
+	var perp: Vector3 = forward.cross(Vector3.UP).normalized()
+	if perp.length_squared() < 0.01:
+		perp = Vector3.RIGHT
+
+	var best: Dictionary = {}
+	var best_score: float = -INF
+	for dist_i in range(DEFENSE_ANCHOR_MIN_DIST, DEFENSE_ANCHOR_MAX_DIST + 1):
+		var dist: float = float(dist_i)
+		for lateral_i in range(-DEFENSE_ANCHOR_LATERAL, DEFENSE_ANCHOR_LATERAL + 1):
+			var lateral: float = float(lateral_i)
+			var p: Vector3 = castle.global_position + forward * dist + perp * lateral
+			if not _is_valid_defense_ground(p, 1.0, true):
+				continue
+			var to_p: Vector3 = p - castle.global_position
+			to_p.y = 0.0
+			if to_p.length_squared() < 0.01:
+				continue
+			var align: float = to_p.normalized().dot(forward)
+			if align < 0.35:
+				continue
+			var width: int = _lane_width(p, perp)
+			if width < 2 or width > DEFENSE_LANE_MAX_WIDTH:
+				continue
+			var barriers: int = _count_nearby_barriers(p, 3)
+			var ford: Vector3 = _find_ford_near(p, 3.5)
+			var is_ford: bool = ford != Vector3.ZERO
+			if barriers < 2 and not is_ford:
+				continue
+			# 浅滩防线必须落在己方一侧，不能跑到河对岸去
+			if is_ford:
+				var ford_depth: float = (ford - castle.global_position).dot(forward)
+				var p_depth: float = to_p.dot(forward)
+				if p_depth > ford_depth + 1.0:
+					continue
+			# 通道太宽不算隘口；5 格左右最理想，过窄可能是城墙/资源夹出的假通道
+			var width_score: float = 5.0 - absf(float(width) - 5.0) * 1.25
+			var center_bonus: float = 1.0 - absf(lateral) / float(DEFENSE_ANCHOR_LATERAL + 1)
+			var score: float = width_score * 2.0 + float(barriers) * 0.45 + center_bonus * 3.0 + align * 5.0
+			score -= absf(dist - 10.0) * 0.22
+			if is_ford:
+				score += 14.0
+			if score > best_score:
+				best_score = score
+				var pdir: Vector3 = to_p.normalized()
+				best = {
+					"pos": p,
+					"dir": pdir,
+					"perp": pdir.cross(Vector3.UP).normalized(),
+					"dist": dist,
+					"width": float(width),
+					"kind": "ford" if is_ford else "choke",
+				}
+	return best
+
+func _find_anchor_spot(center: Vector3, b_id: int, search: float) -> Vector3:
+	var cfg: Dictionary = EntityDatabase.get_config(b_id)
+	if cfg.is_empty():
+		return Vector3.ZERO
+	var radius: float = float(cfg.get("body_radius", 1.0))
+	for r in [0.0, search * 0.5, search, search * 1.5]:
+		for i in range(8):
+			var a: float = TAU * float(i) / 8.0
+			var p: Vector3 = center + Vector3(cos(a) * float(r), 0.0, sin(a) * float(r))
+			if not _is_valid_defense_ground(p, radius, true):
+				continue
+			if not _defense_slot_clear(p, radius, b_id):
+				continue
+			return p
+	return Vector3.ZERO
+
+func _find_defense_line_spot(base: Vector3, perp: Vector3, lateral: float, b_id: int, max_off: float) -> Vector3:
+	var cfg: Dictionary = EntityDatabase.get_config(b_id)
+	if cfg.is_empty():
+		return Vector3.ZERO
+	var radius: float = float(cfg.get("body_radius", 1.0))
+	for dl in [0.0, 0.6, -0.6, 1.2, -1.2]:
+		for dd in [0.0, 0.8, -0.8, max_off, -max_off]:
+			var p: Vector3 = base + perp * (lateral + float(dl)) + _defense_dir * float(dd)
+			if not _is_valid_defense_ground(p, radius, true):
+				continue
+			if not _defense_slot_clear(p, radius, b_id):
+				continue
+			return p
+	return Vector3.ZERO
+
+# 在隘口/浅滩两侧布置箭塔，并把墙线横向排开；返回实际可用的墙段数
+func _plan_anchor_defense(castle, anchor: Dictionary) -> int:
+	var dir: Vector3 = anchor["dir"]
+	var perp: Vector3 = anchor["perp"]
+	if perp.length_squared() < 0.01:
+		perp = dir.cross(Vector3.UP).normalized()
+	var anchor_pos: Vector3 = anchor["pos"]
+	var half_width: float = maxf(2.2, float(anchor["width"]) * 0.5)
+
+	# 锚点较远时先在城堡前方补一座视野塔，保证后续墙/塔能落在己方视野内
+	if float(anchor["dist"]) > 10.0:
+		var vision_pos: Vector3 = castle.global_position + dir * 8.0
+		var vision_spot: Vector3 = _find_anchor_spot(vision_pos, 25, 1.5)
+		if vision_spot != Vector3.ZERO:
+			_add_defense_slot(25, vision_spot, 9.0, "tower")
+
+	var tower_base: Vector3 = anchor_pos - dir * 1.8
+	for side in [-1.0, 1.0]:
+		if _count_planned(25) >= 7:
+			break
+		var tower_pos: Vector3 = tower_base + perp * side * half_width
+		var tower_spot: Vector3 = _find_anchor_spot(tower_pos, 25, 2.2)
+		if tower_spot != Vector3.ZERO:
+			_add_defense_slot(25, tower_spot, 12.0 + absf(float(side)) * 0.5, "tower")
+
+	if _count_planned(26) < 3:
+		var cannon_pos: Vector3 = tower_base - dir * 1.2
+		var cannon_spot: Vector3 = _find_anchor_spot(cannon_pos, 26, 2.0)
+		if cannon_spot != Vector3.ZERO:
+			_add_defense_slot(26, cannon_spot, 15.0, "tower")
+
+	var wall_base: Vector3 = anchor_pos - dir * 0.8
+	var wall_count: int = clampi(int(anchor["width"]) + 4, 5, 9)
+	var spacing: float = 2.0
+	var walls: int = 0
+	for i in range(wall_count):
+		var lateral: float = (float(i) - float(wall_count - 1) * 0.5) * spacing
+		var wall_spot: Vector3 = _find_defense_line_spot(wall_base, perp, lateral, 27, 1.6)
+		if wall_spot != Vector3.ZERO:
+			_add_defense_slot(27, wall_spot, 20.0 + absf(lateral) * 0.35, "wall")
+			walls += 1
+	return walls
+
 func _plan_defense_line(castle) -> bool:
 	var dir: Vector3 = threat_dir
 	dir.y = 0.0
@@ -265,6 +466,14 @@ func _plan_defense_line(castle) -> bool:
 	dir = dir.normalized()
 	if dir.length_squared() < 0.01:
 		dir = Vector3.FORWARD
+
+	# 先找前方隘口/浅滩；找到后把整条防线转向该地形通道，墙线横在通道口
+	_defense_anchor = _find_defense_anchor(castle, dir)
+	if not _defense_anchor.is_empty():
+		dir = _defense_anchor["dir"]
+		_defense_terrain_text = "浅滩" if str(_defense_anchor["kind"]) == "ford" else "隘口"
+	else:
+		_defense_terrain_text = ""
 	_defense_dir = dir
 
 	_defense_queue.clear()
@@ -294,14 +503,19 @@ func _plan_defense_line(castle) -> bool:
 			if p2 != Vector3.ZERO:
 				_add_defense_slot(25, p2, 11.0 + absf(a) * 2.0, "tower")
 
-	# 外墙弧线：先按空位最多的半径选弧线，再逐段微调避开树/矿
-	var wall_radius: float = _pick_wall_radius(castle, dir)
-	for i in range(9):
-		var t: float = float(i) / 8.0
-		var wa: float = lerpf(-0.78, 0.78, t)
-		var wp: Vector3 = _find_defense_spot(castle, dir, wa, wall_radius, 27, 16.0)
-		if wp != Vector3.ZERO:
-			_add_defense_slot(27, wp, 20.0 + absf(float(i) - 4.0) * 1.2, "wall")
+	# 有隘口/浅滩时，墙线横在通道上；否则回退到主城前方的外墙弧线
+	var anchor_wall_count: int = 0
+	if not _defense_anchor.is_empty():
+		anchor_wall_count = _plan_anchor_defense(castle, _defense_anchor)
+	if anchor_wall_count == 0:
+		# 外墙弧线：先按空位最多的半径选弧线，再逐段微调避开树/矿
+		var wall_radius: float = _pick_wall_radius(castle, dir)
+		for i in range(9):
+			var t: float = float(i) / 8.0
+			var wa: float = lerpf(-0.78, 0.78, t)
+			var wp: Vector3 = _find_defense_spot(castle, dir, wa, wall_radius, 27, 16.0)
+			if wp != Vector3.ZERO:
+				_add_defense_slot(27, wp, 20.0 + absf(float(i) - 4.0) * 1.2, "wall")
 
 	for side in [-1.0, 1.0]:
 		var ca: float = 0.34 * side
@@ -414,7 +628,8 @@ func _build_defense_step() -> void:
 			break
 		if not _can_spend_building(b_id, _defense_reserve()):
 			break
-		if ai.build_building(b_id, b_pos):
+		var facing: Vector3 = _defense_dir if b_id in TOWER_IDS else Vector3.ZERO
+		if ai.build_building(b_id, b_pos, facing):
 			built += 1
 			_defense_queue.remove_at(i)
 			continue
@@ -470,7 +685,7 @@ func _maybe_reactive_tower(castle) -> void:
 		if not _can_spend_building(int(b_id), _defense_reserve()):
 			continue
 		if _is_valid_defense_ground(p, float(EntityDatabase.get_config(int(b_id)).get("body_radius", 1.0))):
-			ai.build_building(int(b_id), p)
+			ai.build_building(int(b_id), p, threat_dir)
 			return
 
 func _own_tower_near(pos: Vector3, radius: float) -> bool:
