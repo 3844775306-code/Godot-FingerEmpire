@@ -1283,7 +1283,16 @@ func _build_bullets_data() -> Array:
 	var bullets_data = []
 	for bullet in _bullet_cache:
 		if is_instance_valid(bullet):
-			bullets_data.append({"id":bullet.get_instance_id(),"x":bullet.global_position.x,"y":bullet.global_position.y,"z":bullet.global_position.z,"team":bullet.team})
+			# entity_id 供客户端判断弹丸模型（箭/炮弹/巨石），damage_radius 区分范围弹
+			bullets_data.append({
+				"id": bullet.get_instance_id(),
+				"x": bullet.global_position.x,
+				"y": bullet.global_position.y,
+				"z": bullet.global_position.z,
+				"team": bullet.team,
+				"entity_id": bullet.source_entity_id,
+				"damage_radius": bullet.damage_radius,
+			})
 	return bullets_data
 
 # 1v1 视野裁剪快照 — optimized: entity cache + version-grid + typed iteration

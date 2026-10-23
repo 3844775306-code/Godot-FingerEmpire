@@ -8,6 +8,7 @@ var damage: float
 var speed: float = 6.0
 var target: GameEntity = null
 var source: GameEntity = null
+var source_entity_id: int = -1   # 发射方 entity_id（创建时缓存，供联机快照还原弹丸模型）
 var damage_radius: float = 0.0
 var attack_type: int = 1          # 1=普通, 2=电击, 3=冰冻, 4=灼烧
 var time_alive: float = 0.0
@@ -18,6 +19,9 @@ var _saved_dir: Vector3 = Vector3.ZERO
 
 func _ready():
 	add_to_group("bullets")
+	# 快照序列化时 source 可能已被销毁，创建时先缓存发射方 entity_id
+	if source and is_instance_valid(source):
+		source_entity_id = source.entity_id
 	if damage_radius > 0 or (source and source.entity_id in [16,17,26,39]):
 		# 投石车/巨型投石机用巨石
 		if source and source.entity_id in [17, 59] and ResourceLoader.exists("res://models/defense/weapon-ammo-boulder.glb"):

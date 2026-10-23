@@ -918,15 +918,26 @@ func _create_bullet_node(info: Dictionary) -> Node3D:
 	n.set_meta("is_bullet", true)
 	# Try loading actual bullet model (matches server Bullet.gd)
 	var eid = info.get("entity_id", -1)
+	var dmg_r = float(info.get("damage_radius", 0.0))
 	var loaded = false
 	# Match server Bullet._ready logic exactly
-	if eid in [16, 17, 26, 39]:
-		if eid == 17 and ResourceLoader.exists("res://models/defense/weapon-stone.glb"):
-			var st = load("res://models/defense/weapon-stone.glb")
-			if st: var inst = st.instantiate(); if inst: inst.scale = Vector3.ONE * 2.5; n.add_child(inst); loaded = true
+	# 投石车(17)/巨型投石机(59) 用巨石；火炮(16)/炮艇(39)/炮塔(26) 用炮弹；其余用箭
+	if dmg_r > 0 or eid in [16, 17, 26, 39]:
+		if eid in [17, 59] and ResourceLoader.exists("res://models/defense/weapon-ammo-boulder.glb"):
+			var boulder_scene = load("res://models/defense/weapon-ammo-boulder.glb")
+			if boulder_scene:
+				var boulder = boulder_scene.instantiate()
+				if boulder:
+					boulder.scale = Vector3.ONE * (3.5 if eid == 59 else 2.5)
+					n.add_child(boulder)
+					loaded = true
 		elif ResourceLoader.exists("res://models/pirate/cannon-ball.glb"):
-			var cb = load("res://models/pirate/cannon-ball.glb")
-			if cb: var inst = cb.instantiate(); if inst: n.add_child(inst); loaded = true
+			var ball_scene = load("res://models/pirate/cannon-ball.glb")
+			if ball_scene:
+				var ball = ball_scene.instantiate()
+				if ball:
+					n.add_child(ball)
+					loaded = true
 	if not loaded and ResourceLoader.exists("res://models/forest/weapon-arrow.glb"):
 		var arrow_scene = load("res://models/forest/weapon-arrow.glb")
 		if arrow_scene:
@@ -1242,10 +1253,17 @@ func _cleanup_stale_entities():
 		if not is_instance_valid(node):
 			to_remove.append(id)
 			continue
+		# 子弹没有 snapshot_info，由快照的 bullets 分支单独管理生命周期，
+		# 不能在这里清理，否则飞行中的箭会被从字典移除却留在场景里（残留弓箭）
+		if node.has_meta("is_bullet"):
+			continue
 		if not node.has_meta("snapshot_info"):
 			to_remove.append(id)
 	if to_remove.size() > 0:
 		for id in to_remove:
+			var node = entity_nodes.get(id)
+			if is_instance_valid(node):
+				node.queue_free()
 			entity_nodes.erase(id)
 			_remove_all_bars(id)
 
