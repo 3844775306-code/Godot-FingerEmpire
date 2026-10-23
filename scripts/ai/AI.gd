@@ -4,6 +4,8 @@ extends Node
 
 class_name AIController
 
+const AIDefenseScript = preload("res://scripts/ai/AIDefense.gd")
+
 enum Phase { PRODUCTION, DEVELOPMENT, ASSAULT }
 enum LateTactic { NONE, HARASS, OVERWHELM, RAID, DEFEND }
 
@@ -18,7 +20,7 @@ var last_attack_time: float = -999.0
 const ATTACK_COOLDOWN: float = 120.0
 var production_step: int = 0
 
-var wanted_buildings: Array = [20, 21, 23, 25, 42, 54, 26, 24, 29, 41, 52, 53]
+var wanted_buildings: Array = [20, 21, 23, 42, 54, 24, 29, 52, 53]
 var wanted_units: Array = [11,12,15,16,17,18,35,36,37,38,39,40,13,43,44,45,46,47,48,49,50,58,59,5,6,9]
 var target_army_count: int = 7
 var target_house_count: int = 8
@@ -31,6 +33,9 @@ var defense_initialized: bool = false   # 防线位置已规划（进入分批�
 var _defense_queue: Array = []          # 待建防线队列：[{"id": 建筑id, "pos": 位置}]
 const DEFENSE_CHECK_INTERVAL: float = 120.0
 const DEFENSE_STEP_MAX: int = 3         # 每个 think tick 至多尝试建造的防线建筑数
+var _defense = null                      # AIDefense 模块：威胁/防线/守军/资源区
+var _harass_ids: Dictionary = {}         # 当前骚扰小队 instance_id -> true
+var _harass_until: float = -999.0        # 骚扰小队回收时间
 var _upgrade_cycle_timer: float = 20.0   # 每20秒切换
 var _in_upgrade_cycle: bool = true     # 前20秒为升级周期
 var _castle_rush_done: Array = [false, false, false]  # 3/6/10min castle rush
@@ -396,6 +401,7 @@ func get_counter_priority() -> Array:
 func _ready():
 	_add_nation_special_unit()
 	_create_debug_panel()
+	_defense = AIDefenseScript.new(self)
 
 func _process(delta):
 	# Set think interval based on difficulty (once)
@@ -518,7 +524,6 @@ func _state_development(_delta):
 	_ai_hunt_animals(_delta)
 	_check_hunt_cleanup()
 	_ai_garrison_officials()
-	_manage_defense(_delta)
 	update_tactic(_delta)
 
 # -- ASSAULT: execute tactical attacks --
@@ -536,7 +541,6 @@ func _state_assault(_delta):
 	_ai_hunt_animals(_delta)
 	_check_hunt_cleanup()
 	_ai_garrison_officials()
-	_manage_defense(_delta)
 	update_tactic(_delta)
 # ═══ State Machine Dispatcher ═══
 func decide(_delta):
@@ -553,6 +557,9 @@ func decide(_delta):
 	_refresh_visibility()
 	_refresh_primary_enemy()
 	_diplo_decide()
+	if _defense == null:
+		_defense = AIDefenseScript.new(self)
+	_defense.tick(_delta)
 	if Engine.get_process_frames() % 60 == 0:
 		var _w = count_unit(10)
 	# State dispatch
@@ -828,6 +835,7 @@ func allocate_workers():
 	if workers.size() < desired_worker_count:
 		if can_afford(10) and _can_train_unit(): produce_unit(10)
 		for w in non_delivering:
+			if _worker_is_fleeing(w): continue
 			var target = find_best_resource_for_worker(w, {"food": 100})
 			if target: w.gather_at(target)
 		
@@ -860,6 +868,7 @@ func allocate_workers():
 				else: idle.append(w)
 			else: idle.append(w)
 		for w in workers:
+			if _worker_is_fleeing(w): continue
 			if w.current_order == "deliver":
 				for rk in ["gold","wood","stone","food"]:
 					if w.cargo.get(rk, 0) > 0:
@@ -867,6 +876,7 @@ func allocate_workers():
 						if current[rk] > scarcity.get(rk, 2): idle.append(w)
 						break
 		for w in idle:
+			if _worker_is_fleeing(w): continue
 			var best_rk = ""; var best_gap = -1.0
 			for rk in scarcity:
 				var gap = scarcity[rk] - current.get(rk, 0)
@@ -874,6 +884,11 @@ func allocate_workers():
 			if best_rk != "":
 				var target = find_best_resource_for_worker(w, {best_rk: 100})
 				if target: w.gather_at(target); current[best_rk] = current.get(best_rk, 0) + 1
+
+func _worker_is_fleeing(w) -> bool:
+	if w == null or not is_instance_valid(w) or not w.has_meta("ai_flee_until"):
+		return false
+	return battle != null and battle.game_time < float(w.get_meta("ai_flee_until"))
 
 func _get_build_completion() -> float:
 	var total_targets = 0.0; var built = 0.0
@@ -922,7 +937,9 @@ func attack_move(target_position: Vector3, max_units: int):
 	var sent = 0
 	for entity in battle.entities.get_children():
 		if sent >= max_units: break
-		if entity is Army and entity.health > 0 and entity.entity_id not in [10,14,45,46,47,48,50] and entity_belongs_to_me(entity):
+		if entity is Army and entity.health > 0 and int(entity.entity_id) not in [5,6,10,14,43,44,45,46,47,48,49,50,51] and entity_belongs_to_me(entity):
+			if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass"):
+				continue
 			entity.attack_move_to(target_position)
 			sent += 1
 
@@ -998,43 +1015,10 @@ func _is_valid_build_ground(world_pos: Vector3) -> bool:
 	return true
 
 # ═══ Territory ═══
+# 资源前哨已交给 AIDefense 统一按“正在采集的资源区 + 瞭望塔/守军”规划，
+# 这里不再随机在资源旁边撒箭塔，避免消耗防线的石头与建造位。
 func _ai_expand_territory():
-	_territory_timer -= 2.0
-	if _territory_timer > 0: return
-	_territory_timer = 120.0
-	var castle = get_peer_castle(my_peer_id)
-	if not castle: return
-	if count_building(42) == 0: return
-	for e in battle.entities.get_children():
-		if e is WorldResource and e.health > 0:
-			var rtype = e.resource_type; var dist = e.global_position.distance_to(castle.global_position)
-			var nearby = 0; var gold_nearby = 0; var stone_nearby = 0
-			for e2 in battle.entities.get_children():
-				if e2 is WorldResource and e2.health > 0 and e2 != e:
-					if e2.global_position.distance_to(e.global_position) < 8:
-						nearby += 1
-						if e2.resource_type == "gold": gold_nearby += 1
-						if e2.resource_type == "stone": stone_nearby += 1
-			if (rtype in ["gold","stone"] and dist > 25) or nearby > 5 or gold_nearby > 2 or stone_nearby > 2:
-				var guarded = false
-				for be in battle.entities.get_children():
-					if be is Building and be.entity_id in [25,41] and be.team == my_team and be.health > 0:
-						if be.global_position.distance_to(e.global_position) < 8: guarded = true; break
-				if guarded: continue
-				if can_afford_building(25) and count_building(25) < 6:
-					var pos = e.global_position + Vector3(randf_range(-4,4), 0, randf_range(-4,4))
-					if _is_valid_build_ground(pos):
-						build_building(25, pos)
-						if can_afford_building(41): build_building(41, pos + Vector3(randf_range(2,4), 0, randf_range(2,4)))
-						return
-	for e in battle.entities.get_children():
-		if e is Building and e.entity_id == 23 and e.team == my_team and e.health > 0:
-			var has_tower = false
-			for be in battle.entities.get_children():
-				if be is Building and be.entity_id == 25 and be.team == my_team and be.global_position.distance_to(e.global_position) < 8: has_tower = true; break
-			if not has_tower and can_afford_building(25):
-				var tpos = e.global_position + Vector3(randf_range(3,5), 0, randf_range(3,5))
-				if _is_valid_build_ground(tpos): build_building(25, tpos); return
+	pass
 
 # ═══ Officials ═══
 func _ai_garrison_officials():
@@ -1067,7 +1051,9 @@ func _ai_hunt_animals(delta):
 		if not entity_belongs_to_me(e): continue
 		# Exclude non-combat units
 		if e.entity_id == 10 or e.entity_id == 14: continue  # peasants, gathering ships
+		if e.entity_id == 5 or e.entity_id == 6: continue  # handcarts / trade carts
 		if e.entity_id >= 43: continue  # merchants, officials, food merchant
+		if e.has_meta("ai_home_guard") or e.has_meta("ai_resource_guard") or e.has_meta("ai_harass"): continue
 		if e.current_order != "" or e.current_target != null: continue  # only idle
 		if e.water_capable: idle_water.append(e)
 		else: idle_land.append(e)
@@ -1133,78 +1119,195 @@ func update_tactic(_delta):
 	var my_key = my_peer_id if my_peer_id != -1 else my_team
 	var my_mil = count_military(my_key)
 	var player_mil = _enemy_total_military()
+	_cleanup_harass_squad(float(battle.game_time))
 
+	var threat: int = 0
+	if _defense != null:
+		threat = int(_defense.threat_level)
+
+	# 敌人已经压到基地：立即转防守并召回守军，暂停所有进攻战术
+	if threat >= 2:
+		_harass_until = -999.0
+		_cleanup_harass_squad(float(battle.game_time))
+		if current_tactic != LateTactic.DEFEND:
+			start_defense()
+			current_tactic = LateTactic.DEFEND
+			last_tactic_time = now
+		return
+
+	# 防守姿态：威胁未完全解除前不出击；解除后仍需一定兵力优势
 	if current_tactic == LateTactic.DEFEND:
-		if my_mil > player_mil  and my_mil > 10:
-			current_tactic = LateTactic.OVERWHELM; execute_overwhelm(); last_tactic_time = now; return
-		# assault mode: focus on attack, no defense spam
+		if threat >= 1:
+			return
+		if my_mil > player_mil * 1.15 and my_mil > 12:
+			current_tactic = LateTactic.NONE
+			last_tactic_time = now
+		return
+
+	# 警戒级别（敌人在基地附近但还没压上）时先守，不派小队出门
+	if threat >= 1:
+		_harass_until = -999.0
+		_cleanup_harass_squad(float(battle.game_time))
+		if current_tactic != LateTactic.NONE:
+			current_tactic = LateTactic.NONE
 		return
 
 	if player_mil > my_mil * 1.5:
-		# skip defense — replaced by troop accumulation
 		return
 
 	if now - last_tactic_time < TACTIC_COOLDOWN and current_tactic != LateTactic.NONE: return
 
-	if my_mil > player_mil * 1 and my_mil > 10:
-		current_tactic = LateTactic.OVERWHELM; execute_overwhelm()
-	else:
-		if randf() < 0.5: current_tactic = LateTactic.HARASS; execute_harass()
-		else: current_tactic = LateTactic.RAID; execute_raid()
+	if my_mil > player_mil * 1.1 and my_mil > 10:
+		current_tactic = LateTactic.OVERWHELM
+		execute_overwhelm()
+	elif my_mil >= 4:
+		if randf() < 0.65:
+			current_tactic = LateTactic.HARASS
+			execute_harass()
+		elif my_mil >= 10:
+			current_tactic = LateTactic.RAID
+			execute_raid()
+		else:
+			current_tactic = LateTactic.HARASS
+			execute_harass()
 	last_tactic_time = now
 
+# 骚扰改为 2-3 个高机动单位的小队，优先打外围农民/商队，不再把全军拉去拆仓库。
 func execute_harass():
-	var enemy_team = _primary_enemy_team()
-	var enemy_castle = get_team_castle(enemy_team)
-	if not enemy_castle: return
-	#for i in range(10 - count_unit(15)):
-		#if can_afford(15) and _can_train_unit(): produce_unit(15)
-	#for i in range(10 - count_unit(13)):
-		#if can_afford(13) and _can_train_unit(): produce_unit(13)
-	var best_warehouse: Building = null; var best_dist = 0.0
-	for entity in battle.entities.get_children():
-		if entity is Building and entity.team == enemy_team and entity.entity_id == 22 and entity.health > 0:
-			var dist = entity.global_position.distance_to(enemy_castle.global_position)
-			if dist > 15 and dist > best_dist: best_warehouse = entity; best_dist = dist
-	if best_warehouse:
-		for entity in battle.entities.get_children():
-			if entity is Army and entity.team == my_team and entity.health > 0 and entity.entity_id not in [10,14,46,47,48,50] and entity_belongs_to_me(entity):
-				entity.attack_move_to(best_warehouse.global_position)
-	var player_shipyard: Building = null
-	for entity in battle.entities.get_children():
-		if entity is Building and entity.team == enemy_team and entity.entity_id == 23 and entity.health > 0: player_shipyard = entity; break
-	if player_shipyard:
-		for entity in battle.entities.get_children():
-			if entity is Army and entity.team == my_team and entity.health > 0 and entity.entity_id not in [10,14,46,47,48,50] and entity_belongs_to_me(entity):
-				entity.attack_move_to(player_shipyard.global_position)
+	_harass_until = -999.0
+	_cleanup_harass_squad(float(battle.game_time))
+	var my_castle = get_peer_castle(my_peer_id)
+	var enemy_castle = get_team_castle(_primary_enemy_team())
+	var target = _find_harass_target(my_castle, enemy_castle)
+	if target == null:
+		current_tactic = LateTactic.NONE
+		return
+	var squad: Array = _pick_harass_squad(my_castle)
+	if squad.is_empty():
+		current_tactic = LateTactic.NONE
+		return
+	for u in squad:
+		if not is_instance_valid(u) or u.health <= 0:
+			continue
+		u.set_meta("ai_harass", true)
+		u.attack_move_to(target.global_position)
+		_harass_ids[u.get_instance_id()] = true
+	_harass_until = battle.game_time + 32.0
+
+func _find_harass_target(my_castle, enemy_castle):
+	var best = null
+	var best_score = -INF
+	for e in battle.entities.get_children():
+		if not (e is Army) or e.health <= 0:
+			continue
+		if not _entity_is_enemy(e):
+			continue
+		if int(e.entity_id) not in [10, 5, 6, 43, 44, 45, 51, 14]:
+			continue
+		if e.water_capable:
+			continue
+		if enemy_castle and is_instance_valid(enemy_castle):
+			if e.global_position.distance_to(enemy_castle.global_position) < 12.0:
+				continue
+		var d_us: float = my_castle.global_position.distance_to(e.global_position) if my_castle else 999.0
+		if d_us > 95.0:
+			continue
+		var d_enemy: float = e.global_position.distance_to(enemy_castle.global_position) if enemy_castle else 30.0
+		var score: float = minf(d_enemy, 60.0) * 0.6 - d_us * 0.02
+		if int(e.entity_id) == 10:
+			score += 2.0
+		if score > best_score:
+			best_score = score
+			best = e
+	if best != null:
+		return best
+	# 没有外围经济单位时，退而拆远离敌主城的仓库/船坞
+	for e in battle.entities.get_children():
+		if not (e is Building) or e.health <= 0 or not _entity_is_enemy(e):
+			continue
+		if int(e.entity_id) not in [22, 23]:
+			continue
+		if enemy_castle and e.global_position.distance_to(enemy_castle.global_position) < 15.0:
+			continue
+		if my_castle and e.global_position.distance_to(my_castle.global_position) > 95.0:
+			continue
+		return e
+	return null
+
+func _pick_harass_squad(my_castle) -> Array:
+	var candidates: Array = []
+	for e in battle.entities.get_children():
+		if not (e is Army) or e.health <= 0 or not entity_belongs_to_me(e):
+			continue
+		if int(e.target_type) <= 0 or e.water_capable:
+			continue
+		var sgb = e.get("_soldier_garrison_building")
+		if sgb != null and sgb.get_ref() != null:
+			continue
+		if e.has_meta("ai_home_guard") or e.has_meta("ai_resource_guard"):
+			continue
+		if int(e.entity_id) in [16, 17, 18, 58, 59]:
+			continue
+		if float(e.speed) < 1.7:
+			continue
+		var d: float = e.global_position.distance_to(my_castle.global_position) if my_castle else 0.0
+		candidates.append({"u": e, "d": d})
+	candidates.sort_custom(func(a, b): return float(a["d"]) < float(b["d"]))
+	var out: Array = []
+	for item in candidates:
+		if out.size() >= 3:
+			break
+		out.append(item["u"])
+	return out
+
+func _cleanup_harass_squad(now: float) -> void:
+	if now < _harass_until and _harass_ids.size() > 0:
+		return
+	for uid in _harass_ids.keys():
+		var u = instance_from_id(int(uid))
+		if u != null and is_instance_valid(u) and u.has_meta("ai_harass"):
+			u.remove_meta("ai_harass")
+	_harass_ids.clear()
 
 func execute_overwhelm():
 	var enemy_castle = get_team_castle(_primary_enemy_team())
-	if not enemy_castle: return
+	if not enemy_castle:
+		current_tactic = LateTactic.NONE
+		return
 	var rally = enemy_castle.global_position + Vector3(0, 0, 5)
 	#if wall_positions.size() > 0: rally = wall_positions[wall_positions.size()/2] + Vector3(0, 0, 2)
 	var self_castle = get_peer_castle(my_peer_id)
-	if not self_castle: return
+	if not self_castle:
+		current_tactic = LateTactic.NONE
+		return
 	# 第一波：召集全军到敌方集结点（取消距离限制，确保全军参与）
 	for entity in battle.entities.get_children():
 		if entity is Army and entity.team == my_team and entity.health > 0 and entity_belongs_to_me(entity):
-			if entity.entity_id in [10,14,46,47,48,50]: continue
+			if int(entity.entity_id) in [5,6,10,14,43,44,45,46,47,48,49,50,51]: continue
+			if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass"): continue
 			entity.attack_move_to(rally)
 	# 等待部队集结
 	await get_tree().create_timer(10.0).timeout
+	if _defense != null and int(_defense.threat_level) >= 1:
+		return
 	# 第二波：全军压上敌方城堡
 	for entity in battle.entities.get_children():
 		if entity is Army and entity.team == my_team and entity.health > 0 and entity_belongs_to_me(entity):
-			if entity.entity_id in [10,14,46,47,48,50]: continue
+			if int(entity.entity_id) in [5,6,10,14,43,44,45,46,47,48,49,50,51]: continue
+			if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass"): continue
 			if not enemy_castle or not is_instance_valid(enemy_castle): continue
 			entity.attack_move_to(enemy_castle.global_position)
 
 func execute_raid():
 	var self_castle = get_peer_castle(my_peer_id)
-	if not self_castle or self_castle.level < 3: return
+	if not self_castle or self_castle.level < 3:
+		current_tactic = LateTactic.NONE
+		return
 	var enemy_team = _primary_enemy_team()
 	var enemy_castle = get_team_castle(enemy_team)
-	if not enemy_castle or not is_instance_valid(enemy_castle): return
+	if not enemy_castle or not is_instance_valid(enemy_castle):
+		current_tactic = LateTactic.NONE
+		return
 	var enemy_pos = enemy_castle.global_position
 	var special_uid = RAID_UNIT
 	if NationData.NATION_UNITS.has(nation) and NationData.NATION_UNITS.get(nation).size() >= 2:
@@ -1222,16 +1325,24 @@ func execute_raid():
 		waypoint = enemy_pos + enemy_dir.rotated(Vector3.UP, deg_to_rad(-90*side)) * (flank + 12)
 	var raid_army = []
 	for e in battle.entities.get_children():
-		if e is Army and e.team == my_team and e.health > 0 and (e.entity_id not in [10,14,46,47,48,50]) and entity_belongs_to_me(e):
+		if e is Army and e.team == my_team and e.health > 0 and (int(e.entity_id) not in [5,6,10,14,43,44,45,46,47,48,49,50,51]) and entity_belongs_to_me(e):
+			if e.has_meta("ai_home_guard") or e.has_meta("ai_resource_guard") or e.has_meta("ai_harass"):
+				continue
 			raid_army.append(e)
 	if raid_army.is_empty(): return
+	if raid_army.size() > 10:
+		raid_army = raid_army.slice(0, 10)
 	var half = raid_army.size() / 2
 	for i in range(half):
 		if is_instance_valid(raid_army[i]): raid_army[i].move_to(waypoint)
 	await get_tree().create_timer(1.8).timeout
+	if _defense != null and int(_defense.threat_level) >= 1:
+		return
 	for i in range(half, raid_army.size()):
 		if is_instance_valid(raid_army[i]): raid_army[i].move_to(waypoint)
 	await get_tree().create_timer(RAID_WAIT_TIME)
+	if _defense != null and int(_defense.threat_level) >= 1:
+		return
 	for u in raid_army:
 		if is_instance_valid(u) and is_instance_valid(enemy_castle): u.attack_move_to(enemy_castle.global_position)
 
@@ -1253,27 +1364,9 @@ func _is_near_enemy_tower(pos: Vector3, range: float, enemy_team: int) -> bool:
 # ═══ Defense ═══
 func start_defense():
 	current_tactic = LateTactic.DEFEND
-	var self_castle = get_peer_castle(my_peer_id)
-	if not self_castle: return
-	var castle_pos = self_castle.global_position
-	var defend_pos = castle_pos + Vector3(0, 0, -3)
-	if wall_positions.size() > 0:
-		var avg = Vector3.ZERO
-		for p in wall_positions: avg += p
-		avg /= wall_positions.size()
-		defend_pos = avg - _get_enemy_army_direction(castle_pos).normalized() * 3.5
-	for entity in battle.entities.get_children():
-		if entity is Army and entity.team == my_team and entity.health > 0 and entity_belongs_to_me(entity):
-			if entity.entity_id in [10,14,46,47,48,50]: continue
-			if entity.global_position.distance_to(castle_pos) > SAFE_DEFEND_RADIUS:
-				entity.attack_move_to(defend_pos)
-	for i in range(6 - count_unit(12)):
-		if can_afford(12) and _can_train_unit(): produce_unit(12)
-	for i in range(4 - count_unit(16)):
-		if can_afford(16) and _can_train_unit(): produce_unit(16)
-	if not defense_line_built and count_building(20) > 0:
-		build_defense_line(); defense_line_built = true
-	check_defense_line(); upgrade_defense_to_max()
+	# 防御建筑、威胁方向、守军数量统一交给 AIDefense 处理。
+	if _defense != null:
+		_defense.start_defense()
 
 func build_defense_line():
 	var castle = get_peer_castle(my_peer_id)
@@ -1634,6 +1727,11 @@ func _process_line_3():
 			if hp2 != Vector3.ZERO: build_building(28, hp2)
 
 func _process_line_4():
+	# 威胁上升 / 已进入防守或骚扰姿态时，不再把主力整队送出去
+	if _defense != null and int(_defense.threat_level) >= 1:
+		return
+	if current_tactic != LateTactic.NONE:
+		return
 	var my_key = my_peer_id if my_peer_id != -1 else my_team
 	if count_military(my_key) >= 15 and an_attack():
 		var target = get_team_castle(_primary_enemy_team())
@@ -1701,10 +1799,11 @@ func _rally_land_army_to_castle():
 		if not (entity is Army) or entity.health <= 0: continue
 		if not entity_belongs_to_me(entity): continue
 		# Skip non-combat / naval units
-		if entity.entity_id in [10, 14, 43, 44, 45, 46, 47, 48, 49, 50, 51]: continue
+		if entity.entity_id in [5, 6, 10, 14, 43, 44, 45, 46, 47, 48, 49, 50, 51]: continue
 		if entity.water_capable: continue
 		# 已集合过的单位不再重复集合
 		if entity.has_meta("ai_rallied"): continue
+		if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass"): continue
 		# Only rally idle units (刚生产出来的单位处于空闲状态)
 		if entity.current_order != "" or entity.current_target != null: continue
 		entity.set_meta("ai_rallied", true)
@@ -1765,6 +1864,8 @@ func update_debug_label():
 	var res = _get_resources(); var pop = _get_population()
 	var _pe = {"PRODUCTION": "🌱", "DEVELOPMENT": "🏗️", "ASSAULT": "⚔️"}
 	_header_rtl.text = "%s [color=#%s]%s[/color]  |  %s" % [_pe.get(Phase.keys()[phase], "▶️"), (Color.GREEN if phase == Phase.ASSAULT else (Color(1,0.7,0) if phase == Phase.DEVELOPMENT else Color.CYAN)).to_html(), Phase.keys()[phase], _get_tactic_name(current_tactic)]
+	if _defense != null:
+		_header_rtl.text += "\n[color=#9fd3ff]🛡 %s[/color]" % _defense.get_status_text()
 	var pop_pct = float(pop.current) / max(pop.max, 1)
 	_pop_bar.value = pop_pct * 100
 	var pfs = _pop_bar.get_theme_stylebox("fill")
