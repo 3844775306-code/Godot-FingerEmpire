@@ -420,30 +420,75 @@ func _create_game_timer():
 	else:
 		add_child(game_time_label)
 
-# ==================== AI 决策面板布局 ====================
-# 所有 AI 面板按 peer_id 顺序纵向堆叠；折叠/展开、创建、AI 被消灭时统一重排，
-# 避免折叠后下方留出空白或展开后互相遮挡。高度不足时自动换到下一列。
-func layout_ai_debug_panels() -> void:
+# ==================== AI / 外交面板布局 ====================
+# 右下角停靠：外交面板在上、AI 面板在下；默认折叠，最多同时展开 2 个。
+# 展开/折叠/创建/AI 被消灭时统一重排，并避开右上角小地图。
+func _collect_panel_items(hud) -> Array:
+	var items: Array = []
+	# 外交面板（乱斗模式才存在）
+	if hud and hud.has_method("is_diplo_collapsed") and hud.get("_diplo_panel") != null:
+		items.append({
+			"panel": hud.get("_diplo_panel"),
+			"h": hud.get_diplo_panel_height(),
+			"collapsed": hud.is_diplo_collapsed(),
+			"ai": null,
+			"w": hud.get_diplo_panel_width(),
+		})
 	var ais: Array = []
 	for c in get_children():
 		if c is AIController and is_instance_valid(c.debug_panel):
 			ais.append(c)
-	if ais.is_empty(): return
 	ais.sort_custom(func(a, b): return a.my_peer_id < b.my_peer_id)
+	for ai in ais:
+		items.append({
+			"panel": ai.debug_panel,
+			"h": ai.get_panel_height(),
+			"collapsed": ai._panel_collapsed,
+			"ai": ai,
+			"w": AIController.PANEL_WIDTH,
+		})
+	return items
 
-	var vp_h: float = 1400.0
+func layout_ai_debug_panels() -> void:
+	var hud = get_node_or_null("UI")
+	var items: Array = _collect_panel_items(hud)
+	if items.is_empty(): return
+
+	# 最多同时展开 2 个：超限时收起最早展开的
+	var expanded: Array = items.filter(func(it): return not it["collapsed"])
+	if expanded.size() > 2:
+		expanded.sort_custom(func(a, b):
+			return int(a["panel"].get_meta("expanded_at", 0)) < int(b["panel"].get_meta("expanded_at", 0)))
+		for i in range(expanded.size() - 2):
+			var it = expanded[i]
+			if it["ai"] != null:
+				it["ai"].set_panel_collapsed(true, false)
+			elif hud:
+				hud.set_diplo_collapsed(true, false)
+		items = _collect_panel_items(hud)
+
+	var vw: float = 2400.0
+	var vh: float = 1400.0
 	var vp = get_viewport()
 	if vp:
-		vp_h = vp.get_visible_rect().size.y
-	var x: float = 400.0
-	var y: float = 10.0
-	for ai in ais:
-		var h: float = ai.get_panel_height()
-		if y > 10.0 and y + h > vp_h - 10.0:
-			x += 552.0   # 面板宽 540 + 12 间距
-			y = 10.0
-		ai.debug_panel.position = Vector2(x, y)
-		y += h + 8.0
+		var vr = vp.get_visible_rect().size
+		vw = vr.x
+		vh = vr.y
+
+	# 小地图在右上角：停靠区从它下方开始
+	var dock_top: float = 408.0
+	var minimap = get_node_or_null("UI/Minimap")
+	if minimap:
+		dock_top = minimap.position.y + minimap.size.y + 8.0
+	var gap: float = 8.0
+	var total_h: float = 0.0
+	for it in items:
+		total_h += it["h"]
+	total_h += gap * (items.size() - 1)
+	var y: float = maxf(dock_top, vh - 12.0 - total_h)
+	for it in items:
+		it["panel"].position = Vector2(vw - it["w"] - 16.0, y)
+		y += it["h"] + gap
 
 # ==================== 城堡被摧毁 → 游戏结束 ====================
 # 某个 AI 玩家被消灭：发送通知、清除其全部残余单位，并移除其 AI 控制器

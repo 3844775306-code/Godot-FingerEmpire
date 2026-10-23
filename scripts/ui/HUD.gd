@@ -39,6 +39,8 @@ var _stats_title: RichTextLabel
 var _stats_bonus: Label
 var _stats_mil_rtl: RichTextLabel
 var _stats_bld_rtl: RichTextLabel
+var _stats_eco_rtl: RichTextLabel
+var _stats_eco_title: RichTextLabel
 var _stats_mil_title: RichTextLabel
 var _stats_bld_title: RichTextLabel
 var _stats_pop_bar: ProgressBar
@@ -62,6 +64,11 @@ var _diplo_timer: float = 0.0               # 内容重建节流
 var _diplo_hash: String = ""                # 上次渲染快照（变化才重建）
 var _diplo_visible: bool = true             # 面板开关
 var _diplo_toggle_btn: Button = null        # 左侧切换按钮
+var _diplo_collapsed: bool = true            # 外交面板默认折叠
+var _diplo_collapse_btn: Button = null
+const DIPLO_WIDTH: float = 445.0
+const DIPLO_EXPANDED_H: float = 400.0
+const DIPLO_COLLAPSED_H: float = 44.0
 
 func _get_nation_name(nation: int) -> String:
 	match nation:
@@ -119,7 +126,7 @@ func _create_stats_toggle_button():
 
 	_toggle_stats_btn = Button.new()
 	_toggle_stats_btn.text = "📊 统计"
-	_toggle_stats_btn.position = Vector2(10, 660)
+	_toggle_stats_btn.position = Vector2(620, 10)
 	_toggle_stats_btn.theme = btn_theme
 	_toggle_stats_btn.toggle_mode = true
 	_toggle_stats_btn.button_pressed = true
@@ -137,7 +144,7 @@ func _create_unit_stats_panel():
 	unit_stats_panel.z_index = 100
 	unit_stats_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	unit_stats_panel.position = Vector2(10, 10)
-	unit_stats_panel.size = Vector2(600, 640)
+	unit_stats_panel.size = Vector2(600, 560)
 
 	# 与 AI 决策面板一致的暗色圆角底板
 	var bg = Panel.new()
@@ -236,6 +243,13 @@ func _create_unit_stats_panel():
 	_stats_castle_bar.custom_minimum_size = Vector2(320, 12)
 	castle_hbox.add_child(_stats_castle_bar)
 	vb.add_child(castle_hbox)
+
+	# 经济（农民/采集船/商人/手推车/贸易车/运载船/官员）
+	_stats_eco_title = _make_stats_section("💰 经济")
+	vb.add_child(_stats_eco_title)
+	_stats_eco_rtl = _make_stats_rtl()
+	_stats_eco_rtl.add_theme_font_size_override("font_size", 14)
+	vb.add_child(_stats_eco_rtl)
 
 	# 军队（总数直接跟在分栏标题后）
 	_stats_mil_title = _make_stats_section("⚔️ 军队")
@@ -425,51 +439,27 @@ func _update_unit_stats():
 	if _stats_bld_title:
 		_stats_bld_title.text = "[color=#5af]▸ 🏰 建筑 %d[/color]%s" % [building_total, under_txt]
 
-	var military_lines = []
+	# 经济单位（农民、采集船、商人、手推车、贸易车、运载船、官员）
+	var eco_ids = [10, 14, 5, 6, 9, 43, 44, 45, 51, 46, 47, 48, 49, 50]
+	var eco_total = 0
 	var eco_lines = []
-	# 经济单位
-	for uid in [10, 14, 5, 6, 9]:
+	for uid in eco_ids:
 		var cnt = unit_counts.get(uid, 0)
+		eco_total += cnt
 		if cnt > 0:
 			var name = unit_names.get(uid, str(uid))
 			eco_lines.append("[color=#8c8]%s %s[/color]:[color=white]%d[/color]" % [UITheme.entity_emoji(uid, 2), name, cnt])
-	# 战斗单位
+	if _stats_eco_title:
+		_stats_eco_title.text = "[color=#5af]▸ 💰 经济 %d[/color]" % eco_total
+	_stats_eco_rtl.text = "[color=gray](无经济单位)[/color]" if eco_lines.is_empty() else " ".join(eco_lines)
+
+	var military_lines = []
 	for uid in military_ids:
 		var cnt = unit_counts.get(uid, 0)
 		if cnt > 0:
 			var name = unit_names.get(uid, str(uid))
 			military_lines.append("[color=#aaa]%s %s[/color]:[color=white]%d[/color]" % [UITheme.entity_emoji(uid, 2), name, cnt])
-
-	var merchant_lines = []
-	for uid in [43, 44, 45, 51]:
-		var cnt = unit_counts.get(uid, 0)
-		if cnt > 0:
-			var name = unit_names.get(uid, str(uid))
-			merchant_lines.append("[color=#ffa]%s %s[/color]:[color=white]%d[/color]" % [UITheme.entity_emoji(uid, 2), name, cnt])
-
-	var official_lines = []
-	for uid in [46, 47, 48, 49, 50]:
-		var cnt = unit_counts.get(uid, 0)
-		if cnt > 0:
-			var name = unit_names.get(uid, str(uid))
-			official_lines.append("[color=#f8a]%s %s[/color]:[color=white]%d[/color]" % [UITheme.entity_emoji(uid, 2), name, cnt])
-
-	if military_lines.is_empty() and official_lines.is_empty() and eco_lines.is_empty() and merchant_lines.is_empty():
-		_stats_mil_rtl.text = "[color=gray](无军队)[/color]"
-	else:
-		var text = ""
-		if not eco_lines.is_empty():
-			text = " ".join(eco_lines)
-		if not military_lines.is_empty():
-			if text != "": text += "\n"
-			text += "[color=#8cf]⚔️ 战斗: %d[/color] | " % military_total + " ".join(military_lines)
-		if not merchant_lines.is_empty():
-			if text != "": text += "\n"
-			text += "[color=#ffa]🛒 商人:[/color] " + " ".join(merchant_lines)
-		if not official_lines.is_empty():
-			if text != "": text += "\n"
-			text += "[color=#a8f]🎖️ 官员:[/color] " + " ".join(official_lines)
-		_stats_mil_rtl.text = text if text != "" else "[color=gray](无军队)[/color]"
+	_stats_mil_rtl.text = "[color=gray](无军队)[/color]" if military_lines.is_empty() else " ".join(military_lines)
 
 	# 建筑统计
 	var building_lines = []
@@ -586,21 +576,21 @@ func _ready():
 
 	attack_all_btn = Button.new()
 	attack_all_btn.text = "全军进攻 (A)"
-	attack_all_btn.position = Vector2(10, 700)
+	attack_all_btn.position = Vector2(620, 50)
 	attack_all_btn.theme = btn_theme
 	attack_all_btn.pressed.connect(_on_attack_all_pressed)
 	add_child(attack_all_btn)
 
 	retreat_all_btn = Button.new()
 	retreat_all_btn.text = "全军撤退 (S)"
-	retreat_all_btn.position = Vector2(290, 700)
+	retreat_all_btn.position = Vector2(790, 50)
 	retreat_all_btn.theme = btn_theme
 	retreat_all_btn.pressed.connect(_on_retreat_all_pressed)
 	add_child(retreat_all_btn)
 
 	var stop_gather_btn = Button.new()
 	stop_gather_btn.text = "暂停采集 (H)"
-	stop_gather_btn.position = Vector2(10, 740)
+	stop_gather_btn.position = Vector2(620, 90)
 	stop_gather_btn.toggle_mode = true
 	stop_gather_btn.theme = btn_theme
 	stop_gather_btn.pressed.connect(_on_stop_gather_pressed)
@@ -608,7 +598,7 @@ func _ready():
 
 	var hold_position_btn = Button.new()
 	hold_position_btn.text = "原地防守 (P)"
-	hold_position_btn.position = Vector2(290, 740)
+	hold_position_btn.position = Vector2(790, 90)
 	hold_position_btn.toggle_mode = true
 	hold_position_btn.theme = btn_theme
 	hold_position_btn.pressed.connect(_on_hold_position_pressed)
@@ -616,7 +606,7 @@ func _ready():
 
 	rally_btn = Button.new()
 	rally_btn.text = "全选军队 (R)"
-	rally_btn.position = Vector2(10, 780)
+	rally_btn.position = Vector2(620, 130)
 	rally_btn.theme = btn_theme
 	rally_btn.pressed.connect(_on_rally_pressed)
 	add_child(rally_btn)
@@ -1068,10 +1058,7 @@ func _tick_ffa_diplo(delta: float):
 		return
 	if _diplo_panel == null:
 		_build_diplo_panel()
-	if _diplo_toggle_btn == null:
-		_build_diplo_toggle()
-	_diplo_toggle_btn.visible = true
-	_diplo_panel.visible = _diplo_visible and not bm.game_over
+	_diplo_panel.visible = not bm.game_over
 	if not _diplo_panel.visible:
 		return
 	_diplo_timer -= delta
@@ -1089,12 +1076,8 @@ func _build_diplo_panel():
 	var panel := Panel.new()
 	panel.name = "DiploPanel"
 	panel.z_index = 120
-	panel.anchor_left = 1.0
-	panel.anchor_right = 1.0
-	panel.offset_left = -455
-	panel.offset_right = -10
-	panel.offset_top = 86
-	panel.offset_bottom = 800
+	panel.position = Vector2(1945, 100)
+	panel.size = Vector2(DIPLO_WIDTH, DIPLO_COLLAPSED_H)
 	panel.add_theme_stylebox_override("panel", UITheme.panel_style(UITheme.RADIUS_LG, UITheme.BORDER_MED, 0.92))
 	add_child(panel)
 	_diplo_panel = panel
@@ -1103,11 +1086,23 @@ func _build_diplo_panel():
 	title.position = Vector2(14, 8)
 	panel.add_child(title)
 
+	_diplo_collapse_btn = Button.new()
+	_diplo_collapse_btn.text = "▲"
+	_diplo_collapse_btn.toggle_mode = true
+	_diplo_collapse_btn.button_pressed = true
+	_diplo_collapse_btn.custom_minimum_size = Vector2(36, 28)
+	_diplo_collapse_btn.position = Vector2(DIPLO_WIDTH - 48, 6)
+	_diplo_collapse_btn.tooltip_text = "展开外交面板"
+	UITheme.apply_muted_button(_diplo_collapse_btn, UITheme.FONT_MD)
+	_diplo_collapse_btn.pressed.connect(_on_diplo_collapse_pressed)
+	panel.add_child(_diplo_collapse_btn)
+
 	var scroll := ScrollContainer.new()
 	scroll.name = "DiploScroll"
 	scroll.position = Vector2(10, 44)
-	scroll.size = Vector2(435, 664)
+	scroll.size = Vector2(DIPLO_WIDTH - 20, DIPLO_EXPANDED_H - 54)
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.visible = false
 	panel.add_child(scroll)
 	_diplo_scroll = scroll
 
@@ -1117,6 +1112,41 @@ func _build_diplo_panel():
 	scroll.add_child(content)
 	_diplo_content = content
 	_rebuild_diplo_content()
+	set_diplo_collapsed(true, false)
+	if _get_bm() and _get_bm().has_method("layout_ai_debug_panels"):
+		_get_bm().call_deferred("layout_ai_debug_panels")
+
+func is_diplo_collapsed() -> bool:
+	return _diplo_collapsed
+
+func get_diplo_panel_height() -> float:
+	return DIPLO_COLLAPSED_H if _diplo_collapsed else DIPLO_EXPANDED_H
+
+func get_diplo_panel_width() -> float:
+	return DIPLO_WIDTH
+
+func set_diplo_collapsed(collapsed: bool, relayout: bool = true):
+	_diplo_collapsed = collapsed
+	if _diplo_scroll:
+		_diplo_scroll.visible = not collapsed
+		_diplo_scroll.size = Vector2(DIPLO_WIDTH - 20, DIPLO_EXPANDED_H - 54)
+	if _diplo_collapse_btn:
+		_diplo_collapse_btn.button_pressed = collapsed
+		_diplo_collapse_btn.text = "▲" if collapsed else "▼"
+		_diplo_collapse_btn.tooltip_text = "展开外交面板" if collapsed else "折叠外交面板"
+	if _diplo_panel:
+		var h = get_diplo_panel_height()
+		_diplo_panel.custom_minimum_size = Vector2(DIPLO_WIDTH, h)
+		_diplo_panel.size = Vector2(DIPLO_WIDTH, h)
+		if not collapsed:
+			_diplo_panel.set_meta("expanded_at", Time.get_ticks_msec())
+	if relayout:
+		var bm = _get_bm()
+		if bm and bm.has_method("layout_ai_debug_panels"):
+			bm.layout_ai_debug_panels()
+
+func _on_diplo_collapse_pressed():
+	set_diplo_collapsed(_diplo_collapse_btn.button_pressed, true)
 
 # 外交部另一入口：左侧切换按钮
 func _build_diplo_toggle():

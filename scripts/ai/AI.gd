@@ -1800,13 +1800,23 @@ func update_debug_label():
 		_res_labels[i].text += " %+.1f/s" % _ai_income_rate[r.k]
 		var s = _res_bars[i].get_theme_stylebox("fill")
 		if s: s.bg_color = r.c
-	var all_units = [[10,"农"],[11,"步"],[12,"弓"],[13,"战船"],[14,"采船"],[15,"骑"],[16,"炮"],[17,"投石"],[18,"攻城"],[19,"侦察"],
+	var eco_units = [[10,"农"],[14,"采船"],[5,"推车"],[6,"贸车"],[9,"运载"],
+		[43,"油商"],[44,"木商"],[45,"石商"],[51,"食商"],[46,"县吏"],[47,"上校"],[48,"尚书"],[49,"统帅"],[50,"丞相"]]
+	var eco_lines = []
+	var eco_total = 0
+	for u in eco_units:
+		var cnt = count_unit(u[0], false)
+		eco_total += cnt
+		if cnt > 0: eco_lines.append("[color=#8c8]%s%s[/color]:[color=white]%d[/color]" % [UITheme.entity_emoji(u[0], 2), u[1], cnt])
+	_eco_rtl.text = "[color=gray](无经济单位)[/color]" if eco_lines.is_empty() else " ".join(eco_lines)
+	if _eco_title: _eco_title.text = "[color=#5af]▸ 💰 经济 %d[/color]" % eco_total
+
+	var mil_units = [[11,"步"],[12,"弓"],[13,"战船"],[15,"骑"],[16,"炮"],[17,"投石"],[18,"攻城"],[19,"侦察"],
 		[30,"狂战"],[31,"长弓"],[32,"法骑"],[33,"诸弩"],[34,"象骑"],[35,"长枪"],[36,"重步"],[37,"重弓"],[38,"重骑"],[39,"炮艇"],[40,"爆破"],
-		[43,"油商"],[44,"木商"],[45,"石商"],[51,"食商"],[46,"县吏"],[47,"上校"],[48,"尚书"],[49,"统帅"],[50,"丞相"],
-		[58,"连弩"],[59,"巨投"],[5,"推车"],[6,"贸车"],[9,"运载"],[55,"僧侣"],[56,"长老"],[57,"宗师"],[65,"武士"],[66,"甲骑"]]
+		[58,"连弩"],[59,"巨投"],[55,"僧侣"],[56,"长老"],[57,"宗师"],[65,"武士"],[66,"甲骑"]]
 	var mil_lines = []
 	var mil_total = 0
-	for u in all_units:
+	for u in mil_units:
 		var cnt = count_unit(u[0], false)
 		mil_total += cnt
 		if cnt > 0: mil_lines.append("[color=#aaa]%s%s[/color]:[color=white]%d[/color]" % [UITheme.entity_emoji(u[0], 2), u[1], cnt])
@@ -1867,6 +1877,8 @@ var _mil_rtl: RichTextLabel; var _bld_rtl: RichTextLabel
 var _trait_rtl: RichTextLabel
 var _castle_bar: HealthBarControl
 var _castle_label: Label
+var _eco_title: RichTextLabel
+var _eco_rtl: RichTextLabel
 var _mil_title: RichTextLabel
 var _bld_title: RichTextLabel
 var _title_rtl: RichTextLabel = null       # 面板标题（用于追加国家名）
@@ -1877,7 +1889,7 @@ var _panel_collapsed: bool = false         # 面板是否已收起为标题条
 var _panel_bg_style: StyleBoxFlat = null   # 面板底板样式（按友方/敌方着色）
 var _last_relation: int = -2               # 上次计算的敌我关系，避免每帧重设样式
 const PANEL_WIDTH: float = 540.0
-const PANEL_HEIGHT: float = 440.0
+const PANEL_HEIGHT: float = 400.0
 const PANEL_COLLAPSED_HEIGHT: float = 44.0
 
 # 当前面板实际高度（折叠后只保留标题条），供统一布局函数计算下方面板位置
@@ -2004,28 +2016,39 @@ func _create_debug_panel():
 		ll.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER; ll.clip_text = true; ll.custom_minimum_size = Vector2(85, 0)
 		_res_labels.append(ll); col.add_child(ll); res_grid.add_child(col)
 	body.add_child(res_grid)
+	# 经济
+	_eco_title = _make_section("💰 经济"); body.add_child(_eco_title); _eco_rtl = _make_rtl(); body.add_child(_eco_rtl)
+	# 军队
 	_mil_title = _make_section("⚔️ 军队"); body.add_child(_mil_title); _mil_rtl = _make_rtl(); body.add_child(_mil_rtl)
 	_bld_title = _make_section("🏰 建筑"); body.add_child(_bld_title); _bld_rtl = _make_rtl(); body.add_child(_bld_rtl)
 	var hud = battle.get_node("UI") as CanvasLayer; hud.add_child(debug_panel)
+	# 默认折叠为标题条
+	set_panel_collapsed(true, false)
+	debug_panel.set_meta("expanded_at", 0)
 	# 创建后交给管理器统一排布，避免多个面板叠放
 	if battle.has_method("layout_ai_debug_panels"):
 		battle.call_deferred("layout_ai_debug_panels")
 	if not OS.is_debug_build():
 		debug_panel.visible = false
 
-# ▼/▲：隐藏或展开面板主体。收起后仅保留标题条，面板高度同步压缩，不再长期遮挡战场
+# ▼/▲：隐藏或展开面板主体；管理器可在超限时直接调用（relayout=false）
 func _on_collapse_pressed():
+	set_panel_collapsed(_collapse_btn.button_pressed, true)
+
+func set_panel_collapsed(collapsed: bool, relayout: bool = true):
 	if _collapse_btn == null or _body_vb == null or debug_panel == null:
 		return
-	_panel_collapsed = _collapse_btn.button_pressed
-	_body_vb.visible = not _panel_collapsed
-	_collapse_btn.text = "▲" if _panel_collapsed else "▼"
-	_collapse_btn.tooltip_text = "展开 AI 决策面板" if _panel_collapsed else "隐藏 AI 决策面板"
-	var h = PANEL_COLLAPSED_HEIGHT if _panel_collapsed else PANEL_HEIGHT
+	_panel_collapsed = collapsed
+	_collapse_btn.button_pressed = collapsed
+	_body_vb.visible = not collapsed
+	_collapse_btn.text = "▲" if collapsed else "▼"
+	_collapse_btn.tooltip_text = "展开 AI 决策面板" if collapsed else "隐藏 AI 决策面板"
+	var h = PANEL_COLLAPSED_HEIGHT if collapsed else PANEL_HEIGHT
 	debug_panel.custom_minimum_size = Vector2(PANEL_WIDTH, h)
 	debug_panel.size = Vector2(PANEL_WIDTH, h)
-	# 折叠/展开后重排所有 AI 面板，下方/上方面板立即跟随
-	if battle and is_instance_valid(battle) and battle.has_method("layout_ai_debug_panels"):
+	if not collapsed:
+		debug_panel.set_meta("expanded_at", Time.get_ticks_msec())
+	if relayout and battle and is_instance_valid(battle) and battle.has_method("layout_ai_debug_panels"):
 		battle.layout_ai_debug_panels()
 
 func _make_rtl() -> RichTextLabel:
