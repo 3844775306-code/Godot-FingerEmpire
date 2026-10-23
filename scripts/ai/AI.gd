@@ -1185,22 +1185,15 @@ func update_tactic(_delta):
 			last_tactic_time = now
 		return
 
-	# 防守姿态：威胁未完全解除前不出击；解除后兵力成型就恢复进攻，
-	# 不能因为敌方军力略高就永远缩在城里
+	# 防守姿态：只有 threat>=2（真正压上基地）才继续锁死；警戒级由守军处理，
+	# 兵力成型且未被明显压制时恢复进攻，不能永远缩在城里
 	if current_tactic == LateTactic.DEFEND:
-		if threat >= 1:
+		# 只有威胁重新升到“真正压上基地”才继续锁死；警戒级可由守军处理，主力恢复进攻
+		if threat >= 2:
 			return
 		if my_mil >= 12 and player_mil <= my_mil * 1.35:
 			current_tactic = LateTactic.NONE
 			last_tactic_time = now
-		return
-
-	# 警戒级别（敌人在基地附近但还没压上）时先守，不派小队出门
-	if threat >= 1:
-		_harass_until = -999.0
-		_cleanup_harass_squad(float(battle.game_time))
-		if current_tactic != LateTactic.NONE:
-			current_tactic = LateTactic.NONE
 		return
 
 	if player_mil > my_mil * 1.5:
@@ -1339,7 +1332,7 @@ func execute_overwhelm():
 			entity.attack_move_to(rally)
 	# 等待部队集结
 	await get_tree().create_timer(10.0).timeout
-	if _defense != null and int(_defense.threat_level) >= 1:
+	if _defense != null and int(_defense.threat_level) >= 2:
 		return
 	# 第二波：全军压上敌方城堡
 	for entity in battle.entities.get_children():
@@ -1387,12 +1380,12 @@ func execute_raid():
 	for i in range(half):
 		if is_instance_valid(raid_army[i]): raid_army[i].move_to(waypoint)
 	await get_tree().create_timer(1.8).timeout
-	if _defense != null and int(_defense.threat_level) >= 1:
+	if _defense != null and int(_defense.threat_level) >= 2:
 		return
 	for i in range(half, raid_army.size()):
 		if is_instance_valid(raid_army[i]): raid_army[i].move_to(waypoint)
 	await get_tree().create_timer(RAID_WAIT_TIME)
-	if _defense != null and int(_defense.threat_level) >= 1:
+	if _defense != null and int(_defense.threat_level) >= 2:
 		return
 	for u in raid_army:
 		if is_instance_valid(u) and is_instance_valid(enemy_castle): u.attack_move_to(enemy_castle.global_position)
@@ -1781,7 +1774,7 @@ func _process_line_3():
 
 func _process_line_4():
 	# 威胁上升 / 防守 / 已经全队压上时，不再重复派出主力
-	if _defense != null and int(_defense.threat_level) >= 1:
+	if _defense != null and int(_defense.threat_level) >= 2:
 		return
 	if current_tactic == LateTactic.DEFEND or current_tactic == LateTactic.OVERWHELM or current_tactic == LateTactic.RAID:
 		return

@@ -11,7 +11,7 @@
 # 本模块保持无 class_name，由 AI.gd 通过 preload 加载，避免全局类缓存不同步。
 extends RefCounted
 
-const THREAT_RADIUS: float = 48.0
+const THREAT_RADIUS: float = 36.0
 const THREAT_INTERVAL: float = 2.5
 const DEFENSE_FRONT: float = 7.2
 const DEFENSE_WALL_RADIUS: float = 12.2
@@ -165,14 +165,15 @@ func _evaluate_threat(castle) -> void:
 	if raw > _threat_smoothed:
 		_threat_smoothed = lerpf(_threat_smoothed, raw, 0.7)
 	else:
-		_threat_smoothed = lerpf(_threat_smoothed, raw, 0.32)
+		_threat_smoothed = lerpf(_threat_smoothed, raw, 0.45)
 	threat_score = _threat_smoothed
 
-	if threat_score >= 9.0:
+	# 只有成建制敌军逼近/攻城才进入防守，单个远处侦察兵不应让 AI 全员回防
+	if threat_score >= 14.0:
 		threat_level = 3
-	elif threat_score >= 4.2 or now < _castle_damage_until:
+	elif threat_score >= 7.0 or now < _castle_damage_until:
 		threat_level = 2
-	elif threat_score >= 1.4:
+	elif threat_score >= 2.5:
 		threat_level = 1
 	else:
 		threat_level = 0
