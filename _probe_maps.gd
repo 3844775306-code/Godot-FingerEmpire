@@ -44,7 +44,7 @@ func _ready() -> void:
 	_preview_selfcheck()
 	_sync_selfcheck()
 	# 多人布局自检会改 NetworkManager 模式，放最后
-	for id in ["ridge", "ford", "forest", "marsh", "strait", "desert", "ring"]:
+	for id in ["ridge", "ford", "forest", "marsh", "strait", "desert", "ring", "canyon", "terrace", "bridge", "tworivers"]:
 		for k in [2, 3]:
 			_team_probe(id, k)
 	get_tree().quit()
@@ -80,7 +80,7 @@ func _team_probe(map_id: String, team_size: int) -> void:
 			var rd := sqrt((rx - mid) * (rx - mid) + (rz - mid) * (rz - mid)) / float(size)
 			if bd > 0.27 or rd < 0.35:
 				mirror_ok = false
-		elif map_id == "ridge":
+		elif map_id == "ridge" or map_id == "terrace":
 			# 山脊东西走向 → 南北镜像（z 互补，x 相同）
 			if absi(bx - rx) > 2 or absi((bz + rz) - size) > 3:
 				mirror_ok = false
@@ -109,15 +109,16 @@ func _team_probe(map_id: String, team_size: int) -> void:
 		for y in range(size):
 			if int(g.terrain_grid[x][y]) == 2:
 				water += 1
-	print("TEAM %s %dv%d bases=%d mirror=%s flat=%s gold=%d wood=%d water=%.1f%%" % [
+	print("TEAM %s %dv%d bases=%d mirror=%s flat=%s conn=%s gold=%d wood=%d water=%.1f%%" % [
 		map_id, team_size, team_size, pts.size(), str(mirror_ok), str(flat_ok),
+		str(_cross_connected(g, size, pts[0], pts[team_size], true)),
 		gold, wood, float(water) / float(size * size) * 100.0])
 	g.free()
 
 # 模拟联机下发：主机打包覆盖层 → 客户端解压并还原，地形/覆盖层/配色必须一致
 func _sync_selfcheck() -> void:
 	var size := 100
-	for pid in ["marsh", "desert", "strait", "ring"]:
+	for pid in ["marsh", "desert", "strait", "ring", "canyon", "terrace", "bridge", "tworivers"]:
 		var src = GroundScript.new()
 		src.map_size_override = size
 		src.map_preset = MapPresets.get_preset(pid)
@@ -171,6 +172,17 @@ func _report(g, s: int) -> void:
 	print("  STATS plain=%.1f%% mountain=%.1f%% water=%.1f%% passes=%d forest=%.1f%% marsh=%.1f%% ford=%.1f%%" % [
 		counts[0] / total * 100.0, counts[1] / total * 100.0, counts[2] / total * 100.0,
 		g._pass_centers.size(), overlay_stats[1] / total * 100.0, overlay_stats[2] / total * 100.0, overlay_stats[3] / total * 100.0])
+	# 高度分层：台地图靠 high_ground_min 判定高地视野，需确认中层台面确实抬高了
+	var high_n := 0
+	var mid_n := 0
+	for x in range(size):
+		for y in range(size):
+			var hh: float = float(g.height_grid[x][y])
+			if hh >= 1.0:
+				high_n += 1
+			elif hh >= 0.6:
+				mid_n += 1
+	print("  HEIGHTS high>=1.0 %.1f%% mid>=0.6 %.1f%%" % [high_n / total * 100.0, mid_n / total * 100.0])
 
 	for label in ["PLAYER", "ENEMY"]:
 		var p: Vector3 = g.player_castle_pos if label == "PLAYER" else g.enemy_castle_pos

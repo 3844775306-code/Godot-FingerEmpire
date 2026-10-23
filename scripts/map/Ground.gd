@@ -50,6 +50,7 @@ var _mountain_threshold: float = 0.3
 var _water_threshold: float = -0.25
 var _pass_centers: Array = []          # 隘口中心（格坐标），用于争议资源布点
 var _river_center: Array = []          # 每行河流中心 x（格坐标），供浅滩算子使用
+var _river_centers: Dictionary = {}    # 命名河心记录：多河地图用 name 区分（"a"/"b"）
 var _sea_width: float = 0.0            # 海峡算子的水面宽度（格），供小岛算子参考
 var _ring_radius: float = 0.0          # 环形河中心半径（归一化）
 var _ring_width: float = 0.0           # 环形河宽度（归一化）
@@ -220,6 +221,10 @@ func _generate_with_stages(size: int, stages: Array) -> void:
 				_op_ring_river(size, params)
 			"ring_fords":
 				_op_ring_fords(size, params)
+			"canyon":
+				_op_canyon(size, params)
+			"terrace":
+				_op_terrace(size, params)
 			_:
 				push_warning("[地图] 未知生成算子: %s" % op)
 	_colorize_grid(size)
@@ -232,6 +237,7 @@ func _init_stage_grids(size: int) -> void:
 	base_colors = []
 	_pass_centers = []
 	_reach_tiles = {}
+	_river_centers = {}
 	for x in range(size):
 		var vcol := []
 		var tcol := []
@@ -319,6 +325,7 @@ func _op_river(size: int, params: Dictionary) -> void:
 	var bulge_at := float(params.get("bulge_at", 0.5)) * float(size)
 	var bulge_extra := maxf(0.0, float(params.get("bulge_extra", 0.0)))
 	var bulge_len := maxf(2.0, float(params.get("bulge_len", 10.0)))
+	var river_name := String(params.get("name", "default"))
 	_river_center = []
 	for y in range(size):
 		var bulge := bulge_extra * exp(-pow(float(y) - bulge_at, 2.0) / (2.0 * bulge_len * bulge_len))
@@ -330,10 +337,16 @@ func _op_river(size: int, params: Dictionary) -> void:
 		for x in range(x0, x1 + 1):
 			terrain_grid[x][y] = 2
 			height_grid[x][y] = -height_scale * 0.5
+	_river_centers[river_name] = _river_center.duplicate()
 
 # 浅滩：在指定行位横切河流，标 overlay=3（仍是水，但陆军可按 2.5 成本涉水通过）
+# river 参数可指定用哪条河（多河地图），缺省用最近一次生成的河
 func _op_fords(size: int, params: Dictionary) -> void:
-	if _river_center.is_empty():
+	var river_key := String(params.get("river", ""))
+	var centers: Array = _river_center
+	if river_key != "" and _river_centers.has(river_key):
+		centers = _river_centers[river_key]
+	if centers.is_empty():
 		push_warning("[地图] fords 需要先执行 river")
 		return
 	var positions: Array = params.get("positions", [0.3, 0.7])
@@ -341,7 +354,7 @@ func _op_fords(size: int, params: Dictionary) -> void:
 	var half_w := int(width / 2.0)
 	for p in positions:
 		var fy := clampi(int(float(p) * float(size)), 0, size - 1)
-		var cx: int = _river_center[fy]
+		var cx: int = centers[fy]
 		var left := cx
 		while left - 1 >= 0 and terrain_grid[left - 1][fy] == 2:
 			left -= 1
@@ -594,6 +607,127 @@ func _op_ring_fords(size: int, params: Dictionary) -> void:
 				overlay_grid[px][py] = 3
 				height_grid[px][py] = -height_scale * 0.25
 			r += 1.0
+
+# 峡谷：横向谷道贯穿全图，南北两道山壁夹住；谷道在若干处收窄成隘口，
+# 山壁上留两条"翻山小径"（缺口）供部队绕到谷外穿插
+func _op_canyon(size: int, params: Dictionary) -> void:
+	var half := float(params.get("corridor_half", 0.09)) * float(size)
+	var thick := maxf(3.0, float(params.get("wall_thick", 0.06)) * float(size))
+	var pinches: Array = params.get("pinches", [0.24, 0.5, 0.76])
+	var pinch_depth := float(params.get("pinch_depth", 0.05)) * float(size)
+	var pinch_sigma := maxf(2.0, float(params.get("pinch_width", 0.06)) * float(size))
+	var gates: Array = params.get("gates", [0.14, 0.86])
+	var gate_w := maxi(2, int(params.get("gate_width", 4)))
+	var seed_val := custom_seed if custom_seed != 0 else randi()
+	var noise := FastNoiseLite.new()
+	noise.seed = seed_val + 5519
+	noise.frequency = float(params.get("edge_freq", 0.06))
+	noise.fractal_octaves = 2
+	var cy_all := float(size) * 0.5
+	var half_gate := int(gate_w / 2.0)
+	for x in range(size):
+		# 谷道中心轻微蜿蜒，避免看起来是直尺画的
+		var cy := cy_all + sin(float(x) / float(size) * TAU) * float(size) * 0.02
+		var hw := half
+		for p in pinches:
+			var d := (float(x) - float(p) * float(size)) / pinch_sigma
+			hw -= pinch_depth * exp(-d * d)
+		hw = maxf(float(size) * 0.03, hw)
+		var gate_here := false
+		for g in gates:
+			if absi(x - int(float(g) * float(size))) <= half_gate:
+				gate_here = true
+				break
+		for y in range(size):
+			var dy := absf(float(y) - cy)
+			var inner := hw + noise.get_noise_2d(x, y) * 1.6
+			var outer := inner + thick + noise.get_noise_2d(x + 71, y + 23) * 2.0
+			if dy >= inner and dy <= outer:
+				if gate_here:
+					# 翻山小径：山壁上的缺口，谷地与谷外陆地在此连通
+					terrain_grid[x][y] = 0
+					height_grid[x][y] = 0.0
+					overlay_grid[x][y] = 0
+				else:
+					terrain_grid[x][y] = 1
+					height_grid[x][y] = 1.4 + noise.get_noise_2d(x + 13, y + 5) * 0.5
+					overlay_grid[x][y] = 0
+			elif dy < inner:
+				# 谷道内部：清成平地，保证主力能展开
+				terrain_grid[x][y] = 0
+				height_grid[x][y] = 0.0
+				overlay_grid[x][y] = 0
+	# 隘口中心记作"隘口"，资源布点会把金矿集中到这里（gold_at_passes）
+	for p in pinches:
+		_pass_centers.append(Vector2i(int(float(p) * float(size)), int(cy_all)))
+
+# 台地：三级高度（低地 - 台地 - 低地），台缘由山脊隔断，只有若干坡道可上；
+# 台地高度超过 high_ground_min 时自动获得地图的"高地视野"加成
+func _op_terrace(size: int, params: Dictionary) -> void:
+	var low_top := clampf(float(params.get("low_top", 0.32)), 0.1, 0.45)
+	var mid_top := clampf(float(params.get("mid_top", 0.68)), 0.55, 0.9)
+	var ridge_w := clampf(float(params.get("ridge_width", 0.07)), 0.03, 0.14)
+	var mid_h := float(params.get("mid_height", 0.9))
+	var ridge_h := float(params.get("ridge_height", 1.6))
+	var gaps: Array = params.get("gaps", [0.22, 0.5, 0.78])
+	var gap_w := maxi(2, int(params.get("gap_width", 4)))
+	var seed_val := custom_seed if custom_seed != 0 else randi()
+	var noise := FastNoiseLite.new()
+	noise.seed = seed_val + 9137
+	noise.frequency = float(params.get("edge_freq", 0.08))
+	noise.fractal_octaves = 2
+	var half_gap := int(gap_w / 2.0)
+	for x in range(size):
+		var xf := float(x) / float(size)
+		var at_gap := false
+		for g in gaps:
+			if absf(xf - float(g)) * float(size) <= float(half_gap):
+				at_gap = true
+				break
+		for y in range(size):
+			var yf := float(y) / float(size)
+			var ridge_band := ridge_w * 0.5 + noise.get_noise_2d(x, y) * 0.012
+			var d_low := absf(yf - low_top)
+			var d_high := absf(yf - mid_top)
+			var is_ridge := (d_low <= ridge_band) or (d_high <= ridge_band)
+			if is_ridge and at_gap:
+				# 坡道：山脊上的缺口，连接低地与台地
+				terrain_grid[x][y] = 0
+				height_grid[x][y] = mid_h * 0.5
+				overlay_grid[x][y] = 0
+			elif is_ridge:
+				terrain_grid[x][y] = 1
+				height_grid[x][y] = ridge_h + noise.get_noise_2d(x + 37, y + 11) * 0.3
+				overlay_grid[x][y] = 0
+			elif yf > low_top and yf < mid_top:
+				# 中层台地：整片抬高，站上去视野更远
+				terrain_grid[x][y] = 0
+				height_grid[x][y] = mid_h + noise.get_noise_2d(x, y) * 0.05
+				overlay_grid[x][y] = 0
+			else:
+				terrain_grid[x][y] = 0
+				height_grid[x][y] = 0.0
+				overlay_grid[x][y] = 0
+	# 台地中央的湖：既是油井落点，也是双方争夺的水源
+	var lake_r := float(params.get("lake_radius", 0.05))
+	if lake_r > 0.0:
+		var cr := maxi(2, int(lake_r * float(size)))
+		var cx := size / 2
+		var cy2 := size / 2
+		for dx in range(-cr, cr + 1):
+			for dy in range(-cr, cr + 1):
+				if dx * dx + dy * dy > cr * cr:
+					continue
+				var nx := clampi(cx + dx, 0, size - 1)
+				var ny := clampi(cy2 + dy, 0, size - 1)
+				terrain_grid[nx][ny] = 2
+				height_grid[nx][ny] = -height_scale * 0.5
+				overlay_grid[nx][ny] = 0
+	# 坡道口与台地中心记入隘口：资源布点会在这些位置补金矿
+	# 只记下侧台缘的 3 个坡道 + 台地中心，避免金矿数翻倍
+	for g in gaps:
+		_pass_centers.append(Vector2i(int(float(g) * float(size)), int(low_top * float(size))))
+	_pass_centers.append(Vector2i(size / 2, size / 2))
 
 func _colorize_grid(size: int) -> void:
 	base_colors.clear()
@@ -1364,7 +1498,7 @@ func _place_group_random(rtype, min_sz, max_sz, terrain, placed, size, castles, 
 		for tx in range(5, size - 5):
 			for ty in range(5, size - 5):
 				if terrain_grid[tx][ty] != 2: continue
-				if _count_adjacent_terrain(tx, ty, 0, size) < 1: continue
+				if _count_ortho_terrain(tx, ty, 0, size) < 1: continue
 				if placed.has("g%d,%d,%d" % [rtype, tx, ty]): continue
 				var skip_c := false
 				for cs in castles:
@@ -1418,13 +1552,24 @@ func _spawn_group(rtype, min_sz, max_sz, cx, cy, terrain, placed, size, adjacent
 		var mx = cx + randi_range(-4, 4); var my = cy + randi_range(-4, 4)
 		if mx < 0 or mx >= size or my < 0 or my >= size: continue
 		if terrain_grid[mx][my] != terrain: continue
-		# 近岸油井：工人只能在岸边采集，贴岸的水格才算有效资源点
-		if rtype == 4 and terrain == 2 and _oil_shore_only() and _count_adjacent_terrain(mx, my, 0, size) < 1: continue
+		# 近岸油井：工人只能在正对岸边采集，贴岸的水格才算有效资源点
+		if rtype == 4 and terrain == 2 and _oil_shore_only() and _count_ortho_terrain(mx, my, 0, size) < 1: continue
 		if adjacent_mountains > 0 and _count_adjacent_terrain(mx, my, 1, size) < adjacent_mountains: continue
 		if placed.has("r%d,%d" % [mx, my]): continue
 		placed["r%d,%d" % [mx, my]] = true
 		resource_positions.append({"pos": grid_to_world(mx, my), "type": rtype})
 		placed_count += 1
+
+# Count orthogonal adjacent tiles (4 directions) of a specific terrain type
+func _count_ortho_terrain(x, y, terr_type, size) -> int:
+	var count := 0
+	for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		var nx: int = x + d.x
+		var ny: int = y + d.y
+		if nx >= 0 and nx < size and ny >= 0 and ny < size:
+			if terrain_grid[nx][ny] == terr_type:
+				count += 1
+	return count
 
 # ── Check if terrain type exists within range ──
 # Count adjacent tiles (8 directions) of a specific terrain type
