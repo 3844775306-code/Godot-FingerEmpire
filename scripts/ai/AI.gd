@@ -1755,7 +1755,8 @@ func _find_water_patrol_point(near_pos: Vector3) -> Vector3:
 func update_debug_label():
 	if not debug_panel: return
 	if _title_rtl:
-		_title_rtl.text = _panel_title_base + _my_nation_tag()
+		_title_rtl.text = _relation_tag() + _panel_title_base + _my_nation_tag()
+	_apply_panel_relation()
 	# 收起状态：主体不可见，跳过整块内容刷新，省掉每帧的统计与遍历开销
 	if _panel_collapsed: return
 	var res = _get_resources(); var pop = _get_population()
@@ -1846,9 +1847,52 @@ var _panel_title_base: String = ""         # 不含国家名的原始标题
 var _collapse_btn: Button = null           # 标题栏右侧的隐藏/展开按钮
 var _body_vb: VBoxContainer = null         # 面板主体（隐藏时整块不可见）
 var _panel_collapsed: bool = false         # 面板是否已收起为标题条
+var _panel_bg_style: StyleBoxFlat = null   # 面板底板样式（按友方/敌方着色）
+var _last_relation: int = -2               # 上次计算的敌我关系，避免每帧重设样式
 const PANEL_WIDTH: float = 540.0
 const PANEL_HEIGHT: float = 380.0
 const PANEL_COLLAPSED_HEIGHT: float = 44.0
+
+# 面板视角的敌我关系：1=友方（同队/盟友），-1=敌方，0=自己/中立
+func _relation_to_player() -> int:
+	if not battle: return 0
+	if battle.diplomacy:
+		var me = battle.player_owner_id
+		if my_peer_id == me: return 0
+		return 1 if battle.diplomacy.is_ally(me, my_peer_id) else -1
+	if my_peer_id == battle.player_owner_id: return 0
+	return 1 if my_team == battle.get_host_team() else -1
+
+func _relation_color() -> Color:
+	match _relation_to_player():
+		1: return Color(0.25, 0.65, 1.0)
+		-1: return Color(1.0, 0.3, 0.25)
+		_: return Color(0.7, 0.7, 0.7)
+
+func _relation_tag() -> String:
+	match _relation_to_player():
+		1: return "[color=#4ac3ff]🛡 友方[/color] "
+		-1: return "[color=#ff6b5a]⚔ 敌方[/color] "
+		_: return ""
+
+# 面板边框/底色按友方蓝、敌方红区分（乱斗联盟变化时随之刷新）
+func _apply_panel_relation() -> void:
+	if _panel_bg_style == null: return
+	var rel = _relation_to_player()
+	if rel == _last_relation: return
+	_last_relation = rel
+	var c = _relation_color()
+	_panel_bg_style.border_color = Color(c.r, c.g, c.b, 0.7)
+	_panel_bg_style.border_width_left = 6
+	_panel_bg_style.border_width_right = 2
+	_panel_bg_style.border_width_top = 2
+	_panel_bg_style.border_width_bottom = 2
+	if rel == 1:
+		_panel_bg_style.bg_color = Color(0.04, 0.09, 0.16, 0.93)
+	elif rel == -1:
+		_panel_bg_style.bg_color = Color(0.15, 0.05, 0.06, 0.93)
+	else:
+		_panel_bg_style.bg_color = Color(0.05, 0.06, 0.12, 0.92)
 
 func _create_debug_panel():
 	debug_panel = Control.new(); debug_panel.name = "AIDebugPanel"; debug_panel.z_index = 100
@@ -1878,13 +1922,15 @@ func _create_debug_panel():
 	bg_style.border_width_left = 2; bg_style.border_width_right = 2
 	bg_style.border_width_top = 2; bg_style.border_width_bottom = 2
 	bg_style.border_color = Color(0.25, 0.5, 0.8, 0.5)
+	_panel_bg_style = bg_style
+	_apply_panel_relation()
 	bg.add_theme_stylebox_override("panel", bg_style); debug_panel.add_child(bg)
 	var vb = VBoxContainer.new(); vb.position = Vector2(10, 8); vb.add_theme_constant_override("separation", 3)
 	debug_panel.add_child(vb)
 	# 标题行：左侧标题 + 右侧隐藏按钮（点一下整块收起，只留标题条，不再遮挡战场）
 	var title_hbox = HBoxContainer.new(); vb.add_child(title_hbox)
 	var title = _make_rtl(); _title_rtl = title; _panel_title_base = panel_title
-	title.text = panel_title; title.add_theme_font_size_override("font_size", 22)
+	title.text = _relation_tag() + panel_title; title.add_theme_font_size_override("font_size", 22)
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL; title_hbox.add_child(title)
 	_collapse_btn = Button.new(); _collapse_btn.text = "▼"
 	_collapse_btn.tooltip_text = "隐藏 AI 决策面板"
