@@ -23,7 +23,7 @@ var production_step: int = 0
 var wanted_buildings: Array = [20, 21, 23, 42, 54, 24, 29, 52, 53]
 var wanted_units: Array = [11,12,15,16,17,18,35,36,37,38,39,40,13,43,44,45,46,47,48,49,50,58,59,5,6,9]
 var target_army_count: int = 7
-var target_house_count: int = 10
+var target_house_count: int = 16
 var desired_worker_count: int = 8
 
 var cached_shipyard_pos: Vector3 = Vector3.ZERO
@@ -125,6 +125,16 @@ func _can_train_unit() -> bool:
 		if battle.has_method("can_train_for"):
 			return battle.can_train_for(my_peer_id)
 	return battle.can_train_unit(RTSConfig.Team.RED)
+
+# 资源接近上限时说明常规目标已经满足；允许军队临时超编，把资源转成兵力
+func _resources_high() -> bool:
+	var res: Dictionary = _get_resources()
+	var limits: Dictionary = _get_limits()
+	for k in ["gold", "wood", "stone", "food"]:
+		var lim: float = maxf(float(limits.get(k, 500)), 1.0)
+		if float(res.get(k, 0)) >= lim * 0.92:
+			return true
+	return false
 
 func _deduct_resources(cost: Dictionary) -> bool:
 	if my_peer_id != -1:
@@ -359,8 +369,8 @@ func build_building(building_id: int, pos: Vector3) -> bool:
 	if not cfg: return false
 	# Check castle level requirement (matches RTSBattleManager.is_building_unlocked)
 	if not _ai_can_build(building_id): return false
-	# 城墙允许建 WALL_COUNT 面（防线需求），其余建筑上限 10
-	var _cap = WALL_COUNT if building_id == 27 else 10
+	# 城墙允许建 WALL_COUNT 面（防线需求），民居按人口需求上限，其余建筑上限 10
+	var _cap = WALL_COUNT if building_id == 27 else (target_house_count if building_id == 28 else 10)
 	if count_building(building_id) >= _cap: return false
 	# Non-shipyard buildings: must be within AI vision range
 	if building_id != 23:
@@ -395,8 +405,10 @@ func upgrade_building(building_id: int):
 	for entity in battle.entities.get_children():
 		if entity is Building and entity.health > 0 and entity.entity_id == building_id:
 			if not entity_belongs_to_me(entity): continue
-			entity.perform_upgrade(battle)
-			break
+			# 同类型可能有多个建筑；升级建筑必须是当前可升级的那一个，
+			# 不能只看第一个（第一个满级后会导致后面同类建筑永远不升级）
+			if not entity.can_upgrade(): continue
+			if entity.perform_upgrade(battle): return
 
 # ═══ Counter matrix ═══
 const COUNTER_MATRIX = {
@@ -1786,9 +1798,13 @@ func _process_line_military():
 		if not _can_train_unit():
 			return
 	var priority = get_counter_priority()
+	# 资源满了但固定兵种目标已达成时，继续补兵直到人口/资源重新平衡
+	var target: int = target_army_count
+	if _resources_high():
+		target = 999
 	
 	for u_id in priority:
-		if count_unit(u_id) < target_army_count and can_afford(u_id) and _can_train_unit():
+		if count_unit(u_id) < target and can_afford(u_id) and _can_train_unit():
 			
 			produce_unit(u_id); 
 
