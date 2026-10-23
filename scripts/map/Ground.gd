@@ -909,22 +909,59 @@ func _place_resources():
 		_mark_wood_as_forest(size)
 		_colorize_grid(size)
 
-# 黑森林木材：林缘（平原且 2 格内有森林）多、林内（本身是森林）少
+# 黑森林木材：沿森林边缘一株一株散开（不聚成资源簇），保证林线看得出来
 func _place_forest_wood(size: int, castles: Array, placed: Dictionary, mult: float) -> void:
-	# 每座基地附近先保证 2 组林缘木材，避免开局无木
+	# 候选 = 紧贴森林（8 邻域有森林）的平原格
+	var cands: Array = []
+	for x in range(3, size - 4):
+		for y in range(3, size - 4):
+			if terrain_grid[x][y] != 0:
+				continue
+			if get_overlay(x, y) != 0:
+				continue
+			if not _forest_edge(x, y, size):
+				continue
+			if placed.has("r1,%d,%d" % [x, y]):
+				continue
+			cands.append(Vector2i(x, y))
+	cands.shuffle()
+	var target := maxi(12, int(round(70.0 * mult)))
+	var nodes: Array = []
+	# 每座基地附近先各取 8 株，保证开局能采到木
 	for cs in castles:
-		for _i in range(2):
-			_place_group_where(1, 5, 6, 0, placed, size, func(x, y): return _forest_edge(x, y, size), Vector2i(int(cs[0]), int(cs[1])), 26)
-	for _i in range(int(round(8.0 * mult))):
-		_place_group_where(1, 5, 6, 0, placed, size, func(x, y): return _forest_edge(x, y, size), Vector2i(-1, -1), 0)
-	for _i in range(int(round(3.0 * mult))):
-		_place_group_where(1, 5, 6, 0, placed, size, func(x, y): return get_overlay(x, y) == 1, Vector2i(-1, -1), 0)
+		var center := Vector2i(int(cs[0]), int(cs[1]))
+		var want := 8
+		for c in cands:
+			if want <= 0:
+				break
+			if Vector2(c.x - center.x, c.y - center.y).length() > 30.0:
+				continue
+			if _too_close_to_wood(c, nodes, 3.0):
+				continue
+			nodes.append(c)
+			want -= 1
+	for c in cands:
+		if nodes.size() >= target:
+			break
+		if _too_close_to_wood(c, nodes, 3.0):
+			continue
+		nodes.append(c)
+	for c in nodes:
+		placed["r1,%d,%d" % [c.x, c.y]] = true
+		resource_positions.append({"pos": grid_to_world(c.x, c.y), "type": 1})
+
+# 单株木材之间至少隔 3 格，读起来才是一棵一棵沿林线排开
+func _too_close_to_wood(tile: Vector2i, nodes: Array, min_dist: float) -> bool:
+	for n in nodes:
+		if Vector2(tile.x - n.x, tile.y - n.y).length() < min_dist:
+			return true
+	return false
 
 func _forest_edge(x: int, y: int, size: int) -> bool:
 	if get_overlay(x, y) != 0:
 		return false
-	for dx in range(-2, 3):
-		for dy in range(-2, 3):
+	for dx in range(-1, 2):
+		for dy in range(-1, 2):
 			if dx == 0 and dy == 0:
 				continue
 			var nx: int = x + dx
@@ -933,35 +970,6 @@ func _forest_edge(x: int, y: int, size: int) -> bool:
 				continue
 			if overlay_grid[nx][ny] == 1:
 				return true
-	return false
-
-# 按判定函数找点并生成一组资源（center.x < 0 表示不限位置）
-func _place_group_where(rtype, min_sz, max_sz, terrain, placed, size, pred: Callable, center: Vector2i, max_dist: int) -> bool:
-	for _attempt in range(400):
-		var tx := randi_range(3, size - 4)
-		var ty := randi_range(3, size - 4)
-		if center.x >= 0 and Vector2(tx - center.x, ty - center.y).length() > float(max_dist):
-			continue
-		if terrain_grid[tx][ty] != terrain:
-			continue
-		if placed.has("g%d,%d,%d" % [rtype, tx, ty]):
-			continue
-		if not pred.call(tx, ty):
-			continue
-		# 与同类资源保持间距，避免堆叠
-		var dup := false
-		for k in placed.keys():
-			if k.begins_with("g%d," % rtype):
-				var ox := int(k.split(",")[1])
-				var oy := int(k.split(",")[2])
-				if Vector2(tx - ox, ty - oy).length() < 10.0:
-					dup = true
-					break
-		if dup:
-			continue
-		placed["g%d,%d,%d" % [rtype, tx, ty]] = true
-		_spawn_group(rtype, min_sz, max_sz, tx, ty, terrain, placed, size, 0)
-		return true
 	return false
 
 # 常规地图：木材节点所在格及周围一格改为森林覆盖层

@@ -192,6 +192,7 @@ func _report(g, s: int) -> void:
 	var type_counts := {}
 	var wood_total := 0
 	var wood_in_forest := 0
+	var wood_edge := 0
 	var gold_total := 0
 	var gold_at_passes := 0
 	for r in g.resource_positions:
@@ -205,6 +206,8 @@ func _report(g, s: int) -> void:
 			wood_total += 1
 			if g.get_overlay(wx, wy) == 1:
 				wood_in_forest += 1
+			elif g._forest_edge(wx, wy, size):
+				wood_edge += 1
 		elif t == 0:
 			gold_total += 1
 			for pc in g._pass_centers:
@@ -213,7 +216,19 @@ func _report(g, s: int) -> void:
 					gold_at_passes += 1
 					break
 	print("  RES %s" % str(type_counts))
-	print("  WOOD total=%d in_forest=%d" % [wood_total, wood_in_forest])
+	print("  WOOD total=%d in_forest=%d edge=%d" % [wood_total, wood_in_forest, wood_edge])
+	# 单株分布检查（黑森林）：木材之间应至少隔 3 格，不允许一簇一簇
+	if GameSettings.map_id == "forest":
+		var wpos: Array = []
+		for r in g.resource_positions:
+			if int(r["type"]) == 1:
+				wpos.append(Vector2(r["pos"].x + size / 2.0, r["pos"].z + size / 2.0))
+		var min_gap := 999.0
+		for i in range(wpos.size()):
+			for j in range(i + 1, wpos.size()):
+				min_gap = minf(min_gap, wpos[i].distance_to(wpos[j]))
+		if not wpos.is_empty():
+			print("  WOOD_GAP min=%.1f n=%d" % [min_gap, wpos.size()])
 	if not g._pass_centers.is_empty():
 		print("  GOLD total=%d at_passes=%d" % [gold_total, gold_at_passes])
 	# 浅滩沙色抽样：应当是多种深浅不同的沙色，而不是单一纯色

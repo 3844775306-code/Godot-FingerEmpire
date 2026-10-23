@@ -58,7 +58,7 @@ const PRESETS := {
 		"id": "forest",
 		"name": "黑森林",
 		"battle": "条顿堡 9 AD",
-		"desc": "林海覆盖近四成地表，林中视野骤降；木材只长在林缘与林内，伏击与侦察主导战场。",
+		"desc": "林海覆盖近四成地表，林中视野骤降；木材一株一株沿林线分布，伏击与侦察主导战场。",
 		"stages": [
 			["noise_base", {"freq": 0.03, "octaves": 4, "mountain_threshold": 0.42}],
 			["forest", {"coverage": 0.50, "freq": 0.045, "clearing": 0.45}],
@@ -67,7 +67,7 @@ const PRESETS := {
 		"palette": {},
 		"resources": {"wood": 1.5, "gold": 0.7, "wood_near": "forest", "stone_near": "any"},
 		"modifiers": {},
-		"chips": ["森林覆盖 35%", "林中视野 -45%", "木材只在林缘/林内"],
+		"chips": ["森林覆盖 35%", "林中视野 -45%", "木材沿林线单株分布"],
 		"recommended": "1v1",
 	},
 }
