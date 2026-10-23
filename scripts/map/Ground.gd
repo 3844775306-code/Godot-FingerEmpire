@@ -225,6 +225,14 @@ func _generate_with_stages(size: int, stages: Array) -> void:
 				_op_canyon(size, params)
 			"terrace":
 				_op_terrace(size, params)
+			"crater":
+				_op_crater(size, params)
+			"coast":
+				_op_coast(size, params)
+			"maze":
+				_op_maze(size, params)
+			"four_islands":
+				_op_four_islands(size, params)
 			_:
 				push_warning("[地图] 未知生成算子: %s" % op)
 	_colorize_grid(size)
@@ -729,6 +737,187 @@ func _op_terrace(size: int, params: Dictionary) -> void:
 		_pass_centers.append(Vector2i(int(float(g) * float(size)), int(low_top * float(size))))
 	_pass_centers.append(Vector2i(size / 2, size / 2))
 
+# 环形山：地图中心一圈环形山壁，四个方向各开一处山口；山心是聚金洼地，
+# 全图金矿只落在四处山口与山心，逼双方为"进坑"还是"守口"做选择
+func _op_crater(size: int, params: Dictionary) -> void:
+	var radius_frac := clampf(float(params.get("radius_frac", 0.30)), 0.16, 0.40)
+	var width_frac := clampf(float(params.get("width_frac", 0.07)), 0.03, 0.14)
+	var gates: Array = params.get("gates", [0, 90, 180, 270])
+	var gate_w := maxi(3, int(params.get("gate_width", 6)))
+	var seed_val := custom_seed if custom_seed != 0 else randi()
+	var noise := FastNoiseLite.new()
+	noise.seed = seed_val + 7331
+	noise.frequency = 0.07
+	noise.fractal_octaves = 2
+	var cx := float(size) * 0.5
+	var cy := float(size) * 0.5
+	var ring_r := radius_frac * float(size)
+	var half_w := maxf(2.0, width_frac * float(size) * 0.5)
+	var gate_half := float(gate_w) * 0.5
+	var gate_tol := rad_to_deg(gate_half / maxf(ring_r, 1.0))
+	for x in range(size):
+		for y in range(size):
+			var dx := float(x) - cx
+			var dy := float(y) - cy
+			var r := sqrt(dx * dx + dy * dy)
+			if r > ring_r + half_w + 3.0:
+				continue   # 环外保留噪声地形（平原为主）
+			var ang := rad_to_deg(atan2(dy, dx))
+			var gate_here := false
+			for g in gates:
+				var diff := absf(fposmod(ang - float(g) + 180.0, 360.0) - 180.0)
+				if diff <= gate_tol:
+					gate_here = true
+					break
+			var wob := noise.get_noise_2d(x, y) * 2.0
+			if absf(r + wob - ring_r) <= half_w:
+				if gate_here:
+					terrain_grid[x][y] = 0
+					height_grid[x][y] = 0.0
+				else:
+					terrain_grid[x][y] = 1
+					height_grid[x][y] = 1.5 + noise.get_noise_2d(x + 29, y + 17) * 0.45
+				overlay_grid[x][y] = 0
+			elif r < ring_r - half_w:
+				# 山心洼地：整片平地，中央洼下去一点，金矿就撒在这里
+				terrain_grid[x][y] = 0
+				height_grid[x][y] = 0.0
+				overlay_grid[x][y] = 0
+	# 东西两处山口 + 山心记入隘口：金矿集中到这三处，南北两口留作纯通道
+	var gold_gates: Array = params.get("gold_gates", [0, 180])
+	for g in gold_gates:
+		var a := deg_to_rad(float(g))
+		_pass_centers.append(Vector2i(int(round(cx + cos(a) * ring_r)), int(round(cy + sin(a) * ring_r))))
+	_pass_centers.append(Vector2i(size / 2, size / 2))
+
+# 海岸登陆：整张图是一块被外海包围的大陆，四边浪蚀出弯曲海岸线，近岸留一圈滩头平地；
+# 双方基地都在滩头，向内陆推进，海上散落几座小岛作地标
+func _op_coast(size: int, params: Dictionary) -> void:
+	var width_frac := clampf(float(params.get("width_frac", 0.13)), 0.06, 0.24)
+	var beach_frac := clampf(float(params.get("beach_frac", 0.06)), 0.0, 0.12)
+	var islets: Array = params.get("islets", [])
+	var islet_r := maxi(1, int(params.get("islet_radius", 2)))
+	var seed_val := custom_seed if custom_seed != 0 else randi()
+	var noise := FastNoiseLite.new()
+	noise.seed = seed_val + 9973
+	noise.frequency = float(params.get("coast_freq", 0.055))
+	noise.fractal_octaves = 2
+	var base := width_frac * float(size)
+	var beach_w := beach_frac * float(size)
+	var water_h := -height_scale * 0.5
+	for x in range(size):
+		for y in range(size):
+			var edge := float(mini(mini(x, y), mini(size - 1 - x, size - 1 - y)))
+			var coast := base + noise.get_noise_2d(x + 91, y + 43) * 3.0
+			if edge < coast:
+				terrain_grid[x][y] = 2
+				height_grid[x][y] = water_h
+				overlay_grid[x][y] = 0
+			elif edge < coast + beach_w:
+				# 滩头：整片平地，登陆场必须能展开
+				terrain_grid[x][y] = 0
+				height_grid[x][y] = 0.0
+				overlay_grid[x][y] = 0
+	# 外海上的小岛：整座落在水里才生成，纯作地标
+	for s in islets:
+		var cx := int(float(s[0]) * float(size))
+		var cy := int(float(s[1]) * float(size))
+		var ok := true
+		for dx in range(-islet_r - 1, islet_r + 2):
+			for dy in range(-islet_r - 1, islet_r + 2):
+				var nx := cx + dx
+				var ny := cy + dy
+				if nx < 0 or ny < 0 or nx >= size or ny >= size:
+					ok = false
+					break
+				if terrain_grid[nx][ny] != 2:
+					ok = false
+					break
+			if not ok:
+				break
+		if not ok:
+			continue
+		for dx in range(-islet_r, islet_r + 1):
+			for dy in range(-islet_r, islet_r + 1):
+				if dx * dx + dy * dy > islet_r * islet_r:
+					continue
+				terrain_grid[cx + dx][cy + dy] = 0
+				height_grid[cx + dx][cy + dy] = 0.0
+
+# 迷宫山：三层方环状山壁围成螺旋迷宫，缺口方向内外交替；
+# 整片迷宫区先清成平地再叠山墙，保证每条走廊都能走通；中心是唯一金矿区
+func _op_maze(size: int, params: Dictionary) -> void:
+	var radii: Array = params.get("radii", [0.15, 0.23, 0.31])
+	var gaps: Array = params.get("gaps", ["h", "v", "h"])
+	var thick := maxf(2.0, float(params.get("thick_frac", 0.03)) * float(size))
+	var gap := maxi(3, int(params.get("gap_width", 6)))
+	var half_t := thick * 0.5
+	var gap_half := float(gap) * 0.5
+	var cx := float(size) * 0.5
+	var cy := float(size) * 0.5
+	var outer_r := float(radii[radii.size() - 1]) * float(size)
+	for x in range(size):
+		for y in range(size):
+			var dx := absf(float(x) - cx)
+			var dy := absf(float(y) - cy)
+			var sq := maxf(dx, dy)
+			if sq > outer_r + half_t:
+				continue   # 环外保留噪声地形
+			var t := 0
+			var h := 0.0
+			for i in range(radii.size()):
+				var rr := float(radii[i]) * float(size)
+				if absf(sq - rr) > half_t:
+					continue
+				var g := String(gaps[i]) if i < gaps.size() else "h"
+				var in_gap := false
+				if g == "h":
+					in_gap = dx <= gap_half     # 南北向缺口（上下两侧同时开口，镜像公平）
+				else:
+					in_gap = dy <= gap_half     # 东西向缺口
+				if not in_gap:
+					t = 1
+					h = 1.5
+				break
+			terrain_grid[x][y] = t
+			height_grid[x][y] = h
+			overlay_grid[x][y] = 0
+	_pass_centers.append(Vector2i(size / 2, size / 2))
+	# 中环东西两处缺口各埋一处金矿，避免全图金矿只挤在中心一小块
+	if radii.size() >= 2:
+		var mid_r := int(float(radii[1]) * float(size))
+		_pass_centers.append(Vector2i(size / 2 - mid_r, size / 2))
+		_pass_centers.append(Vector2i(size / 2 + mid_r, size / 2))
+func _op_four_islands(size: int, params: Dictionary) -> void:
+	var water_h := -height_scale * 0.5
+	for x in range(size):
+		for y in range(size):
+			terrain_grid[x][y] = 2
+			height_grid[x][y] = water_h
+			overlay_grid[x][y] = 0
+	var radius := clampi(int(float(size) * float(params.get("radius_frac", 0.14))), 10, 22)
+	var corner := clampf(float(params.get("corner", 0.18)), 0.12, 0.26)
+	var spots: Array = [
+		Vector2(corner, corner), Vector2(1.0 - corner, corner),
+		Vector2(corner, 1.0 - corner), Vector2(1.0 - corner, 1.0 - corner),
+	]
+	if _team_size_for_layout() >= 3:
+		spots.append(Vector2(0.5, corner))
+		spots.append(Vector2(0.5, 1.0 - corner))
+	var rr := float(radius)
+	for s in spots:
+		var cx := int(float(s.x) * float(size))
+		var cy := int(float(s.y) * float(size))
+		for dx in range(-radius, radius + 1):
+			for dy in range(-radius, radius + 1):
+				if float(dx * dx + dy * dy) > rr * rr:
+					continue
+				var nx := clampi(cx + dx, 0, size - 1)
+				var ny := clampi(cy + dy, 0, size - 1)
+				terrain_grid[nx][ny] = 0
+				height_grid[nx][ny] = 0.0
+				overlay_grid[nx][ny] = 0
+
 func _colorize_grid(size: int) -> void:
 	base_colors.clear()
 	for x in range(size):
@@ -855,6 +1044,8 @@ func _preset_team_anchors(k: int) -> Array:
 	# 环形河布局：内圈（蓝方）在河心岛上，外圈（红方）沿环外陆地均分，角度错开浅滩
 	if String(layout.get("type", "mirror_x")) == "ring":
 		return _ring_anchors(k, layout)
+	if String(layout.get("type", "mirror_x")) == "corners":
+		return _corner_anchors(k, layout)
 	var anchors: Array = layout.get("anchors", [])
 	if anchors.size() < 2 or k <= 1:
 		return anchors.duplicate()
@@ -888,6 +1079,27 @@ func _ring_anchors(k: int, layout: Dictionary) -> Array:
 	for i in range(n):
 		var a2 := deg_to_rad(30.0 + 360.0 * float(i) / float(n))
 		out.append([clampf(0.5 + outer_r * cos(a2), 0.06, 0.94), clampf(0.5 + outer_r * sin(a2), 0.06, 0.94)])
+	return out
+
+# 四大岛基地锚点：1V1 对角两座岛，2V2 北岸两座对南岸两座，3V3 南北各三座（含中央两岛）
+func _corner_anchors(k: int, layout: Dictionary) -> Array:
+	var c := clampf(float(layout.get("corner", 0.18)), 0.12, 0.26)
+	var out: Array = []
+	if k <= 1:
+		out.append([c, c])
+		out.append([1.0 - c, 1.0 - c])
+	elif k == 2:
+		out.append([c, c])
+		out.append([1.0 - c, c])
+		out.append([c, 1.0 - c])
+		out.append([1.0 - c, 1.0 - c])
+	else:
+		out.append([c, c])
+		out.append([0.5, c])
+		out.append([1.0 - c, c])
+		out.append([c, 1.0 - c])
+		out.append([0.5, 1.0 - c])
+		out.append([1.0 - c, 1.0 - c])
 	return out
 
 # 团队锚点压平后转世界坐标

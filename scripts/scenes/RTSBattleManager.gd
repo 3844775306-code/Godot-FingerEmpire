@@ -31,7 +31,7 @@ var diplomacy: DiplomacyManager = null        # 乱斗模式外交核心（子�
 # ==================== 废弃建筑（地图边缘的中立废墟） ====================
 # 开局在地图边缘随机生成若干中立建筑；任何一方单位靠近并停留 2.5 秒即归其所有，
 # 先到先得。占领后立刻获得该建筑自身的功能（瞭望视野 / 仓储上限 / 民居人口）与一次性战利品。
-const ABANDONED_TYPE_IDS := [41, 41, 41, 22, 28]   # 废弃瞭望塔(视野) / 废弃仓库(仓储) / 废弃民居(人口)
+const ABANDONED_TYPE_IDS := [41, 41, 41, 22, 28, 27, 27]   # 瞭望塔(视野)/仓库(仓储)/民居(人口)/城墙(断墙残段)
 const ABANDONED_CAPTURE_RADIUS := 4.5
 const ABANDONED_CAPTURE_TIME := 2.5
 var _abandoned_sites: Array = []                  # 尚未被占领的中立废墟（Building）
@@ -2612,6 +2612,8 @@ func _abandoned_loot_for(type_id: int) -> Dictionary:
 			return {"gold": 120, "wood": 80}
 		28:
 			return {"food": 100, "gold": 60}
+		27:
+			return {"stone": 60, "gold": 30}
 		_:
 			return {"gold": 80}
 
@@ -2621,6 +2623,8 @@ func _abandoned_label(type_id: int) -> String:
 			return "废弃仓库"
 		28:
 			return "废弃民居"
+		27:
+			return "废弃城墙"
 		_:
 			return "废弃瞭望塔"
 

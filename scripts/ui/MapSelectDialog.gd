@@ -21,16 +21,36 @@ func _build() -> void:
 	add_child(dim)
 
 	var panel = Panel.new()
-	# 卡片数量随预设增加，按每行 4 张自动换行并调整面板高度
+	# 卡片数量随预设增加：先按可用高度定"最多几行"，再据此决定每行张数与卡宽，
+	# 卡片内容按 400 高设计，高度不足时整体缩小，保证整块面板不溢出视口
 	var ids: Array = MapPresets.all_ids()
+	var gap := 20.0
+	var vp := get_viewport_rect().size
+	var max_panel_w := minf(1720.0, vp.x - 60.0)
+	var max_panel_h := maxf(520.0, vp.y - 24.0)
 	var per_row := 4
 	var rows := int(ceil(float(ids.size()) / float(per_row)))
-	var card_w := 400.0
 	var card_h := 400.0
-	var gap := 20.0
-	var panel_w := 1720.0
+	var card_w := 400.0
+	var found := false
+	while card_h >= 240.0:
+		var rows_max := maxi(1, int(floor((max_panel_h - 128.0 + gap) / (card_h + gap))))
+		var pr := maxi(4, int(ceil(float(ids.size()) / float(rows_max))))
+		var cw := (max_panel_w - float(pr - 1) * gap) / float(pr)
+		if cw >= 130.0 and cw >= minf(card_h * 0.5, 300.0):
+			per_row = pr
+			rows = int(ceil(float(ids.size()) / float(per_row)))
+			card_w = minf(400.0, cw)
+			found = true
+			break
+		card_h -= 20.0
+	if not found:
+		per_row = 4
+		rows = int(ceil(float(ids.size()) / float(per_row)))
+		card_w = minf(400.0, (max_panel_w - float(per_row - 1) * gap) / float(per_row))
+		card_h = 300.0
+	var panel_w := float(per_row) * card_w + float(per_row - 1) * gap
 	var panel_h := 104.0 + float(rows) * card_h + float(rows - 1) * gap + 24.0
-	var vp := get_viewport_rect().size
 	panel.position = Vector2(maxf(0.0, (vp.x - panel_w) * 0.5), maxf(16.0, (vp.y - panel_h) * 0.5))
 	panel.size = Vector2(panel_w, panel_h)
 	panel.add_theme_stylebox_override("panel", UITheme.card_style(UITheme.GOLD))
@@ -92,6 +112,7 @@ func _make_map_card(id: String, pos: Vector2, card_size: Vector2) -> Control:
 
 	var name_lbl = Label.new()
 	name_lbl.text = String(info["name"])
+	name_lbl.clip_text = true
 	name_lbl.position = Vector2(10, y)
 	name_lbl.size = Vector2(cw - 20.0, 34)
 	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -101,6 +122,7 @@ func _make_map_card(id: String, pos: Vector2, card_size: Vector2) -> Control:
 
 	var battle_lbl = Label.new()
 	battle_lbl.text = String(info["battle"])
+	battle_lbl.clip_text = true
 	battle_lbl.position = Vector2(10, y)
 	battle_lbl.size = Vector2(cw - 20.0, 24)
 	battle_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -111,16 +133,19 @@ func _make_map_card(id: String, pos: Vector2, card_size: Vector2) -> Control:
 	var chips = Label.new()
 	var chip_arr := PackedStringArray(info["chips"])
 	chips.text = " · ".join(chip_arr)
-	chips.position = Vector2(14, y)
-	chips.size = Vector2(cw - 28.0, 46)
 	chips.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	chips.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	chips.clip_text = true
 	UITheme.apply_label(chips, 15, UITheme.GOLD)
+	# 先入树再定尺寸：自动换行标签在入树前算出的宽度会按整行文本撑开，窄卡时会溢出
 	card.add_child(chips)
+	chips.position = Vector2(14, y)
+	chips.size = Vector2(cw - 28.0, 46)
 	y += 48.0
 
 	var desc = Label.new()
 	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	desc.clip_text = true   # 窄卡时允许裁字，避免自动换行把最小高度顶出卡片
 	desc.text = String(info["desc"])
 	UITheme.apply_label(desc, 14, UITheme.PARCHMENT.darkened(0.15))
 	# 先入树再定尺寸：自动换行标签在入树前算出的宽度会按整行文本撑开
