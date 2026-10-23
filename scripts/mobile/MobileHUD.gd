@@ -108,6 +108,14 @@ func _create_components() -> void:
 	drawer.produce_requested.connect(_on_produce_requested)
 
 func _relayout_shared_nodes() -> void:
+	# 摇杆在移动端不再需要：左下角让给单位信息面板，同时停掉它的输入处理避免和手势路由抢触摸
+	var stick := _find_ui_node("VirtualStick")
+	if stick is Control:
+		stick.visible = false
+		stick.set_process(false)
+		stick.set_process_input(false)
+		stick.set_process_unhandled_input(false)
+
 	# 小地图与单位信息面板复用桌面节点，只重排位置与尺寸
 	var minimap := _find_ui_node("Minimap")
 	if minimap is Control:
