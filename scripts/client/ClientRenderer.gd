@@ -552,9 +552,11 @@ func _rebuild_building_info(d: Dictionary):
 
 func _update_single_entity(info):
 	# Convert compact Array format to Dictionary
+	var ap_unchanged := false
 	if info is Array:
 		var arr = info
 		if arr.size() < E.size(): return
+		ap_unchanged = arr.size() > E.ASTAR_PATH and arr[E.ASTAR_PATH] == null
 		info = {
 			"id": arr[E.ID], "entity_id": arr[E.EID], "type": arr[E.TYPE],
 			"team": arr[E.TEAM], "x": arr[E.X], "y": arr[E.Y], "z": arr[E.Z],
@@ -567,6 +569,7 @@ func _update_single_entity(info):
 			"hold_position": arr[E.HOLD], "name": arr[E.NAME],
 			"rotation_y": arr[E.ROT_Y] if arr.size() > E.ROT_Y else 0.0,
 			"waypoints": arr[E.WAYPOINTS] if arr.size() > E.WAYPOINTS and arr[E.WAYPOINTS] is Array else [],
+			# 服务端路径增量：null = 未变化，沿用旧路径（否则每帧重发整条 A* 路径太占带宽）
 			"astar_path": arr[E.ASTAR_PATH] if arr.size() > E.ASTAR_PATH and arr[E.ASTAR_PATH] is Array else [],
 			"is_garrisoned": arr[E.GARRISONED] if arr.size() > E.GARRISONED else false,
 		}
@@ -596,6 +599,10 @@ func _update_single_entity(info):
 		# New building placed → play placement sound
 		if info.get("type") == 1 and _is_audible(node.global_position):
 			AudioManager.play_sfx_3d("build_place", node.global_position, _get_cam_pos())
+	# 路径未变化（服务端发 null）：沿用上一次收到的路径，避免每帧重建标记
+	if ap_unchanged and node.has_meta("snapshot_info"):
+		var prev_ap = node.get_meta("snapshot_info").get("astar_path", [])
+		info["astar_path"] = prev_ap
 	# Smooth position interpolation to reduce jitter/flashing
 	var target = Vector3(info["x"], info["y"], info["z"])
 	if node.has_meta("_prev_pos"):
@@ -1115,7 +1122,13 @@ func _update_waypoint_markers(node: Node3D, info: Dictionary):
 	# Render A* path spheres (green)
 	for i in range(apath.size()):
 		var awp = apath[i]
-		var aworld_pos: Vector3 = awp if awp is Vector3 else Vector3(awp["x"], awp.get("y", 0), awp["z"])
+		var aworld_pos: Vector3
+		if awp is Vector3:
+			aworld_pos = awp
+		elif awp is Array and awp.size() >= 3:
+			aworld_pos = Vector3(awp[0], awp[1], awp[2])
+		else:
+			aworld_pos = Vector3(awp["x"], awp.get("y", 0), awp["z"])
 		var acol = Color(0, 1, 0, 0.9) if i == apath.size() - 1 else Color(0, 1, 1, 0.8)
 		var asphere = MeshInstance3D.new()
 		var asph = SphereMesh.new(); asph.radius = 0.13; asph.height = 0.26
