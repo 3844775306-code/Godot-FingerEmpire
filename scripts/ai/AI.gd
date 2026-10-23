@@ -23,7 +23,7 @@ var production_step: int = 0
 var wanted_buildings: Array = [20, 21, 23, 42, 54, 24, 29, 52, 53]
 var wanted_units: Array = [11,12,15,16,17,18,35,36,37,38,39,40,13,43,44,45,46,47,48,49,50,58,59,5,6,9]
 var target_army_count: int = 7
-var target_house_count: int = 16
+var target_house_count: int = 10
 var desired_worker_count: int = 8
 
 var cached_shipyard_pos: Vector3 = Vector3.ZERO
@@ -125,16 +125,6 @@ func _can_train_unit() -> bool:
 		if battle.has_method("can_train_for"):
 			return battle.can_train_for(my_peer_id)
 	return battle.can_train_unit(RTSConfig.Team.RED)
-
-# 资源接近上限时说明常规目标已经满足；允许军队临时超编，把资源转成兵力
-func _resources_high() -> bool:
-	var res: Dictionary = _get_resources()
-	var limits: Dictionary = _get_limits()
-	for k in ["gold", "wood", "stone", "food"]:
-		var lim: float = maxf(float(limits.get(k, 500)), 1.0)
-		if float(res.get(k, 0)) >= lim * 0.92:
-			return true
-	return false
 
 func _deduct_resources(cost: Dictionary) -> bool:
 	if my_peer_id != -1:
@@ -605,6 +595,9 @@ func _state_development(_delta):
 
 # -- ASSAULT: execute tactical attacks --
 func _state_assault(_delta):
+	# 进攻阶段也要先把资源投到建筑升级上，不能只无限补兵
+	if not _priority_upgrade():
+		_process_line_upgrade()
 	_process_line_military()
 	_process_line_1()
 	_process_line_3()
@@ -1798,13 +1791,9 @@ func _process_line_military():
 		if not _can_train_unit():
 			return
 	var priority = get_counter_priority()
-	# 资源满了但固定兵种目标已达成时，继续补兵直到人口/资源重新平衡
-	var target: int = target_army_count
-	if _resources_high():
-		target = 999
 	
 	for u_id in priority:
-		if count_unit(u_id) < target and can_afford(u_id) and _can_train_unit():
+		if count_unit(u_id) < target_army_count and can_afford(u_id) and _can_train_unit():
 			
 			produce_unit(u_id); 
 
