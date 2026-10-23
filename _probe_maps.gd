@@ -217,7 +217,7 @@ func _report(g, s: int) -> void:
 					break
 	print("  RES %s" % str(type_counts))
 	print("  WOOD total=%d in_forest=%d edge=%d" % [wood_total, wood_in_forest, wood_edge])
-	# 单株分布检查（黑森林）：木材之间应至少隔 3 格，不允许一簇一簇
+	# 单株分布检查（黑森林）：木材贴林线排列，允许相邻紧贴，但不应成簇（同格重叠）
 	if GameSettings.map_id == "forest":
 		var wpos: Array = []
 		for r in g.resource_positions:
@@ -227,8 +227,26 @@ func _report(g, s: int) -> void:
 		for i in range(wpos.size()):
 			for j in range(i + 1, wpos.size()):
 				min_gap = minf(min_gap, wpos[i].distance_to(wpos[j]))
-		if not wpos.is_empty():
-			print("  WOOD_GAP min=%.1f n=%d" % [min_gap, wpos.size()])
+		var edge_total := 0
+		for x in range(3, size - 4):
+			for y in range(3, size - 4):
+				if g.terrain_grid[x][y] == 0 and g.get_overlay(x, y) == 0 and g._forest_edge(x, y, size):
+					edge_total += 1
+		print("  WOOD_GAP min=%.1f n=%d EDGE tiles=%d cover=%.0f%%" % [
+			min_gap, wpos.size(), edge_total,
+			float(wpos.size()) / maxf(1.0, float(edge_total)) * 100.0])
+		# 候选池规模（与放置器同口径：成片森林边界）
+		var cand_total := 0
+		for x in range(3, size - 4):
+			for y in range(3, size - 4):
+				if g.terrain_grid[x][y] != 0 or g.get_overlay(x, y) != 0:
+					continue
+				if not g._forest_edge(x, y, size):
+					continue
+				if g._forest_count_near(x, y, 3) < 8:
+					continue
+				cand_total += 1
+		print("  WOOD_CAND pool=%d" % cand_total)
 	if not g._pass_centers.is_empty():
 		print("  GOLD total=%d at_passes=%d" % [gold_total, gold_at_passes])
 	# 浅滩沙色抽样：应当是多种深浅不同的沙色，而不是单一纯色

@@ -909,9 +909,9 @@ func _place_resources():
 		_mark_wood_as_forest(size)
 		_colorize_grid(size)
 
-# 黑森林木材：沿森林边缘一株一株散开（不聚成资源簇），保证林线看得出来
+# 黑森林木材：沿森林边缘一株一株密集排开（只认成片森林的边界，不围着零星小树洞种）
 func _place_forest_wood(size: int, castles: Array, placed: Dictionary, mult: float) -> void:
-	# 候选 = 紧贴森林（8 邻域有森林）的平原格
+	# 候选 = 紧贴森林（8 邻域有森林）且周围成片的平原格
 	var cands: Array = []
 	for x in range(3, size - 4):
 		for y in range(3, size - 4):
@@ -921,36 +921,54 @@ func _place_forest_wood(size: int, castles: Array, placed: Dictionary, mult: flo
 				continue
 			if not _forest_edge(x, y, size):
 				continue
+			# 3 格内至少 10 格森林：小树洞/单棵孤树旁边不放木材，视线会散
+			if _forest_count_near(x, y, 3) < 10:
+				continue
 			if placed.has("r1,%d,%d" % [x, y]):
 				continue
 			cands.append(Vector2i(x, y))
 	cands.shuffle()
-	var target := maxi(12, int(round(70.0 * mult)))
+	# 密度：林线要连成一片树墙，1V1 约 800 株，团队按规模放大（上限 900 防止实体爆炸）
+	var target := mini(900, int(round(800.0 * mult)))
 	var nodes: Array = []
-	# 每座基地附近先各取 8 株，保证开局能采到木
+	# 每座基地附近先各取 30 株，保证开局能采到木
 	for cs in castles:
 		var center := Vector2i(int(cs[0]), int(cs[1]))
-		var want := 8
+		var want := 30
 		for c in cands:
 			if want <= 0:
 				break
 			if Vector2(c.x - center.x, c.y - center.y).length() > 30.0:
 				continue
-			if _too_close_to_wood(c, nodes, 3.0):
+			if _too_close_to_wood(c, nodes, 1.0):
 				continue
 			nodes.append(c)
 			want -= 1
 	for c in cands:
 		if nodes.size() >= target:
 			break
-		if _too_close_to_wood(c, nodes, 3.0):
+		if _too_close_to_wood(c, nodes, 1.0):
 			continue
 		nodes.append(c)
 	for c in nodes:
 		placed["r1,%d,%d" % [c.x, c.y]] = true
 		resource_positions.append({"pos": grid_to_world(c.x, c.y), "type": 1})
 
-# 单株木材之间至少隔 3 格，读起来才是一棵一棵沿林线排开
+# 统计 (x,y) 周围 radius 内的森林覆盖层格数
+func _forest_count_near(x: int, y: int, radius: int) -> int:
+	var size := _get_map_size()
+	var count := 0
+	for dx in range(-radius, radius + 1):
+		for dy in range(-radius, radius + 1):
+			var nx := x + dx
+			var ny := y + dy
+			if nx < 0 or ny < 0 or nx >= size or ny >= size:
+				continue
+			if overlay_grid[nx][ny] == 1:
+				count += 1
+	return count
+
+# 木材之间保持最小间距（1.0 = 允许紧贴成行，只要不落在同一格）
 func _too_close_to_wood(tile: Vector2i, nodes: Array, min_dist: float) -> bool:
 	for n in nodes:
 		if Vector2(tile.x - n.x, tile.y - n.y).length() < min_dist:
