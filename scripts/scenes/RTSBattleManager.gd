@@ -420,6 +420,31 @@ func _create_game_timer():
 	else:
 		add_child(game_time_label)
 
+# ==================== AI 决策面板布局 ====================
+# 所有 AI 面板按 peer_id 顺序纵向堆叠；折叠/展开、创建、AI 被消灭时统一重排，
+# 避免折叠后下方留出空白或展开后互相遮挡。高度不足时自动换到下一列。
+func layout_ai_debug_panels() -> void:
+	var ais: Array = []
+	for c in get_children():
+		if c is AIController and is_instance_valid(c.debug_panel):
+			ais.append(c)
+	if ais.is_empty(): return
+	ais.sort_custom(func(a, b): return a.my_peer_id < b.my_peer_id)
+
+	var vp_h: float = 1400.0
+	var vp = get_viewport()
+	if vp:
+		vp_h = vp.get_visible_rect().size.y
+	var x: float = 400.0
+	var y: float = 10.0
+	for ai in ais:
+		var h: float = ai.get_panel_height()
+		if y > 10.0 and y + h > vp_h - 10.0:
+			x += 552.0   # 面板宽 540 + 12 间距
+			y = 10.0
+		ai.debug_panel.position = Vector2(x, y)
+		y += h + 8.0
+
 # ==================== 城堡被摧毁 → 游戏结束 ====================
 # 某个 AI 玩家被消灭：发送通知、清除其全部残余单位，并移除其 AI 控制器
 # （决策面板挂在 UI 下，由 AIController._exit_tree 一并释放）
@@ -443,7 +468,13 @@ func _eliminate_ai_player(owner: int) -> void:
 		if c is AIController and c.my_peer_id == owner:
 			c.set_process(false)
 			c.set_physics_process(false)
+			# 先摘掉面板引用，避免延迟布局时仍把它算进列表
+			if is_instance_valid(c.debug_panel):
+				c.debug_panel.queue_free()
+				c.debug_panel = null
 			c.queue_free()
+	# 该 AI 的面板移除后，其余面板立即上移
+	call_deferred("layout_ai_debug_panels")
 	# 清理该国经济表，避免每帧继续刷新
 	ai_players.erase(owner)
 	ai_resources.erase(owner)

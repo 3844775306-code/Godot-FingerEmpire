@@ -1854,6 +1854,10 @@ const PANEL_WIDTH: float = 540.0
 const PANEL_HEIGHT: float = 380.0
 const PANEL_COLLAPSED_HEIGHT: float = 44.0
 
+# 当前面板实际高度（折叠后只保留标题条），供统一布局函数计算下方面板位置
+func get_panel_height() -> float:
+	return PANEL_COLLAPSED_HEIGHT if _panel_collapsed else PANEL_HEIGHT
+
 # 面板视角的敌我关系：1=友方（同队/盟友），-1=敌方，0=自己/中立
 func _relation_to_player() -> int:
 	if not battle: return 0
@@ -1965,6 +1969,9 @@ func _create_debug_panel():
 	body.add_child(_make_section("⚔️ 军队")); _mil_rtl = _make_rtl(); body.add_child(_mil_rtl)
 	body.add_child(_make_section("🏰 建筑")); _bld_rtl = _make_rtl(); body.add_child(_bld_rtl)
 	var hud = battle.get_node("UI") as CanvasLayer; hud.add_child(debug_panel)
+	# 创建后交给管理器统一排布，避免多个面板叠放
+	if battle.has_method("layout_ai_debug_panels"):
+		battle.call_deferred("layout_ai_debug_panels")
 	if not OS.is_debug_build():
 		debug_panel.visible = false
 
@@ -1979,6 +1986,9 @@ func _on_collapse_pressed():
 	var h = PANEL_COLLAPSED_HEIGHT if _panel_collapsed else PANEL_HEIGHT
 	debug_panel.custom_minimum_size = Vector2(PANEL_WIDTH, h)
 	debug_panel.size = Vector2(PANEL_WIDTH, h)
+	# 折叠/展开后重排所有 AI 面板，下方/上方面板立即跟随
+	if battle and is_instance_valid(battle) and battle.has_method("layout_ai_debug_panels"):
+		battle.layout_ai_debug_panels()
 
 func _make_rtl() -> RichTextLabel:
 	var r = RichTextLabel.new(); r.bbcode_enabled = true; r.fit_content = true; r.clip_contents = true
