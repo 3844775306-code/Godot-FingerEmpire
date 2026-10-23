@@ -940,7 +940,17 @@ func allocate_workers():
 			if _worker_is_fleeing(w): continue
 			var target = find_best_resource_for_worker(w, {"food": 100})
 			if target: w.gather_at(target)
-		
+
+	# 已经达到目标农民数后，新增/逃跑回来的农民不会走上面的补农分支；
+	# 这里每次分配都兜底处理完全空闲的农民，避免他们长期聚在主城不动。
+	for w in workers:
+		if _worker_is_fleeing(w):
+			continue
+		if w.has_meta("ai_flee_until"):
+			w.remove_meta("ai_flee_until")
+		if w.current_target == null and w.current_order == "":
+			var idle_target = find_best_resource_for_worker(w, _get_phase_weights())
+			if idle_target: w.gather_at(idle_target)
 
 	allocate_timers += 1
 	if allocate_timers > 10:
@@ -1023,7 +1033,7 @@ func clear_invalid_targets():
 				entity.current_order = ""
 
 func find_best_resource_for_worker(worker: Army, priority_score: Dictionary) -> WorldResource:
-	var best = null; var best_score = -1
+	var best = null; var best_score: float = -INF
 	for entity in battle.entities.get_children():
 		if entity is WorldResource and entity.health > 0:
 			var type = entity.resource_type
