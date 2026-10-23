@@ -232,7 +232,7 @@ func _manage_defense(castle, delta: float) -> void:
 		# 箭塔/炮塔需要主城 2 级；威胁已经到家门口时优先补这一级，否则防线永远无法开工
 		if threat_level >= 1 and castle.can_upgrade():
 			var up_cost: Dictionary = castle.get_upgrade_cost()
-			if not up_cost.is_empty() and _can_spend(up_cost, 0.15):
+			if not up_cost.is_empty() and _can_spend(up_cost, _defense_reserve()):
 				ai.upgrade_building(20)
 		return
 	_defense_check_timer -= delta
@@ -957,8 +957,10 @@ func _can_spend(cost: Dictionary, reserve_ratio: float) -> bool:
 	return true
 
 func _defense_reserve() -> float:
+	# 防守建设/升级必须先留出一部分资源给补兵，否则 AIDefense 在 AI 生产之前把资源花光，
+	# 就会出现“进入防守后不再生产军队”的情况。
 	if threat_level >= 2:
-		return 0.08
+		return 0.22
 	if threat_level == 1:
 		return 0.2
 	return 0.35

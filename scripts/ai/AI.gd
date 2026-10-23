@@ -545,6 +545,11 @@ func _state_production(_delta):
 		if count_unit(10) >= desired_worker_count or battle.game_time >= 120.0:
 			phase = Phase.DEVELOPMENT
 		_process_line_military()
+	# 开局就被压到家时不能只造农民/升级主城，否则会一直处于“防守但不补兵”的状态
+	if _is_defending():
+		_process_line_military()
+		_process_line_1()
+		_process_line_3()
 
 # -- DEVELOPMENT: expand base, counter enemy, upgrade --
 func _state_development(_delta):
@@ -559,11 +564,17 @@ func _state_development(_delta):
 				_castle_rush_done[_ci] = true
 			
 	# Upgrade cycle toggle
+	var defending: bool = _is_defending()
+	if defending:
+		# 防守时先补军队，再补建筑和升级；否则升级会先把资源吃光，导致一直不补兵
+		_process_line_military()
+		_process_line_1()
 	
 	if not _priority_upgrade():
 		_process_line_upgrade()
 	
-	_process_line_military()
+	if not defending:
+		_process_line_military()
 	_process_line_1()
 	_process_line_3()
 	_ensure_merchants()
@@ -1414,6 +1425,11 @@ func _is_near_enemy_tower(pos: Vector3, range: float, enemy_team: int) -> bool:
 	return false
 
 # ═══ Defense ═══
+func _is_defending() -> bool:
+	if current_tactic == LateTactic.DEFEND:
+		return true
+	return _defense != null and int(_defense.threat_level) >= 2
+
 func start_defense():
 	current_tactic = LateTactic.DEFEND
 	# 防御建筑、威胁方向、守军数量统一交给 AIDefense 处理。
