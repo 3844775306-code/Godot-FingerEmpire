@@ -357,19 +357,44 @@ func get_castle_level() -> int:
 			return entity.upgrade_level
 	return 1
 
+# 找到本建筑所属玩家/阵营的主城。不能无条件用 get_player_castle()：
+# 那里只返回 BLUE 玩家主城，会让 AI 的兵营等建筑永远被人类玩家主城等级卡在 1 级。
+func _get_upgrade_castle() -> Building:
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if bm == null:
+		return null
+	var best: Building = null
+	var nodes = bm.get("entities")
+	if nodes != null:
+		for e in nodes.get_children():
+			if not (e is Building) or e.health <= 0 or int(e.entity_id) not in [20, 53]:
+				continue
+			if int(e.team) != team:
+				continue
+			# owner 未分配的建筑按同队匹配；有 owner 时必须同 owner，避免 2v2 同队串用主城等级
+			if owner_peer_id != -1 and int(e.owner_peer_id) not in [-1, owner_peer_id]:
+				continue
+			if best == null or int(e.upgrade_level) > int(best.upgrade_level):
+				best = e
+	if best != null:
+		return best
+	if bm.has_method("get_castle_by_team"):
+		return bm.get_castle_by_team(team)
+	if team == RTSConfig.Team.BLUE and bm.has_method("get_player_castle"):
+		return bm.get_player_castle()
+	if team == RTSConfig.Team.RED and bm.has_method("get_enemy_castle"):
+		return bm.get_enemy_castle()
+	return null
+
 func can_upgrade() -> bool:
 	if build_timer > 0: return false
 	if upgrade_timer > 0: return false
 	if upgrade_level >= max_upgrade_level: return false
-	# Cannot upgrade beyond castle level (except castle itself)
+	# Cannot upgrade beyond own castle level (except castle itself)
 	if entity_id not in [20, 53]:
-		var bm = get_tree().get_first_node_in_group("battle_manager")
-		if bm:
-			var castle = null
-			if bm.has_method("get_player_castle"): castle = bm.get_player_castle()
-			elif bm.has_method("get_castle_by_team"): castle = bm.get_castle_by_team(team)
-			if castle and upgrade_level >= castle.upgrade_level:
-				return false
+		var castle = _get_upgrade_castle()
+		if castle and upgrade_level >= castle.upgrade_level:
+			return false
 	return true
 
 func try_produce(unit_id: int) -> bool:
