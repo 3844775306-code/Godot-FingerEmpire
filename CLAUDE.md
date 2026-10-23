@@ -57,11 +57,11 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 
 ## Project Overview
 
-**FingerEmpire** — a server-authoritative medieval RTS built in Godot 4.5 (Forward Plus). Features 5 nations (Viking, England, France, China, Hungary), resource economy, fog of war, A* pathfinding, and online multiplayer via ENet. Supports 1v1 and 2v2 modes with AI bots, plus a local singleplayer mode.
+**FingerEmpire** — a server-authoritative medieval RTS built in Godot 4.7 (Forward Plus). Features 7 nations (Viking, England, France, China, Hungary, Japan, Byzantine), resource economy, fog of war, A* pathfinding, and online multiplayer via ENet / WebSocket / Steam P2P. Supports singleplayer 1v1, 2v2, 3v3 and 3–5 nation FFA, plus online 1v1/2v2/3v3 with AI filling empty slots.
 
 ## Opening the project
 
-Open `project.godot` in the Godot 4.5 editor. The main scene is configured there. There are no command-line build/test steps — everything runs through the Godot editor.
+Open `project.godot` in the Godot 4.7 editor. The main scene is configured there. There are no command-line build/test steps — everything runs through the Godot editor.
 
 ## Architecture
 
@@ -72,12 +72,13 @@ These are globally accessible nodes loaded before any scene:
 |-----------|--------|---------|
 | `RTSConfig` | `scripts/core/RTSConfig.gd` | Global constants (MAP_SIZE, Team enum, Nation enum, COLOR_POOL, ENTITY_MODELS map) |
 | `GameManager` | `scripts/core/GameManager.gd` | Scene-level state machine (MENU → PLAYING → GAME_OVER); switches between `main_menu.tscn` and `rts_battle.tscn` |
-| `EntityDatabase` | `scripts/core/EntityDatabase.gd` | Central registry of all entity configs (IDs 0–63: resources, buildings, armies, animals). `get_config(id)` returns a duplicated Dictionary. |
-| `NetworkManager` | `scripts/core/NetworkManager.gd` | ENet multiplayer peer management. Modes: NONE/SERVER/CLIENT. RPCs for commands, snapshots, map data, nation selection. Port 9000. |
+| `EntityDatabase` | `scripts/core/EntityDatabase.gd` | Central registry of all entity configs (IDs 0–66: resources, buildings, armies, animals). `get_config(id)` returns a duplicated Dictionary. |
+| `NetworkManager` | `scripts/core/NetworkManager.gd` | Multiplayer peer management over ENet (port 9000), WebSocket (port 8080) and Steam P2P. Modes: NONE/SERVER/CLIENT. RPCs for commands, snapshots, map data, nation selection. |
 | `ThemeHelper` | `scripts/ui/ThemeHelper.gd` | UI theming utility |
 | `GameSettings` | `scripts/core/GameSettings.gd` | Player settings (nation choice, AI difficulty, post-game data) |
 | `AudioManager` | `scripts/core/AudioManager.gd` | Music and SFX playback (play_music, play_sfx, play_sfx_3d) |
 | `Profiler` | `scripts/core/Profiler.gd` | Performance profiling |
+| `SteamManager` | `scripts/core/SteamManager.gd` | Steam init, lobby and P2P session; auto-detects `steam-multiplayer-peer` GDExtension vs GodotSteam built-in |
 
 ### Entity System (`scripts/entities/`)
 
@@ -103,7 +104,7 @@ Entities are spawned via `RTSBattleManager.spawn_entity(config, team, pos, level
 - Delta-compressed incremental snapshots (every 100ms, full snapshot every ~3s)
 - Compact array-based entity serialization (enum indices for wire format)
 - Per-player visibility grids for snapshot culling
-- Command processing (1v1 and 2v2 variants)
+- Command processing (1v1 and team 2v2/3v3 variants)
 - AI player creation and management
 - Resource limits and population per peer_id
 
@@ -124,7 +125,7 @@ Entities are spawned via `RTSBattleManager.spawn_entity(config, team, pos, level
 
 ### AI (`scripts/ai/AI.gd`)
 
-`AIController` — attached per AI player (peer_id). Handles autonomous economy, unit training, scouting, and combat.
+`AIController` — attached per AI player (peer_id). Runs a three-phase loop (`PRODUCTION` → `DEVELOPMENT` → `ASSAULT`) with late-game tactics (harass / overwhelm / raid / defend), four difficulty levels (EASY / NORMAL / HARD / HELL), and FFA diplomacy (ally / tribute / break / betray).
 
 ### Map (`scripts/map/`)
 
@@ -149,16 +150,19 @@ Server→client snapshots are delta-compressed arrays sent at ~10Hz. Compact for
 
 - **Entity cache with dirty flag**: `RTSBattleManager._ensure_cache_fresh()` — called before any query that needs entity lists. Rebuilds `_all_entities`, `_armies`, `_buildings`, `_resources`, `_towers`, `_entities_by_team`, `_entity_lookup` from the `$Entities` child list.
 - **Config duplication**: `EntityDatabase.get_config()` always returns a `.duplicate()` — never modify the original.
-- **Networked state ownership**: 1v1 uses team-based ownership; 2v2 uses `owner_peer_id` for per-player isolation.
+- **Networked state ownership**: 1v1 uses team-based ownership; 2v2/3v3 and FFA use `owner_peer_id` for per-player isolation.
 - **Client model mirroring**: ClientRenderer replicates server entity state from snapshots, including 3D models, animations, and team tinting — it does NOT run game logic.
 
 ## Addons (in `addons/`)
 
+- **godot_mcp** — editor-side MCP server exposing project/scene/node/script tools to AI clients (enabled in `project.godot`)
+- **steam-multiplayer-peer** — GDExtension implementation of Steam Sockets; required for Steam P2P matchmaking
 - **godotsteam** — Steamworks SDK integration (not initialized on startup per project config)
 - **script-ide** — enhanced script editor with outline, quick-open, split editing
 - **github_copilot** — in-editor GitHub Copilot AI assistance
 - **git_describe** — git describe info in editor title bar
 - **godot-git-plugin** — version control integration (enabled in project settings)
+- **breakpoint_mcp** — local breakpoint-debug bridge (optional developer tool)
 
 ## Godot 4 GDScript 设计模式参考
 

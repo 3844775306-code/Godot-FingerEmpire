@@ -200,7 +200,7 @@ func _ready():
 
 	# 底部版本号
 	var version = Label.new()
-	version.text = "v1.0 - Godot 4.5"
+	version.text = "v1.0 - Godot 4.7"
 	version.position = Vector2(0, 1340)
 	version.size = Vector2(2400, 30)
 	version.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
