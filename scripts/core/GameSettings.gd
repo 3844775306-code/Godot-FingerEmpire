@@ -52,6 +52,9 @@ func _ready() -> void:
 						ai_mode = 1
 					_:
 						ai_mode = 1
+			elif a == "--mobile-ui":
+				# 桌面端强制预览移动版 UI：godot ... -- --mobile-ui
+				InputSource.force_mobile_ui = true
 	# 移动端默认单次命令（下令后取消选择），PC端默认连续命令
 	if OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios"):
 		command_mode = CommandMode.SINGLE

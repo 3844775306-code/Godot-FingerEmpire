@@ -12,6 +12,7 @@ var is_online: bool = false
 var team_building_levels: Dictionary = {}  # team -> {building_id: level}
 var build_touch_active: bool = false   # 是否正在拖拽建造
 var build_drag_started: bool = false   # 是否已开始拖拽（手指按下后）
+var mobile_keep_build_mode: bool = false  # 移动端连造：放置完成后不退出建造模式
 # ==================== 人口 ====================
 var player_pop: int = 0
 var player_max_pop: int = 50
@@ -2195,11 +2196,12 @@ func _place_building():
 		AudioManager.play_sfx("build_place")
 		notify_path_recalc(pos)
 
-	if not Input.is_key_pressed(KEY_SHIFT):
-			_exit_build_mode()
+	if not (Input.is_key_pressed(KEY_SHIFT) or mobile_keep_build_mode):
+		_exit_build_mode()
 
 func _exit_build_mode():
 	build_mode = false
+	mobile_keep_build_mode = false
 	build_touch_active = false
 	build_drag_started = false
 	selected_building_id = -1

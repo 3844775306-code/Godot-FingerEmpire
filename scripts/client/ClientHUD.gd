@@ -1,6 +1,8 @@
 class_name hud
 extends Control
 
+var _mobile_hud = null    # 移动端界面装配器（仅触屏设备创建）
+
 var gold_label: Label
 var wood_label: Label
 var stone_label: Label
@@ -628,6 +630,12 @@ func _ready():
 	add_to_group("client_hud")
 	call_deferred("_connect_client_input")
 
+	# 移动端：装配触屏界面（桌面端不进入此分支）
+	if InputSource.use_mobile_ui():
+		_mobile_hud = MobileHUD.new()
+		add_child(_mobile_hud)
+		_mobile_hud.setup(self)
+
 func _connect_client_input():
 	var ci = _get_client_input_node()
 	if ci and ci.has_signal("auto_attack_changed"):
@@ -667,6 +675,8 @@ func update_data(resources: Dictionary, population: Dictionary, limits: Dictiona
 			var rv = resources.get(rk, 0)
 			var rl = limits.get(rk, 500) if not limits.is_empty() else 500
 			res_bars[rk].value = min(float(rv)/max(rl,1)*100, 100)
+	if _mobile_hud and is_instance_valid(_mobile_hud):
+		_mobile_hud.update_data(resources, population, limits, gather_counts, income_rate)
 
 
 var _fps_label: Label = null

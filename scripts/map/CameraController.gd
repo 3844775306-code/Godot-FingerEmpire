@@ -89,6 +89,14 @@ func _input(event):
 		# 通常放大应减小视野大小（size），缩小应增大视野
 		_apply_zoom_to(size / event.factor)
 
+# 触屏单指拖动平移：把屏幕位移按当前视野比例换算成世界位移（跟手）
+func pan_by_screen_delta(screen_delta: Vector2) -> void:
+	if _follow_target:
+		return
+	var view_h := get_viewport().get_visible_rect().size.y
+	var world_per_px := size / maxf(view_h, 1.0)
+	global_translate(Vector3(-screen_delta.x * world_per_px, 0.0, -screen_delta.y * world_per_px))
+
 func _process(delta):
 	# 跟随视角模式：相机位置/朝向由跟随目标决定，禁用键盘移动
 	if _follow_target:

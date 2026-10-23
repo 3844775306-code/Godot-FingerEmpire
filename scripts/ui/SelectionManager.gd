@@ -239,41 +239,12 @@ func _input(event):
 
 	elif event is InputEventMouseMotion and is_box_selecting:
 		# 更新框选矩形
+		# 触摸框选/点选不在这里处理：移动端统一由 TouchGestureRouter 合成鼠标事件后走同一套逻辑
 		box_end = event.position
 		var r = Rect2(box_start, box_end - box_start).abs()
 		box_rect.position = r.position
 		box_rect.size = r.size
 		box_rect.visible = true
-
-		# ========== 移动端触摸：单指框选 / 点击选择 ==========
-		if event is InputEventScreenTouch:
-			if event.pressed:
-				_touch_start_pos = event.position
-				var clicked_entity = _get_entity_under_mouse(event.position)
-				if clicked_entity and _is_local_owned(clicked_entity):
-					if clicked_entity in selected_entities:
-						_clear_selection()
-					else:
-						_clear_selection()
-						_add_to_selection(clicked_entity)
-				else:
-					if not selected_entities:
-						_clear_selection()
-						is_box_selecting = true
-						box_start = event.position
-						box_end = event.position
-					else:
-						bm._command_selected_units(event.position)
-			else:
-				if is_box_selecting:
-					_on_left_mouse_released(event)
-
-		elif event is InputEventScreenDrag and is_box_selecting:
-			box_end = event.position
-			var r1 = Rect2(box_start, box_end - box_start).abs()
-			box_rect.position = r1.position
-			box_rect.size = r1.size
-			box_rect.visible = true
 
 
 

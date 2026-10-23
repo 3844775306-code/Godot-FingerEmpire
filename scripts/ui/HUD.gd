@@ -4,6 +4,7 @@ extends CanvasLayer
 # 缓存的节点引用 — 避免每帧 get_tree().get_first_node_in_group()
 var _bm: Node = null
 var _sm: Node = null
+var _mobile_hud = null    # 移动端界面装配器（仅触屏设备创建）
 
 var health_bar_timer = 0.0
 var gold_label: Label
@@ -23,6 +24,8 @@ var gather_timer: float = 0.0
 var income_timer: float = 0.0
 var res_income: Dictionary = {}
 var income_rate: Dictionary = {}
+# 各资源采集人数（每帧刷新，移动端资源胶囊展开时读取）
+var gather_counts: Dictionary = {"gold": 0, "wood": 0, "stone": 0, "food": 0, "oil": 0}
 var minimap_timer: float = 0.0
 
 var player_nation_label: Label
@@ -363,7 +366,7 @@ func _update_unit_stats():
 		_stats_pop_bar.value = min(float(pop) / max(max_pop, 1) * 100, 100)
 
 	# 各资源采集人数 + 增长速率
-	var gather_counts = {"gold": 0, "wood": 0, "stone": 0, "food": 0, "oil": 0}
+	gather_counts = {"gold": 0, "wood": 0, "stone": 0, "food": 0, "oil": 0}
 	for entity in bm.entities.get_children():
 		if entity is Army and entity.health > 0 and bm.is_local_player_owned(entity.owner_peer_id, entity.team):
 			if entity.entity_id in [10, 14] and entity.current_order in ["gather", "deliver"]:
@@ -669,6 +672,12 @@ func _ready():
 	add_child(b_retreat_all)
 
 	set_process(true)
+
+	# 移动端：装配触屏界面（桌面端不进入此分支，零改动）
+	if InputSource.use_mobile_ui():
+		_mobile_hud = MobileHUD.new()
+		add_child(_mobile_hud)
+		_mobile_hud.setup(self)
 const ALERT_DANGER = UITheme.ALERT_DANGER     # 红色 — 基地/建筑被攻击
 const ALERT_WARNING = UITheme.ALERT_WARNING   # 黄色 — 敌军来袭/资源不足
 const ALERT_INFO = UITheme.ALERT_INFO      # 绿色 — 建造/训练/升级完成
@@ -717,6 +726,8 @@ func update_data(resources: Dictionary, population: Dictionary, limits: Dictiona
 		_stats_pop_label.text = "👥 人口: %d/%d" % [population.get("current", 0), population.get("max", 0)]
 	if _stats_pop_bar:
 		_stats_pop_bar.value = clampf(float(population.get("current", 1)) / maxf(float(population.get("max", 1)), 1.0) * 100.0, 0.0, 100.0)
+	if _mobile_hud and is_instance_valid(_mobile_hud):
+		_mobile_hud.update_data(resources, population, limits, gather_counts, income_rate)
 func _process(delta):
 	_tick_ffa_diplo(delta)
 	_unit_stats_timer -= delta
