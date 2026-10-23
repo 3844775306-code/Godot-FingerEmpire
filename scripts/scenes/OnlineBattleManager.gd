@@ -1033,6 +1033,10 @@ const DEAD_ID_MAX: int = 64                  # 单次快照最多携带的死亡
 var _snap_tick: int = 0                      # 单调递增的广播序号（_snap_sent 每秒会清零，不能当钟用）
 var _entity_last_sent: Dictionary = {}       # key -> {entity_id: 最后一次发送时的广播序号}
 var _recent_dead_ids: Dictionary = {}        # key -> {entity_id: 过期广播序号}
+# 建造/升级完工后的"粘性重发"：完工只产生一次状态变化，丢包会让进度条永久卡住
+var _build_phase: Dictionary = {}            # entity_id -> {build: bool, upgrade: bool}
+var _sticky_resend_until: Dictionary = {}    # entity_id -> 过期广播序号
+const STICKY_RESEND_TICKS: int = 25          # 完工后 ~2.5 秒内每次广播都重发
 
 # ==================== 快照视野网格（复用，仅分配一次） ====================
 var _snap_vis_grid: PackedByteArray = []  # flat byte grid (contiguous memory, faster)
@@ -1083,7 +1087,29 @@ func _compute_entity_hash(entity: GameEntity) -> int:
 		h = ((h << 5) ^ (h >> 27)) ^ (1 if entity._soldier_garrison_building and entity._soldier_garrison_building.get_ref() else 0)
 	return h & 0x7FFFFFFF
 
-func _should_include_in_delta(snapshot_key, entity_id: int, new_hash: int) -> bool:
+# 建造/升级是"一次性状态切换"：完工瞬间只产生一条增量，丢包/跳帧会让客户端
+# 一直停在"建造中"。检测状态切换，并在随后若干次广播内强制重发该实体。
+func _track_transition_state(entity: GameEntity) -> bool:
+	var id = entity.get_instance_id()
+	if not (entity is Building):
+		if _build_phase.has(id):
+			_build_phase.erase(id)
+		return false
+	var now_build: bool = entity.build_timer > 0.0
+	var now_upgrade: bool = entity.upgrade_timer > 0.0
+	var prev = _build_phase.get(id, null)
+	if prev != null:
+		if (prev["build"] and not now_build) or (prev["upgrade"] and not now_upgrade):
+			_sticky_resend_until[id] = _snap_tick + STICKY_RESEND_TICKS
+	_build_phase[id] = {"build": now_build, "upgrade": now_upgrade}
+	var until: int = int(_sticky_resend_until.get(id, -1))
+	if until > _snap_tick:
+		return true
+	if until != -1:
+		_sticky_resend_until.erase(id)
+	return false
+
+func _should_include_in_delta(snapshot_key, entity_id: int, new_hash: int, force_resend: bool = false) -> bool:
 	if not _entity_state_hashes.has(snapshot_key):
 		_entity_state_hashes[snapshot_key] = {}
 	var hashes = _entity_state_hashes[snapshot_key]
@@ -1094,6 +1120,11 @@ func _should_include_in_delta(snapshot_key, entity_id: int, new_hash: int) -> bo
 		hashes[entity_id] = new_hash
 		last_sent[entity_id] = _snap_tick
 		return true  # 新实体，必须发送
+	# 完工后的粘性重发：即使哈希不变也连续发送若干次，防止单条增量丢失导致客户端卡在"建造中"
+	if force_resend:
+		hashes[entity_id] = new_hash
+		last_sent[entity_id] = _snap_tick
+		return true
 	# 超时强制重发：delta 只发一次，丢包后客户端状态会永久卡死（例如建筑完工后
 	# 一直显示"建造中"）。用 entity_id 取模错开相位，避免同一帧集中重发一大批实体。
 	if _snap_tick % FORCE_RESEND_EVERY == entity_id % FORCE_RESEND_EVERY and _snap_tick != int(last_sent.get(entity_id, -1)):
@@ -1113,6 +1144,9 @@ func _collect_dead_ids(snapshot_key, dead: Array) -> Array:
 	if not _recent_dead_ids.has(snapshot_key):
 		_recent_dead_ids[snapshot_key] = {}
 	var recent = _recent_dead_ids[snapshot_key]
+	for id in dead:
+		_build_phase.erase(id)
+		_sticky_resend_until.erase(id)
 	var expire_at = _snap_tick + DEAD_ID_RESEND_SNAPSHOTS
 	for id in dead:
 		recent[id] = expire_at
@@ -1326,11 +1360,12 @@ func build_snapshot_for_team(team: int) -> Dictionary:
 			continue
 		var id = entity.get_instance_id()
 		current_entities[id] = true
+		var force_resend = _track_transition_state(entity)
 		if is_full:
 			delta.append(_serialize_entity_compact(entity))
 		else:
 			var h = _compute_entity_hash(entity)
-			if _should_include_in_delta(snapshot_key, id, h):
+			if _should_include_in_delta(snapshot_key, id, h, force_resend):
 				delta.append(_serialize_entity_compact(entity))
 
 	# --- Enemy/neutral team entities: visibility grid check ---
@@ -1629,9 +1664,10 @@ func build_snapshot_for_player(peer_id: int) -> Dictionary:
 		var id = entity.get_instance_id()
 		current_all_ids[id] = true
 		# Same-team entities (own + teammate) all get delta compression
+		var force_resend = _track_transition_state(entity)
 		if not is_full:
 			var h = _compute_entity_hash(entity)
-			if not _should_include_in_delta(snapshot_key, id, h):
+			if not _should_include_in_delta(snapshot_key, id, h, force_resend):
 				continue
 		delta.append(_serialize_entity_compact(entity))
 	var _t_own = (Time.get_ticks_usec() - _t0) / 1000.0
