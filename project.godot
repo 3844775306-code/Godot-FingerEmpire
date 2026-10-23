@@ -10,7 +10,7 @@ config_version=5
 
 [addons]
 
-git_describe/commit_hash="74b563c563093f864c1f60d96df8048832a03cbc"
+git_describe/commit_hash="95abbd1bb06bd5f0889a0400e2f73581767373de"
 
 [animation]
 
@@ -22,7 +22,7 @@ config/name="FingerEmpire"
 run/main_scene="uid://1vdpl5lndb83"
 config/features=PackedStringArray("4.7", "Forward Plus")
 config/icon="res://icon.svg"
-config/git_describe="74b563c"
+config/git_describe="95abbd1"
 
 [autoload]
 

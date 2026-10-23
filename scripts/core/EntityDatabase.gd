@@ -20,7 +20,7 @@ func _init_data():
 		{
 			"id": 1, "type": 0, "name": "树林", "team": 2,
 			"max_health": 2250, "regeneration_rate": 1.5, "gather_amount": 15,
-			"body_radius": 0.7, "resource_type": "wood"
+			"body_radius": 1.3, "resource_type": "wood"
 		},
 		{
 			"id": 2, "type": 0, "name": "石矿", "team": 2,
