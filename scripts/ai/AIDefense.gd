@@ -253,7 +253,7 @@ func _plan_defense_line(castle) -> bool:
 	wall_positions.clear()
 	tower_positions.clear()
 
-	# 内圈箭塔：主城两侧各两座，贴近主城但按建筑半径判定，不再受 10m 全范围排斥
+	# 内圈箭塔：固定角度优先；树/矿/水面占位时在附近找可用点
 	var arrow_specs: Array = [
 		{"angle": -0.58, "dist": 7.2},
 		{"angle": 0.58, "dist": 7.2},
@@ -263,23 +263,100 @@ func _plan_defense_line(castle) -> bool:
 	for spec in arrow_specs:
 		var a: float = float(spec["angle"])
 		var d: float = float(spec["dist"])
-		var p: Vector3 = castle.global_position + dir.rotated(Vector3.UP, a) * d
-		_add_defense_slot(25, p, 10.0 + absf(a) * 2.0, "tower")
+		var p: Vector3 = _find_defense_spot(castle, dir, a, d, 25, 9.8)
+		if p != Vector3.ZERO:
+			_add_defense_slot(25, p, 10.0 + absf(a) * 2.0, "tower")
+	# 固定角度只落到 1 座以内时，补搜主城前方可用塔位
+	if _count_planned(25) < 4:
+		for a in [-1.3, -0.9, -0.3, 0.3, 0.9, 1.3, -1.6, 1.6, 0.0]:
+			if _count_planned(25) >= 4:
+				break
+			var p2: Vector3 = _find_defense_spot(castle, dir, a, 8.4, 25, 9.8)
+			if p2 != Vector3.ZERO:
+				_add_defense_slot(25, p2, 11.0 + absf(a) * 2.0, "tower")
 
-	# 外墙弧线：先墙后炮塔，避免炮塔先耗光石头
+	# 外墙弧线：先按空位最多的半径选弧线，再逐段微调避开树/矿
+	var wall_radius: float = _pick_wall_radius(castle, dir)
 	for i in range(9):
 		var t: float = float(i) / 8.0
 		var wa: float = lerpf(-0.78, 0.78, t)
-		var wp: Vector3 = castle.global_position + dir.rotated(Vector3.UP, wa) * DEFENSE_WALL_RADIUS
-		_add_defense_slot(27, wp, 20.0 + absf(float(i) - 4.0) * 1.2, "wall")
+		var wp: Vector3 = _find_defense_spot(castle, dir, wa, wall_radius, 27, 16.0)
+		if wp != Vector3.ZERO:
+			_add_defense_slot(27, wp, 20.0 + absf(float(i) - 4.0) * 1.2, "wall")
 
 	for side in [-1.0, 1.0]:
 		var ca: float = 0.34 * side
-		var cp: Vector3 = castle.global_position + dir.rotated(Vector3.UP, ca) * 9.8
-		_add_defense_slot(26, cp, 32.0, "tower")
+		var cp: Vector3 = _find_defense_spot(castle, dir, ca, 9.8, 26, 9.8)
+		if cp != Vector3.ZERO:
+			_add_defense_slot(26, cp, 32.0, "tower")
+	# 炮塔也被占位时补搜：正面/侧面优先，实在不行再找背面空隙
+	if _count_planned(26) < 2:
+		for a in [-0.7, 0.7, 0.0, -1.0, 1.0, -1.4, 1.4, -1.8, 1.8, -2.2, 2.2, -2.6, 2.6, 3.14]:
+			if _count_planned(26) >= 2:
+				break
+			var cp2: Vector3 = _find_defense_spot(castle, dir, a, 9.8, 26, 9.8)
+			if cp2 != Vector3.ZERO:
+				_add_defense_slot(26, cp2, 33.0, "tower")
 
 	_defense_queue.sort_custom(func(a, b): return float(a["priority"]) < float(b["priority"]))
 	return not _defense_queue.is_empty()
+
+# 在一段弧线/半径附近寻找可建造点：先试原位置，再向内外、左右微调
+func _find_defense_spot(castle, dir: Vector3, angle: float, dist: float, b_id: int, max_dist: float) -> Vector3:
+	var cfg: Dictionary = EntityDatabase.get_config(b_id)
+	if cfg.is_empty():
+		return Vector3.ZERO
+	var radius: float = float(cfg.get("body_radius", 1.0))
+	for da in [0.0, 0.12, -0.12, 0.24, -0.24, 0.36, -0.36, 0.5, -0.5, 0.68, -0.68]:
+		for dd in [0.0, 1.2, -1.2, 2.2, -2.2, 3.2, -3.2]:
+			var try_dist: float = dist + float(dd)
+			if try_dist < 5.0 or try_dist > max_dist:
+				continue
+			var p: Vector3 = castle.global_position + dir.rotated(Vector3.UP, angle + float(da)) * try_dist
+			if not _is_valid_defense_ground(p, radius, true):
+				continue
+			if not _defense_slot_clear(p, radius, b_id):
+				continue
+			return p
+	return Vector3.ZERO
+
+func _pick_wall_radius(castle, dir: Vector3) -> float:
+	var best_r: float = DEFENSE_WALL_RADIUS
+	var best_n: int = -1
+	for r in [DEFENSE_WALL_RADIUS, 13.6, 15.0, 11.0]:
+		var n: int = 0
+		for i in range(9):
+			var t: float = float(i) / 8.0
+			var wa: float = lerpf(-0.78, 0.78, t)
+			var p: Vector3 = castle.global_position + dir.rotated(Vector3.UP, wa) * float(r)
+			if _is_valid_defense_ground(p, 1.0, true) and _defense_slot_clear(p, 1.0, 27):
+				n += 1
+		if n > best_n:
+			best_n = n
+			best_r = float(r)
+	return best_r
+
+func _count_planned(b_id: int) -> int:
+	var n: int = 0
+	for s in _defense_slots:
+		if int(s["id"]) == b_id:
+			n += 1
+	return n
+
+func _defense_slot_clear(pos: Vector3, radius: float, b_id: int) -> bool:
+	for s in _defense_slots:
+		var cfg: Dictionary = EntityDatabase.get_config(int(s["id"]))
+		var other_r: float = float(cfg.get("body_radius", 1.0))
+		var min_sep: float = radius + other_r + 0.6
+		# 城墙是一段接一段的，墙体之间可以贴得更近
+		if b_id == 27 and int(s["id"]) == 27:
+			min_sep = 0.9
+		# 炮塔本来就贴着外墙内侧，允许墙与炮塔的占地略微交叠
+		elif (b_id == 26 and int(s["id"]) == 27) or (b_id == 27 and int(s["id"]) == 26):
+			min_sep = radius + other_r - 0.2
+		if (s["pos"] - pos).length() < min_sep:
+			return false
+	return true
 
 func _add_defense_slot(b_id: int, pos: Vector3, priority: float, kind: String) -> void:
 	var cfg: Dictionary = EntityDatabase.get_config(b_id)
@@ -289,9 +366,8 @@ func _add_defense_slot(b_id: int, pos: Vector3, priority: float, kind: String) -
 	# 防线塔位在规划阶段不受敌军距离影响；建好之后敌方靠近也不会把已有计划清空。
 	if not _is_valid_defense_ground(pos, radius, true):
 		return
-	for s in _defense_slots:
-		if (s["pos"] - pos).length() < 1.4:
-			return
+	if not _defense_slot_clear(pos, radius, b_id):
+		return
 	_defense_slots.append({"id": b_id, "pos": pos})
 	_defense_queue.append({"id": b_id, "pos": pos, "priority": priority, "tries": 0})
 	if kind == "wall":
