@@ -190,8 +190,14 @@ func _draw():
 func _gui_input(event):
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		var local = event.position
-		if local.x >= 0 and local.x <= MINIMAP_SIZE and local.y >= 0 and local.y <= MINIMAP_SIZE:
-			var world_x = (local.x / MINIMAP_SIZE - 0.5) * RTSConfig.MAP_SIZE
-			var world_z = (local.y / MINIMAP_SIZE - 0.5) * RTSConfig.MAP_SIZE
+		# 用控件实际尺寸换算，避免窗口/布局变化后坐标偏移
+		var w = maxf(size.x, 1.0)
+		var h = maxf(size.y, 1.0)
+		if local.x >= 0 and local.x <= w and local.y >= 0 and local.y <= h:
+			var world_x = (local.x / w - 0.5) * RTSConfig.MAP_SIZE
+			var world_z = (local.y / h - 0.5) * RTSConfig.MAP_SIZE
 			if camera:
-				camera.global_position = Vector3(world_x, camera.global_position.y, world_z)
+				if camera.has_method("focus_on_ground"):
+					camera.focus_on_ground(Vector3(world_x, 0, world_z))
+				else:
+					camera.global_position = Vector3(world_x, camera.global_position.y, world_z)

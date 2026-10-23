@@ -147,6 +147,31 @@ func _screen_center_ground() -> Vector3:
 		dist = 0.0
 	return from + dir * dist
 
+# ═══ 定位到地面某点（小地图点击 / 跳转警报）═══
+# 直接改 global_position.x/z 会把“相机眼睛”放到目标点，而屏幕中心在斜前方十几米处。
+# 这里保持当前高度与俯角，把相机沿视线方向后退，使目标点正好落在屏幕中心。
+func focus_on_ground(world_pos: Vector3) -> void:
+	if _follow_target:
+		stop_follow()
+	var target := Vector3(world_pos.x, 0.0, world_pos.z)
+	# 优先用地面碰撞取得真实高度（地形有起伏）
+	var space = get_world_3d().direct_space_state
+	if space:
+		var q = PhysicsRayQueryParameters3D.create(target + Vector3.UP * 200.0, target + Vector3.DOWN * 200.0)
+		q.collide_with_bodies = true
+		q.collision_mask = 2
+		var hit = space.intersect_ray(q)
+		if hit:
+			target.y = hit.position.y
+	var fwd = -global_transform.basis.z
+	if fwd.y >= -0.001:
+		fwd = Vector3(0.0, -1.0, 0.0)
+	# 保持当前俯角：沿视线反推相机到目标的距离，使目标居中且高度不变
+	var dist = (global_position.y - target.y) / (-fwd.y)
+	dist = maxf(dist, 1.0)
+	global_position = target - fwd * dist
+	look_at(target, Vector3.UP)
+
 # ═══ 跟随视角 ═══
 func is_following() -> bool:
 	return _follow_target != null

@@ -351,7 +351,10 @@ func _on_jump_to_alert():
 		var cam = get_viewport().get_camera_3d()
 		if cam:
 			var target = minimap.latest_alert_world_pos
-			cam.global_position = Vector3(target.x, cam.global_position.y, target.z)
+			if cam.has_method("focus_on_ground"):
+				cam.focus_on_ground(target)
+			else:
+				cam.global_position = Vector3(target.x, cam.global_position.y, target.z)
 			minimap.has_latest_alert = false
 
 
