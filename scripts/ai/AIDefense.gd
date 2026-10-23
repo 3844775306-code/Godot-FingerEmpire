@@ -11,7 +11,7 @@
 # 本模块保持无 class_name，由 AI.gd 通过 preload 加载，避免全局类缓存不同步。
 extends RefCounted
 
-const THREAT_RADIUS: float = 36.0
+const THREAT_RADIUS: float = 15.0
 const THREAT_INTERVAL: float = 2.5
 const DEFENSE_FRONT: float = 7.2
 const DEFENSE_WALL_RADIUS: float = 12.2
@@ -157,19 +157,19 @@ func _evaluate_threat(castle) -> void:
 		center_sum += e.global_position * w
 		weight_sum += w
 
-	# 主城掉血是“已经挨打”的硬信号；血量不回复，因此只在掉血后的短时间内生效
+	# 主城掉血只作为“已有可见近敌”的严重度加成，不再单独触发威胁；
+	# 威胁只来自主城 15 单位内、确实可见的敌方军队。
 	if _last_castle_id != castle.get_instance_id():
 		_last_castle_id = castle.get_instance_id()
 		_last_castle_health = castle.health
 	if castle.health < _last_castle_health - 0.5:
 		_castle_damage_until = now + 8.0
 	_last_castle_health = castle.health
-	if now < _castle_damage_until:
+	if count > 0 and now < _castle_damage_until:
 		raw += 4.0
 
-	# 没有任何可见威胁、主城也没有正在挨打时，直接把威胁清零。
-	# 否则之前大战留下的高分只会缓慢衰减，出现“全场无军队但威胁很高”的假状态。
-	if count == 0 and now >= _castle_damage_until:
+	# 没有任何可见近敌时直接清零，避免之前战斗的高分继续残留。
+	if count == 0:
 		_threat_smoothed = 0.0
 
 	threat_enemy_count = count
@@ -182,7 +182,7 @@ func _evaluate_threat(castle) -> void:
 	# 只有成建制敌军逼近/攻城才进入防守，单个远处侦察兵不应让 AI 全员回防
 	if threat_score >= 14.0:
 		threat_level = 3
-	elif threat_score >= 7.0 or now < _castle_damage_until:
+	elif threat_score >= 7.0:
 		threat_level = 2
 	elif threat_score >= 2.5:
 		threat_level = 1
