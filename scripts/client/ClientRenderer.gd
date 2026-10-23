@@ -750,13 +750,28 @@ func _apply_model_tint(node: Node, tint: Color):
 		if child is MeshInstance3D and child.mesh:
 			for si in child.mesh.get_surface_count():
 				var src = child.get_active_material(si)
-				var mat = StandardMaterial3D.new()
-				mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
-				mat.albedo_color = tint
-				if src and "albedo_texture" in src:
-					mat.albedo_texture = src.albedo_texture
-				child.set_surface_override_material(si, mat)
+				if src:
+					# 复制原材质以保留 GLB 的法线/粗糙度/金属度等属性；
+					# 直接 new StandardMaterial3D 会丢掉这些贴图，模型看起来会变成扁平色块
+					var mat = src.duplicate()
+					if "albedo_color" in mat:
+						mat.albedo_color = src.albedo_color.lerp(tint, 0.5)
+					if "shading_mode" in mat:
+						mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+					child.set_surface_override_material(si, mat)
+				else:
+					var mat2 = StandardMaterial3D.new()
+					mat2.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+					mat2.albedo_color = tint
+					child.set_surface_override_material(si, mat2)
 		_apply_model_tint(child, tint)
+
+# 模型需要投射/接收实时阴影，否则光影层次会明显变弱
+func _ensure_model_shadows(node: Node) -> void:
+	if node is MeshInstance3D:
+		node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	for child in node.get_children():
+		_ensure_model_shadows(child)
 
 func _tint_preview(node: Node, color: Color):
 	for child in node.get_children():
@@ -853,6 +868,7 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 		if info.get("entity_id", 0) == 33: loaded_model.scale *= 1.5
 		if info.get("entity_id", 0) in [25, 26, 33]: loaded_model.scale *= 1.5
 		entity.add_child(loaded_model)
+		_ensure_model_shadows(loaded_model)
 		# 队伍色着色
 		if info.get("type", -1) != 0:
 			var lt = Color(0.5 + entity_color.r * 0.5, 0.5 + entity_color.g * 0.5, 0.5 + entity_color.b * 0.5)

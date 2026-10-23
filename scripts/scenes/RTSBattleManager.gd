@@ -1241,6 +1241,7 @@ func _apply_entity_model(entity: GameEntity) -> bool:
 		scale_factor = target_size / current_size
 		model_instance.scale = Vector3.ONE * scale_factor
 	entity.add_child(model_instance)
+	_ensure_model_shadows(model_instance)
 	# 特殊朝向调整
 	if entity.entity_id == 16: model_instance.rotation.y = deg_to_rad(180)
 	elif entity.entity_id == 17: model_instance.rotation.y = deg_to_rad(90)
@@ -1269,6 +1270,13 @@ func _set_unshaded_recursive(node: Node):
 					m.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 					child.set_surface_override_material(si, m)
 		_set_unshaded_recursive(child)
+
+# 模型需要投射/接收实时阴影，否则光影层次会明显变弱
+func _ensure_model_shadows(node: Node) -> void:
+	if node is MeshInstance3D:
+		node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	for child in node.get_children():
+		_ensure_model_shadows(child)
 
 func _get_model_aabb(node: Node) -> AABB:
 	var aabb = AABB()

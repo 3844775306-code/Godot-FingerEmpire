@@ -26,7 +26,17 @@ sky_material = SubResource("PanoramaSkyMaterial_opw4b")
 [sub_resource type="Environment" id="Environment_opw4b"]
 background_mode = 1
 sky = SubResource("Sky_ke6fh")
-ambient_light_energy = 5.0
+ambient_light_source = 2
+ambient_light_color = Color(0.72, 0.8, 1, 1)
+ambient_light_energy = 1.5
+tonemap_mode = 2
+tonemap_exposure = 1.05
+ssao_enabled = true
+ssao_radius = 1.2
+ssao_intensity = 1.8
+ssao_power = 1.5
+ssao_detail = 0.5
+ssao_light_affect = 0.2
 
 [sub_resource type="NavigationMesh" id="NavigationMesh_3m0ah"]
 vertices = PackedVector3Array(-49.5, 0.4, -49.5, -49.5, 0.4, 49.5, 49.5, 0.4, 49.5, 49.5, 0.4, -49.5)
@@ -43,8 +53,13 @@ environment = SubResource("Environment_opw4b")
 
 [node name="DirectionalLight3D" type="DirectionalLight3D" parent="."]
 transform = Transform3D(0.70710677, -0.35355338, 0.6123724, 0, 0.8660254, 0.5, -0.70710677, -0.35355338, 0.6123724, 0, 0, 0)
-light_energy = 3.0
+light_energy = 2.8
+light_angular_distance = 0.4
 shadow_enabled = true
+shadow_normal_bias = 1.5
+shadow_blur = 1.2
+directional_shadow_mode = 2
+directional_shadow_max_distance = 120.0
 
 [node name="Camera3D" type="Camera3D" parent="."]
 transform = Transform3D(1, 0, 0, 0, 0.34202012, 0.93969256, 0, -0.93969256, 0.34202012, 0, 15, 0)
