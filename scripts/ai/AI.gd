@@ -238,13 +238,29 @@ func _is_visible_to_ai(target: GameEntity) -> bool:
 # Refresh visible enemies cache (called once per think cycle)
 func _refresh_visibility():
 	_visible_enemies.clear()
+	# 先缓存己方视野源，避免对每个敌人重复全实体扫描和重复计算有效视野
+	var sources: Array = []
+	for own in battle.entities.get_children():
+		if not (own is GameEntity) or own.health <= 0:
+			continue
+		if not entity_belongs_to_me(own):
+			continue
+		var vision: float = float(own.vision_range)
+		if battle.has_method("get_effective_vision"):
+			vision = float(battle.get_effective_vision(own))
+		sources.append([own.global_position, vision])
+	if sources.is_empty():
+		return
 	for e in battle.entities.get_children():
 		if not (e is GameEntity): continue
 		if e.health <= 0: continue
 		if entity_belongs_to_me(e): continue
 		if e is WorldResource: continue
-		if _is_visible_to_ai(e):
-			_visible_enemies.append(e)
+		var ep: Vector3 = e.global_position
+		for s in sources:
+			if (s[0] as Vector3).distance_to(ep) <= float(s[1]):
+				_visible_enemies.append(e)
+				break
 
 # Check if an entity is in the visible enemies cache
 func _is_visible_enemy(entity: GameEntity) -> bool:
@@ -495,10 +511,7 @@ func _process(delta):
 		_naval_patrol_timer = NAVAL_PATROL_INTERVAL
 		if phase >= Phase.DEVELOPMENT:
 			_patrol_navy_around_water()
-	# Troop accumulation: assault when army >= 30
-	var army_count = count_military(my_peer_id if my_peer_id != -1 else my_team)
-	if army_count >= 30 and phase == Phase.DEVELOPMENT:
-		phase = Phase.ASSAULT
+	# 部队积累判定放到 decide() 的 AI 思考节流里，避免每帧全实体扫描
 
 # ═══ Decide ═══
 
@@ -640,7 +653,12 @@ func decide(_delta):
 		Phase.PRODUCTION: _state_production(_delta)
 		Phase.DEVELOPMENT: _state_development(_delta)
 		Phase.ASSAULT: _state_assault(_delta)
-	if OS.is_debug_build():
+	# 进攻阶段转换只在思考节流里判断；count_military 会遍历全部实体，不能每帧调用
+	if phase == Phase.DEVELOPMENT:
+		var army_count = count_military(my_peer_id if my_peer_id != -1 else my_team)
+		if army_count >= 30:
+			phase = Phase.ASSAULT
+	if OS.is_debug_build() and Engine.get_process_frames() % 10 == 0:
 		update_debug_label()
 func get_team_castle(tm) -> Building:
 	for entity in battle.entities.get_children():
@@ -726,7 +744,7 @@ func _visible_enemy_military() -> int:
 		if not (e is Army): continue
 		if int(e.team) == RTSConfig.Team.NEUTRAL: continue
 		if not _entity_is_enemy(e): continue
-		if not _is_visible_to_ai(e): continue
+		# _visible_enemies 已经过视野筛选，不再重复调用 _is_visible_to_ai
 		if e.entity_id != 10 and e.entity_id != 14 and int(e.entity_id) not in [43,44,45,46,47,48,49,50,51]:
 			total += 1
 	return total

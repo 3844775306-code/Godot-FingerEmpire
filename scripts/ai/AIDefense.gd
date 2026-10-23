@@ -135,8 +135,7 @@ func _evaluate_threat(castle) -> void:
 	for e in ai._visible_enemies:
 		if not (e is Army) or e.health <= 0:
 			continue
-		if not ai._is_visible_to_ai(e):
-			continue
+		# _visible_enemies 已经过视野筛选，不再重复扫描己方全部实体
 		if not _is_combat_enemy(e):
 			continue
 		var d: float = e.global_position.distance_to(castle.global_position)

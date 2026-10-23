@@ -2329,26 +2329,23 @@ func _apply_fog():
 
 func _update_visibility():
 	if not entities: return
-	var players = []
-	for e in entities.get_children():
-		if e is GameEntity and e.team == get_host_team() and e.health > 0:
-			players.append(e)
-
+	if visible_grid.is_empty():
+		_init_fog_grid()
+	var host_team = get_host_team()
 	for e in entities.get_children():
 		if not (e is GameEntity): continue
-		if e.team == get_host_team():
+		if e.team == host_team:
 			e.visible = true
 			continue
-		if e.team == RTSConfig.Team.NEUTRAL:
-			var g = world_to_grid(e.global_position)
-			e.visible = explored_grid[g.x][g.y]
+		var g = world_to_grid(e.global_position)
+		if g.x < 0 or g.x >= RTSConfig.MAP_SIZE or g.y < 0 or g.y >= RTSConfig.MAP_SIZE:
+			e.visible = false
 			continue
-		var seen = false
-		for p in players:
-			if p.global_position.distance_to(e.global_position) <= get_effective_vision(p):
-				seen = true
-				break
-		e.visible = seen
+		# 敌方/中立可见性直接查本帧已算好的迷雾网格，避免每帧对每个实体遍历全部友军
+		if e.team == RTSConfig.Team.NEUTRAL:
+			e.visible = explored_grid[g.x][g.y]
+		else:
+			e.visible = visible_grid[g.x][g.y]
 
 # ==================== 警报辅助 ====================
 # 该实体是否由“人类玩家”控制：单机只认玩家本人（排除同队 AI），联机排除 1000+ 的 AI 合成 peer_id
