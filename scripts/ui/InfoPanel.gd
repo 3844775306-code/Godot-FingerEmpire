@@ -13,9 +13,6 @@ var observed_entity: GameEntity = null
 var battle: RTSBattleManager = null
 var demolish_btn: Button = null
 var hp_bar_bg: ColorRect = null
-# 顶部纹章头像（clash-royale 卡片式徽章）：队伍色边框 + 实体 emoji
-var _crest_sb: StyleBoxFlat = null
-var _crest_emoji: Label = null
 # 统一资源获取：在线模式用 get_host_resources()，单机用 player_resources
 func _get_res() -> Dictionary:
 	if not battle:
@@ -85,9 +82,6 @@ func _ready():
 	UITheme.apply_danger_button(demolish_btn, UITheme.FONT_SM)
 	$VBox.add_child(demolish_btn)
 
-	# 顶部纹章头（名称行移入，紧贴徽章）
-	_build_crest_header()
-
 	set_process(true)
 
 func _swap_rtl(nm: String):
@@ -99,69 +93,6 @@ func _swap_rtl(nm: String):
 	r.bbcode_enabled = true; r.fit_content = true; r.autowrap_mode = TextServer.AUTOWRAP_OFF
 	r.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	p.add_child(r); p.move_child(r, i)
-
-# 顶部纹章头：队伍色圆徽（实体 emoji）+ 名称行紧贴其后
-func _build_crest_header() -> void:
-	var vb := $VBox
-	var header := HBoxContainer.new()
-	header.name = "HeaderRow"
-	header.add_theme_constant_override("separation", 10)
-	header.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-
-	var crest := Panel.new()
-	crest.name = "Crest"
-	crest.custom_minimum_size = Vector2(58, 58)
-	var sb := StyleBoxFlat.new()
-	sb.bg_color = Color(UITheme.INK, 0.95)
-	sb.set_corner_radius_all(10)
-	sb.set_border_width_all(UITheme.BORDER_MED)
-	sb.border_width_top = UITheme.BORDER_THICK + 1
-	sb.border_color = Color(UITheme.GOLD, 0.9)
-	sb.shadow_size = 4
-	sb.shadow_color = Color(0, 0, 0, 0.5)
-	sb.shadow_offset = Vector2(1, 2)
-	crest.add_theme_stylebox_override("panel", sb)
-	_crest_sb = sb
-
-	var emoji := Label.new()
-	emoji.name = "Emoji"
-	emoji.text = "🛡️"
-	emoji.set_anchors_preset(Control.PRESET_FULL_RECT)
-	emoji.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	emoji.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	emoji.add_theme_font_size_override("font_size", _mobile_font(UITheme.FONT_XXL))
-	emoji.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	crest.add_child(emoji)
-	_crest_emoji = emoji
-	header.add_child(crest)
-
-	# 名称行移入头部（宽高让给 RTL 自动折行）
-	vb.remove_child(name_rtl)
-	name_rtl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	header.add_child(name_rtl)
-
-	vb.add_child(header)
-	vb.move_child(header, 0)
-	# 血条紧跟标题行
-	if hp_bar_bg:
-		vb.move_child(hp_bar_bg, 1)
-
-# 更新纹章：accent 边框 + emoji 内容
-func _set_crest(accent: Color, emoji_text: String) -> void:
-	if _crest_emoji:
-		_crest_emoji.text = emoji_text
-	if _crest_sb:
-		_crest_sb.border_color = Color(accent, 0.95)
-		_crest_sb.bg_color = Color(accent, 0.18)
-
-# 根据实体所属队伍取强调色（友方=蓝宝石 / 敌方=朱红 / 中立=金）
-func _accent_for(team: int) -> Color:
-	if battle and battle.has_method("get_host_team") and team == battle.get_host_team():
-		return UITheme.SAPPHIRE
-	match team:
-		0: return UITheme.VERMILION
-		1: return UITheme.SAPPHIRE
-		_: return UITheme.GOLD
 
 func _bc(pct: float) -> Color:
 	return UITheme.health_bar_color(pct)
@@ -191,8 +122,6 @@ func _get_same_type_buildings(entity: Building) -> Array[Building]:
 
 func update_info(entity: GameEntity):
 	observed_entity = entity; visible = true
-
-	_set_crest(_accent_for(entity.team), UITheme.entity_emoji(entity.entity_id, entity.entity_type))
 
 	# Batch count from selection
 	var batch_count = 1
@@ -373,7 +302,6 @@ func show_multi_selection(entities: Array):
 	produce_vbox.visible = true
 	hp_bar.visible = false
 	if hp_bar_bg: hp_bar_bg.visible = false
-	_set_crest(UITheme.GOLD, "👥")
 	name_rtl.text = "[color=%s]⚔️ 选中 %d 个单位[/color]" % [UITheme.hex_str(UITheme.GOLD), entities.size()]
 	stats_rtl.text = ""
 	for c in produce_vbox.get_children(): c.queue_free()

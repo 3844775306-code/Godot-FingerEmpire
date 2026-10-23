@@ -36,7 +36,7 @@ func _ready():
 	var mobile := is_mobile()
 	var item_h: float = UILayout.dp(ITEM_H_DP) if mobile else 38.0
 	var gap: float = UILayout.dp(5.0) if mobile else 4.0
-	var font: int = UILayout.font_dp(12.0) if mobile else 13
+	var font: int = UILayout.font_dp(11.0) if mobile else 13
 	var pad: float = UILayout.dp(PAD_DP) if mobile else 8.0
 	var menu_w: float = UILayout.dp(MENU_W_DP) if mobile else 165.0
 
@@ -55,19 +55,28 @@ func _ready():
 	var vbox = VBoxContainer.new()
 	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	vbox.add_theme_constant_override("separation", int(gap))
+	var container: Node = vbox
+	var cell_w: float = menu_w - pad * 2.0
 	if mobile:
-		# 触屏屏高有限：菜单限高屏高，内容超出时内部滚动
+		# 触屏屏高只有约 393dp，竖排列表必须滑动，滑动手感差；
+		# 直接摊成 3 列网格，一屏看全，不需要滑动。
+		var cols := 3
 		var vp: Vector2 = get_viewport().get_visible_rect().size
-		var max_h: float = vp.y - UILayout.dp(36.0)
-		var content_h: float = (building_defs.size() + 1) * (item_h + gap) + pad * 2.0
-		_menu_size = Vector2(menu_w, minf(content_h, max_h))
-		var scroll = ScrollContainer.new()
-		scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-		scroll.position = Vector2(pad, pad)
-		scroll.custom_minimum_size = Vector2(menu_w - pad * 2.0, _menu_size.y - pad * 2.0)
-		scroll.size = Vector2(menu_w - pad * 2.0, _menu_size.y - pad * 2.0)
-		add_child(scroll)
-		scroll.add_child(vbox)
+		var avail_w: float = vp.x - UILayout.dp(16.0)
+		cell_w = UILayout.dp(196.0)
+		menu_w = cols * cell_w + (cols - 1) * gap + pad * 2.0
+		if menu_w > avail_w:
+			cell_w = (avail_w - pad * 2.0 - (cols - 1) * gap) / float(cols)
+			menu_w = cols * cell_w + (cols - 1) * gap + pad * 2.0
+		var grid := GridContainer.new()
+		grid.columns = cols
+		grid.position = Vector2(pad, pad)
+		grid.add_theme_constant_override("h_separation", int(gap))
+		grid.add_theme_constant_override("v_separation", int(gap))
+		add_child(grid)
+		container = grid
+		var rows: int = int(ceil(float(building_defs.size() + 1) / float(cols)))
+		_menu_size = Vector2(menu_w, rows * (item_h + gap) - gap + pad * 2.0)
 	else:
 		vbox.position = Vector2(pad, pad)
 		add_child(vbox)
@@ -93,7 +102,7 @@ func _ready():
 
 		btn.disabled = not affordable or is_locked
 		if mobile:
-			btn.custom_minimum_size = Vector2(menu_w - pad * 2.0, item_h)
+			btn.custom_minimum_size = Vector2(cell_w, item_h)
 		else:
 			btn.custom_minimum_size = Vector2(150, 38)
 		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -115,16 +124,19 @@ func _ready():
 		btn.add_child(rtl)
 		if not is_locked:
 			btn.pressed.connect(_on_building_pressed.bind(bd.id))
-		vbox.add_child(btn)
+		container.add_child(btn)
 
 	var cancel_h: float = item_h
 	var close_btn = Button.new()
 	close_btn.text = "取消"
-	close_btn.custom_minimum_size = Vector2(0, cancel_h)
-	close_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	if mobile:
+		close_btn.custom_minimum_size = Vector2(cell_w, cancel_h)
+	else:
+		close_btn.custom_minimum_size = Vector2(0, cancel_h)
+		close_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	close_btn.add_theme_font_size_override("font_size", font)
 	close_btn.pressed.connect(queue_free)
-	vbox.add_child(close_btn)
+	container.add_child(close_btn)
 
 	if mobile:
 		bg.size = _menu_size

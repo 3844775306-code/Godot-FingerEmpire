@@ -16,7 +16,6 @@ var hud: Node = null
 var router: TouchGestureRouter = null
 var capsule: MobileResourceCapsule = null
 var command_bar: MobileCommandBar = null
-var unit_bar: MobileUnitBar = null
 var stats_screen: StatsOverviewScreen = null
 
 var _bm: Node = null
@@ -87,12 +86,6 @@ func _create_components() -> void:
 	command_bar.hud = hud
 	command_bar.router = router
 	add_child(command_bar)
-
-	unit_bar = MobileUnitBar.new()
-	unit_bar.name = "UnitBar"
-	unit_bar.selection_provider = Callable(self, "_collect_selection")
-	unit_bar.focus_requested.connect(_on_unit_focus_requested)
-	add_child(unit_bar)
 
 	stats_screen = StatsOverviewScreen.new()
 	stats_screen.name = "StatsOverview"
@@ -191,7 +184,7 @@ func is_point_over_panel(pos: Vector2) -> bool:
 		return true
 	if _point_over_build_menu(pos):
 		return true
-	for ctrl in [capsule, command_bar, unit_bar]:
+	for ctrl in [capsule, command_bar]:
 		if ctrl is Control and ctrl.visible and ctrl.get_global_rect().has_point(pos):
 			return true
 	var info := _find_ui_node("InfoPanel")
@@ -222,8 +215,6 @@ func _process(delta: float) -> void:
 	if _refresh_timer > 0.0:
 		return
 	_refresh_timer = REFRESH_INTERVAL
-	if unit_bar:
-		unit_bar.refresh(_collect_selection())
 	if capsule:
 		_refresh_resources()
 		capsule.set_time_text(_format_game_time())
@@ -263,14 +254,6 @@ func _format_game_time() -> String:
 	var mins := int(seconds / 60.0)
 	var secs := int(seconds) % 60
 	return "%02d:%02d" % [mins, secs]
-
-# 点按单位条：把镜头移到该单位
-func _on_unit_focus_requested(entity) -> void:
-	if entity == null or not is_instance_valid(entity):
-		return
-	var cam := get_viewport().get_camera_3d() if get_viewport() else null
-	if cam and cam.has_method("focus_on_ground"):
-		cam.call("focus_on_ground", entity.global_position)
 
 func _on_stats_requested() -> void:
 	if stats_screen:
