@@ -35,10 +35,17 @@ var nation_bonus_label: Label
 # ==================== 玩家单位统计面板 ====================
 var unit_stats_panel: Control = null
 var unit_stats_visible: bool = true
+var _stats_title: RichTextLabel
+var _stats_bonus: Label
 var _stats_mil_rtl: RichTextLabel
 var _stats_bld_rtl: RichTextLabel
+var _stats_totals: RichTextLabel
 var _stats_pop_bar: ProgressBar
 var _stats_pop_label: Label
+var _stats_res_labels: Dictionary = {}
+var _stats_res_bars: Dictionary = {}
+var _stats_castle_bar: HealthBarControl
+var _stats_castle_label: Label
 var _toggle_stats_btn: Button
 var _alert_label: Label = null
 var _alert_bg: ColorRect = null
@@ -64,6 +71,37 @@ func _get_nation_name(nation: int) -> String:
 		RTSConfig.Nation.JAPAN: return "日本"
 		RTSConfig.Nation.BYZANTINE: return "拜占庭"
 		_: return "未知"
+
+# 国家特色：标题用短描述，下面一行用完整描述
+func _nation_trait_short(nation: int) -> String:
+	match nation:
+		RTSConfig.Nation.VIKING: return "生命+25% 速度+10%"
+		RTSConfig.Nation.ENGLAND: return "攻击+15% 视野+20% 采木+10%"
+		RTSConfig.Nation.FRANCE: return "护甲+25 主城起始2级"
+		RTSConfig.Nation.CHINA: return "食物+20% 黄金+10% 人口+10"
+		RTSConfig.Nation.HUNGARY: return "护甲+15 石+15% 金+10% 人口+5"
+		RTSConfig.Nation.JAPAN: return "攻速+15% 攻击+10%"
+		RTSConfig.Nation.BYZANTINE: return "双护甲+2 黄金+10%"
+		_: return ""
+
+func _nation_trait_full(nation: int) -> String:
+	match nation:
+		RTSConfig.Nation.VIKING: return "全军生命 +25%、移动速度 +10%，适合正面强攻。"
+		RTSConfig.Nation.ENGLAND: return "全军攻击 +15%、视野 +20%，木材采集 +10%，擅长远程压制。"
+		RTSConfig.Nation.FRANCE: return "全军护甲 +25，主城开局 2 级，重装骑兵强势。"
+		RTSConfig.Nation.CHINA: return "食物 +20%、黄金 +10%，人口上限 +10，经济与规模见长。"
+		RTSConfig.Nation.HUNGARY: return "护甲 +15，石材 +15%、黄金 +10%，人口上限 +5。"
+		RTSConfig.Nation.JAPAN: return "攻速 +15%、攻击 +10%，近战爆发更强。"
+		RTSConfig.Nation.BYZANTINE: return "双护甲 +2，黄金 +10%，防御体系稳固。"
+		_: return ""
+
+func _find_local_castle(bm) -> Building:
+	if bm == null: return null
+	for e in bm.entities.get_children():
+		if e is Building and e.entity_id == 20 and e.health > 0:
+			if bm.is_local_player_owned(e.owner_peer_id, e.team):
+				return e
+	return null
 
 # 单位血条上方的“国家类别”前缀：由 battle_manager 的 owner/队伍解析，未知国家返回空串
 func _nat_tag(entity: GameEntity) -> String:
@@ -95,7 +133,7 @@ func _create_stats_toggle_button():
 
 	_toggle_stats_btn = Button.new()
 	_toggle_stats_btn.text = "📊 统计"
-	_toggle_stats_btn.position = Vector2(10, 540)
+	_toggle_stats_btn.position = Vector2(10, 660)
 	_toggle_stats_btn.theme = btn_theme
 	_toggle_stats_btn.toggle_mode = true
 	_toggle_stats_btn.button_pressed = true
@@ -112,9 +150,10 @@ func _create_unit_stats_panel():
 	unit_stats_panel.name = "PlayerUnitStats"
 	unit_stats_panel.z_index = 100
 	unit_stats_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	unit_stats_panel.position = Vector2(1960, 950)
+	unit_stats_panel.position = Vector2(10, 10)
+	unit_stats_panel.size = Vector2(600, 640)
 
-	# 背景
+	# 与 AI 决策面板一致的暗色圆角底板
 	var bg = Panel.new()
 	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	var bg_style = StyleBoxFlat.new()
@@ -132,28 +171,84 @@ func _create_unit_stats_panel():
 	unit_stats_panel.add_child(bg)
 
 	var vb = VBoxContainer.new()
-	vb.position = Vector2(10, 8)
-	vb.add_theme_constant_override("separation", 2)
+	vb.position = Vector2(12, 10)
+	vb.custom_minimum_size = Vector2(576, 0)
+	vb.add_theme_constant_override("separation", 4)
 	unit_stats_panel.add_child(vb)
 
-	# 标题
-	var title = _make_stats_rtl()
-	title.text = "[color=#5af]👑 ◈ 我方军力统计[/color]"
-	title.add_theme_font_size_override("font_size", 20)
-	vb.add_child(title)
+	# 标题：国家名 + 国家特色
+	_stats_title = _make_stats_rtl()
+	_stats_title.add_theme_font_size_override("font_size", 24)
+	vb.add_child(_stats_title)
+
+	_stats_bonus = Label.new()
+	_stats_bonus.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_stats_bonus.custom_minimum_size = Vector2(576, 0)
+	_stats_bonus.add_theme_font_size_override("font_size", 14)
+	_stats_bonus.add_theme_color_override("font_color", Color(UITheme.PARCHMENT, 0.85))
+	vb.add_child(_stats_bonus)
 
 	# 人口
 	var pop_hbox = HBoxContainer.new()
+	pop_hbox.add_theme_constant_override("separation", 8)
 	_stats_pop_label = Label.new()
-	_stats_pop_label.add_theme_font_size_override("font_size", 15)
+	_stats_pop_label.add_theme_font_size_override("font_size", 16)
 	_stats_pop_label.add_theme_color_override("font_color", Color.WHITE)
 	_stats_pop_label.text = "👥 人口: 0/0"
 	pop_hbox.add_child(_stats_pop_label)
-
 	_stats_pop_bar = _make_stats_bar(Color(0.25, 0.65, 1.0))
-	_stats_pop_bar.custom_minimum_size = Vector2(200, 8)
+	_stats_pop_bar.custom_minimum_size = Vector2(300, 8)
 	pop_hbox.add_child(_stats_pop_bar)
 	vb.add_child(pop_hbox)
+
+	# 五项资源：图标 + 数值 + 细进度条
+	var res_grid = GridContainer.new()
+	res_grid.columns = 5
+	res_grid.add_theme_constant_override("h_separation", 6)
+	vb.add_child(res_grid)
+	var res_cfg = [
+		["gold", UITheme.RES_GOLD], ["wood", UITheme.RES_WOOD], ["stone", UITheme.RES_STONE],
+		["food", UITheme.RES_FOOD], ["oil", UITheme.RES_OIL],
+	]
+	for rc in res_cfg:
+		var key: String = rc[0]
+		var col: Color = rc[1]
+		var col_vb = VBoxContainer.new()
+		col_vb.custom_minimum_size = Vector2(108, 0)
+		var head = Label.new()
+		head.text = "%s %s" % [UITheme.RESOURCE_ICONS.get(key, "◆"), UITheme.RESOURCE_NAMES.get(key, key)]
+		head.add_theme_font_size_override("font_size", 13)
+		head.add_theme_color_override("font_color", col)
+		col_vb.add_child(head)
+		var val = Label.new()
+		val.add_theme_font_size_override("font_size", 16)
+		val.add_theme_color_override("font_color", Color.WHITE)
+		val.text = "0"
+		col_vb.add_child(val)
+		_stats_res_labels[key] = val
+		var rbar = _make_stats_bar(col)
+		rbar.custom_minimum_size = Vector2(100, 5)
+		col_vb.add_child(rbar)
+		_stats_res_bars[key] = rbar
+		res_grid.add_child(col_vb)
+
+	# 主城血量
+	var castle_hbox = HBoxContainer.new()
+	castle_hbox.add_theme_constant_override("separation", 8)
+	_stats_castle_label = Label.new()
+	_stats_castle_label.add_theme_font_size_override("font_size", 16)
+	_stats_castle_label.add_theme_color_override("font_color", Color(UITheme.PARCHMENT))
+	_stats_castle_label.text = "🏰 主城 0/0"
+	castle_hbox.add_child(_stats_castle_label)
+	_stats_castle_bar = HealthBarControl.new()
+	_stats_castle_bar.custom_minimum_size = Vector2(320, 12)
+	castle_hbox.add_child(_stats_castle_bar)
+	vb.add_child(castle_hbox)
+
+	# 军队/建筑总数
+	_stats_totals = _make_stats_rtl()
+	_stats_totals.add_theme_font_size_override("font_size", 16)
+	vb.add_child(_stats_totals)
 
 	# 军队
 	vb.add_child(_make_stats_section("⚔️ 军队"))
@@ -168,8 +263,6 @@ func _create_unit_stats_panel():
 	vb.add_child(_stats_bld_rtl)
 
 	add_child(unit_stats_panel)
-	unit_stats_panel.custom_minimum_size = Vector2(380, 0)
-	unit_stats_panel.size = Vector2(400, 380)
 
 func _make_stats_rtl() -> RichTextLabel:
 	var r = RichTextLabel.new()
@@ -213,6 +306,35 @@ func _update_unit_stats():
 	var bm = _get_bm()
 	if not bm:
 		return
+
+	# 资源 / 国家 / 主城
+	var res = bm.player_resources
+	var lim = bm.player_resource_limits
+	if bm.has_method("get_host_resources"):
+		res = bm.get_host_resources()
+		lim = bm.get_host_limits()
+	var local_team = bm.get_local_team()
+	var nation = bm.team_nations.get(local_team, -1)
+	if _stats_title:
+		_stats_title.text = "[color=#5af]👑 %s[/color] · [color=#ffd34f]%s[/color]" % [_get_nation_name(nation), _nation_trait_short(nation)]
+	if _stats_bonus:
+		_stats_bonus.text = _nation_trait_full(nation)
+	for key in ["gold", "wood", "stone", "food", "oil"]:
+		var lbl = _stats_res_labels.get(key)
+		if lbl:
+			lbl.text = "%d/%d" % [res.get(key, 0), lim.get(key, 500)]
+		var rb = _stats_res_bars.get(key)
+		if rb:
+			rb.value = clampf(float(res.get(key, 0)) / maxf(float(lim.get(key, 500)), 1.0) * 100.0, 0.0, 100.0)
+	var castle = _find_local_castle(bm)
+	if _stats_castle_bar and _stats_castle_label:
+		if castle:
+			_stats_castle_bar.visible = true
+			_stats_castle_bar.update_bar(castle.health, castle.max_health, -1, bm.get_entity_color(castle))
+			_stats_castle_label.text = "🏰 主城 Lv.%d %d/%d" % [castle.upgrade_level, int(castle.health), int(castle.max_health)]
+		else:
+			_stats_castle_bar.visible = false
+			_stats_castle_label.text = "🏰 主城 已失守"
 
 	# 在线模式桥接
 	var pop = bm.player_pop
@@ -273,6 +395,14 @@ func _update_unit_stats():
 	var military_total = 0
 	for uid in military_ids:
 		military_total += unit_counts.get(uid, 0)
+	var building_total = 0
+	for bid in building_counts:
+		building_total += building_counts[bid]
+	var under_txt := ""
+	if under_construction > 0:
+		under_txt = "    [color=#caa]🏗️ 在建 %d[/color]" % under_construction
+	if _stats_totals:
+		_stats_totals.text = "[color=#8cf]⚔️ 军队 %d[/color]    [color=#e8c060]🏰 建筑 %d[/color]%s" % [military_total, building_total, under_txt]
 
 	var military_lines = []
 	var eco_lines = []
@@ -427,146 +557,29 @@ func _order_all_units(order_type: String, destination: Vector3):
 
 
 func _ready():
-	# 资源颜色和名称
-	const RES_CFG = [
-		{name="黄金", key="gold", color=UITheme.RES_GOLD},
-		{name="木材", key="wood", color=UITheme.RES_WOOD},
-		{name="石头", key="stone", color=UITheme.RES_STONE},
-		{name="食物", key="food", color=UITheme.RES_FOOD},
-		{name="石油", key="oil", color=UITheme.RES_OIL},
-		{name="人口", key="pop", color=UITheme.RES_POP},
-	]
-	var res_labels = {}
+	_create_unit_stats_panel()
+	_create_stats_toggle_button()
 
-	for i in range(RES_CFG.size()):
-		var cfg = RES_CFG[i]
-		var y = 10 + i * 38
-		var col = cfg.color
-
-		# 圆角背景面板（半透明暗色 + 彩色边框）
-		var bg = Panel.new()
-		bg.position = Vector2(8, y)
-		bg.size = Vector2(240, 36)
-		var bg_style = StyleBoxFlat.new()
-		bg_style.bg_color = Color(UITheme.INK, UITheme.ALPHA_OVERLAY)
-		bg_style.corner_radius_top_left = 5; bg_style.corner_radius_top_right = 5
-		bg_style.corner_radius_bottom_left = 5; bg_style.corner_radius_bottom_right = 5
-		bg_style.border_width_left = 1; bg_style.border_width_right = 1
-		bg_style.border_width_top = 1; bg_style.border_width_bottom = 1
-		bg_style.border_color = Color(UITheme.GOLD, UITheme.ALPHA_SUBTLE)
-		bg.add_theme_stylebox_override("panel", bg_style)
-		add_child(bg)
-
-		# 资源名称（前面加 emoji 图标）
-		var icon_text = UITheme.RESOURCE_ICONS.get(cfg.key, "")
-		var name_lbl = Label.new()
-		name_lbl.position = Vector2(12, y + 5)
-		name_lbl.text = "%s %s" % [icon_text, cfg.name]
-		name_lbl.add_theme_font_size_override("font_size", 15)
-		name_lbl.add_theme_color_override("font_color", col)
-		name_lbl.add_theme_color_override("font_outline_color", Color.BLACK)
-		name_lbl.add_theme_constant_override("outline_size", 1)
-		add_child(name_lbl)
-		res_name_labels[cfg.key] = name_lbl
-
-		# 数值（右对齐）
-		var val_lbl = Label.new()
-		val_lbl.position = Vector2(80, y + 6)
-		val_lbl.size = Vector2(160, 20)
-		val_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-		val_lbl.add_theme_font_size_override("font_size", 15)
-		val_lbl.add_theme_color_override("font_color", UITheme.PARCHMENT)
-		val_lbl.add_theme_color_override("font_outline_color", Color.BLACK)
-		val_lbl.add_theme_constant_override("outline_size", 1)
-		add_child(val_lbl)
-		res_labels[cfg.key] = val_lbl
-
-		# Progress bar for this resource
-		var pbar = ProgressBar.new()
-		pbar.position = Vector2(14, y + 24)
-		pbar.size = Vector2(220, 6)
-		pbar.max_value = 100; pbar.show_percentage = false
-		var fs = StyleBoxFlat.new(); fs.bg_color = col.darkened(0.15); fs.corner_radius_top_left = 2; fs.corner_radius_top_right = 2; fs.corner_radius_bottom_left = 2; fs.corner_radius_bottom_right = 2
-		pbar.add_theme_stylebox_override("fill", fs)
-		var bs = StyleBoxFlat.new(); bs.bg_color = Color(0.08,0.08,0.08,0.8); bs.corner_radius_top_left = 2; bs.corner_radius_top_right = 2; bs.corner_radius_bottom_left = 2; bs.corner_radius_bottom_right = 2
-		pbar.add_theme_stylebox_override("background", bs)
-		add_child(pbar)
-		match cfg.key:
-			"gold": res_bars["gold"] = pbar
-			"wood": res_bars["wood"] = pbar
-			"stone": res_bars["stone"] = pbar
-			"food": res_bars["food"] = pbar
-			"oil": res_bars["oil"] = pbar
-
-	gold_label = res_labels["gold"]
-	wood_label = res_labels["wood"]
-	stone_label = res_labels["stone"]
-	food_label = res_labels["food"]
-	oil_label = res_labels["oil"]
-	pop_label = res_labels["pop"]
-
-	# Population progress bar
-	pop_bar = ProgressBar.new()
-	pop_bar.position = Vector2(14, 10 + 5 * (32 + 6) + 24)
-	pop_bar.size = Vector2(220, 6)
-	pop_bar.max_value = 100; pop_bar.show_percentage = false
-	var pfs = StyleBoxFlat.new(); pfs.bg_color = Color(0.25, 0.65, 1.0).darkened(0.15)
-	pfs.corner_radius_top_left = 2; pfs.corner_radius_top_right = 2
-	pfs.corner_radius_bottom_left = 2; pfs.corner_radius_bottom_right = 2
-	pop_bar.add_theme_stylebox_override("fill", pfs)
-	var pbs = StyleBoxFlat.new(); pbs.bg_color = Color(0.08,0.08,0.08,0.8)
-	pbs.corner_radius_top_left = 2; pbs.corner_radius_top_right = 2
-	pbs.corner_radius_bottom_left = 2; pbs.corner_radius_bottom_right = 2
-	pop_bar.add_theme_stylebox_override("background", pbs)
-	add_child(pop_bar)
-
-	# 国家及加成标签（字号20）
-	player_nation_label = Label.new()
-	player_nation_label.position = Vector2(10, 280)
-	player_nation_label.add_theme_font_size_override("font_size", 20)
-	player_nation_label.add_theme_color_override("font_color", Color.WHITE)
-	player_nation_label.add_theme_color_override("font_outline_color", Color.BLACK)
-	player_nation_label.add_theme_constant_override("outline_size", 1)
-	add_child(player_nation_label)
-
-	enemy_nation_label = Label.new()
-	enemy_nation_label.position = Vector2(10, 310)
-	enemy_nation_label.add_theme_font_size_override("font_size", 20)
-	enemy_nation_label.add_theme_color_override("font_color", Color.WHITE)
-	enemy_nation_label.add_theme_color_override("font_outline_color", Color.BLACK)
-	enemy_nation_label.add_theme_constant_override("outline_size", 1)
-	add_child(enemy_nation_label)
-
-	nation_bonus_label = Label.new()
-	nation_bonus_label.position = Vector2(10, 340)
-	nation_bonus_label.add_theme_font_size_override("font_size", 18)
-	nation_bonus_label.add_theme_color_override("font_color", Color.LIGHT_GRAY)
-	nation_bonus_label.add_theme_color_override("font_outline_color", Color.BLACK)
-	nation_bonus_label.add_theme_constant_override("outline_size", 1)
-	add_child(nation_bonus_label)
-
-	# 按钮设置较大字体（通过 Theme）
 	var btn_theme = Theme.new()
-	var default_font = Label.new().get_theme_font("font", "Label")
 	btn_theme.set_font_size("font_size", "Button", 20)
-	
+
 	attack_all_btn = Button.new()
 	attack_all_btn.text = "全军进攻 (A)"
-	attack_all_btn.position = Vector2(10, 420)
+	attack_all_btn.position = Vector2(10, 700)
 	attack_all_btn.theme = btn_theme
 	attack_all_btn.pressed.connect(_on_attack_all_pressed)
 	add_child(attack_all_btn)
 
 	retreat_all_btn = Button.new()
 	retreat_all_btn.text = "全军撤退 (S)"
-	retreat_all_btn.position = Vector2(180, 420)
+	retreat_all_btn.position = Vector2(290, 700)
 	retreat_all_btn.theme = btn_theme
 	retreat_all_btn.pressed.connect(_on_retreat_all_pressed)
 	add_child(retreat_all_btn)
 
 	var stop_gather_btn = Button.new()
 	stop_gather_btn.text = "暂停采集 (H)"
-	stop_gather_btn.position = Vector2(10, 460)
+	stop_gather_btn.position = Vector2(10, 740)
 	stop_gather_btn.toggle_mode = true
 	stop_gather_btn.theme = btn_theme
 	stop_gather_btn.pressed.connect(_on_stop_gather_pressed)
@@ -574,25 +587,20 @@ func _ready():
 
 	var hold_position_btn = Button.new()
 	hold_position_btn.text = "原地防守 (P)"
-	hold_position_btn.position = Vector2(180, 460)
+	hold_position_btn.position = Vector2(290, 740)
 	hold_position_btn.toggle_mode = true
 	hold_position_btn.theme = btn_theme
 	hold_position_btn.pressed.connect(_on_hold_position_pressed)
 	add_child(hold_position_btn)
 
-	var rally_btn = Button.new()
+	rally_btn = Button.new()
 	rally_btn.text = "全选军队 (R)"
-	rally_btn.position = Vector2(10, 500)
+	rally_btn.position = Vector2(10, 780)
 	rally_btn.theme = btn_theme
 	rally_btn.pressed.connect(_on_rally_pressed)
 	add_child(rally_btn)
-	# 创建单位统计面板
-	_create_unit_stats_panel()
-	# 创建切换按钮
-	_create_stats_toggle_button()
 
 	set_process(true)
-
 const ALERT_DANGER = UITheme.ALERT_DANGER     # 红色 — 基地/建筑被攻击
 const ALERT_WARNING = UITheme.ALERT_WARNING   # 黄色 — 敌军来袭/资源不足
 const ALERT_INFO = UITheme.ALERT_INFO      # 绿色 — 建造/训练/升级完成
@@ -629,93 +637,24 @@ func show_alert_message(msg: String, color: Color = ALERT_DANGER):
 
 
 func update_data(resources: Dictionary, population: Dictionary, limits: Dictionary = {}):
-	gold_label.text = "%d" % resources.get("gold", 0)
-	wood_label.text = "%d" % resources.get("wood", 0)
-	stone_label.text = "%d" % resources.get("stone", 0)
-	food_label.text = "%d" % resources.get("food", 0)
-	oil_label.text = "%d" % resources.get("oil", 0)
-	pop_label.text = "%d/%d" % [population.get("current", 0), population.get("max", 0)]
-	if pop_bar:
-		pop_bar.value = min(float(population.get("current",1))/max(population.get("max",1),1)*100, 100)
-	for rk in ["gold","wood","stone","food","oil"]:
-		if res_bars.has(rk):
-			var rv = resources.get(rk, 0)
+	for rk in ["gold", "wood", "stone", "food", "oil"]:
+		var lbl = _stats_res_labels.get(rk)
+		if lbl:
+			lbl.text = "%d" % resources.get(rk, 0)
+		var rb = _stats_res_bars.get(rk)
+		if rb:
 			var rl = limits.get(rk, 500) if not limits.is_empty() else 500
-			res_bars[rk].value = min(float(rv)/max(rl,1)*100, 100)
-	
-
+			rb.value = clampf(float(resources.get(rk, 0)) / maxf(float(rl), 1.0) * 100.0, 0.0, 100.0)
+	if _stats_pop_label:
+		_stats_pop_label.text = "👥 人口: %d/%d" % [population.get("current", 0), population.get("max", 0)]
+	if _stats_pop_bar:
+		_stats_pop_bar.value = clampf(float(population.get("current", 1)) / maxf(float(population.get("max", 1)), 1.0) * 100.0, 0.0, 100.0)
 func _process(delta):
 	_tick_ffa_diplo(delta)
 	_unit_stats_timer -= delta
 	var bm = _get_bm()
-	
-	# 在线模式：统一用 get_host_* 桥接
-	var res = bm.player_resources
-	var pop = bm.player_pop
-	var max_pop = bm.player_max_pop
-	var lim = bm.player_resource_limits
-	if bm.has_method("get_host_resources"):
-		res = bm.get_host_resources()
-		pop = bm.get_host_pop()
-		max_pop = bm.get_host_max_pop()
-		lim = bm.get_host_limits()
-		gold_label.text = "黄金: %d/%d" % [res["gold"], lim["gold"]]
-		wood_label.text = "木材: %d/%d" % [res["wood"], lim["wood"]]
-		stone_label.text = "石头: %d/%d" % [res["stone"], lim["stone"]]
-		food_label.text = "食物: %d/%d" % [res["food"], lim["food"]]
-		oil_label.text = "石油: %d/%d" % [res["oil"], lim["oil"]]
-		pop_label.text = "人口: %d/%d" % [pop, max_pop]
-		if pop_bar:
-			pop_bar.value = min(float(pop)/max(max_pop,1)*100, 100)
-			for rk in ["gold","wood","stone","food","oil"]:
-				if res_bars.has(rk):
-					var rv = res.get(rk, 0)
-					var rl = bm.player_resource_limits.get(rk, 500)
-					res_bars[rk].value = min(float(rv)/max(rl,1)*100, 100)
-		var player_nation = bm.team_nations.get(RTSConfig.Team.BLUE, -1)
-		player_nation_label.text = "我方国家: %s" % _get_nation_name(player_nation)
-		nation_bonus_label.text = "加成:\n" + NationBonuses.get_description(player_nation)
-		var enemy_nation = bm.team_nations.get(RTSConfig.Team.RED, -1)
-		enemy_nation_label.text = "敌方国家: %s" % _get_nation_name(enemy_nation)
-
-	# Gatherer count every 1s, income rate every 10s
-	gather_timer -= delta
-	income_timer -= delta
-	
-	if gather_timer <= 0:
-		gather_timer = 1.0
-		var gather_counts = {"gold":0, "wood":0, "stone":0, "food":0, "oil":0}
-		for entity in get_tree().get_nodes_in_group("entities"):
-			if entity is Army and entity.health > 0 and (entity.owner_peer_id == 1 or entity.team == bm.get_host_team()):
-				if entity.entity_id in [10, 14] and entity.current_order in ["gather", "deliver"]:
-					var tgt = entity.current_target
-					if is_instance_valid(tgt) and tgt is WorldResource:
-						var rt = tgt.resource_type
-						if rt in gather_counts:
-							gather_counts[rt] += 1
-		
-		if res_snapshot.is_empty():
-			res_snapshot = bm.player_resources.duplicate()
-		else:
-			for rk in ["gold","wood","stone","food","oil"]:
-				var cur = res.get(rk, 0)
-				var prev = res_snapshot.get(rk, cur)
-				if cur > prev:
-					res_income[rk] = res_income.get(rk, 0) + (cur - prev)
-				res_snapshot[rk] = cur
-		if income_timer <= 0:
-			income_timer = 10.0
-			for rk in ["gold","wood","stone","food","oil"]:
-				income_rate[rk] = res_income.get(rk, 0) / 10.0
-				res_income[rk] = 0
-		for rk in ["gold", "wood", "stone", "food", "oil"]:
-			var nl = res_name_labels.get(rk)
-			if nl:
-				var icon = UITheme.RESOURCE_ICONS.get(rk, "◆")
-				var nm = UITheme.RESOURCE_NAMES.get(rk, rk)
-				nl.text = "%s %s  %d人 %+.1f/s" % [icon, nm, gather_counts[rk], income_rate.get(rk, 0.0)]
-
-
+	if bm == null:
+		return
 	minimap_timer -= delta
 	if minimap_timer <= 0:
 		minimap_timer = 0.5
