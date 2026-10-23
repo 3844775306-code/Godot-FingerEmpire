@@ -580,6 +580,8 @@ func _state_development(_delta):
 		_process_line_military()
 	_process_line_1()
 	_process_line_3()
+	# 主力出击不再只等到 ASSAULT：发育阶段兵力成型且开局时间已过，也要主动发起主攻
+	_process_line_4()
 	_ensure_merchants()
 	var _did_merchant = _try_produce_merchants_or_officials()
 	_try_produce_monks()
@@ -681,6 +683,31 @@ func _primary_enemy_team() -> int:
 		return battle.diplomacy.get_team_of(_primary_enemy_owner)
 	# 非乱斗经典红蓝对位；乱斗下全盟友无主敌时回退（BLUE/RED 无独立国时自然为空，不会误打盟友）
 	return RTSConfig.Team.BLUE if my_team == RTSConfig.Team.RED else RTSConfig.Team.RED
+
+# 主攻目标：优先外交确定的主敌，其次对位队伍，最后找最近的敌对城堡。
+# 乱斗里 BLUE/RED 不一定有国家，只按队伍找会拿到空目标，导致 AI 永远不发起主攻。
+func _get_attack_target_castle() -> Building:
+	if _primary_enemy_owner != -1:
+		var oc = get_peer_castle(_primary_enemy_owner)
+		if oc != null and oc.health > 0:
+			return oc
+	var tc = get_team_castle(_primary_enemy_team())
+	if tc != null:
+		return tc
+	var my_castle = get_peer_castle(my_peer_id)
+	var base = my_castle.global_position if my_castle else Vector3.ZERO
+	var best: Building = null
+	var best_d: float = INF
+	for e in battle.entities.get_children():
+		if not (e is Building) or int(e.entity_id) != 20 or e.health <= 0:
+			continue
+		if not _entity_is_enemy(e):
+			continue
+		var d: float = base.distance_squared_to(e.global_position)
+		if d < best_d:
+			best_d = d
+			best = e
+	return best
 
 # 该实体是否对我构成敌对（owner 感知）。无外交管理器时退化为纯队伍判定，资源恒非敌。
 func _entity_is_enemy(e) -> bool:
@@ -1244,7 +1271,7 @@ func execute_harass():
 	_harass_until = -999.0
 	_cleanup_harass_squad(float(battle.game_time))
 	var my_castle = get_peer_castle(my_peer_id)
-	var enemy_castle = get_team_castle(_primary_enemy_team())
+	var enemy_castle = _get_attack_target_castle()
 	var target = _find_harass_target(my_castle, enemy_castle)
 	if target == null:
 		current_tactic = LateTactic.NONE
@@ -1337,7 +1364,7 @@ func _cleanup_harass_squad(now: float) -> void:
 	_harass_ids.clear()
 
 func execute_overwhelm():
-	var enemy_castle = get_team_castle(_primary_enemy_team())
+	var enemy_castle = _get_attack_target_castle()
 	if not enemy_castle:
 		current_tactic = LateTactic.NONE
 		return
@@ -1370,11 +1397,11 @@ func execute_raid():
 	if not self_castle or self_castle.level < 3:
 		current_tactic = LateTactic.NONE
 		return
-	var enemy_team = _primary_enemy_team()
-	var enemy_castle = get_team_castle(enemy_team)
+	var enemy_castle = _get_attack_target_castle()
 	if not enemy_castle or not is_instance_valid(enemy_castle):
 		current_tactic = LateTactic.NONE
 		return
+	var enemy_team: int = int(enemy_castle.team)
 	var enemy_pos = enemy_castle.global_position
 	var special_uid = RAID_UNIT
 	if NationData.NATION_UNITS.has(nation) and NationData.NATION_UNITS.get(nation).size() >= 2:
@@ -1806,15 +1833,19 @@ func _process_line_3():
 			if hp2 != Vector3.ZERO: build_building(28, hp2)
 
 func _process_line_4():
-	# 威胁上升 / 防守 / 已经全队压上时，不再重复派出主力
+	# 威胁上升 / 防守姿态时不再把主力送出去；骚扰、突袭、全军压上时仍允许补发主攻
 	if _defense != null and int(_defense.threat_level) >= 2:
 		return
-	if current_tactic == LateTactic.DEFEND or current_tactic == LateTactic.OVERWHELM or current_tactic == LateTactic.RAID:
+	if current_tactic == LateTactic.DEFEND:
+		return
+	# 发育阶段保留原来的 ASSAULT 门槛，但兵力成型且开局时间已过就先发起主攻，
+	# 避免一直等到 30 人、结果因为人口/产能卡住而永远不出门
+	if phase == Phase.DEVELOPMENT and battle.game_time < 120.0:
 		return
 	# 骚扰小队出门时主力仍可进攻；attack_move 会跳过 ai_harass 单位
 	var my_key = my_peer_id if my_peer_id != -1 else my_team
 	if count_military(my_key) >= 12 and an_attack():
-		var target = get_team_castle(_primary_enemy_team())
+		var target = _get_attack_target_castle()
 		if target: attack_move(target.global_position, 30)
 
 func _process_line_5():
