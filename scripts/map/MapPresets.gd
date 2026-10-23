@@ -54,6 +54,22 @@ const PRESETS := {
 		"chips": ["S 形大河", "两处浅滩", "河心油井"],
 		"recommended": "1v1",
 	},
+	"forest": {
+		"id": "forest",
+		"name": "黑森林",
+		"battle": "条顿堡 9 AD",
+		"desc": "林海覆盖近四成地表，林中视野骤降，伏击与侦察主导战场。",
+		"stages": [
+			["noise_base", {"freq": 0.03, "octaves": 4, "mountain_threshold": 0.42}],
+			["forest", {"coverage": 0.50, "freq": 0.045, "clearing": 0.45}],
+		],
+		"castle_layout": {"type": "mirror_x", "anchors": [[0.22, 0.5], [0.78, 0.5]], "flat_radius": 5},
+		"palette": {},
+		"resources": {"wood": 1.5, "gold": 0.7, "wood_near": "any", "stone_near": "any"},
+		"modifiers": {},
+		"chips": ["森林覆盖 35%", "林中视野 -45%", "木材 +50%"],
+		"recommended": "1v1",
+	},
 }
 
 static func has_preset(id: String) -> bool:

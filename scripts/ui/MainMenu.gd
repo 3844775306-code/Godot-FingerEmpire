@@ -1,8 +1,10 @@
 extends Control
 
 const MapPresets = preload("res://scripts/map/MapPresets.gd")
+const MapPreview = preload("res://scripts/map/MapPreview.gd")
 
 var nation_select: OptionButton
+var _map_button: Button = null
 
 func _ready():
 	AudioManager.play_music("menu")
@@ -143,7 +145,7 @@ func _ready():
 	_style_option(mode_select, 16)
 	add_child(mode_select)
 
-	# 战场地形（试点：特殊地图仅 1V1 可选）
+	# 战场地形：按钮打开卡片选择器（试点：特殊地图仅 1V1 可选）
 	var map_label = Label.new()
 	map_label.text = "战场地形"
 	map_label.position = Vector2(700, 488)
@@ -152,21 +154,15 @@ func _ready():
 	UITheme.apply_label(map_label, 20, UITheme.PARCHMENT)
 	add_child(map_label)
 
-	var map_select = OptionButton.new()
-	map_select.name = "MapSelect"
-	map_select.position = Vector2(910, 486)
-	map_select.size = Vector2(420, 40)
-	_style_option(map_select, 16)
-	var map_ids: Array = MapPresets.all_ids()
-	for i in range(map_ids.size()):
-		var info: Dictionary = MapPresets.get_info(map_ids[i])
-		var item_text: String = "  " + String(info["name"])
-		if String(info["battle"]) != "":
-			item_text += " · " + String(info["battle"])
-		map_select.add_item(item_text)
-		map_select.set_item_metadata(i, map_ids[i])
-	map_select.selected = maxi(map_ids.find(GameSettings.map_id), 0)
-	add_child(map_select)
+	var map_btn = Button.new()
+	map_btn.name = "MapButton"
+	map_btn.position = Vector2(910, 486)
+	map_btn.size = Vector2(420, 40)
+	UITheme.apply_muted_button(map_btn, 16)
+	map_btn.pressed.connect(_open_map_dialog)
+	add_child(map_btn)
+	_map_button = map_btn
+	_refresh_map_button()
 	mode_select.item_selected.connect(_update_map_availability)
 	_update_map_availability(mode_select.selected)
 
@@ -289,13 +285,149 @@ func _set_cmd_toggle(btn: Button, on: bool) -> void:
 
 ## 特殊地形只支持 1V1，其余模式禁用选图并回到经典大陆
 func _update_map_availability(mode_idx: int) -> void:
-	var ms = get_node_or_null("MapSelect")
-	if not ms:
+	if not _map_button:
 		return
 	var allow := mode_idx == 0
-	ms.disabled = not allow
+	_map_button.disabled = not allow
 	if not allow:
-		ms.selected = 0
+		GameSettings.map_id = "classic"
+	_refresh_map_button()
+
+func _refresh_map_button() -> void:
+	if not _map_button:
+		return
+	var info := MapPresets.get_info(GameSettings.map_id)
+	var suffix := ""
+	if String(info["battle"]) != "":
+		suffix = " · " + String(info["battle"])
+	_map_button.text = "  %s%s ▸" % [String(info["name"]), suffix]
+	if _map_button.disabled:
+		_map_button.text += "（仅 1V1）"
+
+# ---------- 战场地形卡片选择器 ----------
+func _open_map_dialog() -> void:
+	if _map_button and _map_button.disabled:
+		return
+	var existing = get_node_or_null("MapDialog")
+	if existing:
+		existing.queue_free()
+		return
+	_build_map_dialog()
+
+func _build_map_dialog() -> void:
+	var dlg = Control.new()
+	dlg.name = "MapDialog"
+	dlg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	add_child(dlg)
+
+	var dim = ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.65)
+	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	dlg.add_child(dim)
+
+	var panel = Panel.new()
+	panel.position = Vector2(340, 300)
+	panel.size = Vector2(1720, 760)
+	panel.add_theme_stylebox_override("panel", UITheme.card_style(UITheme.GOLD))
+	dlg.add_child(panel)
+	UITheme.fade_in(panel, 0.2)
+
+	var title = Label.new()
+	title.text = "⚔️ 选择战场地形 ⚔️"
+	title.position = Vector2(0, 16)
+	title.size = Vector2(1720, 46)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	UITheme.apply_label(title, 32, UITheme.GOLD)
+	panel.add_child(title)
+
+	var hint = Label.new()
+	hint.text = "特殊地形暂只支持 1V1；地形会改变视野、移速与资源分布"
+	hint.position = Vector2(0, 66)
+	hint.size = Vector2(1720, 26)
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	UITheme.apply_label(hint, 18, UITheme.STONE.lightened(0.35))
+	panel.add_child(hint)
+
+	var ids: Array = MapPresets.all_ids()
+	var card_w := 380.0
+	var gap := 24.0
+	var total_w := card_w * float(ids.size()) + gap * float(ids.size() - 1)
+	var start_x := (1720.0 - total_w) * 0.5
+	for i in range(ids.size()):
+		panel.add_child(_make_map_card(String(ids[i]), Vector2(start_x + float(i) * (card_w + gap), 104)))
+
+	var close = Button.new()
+	close.text = "✕"
+	close.position = Vector2(1660, 16)
+	close.size = Vector2(44, 44)
+	UITheme.apply_muted_button(close, 20)
+	close.pressed.connect(dlg.queue_free)
+	panel.add_child(close)
+
+func _make_map_card(id: String, pos: Vector2) -> Control:
+	var info := MapPresets.get_info(id)
+	var selected := id == GameSettings.map_id
+
+	var card = Panel.new()
+	card.position = pos
+	card.size = Vector2(380, 620)
+	card.add_theme_stylebox_override("panel", UITheme.card_style(UITheme.GOLD if selected else UITheme.STONE))
+
+	var thumb = TextureRect.new()
+	thumb.position = Vector2(55, 18)
+	thumb.size = Vector2(270, 270)
+	thumb.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	thumb.texture = MapPreview.get_texture(id, 270)
+	card.add_child(thumb)
+
+	var name_lbl = Label.new()
+	name_lbl.text = String(info["name"])
+	name_lbl.position = Vector2(10, 300)
+	name_lbl.size = Vector2(360, 36)
+	name_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	UITheme.apply_label(name_lbl, 26, UITheme.GOLD if selected else UITheme.PARCHMENT)
+	card.add_child(name_lbl)
+
+	var battle_lbl = Label.new()
+	battle_lbl.text = String(info["battle"])
+	battle_lbl.position = Vector2(10, 338)
+	battle_lbl.size = Vector2(360, 26)
+	battle_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	UITheme.apply_label(battle_lbl, 17, UITheme.STONE.lightened(0.4))
+	card.add_child(battle_lbl)
+
+	var chips = Label.new()
+	var chip_arr := PackedStringArray(info["chips"])
+	chips.text = " · ".join(chip_arr)
+	chips.position = Vector2(14, 374)
+	chips.size = Vector2(352, 60)
+	chips.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	chips.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UITheme.apply_label(chips, 17, UITheme.GOLD)
+	card.add_child(chips)
+
+	var desc = Label.new()
+	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	desc.text = String(info["desc"])
+	UITheme.apply_label(desc, 16, UITheme.PARCHMENT.darkened(0.15))
+	# 先入树再定尺寸：自动换行标签在入树前算出的宽度会按整行文本撑开
+	card.add_child(desc)
+	desc.position = Vector2(18, 442)
+	desc.size = Vector2(344, 130)
+
+	var pick = Button.new()
+	pick.flat = true
+	pick.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	pick.pressed.connect(func(): _select_map(id))
+	card.add_child(pick)
+	return card
+
+func _select_map(id: String) -> void:
+	GameSettings.map_id = id
+	_refresh_map_button()
+	var dlg = get_node_or_null("MapDialog")
+	if dlg:
+		dlg.queue_free()
 
 func _on_play_pressed():
 	GameSettings.player_nation = nation_select.selected
@@ -313,10 +445,7 @@ func _on_play_pressed():
 		GameSettings.ffa_nation_count = 3
 		GameSettings.ai_mode = mode_idx + 1
 	# 战场地形：仅 1V1 生效，其余模式回经典大陆
-	var msel = get_node_or_null("MapSelect")
-	if msel and not msel.disabled and msel.selected >= 0:
-		GameSettings.map_id = String(msel.get_item_metadata(msel.selected))
-	else:
+	if _map_button and _map_button.disabled:
 		GameSettings.map_id = "classic"
 	var fc = get_node_or_null("FastCheck")
 	GameSettings.fast_mode = fc.button_pressed if fc else false

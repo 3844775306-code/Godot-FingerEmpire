@@ -7,6 +7,7 @@ extends Node
 const SEEDS := [1, 2, 3]
 const DEFAULT_MAP := "classic"
 const GroundScript = preload("res://scripts/map/Ground.gd")
+const MapPreview = preload("res://scripts/map/MapPreview.gd")
 
 func _ready() -> void:
 	GameSettings.ai_mode = 1
@@ -39,7 +40,13 @@ func _ready() -> void:
 			_ascii(g, RTSConfig.MAP_SIZE)
 		g.free()
 
+	_preview_selfcheck()
 	get_tree().quit()
+
+func _preview_selfcheck() -> void:
+	for id in ["classic", "ridge", "ford", "forest"]:
+		var tex = MapPreview.get_texture(id, 64)
+		print("PREVIEW %s %s" % [id, str(tex.get_size()) if tex else "null"])
 
 func _read_map_arg() -> String:
 	for a in OS.get_cmdline_user_args():

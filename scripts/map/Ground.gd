@@ -187,6 +187,8 @@ func _generate_with_stages(size: int, stages: Array) -> void:
 				_op_river(size, params)
 			"fords":
 				_op_fords(size, params)
+			"forest":
+				_op_forest(size, params)
 			_:
 				push_warning("[地图] 未知生成算子: %s" % op)
 	_colorize_grid(size)
@@ -318,6 +320,42 @@ func _op_fords(size: int, params: Dictionary) -> void:
 			var yy := clampi(fy + dy, 0, size - 1)
 			for x in range(left, right + 1):
 				overlay_grid[x][yy] = 3
+
+# 森林：低频噪声圈出成片林地（按分位阈值保证覆盖率），再用另一层噪声挖出林间空地
+func _op_forest(size: int, params: Dictionary) -> void:
+	var coverage := clampf(float(params.get("coverage", 0.38)), 0.05, 0.85)
+	var freq := float(params.get("freq", 0.045))
+	var clearing := float(params.get("clearing", 0.45))
+	var seed_val := custom_seed if custom_seed != 0 else randi()
+	var noise := FastNoiseLite.new()
+	noise.seed = seed_val
+	noise.frequency = freq
+	noise.fractal_octaves = 3
+	var clr := FastNoiseLite.new()
+	clr.seed = seed_val + 977
+	clr.frequency = float(params.get("clearing_freq", 0.09))
+	clr.fractal_octaves = 2
+
+	# 只在平地上取分位阈值，保证实际覆盖率贴近参数
+	var plain_vals: Array = []
+	for x in range(size):
+		for y in range(size):
+			if terrain_grid[x][y] == 0:
+				plain_vals.append(noise.get_noise_2d(x, y))
+	if plain_vals.is_empty():
+		return
+	plain_vals.sort()
+	var idx := clampi(int(float(plain_vals.size()) * (1.0 - coverage)), 0, plain_vals.size() - 1)
+	var threshold: float = plain_vals[idx]
+	for x in range(size):
+		for y in range(size):
+			if terrain_grid[x][y] != 0:
+				continue
+			if noise.get_noise_2d(x, y) < threshold:
+				continue
+			if clr.get_noise_2d(x, y) > clearing:
+				continue
+			overlay_grid[x][y] = 1
 
 func _colorize_grid(size: int) -> void:
 	base_colors.clear()
@@ -651,6 +689,8 @@ func _place_resources():
 	var prof: Dictionary = map_preset.get("resources", {})
 	# 森林/山脊图基地附近没有山，"靠山才有林"的条件会落空，先放开
 	var wood_near_any := String(prof.get("wood_near", "mountain")) == "any"
+	# 森林图山地稀少，"靠山才有石"会大面积落空，同样放开
+	var stone_near_any := String(prof.get("stone_near", "mountain")) == "any"
 
 	# Castle positions in grid coordinates
 	var player_gx = int(player_castle_pos.x + size/2.0)
@@ -682,6 +722,10 @@ func _place_resources():
 		for gu in guaranteed:
 			if int(gu["type"]) == 1:
 				gu["near_mountain"] = false
+	if stone_near_any:
+		for gu in guaranteed:
+			if int(gu["type"]) == 2:
+				gu["adjacent_mountains"] = 0
 	for castle in castles:
 		for gu in guaranteed:
 			_place_group_near(gu.type, gu.min_sz, gu.max_sz, castle[0], castle[1], gu.dist, gu.terrain, placed, size, gu.get("near_mountain", false), gu.get("adjacent_mountains", 0))
@@ -696,6 +740,10 @@ func _place_resources():
 		for gu in hard_extra:
 			if int(gu["type"]) == 1:
 				gu["near_mountain"] = false
+	if stone_near_any:
+		for gu in hard_extra:
+			if int(gu["type"]) == 2:
+				gu["adjacent_mountains"] = 0
 	if GameSettings.ai_difficulty >= GameSettings.AIDifficulty.HARD or GameSettings.red_ai_difficulty >= GameSettings.AIDifficulty.HARD or GameSettings.blue_ai_difficulty >= GameSettings.AIDifficulty.HARD:
 		# Only for enemy/AI castles（1v1 敌方 = 后半；2v2/3v3 红队城堡 = 后半；乱斗 = 玩家之外全部 AI）
 		var ai_castles = castles.slice(1) if is_ffa_single else castles.slice(castles.size() / 2)
@@ -715,6 +763,10 @@ func _place_resources():
 		for g in remaining:
 			if int(g["type"]) == 1:
 				g["near_mountain"] = false
+	if stone_near_any:
+		for g in remaining:
+			if int(g["type"]) == 2:
+				g["adjacent_mountains"] = 0
 	for g in remaining:
 		for _gi in range(g.count):
 			_place_group_random(g.type, g.min_sz, g.max_sz, g.terrain, placed, size, castles, g.get("near_mountain", false), g.get("away_mountain", false), g.get("adjacent_mountains", 0))
