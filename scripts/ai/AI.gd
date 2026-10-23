@@ -23,7 +23,7 @@ var production_step: int = 0
 var wanted_buildings: Array = [20, 21, 23, 42, 54, 24, 29, 52, 53]
 var wanted_units: Array = [11,12,15,16,17,18,35,36,37,38,39,40,13,43,44,45,46,47,48,49,50,58,59,5,6,9]
 var target_army_count: int = 7
-var target_house_count: int = 8
+var target_house_count: int = 10
 var desired_worker_count: int = 8
 
 var cached_shipyard_pos: Vector3 = Vector3.ZERO
@@ -867,7 +867,8 @@ func find_valid_build_position(near_pos: Vector3, building_id: int) -> Vector3:
 			var test = near_pos + Vector3(cos(randf_range(0, TAU))*dist, 0, sin(randf_range(0, TAU))*dist)
 			var overlap = false
 			for entity in battle.entities.get_children():
-				if not (entity is GameEntity) or entity.health <= 0: continue
+				# 单位会移动，不能因为附近站着农民/士兵就判定无法建造；只避让建筑和资源点
+				if not (entity is Building or entity is WorldResource) or entity.health <= 0: continue
 				if test.distance_to(entity.global_position) < (radius + entity.body_radius + 2.0):
 					overlap = true; break
 			if not overlap and _is_valid_build_ground(test):
@@ -1071,9 +1072,6 @@ func _is_valid_build_ground(world_pos: Vector3) -> bool:
 	var gx = int(world_pos.x + RTSConfig.MAP_SIZE / 2); var gz = int(world_pos.z + RTSConfig.MAP_SIZE / 2)
 	if gx < 0 or gx >= RTSConfig.MAP_SIZE or gz < 0 or gz >= RTSConfig.MAP_SIZE: return false
 	if battle.get_terrain_at_grid(gx, gz) != 0: return false
-	for e in battle.entities.get_children():
-		if e is GameEntity and e.team == my_team and e.health > 0:
-			if e.global_position.distance_to(world_pos) < 10.0: return false
 	for e in battle.entities.get_children():
 		if e is Building and e.team == my_team and e.health > 0:
 			if e.global_position.distance_to(world_pos) < (e.body_radius + 3.0): return false
@@ -1782,6 +1780,11 @@ func _try_produce_monks():
 			produce_unit(mid); return
 
 func _process_line_military():
+	# 人口满时先补民居，否则 AI 会一直卡在上限，看起来像“不会造房、也不出兵”
+	if not _can_train_unit():
+		_process_line_3()
+		if not _can_train_unit():
+			return
 	var priority = get_counter_priority()
 	
 	for u_id in priority:
