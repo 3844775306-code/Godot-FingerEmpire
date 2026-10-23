@@ -9,18 +9,19 @@ extends Control
 #   - 选择/下令仍走既有 SelectionManager / ClientInput，通过 TouchGestureRouter 合成
 #
 # 布局分区：态势左上（资源胶囊）、复盘全屏（统计大屏）、看左（单位信息面板）、
-#          造中（单位条 + 建造抽屉）、令右（框选模式 + 五个全局指令）。
+#          单位条底部居中（生产按钮在单位信息面板里）、令右（框选模式 + 五个全局指令）。
+# 建造入口改为长按地图呼出建造菜单（由 TouchGestureRouter 合成右键触发），不再有底部抽屉。
 
 var hud: Node = null
 var router: TouchGestureRouter = null
 var capsule: MobileResourceCapsule = null
 var command_bar: MobileCommandBar = null
 var unit_bar: MobileUnitBar = null
-var drawer: MobileBuildDrawer = null
 var stats_screen: StatsOverviewScreen = null
 
 var _bm: Node = null
 var _refresh_timer: float = 0.0
+var _ai_hide_timer: float = 0.0
 var _last_resources: Dictionary = {}
 var _last_population: Dictionary = {}
 var _last_limits: Dictionary = {}
@@ -93,11 +94,6 @@ func _create_components() -> void:
 	unit_bar.focus_requested.connect(_on_unit_focus_requested)
 	add_child(unit_bar)
 
-	drawer = MobileBuildDrawer.new()
-	drawer.name = "BuildDrawer"
-	drawer.battle_manager_provider = Callable(self, "_get_bm")
-	add_child(drawer)
-
 	stats_screen = StatsOverviewScreen.new()
 	stats_screen.name = "StatsOverview"
 	stats_screen.battle_manager_provider = Callable(self, "_get_bm")
@@ -105,7 +101,15 @@ func _create_components() -> void:
 	stats_screen.visible = false
 	add_child(stats_screen)
 
-	drawer.produce_requested.connect(_on_produce_requested)
+	_hide_ai_debug_panels()
+
+# AI 决策面板在移动端改为并入全屏统计大屏，战场上不再常驻显示
+func _hide_ai_debug_panels() -> void:
+	if hud == null:
+		return
+	for child in hud.get_children():
+		if child is Control and child.name.begins_with("AIDebugPanel") and child.visible:
+			child.visible = false
 
 func _relayout_shared_nodes() -> void:
 	# 摇杆在移动端不再需要：左下角让给单位信息面板，同时停掉它的输入处理避免和手势路由抢触摸
@@ -128,14 +132,15 @@ func _relayout_shared_nodes() -> void:
 		info.mouse_filter = Control.MOUSE_FILTER_STOP
 		_scale_shared_fonts(info)
 
-# 信息面板是桌面节点，字号按 2400 宽屏定死；手机上要按 dp 比例整体放大，否则读不出来
+# 信息面板是桌面节点，Label/Button 字号按 2400 宽屏定死，手机上要按 dp 比例整体放大。
+# RichTextLabel 不在这里处理：它的字号主题项是 normal_font_size，由 InfoPanel 自己按 dp 设置。
 func _scale_shared_fonts(root: Control) -> void:
 	var stack: Array = [root]
 	while not stack.is_empty():
 		var node: Node = stack.pop_back()
 		for child in node.get_children():
 			stack.append(child)
-			if child is Label or child is Button or child is RichTextLabel:
+			if child is Label or child is Button:
 				var cur: int = int(child.get_theme_font_size("font_size"))
 				if cur > 0:
 					child.add_theme_font_size_override("font_size", int(round(cur * UILayout.DP_RATIO)))
@@ -184,7 +189,9 @@ func _collect_selection() -> Array:
 func is_point_over_panel(pos: Vector2) -> bool:
 	if stats_screen and stats_screen.visible and stats_screen.is_point_inside(pos):
 		return true
-	for ctrl in [capsule, command_bar, unit_bar, drawer]:
+	if _point_over_build_menu(pos):
+		return true
+	for ctrl in [capsule, command_bar, unit_bar]:
 		if ctrl is Control and ctrl.visible and ctrl.get_global_rect().has_point(pos):
 			return true
 	var info := _find_ui_node("InfoPanel")
@@ -195,15 +202,28 @@ func is_point_over_panel(pos: Vector2) -> bool:
 		return true
 	return false
 
+# 长按呼出的建造菜单也是触屏面板：命中的触摸要转成 UI 点击，不能漏进世界选择
+func _point_over_build_menu(pos: Vector2) -> bool:
+	var bm := _get_bm()
+	if bm == null:
+		return false
+	var menu = bm.get("current_build_menu")
+	if menu is Control and is_instance_valid(menu) and menu.visible:
+		return menu.get_global_rect().has_point(pos)
+	return false
+
 func _process(delta: float) -> void:
+	# AI 面板由 AI 自己创建/重建，定期扫一遍确保移动端始终隐藏
+	_ai_hide_timer -= delta
+	if _ai_hide_timer <= 0.0:
+		_ai_hide_timer = 1.0
+		_hide_ai_debug_panels()
 	_refresh_timer -= delta
 	if _refresh_timer > 0.0:
 		return
 	_refresh_timer = REFRESH_INTERVAL
 	if unit_bar:
 		unit_bar.refresh(_collect_selection())
-	if drawer:
-		drawer.refresh(_collect_selection())
 	if capsule:
 		_refresh_resources()
 		capsule.set_time_text(_format_game_time())
@@ -243,11 +263,6 @@ func _format_game_time() -> String:
 	var mins := int(seconds / 60.0)
 	var secs := int(seconds) % 60
 	return "%02d:%02d" % [mins, secs]
-
-func _on_produce_requested(building: Node, unit_id: int) -> void:
-	var bm := _get_bm()
-	if bm and bm.has_method("produce_unit"):
-		bm.call("produce_unit", building, unit_id)
 
 # 点按单位条：把镜头移到该单位
 func _on_unit_focus_requested(entity) -> void:

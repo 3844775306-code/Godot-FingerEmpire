@@ -23,6 +23,24 @@ func _get_res() -> Dictionary:
 	if battle.has_method("get_host_resources"):
 		return battle.get_host_resources()
 	return battle.player_resources
+
+# 移动端字号：设计空间 2400x1400 直接写 14 号字在手机上只有约 4dp。
+# 注意 RichTextLabel 的字号主题项是 normal_font_size，只设 font_size 不会生效。
+func _is_mobile() -> bool:
+	return InputSource.use_mobile_ui()
+
+func _mobile_font(base_size: int) -> int:
+	if not _is_mobile():
+		return base_size
+	return int(round(base_size * UILayout.DP_RATIO))
+
+func _set_rtl_font(rtl: RichTextLabel, size: int) -> void:
+	rtl.add_theme_font_size_override("normal_font_size", size)
+	rtl.add_theme_font_size_override("bold_font_size", size)
+	rtl.add_theme_font_size_override("italics_font_size", size)
+	rtl.add_theme_font_size_override("bold_italics_font_size", size)
+	rtl.add_theme_font_size_override("mono_font_size", size)
+
 func _ready():
 	visible = false
 	add_theme_stylebox_override("panel", UITheme.panel_style(UITheme.RADIUS_LG, UITheme.BORDER_MED))
@@ -36,6 +54,10 @@ func _ready():
 	name_rtl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	stats_rtl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	stats_rtl.add_theme_color_override("default_color", UITheme.PARCHMENT)
+	if _is_mobile():
+		# 手机上名称与属性两行都要能看清：名称 15dp、属性 12dp
+		_set_rtl_font(name_rtl, UILayout.font_dp(15.0))
+		_set_rtl_font(stats_rtl, UILayout.font_dp(12.0))
 
 	# 血条：黑色背景条 + 锚点前景（宽度 = 血量比例）
 	hp_bar_bg = ColorRect.new(); hp_bar_bg.name = "HPBarBg"
@@ -107,7 +129,7 @@ func _build_crest_header() -> void:
 	emoji.set_anchors_preset(Control.PRESET_FULL_RECT)
 	emoji.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	emoji.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	emoji.add_theme_font_size_override("font_size", UITheme.FONT_XXL)
+	emoji.add_theme_font_size_override("font_size", _mobile_font(UITheme.FONT_XXL))
 	emoji.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	crest.add_child(emoji)
 	_crest_emoji = emoji
@@ -151,6 +173,7 @@ func _make_rtl_label() -> RichTextLabel:
 	var l = RichTextLabel.new(); l.bbcode_enabled = true; l.fit_content = true; l.autowrap_mode = TextServer.AUTOWRAP_OFF
 	l.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	l.add_theme_color_override("default_color", UITheme.PARCHMENT)
+	_set_rtl_font(l, _mobile_font(UITheme.FONT_XS))
 	return l
 
 func _get_same_type_buildings(entity: Building) -> Array[Building]:
@@ -259,8 +282,14 @@ func update_info(entity: GameEntity):
 				seen[prod.unit_id] = true
 				var uc = EntityDatabase.get_config(prod.unit_id)
 				if not uc: continue
-				var btn = Button.new(); btn.text = ""; btn.custom_minimum_size = Vector2(200, 40); btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-				UITheme.apply_button(btn, UITheme.FONT_SM)
+				var btn = Button.new(); btn.text = ""
+				if _is_mobile():
+					btn.custom_minimum_size = Vector2(0, UILayout.dp(40.0))
+					UITheme.apply_button(btn, UILayout.font_dp(13.0))
+				else:
+					btn.custom_minimum_size = Vector2(200, 40)
+					UITheme.apply_button(btn, UITheme.FONT_SM)
+				btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 				var ok = true; var cs = []
 				var lv = entity.level
 				for res in uc.get("cost", {}):
@@ -275,6 +304,7 @@ func update_info(entity: GameEntity):
 				rtl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 				rtl.anchor_left = 0; rtl.anchor_right = 1; rtl.anchor_top = 0; rtl.anchor_bottom = 1
 				rtl.add_theme_color_override("default_color", UITheme.PARCHMENT)
+				_set_rtl_font(rtl, _mobile_font(UITheme.FONT_SM))
 				var ct = ""
 				for ci in cs:
 					var cc = "white" if _get_res().get(ci.res, 0) >= ci.need else UITheme.hex_str(UITheme.VERMILION)
@@ -376,9 +406,14 @@ func show_multi_selection(entities: Array):
 		var row_color = ROW_COLORS[i % ROW_COLORS.size()]
 
 		var btn = Button.new()
-		btn.custom_minimum_size = Vector2(200, 40)
+		if _is_mobile():
+			btn.custom_minimum_size = Vector2(0, UILayout.dp(40.0))
+		else:
+			btn.custom_minimum_size = Vector2(200, 40)
 		btn.toggle_mode = true
 		UITheme.apply_row_button(btn, row_color)
+		if _is_mobile():
+			btn.add_theme_font_size_override("font_size", UILayout.font_dp(12.0))
 
 		var etype: int = 2
 		if g["entities"].size() > 0:

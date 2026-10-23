@@ -2235,13 +2235,24 @@ func _show_build_menu(world_pos: Vector3):
 	var menu = load("res://scripts/ui/BuildMenu.gd").new()
 	menu.building_defs = building_defs
 	menu.castle_level = get_player_castle_level()
-	var cam = get_viewport().get_camera_3d()
-	menu.position = cam.unproject_position(world_pos) - Vector2(65,15)
-	menu.z_index = 10
 	if has_node("UI"):
 		$UI.add_child(menu)
 	else:
 		add_child(menu)
+	# 尺寸要等 add_child 触发 _ready 之后才知道
+	var cam = get_viewport().get_camera_3d()
+	var screen_pos: Vector2 = cam.unproject_position(world_pos)
+	if InputSource.use_mobile_ui() and menu.has_method("get_menu_size"):
+		# 触屏菜单更大：以触点为中心弹出，并夹在视口内避免超出屏幕
+		var ms: Vector2 = menu.get_menu_size()
+		var vp: Vector2 = get_viewport().get_visible_rect().size
+		var margin: float = UILayout.dp(8.0)
+		menu.position = Vector2(
+			clampf(screen_pos.x - ms.x * 0.5, margin, maxf(margin, vp.x - ms.x - margin)),
+			clampf(screen_pos.y - ms.y * 0.5, margin, maxf(margin, vp.y - ms.y - margin)))
+	else:
+		menu.position = screen_pos - Vector2(65, 15)
+	menu.z_index = 10
 	current_build_menu = menu
 	menu.building_selected.connect(_on_building_selected_for_build)
 
@@ -2490,6 +2501,8 @@ func _process(delta):
 		fog_timer = 0.5
 		_update_fog_visibility()
 		_apply_fog()
+		# 实体可见性依赖的迷雾网格每 0.5s 才变化，无需每帧全量刷新
+		_update_visibility()
 		# 队伍制（纯离线1v1 / 联机）才整队刷新人口上限；owner 制由下方 1s 循环按 owner 刷新，
 		# 避免 0.5s 的全蓝方统计把队友房屋算进玩家上限
 		if ai_players.is_empty():
@@ -2526,9 +2539,6 @@ func _process(delta):
 		_enemy_attack_cooldown = 5.0
 		_detect_enemy_near_base()
 
-	_update_visibility()
-
-	if Engine.get_process_frames() % 60 == 0: print("[Profile-Total] frame=%.1fms fps=%.0f entities=%d" % [(Time.get_ticks_usec() - _pt) / 1000.0, Engine.get_frames_per_second(), _all_entities.size()])
 # ==================== 工具函数 ====================
 func _ray_plane_intersection(ro, re, po, pn):
 	var d = (re - ro).normalized()

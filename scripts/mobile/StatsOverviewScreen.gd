@@ -2,7 +2,9 @@ class_name StatsOverviewScreen
 extends Control
 
 # 全屏统计大屏：一卡一国（玩家 + 全部 AI），右侧挂外交面板。
-# 数据直接取 BattleStats 的采样结果（按 owner/team/nation 聚合），不重复实现统计逻辑。
+# 移动端取代战场常驻的 AI 决策面板，因此每张卡片的数据项与它保持一致：
+# 阶段/战术、国家特色、人口、主城等级血量、五项资源、经济/军队/建筑明细、历史累计。
+# 数据来源：玩家读 battle_manager，AI 读各自的 AIController（同源，保证和桌面决策面板一样多）。
 
 var battle_manager_provider: Callable = Callable()
 var hud: Node = null
@@ -15,6 +17,19 @@ var _diplo_host: Control = null
 var _diplo_hint: Label = null
 var _diplo_panel: Control = null
 var _diplo_original_parent: Node = null
+
+const ECO_UNITS := [[10, "农"], [14, "采船"], [5, "推车"], [6, "贸车"], [9, "运载"],
+	[43, "油商"], [44, "木商"], [45, "石商"], [51, "食商"], [46, "县吏"], [47, "上校"],
+	[48, "尚书"], [49, "统帅"], [50, "丞相"]]
+const MIL_UNITS := [[11, "步"], [12, "弓"], [13, "战船"], [15, "骑"], [16, "炮"], [17, "投石"],
+	[18, "攻城"], [19, "侦察"], [30, "狂战"], [31, "长弓"], [32, "法骑"], [33, "诸弩"],
+	[34, "象骑"], [35, "长枪"], [36, "重步"], [37, "重弓"], [38, "重骑"], [39, "炮艇"],
+	[40, "爆破"], [58, "连弩"], [59, "巨投"], [55, "僧侣"], [56, "长老"], [57, "宗师"],
+	[65, "武士"], [66, "甲骑"]]
+const BLD_UNITS := [[20, "城"], [21, "营"], [22, "仓"], [23, "坞"], [24, "攻城车"], [25, "箭塔"],
+	[26, "炮塔"], [27, "墙"], [28, "民"], [29, "重工"], [41, "瞭望"], [42, "书院"],
+	[52, "集市"], [53, "城堡"], [64, "炮台"], [7, "桥"], [8, "梯子"], [54, "修道"]]
+const PHASE_NAMES := ["🌱 生产", "🏗️ 发展", "⚔️ 进攻"]
 
 func _ready() -> void:
 	visible = false
@@ -102,39 +117,165 @@ func _get_bm() -> Node:
 		return battle_manager_provider.call()
 	return get_tree().get_first_node_in_group("battle_manager")
 
+# 实体上并非每个属性都存在（资源节点没有 health 等），统一走安全转换
+func _i(v) -> int:
+	return 0 if v == null else int(v)
+
+func _f(v) -> float:
+	return 0.0 if v == null else float(v)
+
+# ==================== 数据收集 ====================
+
 func _refresh() -> void:
 	for child in _grid.get_children():
 		child.queue_free()
 
 	var bm := _get_bm()
-	var owners: Dictionary = {}
-	if bm != null and bm.get("battle_stats") != null:
-		var stats = bm.get("battle_stats")
-		if stats.samples.is_empty():
-			stats.sample_now()
-		if not stats.samples.is_empty():
-			owners = stats.samples[-1].get("owners", {})
-
-	if owners.is_empty():
+	if bm == null:
+		_diplo_host.visible = false
 		var empty := Label.new()
 		empty.text = "暂无统计数据"
-		_diplo_host.visible = false
+		empty.add_theme_font_size_override("font_size", UILayout.font_dp(13.0))
 		_grid.add_child(empty)
 		return
 	_diplo_host.visible = true
 
-	var entries: Array = []
+	var reports: Array = []
+	reports.append(_player_report(bm))
+	for child in bm.get_children():
+		if _is_ai_controller(child):
+			reports.append(_ai_report(child, bm))
+	for r in reports:
+		_grid.add_child(_make_card(r))
+
+func _is_ai_controller(node: Node) -> bool:
+	return node.has_method("count_unit") and node.has_method("_get_population") and node.get("my_team") != null
+
+func _belongs(entity: Node, owner: int, team: int, peer_id: int) -> bool:
+	# 单机 1v1 里实体 owner_peer_id 全是 -1，只能按 team 归属；
+	# 多人模式实体带 owner_peer_id，用 owner 严格区分同队玩家。
+	var e_owner := _i(entity.get("owner_peer_id"))
+	if peer_id != -1 and e_owner != -1:
+		return e_owner == peer_id
+	return _i(entity.get("team")) == team
+
+# 从实体一次性汇总该归属下的单位与建筑，避免按兵种反复遍历
+func _detail_scan(bm: Node, owner: int, team: int, peer_id: int) -> Dictionary:
+	var units := {}
+	var buildings := {}
+	var under_construction := 0
+	for e in bm.get_node("Entities").get_children():
+		if not is_instance_valid(e) or _i(e.get("health")) <= 0:
+			continue
+		if not _belongs(e, owner, team, peer_id):
+			continue
+		if e is Building:
+			var bid := _i(e.get("entity_id"))
+			var info: Dictionary = buildings.get(bid, {"count": 0, "level": 1})
+			info["count"] = int(info["count"]) + 1
+			info["level"] = maxi(int(info["level"]), _i(e.get("upgrade_level")))
+			buildings[bid] = info
+			if _f(e.get("build_timer")) > 0.0:
+				under_construction += 1
+		elif e is Army:
+			var uid := _i(e.get("entity_id"))
+			units[uid] = int(units.get(uid, 0)) + 1
+	return {"units": units, "buildings": buildings, "under_construction": under_construction}
+
+func _player_report(bm: Node) -> Dictionary:
+	var castle = null
+	if bm.has_method("get_player_castle"):
+		castle = bm.call("get_player_castle")
+	var owner := _i(bm.get("player_owner_id"))
+	var team := _i(bm.call("get_host_team")) if bm.has_method("get_host_team") else 0
+	var detail := _detail_scan(bm, owner, team, -1 if owner == -1 else owner)
+	return {
+		"kind": "player",
+		"owner": owner,
+		"team": team,
+		"nation": _i(GameSettings.player_nation),
+		"phase": -1,
+		"tactic": -1,
+		"pop": {
+			"current": _i(bm.get("player_pop")),
+			"max": _i(bm.get("player_max_pop")),
+		},
+		"res": bm.get("player_resources") if bm.get("player_resources") is Dictionary else {},
+		"limits": bm.get("player_resource_limits") if bm.get("player_resource_limits") is Dictionary else {},
+		"castle": _castle_info(castle),
+		"units": detail["units"],
+		"buildings": detail["buildings"],
+		"under_construction": detail["under_construction"],
+		"stats": _final_stats(bm, owner, team),
+	}
+
+func _ai_report(ai: Node, bm: Node) -> Dictionary:
+	var peer := _i(ai.get("my_peer_id"))
+	var team := _i(ai.get("my_team"))
+	var nation := -1
+	if ai.has_method("_my_nation_index"):
+		nation = _i(ai.call("_my_nation_index"))
+	var castle = null
+	if peer != -1 and ai.has_method("get_peer_castle"):
+		castle = ai.call("get_peer_castle", peer)
+	elif ai.has_method("get_team_castle"):
+		castle = ai.call("get_team_castle", team)
+	var pop := {"current": 0, "max": 0}
+	if ai.has_method("_get_population"):
+		pop = ai.call("_get_population")
+	var res: Dictionary = {}
+	if ai.has_method("_get_resources"):
+		res = ai.call("_get_resources")
+	var detail := _detail_scan(bm, peer, team, peer)
+	return {
+		"kind": "ai",
+		"owner": peer,
+		"team": team,
+		"nation": nation,
+		"phase": _i(ai.get("phase")),
+		"tactic": _i(ai.get("current_tactic")),
+		"pop": pop,
+		"res": res,
+		"limits": {},
+		"castle": _castle_info(castle),
+		"units": detail["units"],
+		"buildings": detail["buildings"],
+		"under_construction": detail["under_construction"],
+		"stats": _final_stats(bm, peer, team),
+	}
+
+func _castle_info(castle) -> Dictionary:
+	if castle == null or not is_instance_valid(castle):
+		return {}
+	return {
+		"level": _i(castle.get("upgrade_level")),
+		"health": _i(castle.get("health")),
+		"max": _i(castle.get("max_health")),
+	}
+
+# 历史累计仍取 BattleStats 采样，保证和结算数据一致
+func _final_stats(bm: Node, owner: int, team: int) -> Dictionary:
+	var stats = bm.get("battle_stats")
+	if stats == null:
+		return {}
+	if stats.samples.is_empty():
+		stats.sample_now()
+	if stats.samples.is_empty():
+		return {}
+	var owners: Dictionary = stats.samples[-1].get("owners", {})
 	for key in owners.keys():
-		entries.append(owners[key])
-	entries.sort_custom(func(a, b):
-		if int(a.get("team", 0)) != int(b.get("team", 0)):
-			return int(a.get("team", 0)) < int(b.get("team", 0))
-		return int(a.get("owner", 0)) < int(b.get("owner", 0)))
+		var e: Dictionary = owners[key]
+		if _i(e.get("owner", -2)) == owner and _i(e.get("team", -2)) == team:
+			return e
+	for key in owners.keys():
+		var e2: Dictionary = owners[key]
+		if _i(e2.get("team", -2)) == team and owner == -1:
+			return e2
+	return {}
 
-	for entry in entries:
-		_grid.add_child(_make_card(entry))
+# ==================== 渲染 ====================
 
-func _make_card(entry: Dictionary) -> PanelContainer:
+func _make_card(r: Dictionary) -> PanelContainer:
 	var card := PanelContainer.new()
 	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	var style := StyleBoxFlat.new()
@@ -145,16 +286,18 @@ func _make_card(entry: Dictionary) -> PanelContainer:
 	card.add_theme_stylebox_override("panel", style)
 
 	var vb := VBoxContainer.new()
-	vb.add_theme_constant_override("separation", int(UILayout.dp(2.0)))
+	vb.add_theme_constant_override("separation", int(UILayout.dp(3.0)))
 	card.add_child(vb)
 
-	var nation := int(entry.get("nation", -1))
-	var team := int(entry.get("team", -1))
+	var nation := int(r.get("nation", -1))
+	var team := int(r.get("team", -1))
 	var nation_name := "中立"
 	if nation >= 0 and nation < BattleStats.NATION_NAMES.size():
 		nation_name = BattleStats.NATION_NAMES[nation]
 	var team_name := "蓝方" if team == RTSConfig.Team.BLUE else ("红方" if team == RTSConfig.Team.RED else "中立")
 	var team_color := Color(0.35, 0.62, 1.0) if team == RTSConfig.Team.BLUE else Color(0.92, 0.35, 0.32)
+
+	var is_player := String(r.get("kind", "")) == "player"
 
 	var header := HBoxContainer.new()
 	vb.add_child(header)
@@ -166,34 +309,133 @@ func _make_card(entry: Dictionary) -> PanelContainer:
 	header.add_child(dot)
 
 	var title := Label.new()
-	var owner := int(entry.get("owner", -1))
-	var owner_tag := "玩家" if owner == 0 or owner == 1 else ("AI-%d" % owner)
-	title.text = "  %s · %s" % [nation_name, team_name]
+	var owner := int(r.get("owner", -1))
+	var owner_tag := "玩家" if is_player else ("AI-%d" % owner if owner != -1 else "AI")
+	title.text = "  %s · %s  %s" % [nation_name, team_name, owner_tag]
 	title.add_theme_font_size_override("font_size", UILayout.font_dp(13.0))
 	title.add_theme_color_override("font_color", team_color)
+	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header.add_child(title)
 
-	var tag := Label.new()
-	tag.text = owner_tag
-	tag.add_theme_font_size_override("font_size", UILayout.font_dp(9.0))
-	tag.add_theme_color_override("font_color", Color(UITheme.PARCHMENT, 0.6))
-	header.add_child(tag)
+	# 阶段 / 战术（AI 才有，和决策面板一致）
+	if String(r.get("kind", "")) == "ai":
+		var phase := int(r.get("phase", -1))
+		var tactic := int(r.get("tactic", -1))
+		var phase_txt: String = PHASE_NAMES[phase] if phase >= 0 and phase < PHASE_NAMES.size() else "—"
+		var tactic_txt := _tactic_name(tactic)
+		var line := Label.new()
+		line.text = "▸ %s ｜ %s" % [phase_txt, tactic_txt]
+		line.add_theme_font_size_override("font_size", UILayout.font_dp(10.0))
+		line.add_theme_color_override("font_color", Color(0.6, 0.85, 1.0))
+		vb.add_child(line)
 
-	var live := Label.new()
-	live.text = "🏰%d  ⚔️%d  🪙%d  👁%d" % [
-		int(entry.get("buildings", 0)), int(entry.get("army", 0)),
-		int(entry.get("resources", 0)), int(entry.get("vision", 0))]
-	live.add_theme_font_size_override("font_size", UILayout.font_dp(10.0))
-	vb.add_child(live)
+	# 国家特色
+	if nation >= 0:
+		var trait_rtl := RichTextLabel.new()
+		trait_rtl.bbcode_enabled = true
+		trait_rtl.fit_content = true
+		trait_rtl.add_theme_font_size_override("normal_font_size", UILayout.font_dp(9.0))
+		trait_rtl.text = "[color=#cba]%s[/color]" % NationBonuses.get_trait_full(nation)
+		vb.add_child(trait_rtl)
 
-	var accum := Label.new()
-	accum.text = "采集 %d · 生产 %d · 歼敌 %d · 伤害 %d" % [
-		int(entry.get("gathered", 0)), int(entry.get("produced", 0)),
-		int(entry.get("kills", 0)), int(entry.get("damage", 0))]
-	accum.add_theme_font_size_override("font_size", UILayout.font_dp(9.0))
-	accum.add_theme_color_override("font_color", Color(UITheme.PARCHMENT, 0.75))
-	vb.add_child(accum)
+	# 人口 / 主城
+	var pop: Dictionary = r.get("pop", {})
+	var castle: Dictionary = r.get("castle", {})
+	var pop_txt := "👥 %d/%d" % [int(pop.get("current", 0)), int(pop.get("max", 0))]
+	var castle_txt := "🏰 已失守"
+	if not castle.is_empty():
+		castle_txt = "🏰 Lv.%d %d/%d" % [int(castle.get("level", 1)),
+			int(castle.get("health", 0)), int(castle.get("max", 1))]
+	var vital := Label.new()
+	vital.text = "%s   %s" % [pop_txt, castle_txt]
+	vital.add_theme_font_size_override("font_size", UILayout.font_dp(10.0))
+	vital.add_theme_color_override("font_color", Color(UITheme.PARCHMENT))
+	vb.add_child(vital)
+
+	# 资源
+	var res: Dictionary = r.get("res", {})
+	var res_line := HBoxContainer.new()
+	res_line.add_theme_constant_override("separation", int(UILayout.dp(5.0)))
+	for key in ["gold", "wood", "stone", "food", "oil"]:
+		var lbl := Label.new()
+		lbl.text = "%s%d" % [String(UITheme.RESOURCE_ICONS.get(key, "◆")), int(res.get(key, 0))]
+		lbl.add_theme_font_size_override("font_size", UILayout.font_dp(9.0))
+		lbl.add_theme_color_override("font_color", UITheme.RESOURCE_COLORS.get(key, Color.WHITE))
+		res_line.add_child(lbl)
+	vb.add_child(res_line)
+
+	# 明细：经济 / 军队 / 建筑
+	var units: Dictionary = r.get("units", {})
+	var buildings: Dictionary = r.get("buildings", {})
+	vb.add_child(_detail_line("💰 经济", ECO_UNITS, units, Color(0.6, 0.9, 0.6)))
+	vb.add_child(_detail_line("⚔️ 军队", MIL_UNITS, units, Color(0.85, 0.85, 0.85)))
+	vb.add_child(_building_line(buildings, int(r.get("under_construction", 0))))
+
+	# 历史累计
+	var st: Dictionary = r.get("stats", {})
+	if not st.is_empty():
+		var accum := Label.new()
+		accum.text = "采集 %d · 生产 %d · 歼敌 %d · 伤害 %d" % [
+			int(st.get("gathered", 0)), int(st.get("produced", 0)),
+			int(st.get("kills", 0)), int(st.get("damage", 0))]
+		accum.add_theme_font_size_override("font_size", UILayout.font_dp(9.0))
+		accum.add_theme_color_override("font_color", Color(UITheme.PARCHMENT, 0.75))
+		vb.add_child(accum)
 	return card
+
+func _detail_line(title: String, table: Array, counts: Dictionary, color: Color) -> RichTextLabel:
+	var rtl := RichTextLabel.new()
+	rtl.bbcode_enabled = true
+	rtl.fit_content = true
+	rtl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	rtl.add_theme_font_size_override("normal_font_size", UILayout.font_dp(9.0))
+	var total := 0
+	var parts: Array = []
+	for entry in table:
+		var cnt := int(counts.get(int(entry[0]), 0))
+		total += cnt
+		if cnt > 0:
+			parts.append("%s%s:%d" % [UITheme.entity_emoji(int(entry[0]), 2), String(entry[1]), cnt])
+	var head := "[color=#5af]%s %d[/color]  " % [title, total]
+	if parts.is_empty():
+		rtl.text = head + "[color=gray](无)[/color]"
+	else:
+		rtl.text = head + "[color=#%s]%s[/color]" % [color.to_html(), "  ".join(parts)]
+	return rtl
+
+func _building_line(buildings: Dictionary, under: int) -> RichTextLabel:
+	var rtl := RichTextLabel.new()
+	rtl.bbcode_enabled = true
+	rtl.fit_content = true
+	rtl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	rtl.add_theme_font_size_override("normal_font_size", UILayout.font_dp(9.0))
+	var total := 0
+	var parts: Array = []
+	for entry in BLD_UNITS:
+		var bid := int(entry[0])
+		if not buildings.has(bid):
+			continue
+		var info: Dictionary = buildings[bid]
+		var cnt := int(info.get("count", 0))
+		total += cnt
+		parts.append("%s【%d】%s:%d" % [UITheme.entity_emoji(bid, 1), int(info.get("level", 1)),
+			String(entry[1]), cnt])
+	var head := "[color=#5af]▸ 🏰 建筑 %d[/color]" % total
+	if under > 0:
+		head += "  [color=#caa]🏗️ 在建 %d[/color]" % under
+	if parts.is_empty():
+		rtl.text = head + "  [color=gray](无)[/color]"
+	else:
+		rtl.text = head + "  [color=#888]%s[/color]" % "  ".join(parts)
+	return rtl
+
+func _tactic_name(tactic: int) -> String:
+	match tactic:
+		1: return "🔥 骚扰"
+		2: return "⚔️ 压制"
+		3: return "⚡ 突袭"
+		4: return "🛡️ 防守"
+		_: return "—"
 
 # 外交面板复用桌面 HUD 的现成节点：打开时临时挂到右栏，关闭时归还原位
 func _attach_diplo(on: bool) -> void:

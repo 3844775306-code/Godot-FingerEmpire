@@ -14,10 +14,11 @@ extends Node
 
 signal box_select_mode_changed(active: bool)
 
-enum Mode { IDLE, TAP_CANDIDATE, PAN, BOX, BUILD_PREVIEW }
+enum Mode { IDLE, TAP_CANDIDATE, PAN, BOX, BUILD_PREVIEW, LONG_PRESS }
 
 const TAP_MOVE_LIMIT: float = 26.0      # 约 8dp，设计空间单位
 const TAP_TIME_LIMIT: float = 0.45      # 秒；超时不再算点按
+const LONG_PRESS_MS: int = 500          # 长按阈值：呼出建造菜单（等价桌面右键空地）
 
 var enabled: bool = true
 var box_select_mode: bool = false
@@ -38,8 +39,34 @@ var _ui_touch_down: bool = false
 
 func _ready() -> void:
 	set_process_input(true)
+	set_process(true)
 	# 关闭引擎自动模拟鼠标：触摸全部由本路由器翻译，避免一次触摸产生两份鼠标事件
 	Input.emulate_mouse_from_touch = false
+
+# 长按检测：手指按住不动超过阈值 → 合成右键呼出建造菜单
+func _process(_delta: float) -> void:
+	if _mode != Mode.TAP_CANDIDATE or _touch_index == -1:
+		return
+	if Time.get_ticks_msec() - _start_msec < LONG_PRESS_MS:
+		return
+	if (_last_pos - _start_pos).length() > TAP_MOVE_LIMIT:
+		return
+	_mode = Mode.LONG_PRESS
+	_emit_right_click(_start_pos)
+
+func _emit_right_click(pos: Vector2) -> void:
+	var down := InputEventMouseButton.new()
+	down.button_index = MOUSE_BUTTON_RIGHT
+	down.pressed = true
+	down.position = pos
+	down.global_position = pos
+	get_viewport().push_input(down, true)
+	var up := InputEventMouseButton.new()
+	up.button_index = MOUSE_BUTTON_RIGHT
+	up.pressed = false
+	up.position = pos
+	up.global_position = pos
+	get_viewport().push_input(up, true)
 
 func set_box_select_mode(active: bool) -> void:
 	if box_select_mode == active:

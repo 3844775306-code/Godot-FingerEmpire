@@ -1,11 +1,19 @@
 # scripts/ui/BuildMenu.gd
 extends Control
 
+# 长按/右键呼出的建造菜单。
+# 桌面端尺寸保持原样；移动端整体放大（dp 换算），并在弹出时夹在视口内。
+
 signal building_selected(building_id: int)
 
 var building_defs: Array = []
 var castle_level: int = 1
 const RC = {"wood": "green", "stone": "gray", "gold": "gold", "food": "orange", "oil": "saddlebrown"}
+
+# 移动端尺寸（dp）
+const MENU_W_DP: float = 250.0
+const ITEM_H_DP: float = 42.0
+const PAD_DP: float = 6.0
 
 # 建筑需要的城堡等级
 const BUILDING_REQUIRED_CASTLE: Dictionary = {
@@ -14,8 +22,24 @@ const BUILDING_REQUIRED_CASTLE: Dictionary = {
 	42: 3, 53: 4, 54: 4             # 书院→3级 城堡→4级
 }
 
+var _menu_size: Vector2 = Vector2(165, 40)
+
+func is_mobile() -> bool:
+	return InputSource.use_mobile_ui()
+
+# 供弹出逻辑取尺寸做居中与夹边
+func get_menu_size() -> Vector2:
+	return _menu_size
+
 func _ready():
 	var bm = get_tree().get_first_node_in_group("battle_manager")
+	var mobile := is_mobile()
+	var item_h: float = UILayout.dp(ITEM_H_DP) if mobile else 38.0
+	var gap: float = UILayout.dp(5.0) if mobile else 4.0
+	var font: int = UILayout.font_dp(12.0) if mobile else 13
+	var pad: float = UILayout.dp(PAD_DP) if mobile else 8.0
+	var menu_w: float = UILayout.dp(MENU_W_DP) if mobile else 165.0
+
 	# Background panel
 	var bg = Panel.new()
 	var bs = StyleBoxFlat.new()
@@ -29,9 +53,24 @@ func _ready():
 	add_child(bg)
 
 	var vbox = VBoxContainer.new()
-	vbox.position = Vector2(8, 8)
-	vbox.add_theme_constant_override("separation", 4)
-	add_child(vbox)
+	vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vbox.add_theme_constant_override("separation", int(gap))
+	if mobile:
+		# 触屏屏高有限：菜单限高屏高，内容超出时内部滚动
+		var vp: Vector2 = get_viewport().get_visible_rect().size
+		var max_h: float = vp.y - UILayout.dp(36.0)
+		var content_h: float = (building_defs.size() + 1) * (item_h + gap) + pad * 2.0
+		_menu_size = Vector2(menu_w, minf(content_h, max_h))
+		var scroll = ScrollContainer.new()
+		scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+		scroll.position = Vector2(pad, pad)
+		scroll.custom_minimum_size = Vector2(menu_w - pad * 2.0, _menu_size.y - pad * 2.0)
+		scroll.size = Vector2(menu_w - pad * 2.0, _menu_size.y - pad * 2.0)
+		add_child(scroll)
+		scroll.add_child(vbox)
+	else:
+		vbox.position = Vector2(pad, pad)
+		add_child(vbox)
 
 	for bd in building_defs:
 		var bid = bd.id
@@ -53,11 +92,19 @@ func _ready():
 				ct += "[color=%s]%s[/color]:[color=%s]%d[/color] " % [rc, res, cc, need]
 
 		btn.disabled = not affordable or is_locked
-		btn.custom_minimum_size = Vector2(150, 38)
-		btn.add_theme_font_size_override("font_size", 13)
+		if mobile:
+			btn.custom_minimum_size = Vector2(menu_w - pad * 2.0, item_h)
+		else:
+			btn.custom_minimum_size = Vector2(150, 38)
+		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		btn.add_theme_font_size_override("font_size", font)
 		var rtl = RichTextLabel.new(); rtl.bbcode_enabled = true; rtl.fit_content = true
 		rtl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		rtl.anchor_left = 0; rtl.anchor_right = 1; rtl.anchor_top = 0; rtl.anchor_bottom = 1
+		# 移动端字号必须用 normal_font_size，只设 font_size 对 RichTextLabel 无效
+		if mobile:
+			rtl.add_theme_font_size_override("normal_font_size", font)
+			rtl.add_theme_font_size_override("bold_font_size", font)
 
 		if is_locked:
 			var req_lv = BUILDING_REQUIRED_CASTLE[bid]
@@ -70,12 +117,31 @@ func _ready():
 			btn.pressed.connect(_on_building_pressed.bind(bd.id))
 		vbox.add_child(btn)
 
+	var cancel_h: float = item_h
 	var close_btn = Button.new()
-	close_btn.text = "Cancel"; close_btn.add_theme_font_size_override("font_size", 13)
+	close_btn.text = "取消"
+	close_btn.custom_minimum_size = Vector2(0, cancel_h)
+	close_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	close_btn.add_theme_font_size_override("font_size", font)
 	close_btn.pressed.connect(queue_free)
 	vbox.add_child(close_btn)
 
-	bg.size = Vector2(165, 20 + building_defs.size() * 45)
+	if mobile:
+		bg.size = _menu_size
+		custom_minimum_size = _menu_size
+		size = _menu_size
+	else:
+		_menu_size = Vector2(165, 20 + building_defs.size() * 45)
+		bg.size = _menu_size
+		size = _menu_size
+
+# 触屏：点菜单外面即关闭（合成鼠标事件会经过这里）
+func _input(event: InputEvent) -> void:
+	if not is_mobile():
+		return
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		if not get_global_rect().has_point(event.position):
+			queue_free()
 
 func _on_building_pressed(id: int):
 	emit_signal("building_selected", id)
