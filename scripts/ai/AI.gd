@@ -87,6 +87,7 @@ const WALL_COUNT: int = 12
 const WALL_SPACING: float = 1.3
 const TOWER_SPACING: float = 3.0
 const DEFENSE_FRONT_DIST: float = 8.0
+const BUILD_ENEMY_ARMY_SAFE_RADIUS: float = 10.0
 const SAFE_DEFEND_RADIUS: float = 45.0
 const LAND_RALLY_DISTANCE: float = 12.0
 const LAND_RALLY_INTERVAL: float = 8.0
@@ -326,6 +327,20 @@ func produce_unit(unit_id: int) -> bool:
 					produced += 1
 		return produced > 0
 
+# 建造前安全检查：10 单位内存在敌方作战军队时不允许落建筑，
+# 避免 AI 当着敌军的面拍塔/拍民居，刚建好就被拆。
+func _enemy_army_within(pos: Vector3, radius: float = BUILD_ENEMY_ARMY_SAFE_RADIUS) -> bool:
+	if battle == null:
+		return false
+	for e in battle.get_nearby_entities(pos, radius):
+		if not (e is Army) or e.health <= 0:
+			continue
+		if int(e.target_type) <= 0 and float(e.attack) <= 0.0:
+			continue
+		if _entity_is_enemy(e):
+			return true
+	return false
+
 # 最终落位校验：AI 的所有建造入口（随机仓库、防线规划、补建队列）都必须过这一关，
 # 防止建筑重叠、建到水面/山坡上，或直接压住资源点。
 func _can_place_ai_building(building_id: int, pos: Vector3) -> bool:
@@ -379,6 +394,9 @@ func build_building(building_id: int, pos: Vector3, facing: Vector3 = Vector3.ZE
 	# 城墙允许建 WALL_COUNT 面（防线需求），民居按人口需求上限，其余建筑上限 10
 	var _cap = WALL_COUNT if building_id == 27 else (target_house_count if building_id == 28 else 10)
 	if count_building(building_id) >= _cap: return false
+	# 周围 10 单位内不能有敌方作战军队；否则直接放弃本次建造，不扣资源
+	if _enemy_army_within(pos):
+		return false
 	# Non-shipyard buildings: must be within AI vision range
 	if building_id != 23:
 		var world_pos = Vector3(pos.x, 0, pos.z)
