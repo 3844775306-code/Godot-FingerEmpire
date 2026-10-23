@@ -872,6 +872,7 @@ func _update_health_bars():
 			# Color label
 			var _hlc2 = _get_hud_label_color(entity)
 			label.add_theme_color_override("font_color", _hlc2)
+			_apply_hud_label_outline(label, entity)
 			if prod_bar:
 				prod_bar.visible = false
 				prod_label.visible = false
@@ -936,6 +937,7 @@ func _update_health_bars():
 			# Color label by owner/team
 			var _hlc = _get_hud_label_color(entity)
 			label.add_theme_color_override("font_color", _hlc)
+			_apply_hud_label_outline(label, entity)
 		label.position = bar.position + Vector2(0, -22)
 
 		if entity.health >= entity.max_health:
@@ -1010,6 +1012,13 @@ func _get_hud_label_color(entity: GameEntity) -> Color:
 				return GROUP_LABEL_COLORS[g]
 	
 	return Color.WHITE
+
+# 血条标签镶边：用实体所属国家/阵营色描边，便于快速区分敌我与国家
+func _apply_hud_label_outline(label: Label, entity: GameEntity) -> void:
+	var bm = _get_bm()
+	if bm and bm.has_method("get_entity_color"):
+		label.add_theme_color_override("font_outline_color", bm.get_entity_color(entity))
+		label.add_theme_constant_override("outline_size", 2)
 
 func _on_demolish_selected():
 	var bm = _get_bm() as RTSBattleManager

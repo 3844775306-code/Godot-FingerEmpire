@@ -1208,6 +1208,11 @@ func _get_entity_color(info: Dictionary) -> Color:
 		_:
 			return Color(0.7, 0.7, 0.7)   # 中立灰色
 
+# 血条标签镶边：用所属国家/阵营色描边，便于快速区分敌我与国家
+func _apply_label_nation_outline(lab: Label, info: Dictionary) -> void:
+	lab.add_theme_color_override("font_outline_color", _get_entity_color(info))
+	lab.add_theme_constant_override("outline_size", 3)
+
 # Helper: get color for entity label (by control group first, then owner/team)
 func _get_entity_label_color(info: Dictionary) -> Color:
 	var eid = info["id"]
@@ -1334,6 +1339,7 @@ func _update_health_bars():
 			lab.text = _gpfx3 + "%s (建造中)" % nm2
 			var _lbc3 = _get_entity_label_color(info)
 			lab.add_theme_color_override("font_color", _lbc3)
+			_apply_label_nation_outline(lab, info)
 			var world_pos = node.global_position + Vector3.UP * (info["body_radius"]*2 + 0.5)
 			var screen_pos = cam.unproject_position(world_pos)
 			if viewport_rect.has_point(screen_pos):
@@ -1409,6 +1415,7 @@ func _update_health_bars():
 
 		var _lbc = _get_entity_label_color(info)
 		lab.add_theme_color_override("font_color", _lbc)
+		_apply_label_nation_outline(lab, info)
 		var world_pos = node.global_position + Vector3.UP * (info["body_radius"]*2 + 0.5)
 		var screen_pos = cam.unproject_position(world_pos)
 
@@ -1431,6 +1438,7 @@ func _update_health_bars():
 
 				var _lbc4 = _get_entity_label_color(info)
 				lab.add_theme_color_override("font_color", _lbc4)
+				_apply_label_nation_outline(lab, info)
 			else:
 				bar.visible = false; lab.visible = false
 		else:
