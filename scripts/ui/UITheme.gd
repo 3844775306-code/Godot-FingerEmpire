@@ -20,27 +20,36 @@ const EMERALD    := Color(0.176, 0.545, 0.306)   # #2D8B4E  资源充足/木材
 const STONE      := Color(0.439, 0.439, 0.439)   # #707070  次要文字/禁用
 const PURPLE     := Color(0.482, 0.310, 0.749)   # #7B4FBF  升级进度/特殊
 
-# 统一进度条样式：暖黑圆角底 + 单色填充 + 同色细边
-# 用于建造（金）、生产（蓝）、升级（紫）三种进度
+# 进度条专用色：比主题金色/紫色更亮，避免深色底上发闷
+const BUILD_PROGRESS   := Color(0.960, 0.720, 0.280)   # 暖琥珀：建造
+const UPGRADE_PROGRESS := Color(0.680, 0.520, 0.960)   # 亮紫罗兰：升级
+
+# 统一进度条样式：暖黑圆角底 + 单色填充 + 顶部高光 + 同色细边
+# 用于建造（琥珀）、生产（蓝）、升级（紫罗兰）三种进度
 static func style_progress_bar(bar: ProgressBar, color: Color, height: float = 8.0) -> void:
 	bar.custom_minimum_size = Vector2(60, height)
 	bar.max_value = 1.0
 	bar.show_percentage = false
 	var fill := StyleBoxFlat.new()
-	fill.bg_color = color
-	fill.corner_radius_top_left = 3
-	fill.corner_radius_top_right = 3
-	fill.corner_radius_bottom_left = 3
-	fill.corner_radius_bottom_right = 3
+	fill.bg_color = color.lightened(0.06)
+	fill.corner_radius_top_left = 4
+	fill.corner_radius_top_right = 4
+	fill.corner_radius_bottom_left = 4
+	fill.corner_radius_bottom_right = 4
+	# 顶部 1px 亮边，模拟受光的金属/宝石质感
+	fill.border_width_top = 1
+	fill.border_color = color.lightened(0.45)
+	fill.shadow_color = Color(color, 0.25)
+	fill.shadow_size = 1
 	bar.add_theme_stylebox_override("fill", fill)
 	var bg := StyleBoxFlat.new()
-	bg.bg_color = Color(INK, 0.8)
-	bg.corner_radius_top_left = 3
-	bg.corner_radius_top_right = 3
-	bg.corner_radius_bottom_left = 3
-	bg.corner_radius_bottom_right = 3
+	bg.bg_color = Color(INK, 0.82)
+	bg.corner_radius_top_left = 4
+	bg.corner_radius_top_right = 4
+	bg.corner_radius_bottom_left = 4
+	bg.corner_radius_bottom_right = 4
 	bg.set_border_width_all(1)
-	bg.border_color = Color(color, 0.35)
+	bg.border_color = Color(color, 0.45)
 	bar.add_theme_stylebox_override("background", bg)
 
 # 资源颜色

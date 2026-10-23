@@ -862,7 +862,7 @@ func _update_health_bars():
 			var up_lbl = up_bar_data.get("upgrade_label")
 			if not up_bar:
 				up_bar = ProgressBar.new()
-				UITheme.style_progress_bar(up_bar, UITheme.PURPLE, 8.0)
+				UITheme.style_progress_bar(up_bar, UITheme.UPGRADE_PROGRESS, 8.0)
 				add_child(up_bar); up_bar_data["upgrade_bar"] = up_bar
 				up_bar.z_index = -1
 			if not up_lbl:
@@ -893,7 +893,7 @@ func _update_health_bars():
 			var build_bar: ProgressBar = bdata.get("build_bar")
 			if not build_bar:
 				build_bar = ProgressBar.new()
-				UITheme.style_progress_bar(build_bar, UITheme.GOLD, 8.0)
+				UITheme.style_progress_bar(build_bar, UITheme.BUILD_PROGRESS, 8.0)
 				add_child(build_bar); build_bar.z_index = -1
 				bdata["build_bar"] = build_bar
 			var build_total := maxf(entity.max_build_time, 0.001)

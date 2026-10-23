@@ -1553,7 +1553,7 @@ func _get_or_create_build_bar(id) -> ProgressBar:
 		unit_bars[id] = { "bar":null, "label":null, "prod_bar":null, "prod_label":null, "order_label":null }
 	if not unit_bars[id].has("build_bar") or not unit_bars[id].build_bar:
 		var p = ProgressBar.new()
-		UITheme.style_progress_bar(p, UITheme.GOLD, 8.0)
+		UITheme.style_progress_bar(p, UITheme.BUILD_PROGRESS, 8.0)
 		add_child(p)
 		unit_bars[id].build_bar = p
 	return unit_bars[id].build_bar
@@ -1563,7 +1563,7 @@ func _get_or_create_upgrade_bar(id) -> ProgressBar:
 		unit_bars[id] = { "bar":null, "label":null, "prod_bar":null, "prod_label":null, "order_label":null, "upgrade_bar":null, "upgrade_label":null }
 	if not unit_bars[id].has("upgrade_bar") or not unit_bars[id].upgrade_bar:
 		var hb = ProgressBar.new()
-		UITheme.style_progress_bar(hb, UITheme.PURPLE, 8.0)
+		UITheme.style_progress_bar(hb, UITheme.UPGRADE_PROGRESS, 8.0)
 		add_child(hb)
 		unit_bars[id].upgrade_bar = hb
 	return unit_bars[id].upgrade_bar
