@@ -20,7 +20,7 @@ var last_attack_time: float = -999.0
 const ATTACK_COOLDOWN: float = 120.0
 var production_step: int = 0
 
-var wanted_buildings: Array = [20, 21, 23, 42, 54, 24, 29, 52, 53]
+var wanted_buildings: Array = [20, 21, 29, 23, 42, 54, 24, 52, 53]
 var wanted_units: Array = [11,12,15,16,17,18,35,36,37,38,39,40,13,43,44,45,46,47,48,49,50,58,59,5,6,9]
 var target_army_count: int = 7
 var target_house_count: int = 10
@@ -71,7 +71,17 @@ var _diplo_propose_history: Dictionary = {} # owner -> game_time（冷却期内�
 
 const WAREHOUSE_MAX_COUNT: int = 5
 const HOME_ASSEMBLE_RANGE: float = 50.0
-const MILITARY_PRODUCER_TARGETS = {21: 3, 24: 2, 29: 2}
+# 新版重装武器厂(29)只有在4级才会解锁巨型投石机(59)。
+# 以前 29 排在建/升级队列很后面，且 59 没有独立生产目标，实战里几乎见不到。
+# 这里把 29 提前，并让 AI 主动攒资源造一台 59。
+const MILITARY_PRODUCER_TARGETS = {21: 3, 24: 2, 29: 1}
+const TREBUCHET_ID: int = 59
+const HEAVY_SIEGE_BUILDING_ID: int = 29
+const TREBUCHET_TARGET_COUNT: int = 1
+const TREBUCHET_SAVE_TIMEOUT: float = 90.0
+const HEAVY_SIEGE_TECH_SAVE_TIMEOUT: float = 180.0
+var _trebuchet_save_started: float = -1.0
+var _heavy_siege_tech_save_started: float = -1.0
 const BOAT_VISION_RANGE: float = 12.0
 const SHIPYARD_SPACING: float = 35.0
 const SHIPYARD_FISHER_RADIUS: float = 15.0
@@ -283,12 +293,151 @@ func _ai_can_build(building_id: int) -> bool:
 			return cl >= 3
 	return true
 
+# ═══ 巨型投石机专线 ═══
+# AI 以前的兵种列表里虽然有 59，但缺少“科技 + 攒钱 + 优先生产”的完整链路：
+# 重装武器厂(29)要升到4级才会解锁，升级又需要城堡4级和大量石/油；
+# 同时普通军队会持续吃掉资源，导致 59 永远差一点资源。
+# 下面几个函数负责：优先把 29 推到4级、解锁后暂停普通消费攒钱、最后优先排产 59。
+
+func _find_own_building(building_id: int) -> Building:
+	for entity in battle.entities.get_children():
+		if entity is Building and entity.health > 0 and entity.entity_id == building_id and entity_belongs_to_me(entity):
+			return entity
+	return null
+
+func _trebuchet_pending() -> bool:
+	return count_unit(TREBUCHET_ID) < TREBUCHET_TARGET_COUNT
+
+func _trebuchet_unlocked() -> bool:
+	for entity in battle.entities.get_children():
+		if entity is Building and entity.health > 0 and entity.build_timer <= 0 and entity.entity_id == HEAVY_SIEGE_BUILDING_ID and entity_belongs_to_me(entity):
+			if entity.upgrade_level >= 4:
+				return true
+	return false
+
+# 解锁 59 之后，如果普通生产继续花钱，就永远凑不齐 200木/250石/150金。
+# 这里在解锁后进入短暂的“攒钱模式”：除 59 本身外，其他消费都要求扣完后仍能支付 59。
+# 防守或人口已满时不启用，避免 AI 为了憋投石机而不补兵/不造民居。
+func _trebuchet_reserve_active() -> bool:
+	if not _trebuchet_pending():
+		_trebuchet_save_started = -1.0
+		return false
+	if not _trebuchet_unlocked():
+		return false
+	if not _can_train_unit():
+		return false
+	if _is_defending():
+		return false
+	if battle == null:
+		return false
+	if _trebuchet_save_started < 0.0:
+		_trebuchet_save_started = battle.game_time
+	if battle.game_time - _trebuchet_save_started > TREBUCHET_SAVE_TIMEOUT:
+		_trebuchet_save_started = -1.0
+		return false
+	return true
+
+func _can_pay_with_trebuchet_reserve(cost: Dictionary) -> bool:
+	var tcfg = EntityDatabase.get_config(TREBUCHET_ID)
+	if not tcfg:
+		return true
+	return _can_pay_with_reserve(cost, tcfg.get("cost", {}))
+
+func _can_pay_with_reserve(cost: Dictionary, reserve_cost: Dictionary) -> bool:
+	var res = _get_resources()
+	for k in cost:
+		if int(res.get(k, 0)) - int(cost[k]) < int(reserve_cost.get(k, 0)):
+			return false
+	return true
+
+# 29 的升级和“城堡等级追上 29”都消耗大量石/油/金。
+# 29 一落地就开始留这段预算，否则普通升级/重装兵会把资源反复花掉，
+# AI 永远卡在“差一点就能升29”的状态。
+func _heavy_siege_tech_reserve_cost() -> Dictionary:
+	if not _trebuchet_pending():
+		return {}
+	if _trebuchet_unlocked():
+		return {}
+	var b29 = _find_own_building(HEAVY_SIEGE_BUILDING_ID)
+	if b29 == null or b29.upgrade_level >= 4:
+		return {}
+	var castle = get_peer_castle(my_peer_id)
+	if castle == null:
+		return {}
+	if castle.upgrade_level < 4:
+		if castle.upgrade_level <= b29.upgrade_level:
+			return castle.get_upgrade_cost()
+		return {}
+	return b29.get_upgrade_cost()
+
+func _heavy_siege_tech_reserve_active() -> bool:
+	if _is_defending():
+		return false
+	var cost = _heavy_siege_tech_reserve_cost()
+	if cost.is_empty():
+		_heavy_siege_tech_save_started = -1.0
+		return false
+	if battle == null:
+		return false
+	if _heavy_siege_tech_save_started < 0.0:
+		_heavy_siege_tech_save_started = battle.game_time
+	if battle.game_time - _heavy_siege_tech_save_started > HEAVY_SIEGE_TECH_SAVE_TIMEOUT:
+		_heavy_siege_tech_save_started = -1.0
+		return false
+	return true
+
+func _try_produce_trebuchet() -> bool:
+	if not _trebuchet_pending():
+		return false
+	if not _trebuchet_unlocked():
+		return false
+	if not _can_train_unit():
+		return false
+	if not can_afford(TREBUCHET_ID):
+		return false
+	if produce_unit(TREBUCHET_ID):
+		_trebuchet_save_started = -1.0
+		return true
+	return false
+
+# 重装武器厂4级需要城堡4级；城堡等级不够时先升城堡，够了一级一级升 29。
+func _ensure_heavy_siege_tech() -> bool:
+	if not _trebuchet_pending():
+		return false
+	var b29: Building = null
+	for entity in battle.entities.get_children():
+		if entity is Building and entity.health > 0 and entity.entity_id == HEAVY_SIEGE_BUILDING_ID and entity_belongs_to_me(entity):
+			if b29 == null or int(entity.upgrade_level) > int(b29.upgrade_level):
+				b29 = entity
+	if b29 == null or b29.upgrade_level >= 4:
+		return false
+	var castle = get_peer_castle(my_peer_id)
+	if castle == null:
+		return false
+	if castle.upgrade_level <= b29.upgrade_level:
+		if can_afford_upgrade(20):
+			upgrade_building(20)
+			_heavy_siege_tech_save_started = -1.0
+			return true
+		return false
+	for entity in battle.entities.get_children():
+		if entity is Building and entity.health > 0 and entity.build_timer <= 0 and entity.entity_id == HEAVY_SIEGE_BUILDING_ID and entity_belongs_to_me(entity):
+			if entity.upgrade_level < 4 and entity.can_upgrade():
+				if entity.perform_upgrade(battle):
+					_heavy_siege_tech_save_started = -1.0
+					return true
+	return false
+
 func can_afford(unit_id: int) -> bool:
 	var cfg = EntityDatabase.get_config(unit_id)
 	if not cfg: return false
 	var cost = cfg.get("cost", {})
 	var res = _get_resources()
 	for k in cost: if res.get(k, 0) < cost[k]: return false
+	if unit_id != TREBUCHET_ID and _trebuchet_reserve_active():
+		return _can_pay_with_trebuchet_reserve(cost)
+	if unit_id != TREBUCHET_ID and _heavy_siege_tech_reserve_active():
+		return _can_pay_with_reserve(cost, _heavy_siege_tech_reserve_cost())
 	return true
 
 func can_afford_building(building_id: int) -> bool:
@@ -297,6 +446,10 @@ func can_afford_building(building_id: int) -> bool:
 	var cost = cfg.get("cost", {})
 	var res = _get_resources()
 	for k in cost: if res.get(k, 0) < cost[k]: return false
+	if _trebuchet_reserve_active():
+		return _can_pay_with_trebuchet_reserve(cost)
+	if _heavy_siege_tech_reserve_active():
+		return _can_pay_with_reserve(cost, _heavy_siege_tech_reserve_cost())
 	return true
 
 func can_afford_upgrade(building_id: int) -> bool:
@@ -311,6 +464,10 @@ func can_afford_upgrade(building_id: int) -> bool:
 				var cost = entity.get_upgrade_cost()
 				var res = _get_resources()
 				for k in cost: if res.get(k, 0) < cost[k]: return false
+				if _trebuchet_reserve_active():
+					return _can_pay_with_trebuchet_reserve(cost)
+				if building_id != HEAVY_SIEGE_BUILDING_ID and building_id != 20 and _heavy_siege_tech_reserve_active():
+					return _can_pay_with_reserve(cost, _heavy_siege_tech_reserve_cost())
 				return true
 	return false
 
@@ -1051,19 +1208,27 @@ func _get_build_completion() -> float:
 	return built / max(total_targets, 1.0)
 
 func _get_phase_weights() -> Dictionary:
+	var w: Dictionary
 	if phase == Phase.PRODUCTION:
 		if count_unit(10) < 8:
-			return {"gold": 0.5, "wood": 1.5, "stone": 0.8, "food": 5.0}
+			w = {"gold": 0.5, "wood": 1.5, "stone": 0.8, "food": 5.0}
 		else:
-			return {"gold": 1.0, "wood": 3.0, "stone": 2.0, "food": 1.5}
+			w = {"gold": 1.0, "wood": 3.0, "stone": 2.0, "food": 1.5}
 	else:
 		var build_pct = _get_build_completion()
 		if build_pct < 0.4:
-			return {"gold": 2.0, "wood": 4.5, "stone": 3.5, "food": 2.0}
+			w = {"gold": 2.0, "wood": 4.5, "stone": 3.5, "food": 2.0}
 		elif build_pct < 0.75:
-			return {"gold": 3.0, "wood": 3.0, "stone": 4.0, "food": 3.0}
+			w = {"gold": 3.0, "wood": 3.0, "stone": 4.0, "food": 3.0}
 		else:
-			return {"gold": 4.0, "wood": 2.0, "stone": 5.0, "food": 3.0}
+			w = {"gold": 4.0, "wood": 2.0, "stone": 5.0, "food": 3.0}
+	# 重装武器厂需要大量油；农民权重里以前完全没有 oil，升级 29 时会长期卡油。
+	# 只在已有 29 或进入发育/进攻阶段后加入，避免开局抢走采粮/采木的农民。
+	if phase >= Phase.DEVELOPMENT or count_building(HEAVY_SIEGE_BUILDING_ID) > 0:
+		w["oil"] = maxf(float(w.get("oil", 0.0)), 1.5)
+	if count_building(HEAVY_SIEGE_BUILDING_ID) > 0 and _trebuchet_pending() and not _trebuchet_unlocked():
+		w["oil"] = maxf(float(w.get("oil", 0.0)), 4.0)
+	return w
 
 func clear_invalid_targets():
 	for entity in battle.entities.get_children():
@@ -1127,6 +1292,17 @@ func an_attack() -> bool:
 func _should_build_or_upgrade(b_id: int) -> bool:
 	if b_id == 25 and count_building(25) >= 5: return false
 	if count_building(b_id) == 0: return true
+	# 科技攒钱期间不要顺手把主城升5级，优先保证29/59的前置科技
+	if b_id == 20 and _heavy_siege_tech_reserve_active():
+		return false
+	# 29升到4级已解锁59，先把第一台59造出来再考虑升5级，别把石/油又吃光
+	if b_id == HEAVY_SIEGE_BUILDING_ID and _trebuchet_pending():
+		var highest_lv = 0
+		for entity in battle.entities.get_children():
+			if entity is Building and entity.health > 0 and entity.entity_id == b_id and entity_belongs_to_me(entity):
+				highest_lv = maxi(highest_lv, int(entity.upgrade_level))
+		if highest_lv >= 4:
+			return false
 	for entity in battle.entities.get_children():
 		if entity is Building and entity.health > 0 and entity.entity_id == b_id:
 			if not entity_belongs_to_me(entity): continue
@@ -1830,7 +2006,11 @@ func _any_building_can_upgrade() -> bool:
 			return true
 	return false
 func _process_line_1():
-	
+	# 重装武器厂/城堡4级是59的前置科技，优先于普通建筑升级
+	if _ensure_heavy_siege_tech():
+		return
+	if _trebuchet_reserve_active():
+		return
 	for b_id in wanted_buildings:
 		if _should_build_or_upgrade(b_id) and can_afford_upgrade(b_id):
 			upgrade_building(b_id)
@@ -1847,6 +2027,10 @@ func _process_line_1():
 
 # 优先升级：兵营(21)升到4级，受城堡等级限制则先升城堡
 func _priority_upgrade():
+	if _ensure_heavy_siege_tech():
+		return true
+	if _trebuchet_reserve_active():
+		return false
 	var castle = get_peer_castle(my_peer_id)
 	if not castle: return false
 	for i in [21,23,24,29,54]:
@@ -1862,6 +2046,10 @@ func _priority_upgrade():
 	return false
 
 func _process_line_upgrade():
+	if _ensure_heavy_siege_tech():
+		return
+	if _trebuchet_reserve_active():
+		return
 	for b_id in wanted_buildings:
 		if _should_build_or_upgrade(b_id) and can_afford_upgrade(b_id):
 			upgrade_building(b_id)
@@ -1888,6 +2076,11 @@ func _try_produce_monks():
 			produce_unit(mid); return
 
 func _process_line_military():
+	# 59优先排产；如果已经解锁但资源不够，进入短暂攒钱模式，避免普通兵种把资源吃干
+	if _try_produce_trebuchet():
+		return
+	if _trebuchet_reserve_active():
+		return
 	# 人口满时先补民居，否则 AI 会一直卡在上限，看起来像“不会造房、也不出兵”
 	if not _can_train_unit():
 		_process_line_3()
@@ -1970,10 +2163,14 @@ func _process_line_5():
 		while warships < 2 and can_afford(13) and _can_train_unit(): produce_unit(13); warships += 1
 		while gunboats < 2 and can_afford(39) and _can_train_unit(): produce_unit(39); gunboats += 1
 		# 每个船坞至少保证 1 艘采集船，直接在该船坞排队，避免被别的船坞抢走产能
+		# 重装武器厂科技期间油需求很大，每个船坞临时补到 2 艘采集船
+		var fisher_target = 1
+		if _trebuchet_pending() and not _trebuchet_unlocked() and int(_get_resources().get("oil", 0)) < 400:
+			fisher_target = 2
 		var has_fisher_queued: bool = false
 		for pid in sy.production_queue:
 			if int(pid) == 14: has_fisher_queued = true; break
-		if fishermen < 1 and not has_fisher_queued and can_afford(14) and _can_train_unit():
+		if fishermen < fisher_target and not has_fisher_queued and can_afford(14) and _can_train_unit():
 			sy.try_produce(14)
 
 # ═══ Merchants (castle Lv3+) ═══
