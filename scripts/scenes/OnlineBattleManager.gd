@@ -344,7 +344,7 @@ func _init_team_mode():
 	var host_team = RTSConfig.Team.RED if red_slots_free > 0 else RTSConfig.Team.BLUE
 	player_info[1] = {
 		"team": host_team, "slot": 0, "alive": true,
-		"color": _pick_player_color(),
+		"color": _pick_player_color(host_team, 0),
 		"nation": NetworkManager.pending_nations.get(1, GameSettings.player_nation),
 		"is_ai": false,
 	}
@@ -363,7 +363,7 @@ func _init_team_mode():
 			team = RTSConfig.Team.BLUE
 
 		var slot = red_assigned if team == RTSConfig.Team.RED else blue_assigned
-		var color = _pick_player_color()   # 从颜色池随机分配
+		var color = _pick_player_color(team, slot)   # 与队友同色系，按槽位区分明度
 		var nation = pending_nations.get(peers[i], 0)
 
 		player_info[peers[i]] = {
@@ -467,18 +467,13 @@ func _create_ai_player(peer_id: int, team: int, slot: int):
 	ai_controller.my_peer_id = peer_id
 	ai_controller.my_team = team
 	add_child(ai_controller)
-# 根据队伍和槽位为 AI 分配一个独特颜色（避免与人类玩家重复）
-var _color_used_count: int = 0
-
-func _pick_player_color() -> Color:
-	var c = RTSConfig.COLOR_POOL[_color_used_count % RTSConfig.COLOR_POOL.size()]
-	_color_used_count += 1
-	return c
+# 玩家/AI 颜色统一按队伍色系分配（蓝队蓝色系、红队红色系，槽位只影响明暗），
+# 避免同队出现一红一蓝的血条与单位颜色
+func _pick_player_color(team: int, slot: int) -> Color:
+	return RTSConfig.get_team_member_color(team, slot, NetworkManager.get_team_size())
 
 func _get_ai_color(team: int, slot: int) -> Color:
-	var idx = _color_used_count
-	_color_used_count += 1
-	return RTSConfig.COLOR_POOL[idx % RTSConfig.COLOR_POOL.size()]
+	return RTSConfig.get_team_member_color(team, slot, NetworkManager.get_team_size())
 func _get_ai_castle_pos(team: int, slot: int) -> Vector3:
 	var map = $Map
 	if not map: return Vector3.ZERO

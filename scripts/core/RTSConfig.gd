@@ -17,6 +17,25 @@ const COLOR_POOL = [
 	Color(1.0, 0.45, 0.75),
 ]
 
+# 队伍基准色：同队玩家/单位统一使用同一色系（蓝队蓝色系、红队红色系）
+const TEAM_BASE_COLORS = {
+	Team.BLUE: Color(0.2, 0.6, 1.0),
+	Team.RED: Color(1.0, 0.3, 0.2),
+}
+
+# 同队成员色：保持色相基本不变，仅调整明度/饱和度，
+# 让友军之间既能区分、又不会出现「一个红血条一个蓝血条」的混色
+static func get_team_member_color(team: int, slot: int, team_size: int = 2) -> Color:
+	var base: Color = TEAM_BASE_COLORS.get(team, Color(0.7, 0.7, 0.7))
+	var n: int = maxi(team_size, 1)
+	if n <= 1:
+		return base
+	var idx: int = clampi(slot, 0, n - 1)
+	var t: float = float(idx) / float(n - 1)          # 0=最暗, 1=最亮
+	var h: float = fposmod(base.h + (t - 0.5) * 0.015, 1.0)
+	var v: float = clampf(base.v * (0.8 + 0.2 * t), 0.25, 1.0)
+	return Color.from_hsv(h, base.s, v, 1.0)
+
 static func get_player_color(peer_id: int) -> Color:
 	return COLOR_POOL[peer_id % COLOR_POOL.size()]
 
