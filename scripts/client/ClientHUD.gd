@@ -201,23 +201,28 @@ func _update_unit_stats():
 
 	# 统计单位 - 从 entity_nodes 的 snapshot_info 中读取
 	var unit_names = {
+		5: "手推车", 6: "贸易车", 9: "运载船",
 		10: "农民", 11: "步兵", 12: "弓箭手", 13: "战船", 14: "采集船",
 		15: "骑兵", 16: "火炮", 17: "投石车", 18: "攻城车", 19: "侦察兵",
 		30: "狂战士", 31: "长弓兵", 32: "法式骑兵", 33: "诸葛连弩",
 		34: "象骑兵", 35: "长枪兵", 36: "重装步兵", 37: "重装弓箭手",
 		38: "重装骑兵", 39: "炮艇", 40: "快艇",
-		43: "油商", 44: "木商", 45: "石商",
-		46: "县吏", 47: "上校", 48: "尚书", 49: "统帅", 50: "丞相"
+		43: "油商", 44: "木商", 45: "石商", 51: "食商",
+		46: "县吏", 47: "上校", 48: "尚书", 49: "统帅", 50: "丞相",
+		55: "僧侣", 56: "长老", 57: "宗师", 58: "连弩", 59: "巨型投石机",
+		65: "日本武士", 66: "甲胄骑兵"
 	}
 	var building_names = {
+		7: "桥", 8: "梯子",
 		20: "城堡", 21: "兵营", 22: "仓库", 23: "船坞", 24: "攻城车间",
 		25: "箭塔", 26: "炮塔", 27: "城墙", 28: "民居", 29: "重装武器厂",
-		41: "瞭望塔", 42: "书院"
+		41: "瞭望塔", 42: "书院", 52: "集市", 53: "城堡", 54: "修道院", 64: "炮台"
 	}
 
 	var unit_counts = {}
 	var building_counts = {}
 	var building_levels = {}
+	var under_construction = 0
 
 	for id in renderer.entity_nodes.keys():
 		var node = renderer.entity_nodes[id]
@@ -241,32 +246,42 @@ func _update_unit_stats():
 		if etype == 2:  # Army
 			unit_counts[eid] = unit_counts.get(eid, 0) + 1
 		elif etype == 1:  # Building
+			if info.get("build_timer", 0) > 0:
+				under_construction += 1
+				continue
 			building_counts[eid] = building_counts.get(eid, 0) + 1
 			var lv = info.get("upgrade_level", info.get("level", 1))
 			if not building_levels.has(eid) or building_levels[eid] < lv:
 				building_levels[eid] = lv
 
-	# 构建军队显示（排除农民、采集船、官员）
+	# 军用 ID 与展示列表共用同一组，保证总数与明细一致
+	var military_ids = [11, 12, 13, 15, 16, 17, 18, 19, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 55, 56, 57, 58, 59, 65, 66]
 	var military_total = 0
-	for uid in unit_counts.keys():
-		if uid != 10 and uid != 14 and uid not in [46, 47, 48, 49, 50]:
-			military_total += unit_counts[uid]
+	for uid in military_ids:
+		military_total += unit_counts.get(uid, 0)
 
 	var military_lines = []
 	var eco_lines = []
 	# 经济单位
-	for uid in [10, 14]:
+	for uid in [10, 14, 5, 6, 9]:
 		var cnt = unit_counts.get(uid, 0)
 		if cnt > 0:
 			var name = unit_names.get(uid, str(uid))
 			eco_lines.append("[color=#8c8]%s %s[/color]:[color=white]%d[/color]" % [UITheme.entity_emoji(uid, 2), name, cnt])
 	# 战斗单位
-	var unit_order = [11, 12, 15, 16, 17, 18, 19, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40]
-	for uid in unit_order:
+	for uid in military_ids:
 		var cnt = unit_counts.get(uid, 0)
 		if cnt > 0:
 			var name = unit_names.get(uid, str(uid))
 			military_lines.append("[color=#aaa]%s %s[/color]:[color=white]%d[/color]" % [UITheme.entity_emoji(uid, 2), name, cnt])
+
+	# 商人
+	var merchant_lines = []
+	for uid in [43, 44, 45, 51]:
+		var cnt = unit_counts.get(uid, 0)
+		if cnt > 0:
+			var name = unit_names.get(uid, str(uid))
+			merchant_lines.append("[color=#ffa]%s %s[/color]:[color=white]%d[/color]" % [UITheme.entity_emoji(uid, 2), name, cnt])
 
 	# 添加官员（如果有）
 	var official_lines = []
@@ -276,7 +291,7 @@ func _update_unit_stats():
 			var name = unit_names.get(uid, str(uid))
 			official_lines.append("[color=#f8a]%s %s[/color]:[color=white]%d[/color]" % [UITheme.entity_emoji(uid, 2), name, cnt])
 
-	if military_lines.is_empty() and official_lines.is_empty() and eco_lines.is_empty():
+	if military_lines.is_empty() and official_lines.is_empty() and eco_lines.is_empty() and merchant_lines.is_empty():
 		_stats_mil_rtl.text = "[color=gray](无军队)[/color]"
 	else:
 		var text = ""
@@ -285,6 +300,9 @@ func _update_unit_stats():
 		if not military_lines.is_empty():
 			if text != "": text += "\n"
 			text += "[color=#8cf]⚔️ 战斗: %d[/color] | " % military_total + " ".join(military_lines)
+		if not merchant_lines.is_empty():
+			if text != "": text += "\n"
+			text += "[color=#ffa]🛒 商人:[/color] " + " ".join(merchant_lines)
 		if not official_lines.is_empty():
 			if text != "": text += "\n"
 			text += "[color=#a8f]🎖️ 官员:[/color] " + " ".join(official_lines)
@@ -292,13 +310,16 @@ func _update_unit_stats():
 
 	# 构建建筑显示
 	var building_lines = []
-	var building_order = [20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 41, 42]
+	var building_order = [7, 8, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 41, 42, 52, 53, 54, 64]
 	for bid in building_order:
 		var cnt = building_counts.get(bid, 0)
 		if cnt > 0:
 			var lv = building_levels.get(bid, 1)
 			var name = building_names.get(bid, str(bid))
 			building_lines.append("[color=#888]%s【%d】%s[/color]:[color=white]%d[/color]" % [UITheme.entity_emoji(bid, 1), lv, name, cnt])
+
+	if under_construction > 0:
+		building_lines.append("[color=#caa]🏗️ 在建[/color]:[color=white]%d[/color]" % under_construction)
 
 	if building_lines.is_empty():
 		_stats_bld_rtl.text = "[color=gray](无建筑)[/color]"

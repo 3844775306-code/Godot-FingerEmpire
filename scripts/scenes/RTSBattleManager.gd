@@ -2179,6 +2179,18 @@ func is_human_owned(owner: int, team: int) -> bool:
 		return owner == player_owner_id
 	return team == get_host_team()
 
+# 本地玩家（单机=玩家本人，联机=房主 peer 1）的 owner/team 与归属判断，供统计面板使用
+func get_local_owner_id() -> int:
+	return player_owner_id
+
+func get_local_team() -> int:
+	return get_host_team()
+
+func is_local_player_owned(owner: int, team: int) -> bool:
+	if owner != -1:
+		return owner == get_local_owner_id()
+	return team == get_local_team()
+
 func _show_hud_alert(msg: String, color: Color = Color(1.0, 0.2, 0.1), _target_team: int = -1):
 	if color == Color(1.0, 0.2, 0.1) or color == Color(1.0, 0.8, 0.1): AudioManager.play_sfx("alert")
 	if has_node("UI"):

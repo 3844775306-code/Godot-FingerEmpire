@@ -74,6 +74,13 @@ func _host_player_team() -> int:
 		return int(player_teams[1])
 	return RTSConfig.Team.BLUE
 
+# 统计面板：联机本地玩家是房主 peer 1
+func get_local_owner_id() -> int:
+	return 1
+
+func get_local_team() -> int:
+	return _host_player_team()
+
 # ==================== 采集统计（服务器端统一计算） ====================
 var team_gather_counts: Dictionary = {}     # team 或 peer_id -> {"gold":0, "wood":0, ...}
 var team_res_snapshots: Dictionary = {}     # 用于计算收入速率的资源快照

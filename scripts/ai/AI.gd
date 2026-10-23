@@ -155,7 +155,7 @@ func _add_nation_special_unit():
 			wanted_units.append(uid)
 
 # ═══ Counting ═══
-func count_unit(id: int) -> int:
+func count_unit(id: int, include_queue: bool = true) -> int:
 	var cnt = 0
 	# Count existing units
 	for entity in battle.entities.get_children():
@@ -163,13 +163,14 @@ func count_unit(id: int) -> int:
 			if my_peer_id != -1 and entity.owner_peer_id != my_peer_id: continue
 			if my_peer_id == -1 and entity.team != my_team: continue
 			cnt += 1
-	# Count units in production queues
-	for entity in battle.entities.get_children():
-		if entity is Building and entity.health > 0:
-			if my_peer_id != -1 and entity.owner_peer_id != my_peer_id: continue
-			if my_peer_id == -1 and entity.team != my_team: continue
-			for pid in entity.production_queue:
-				if pid == id: cnt += 1
+	# Count units in production queues（决策用；面板统计传 false，避免把队列当成已存在单位）
+	if include_queue:
+		for entity in battle.entities.get_children():
+			if entity is Building and entity.health > 0:
+				if my_peer_id != -1 and entity.owner_peer_id != my_peer_id: continue
+				if my_peer_id == -1 and entity.team != my_team: continue
+				for pid in entity.production_queue:
+					if pid == id: cnt += 1
 	return cnt
 
 func count_building(id: int) -> int:
@@ -1790,10 +1791,10 @@ func update_debug_label():
 	var all_units = [[10,"农"],[11,"步"],[12,"弓"],[13,"战船"],[14,"采船"],[15,"骑"],[16,"炮"],[17,"投石"],[18,"攻城"],[19,"侦察"],
 		[30,"狂战"],[31,"长弓"],[32,"法骑"],[33,"诸弩"],[34,"象骑"],[35,"长枪"],[36,"重步"],[37,"重弓"],[38,"重骑"],[39,"炮艇"],[40,"爆破"],
 		[43,"油商"],[44,"木商"],[45,"石商"],[51,"食商"],[46,"县吏"],[47,"上校"],[48,"尚书"],[49,"统帅"],[50,"丞相"],
-		[58,"连弩"],[59,"巨投"],[5,"推车"],[6,"贸车"],[9,"运载"],[55,"僧侣"],[56,"长老"],[57,"宗师"]]
+		[58,"连弩"],[59,"巨投"],[5,"推车"],[6,"贸车"],[9,"运载"],[55,"僧侣"],[56,"长老"],[57,"宗师"],[65,"武士"],[66,"甲骑"]]
 	var mil_lines = []
 	for u in all_units:
-		var cnt = count_unit(u[0])
+		var cnt = count_unit(u[0], false)
 		if cnt > 0: mil_lines.append("[color=#aaa]%s[/color]:[color=white]%d[/color]" % [u[1], cnt])
 	_mil_rtl.text = "[color=gray](无军队)[/color]" if mil_lines.is_empty() else " ".join(mil_lines)
 	var all_blds = [[20,"城"],[21,"营"],[22,"仓"],[23,"坞"],[24,"攻城车"],[25,"箭塔"],[26,"炮塔"],[27,"墙"],[28,"民"],[29,"重工"],[41,"瞭望"],[42,"书院"],[52,"集市"],[53,"城堡"],[64,"炮台"],[7,"桥"],[8,"梯子"],[54,"修道"]]
@@ -1801,7 +1802,7 @@ func update_debug_label():
 	for b in all_blds:
 		var cnt = 0; var max_lv = 1
 		for entity in battle.entities.get_children():
-			if entity is Building and entity.entity_id == b[0] and entity_belongs_to_me(entity) and entity.health > 0:
+			if entity is Building and entity.entity_id == b[0] and entity_belongs_to_me(entity) and entity.health > 0 and entity.build_timer <= 0:
 				cnt += 1
 				if entity.upgrade_level > max_lv: max_lv = entity.upgrade_level
 		if cnt > 0: bld_lines.append("[color=#888]【%d】%s[/color]:[color=white]%d[/color]" % [max_lv, b[1], cnt])
