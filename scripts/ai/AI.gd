@@ -1387,7 +1387,7 @@ func execute_overwhelm():
 		return
 	# 第一波：召集全军到敌方集结点（取消距离限制，确保全军参与）
 	for entity in battle.entities.get_children():
-		if entity is Army and entity.team == my_team and entity.health > 0 and entity_belongs_to_me(entity):
+		if entity is Army and entity_belongs_to_me(entity) and entity.health > 0:
 			if int(entity.entity_id) in [5,6,10,14,43,44,45,46,47,48,49,50,51]: continue
 			if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass"): continue
 			entity.attack_move_to(rally)
@@ -1397,7 +1397,7 @@ func execute_overwhelm():
 		return
 	# 第二波：全军压上敌方城堡
 	for entity in battle.entities.get_children():
-		if entity is Army and entity.team == my_team and entity.health > 0 and entity_belongs_to_me(entity):
+		if entity is Army and entity_belongs_to_me(entity) and entity.health > 0:
 			if int(entity.entity_id) in [5,6,10,14,43,44,45,46,47,48,49,50,51]: continue
 			if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass"): continue
 			if not enemy_castle or not is_instance_valid(enemy_castle): continue
@@ -1848,12 +1848,36 @@ func _process_line_3():
 func _release_guards_for_main_attack() -> void:
 	if _defense != null and _defense.has_method("release_guards_for_attack"):
 		_defense.release_guards_for_attack()
+	# 兜底清理可能没记入 _home_guard_ids 的残留驻扎标记
+	for entity in battle.entities.get_children():
+		if not (entity is Army) or entity.health <= 0 or not entity_belongs_to_me(entity):
+			continue
+		if int(entity.entity_id) in [5, 6, 10, 14, 43, 44, 45, 46, 47, 48, 49, 50, 51]:
+			continue
+		if entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass"):
+			continue
+		if entity.has_meta("ai_home_guard"):
+			entity.remove_meta("ai_home_guard")
+		if entity.garrison_point != Vector3.ZERO:
+			entity.garrison_point = Vector3.ZERO
+			if entity.has_method("_hide_garrison_marker"):
+				entity.call("_hide_garrison_marker")
 
 func _process_line_4():
 	# 威胁上升 / 防守姿态时不再把主力送出去；骚扰、突袭、全军压上时仍允许补发主攻
 	if _defense != null and int(_defense.threat_level) >= 2:
 		return
 	if current_tactic == LateTactic.DEFEND:
+		return
+	# 压制姿态必须持续给实际部队下主攻命令：不要求先满 12 人，也不等 120 秒，
+	# 否则队列里的兵会让“压制”提前亮起，但场上实际部队一直不出门。
+	if current_tactic == LateTactic.OVERWHELM:
+		if not an_attack():
+			return
+		var overwhem_target = _get_attack_target_castle()
+		if overwhem_target:
+			_release_guards_for_main_attack()
+			attack_move(overwhem_target.global_position, 30)
 		return
 	# 发育阶段保留原来的 ASSAULT 门槛，但兵力成型且开局时间已过就先发起主攻，
 	# 避免一直等到 30 人、结果因为人口/产能卡住而永远不出门
