@@ -1817,6 +1817,13 @@ func update_debug_label():
 var debug_panel: Control = null
 var _header_rtl: RichTextLabel
 
+# 决策面板挂在 battle 的 UI 画布下，不是 AI 节点的子节点；
+# AI 被移除（城堡被摧毁 / 场景切换）时必须显式释放，避免留下空面板
+func _exit_tree():
+	if is_instance_valid(debug_panel):
+		debug_panel.queue_free()
+	debug_panel = null
+
 # 面板标题上显示本国名称：owner 优先，其次队伍默认（静态 1v1 红方 AI 用敌方国家）
 func _my_nation_tag() -> String:
 	if not battle or not battle.has_method("get_nation_name"):

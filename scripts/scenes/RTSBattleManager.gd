@@ -421,9 +421,41 @@ func _create_game_timer():
 		add_child(game_time_label)
 
 # ==================== 城堡被摧毁 → 游戏结束 ====================
+# 某个 AI 玩家被消灭：发送通知、清除其全部残余单位，并移除其 AI 控制器
+# （决策面板挂在 UI 下，由 AIController._exit_tree 一并释放）
+func _eliminate_ai_player(owner: int) -> void:
+	if owner == player_owner_id:
+		return
+	var info = ai_players.get(owner, {})
+	var nation_name = get_nation_name(int(info.get("nation", -1)))
+	var color: Color = _player_colors.get(owner, Color(1.0, 0.6, 0.2))
+	_show_hud_alert("【AI】%s 的城堡被摧毁，残余部队已溃散" % nation_name, color)
+	# 残余单位/建筑（health<=0 的正在播放死亡动画，交给各自 die() 自清理）
+	var to_free: Array = []
+	for e in entities.get_children():
+		if e is GameEntity and (e as GameEntity).owner_peer_id == owner and (e as GameEntity).health > 0:
+			to_free.append(e)
+	for e in to_free:
+		if is_instance_valid(e):
+			e.queue_free()
+	# 停止并移除该国 AI 控制器
+	for c in get_children():
+		if c is AIController and c.my_peer_id == owner:
+			c.set_process(false)
+			c.set_physics_process(false)
+			c.queue_free()
+	# 清理该国经济表，避免每帧继续刷新
+	ai_players.erase(owner)
+	ai_resources.erase(owner)
+	ai_population.erase(owner)
+	ai_limits.erase(owner)
+
 # 单机2v2：检查同队所有城堡是否全部死亡
-func _on_2v2_castle_died(team: int):
+func _on_2v2_castle_died(team: int, owner: int = -1):
 	if game_over: return
+	# 单个 AI 的城堡被摧毁：立即通知并清场，即使本队还有其他城堡存活
+	if owner != -1:
+		_eliminate_ai_player(owner)
 	_team_castle_count[team] = _team_castle_count.get(team, 2) - 1
 	if _team_castle_count[team] > 0: return   # 还有存活城堡，继续
 	game_over = true
@@ -640,25 +672,21 @@ func _init_ffa_single(_nation_count: int):
 func _on_ffa_castle_died(owner: int):
 	if game_over: return
 	var remaining: Array = diplomacy.notify_castle_died(owner) if diplomacy else []
-	# 清除该国残余军队/建筑（健康<=0 的正在播放死亡动画，交给各自 die() 自清理）
-	var to_free: Array = []
-	for e in entities.get_children():
-		if e is GameEntity and (e as GameEntity).owner_peer_id == owner and (e as GameEntity).health > 0:
-			to_free.append(e)
-	for e in to_free:
-		if is_instance_valid(e):
-			e.queue_free()
-	# 停掉该国 AI 控制器
-	for c in get_children():
-		if c is AIController and c.my_peer_id == owner:
-			c.set_process(false)
-			c.set_physics_process(false)
-			c.queue_free()
-	# 清理该国经济表，避免每帧继续刷新
-	ai_players.erase(owner)
-	ai_resources.erase(owner)
-	ai_population.erase(owner)
-	ai_limits.erase(owner)
+	# 清除该国残余军队/建筑（AI 走统一清场流程并发送通知；玩家则清场后判负）
+	if owner != player_owner_id:
+		_eliminate_ai_player(owner)
+	else:
+		var to_free: Array = []
+		for e in entities.get_children():
+			if e is GameEntity and (e as GameEntity).owner_peer_id == owner and (e as GameEntity).health > 0:
+				to_free.append(e)
+		for e in to_free:
+			if is_instance_valid(e):
+				e.queue_free()
+		ai_players.erase(owner)
+		ai_resources.erase(owner)
+		ai_population.erase(owner)
+		ai_limits.erase(owner)
 
 	# 玩家被消灭 → 直接结束
 	if owner == player_owner_id:
@@ -727,7 +755,10 @@ func _init_2v2_single():
 		var castle = spawn_entity(castle_cfg, team, castle_pos, 1)
 		castle.owner_peer_id = pid
 		if castle:
-			castle.died.connect(_on_2v2_castle_died.bind(team))
+			if info.is_human:
+				castle.died.connect(_on_2v2_castle_died.bind(team))
+			else:
+				castle.died.connect(_on_2v2_castle_died.bind(team, pid))
 			ai_players[pid] = {"castle": castle, "team": team, "slot": slot, "nation": info.get("nation", -1)}
 
 		# 生成3个农民
@@ -820,7 +851,7 @@ func _init_multi_single(mode: int):
 			var castle = spawn_entity(castle_cfg, team, castle_pos, 1)
 			if castle:
 				castle.owner_peer_id = pid
-				castle.died.connect(_on_2v2_castle_died.bind(team))
+				castle.died.connect(_on_2v2_castle_died.bind(team, pid))
 				var start_lv_ai = NationBonuses.get_castle_start_level(nation)
 				castle.upgrade_level = start_lv_ai
 				castle.level = start_lv_ai
