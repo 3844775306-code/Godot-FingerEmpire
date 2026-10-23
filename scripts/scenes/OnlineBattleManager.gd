@@ -576,8 +576,21 @@ func _send_map_data(peers: Array):
 			"x": r["pos"].x, "y": r["pos"].y, "z": r["pos"].z,
 			"type": r["type"]
 		})
+	var size: int = terrain_copy.size()
+	# 地形预设 ID 与覆盖层一起下发：客户端据此还原地形修正与配色
+	var map_id := "classic"
+	if $Map.map_preset is Dictionary:
+		map_id = String($Map.map_preset.get("id", "classic"))
+	var overlay := PackedByteArray()
+	overlay.resize(size * size)
+	var oi := 0
+	for x in range(size):
+		for y in range(size):
+			overlay[oi] = $Map.get_overlay(x, y)
+			oi += 1
+	var overlay_zip := overlay.compress(FileAccess.COMPRESSION_ZSTD)
 	for pid in peers:
-		NetworkManager.receive_map_data.rpc_id(pid, terrain_copy, height_copy, res_data)
+		NetworkManager.receive_map_data.rpc_id(pid, terrain_copy, height_copy, res_data, map_id, overlay_zip)
 
 # ---------- 组队模式城堡生成（2v2 / 3v3 共用） ----------
 func _init_all_castles_team():

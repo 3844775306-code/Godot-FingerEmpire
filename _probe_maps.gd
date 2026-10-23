@@ -8,6 +8,7 @@ const SEEDS := [1, 2, 3]
 const DEFAULT_MAP := "classic"
 const GroundScript = preload("res://scripts/map/Ground.gd")
 const MapPreview = preload("res://scripts/map/MapPreview.gd")
+const MapPresets = preload("res://scripts/map/MapPresets.gd")
 
 func _ready() -> void:
 	GameSettings.ai_mode = 1
@@ -41,7 +42,36 @@ func _ready() -> void:
 		g.free()
 
 	_preview_selfcheck()
+	_sync_selfcheck()
 	get_tree().quit()
+
+# 模拟联机下发：主机打包覆盖层 → 客户端解压并还原，地形/覆盖层/配色必须一致
+func _sync_selfcheck() -> void:
+	var size := 100
+	var src = GroundScript.new()
+	src.map_size_override = size
+	src.map_preset = MapPresets.get_preset("forest")
+	src.custom_seed = 12345
+	src._generate_with_stages(size, src.map_preset["stages"])
+	var overlay := PackedByteArray()
+	overlay.resize(size * size)
+	var oi := 0
+	for x in range(size):
+		for y in range(size):
+			overlay[oi] = src.get_overlay(x, y)
+			oi += 1
+	var zip := overlay.compress(FileAccess.COMPRESSION_ZSTD)
+	var unzip := zip.decompress(size * size, FileAccess.COMPRESSION_ZSTD)
+	var dst = GroundScript.new()
+	dst.map_size_override = size
+	dst.apply_received_map(src.terrain_grid, src.height_grid, [], unzip, "forest")
+	var same := var_to_bytes([src.terrain_grid, src.overlay_grid]) == var_to_bytes([dst.terrain_grid, dst.overlay_grid])
+	var same_colors := var_to_bytes(src.base_colors) == var_to_bytes(dst.base_colors)
+	print("SYNC match=%s colors=%s zip=%d raw=%d mods=%s" % [
+		str(same), str(same_colors), zip.size(), overlay.size(),
+		str(dst.map_preset.get("modifiers", {}))])
+	src.free()
+	dst.free()
 
 func _preview_selfcheck() -> void:
 	for id in ["classic", "ridge", "ford", "forest"]:

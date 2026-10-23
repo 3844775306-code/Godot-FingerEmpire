@@ -71,7 +71,7 @@ func _ready():
 	map_generated = true
 
 # 服务器发来的完整地图数据直接覆盖
-func apply_received_map(p_terrain: Array, p_height: Array, p_resources: Array):
+func apply_received_map(p_terrain: Array, p_height: Array, p_resources: Array, p_overlay: PackedByteArray = PackedByteArray(), p_preset_id: String = ""):
 	# 清除旧的视觉和碰撞体
 	for child in get_children():
 		if child.name.begins_with("TerrainPlane") or child.name == "NavRegion":
@@ -82,21 +82,30 @@ func apply_received_map(p_terrain: Array, p_height: Array, p_resources: Array):
 	var size = _get_map_size()
 
 	# 覆盖地形网格和颜色
+	if p_preset_id != "":
+		map_preset = MapPresets.get_preset(p_preset_id)
 	terrain_grid = p_terrain.duplicate(true)
 	base_colors.clear()
 	height_grid = p_height.duplicate(true)
-	# 覆盖层暂由两端默认全 0（联机下发在后续阶段接入）
+	# 覆盖层由主机下发（1 字节/格，已压缩）；旧格式缺该数据时按全 0 处理
 	overlay_grid.clear()
+	var use_overlay: bool = p_overlay.size() >= size * size
+	var ov_i := 0
 	for x in range(size):
 		var orow := []
 		orow.resize(size)
-		orow.fill(0)
+		for y in range(size):
+			if use_overlay:
+				orow[y] = p_overlay[ov_i]
+				ov_i += 1
+			else:
+				orow[y] = 0
 		overlay_grid.append(orow)
 	for x in range(size):
 		var color_col = []
 		for y in range(size):
-			# 与本地生成走同一个着色函数：只用类型 + 高度，客户端与主机配色一致
-			color_col.append(_terrain_color_for(terrain_grid[x][y], height_grid[x][y], x, y))
+			# 与本地生成走同一个着色函数：类型 + 高度 + 覆盖层，客户端与主机配色一致
+			color_col.append(_terrain_color_for(terrain_grid[x][y], height_grid[x][y], x, y, get_overlay(x, y)))
 		base_colors.append(color_col)
 
 	# 覆盖资源列表

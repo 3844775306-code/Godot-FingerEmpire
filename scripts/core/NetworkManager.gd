@@ -366,12 +366,17 @@ func _load_battle_scene():
 		var _t = get_tree(); if _t: _t.change_scene_to_file("res://scenes/rts_battle_client.tscn")
 
 @rpc("any_peer", "call_remote", "reliable")
-func receive_map_data(terrain: Array, height_data: Array, resources: Array):
+func receive_map_data(terrain: Array, height_data: Array, resources: Array, map_id: String, overlay_zip: PackedByteArray):
 	if mode == Mode.CLIENT:
 		RTSConfig.MAP_SIZE = terrain.size()
+		GameSettings.map_id = map_id
+		# 覆盖层随地图下发（压缩字节流）；缺失时按全 0 处理，兼容旧格式
+		var overlay := PackedByteArray()
+		if overlay_zip.size() > 0:
+			overlay = overlay_zip.decompress(terrain.size() * terrain.size(), FileAccess.COMPRESSION_ZSTD)
 		var map = _get_map()
 		if map:
-			map.apply_received_map(terrain, height_data, resources)
+			map.apply_received_map(terrain, height_data, resources, overlay, map_id)
 		var renderer = _get_renderer()
 		if renderer and renderer.has_method("_add_water_box"):
 			var fog_tex = null
@@ -379,6 +384,9 @@ func receive_map_data(terrain: Array, height_data: Array, resources: Array):
 				fog_tex = map.get_terrain_texture()
 			renderer._add_water_box(terrain.size(), fog_tex)
 		if renderer:
+			# 客户端迷雾与主机同口径：地图倍率/高地/森林修正
+			if map and map.map_preset is Dictionary:
+				renderer.map_modifiers = map.map_preset.get("modifiers", {})
 			renderer.on_map_size_changed()
 			renderer._init_fog_grids()
 

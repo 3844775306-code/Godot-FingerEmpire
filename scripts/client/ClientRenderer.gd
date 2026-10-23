@@ -15,6 +15,7 @@ var entity_nodes: Dictionary = {}   # instance_id -> Node3D
 
 # ==================== 战争迷雾 ====================
 var local_explored_grid: Array = []
+var map_modifiers: Dictionary = {}   # 当前地图的视野规则修正（由 receive_map_data 下发）
 var local_visible_grid: Array = []
 
 # ==================== 血条池 ====================
@@ -1055,7 +1056,7 @@ func _process_fog_batch() -> bool:
 			continue
 		var gx = int(info["x"] + RTSConfig.MAP_SIZE / 2)
 		var gz = int(info["z"] + RTSConfig.MAP_SIZE / 2)
-		var vision = info.get("vision_range", 12)
+		var vision = _effective_vision(info)
 		for dx in range(-vision, vision + 1):
 			for dz in range(-vision, vision + 1):
 				if dx*dx + dz*dz > vision*vision: continue
@@ -1631,9 +1632,26 @@ func is_in_player_vision(world_pos: Vector3) -> bool:
 	for node in entity_nodes.values():
 		var info = node.get_meta("snapshot_info", null)
 		if info and info["team"] == player_team and info["health"] > 0:
-			if node.global_position.distance_to(world_pos) <= info.get("vision_range", 12):
+			if node.global_position.distance_to(world_pos) <= _effective_vision(info):
 				return true
 	return false
+
+# 客户端有效视野：与主机 get_effective_vision 同口径（地图倍率 × 树林遮蔽 × 高地加成）
+func _effective_vision(info: Dictionary) -> int:
+	var v := float(info.get("vision_range", 12))
+	if v <= 0.0:
+		return 0
+	v *= float(map_modifiers.get("vision", 1.0))
+	var map = get_node_or_null("Map")
+	if map and map.has_method("get_overlay"):
+		var gx := int(float(info.get("x", 0.0)) + RTSConfig.MAP_SIZE / 2.0)
+		var gz := int(float(info.get("z", 0.0)) + RTSConfig.MAP_SIZE / 2.0)
+		if map.get_overlay(gx, gz) == 1:
+			v *= 0.55
+		var hg := float(map_modifiers.get("high_ground_vision", 0.0))
+		if hg > 0.0 and map.has_method("get_height_at_grid") and map.get_height_at_grid(gx, gz) >= float(map_modifiers.get("high_ground_min", 1.0)):
+			v *= 1.0 + hg
+	return maxi(1, int(round(v)))
 
 func get_terrain_at(pos: Vector3) -> int:
 	var map = get_node_or_null("Map")

@@ -1,5 +1,8 @@
 extends Control
 
+const MapPresets = preload("res://scripts/map/MapPresets.gd")
+const MapSelectDialog = preload("res://scripts/ui/MapSelectDialog.gd")
+
 var nation_select: OptionButton
 var red_ai_spin: SpinBox
 var blue_ai_spin: SpinBox
@@ -10,6 +13,8 @@ var status_label: Label
 var ip_input: LineEdit
 var enet_toggle_btn: Button
 var ws_toggle_btn: Button
+var map_btn: Button
+var _last_map_id: String = "classic"
 
 func _ready():
 	NetworkManager.connection_success.connect(_on_connected)
@@ -116,6 +121,13 @@ func _ready():
 	nation_select.position = Vector2(x0, y + 38); nation_select.size = Vector2(500, 44)
 	_style_option(nation_select, 16)
 	panel.add_child(nation_select)
+
+	y += 100
+	_lb.call("🗺️ 战场地形（房主）", y)
+	map_btn = _make_btn(" 经典大陆 ▸", Color(0.2, 0.28, 0.2), Vector2(x0, y + 38), Vector2(500, 44), "muted")
+	map_btn.pressed.connect(_open_map_dialog)
+	panel.add_child(map_btn)
+	_update_map_availability(NetworkManager.selected_mode == NetworkManager.GameMode.ONEvONE)
 
 	y += 100
 	_lb.call("📡 传输方式", y)
@@ -309,6 +321,48 @@ func _select_mode(mode: int):
 	blue_ai_spin.max_value = max_ai
 	red_ai_spin.value = mini(int(red_ai_spin.value), max_ai)
 	blue_ai_spin.value = mini(int(blue_ai_spin.value), max_ai)
+	_update_map_availability(mode == NetworkManager.GameMode.ONEvONE)
+
+# ---------- 战场地形（特殊地图仅 1V1，跟随房主选择） ----------
+func _open_map_dialog() -> void:
+	if map_btn and map_btn.disabled:
+		return
+	var existing = get_node_or_null("MapDialog")
+	if existing:
+		existing.queue_free()
+		return
+	var dlg = MapSelectDialog.new()
+	dlg.name = "MapDialog"
+	dlg.map_selected.connect(_on_map_selected)
+	add_child(dlg)
+
+func _on_map_selected(id: String) -> void:
+	GameSettings.map_id = id
+	_refresh_map_button()
+
+func _refresh_map_button() -> void:
+	if not map_btn:
+		return
+	var info := MapPresets.get_info(GameSettings.map_id)
+	var suffix := ""
+	if String(info["battle"]) != "":
+		suffix = " · " + String(info["battle"])
+	map_btn.text = "  %s%s ▸" % [String(info["name"]), suffix]
+	if map_btn.disabled:
+		map_btn.text += "（仅 1V1）"
+
+func _update_map_availability(allow: bool) -> void:
+	if not map_btn:
+		return
+	if not allow:
+		# 离开 1V1 时记住上次选择，切回来时恢复
+		if GameSettings.map_id != "classic":
+			_last_map_id = GameSettings.map_id
+		GameSettings.map_id = "classic"
+	else:
+		GameSettings.map_id = _last_map_id
+	map_btn.disabled = not allow
+	_refresh_map_button()
 
 func _on_transport_changed(use_ws: bool):
 	NetworkManager.use_websocket = use_ws
