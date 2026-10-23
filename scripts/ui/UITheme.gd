@@ -20,6 +20,29 @@ const EMERALD    := Color(0.176, 0.545, 0.306)   # #2D8B4E  资源充足/木材
 const STONE      := Color(0.439, 0.439, 0.439)   # #707070  次要文字/禁用
 const PURPLE     := Color(0.482, 0.310, 0.749)   # #7B4FBF  升级进度/特殊
 
+# 统一进度条样式：暖黑圆角底 + 单色填充 + 同色细边
+# 用于建造（金）、生产（蓝）、升级（紫）三种进度
+static func style_progress_bar(bar: ProgressBar, color: Color, height: float = 8.0) -> void:
+	bar.custom_minimum_size = Vector2(60, height)
+	bar.max_value = 1.0
+	bar.show_percentage = false
+	var fill := StyleBoxFlat.new()
+	fill.bg_color = color
+	fill.corner_radius_top_left = 3
+	fill.corner_radius_top_right = 3
+	fill.corner_radius_bottom_left = 3
+	fill.corner_radius_bottom_right = 3
+	bar.add_theme_stylebox_override("fill", fill)
+	var bg := StyleBoxFlat.new()
+	bg.bg_color = Color(INK, 0.8)
+	bg.corner_radius_top_left = 3
+	bg.corner_radius_top_right = 3
+	bg.corner_radius_bottom_left = 3
+	bg.corner_radius_bottom_right = 3
+	bg.set_border_width_all(1)
+	bg.border_color = Color(color, 0.35)
+	bar.add_theme_stylebox_override("background", bg)
+
 # 资源颜色
 const RES_GOLD   := Color(1.00, 0.84, 0.10)      # 黄金
 const RES_WOOD   := Color(0.25, 0.82, 0.20)      # 木材

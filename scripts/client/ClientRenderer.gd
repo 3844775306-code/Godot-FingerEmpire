@@ -1360,24 +1360,30 @@ func _update_health_bars():
 		var type = info["type"]
 		var team = info.get("team", -1)
 
+		# 每帧先隐藏建造条，建造分支命中时会重新显示
+		if unit_bars.has(id) and unit_bars[id].get("build_bar"):
+			unit_bars[id].build_bar.visible = false
+
 		# 建造中
 		if type == 1 and info.get("build_timer", 0) > 0:
 			if Engine.get_process_frames() % 40 == 0:
 				AudioManager.play_sfx_3d("build_loop", node.global_position, _get_cam_pos())
-			var bar = _get_or_create_health_bar(id)
+			var bar = _get_or_create_build_bar(id)
 			var lab = _get_or_create_label(id)
+			var bt := maxf(float(info.get("max_build_time", 0.0)), 0.001)
+			var bp := clampf(1.0 - float(info["build_timer"]) / bt, 0.0, 1.0)
 			bar.visible = true; lab.visible = show_unit_text
-			bar.update_bar(info["build_timer"], info["max_build_time"], -1, UITheme.GOLD)
+			bar.value = bp
 			var nm2 = info["name"]
 			var _gpfx3 = _get_entity_group_prefix(info["id"])
-			lab.text = _gpfx3 + "%s (建造中)" % nm2
+			lab.text = _gpfx3 + "%s (建造中 %d%%)" % [nm2, int(bp * 100.0)]
 			var _lbc3 = _get_entity_label_color(info)
 			lab.add_theme_color_override("font_color", _lbc3)
 			_apply_label_nation_outline(lab, info)
 			var world_pos = node.global_position + Vector3.UP * (info["body_radius"]*2 + 0.5)
 			var screen_pos = cam.unproject_position(world_pos)
 			if viewport_rect.has_point(screen_pos):
-				bar.position = screen_pos - Vector2(30, 5)
+				bar.position = screen_pos - Vector2(30, 4)
 				lab.position = bar.position + Vector2(0, -22)
 				lab.visible = show_unit_text
 			else:
@@ -1389,9 +1395,11 @@ func _update_health_bars():
 		if info.get("upgrade_timer", 0) > 0:
 			var upbar = _get_or_create_upgrade_bar(id)
 			var uplab = _get_or_create_upgrade_label(id)
+			var ut := maxf(float(info.get("max_upgrade_time", 0.0)), 0.001)
+			var up := clampf(1.0 - float(info["upgrade_timer"]) / ut, 0.0, 1.0)
 			upbar.visible = true; uplab.visible = show_unit_text
-			upbar.update_bar(info["upgrade_timer"], info["max_upgrade_time"], -1, UITheme.PURPLE)
-			uplab.text = "升级中"
+			upbar.value = up
+			uplab.text = "升级中 %d%%" % int(up * 100.0)
 			uplab.add_theme_color_override("font_color", UITheme.PURPLE.lightened(0.25))
 			var uwp = node.global_position + Vector3.UP * (info["body_radius"]*2 + 0.5)
 			var usp = cam.unproject_position(uwp)
@@ -1409,11 +1417,12 @@ func _update_health_bars():
 			var plab = _get_or_create_prod_label(id)
 			pbar.visible = true; plab.visible = show_unit_text
 			var prog = info.get("production_progress")
-			pbar.value = prog if prog != null else 0.0
+			var prog_f := clampf(float(prog) if prog != null else 0.0, 0.0, 1.0)
+			pbar.value = prog_f
 			var pcu = info.get("production_current_unit")
 			if pcu == null or pcu == -1: continue
 			var unit_cfg = EntityDatabase.get_config(pcu)
-			plab.text = "%s x%d" % [unit_cfg.get("name","?"), info["production_queue_size"]]
+			plab.text = "%s x%d %d%%" % [unit_cfg.get("name","?"), info["production_queue_size"], int(prog_f * 100.0)]
 			var world_pos = node.global_position + Vector3.UP * (info["body_radius"]*2 + 0.5)
 			var screen_pos = cam.unproject_position(world_pos)
 			if viewport_rect.has_point(screen_pos):
@@ -1490,6 +1499,7 @@ func _hide_unit_bars(id):
 		if bd.get("label"): bd.label.visible = false
 		if bd.get("prod_bar"): bd.prod_bar.visible = false
 		if bd.get("prod_label"): bd.prod_label.visible = false
+		if bd.get("build_bar"): bd.build_bar.visible = false
 		if bd.get("upgrade_bar"): bd.upgrade_bar.visible = false
 		if bd.get("upgrade_label"): bd.upgrade_label.visible = false
 
@@ -1522,19 +1532,7 @@ func _get_or_create_prod_bar(id) -> ProgressBar:
 		unit_bars[id] = { "bar":null, "label":null, "prod_bar":null, "prod_label":null, "order_label":null }
 	if not unit_bars[id].prod_bar:
 		var p = ProgressBar.new()
-		p.custom_minimum_size = Vector2(60, 6)
-		p.max_value = 1.0
-		p.show_percentage = false
-		# 皇庭生产条：金墨 fill + 暖黑底金细边（圆角）
-		var pfs := StyleBoxFlat.new(); pfs.bg_color = UITheme.GOLD.lightened(0.15)
-		pfs.corner_radius_top_left = 3; pfs.corner_radius_top_right = 3
-		pfs.corner_radius_bottom_left = 3; pfs.corner_radius_bottom_right = 3
-		p.add_theme_stylebox_override("fill", pfs)
-		var pbs := StyleBoxFlat.new(); pbs.bg_color = Color(UITheme.INK, 0.8)
-		pbs.corner_radius_top_left = 3; pbs.corner_radius_top_right = 3
-		pbs.corner_radius_bottom_left = 3; pbs.corner_radius_bottom_right = 3
-		pbs.set_border_width_all(1); pbs.border_color = Color(UITheme.GOLD, 0.35)
-		p.add_theme_stylebox_override("background", pbs)
+		UITheme.style_progress_bar(p, UITheme.SAPPHIRE, 8.0)
 		add_child(p)
 		unit_bars[id].prod_bar = p
 	return unit_bars[id].prod_bar
@@ -1550,12 +1548,22 @@ func _get_or_create_prod_label(id) -> Label:
 		unit_bars[id].prod_label = l
 	return unit_bars[id].prod_label
 
-func _get_or_create_upgrade_bar(id) -> HealthBarControl:
+func _get_or_create_build_bar(id) -> ProgressBar:
+	if not unit_bars.has(id):
+		unit_bars[id] = { "bar":null, "label":null, "prod_bar":null, "prod_label":null, "order_label":null }
+	if not unit_bars[id].has("build_bar") or not unit_bars[id].build_bar:
+		var p = ProgressBar.new()
+		UITheme.style_progress_bar(p, UITheme.GOLD, 8.0)
+		add_child(p)
+		unit_bars[id].build_bar = p
+	return unit_bars[id].build_bar
+
+func _get_or_create_upgrade_bar(id) -> ProgressBar:
 	if not unit_bars.has(id):
 		unit_bars[id] = { "bar":null, "label":null, "prod_bar":null, "prod_label":null, "order_label":null, "upgrade_bar":null, "upgrade_label":null }
 	if not unit_bars[id].has("upgrade_bar") or not unit_bars[id].upgrade_bar:
-		var hb = HealthBarControl.new()
-		hb.custom_minimum_size = Vector2(60, 10)
+		var hb = ProgressBar.new()
+		UITheme.style_progress_bar(hb, UITheme.PURPLE, 8.0)
 		add_child(hb)
 		unit_bars[id].upgrade_bar = hb
 	return unit_bars[id].upgrade_bar
@@ -1600,6 +1608,9 @@ func _remove_all_bars(id):
 		if data.label: data.label.queue_free()
 		if data.prod_bar: data.prod_bar.queue_free()
 		if data.prod_label: data.prod_label.queue_free()
+		if data.get("build_bar"): data.build_bar.queue_free()
+		if data.get("upgrade_bar"): data.upgrade_bar.queue_free()
+		if data.get("upgrade_label"): data.upgrade_label.queue_free()
 		if data.order_label: data.order_label.queue_free()
 		unit_bars.erase(id)
 

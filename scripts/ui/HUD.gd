@@ -771,6 +771,12 @@ func _update_health_bars():
 			if unit_bars[e].has("prod_bar"):
 				unit_bars[e].prod_bar.queue_free()
 				unit_bars[e].prod_label.queue_free()
+			if unit_bars[e].has("build_bar") and unit_bars[e].build_bar:
+				unit_bars[e].build_bar.queue_free()
+			if unit_bars[e].has("upgrade_bar") and unit_bars[e].upgrade_bar:
+				unit_bars[e].upgrade_bar.queue_free()
+			if unit_bars[e].has("upgrade_label") and unit_bars[e].upgrade_label:
+				unit_bars[e].upgrade_label.queue_free()
 			unit_bars.erase(e)
 
 	# 遍历所有实体
@@ -789,6 +795,7 @@ func _update_health_bars():
 					unit_bars[entity].upgrade_bar.visible = false
 				if unit_bars[entity].has("upgrade_label"):
 					unit_bars[entity].upgrade_label.visible = false
+				_hide_build_bar(entity)
 			continue
 		if not entity.visible:
 			if entity in unit_bars:
@@ -797,6 +804,7 @@ func _update_health_bars():
 				if unit_bars[entity].has("prod_bar"):
 					unit_bars[entity].prod_bar.visible = false
 					unit_bars[entity].prod_label.visible = false
+				_hide_build_bar(entity)
 			continue
 
 		if entity not in unit_bars:
@@ -828,8 +836,10 @@ func _update_health_bars():
 				data.upgrade_bar.visible = false
 			if data.has("upgrade_label") and data.upgrade_label:
 				data.upgrade_label.visible = false
+			_hide_build_bar(entity)
 			continue
 		var screen_pos = cam.unproject_position(world_pos)
+		_hide_build_bar(entity)
 		bar.position = screen_pos - bar_size / 2
 
 		# 建造进度
@@ -839,7 +849,8 @@ func _update_health_bars():
 			var up_bar = up_bar_data.get("upgrade_bar")
 			var up_lbl = up_bar_data.get("upgrade_label")
 			if not up_bar:
-				up_bar = HealthBarControl.new()
+				up_bar = ProgressBar.new()
+				UITheme.style_progress_bar(up_bar, UITheme.PURPLE, 8.0)
 				add_child(up_bar); up_bar_data["upgrade_bar"] = up_bar
 				up_bar.z_index = -1
 			if not up_lbl:
@@ -849,11 +860,13 @@ func _update_health_bars():
 				up_lbl.add_theme_constant_override("outline_size", 1)
 				add_child(up_lbl); up_bar_data["upgrade_label"] = up_lbl
 				up_lbl.z_index = -1
-			up_bar.custom_minimum_size = bar_size
+			up_bar.custom_minimum_size = Vector2(bar_size.x, 8 * scale_factor)
 			up_lbl.add_theme_font_size_override("font_size", font_size)
 			up_bar.visible = true; up_lbl.visible = show_unit_text
-			up_bar.update_bar(entity.upgrade_timer, entity.max_upgrade_time, -1, Color(0.6, 0.2, 0.8))
-			up_lbl.text = "升级中"
+			var up_total := maxf(entity.max_upgrade_time, 0.001)
+			var up_pct := clampf(1.0 - entity.upgrade_timer / up_total, 0.0, 1.0)
+			up_bar.value = up_pct
+			up_lbl.text = "升级中 %d%%" % int(up_pct * 100.0)
 			up_bar.position = screen_pos - bar_size / 2 + Vector2(0, -bar_size.y * 2 - 6)
 			up_lbl.position = up_bar.position + Vector2(0, -bar_size.y - 4)
 		else:
@@ -864,15 +877,27 @@ func _update_health_bars():
 				up_data2.upgrade_label.visible = false
 
 		if entity is Building and entity.has_method("is_under_construction") and entity.is_under_construction():
-			bar.visible = true
+			var bdata = unit_bars[entity]
+			var build_bar: ProgressBar = bdata.get("build_bar")
+			if not build_bar:
+				build_bar = ProgressBar.new()
+				UITheme.style_progress_bar(build_bar, UITheme.GOLD, 8.0)
+				add_child(build_bar); build_bar.z_index = -1
+				bdata["build_bar"] = build_bar
+			var build_total := maxf(entity.max_build_time, 0.001)
+			var build_pct := clampf(1.0 - entity.build_timer / build_total, 0.0, 1.0)
+			build_bar.visible = true
+			build_bar.size = Vector2(bar_size.x, 8 * scale_factor)
+			build_bar.position = bar.position + Vector2(0, -bar_size.y - 4)
+			build_bar.value = build_pct
+			bar.visible = false
 			label.visible = show_unit_text
-			var progress = 1.0 - (entity.build_timer / entity.max_build_time)
-			bar.update_bar(progress * entity.max_health, entity.max_health, entity.team, Color.YELLOW)
-			label.text = "%s (建造中)" % entity.display_name
+			label.text = "%s (建造中 %d%%)" % [entity.display_name, int(build_pct * 100.0)]
 			# Color label
 			var _hlc2 = _get_hud_label_color(entity)
 			label.add_theme_color_override("font_color", _hlc2)
 			_apply_hud_label_outline(label, entity)
+			label.position = build_bar.position + Vector2(0, -22)
 			if prod_bar:
 				prod_bar.visible = false
 				prod_label.visible = false
@@ -894,9 +919,10 @@ func _update_health_bars():
 						break
 				if prod_cfg:
 					var progress = 1.0 - (entity.production_timer / prod_cfg.cooldown)
+					progress = clampf(progress, 0.0, 1.0)
 					prod_bar.max_value = 1.0
 					prod_bar.value = progress
-					prod_label.text = "%s x%d" % [unit_name, entity.production_queue.size()]
+					prod_label.text = "%s x%d %d%%" % [unit_name, entity.production_queue.size(), int(progress * 100.0)]
 					prod_bar.position = bar.position + Vector2(0, bar_size.y + 4)
 					prod_label.position = prod_bar.position + Vector2(0, -14)
 				else:
@@ -953,6 +979,12 @@ func _update_health_bars():
 		bar.update_bar(entity.health, entity.max_health, entity.team, bar_color)
 
 
+func _hide_build_bar(entity):
+	if entity in unit_bars:
+		var d = unit_bars[entity]
+		if d.has("build_bar") and d.build_bar:
+			d.build_bar.visible = false
+
 func _create_health_bar(entity):
 	var bar = HealthBarControl.new()
 	bar.size = Vector2(100, 16)
@@ -971,10 +1003,7 @@ func _create_health_bar(entity):
 	unit_bars[entity] = {"bar": bar, "label": label}
 
 	var prod_bar = ProgressBar.new()
-	prod_bar.max_value = 1.0
-	prod_bar.value = 0.0
-	prod_bar.custom_minimum_size = Vector2(100, 8)
-	prod_bar.show_percentage = false
+	UITheme.style_progress_bar(prod_bar, UITheme.SAPPHIRE, 8.0)
 	prod_bar.visible = false
 	prod_bar.z_index = -1
 	add_child(prod_bar)
