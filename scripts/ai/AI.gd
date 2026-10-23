@@ -1885,6 +1885,7 @@ var _title_rtl: RichTextLabel = null       # 面板标题（用于追加国家�
 var _panel_title_base: String = ""         # 不含国家名的原始标题
 var _collapse_btn: Button = null           # 标题栏右侧的隐藏/展开按钮
 var _body_vb: VBoxContainer = null         # 面板主体（隐藏时整块不可见）
+var _body_scroll: ScrollContainer = null   # 内容滚动区，避免建筑统计被面板高度截断
 var _panel_collapsed: bool = false         # 面板是否已收起为标题条
 var _panel_bg_style: StyleBoxFlat = null   # 面板底板样式（按友方/敌方着色）
 var _last_relation: int = -2               # 上次计算的敌我关系，避免每帧重设样式
@@ -1970,7 +1971,8 @@ func _create_debug_panel():
 	bg.add_theme_stylebox_override("panel", bg_style); debug_panel.add_child(bg)
 	var vb = VBoxContainer.new(); vb.position = Vector2(10, 8); vb.add_theme_constant_override("separation", 3)
 	# 固定内容宽度：折叠后主体隐藏时 VBox 不能收缩，否则右对齐的折叠按钮会跳到标题旁边
-	vb.custom_minimum_size = Vector2(PANEL_WIDTH - 20.0, 0)
+	vb.custom_minimum_size = Vector2(PANEL_WIDTH - 20.0, PANEL_HEIGHT - 16.0)
+	vb.size = Vector2(PANEL_WIDTH - 20.0, PANEL_HEIGHT - 16.0)
 	debug_panel.add_child(vb)
 	# 标题行：左侧标题 + 右侧隐藏按钮（点一下整块收起，只留标题条，不再遮挡战场）
 	var title_hbox = HBoxContainer.new(); vb.add_child(title_hbox)
@@ -1984,9 +1986,17 @@ func _create_debug_panel():
 	UITheme.apply_muted_button(_collapse_btn, UITheme.FONT_MD)
 	_collapse_btn.pressed.connect(_on_collapse_pressed)
 	title_hbox.add_child(_collapse_btn)
-	# 面板主体：全部内容挂这里，隐藏按钮关闭整块
+	# 面板主体：放进滚动区，内容超出面板高度时可滚动查看
+	_body_scroll = ScrollContainer.new()
+	_body_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_body_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	_body_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_body_scroll.custom_minimum_size = Vector2(PANEL_WIDTH - 20.0, PANEL_HEIGHT - 52.0)
+	vb.add_child(_body_scroll)
 	var body = VBoxContainer.new(); body.add_theme_constant_override("separation", 3)
-	vb.add_child(body); _body_vb = body
+	body.custom_minimum_size = Vector2(PANEL_WIDTH - 44.0, 0)
+	body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_body_scroll.add_child(body); _body_vb = body
 	_header_rtl = _make_rtl(); _header_rtl.add_theme_font_size_override("font_size", 19); body.add_child(_header_rtl)
 	# 国家特色
 	_trait_rtl = _make_rtl(); _trait_rtl.add_theme_font_size_override("font_size", 13); body.add_child(_trait_rtl)
@@ -2040,7 +2050,10 @@ func set_panel_collapsed(collapsed: bool, relayout: bool = true):
 		return
 	_panel_collapsed = collapsed
 	_collapse_btn.button_pressed = collapsed
-	_body_vb.visible = not collapsed
+	if _body_scroll:
+		_body_scroll.visible = not collapsed
+	else:
+		_body_vb.visible = not collapsed
 	_collapse_btn.text = "▲" if collapsed else "▼"
 	_collapse_btn.tooltip_text = "展开 AI 决策面板" if collapsed else "隐藏 AI 决策面板"
 	var h = PANEL_COLLAPSED_HEIGHT if collapsed else PANEL_HEIGHT

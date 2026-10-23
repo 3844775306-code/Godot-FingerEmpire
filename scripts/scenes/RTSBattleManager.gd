@@ -913,6 +913,23 @@ func _init_2v2_single():
 		if cam:
 			cam.global_position = Vector3(player_castle.global_position.x, cam.global_position.y, player_castle.global_position.z)
 
+# 随机 AI 国家池：排除玩家国家，尽量让每个 AI 国家不同
+func _random_ai_nation_pool(count: int) -> Array:
+	var pool: Array = []
+	for n in range(RTSConfig.Nation.size()):
+		if n != GameSettings.player_nation:
+			pool.append(n)
+	pool.shuffle()
+	var out: Array = []
+	while out.size() < count:
+		if pool.is_empty():
+			for n in range(RTSConfig.Nation.size()):
+				if n != GameSettings.player_nation:
+					pool.append(n)
+			pool.shuffle()
+		out.append(pool.pop_back())
+	return out
+
 # 单机对称团队战：玩家+蓝方AI vs 红方AI（2V2/3V3），每方人数=模式值
 func _init_multi_single(mode: int):
 	var map = $Map
@@ -930,9 +947,9 @@ func _init_multi_single(mode: int):
 	_team_castle_count[RTSConfig.Team.BLUE] = mode
 	_team_castle_count[RTSConfig.Team.RED] = mode
 
-	# 红方所有 AI 统一一个随机国家（写入 team_nations[RED]）
-	var red_nation = randi() % RTSConfig.Nation.size()
-	team_nations[RTSConfig.Team.RED] = red_nation
+	# 所有 AI 国家独立随机（排除玩家国家，尽量互不重复）
+	var ai_nation_order: Array = _random_ai_nation_pool((mode - 1) + mode)
+	var ai_nation_idx: int = 0
 
 	# 玩家城堡（layout[0]，蓝方主城）
 	var player_castle = null
@@ -963,10 +980,11 @@ func _init_multi_single(mode: int):
 	for team in [RTSConfig.Team.BLUE, RTSConfig.Team.RED]:
 		var count = (mode - 1) if team == RTSConfig.Team.BLUE else mode
 		var base_pid = 1000 if team == RTSConfig.Team.BLUE else 2000
-		var nation = GameSettings.player_nation if team == RTSConfig.Team.BLUE else red_nation
 		var colors = blue_colors if team == RTSConfig.Team.BLUE else red_colors
 		for ai_index in range(count):
 			var pid = base_pid + ai_index
+			var nation = ai_nation_order[ai_nation_idx] if ai_nation_idx < ai_nation_order.size() else (randi() % RTSConfig.Nation.size())
+			ai_nation_idx += 1
 			# 位置：蓝方 AI 占 layout[1..mode-1]，红方 AI 占 layout[mode..2*mode-1]
 			var castle_pos = layout[ai_index + 1] if team == RTSConfig.Team.BLUE else layout[mode + ai_index]
 			_player_colors[pid] = colors[ai_index % colors.size()]

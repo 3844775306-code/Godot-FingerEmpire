@@ -217,7 +217,7 @@ func update_player_population(peer_id: int):
 			if entity.entity_id == 20: max_pop += 20
 			elif entity.entity_id == 28: max_pop += 10
 	if info:
-		max_pop += NationBonuses.get_population_bonus(team_nations[info.team])
+		max_pop += NationBonuses.get_population_bonus(int(info.get("nation", team_nations.get(info.team, -1))))
 	player_population[peer_id]["max"] = max_pop
 # ==================== 生命周期 ====================
 func _ready():
@@ -463,8 +463,25 @@ func _count_human_players(team: int) -> int:
 func _generate_ai_id(team: int, index: int) -> int:
 	return 1000 + team * 10 + index
 
+# 每个 AI 独立随机国家，排除玩家国家并尽量不重复
+func _pick_ai_nation() -> int:
+	var used: Dictionary = {}
+	for info in player_info.values():
+		used[int(info.get("nation", -1))] = true
+	for pid in pending_nations.keys():
+		used[int(pending_nations[pid])] = true
+	var pool: Array = []
+	for n in range(RTSConfig.Nation.size()):
+		if n != GameSettings.player_nation and not used.has(n):
+			pool.append(n)
+	if pool.is_empty():
+		for n in range(RTSConfig.Nation.size()):
+			if n != GameSettings.player_nation:
+				pool.append(n)
+	return pool[randi() % pool.size()]
+
 func _create_ai_player(peer_id: int, team: int, slot: int):
-	var ai_nation = randi() % RTSConfig.Nation.size()
+	var ai_nation = _pick_ai_nation()
 	player_info[peer_id] = {
 		"team": team,
 		"slot": slot,
