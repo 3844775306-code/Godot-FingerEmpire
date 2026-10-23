@@ -1,0 +1,63 @@
+# 地图预设注册表
+#
+# 每张地图 = 地形配方(stages) + 资源画像(resources) + 规则修正(modifiers) + 外观(palette)。
+# stages 为空时走 Ground._generate_classic()，与历史版本逐字节一致，作为默认图与回归基线。
+# 取值一律返回深拷贝，调用方可随意修改（与 EntityDatabase.get_config() 的约定一致）。
+extends RefCounted
+
+const CLASSIC := "classic"
+
+const PRESETS := {
+	CLASSIC: {
+		"id": CLASSIC,
+		"name": "经典大陆",
+		"battle": "",
+		"desc": "随机大陆、山地与湖泊，标准对局地图。",
+		"stages": [],
+		"palette": {},
+		"resources": {},
+		"modifiers": {},
+		"chips": ["标准地形"],
+		"recommended": "全部模式",
+	},
+	"ridge": {
+		"id": "ridge",
+		"name": "白垩山脊",
+		"battle": "海斯廷斯 1066",
+		"desc": "东西山脊横贯全图，三处隘口决定攻守。",
+		"stages": [
+			["noise_base", {"freq": 0.028, "octaves": 4}],
+			["ridge", {"axis": "x", "center": 0.5, "width": 26.0, "strength": 0.62}],
+			["passes", {"count": 3, "width": 4, "height": 0.35, "centers": [0.2, 0.5, 0.8]}],
+		],
+		"castle_layout": {"type": "mirror_z", "anchors": [[0.72, 0.82], [0.72, 0.18]], "flat_radius": 5},
+		"palette": {},
+		"resources": {"stone": 1.3, "wood_near": "any"},
+		"modifiers": {"high_ground_vision": 0.25},
+		"chips": ["三处隘口", "高地视野 +25%", "石料 +30%"],
+		"recommended": "1v1",
+	},
+}
+
+static func has_preset(id: String) -> bool:
+	return PRESETS.has(id)
+
+static func get_preset(id: String) -> Dictionary:
+	if PRESETS.has(id):
+		return PRESETS[id].duplicate(true)
+	return PRESETS[CLASSIC].duplicate(true)
+
+static func all_ids() -> Array:
+	return PRESETS.keys()
+
+# UI 卡片只要这几项，避免把生成参数漏到界面层
+static func get_info(id: String) -> Dictionary:
+	var p := get_preset(id)
+	return {
+		"id": p.get("id", CLASSIC),
+		"name": p.get("name", "经典大陆"),
+		"battle": p.get("battle", ""),
+		"desc": p.get("desc", ""),
+		"chips": p.get("chips", []).duplicate(),
+		"recommended": p.get("recommended", ""),
+	}

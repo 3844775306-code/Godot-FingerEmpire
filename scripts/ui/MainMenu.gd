@@ -1,5 +1,7 @@
 extends Control
 
+const MapPresets = preload("res://scripts/map/MapPresets.gd")
+
 var nation_select: OptionButton
 
 func _ready():
@@ -141,11 +143,38 @@ func _ready():
 	_style_option(mode_select, 16)
 	add_child(mode_select)
 
+	# 战场地形（试点：特殊地图仅 1V1 可选）
+	var map_label = Label.new()
+	map_label.text = "战场地形"
+	map_label.position = Vector2(700, 488)
+	map_label.size = Vector2(200, 30)
+	map_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	UITheme.apply_label(map_label, 20, UITheme.PARCHMENT)
+	add_child(map_label)
+
+	var map_select = OptionButton.new()
+	map_select.name = "MapSelect"
+	map_select.position = Vector2(910, 486)
+	map_select.size = Vector2(420, 40)
+	_style_option(map_select, 16)
+	var map_ids: Array = MapPresets.all_ids()
+	for i in range(map_ids.size()):
+		var info: Dictionary = MapPresets.get_info(map_ids[i])
+		var item_text: String = "  " + String(info["name"])
+		if String(info["battle"]) != "":
+			item_text += " · " + String(info["battle"])
+		map_select.add_item(item_text)
+		map_select.set_item_metadata(i, map_ids[i])
+	map_select.selected = maxi(map_ids.find(GameSettings.map_id), 0)
+	add_child(map_select)
+	mode_select.item_selected.connect(_update_map_availability)
+	_update_map_availability(mode_select.selected)
+
 	# 快速模式
 	var fast_check = CheckBox.new()
 	fast_check.name = "FastCheck"
 	fast_check.text = "快速模式（采集×3）"
-	fast_check.position = Vector2(1000, 500)
+	fast_check.position = Vector2(1360, 492)
 	fast_check.add_theme_font_size_override("font_size", 18)
 	fast_check.add_theme_color_override("font_color", UITheme.PARCHMENT)
 	fast_check.add_theme_color_override("font_hover_color", UITheme.GOLD)
@@ -258,6 +287,16 @@ func _set_cmd_toggle(btn: Button, on: bool) -> void:
 	else:
 		UITheme.apply_muted_button(btn, UITheme.FONT_SM)
 
+## 特殊地形只支持 1V1，其余模式禁用选图并回到经典大陆
+func _update_map_availability(mode_idx: int) -> void:
+	var ms = get_node_or_null("MapSelect")
+	if not ms:
+		return
+	var allow := mode_idx == 0
+	ms.disabled = not allow
+	if not allow:
+		ms.selected = 0
+
 func _on_play_pressed():
 	GameSettings.player_nation = nation_select.selected
 	GameSettings.enemy_nation = randi() % RTSConfig.Nation.size()
@@ -273,6 +312,12 @@ func _on_play_pressed():
 	else:
 		GameSettings.ffa_nation_count = 3
 		GameSettings.ai_mode = mode_idx + 1
+	# 战场地形：仅 1V1 生效，其余模式回经典大陆
+	var msel = get_node_or_null("MapSelect")
+	if msel and not msel.disabled and msel.selected >= 0:
+		GameSettings.map_id = String(msel.get_item_metadata(msel.selected))
+	else:
+		GameSettings.map_id = "classic"
 	var fc = get_node_or_null("FastCheck")
 	GameSettings.fast_mode = fc.button_pressed if fc else false
 	get_tree().change_scene_to_file("res://scenes/rts_battle.tscn")
@@ -281,6 +326,7 @@ func _on_multiplayer_pressed():
 	var ds = get_node_or_null("DiffSelect")
 	if ds: GameSettings.ai_difficulty = ds.selected
 	GameSettings.ai_mode = 1   # 联机模式不使用单机模式
+	GameSettings.map_id = "classic"   # 联机选图在后续阶段接入
 	var fc = get_node_or_null("FastCheck")
 	GameSettings.fast_mode = fc.button_pressed if fc else false
 	get_tree().change_scene_to_file("res://scenes/online_menu.tscn")

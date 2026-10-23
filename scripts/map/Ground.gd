@@ -1,6 +1,8 @@
 # scripts/map/MapGenerator.gd
 extends Node3D
 
+const MapPresets = preload("res://scripts/map/MapPresets.gd")
+
 const TEX_SIZE = 512
 
 # 强制覆盖地图尺寸（0表示使用全局常量）
@@ -37,6 +39,15 @@ var _cached_ffa_castle_positions: Dictionary = {}  # 乱斗 N 国环绕布局缓
 # 自定义地图种子（为0则随机）
 var custom_seed: int = 0
 
+# 当前生效的地图预设（由 GameSettings.map_id 解析，见 MapPresets.gd）
+var map_preset: Dictionary = {}
+
+# 特殊地形生成管线的中间状态
+var _val_grid: Array = []              # 噪声值，供山脊等算子叠加
+var _mountain_threshold: float = 0.3
+var _water_threshold: float = -0.25
+var _pass_centers: Array = []          # 隘口中心（格坐标），用于争议资源布点
+
 # 防止重复生成
 var map_generated: bool = false
 
@@ -47,6 +58,7 @@ func _ready():
 	# 如果已经生成过，跳过
 	if map_generated:
 		return
+	_resolve_preset()
 	_generate_terrain()
 	_place_castles()
 	_place_resources()
@@ -88,11 +100,27 @@ func apply_received_map(p_terrain: Array, p_height: Array, p_resources: Array):
 	_create_chunked_collisions()
 	print("[地图] 已应用服务器地图，尺寸:", size)
 
+func _resolve_preset() -> void:
+	map_preset = MapPresets.get_preset(GameSettings.map_id)
+	if custom_seed == 0 and GameSettings.map_seed != 0:
+		custom_seed = GameSettings.map_seed
+
 # ---------- 地形生成 ----------
 func _generate_terrain():
 	var size = _get_map_size()
-	print("实际地图尺寸:", size)
+	print("实际地图尺寸:", size, " 地形预设:", map_preset.get("name", "经典大陆"))
+	var stages: Array = map_preset.get("stages", [])
+	if stages.is_empty():
+		_generate_classic(size)
+		return
+	if not _special_map_supported():
+		push_warning("[地图] 特殊地形暂只支持 1V1，回退经典大陆")
+		_generate_classic(size)
+		return
+	_generate_with_stages(size, stages)
 
+# 经典生成：与历史版本逐字节一致，作为默认图与回归基线
+func _generate_classic(size: int):
 	var noise = FastNoiseLite.new()
 	if custom_seed != 0:
 		noise.seed = custom_seed
@@ -126,6 +154,114 @@ func _generate_terrain():
 	# 第二趟：上色
 	for x in range(size):
 		var color_col = []
+		for y in range(size):
+			color_col.append(_terrain_color_for(terrain_grid[x][y], height_grid[x][y], x, y))
+		base_colors.append(color_col)
+
+# 特殊地形：按预设 stages 管线生成（算子可组合，顺序即执行顺序）
+func _generate_with_stages(size: int, stages: Array) -> void:
+	_init_stage_grids(size)
+	for stage in stages:
+		if not (stage is Array) or stage.is_empty():
+			continue
+		var op := String(stage[0])
+		var params: Dictionary = stage[1] if stage.size() > 1 and stage[1] is Dictionary else {}
+		match op:
+			"noise_base":
+				_op_noise_base(size, params)
+			"ridge":
+				_op_ridge(size, params)
+			"passes":
+				_op_passes(size, params)
+			_:
+				push_warning("[地图] 未知生成算子: %s" % op)
+	_colorize_grid(size)
+
+func _init_stage_grids(size: int) -> void:
+	_val_grid = []
+	terrain_grid = []
+	height_grid = []
+	base_colors = []
+	_pass_centers = []
+	for x in range(size):
+		var vcol := []
+		var tcol := []
+		var hcol := []
+		for y in range(size):
+			vcol.append(0.0)
+			tcol.append(0)
+			hcol.append(0.0)
+		_val_grid.append(vcol)
+		terrain_grid.append(tcol)
+		height_grid.append(hcol)
+
+# 按噪声值判定类型与高度：公式与经典生成保持一致，两张图的山地/草地观感统一
+func _classify_tile(x: int, y: int, val: float) -> void:
+	var t := 0
+	if val > _mountain_threshold:
+		t = 1
+	elif val < _water_threshold:
+		t = 2
+	terrain_grid[x][y] = t
+	if t == 1:
+		height_grid[x][y] = val * height_scale * 5.0
+	elif t == 0:
+		height_grid[x][y] = val * 0.3
+	else:
+		height_grid[x][y] = -height_scale * 0.5
+
+func _op_noise_base(size: int, params: Dictionary) -> void:
+	var noise := FastNoiseLite.new()
+	noise.seed = custom_seed if custom_seed != 0 else randi()
+	noise.frequency = float(params.get("freq", 0.03))
+	noise.fractal_octaves = int(params.get("octaves", 4))
+	_mountain_threshold = float(params.get("mountain_threshold", 0.3))
+	_water_threshold = float(params.get("water_threshold", -0.25))
+	for x in range(size):
+		for y in range(size):
+			var val := noise.get_noise_2d(x, y)
+			_val_grid[x][y] = val
+			_classify_tile(x, y, val)
+
+# 山脊：叠加一条高斯带，把原本的噪声值整体抬升，山脊之外保持原样
+func _op_ridge(size: int, params: Dictionary) -> void:
+	var axis := String(params.get("axis", "x"))
+	var center := float(params.get("center", 0.5)) * float(size)
+	var width := maxf(4.0, float(params.get("width", 24.0)))
+	var strength := float(params.get("strength", 0.6))
+	var sigma := width * 0.5
+	for x in range(size):
+		for y in range(size):
+			var d := absf((float(y) if axis == "x" else float(x)) - center)
+			var ridge := strength * exp(-(d * d) / (2.0 * sigma * sigma))
+			var val := float(_val_grid[x][y]) + ridge
+			_val_grid[x][y] = val
+			_classify_tile(x, y, val)
+
+# 隘口：沿山脊垂直方向打通若干条走廊；只把山地改回平原，不动湖泊
+func _op_passes(size: int, params: Dictionary) -> void:
+	var count := maxi(1, int(params.get("count", 3)))
+	var width := maxi(1, int(params.get("width", 4)))
+	var flat_h := float(params.get("height", 0.35))
+	var centers: Array = params.get("centers", [])
+	var half_w := int(width / 2.0)
+	for i in range(count):
+		var cx := int(float(i + 1) / float(count + 1) * float(size))
+		if i < centers.size():
+			cx = int(float(centers[i]) * float(size))
+		for dx in range(-half_w, half_w + 1):
+			var gx := clampi(cx + dx, 0, size - 1)
+			for gy in range(size):
+				if terrain_grid[gx][gy] != 1:
+					continue
+				terrain_grid[gx][gy] = 0
+				height_grid[gx][gy] = flat_h
+		_pass_centers.append(Vector2i(cx, int(size * 0.5)))
+
+func _colorize_grid(size: int) -> void:
+	base_colors.clear()
+	for x in range(size):
+		var color_col := []
 		for y in range(size):
 			color_col.append(_terrain_color_for(terrain_grid[x][y], height_grid[x][y], x, y))
 		base_colors.append(color_col)
@@ -304,7 +440,47 @@ func _force_flat_spot(gx: int, gy: int, safe_size: int) -> Vector3:
 			var nx = clampi(gx + dx, 0, size - 1)
 			var ny = clampi(gy + dy, 0, size - 1)
 			terrain_grid[nx][ny] = 0
+			# 只改类型不改高度会让被压平的格子仍沉在水面下，城堡会悬空/陷水
+			if height_grid.size() > nx and height_grid[nx].size() > ny:
+				height_grid[nx][ny] = 0.0
 	return grid_to_world(gx, gy)
+
+# 特殊地图是否使用预设的城堡锚点（试点仅 1V1 生效：团队/乱斗仍走多人布局）
+func _special_map_supported() -> bool:
+	if GameSettings.ai_mode >= 2 or GameSettings.is_ffa:
+		return false
+	# 单机不参考 selected_mode（它是跨场景静态量，可能残留上次联机的模式）
+	if NetworkManager.mode == NetworkManager.Mode.NONE:
+		return true
+	return NetworkManager.selected_mode == NetworkManager.GameMode.ONEvONE
+
+func _use_preset_layout() -> bool:
+	return _special_map_supported() and not map_preset.get("castle_layout", {}).is_empty()
+
+# 按归一化锚点放置城堡：先压平地形与高度，再转世界坐标
+func _place_castles_from_anchors(layout: Dictionary) -> void:
+	var size := _get_map_size()
+	var anchors: Array = layout.get("anchors", [])
+	if anchors.size() < 2:
+		return
+	var radius: int = clampi(int(layout.get("flat_radius", 5)), 2, 8)
+	var pts: Array = []
+	for a in anchors:
+		var gx := int(clampf(float(a[0]) * float(size), float(radius + 1), float(size - radius - 2)))
+		var gy := int(clampf(float(a[1]) * float(size), float(radius + 1), float(size - radius - 2)))
+		_flatten_area(gx, gy, radius)
+		pts.append(grid_to_world(gx, gy))
+	player_castle_pos = pts[0]
+	enemy_castle_pos = pts[1]
+
+func _flatten_area(gx: int, gy: int, radius: int) -> void:
+	var size := _get_map_size()
+	for dx in range(-radius, radius + 1):
+		for dy in range(-radius, radius + 1):
+			var nx := clampi(gx + dx, 0, size - 1)
+			var ny := clampi(gy + dy, 0, size - 1)
+			terrain_grid[nx][ny] = 0
+			height_grid[nx][ny] = 0.0
 
 func _find_flat_plain(gx_min,gy_min,gx_max,gy_max,ps:int) -> Vector3:
 	var size=_get_map_size()
@@ -334,6 +510,10 @@ func _place_castles():
 	var half = size / 2.0
 	var margin = 10
 	var ps = 5
+	# 特殊地图：按预设锚点压平，保证城堡一定落在平地上
+	if _use_preset_layout():
+		_place_castles_from_anchors(map_preset.get("castle_layout", {}))
+		return
 	# 乱斗模式（FFA）：N 国环绕布局，玩家=layout[0]，其余 AI 国依次分布
 	if NetworkManager.mode == NetworkManager.Mode.NONE and GameSettings.is_ffa:
 		var ffa_layout = get_ffa_castle_positions(clampi(GameSettings.ffa_nation_count, 3, 5))
@@ -382,6 +562,9 @@ func _find_castle_spot_in_region(gx_min, gy_min, gx_max, gy_max, safe_size: int 
 	return Vector3.ZERO
 
 # ---------- 资源放置 ----------
+func _res_count(base: float, prof: Dictionary, key: String) -> int:
+	return maxi(1, int(round(base * float(prof.get(key, 1.0)))))
+
 func _place_resources():
 	resource_positions.clear()
 	var size = _get_map_size()
@@ -395,6 +578,11 @@ func _place_resources():
 	var is_team_mode = NetworkManager.selected_mode != NetworkManager.GameMode.ONEvONE or is_single_team
 	var ffa_n = clampi(GameSettings.ffa_nation_count, 3, 5) if is_ffa_single else 3
 	var mult = 2.0 if is_3v3 else (2.0 if (is_ffa_single and ffa_n >= 4) else (1.5 if (is_team_mode or is_ffa_single) else 1.0))
+
+	# 资源画像：按预设倍率调整每类资源的组数
+	var prof: Dictionary = map_preset.get("resources", {})
+	# 森林/山脊图基地附近没有山，"靠山才有林"的条件会落空，先放开
+	var wood_near_any := String(prof.get("wood_near", "mountain")) == "any"
 
 	# Castle positions in grid coordinates
 	var player_gx = int(player_castle_pos.x + size/2.0)
@@ -422,6 +610,10 @@ func _place_resources():
 		{"type":2, "min_sz":2, "max_sz":3, "dist":30, "terrain":0, "adjacent_mountains":2},  # stone (山边平地)
 		{"type":0, "min_sz":2, "max_sz":3, "dist":10, "terrain":0},  # gold
 	]
+	if wood_near_any:
+		for gu in guaranteed:
+			if int(gu["type"]) == 1:
+				gu["near_mountain"] = false
 	for castle in castles:
 		for gu in guaranteed:
 			_place_group_near(gu.type, gu.min_sz, gu.max_sz, castle[0], castle[1], gu.dist, gu.terrain, placed, size, gu.get("near_mountain", false), gu.get("adjacent_mountains", 0))
@@ -432,6 +624,10 @@ func _place_resources():
 		{"type":2, "min_sz":2, "max_sz":3, "dist":30, "terrain":0, "adjacent_mountains":2},  # stone (山边平地)
 		{"type":0, "min_sz":2, "max_sz":3, "dist":12, "terrain":0},  # gold
 	]
+	if wood_near_any:
+		for gu in hard_extra:
+			if int(gu["type"]) == 1:
+				gu["near_mountain"] = false
 	if GameSettings.ai_difficulty >= GameSettings.AIDifficulty.HARD or GameSettings.red_ai_difficulty >= GameSettings.AIDifficulty.HARD or GameSettings.blue_ai_difficulty >= GameSettings.AIDifficulty.HARD:
 		# Only for enemy/AI castles（1v1 敌方 = 后半；2v2/3v3 红队城堡 = 后半；乱斗 = 玩家之外全部 AI）
 		var ai_castles = castles.slice(1) if is_ffa_single else castles.slice(castles.size() / 2)
@@ -441,15 +637,23 @@ func _place_resources():
 
 	# ── Remaining groups: placed anywhere ──
 	var remaining = [
-		{"type":0, "count": int(4*mult), "min_sz":1, "max_sz":2, "terrain":0},
-		{"type":1, "count": int(8*mult), "min_sz":5, "max_sz":6, "terrain":0, "near_mountain":true},
-		{"type":2, "count": int(6*mult), "min_sz":2, "max_sz":3, "terrain":0, "adjacent_mountains":2},
-		{"type":3, "count": int(6*mult), "min_sz":3, "max_sz":4, "terrain":0, "away_mountain":true},
-		{"type":4, "count": int(6*mult), "min_sz":1, "max_sz":2, "terrain":2},
+		{"type":0, "count": _res_count(4.0 * mult, prof, "gold"), "min_sz":1, "max_sz":2, "terrain":0},
+		{"type":1, "count": _res_count(8.0 * mult, prof, "wood"), "min_sz":5, "max_sz":6, "terrain":0, "near_mountain":true},
+		{"type":2, "count": _res_count(6.0 * mult, prof, "stone"), "min_sz":2, "max_sz":3, "terrain":0, "adjacent_mountains":2},
+		{"type":3, "count": _res_count(6.0 * mult, prof, "food"), "min_sz":3, "max_sz":4, "terrain":0, "away_mountain":true},
+		{"type":4, "count": _res_count(6.0 * mult, prof, "oil"), "min_sz":1, "max_sz":2, "terrain":2},
 	]
+	if wood_near_any:
+		for g in remaining:
+			if int(g["type"]) == 1:
+				g["near_mountain"] = false
 	for g in remaining:
 		for _gi in range(g.count):
 			_place_group_random(g.type, g.min_sz, g.max_sz, g.terrain, placed, size, castles, g.get("near_mountain", false), g.get("away_mountain", false), g.get("adjacent_mountains", 0))
+
+	# 特殊地图：隘口上的争议金矿，逼双方争夺通道
+	for pc in _pass_centers:
+		_place_group_near(0, 2, 3, pc.x, pc.y, 8, 0, placed, size)
 
 	# ── Animals ──
 	for _i in range(int(8 * mult)):

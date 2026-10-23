@@ -25,6 +25,8 @@ func update_ui_scale():
 		ui_offset_y = (vs.y - DESIGN_HEIGHT * ui_scale) / 2.0
 
 var fast_mode: bool = false  # 3x gather speed
+var map_id: String = "classic"     # 地图预设（见 scripts/map/MapPresets.gd）
+var map_seed: int = 0              # 0 = 随机；非 0 可复现同一张图
 enum CommandMode { SINGLE = 0, CONTINUOUS = 1 }
 var command_mode: int = CommandMode.CONTINUOUS  # 单次/连续命令模式（_ready 中按平台设定）
 
