@@ -1072,6 +1072,11 @@ func clear_invalid_targets():
 				entity.current_target = null
 				entity.current_order = ""
 
+# 农民选资源时，附近敌军只做“适度避让”，不能像以前那样直接 -500 把所有
+# 受威胁资源一票否决；否则资源区一有敌人，农民就会全部缩回主城不出去。
+const WORKER_THREAT_RADIUS: float = 12.0
+const WORKER_THREAT_MAX_PENALTY: float = 2.5
+
 func find_best_resource_for_worker(worker: Army, priority_score: Dictionary) -> WorldResource:
 	var best = null; var best_score: float = -INF
 	for entity in battle.entities.get_children():
@@ -1079,9 +1084,27 @@ func find_best_resource_for_worker(worker: Army, priority_score: Dictionary) -> 
 			var type = entity.resource_type
 			if type in priority_score:
 				var score = priority_score[type] - worker.global_position.distance_to(entity.global_position) * 0.01
-				for e in battle.entities.get_children():
-					if e is Army and e.entity_id not in [10,14,43,44,45] and _entity_is_enemy(e):
-						if e.global_position.distance_to(entity.global_position) < 10.0: score -= 500; break
+				var threat_penalty: float = 0.0
+				var nearby: Array = []
+				if battle.has_method("get_nearby_enemies"):
+					nearby = battle.get_nearby_enemies(entity.global_position, WORKER_THREAT_RADIUS, worker.team, worker.owner_peer_id)
+				else:
+					nearby = battle.entities.get_children()
+				for e in nearby:
+					if not (e is Army) or e.health <= 0:
+						continue
+					if e.entity_id in [10, 14, 43, 44, 45]:
+						continue
+					if e.get("_animal_type") != null and str(e.get("_animal_type")) != "":
+						continue
+					if not _entity_is_enemy(e):
+						continue
+					var d: float = e.global_position.distance_to(entity.global_position)
+					if d < WORKER_THREAT_RADIUS:
+						# 距离越近惩罚越大，但上限只有 2.5，低于大多数资源权重，
+						# 保证农民仍会挑一个相对安全的矿点出门，而不是全留主城。
+						threat_penalty = maxf(threat_penalty, (1.0 - d / WORKER_THREAT_RADIUS) * WORKER_THREAT_MAX_PENALTY)
+				score -= threat_penalty
 				if score > best_score: best_score = score; best = entity
 	return best
 

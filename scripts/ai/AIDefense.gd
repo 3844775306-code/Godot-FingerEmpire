@@ -5,7 +5,7 @@
 #   1. 用可见敌军 + 主城掉血 + 资源区受袭共同评估威胁，而不是只看军力总和；
 #   2. 防线允许建在主城附近，按“内圈箭塔 → 外墙 → 炮塔”分批建造，被拆后补建；
 #   3. 常驻少量守军，威胁升高时逐步回防，危急时召回全部陆战部队；
-#   4. 资源区受袭时先让农民逃跑，再派 1-3 个机动部队去资源区；远矿点补瞭望塔；
+#   4. 资源区受袭时先让农民短距离躲避，再派 1-3 个机动部队去资源区；远矿点补瞭望塔；
 #   5. 防守升级按“威胁方向上的塔优先”逐个升级，不再随机升级所有建筑。
 #
 # 本模块保持无 class_name，由 AI.gd 通过 preload 加载，避免全局类缓存不同步。
@@ -30,6 +30,8 @@ const OUTPOST_INTERVAL: float = 24.0
 const RESOURCE_GUARD_HOLD: float = 9.0
 const DEFENSE_RECALL_SAFE_RADIUS: float = 25.0
 const WORKER_FLEE_TIME: float = 9.0
+const WORKER_FLEE_RADIUS: float = 8.0
+const WORKER_FLEE_DISTANCE: float = 6.0
 const FORCE_GUARD_TIME: float = 16.0
 
 const SIEGE_IDS: Array = [16, 17, 18, 58, 59]
@@ -1020,25 +1022,35 @@ func _defend_resources(castle) -> void:
 		if w is Army and w.health > 0 and int(w.entity_id) == 10 and ai.entity_belongs_to_me(w):
 			workers.append(w)
 
-	# 1) 农民逃跑：敌人进入 13m 就回主城，持续 9 秒；期间工人分配逻辑会跳过
+	# 1) 农民避险：只有敌人贴到 8m 才短暂躲避，往远离敌人的方向挪 6m，
+	#    不再把所有农民都召回主城；防守状态下资源采集也尽量保持。
 	for w in workers:
-		var danger = _nearest_enemy_combat(w.global_position, 13.0)
+		var danger = _nearest_enemy_combat(w.global_position, WORKER_FLEE_RADIUS)
 		if danger:
+			# 已经在躲避中就不要每 1.5 秒重复改目标，否则农民会被一路推着跑
+			if w.has_meta("ai_flee_until") and now < float(w.get_meta("ai_flee_until")):
+				continue
 			w.set_meta("ai_flee_until", now + WORKER_FLEE_TIME)
-			# 逃跑期间不要让它继续采集；有货物时允许先回城卸货
 			var has_cargo: bool = false
 			for rk in ["gold", "wood", "stone", "food", "oil"]:
 				if int(w.cargo.get(rk, 0)) > 0:
 					has_cargo = true
 					break
-			if not has_cargo:
-				if w.current_order != "move":
-					if w.has_method("stop_movement"):
-						w.call("stop_movement")
-					if w.global_position.distance_to(castle.global_position) > 4.0:
-						w.move_to(castle.global_position)
-			elif w.current_order != "deliver" and w.global_position.distance_to(castle.global_position) > 4.0:
-				w.move_to(castle.global_position)
+			if has_cargo:
+				# 有货物时按正常经济逻辑去交付，不强行把它押回主城
+				if w.current_order != "deliver" and w.current_order != "move":
+					if w.has_method("_return_to_deliver"):
+						w.call("_return_to_deliver")
+			elif w.current_order != "move":
+				var away: Vector3 = w.global_position - danger.global_position
+				away.y = 0.0
+				if away.length_squared() < 0.01:
+					away = Vector3.RIGHT
+				var flee_pos: Vector3 = w.global_position + away.normalized() * WORKER_FLEE_DISTANCE
+				var half_limit: float = RTSConfig.MAP_SIZE / 2.0 - 3.0
+				flee_pos.x = clampf(flee_pos.x, -half_limit, half_limit)
+				flee_pos.z = clampf(flee_pos.z, -half_limit, half_limit)
+				w.move_to(flee_pos)
 		elif w.has_meta("ai_flee_until") and now >= float(w.get_meta("ai_flee_until")):
 			w.remove_meta("ai_flee_until")
 
