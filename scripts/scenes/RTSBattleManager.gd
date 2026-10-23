@@ -512,37 +512,6 @@ func _ready():
 	_create_diag_label()
 	AudioManager.play_music("battle")
 	set_process(true)
-	call_deferred("_print_model_animations")
-
-func _print_anim(path, label):
-	var s = load(path)
-	if s:
-		var inst = s.instantiate()
-		if inst:
-			var ap = inst.get_node_or_null("AnimationPlayer") as AnimationPlayer
-			if ap: print("  %s: %s" % [label, str(ap.get_animation_list())])
-			inst.queue_free()
-
-	print("===== GLB Animation List =====")
-	var dir = DirAccess.open("res://models")
-	if not dir: print("Cannot open models/"); return
-	dir.list_dir_begin()
-	var fname = dir.get_next()
-	while fname != "":
-		if fname.ends_with(".glb"):
-			path = "res://models/" + fname
-			s = load(path)
-			if s:
-				var inst = s.instantiate()
-				if inst:
-					var ap = inst.get_node_or_null("AnimationPlayer") as AnimationPlayer
-					if ap:
-						var anims = ap.get_animation_list()
-						print("  %s: %s" % [fname, str(anims)])
-					inst.queue_free()
-		fname = dir.get_next()
-	dir.list_dir_end()
-	print("==============================")
 
 # ==================== 乱斗模式（FFA） ====================
 # 开局：N 国环绕布局，各国独立 team/owner/颜色/国家加成/AI控制器。

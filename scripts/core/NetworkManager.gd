@@ -29,7 +29,7 @@ enum TransportMode { ENET, WEBSOCKET }
 static var use_websocket: bool = false
 static var pending_nations: Dictionary = {}  # 缓存场景加载前的国家选择
 var game_started: bool = false
-var max_players
+var max_players: int = 2   # 默认按 1v1 计算；开局前由 start_server/start_client 按所选模式刷新
 signal connection_success()
 signal connection_failed(reason: String)
 signal player_joined(peer_id: int)
