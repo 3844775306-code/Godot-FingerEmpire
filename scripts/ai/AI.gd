@@ -492,9 +492,9 @@ func _process(delta):
 		_naval_patrol_timer = NAVAL_PATROL_INTERVAL
 		if phase >= Phase.DEVELOPMENT:
 			_patrol_navy_around_water()
-	# 部队成型后转入进攻；不必等到 30 人，否则经济和船坞问题会让 AI 长期不出门
+	# Troop accumulation: assault when army >= 30
 	var army_count = count_military(my_peer_id if my_peer_id != -1 else my_team)
-	if phase == Phase.DEVELOPMENT and army_count >= 12 and battle.game_time >= 120.0:
+	if army_count >= 30 and phase == Phase.DEVELOPMENT:
 		phase = Phase.ASSAULT
 
 # ═══ Decide ═══
