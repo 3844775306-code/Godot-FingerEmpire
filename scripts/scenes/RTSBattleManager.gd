@@ -18,6 +18,8 @@ var enemy_max_pop: int = 50
 var game_mode_2v2: bool = false               # 是否单机2v2模式
 var is_ffa: bool = false                      # 是否乱斗模式（多国自由结盟/进贡/决裂/背叛）
 var player_owner_id: int = 1                  # 玩家自己的owner_peer_id (单机2v2=1, 1v1=-1)
+var local_auto_attack: bool = false           # 本地玩家的自动进攻开关
+const AUTO_ATTACK_EXCLUDE_IDS = [5, 6, 9, 10, 14, 43, 44, 45, 51, 46, 47, 48, 49, 50]
 var ai_players: Dictionary = {}               # { peer_id: { "team":, "slot":, "castle": } }
 var ai_resources: Dictionary = {}             # peer_id -> resources dict
 var ai_population: Dictionary = {}            # peer_id -> population dict
@@ -364,6 +366,58 @@ func get_enemy_castle() -> Building:
 		if is_instance_valid(entity) and entity.team == RTSConfig.Team.RED and entity.entity_id == 20:
 			return entity
 	return null
+
+# ==================== 自动进攻开关 ====================
+# 开启后：现有军队（无攻击目标）与后续新生产的军队自动向敌方主城攻击移动；
+# 关闭后：正在攻击具体目标的军队不受影响，其余军队停止向敌方主城移动。
+func set_local_auto_attack(enabled: bool) -> void:
+	local_auto_attack = enabled
+	var target = _get_auto_attack_target(-1, get_local_team())
+	for e in get_tree().get_nodes_in_group("entities"):
+		if not (e is Army) or e.health <= 0: continue
+		if not is_local_player_owned(e.owner_peer_id, e.team): continue
+		if not e._is_military() or e.entity_id in AUTO_ATTACK_EXCLUDE_IDS: continue
+		if enabled:
+			if e.current_target != null: continue
+			if target:
+				e._clear_command_queue()
+				e.attack_move_to(target.global_position)
+		else:
+			if _has_attack_move_order(e) and e.current_target == null:
+				e.stop_movement()
+				e._clear_command_queue()
+
+func _has_attack_move_order(e: Army) -> bool:
+	if e.is_attack_moving: return true
+	for cmd in e.command_queue:
+		if cmd is Dictionary and cmd.get("type", "") == "attack_move":
+			return true
+	return false
+
+func _is_auto_attack_enabled_for(owner: int, team: int) -> bool:
+	return local_auto_attack and is_local_player_owned(owner, team)
+
+func _get_auto_attack_target(_owner: int, _team: int) -> Building:
+	var castle = get_enemy_castle()
+	if castle: return castle
+	# 乱斗模式没有 RED 队伍：选择任意非本地玩家的主城
+	_ensure_cache_fresh()
+	for e in _buildings:
+		if e is Building and e.entity_id == 20 and e.health > 0:
+			if not is_local_player_owned(e.owner_peer_id, e.team):
+				return e
+	return null
+
+# 新生产的军队继承当前自动进攻状态
+func _apply_auto_attack_to_entity(entity: GameEntity) -> void:
+	if not is_instance_valid(entity) or not (entity is Army): return
+	if entity.health <= 0 or not entity._is_military(): return
+	if entity.entity_id in AUTO_ATTACK_EXCLUDE_IDS: return
+	if not _is_auto_attack_enabled_for(entity.owner_peer_id, entity.team): return
+	if entity.current_target != null: return
+	var target = _get_auto_attack_target(entity.owner_peer_id, entity.team)
+	if target:
+		entity.attack_move_to(target.global_position)
 
 # ==================== 游戏结束界面 ====================
 func _create_game_over_panel():
@@ -1492,6 +1546,9 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 			increase_population_for(entity.owner_peer_id, 1)
 		else:
 			increase_population(team, 1)
+
+	if entity is Army and entity.health > 0:
+		call_deferred("_apply_auto_attack_to_entity", entity)
 
 	return entity
 

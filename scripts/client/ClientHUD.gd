@@ -22,6 +22,7 @@ var res_income: Dictionary = {"gold":0,"wood":0,"stone":0,"food":0,"oil":0}
 
 var attack_all_btn: Button
 var retreat_all_btn: Button
+var auto_attack_btn: Button
 var rally_btn: Button
 
 var nation_bonus_label: Label
@@ -380,10 +381,10 @@ func _on_jump_to_alert():
 
 
 func _on_attack_all_pressed():
-	NetworkManager.send_command.rpc_id(1, {
-		"action": "global_attack",
-		"selected_ids": []
-	})
+	var ci = _get_client_input_node()
+	if ci and ci.has_method("toggle_auto_attack"):
+		ci.toggle_auto_attack()
+		_on_auto_attack_changed(ci.auto_attack_on)
 
 
 func _on_retreat_all_pressed():
@@ -559,12 +560,13 @@ func _ready():
 	add_child(retreat_all_btn)
 
 	var b_auto = Button.new()
-	b_auto.text = "⚔️ 自动进攻 (F2)"
+	b_auto.text = "⚔️ 自动进攻：关 (F2)"
 	b_auto.position = Vector2(10, 560)
 	b_auto.custom_minimum_size = Vector2(200, 44)
 	UITheme.apply_danger_button(b_auto, UITheme.FONT_LG)
 	b_auto.pressed.connect(_on_attack_all_pressed)
 	add_child(b_auto)
+	auto_attack_btn = b_auto
 
 	var b_ret_screen = Button.new()
 	b_ret_screen.text = "屏幕军队撤退 (F3)"
@@ -614,6 +616,19 @@ func _ready():
 
 	set_process(true)
 	add_to_group("client_hud")
+	call_deferred("_connect_client_input")
+
+func _connect_client_input():
+	var ci = _get_client_input_node()
+	if ci and ci.has_signal("auto_attack_changed"):
+		if not ci.auto_attack_changed.is_connected(_on_auto_attack_changed):
+			ci.auto_attack_changed.connect(_on_auto_attack_changed)
+	if ci:
+		_on_auto_attack_changed(ci.auto_attack_on)
+
+func _on_auto_attack_changed(on: bool):
+	if auto_attack_btn:
+		auto_attack_btn.text = "⚔️ 自动进攻：%s (F2)" % ("开" if on else "关")
 
 
 func update_data(resources: Dictionary, population: Dictionary, limits: Dictionary, gather_counts: Dictionary = {}, income_rate: Dictionary = {}):
@@ -659,6 +674,13 @@ var _net_stat_label: Label = null
 var _ping_rtt: int = 0
 
 func _process(delta):
+	# 同步自动进攻按钮状态（F2 可能由 ClientInput 直接触发）
+	if auto_attack_btn:
+		var ci = _get_client_input_node()
+		if ci:
+			var t = "⚔️ 自动进攻：%s (F2)" % ("开" if ci.auto_attack_on else "关")
+			if auto_attack_btn.text != t:
+				auto_attack_btn.text = t
 	# 每秒更新一次单位统计
 	_unit_stats_timer -= delta
 	if _unit_stats_timer <= 0:

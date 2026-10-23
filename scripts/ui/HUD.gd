@@ -26,6 +26,8 @@ var income_rate: Dictionary = {}
 var minimap_timer: float = 0.0
 
 var player_nation_label: Label
+var auto_attack_btn: Button
+var auto_attack_on: bool = false
 var enemy_nation_label: Label
 var nation_bonus_label: Label
 
@@ -573,12 +575,15 @@ func _on_select_all_pressed():
 func _on_attack_all_pressed():
 	var bm = _get_bm()
 	if not bm: return
-	var target = bm.get_enemy_castle()
-	if target == null: return
-	for u in _get_local_military_units(false):
-		if u.has_method("attack_move_to"):
-			u.attack_move_to(target.global_position)
-	show_alert_message("全军自动进攻：向敌方主城推进", ALERT_WARNING)
+	auto_attack_on = not auto_attack_on
+	if bm.has_method("set_local_auto_attack"):
+		bm.set_local_auto_attack(auto_attack_on)
+	_update_auto_attack_button()
+	show_alert_message("自动进攻：%s" % ("开启" if auto_attack_on else "关闭"), ALERT_WARNING if auto_attack_on else ALERT_INFO)
+
+func _update_auto_attack_button():
+	if auto_attack_btn:
+		auto_attack_btn.text = "自动进攻：%s (F2)" % ("开" if auto_attack_on else "关")
 
 func _retreat_units(units: Array):
 	var bm = _get_bm()
@@ -627,12 +632,13 @@ func _ready():
 	add_child(b_select_all)
 
 	var b_auto_attack = Button.new()
-	b_auto_attack.text = "自动进攻 (F2)"
+	b_auto_attack.text = "自动进攻：关 (F2)"
 	b_auto_attack.position = Vector2(620, 92)
 	b_auto_attack.custom_minimum_size = Vector2(210, 32)
 	b_auto_attack.theme = btn_theme
 	b_auto_attack.pressed.connect(_on_attack_all_pressed)
 	add_child(b_auto_attack)
+	auto_attack_btn = b_auto_attack
 
 	var b_retreat_screen = Button.new()
 	b_retreat_screen.text = "屏幕军队撤退 (F3)"

@@ -195,7 +195,7 @@ func _input(event):
 					bm._command_selected_units(event.position)
 					return
 			var now = Time.get_ticks_msec() / 1000.0
-			if clicked_entity and clicked_entity.team == bm.get_host_team():
+			if clicked_entity and _is_local_owned(clicked_entity):
 				# Official garrison: if selected is official and clicked is building, send garrison command
 				if clicked_entity is Building and Input.is_key_pressed(KEY_ALT):
 					for e in selected_entities:
@@ -250,7 +250,7 @@ func _input(event):
 			if event.pressed:
 				_touch_start_pos = event.position
 				var clicked_entity = _get_entity_under_mouse(event.position)
-				if clicked_entity and clicked_entity.team == bm.get_host_team():
+				if clicked_entity and _is_local_owned(clicked_entity):
 					if clicked_entity in selected_entities:
 						_clear_selection()
 					else:
@@ -288,7 +288,7 @@ func _on_left_mouse_released(event):
 		# 遍历所有实体，选中屏幕矩形内的己方单位
 		for entity in get_tree().get_nodes_in_group("entities"):
 			var bm = get_tree().get_first_node_in_group("battle_manager")
-			if entity.team == bm.get_host_team():
+			if _is_local_owned(entity):
 				var screen_pos = cam.unproject_position(entity.global_position)
 				if rect.has_point(screen_pos):
 					_add_to_selection(entity)
@@ -298,11 +298,11 @@ func _select_all_of_same_type(target: GameEntity):
 	_clear_selection()
 	if target is Army:
 		for entity in get_tree().get_nodes_in_group("entities"):
-			if entity is Army and entity.team == target.team and entity.display_name == target.display_name:
+			if entity is Army and _is_local_owned(entity) and entity.display_name == target.display_name:
 				_add_to_selection(entity)
 	elif target is Building:
 		for entity in get_tree().get_nodes_in_group("entities"):
-			if entity is Building and entity.team == target.team and entity.display_name == target.display_name:
+			if entity is Building and _is_local_owned(entity) and entity.display_name == target.display_name:
 				_add_to_selection(entity)
 	elif target is WorldResource:
 		# 资源默认只选中自己
@@ -333,9 +333,18 @@ func _get_ground_pos(screen_pos: Vector2) -> Vector3:
 	var res = get_viewport().get_world_3d().direct_space_state.intersect_ray(PhysicsRayQueryParameters3D.create(from, to))
 	return res.position if res else Vector3.ZERO
 
+# 是否属于本地玩家（2v2/3v3 必须按 owner 判断，不能只看 team）
+func _is_local_owned(entity: GameEntity) -> bool:
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if not bm: return false
+	if bm.has_method("is_local_player_owned"):
+		return bm.is_local_player_owned(entity.owner_peer_id, entity.team)
+	return entity.team == bm.get_host_team()
+
 # ---------- 选择列表操作 ----------
 func _add_to_selection(entity: GameEntity):
-	
+	if not _is_local_owned(entity):
+		return
 	if entity not in selected_entities:
 		selected_entities.append(entity)
 		entity.set_selected(true); if entity is Army and entity.has_method("show_waypoints"): entity.show_waypoints()
@@ -349,11 +358,8 @@ func _remove_from_selection(entity: GameEntity):
 func select_all_military():
 	_clear_selection()
 	for entity in get_tree().get_nodes_in_group("entities"):
-		var bm = get_tree().get_first_node_in_group("battle_manager")
-
-		if entity is Army and entity.team == bm.get_host_team() and entity.health > 0:
-			if entity.entity_id != 10 and entity.entity_id != 14 and entity.entity_id not in [46,47,48,50]:   # 非农民、非采集船
-				_add_to_selection(entity)
+		if entity is Army and _is_local_owned(entity) and entity.health > 0 and entity.entity_id not in [5,6,9,10,14,43,44,45,51,46,47,48,49,50]:
+			_add_to_selection(entity)
 func _clear_selection():
 	for e in selected_entities:
 		if is_instance_valid(e):
@@ -382,7 +388,7 @@ func _set_control_group(group: int):
 	control_groups[group] = []
 	var count = 0
 	for e in selected_entities:
-		if is_instance_valid(e) and (e is Army or e is Building):
+		if is_instance_valid(e) and (e is Army or e is Building) and _is_local_owned(e):
 			control_groups[group].append(e)
 			count += 1
 	print("编队 %d 已设置，共 %d 个单位" % [group, count])
@@ -523,7 +529,7 @@ func _cycle_same_type_sp():
 		bm._ensure_cache_fresh()
 		for e in bm._armies:
 			if e.health<=0 or e.entity_id==14: continue
-			if e.team != bm.get_host_team(): continue
+			if not _is_local_owned(e): continue
 			if e.entity_id == current_eid: candidates.append(e)
 	if candidates.size()>0:
 		var idx = (candidates.find(selected_entities[0])+1) % candidates.size() if current_eid!=-1 and selected_entities.size()==1 else 0
@@ -557,7 +563,8 @@ func _cycle_idle_sp(filter_id: int):
 	bm._ensure_cache_fresh()
 	var candidates=[]; var team=bm.get_host_team()
 	for e in bm._armies:
-		if e.health<=0: continue; if e.team!=team: continue
+		if e.health<=0: continue
+		if not _is_local_owned(e): continue
 		if filter_id==10 and e.entity_id!=10: continue
 		if filter_id==-1 and (e.entity_id==10 or e.entity_id==14): continue
 		if e.current_order in ["idle",""]: candidates.append(e)

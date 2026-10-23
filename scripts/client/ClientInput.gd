@@ -4,10 +4,12 @@ extends Node
 
 # 信号
 signal selection_changed(selected_ids: Array)
+signal auto_attack_changed(on: bool)
 signal build_requested(world_pos: Vector3)
 
 # 当前选中实体
 var client_selected_ids: Array = []
+var auto_attack_on: bool = false
 
 # Local control groups (mirrored with server)
 var local_groups: Dictionary = {}  # int -> Array[int]
@@ -85,6 +87,14 @@ func select_all_military():
 
 func select_screen_military():
 	_select_military(true)
+
+func toggle_auto_attack():
+	auto_attack_on = not auto_attack_on
+	NetworkManager.send_command.rpc_id(1, {
+		"action": "toggle_auto_attack",
+		"enabled": auto_attack_on,
+	})
+	emit_signal("auto_attack_changed", auto_attack_on)
 
 # 屏幕内军队撤退：向自己的主城发送移动指令
 func retreat_screen_units():
@@ -190,7 +200,7 @@ func _input(event):
 			else: select_screen_military()
 			get_viewport().set_input_as_handled(); return
 		if key == KEY_F2:
-			NetworkManager.send_command.rpc_id(1, {"action": "global_attack", "selected_ids": []})
+			toggle_auto_attack()
 			get_viewport().set_input_as_handled(); return
 		if key == KEY_F3:
 			if ctrl:

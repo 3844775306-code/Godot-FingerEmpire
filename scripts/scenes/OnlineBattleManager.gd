@@ -11,6 +11,8 @@ const SNAP_VERSION = 4  # 4 = added GARRISONED (Army) + GARRISON_COUNT (Building
 
 # 1v1 专用
 var player_teams: Dictionary = {}         # peer_id -> team
+var auto_attack_teams: Dictionary = {}    # 1v1: team -> bool
+var auto_attack_peers: Dictionary = {}    # 2v2/3v3: peer_id -> bool
 
 # 2v2 专用
 var player_info: Dictionary = {}          # peer_id -> { "team": int, "slot": int, "alive": bool, "color": Color, "nation": int }
@@ -665,10 +667,27 @@ func _global_retreat(team: int):
 
 # ---------- 命令处理（兼容两种模式） ----------
 func process_command(peer_id: int, data: Dictionary):
+	# 服务端兜底：剔除任何不属于该玩家的选中实体，禁止操控队友单位
+	if data.has("selected_ids"):
+		data["selected_ids"] = _owned_selected_ids(peer_id, data["selected_ids"])
 	if game_mode == NetworkManager.GameMode.ONEvONE:
 		_process_1v1_command(peer_id, data)
 	else:
 		_process_2v2_command(peer_id, data)
+
+func _owned_selected_ids(peer_id: int, ids: Array) -> Array:
+	var team = player_teams.get(peer_id, -1)
+	if player_info.has(peer_id):
+		team = player_info[peer_id].team
+	var out: Array = []
+	for id in ids:
+		var e = _find_entity_by_id(id)
+		if not e: continue
+		if game_mode == NetworkManager.GameMode.ONEvONE:
+			if e.team == team: out.append(id)
+		elif e.owner_peer_id == peer_id:
+			out.append(id)
+	return out
 
 func _process_1v1_command(peer_id: int, data: Dictionary):
 	var team = player_teams.get(peer_id, -1)
@@ -689,6 +708,7 @@ func _process_1v1_command(peer_id: int, data: Dictionary):
 		"set_garrison":  _set_garrison_for_team(team, data)
 		"clear_garrison": _clear_garrison_for_team(team, data)
 		"ungarrison_soldiers": _ungarrison_soldiers_1v1(team, data)
+		"toggle_auto_attack": _1v1_set_auto_attack(team, bool(data.get("enabled", false)))
 
 func _process_2v2_command(peer_id: int, data: Dictionary):
 	if not player_info.has(peer_id) or not player_info[peer_id].alive: return
@@ -708,6 +728,7 @@ func _process_2v2_command(peer_id: int, data: Dictionary):
 		"set_garrison":  _2v2_set_garrison(peer_id, data)
 		"clear_garrison": _2v2_clear_garrison(peer_id, data)
 		"ungarrison_soldiers": _ungarrison_soldiers_2v2(peer_id, data)
+		"toggle_auto_attack": _2v2_set_auto_attack(peer_id, bool(data.get("enabled", false)))
 
 # ---------- 1v1 命令实现 ----------
 func _1v1_right_click(team: int, data: Dictionary):
@@ -961,6 +982,52 @@ func _2v2_rally(peer_id: int, x: float, y: float, z: float):
 	for entity in entities.get_children():
 		if entity is Army and entity.get("owner_peer_id") == peer_id and entity.entity_id not in [10,14]:
 			entity.move_to(pos)
+
+# ==================== 自动进攻开关（服务端权威） ====================
+func _is_auto_attack_enabled_for(owner: int, team: int) -> bool:
+	if game_mode == NetworkManager.GameMode.ONEvONE:
+		return auto_attack_teams.get(team, false)
+	if owner != -1:
+		return auto_attack_peers.get(owner, false)
+	return auto_attack_teams.get(team, false)
+
+func _get_auto_attack_target(_owner: int, team: int) -> Building:
+	var enemy_team = RTSConfig.Team.RED if team == RTSConfig.Team.BLUE else RTSConfig.Team.BLUE
+	return _get_first_alive_castle(enemy_team)
+
+func _1v1_set_auto_attack(team: int, enabled: bool) -> void:
+	auto_attack_teams[team] = enabled
+	var target = _get_auto_attack_target(-1, team)
+	for entity in entities.get_children():
+		if not (entity is Army) or entity.team != team or entity.health <= 0: continue
+		if not entity._is_military() or entity.entity_id in AUTO_ATTACK_EXCLUDE_IDS: continue
+		if enabled:
+			if entity.current_target != null: continue
+			if target:
+				entity._clear_command_queue()
+				entity.attack_move_to(target.global_position)
+		else:
+			if _has_attack_move_order(entity) and entity.current_target == null:
+				entity.stop_movement()
+				entity._clear_command_queue()
+
+func _2v2_set_auto_attack(peer_id: int, enabled: bool) -> void:
+	auto_attack_peers[peer_id] = enabled
+	if not player_info.has(peer_id): return
+	var team = player_info[peer_id].team
+	var target = _get_auto_attack_target(peer_id, team)
+	for entity in entities.get_children():
+		if not (entity is Army) or entity.get("owner_peer_id") != peer_id or entity.health <= 0: continue
+		if not entity._is_military() or entity.entity_id in AUTO_ATTACK_EXCLUDE_IDS: continue
+		if enabled:
+			if entity.current_target != null: continue
+			if target:
+				entity._clear_command_queue()
+				entity.attack_move_to(target.global_position)
+		else:
+			if _has_attack_move_order(entity) and entity.current_target == null:
+				entity.stop_movement()
+				entity._clear_command_queue()
 
 # ---------- 通用工具 ----------
 func _find_entity_by_id(id: int) -> GameEntity:
