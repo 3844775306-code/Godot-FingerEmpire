@@ -1931,6 +1931,8 @@ func _create_debug_panel():
 	_apply_panel_relation()
 	bg.add_theme_stylebox_override("panel", bg_style); debug_panel.add_child(bg)
 	var vb = VBoxContainer.new(); vb.position = Vector2(10, 8); vb.add_theme_constant_override("separation", 3)
+	# 固定内容宽度：折叠后主体隐藏时 VBox 不能收缩，否则右对齐的折叠按钮会跳到标题旁边
+	vb.custom_minimum_size = Vector2(PANEL_WIDTH - 20.0, 0)
 	debug_panel.add_child(vb)
 	# 标题行：左侧标题 + 右侧隐藏按钮（点一下整块收起，只留标题条，不再遮挡战场）
 	var title_hbox = HBoxContainer.new(); vb.add_child(title_hbox)
