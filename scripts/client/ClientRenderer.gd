@@ -832,12 +832,18 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 		var target_size = info["body_radius"] * 2.0
 		var aabb = _get_model_aabb(loaded_model)
 		var current_size = max(aabb.size.x, max(aabb.size.y, aabb.size.z))
+		var scale_factor := 1.0
 		if current_size > 0.01:
-			loaded_model.scale = Vector3.ONE * (target_size / current_size)
+			scale_factor = target_size / current_size
+			loaded_model.scale = Vector3.ONE * scale_factor
 		# Special rotations
 		if info.get("entity_id", 0) == 16: loaded_model.rotation.y = deg_to_rad(180)
 		elif info.get("entity_id", 0) == 17: loaded_model.rotation.y = deg_to_rad(90)
 		elif info.get("entity_id", 0) == 18: loaded_model.rotation.y = deg_to_rad(90)
+		elif info.get("entity_id", 0) == 64:
+			# 炮台：顺时针旋转 90°，并按模型高度下移 30%，与服务端保持一致
+			loaded_model.rotation.y = deg_to_rad(-90)
+			loaded_model.position.y -= aabb.size.y * scale_factor * 0.3
 		# character 与步兵模型默认朝向相反，统一绕 Y 轴旋转 180° 掉头（entity 10 原特例已并入）
 		if RTSConfig.model_needs_flip(model_path):
 			loaded_model.rotation.y = deg_to_rad(180)

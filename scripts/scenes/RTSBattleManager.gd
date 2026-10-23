@@ -1236,14 +1236,19 @@ func _apply_entity_model(entity: GameEntity) -> bool:
 	var target_size = entity.body_radius * 2.0
 	var aabb = _get_model_aabb(model_instance)
 	var current_size = max(aabb.size.x, max(aabb.size.y, aabb.size.z))
+	var scale_factor := 1.0
 	if current_size > 0.01:
-		var scale_factor = target_size / current_size
+		scale_factor = target_size / current_size
 		model_instance.scale = Vector3.ONE * scale_factor
 	entity.add_child(model_instance)
 	# 特殊朝向调整
 	if entity.entity_id == 16: model_instance.rotation.y = deg_to_rad(180)
 	elif entity.entity_id == 17: model_instance.rotation.y = deg_to_rad(90)
 	elif entity.entity_id == 18: model_instance.rotation.y = deg_to_rad(90)
+	elif entity.entity_id == 64:
+		# 炮台：顺时针旋转 90°，并按模型高度下移 30%，贴合城墙
+		model_instance.rotation.y = deg_to_rad(-90)
+		model_instance.position.y -= aabb.size.y * scale_factor * 0.3
 	# character 与步兵模型默认朝向相反，统一绕 Y 轴旋转 180° 掉头
 	if RTSConfig.model_needs_flip(model_path):
 		model_instance.rotation.y = deg_to_rad(180)
