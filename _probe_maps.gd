@@ -218,6 +218,13 @@ func _report(g, s: int) -> void:
 					break
 	print("  RES %s" % str(type_counts))
 	print("  WOOD total=%d in_forest=%d edge=%d" % [wood_total, wood_in_forest, wood_edge])
+	# 动物（兽群）数量与孤岛统计：海峡图应有一批与两岸不连通的隔离岛，且资源全部可达
+	var animals := 0
+	for r in g.resource_positions:
+		if int(r["type"]) >= 60:
+			animals += 1
+	print("  ANIMALS %d" % animals)
+	_report_islands(g, size)
 	# 单株分布检查（黑森林）：木材贴林线排列，允许相邻紧贴，但不应成簇（同格重叠）
 	if GameSettings.map_id == "forest":
 		var wpos: Array = []
@@ -262,6 +269,68 @@ func _report(g, s: int) -> void:
 		for i in range(mini(4, keys.size())):
 			sample.append(keys[i])
 		print("  FORD_COLORS distinct=%d sample=%s" % [keys.size(), str(sample)])
+
+# 孤岛统计：从两座城堡洪水填充，统计与两岸不连通的陆地格与连通块数；
+# 同时确认没有落在孤岛上的资源（海峡图 reachable_only 会剔除）
+func _report_islands(g, size: int) -> void:
+	var reach := {}
+	var q: Array = []
+	for p in [g.player_castle_pos, g.enemy_castle_pos]:
+		var c := Vector2i(int(p.x + size / 2.0), int(p.z + size / 2.0))
+		if not reach.has(c):
+			reach[c] = true
+			q.append(c)
+	while not q.is_empty():
+		var cur: Vector2i = q.pop_back()
+		for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var n: Vector2i = cur + d
+			if n.x < 0 or n.y < 0 or n.x >= size or n.y >= size:
+				continue
+			if reach.has(n):
+				continue
+			if int(g.terrain_grid[n.x][n.y]) == 2 and g.get_overlay(n.x, n.y) != 3:
+				continue
+			reach[n] = true
+			q.append(n)
+	var island_tiles := 0
+	var islands := 0
+	var seen := {}
+	for x in range(size):
+		for y in range(size):
+			if int(g.terrain_grid[x][y]) == 2 or reach.has(Vector2i(x, y)):
+				continue
+			if seen.has(Vector2i(x, y)):
+				continue
+			islands += 1
+			var bq: Array = [Vector2i(x, y)]
+			seen[Vector2i(x, y)] = true
+			while not bq.is_empty():
+				var cur: Vector2i = bq.pop_back()
+				island_tiles += 1
+				for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+					var n: Vector2i = cur + d
+					if n.x < 0 or n.y < 0 or n.x >= size or n.y >= size:
+						continue
+					if seen.has(n) or reach.has(n):
+						continue
+					if int(g.terrain_grid[n.x][n.y]) == 2:
+						continue
+					seen[n] = true
+					bq.append(n)
+	var unreachable_res := 0
+	for r in g.resource_positions:
+		var gx := int(r["pos"].x + size / 2.0)
+		var gy := int(r["pos"].z + size / 2.0)
+		var ok: bool = reach.has(Vector2i(gx, gy))
+		# 水面资源站在岸边就能采，相邻陆地可达即算可达
+		if not ok and int(g.terrain_grid[gx][gy]) == 2:
+			for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+				if reach.has(Vector2i(gx, gy) + d):
+					ok = true
+					break
+		if not ok:
+			unreachable_res += 1
+	print("  ISLANDS n=%d tiles=%d unreachable_res=%d" % [islands, island_tiles, unreachable_res])
 
 # 2 倍降采样的字符画：. 平原  ^ 山地  ~ 水域  P/E 城堡  | 隘口
 func _ascii(g, size: int) -> void:

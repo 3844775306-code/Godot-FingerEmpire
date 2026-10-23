@@ -51,6 +51,7 @@ var _water_threshold: float = -0.25
 var _pass_centers: Array = []          # 隘口中心（格坐标），用于争议资源布点
 var _river_center: Array = []          # 每行河流中心 x（格坐标），供浅滩算子使用
 var _sea_width: float = 0.0            # 海峡算子的水面宽度（格），供小岛算子参考
+var _reach_tiles: Dictionary = {}      # 从城堡可达的格集合（仅 reachable_only 地图计算）
 
 # 防止重复生成
 var map_generated: bool = false
@@ -224,6 +225,7 @@ func _init_stage_grids(size: int) -> void:
 	overlay_grid = []
 	base_colors = []
 	_pass_centers = []
+	_reach_tiles = {}
 	for x in range(size):
 		var vcol := []
 		var tcol := []
@@ -424,24 +426,33 @@ func _op_sea(size: int, params: Dictionary) -> void:
 		"freq": params.get("freq", 0.035),
 	})
 
-# 小岛：在海峡静水里撒几块陆地，避开渡口行，避免把唯一的陆路通道堵死
+# 岛屿：在海峡静水里撒岛，避开渡口行（那是唯一陆路通道）。
+# 小岛互不相连、与两岸也保持一格水道，形成真正的"隔离岛屿"；
+# big 参数额外撒几座大岛，作为海面上的地标与资源点。
 func _op_islets(size: int, params: Dictionary) -> void:
 	if _river_center.is_empty():
 		push_warning("[地图] islets 需要先执行 sea/river")
 		return
-	var count := maxi(0, int(params.get("count", 8)))
+	var count := maxi(0, int(params.get("count", 14)))
+	var big_count := maxi(0, int(params.get("big", 2)))
 	var avoid: Array = params.get("avoid", [])
-	var band := clampf(float(params.get("band", 0.45)), 0.05, 1.0)
+	var band := clampf(float(params.get("band", 0.5)), 0.05, 1.0)
+	var r_min := maxi(1, int(params.get("radius_min", 2)))
+	var r_max := maxi(r_min, int(params.get("radius_max", 4)))
+	var big_r := maxi(r_max + 1, int(params.get("big_radius", 6)))
 	var half_width := maxf(3.0, _sea_width * 0.5)
 	var seed_val := custom_seed if custom_seed != 0 else randi()
 	var isl := FastNoiseLite.new()
 	isl.seed = seed_val + 1327
 	isl.frequency = float(params.get("freq", 0.07))
 	isl.fractal_octaves = 2
-	var planted := 0
+	var planted: Array = []   # [Vector2i 中心, 半径]，用于保证岛与岛之间留出水道
+	var planted_count := 0
 	var guard := 0
-	while planted < count and guard < count * 80:
+	while planted_count < count + big_count and guard < (count + big_count) * 120:
 		guard += 1
+		var is_big := big_count > 0 and planted_count >= count
+		var rad := big_r if is_big else randi_range(r_min, r_max)
 		var gy := randi_range(int(float(size) * 0.08), int(float(size) * 0.92))
 		var skip := false
 		for p in avoid:
@@ -458,8 +469,17 @@ func _op_islets(size: int, params: Dictionary) -> void:
 			continue
 		if isl.get_noise_2d(gx, gy) < 0.0:
 			continue
-		var rad := randi_range(2, 3)
-		# 小岛必须整块落在水里，压到陆地就当这次没撒成
+		# 与已生成的岛保持距离，避免连成一片陆地
+		var too_close := false
+		for pi in planted:
+			var pc: Vector2i = pi[0]
+			var pr: int = int(pi[1])
+			if Vector2(gx - pc.x, gy - pc.y).length() < float(rad + pr + 2):
+				too_close = true
+				break
+		if too_close:
+			continue
+		# 岛必须整块落在水里（外圈再留一格水），压到陆地就当这次没撒成
 		var ok := true
 		for dx in range(-rad - 1, rad + 2):
 			for dy in range(-rad - 1, rad + 2):
@@ -485,7 +505,8 @@ func _op_islets(size: int, params: Dictionary) -> void:
 				var ny := gy + dy
 				terrain_grid[nx][ny] = 0
 				height_grid[nx][ny] = 0.1
-		planted += 1
+		planted.append([Vector2i(gx, gy), rad])
+		planted_count += 1
 
 # 绿洲：在沙海上挖几眼小水面，既是油井落点也是地标；压平区会覆盖成平地
 func _op_oasis(size: int, params: Dictionary) -> void:
@@ -909,7 +930,7 @@ func _find_castle_spot_in_region(gx_min, gy_min, gx_max, gy_max, safe_size: int 
 
 # ---------- 资源放置 ----------
 func _res_count(base: float, prof: Dictionary, key: String) -> int:
-	return maxi(1, int(round(base * float(prof.get(key, 1.0)))))
+	return maxi(0, int(round(base * float(prof.get(key, 1.0)))))
 
 func _place_resources():
 	resource_positions.clear()
@@ -935,6 +956,10 @@ func _place_resources():
 	var wood_forest := String(prof.get("wood_near", "mountain")) == "forest"
 	# 山脊图：所有金矿集中在隘口
 	var gold_at_passes := bool(prof.get("gold_at_passes", false))
+	# 沙漠图 food=0：除每座城堡 1 组保底农田外不再撒农田，高难度 AI 加成也不补，食物主要靠狩猎
+	var no_extra_food := float(prof.get("food", 1.0)) <= 0.0
+	# 动物密度：沙漠这类以狩猎为主的图调高兽群数量
+	var animal_mult := maxf(0.0, float(prof.get("animals", 1.0)))
 
 	# Castle positions in grid coordinates
 	var player_gx = int(player_castle_pos.x + size/2.0)
@@ -997,6 +1022,9 @@ func _place_resources():
 		hard_extra = hard_extra.filter(func(e): return int(e["type"]) != 0)
 	if wood_forest:
 		hard_extra = hard_extra.filter(func(e): return int(e["type"]) != 1)
+	# 沙漠图：高难度 AI 也不额外补农田，食物靠兽群
+	if no_extra_food:
+		hard_extra = hard_extra.filter(func(e): return int(e["type"]) != 3)
 	if GameSettings.ai_difficulty >= GameSettings.AIDifficulty.HARD or GameSettings.red_ai_difficulty >= GameSettings.AIDifficulty.HARD or GameSettings.blue_ai_difficulty >= GameSettings.AIDifficulty.HARD:
 		# Only for enemy/AI castles（1v1 敌方 = 后半；2v2/3v3 红队城堡 = 后半；乱斗 = 玩家之外全部 AI）
 		var ai_castles = castles.slice(1) if is_ffa_single else castles.slice(castles.size() / 2)
@@ -1045,9 +1073,18 @@ func _place_resources():
 		for _i in range(per_pass):
 			_place_group_near(0, 2, 3, pc.x, pc.y, gold_dist, 0, placed, size)
 
+	# 海峡图：岛上的资源工人够不着（没桥/浅滩），生成完直接剔除不可达资源与动物
+	if bool(map_preset.get("reachable_only", false)):
+		_drop_unreachable_resources(size, castles)
+
 	# ── Animals ──
-	for _i in range(int(8 * mult)):
+	# 沙漠等以狩猎为主的图：food=0 后动物是主要食物来源，兽群数量按 animals 倍率放大
+	var herd_count := int(round(8.0 * mult * animal_mult))
+	for _i in range(herd_count):
 		var cx = randi_range(8, size - 9); var cy = randi_range(8, size - 9)
+		# 孤岛上的兽群猎不到，直接换位置（海峡图）
+		if not _reach_tiles.is_empty() and not _reach_tiles.has(Vector2i(cx, cy)):
+			continue
 		var t = terrain_grid[cx][cy]
 		var atype = -1
 		if t == 0:
@@ -1061,6 +1098,8 @@ func _place_resources():
 			for _j in range(herd_size):
 				var ax = cx + randi_range(-4, 4); var ay = cy + randi_range(-4, 4)
 				if ax >= 0 and ax < size and ay >= 0 and ay < size:
+					if not _reach_tiles.is_empty() and not _reach_tiles.has(Vector2i(ax, ay)):
+						continue
 					var at = terrain_grid[ax][ay]
 					if (atype == 63 and at == 2) or (atype != 63 and at == 0):
 						if not placed.has("a%d,%d" % [ax, ay]):
@@ -1071,6 +1110,49 @@ func _place_resources():
 	if String(map_preset.get("id", "classic")) == "classic":
 		_mark_wood_as_forest(size)
 		_colorize_grid(size)
+
+# 油井是否只贴岸生成：海边/湖边油井离岸太远工人够不着，沙漠与海峡图要求贴岸
+func _oil_shore_only() -> bool:
+	return bool(map_preset.get("oil_near_shore", false))
+
+# 从每座城堡出发做一次洪水填充（地形 0/1 可走，水面仅浅滩可走），
+# 把落在孤岛上的资源点/兽群剔除，避免工人永远走不到、AI 反复尝试
+func _drop_unreachable_resources(size: int, castles: Array) -> void:
+	var reach := {}
+	var q: Array = []
+	for cs in castles:
+		var c := Vector2i(clampi(int(cs[0]), 0, size - 1), clampi(int(cs[1]), 0, size - 1))
+		if not reach.has(c):
+			reach[c] = true
+			q.append(c)
+	while not q.is_empty():
+		var cur: Vector2i = q.pop_back()
+		for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var n: Vector2i = cur + d
+			if n.x < 0 or n.y < 0 or n.x >= size or n.y >= size:
+				continue
+			if reach.has(n):
+				continue
+			var t: int = terrain_grid[n.x][n.y]
+			if t == 2 and get_overlay(n.x, n.y) != 3:
+				continue
+			reach[n] = true
+			q.append(n)
+	_reach_tiles = reach
+	var kept: Array = []
+	for r in resource_positions:
+		var gx := int(r["pos"].x + size / 2.0)
+		var gy := int(r["pos"].z + size / 2.0)
+		var ok: bool = reach.has(Vector2i(gx, gy))
+		# 水面资源（油井）站在岸边就能采，只要相邻陆地可达即可
+		if not ok and int(terrain_grid[gx][gy]) == 2:
+			for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+				if reach.has(Vector2i(gx, gy) + d):
+					ok = true
+					break
+		if ok:
+			kept.append(r)
+	resource_positions = kept
 
 # 黑森林木材：沿森林边缘一株一株密集排开（只认成片森林的边界，不围着零星小树洞种）
 func _place_forest_wood(size: int, castles: Array, placed: Dictionary, mult: float) -> void:
@@ -1192,6 +1274,32 @@ func _place_group_near(rtype, min_sz, max_sz, cx, cy, max_dist, terrain, placed,
 # ── Helper: place a group randomly on the map ──
 func _place_group_random(rtype, min_sz, max_sz, terrain, placed, size, castles, near_mountain=false, away_mountain=false, adjacent_mountains=0):
 	var cx = -1; var cy = -1
+	# 近岸油井的候选格很少（只有贴岸的水），随机采样 100 次几乎撞不到，改成先列候选再洗牌
+	if rtype == 4 and terrain == 2 and _oil_shore_only():
+		var cands: Array = []
+		for tx in range(5, size - 5):
+			for ty in range(5, size - 5):
+				if terrain_grid[tx][ty] != 2: continue
+				if _count_adjacent_terrain(tx, ty, 0, size) < 1: continue
+				if placed.has("g%d,%d,%d" % [rtype, tx, ty]): continue
+				var skip_c := false
+				for cs in castles:
+					if sqrt((tx-cs[0])**2 + (ty-cs[1])**2) < 8: skip_c = true; break
+				if skip_c: continue
+				var near_dup := false
+				for k in placed.keys():
+					if k.begins_with("g%d," % rtype):
+						var ox = int(k.split(",")[1]); var oy = int(k.split(",")[2])
+						if sqrt((tx-ox)**2 + (ty-oy)**2) < 15: near_dup = true; break
+				if near_dup: continue
+				cands.append(Vector2i(tx, ty))
+		if cands.is_empty():
+			return
+		cands.shuffle()
+		cx = cands[0].x; cy = cands[0].y
+		placed["g%d,%d,%d" % [rtype, cx, cy]] = true
+		_spawn_group(rtype, min_sz, max_sz, cx, cy, terrain, placed, size, adjacent_mountains)
+		return
 	for _attempt in range(100):
 		var tx = randi_range(5, size - 6); var ty = randi_range(5, size - 6)
 		if terrain_grid[tx][ty] != terrain: continue
@@ -1226,6 +1334,8 @@ func _spawn_group(rtype, min_sz, max_sz, cx, cy, terrain, placed, size, adjacent
 		var mx = cx + randi_range(-4, 4); var my = cy + randi_range(-4, 4)
 		if mx < 0 or mx >= size or my < 0 or my >= size: continue
 		if terrain_grid[mx][my] != terrain: continue
+		# 近岸油井：工人只能在岸边采集，贴岸的水格才算有效资源点
+		if rtype == 4 and terrain == 2 and _oil_shore_only() and _count_adjacent_terrain(mx, my, 0, size) < 1: continue
 		if adjacent_mountains > 0 and _count_adjacent_terrain(mx, my, 1, size) < adjacent_mountains: continue
 		if placed.has("r%d,%d" % [mx, my]): continue
 		placed["r%d,%d" % [mx, my]] = true
