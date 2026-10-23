@@ -38,6 +38,7 @@ var current_build_menu: Control = null
 var explored_grid: Array = []
 var visible_grid: Array = []
 var fog_timer: float = 0.0
+var map_modifiers: Dictionary = {}   # 当前地图的规则修正（视野/高地/浅滩等）
 
 # ==================== 游戏状态 ====================
 var _pending_left_click: bool = false
@@ -652,6 +653,11 @@ func _ready():
 	
 	
 	add_to_group("battle_manager")
+	# 地图规则修正（子节点 Map 的 _ready 先于本节点执行，此时预设已解析完成）
+	if $Map:
+		var preset = $Map.get("map_preset")
+		if preset is Dictionary:
+			map_modifiers = preset.get("modifiers", {})
 	_init_building_defs()
 	battle_stats = BattleStatsScript.new(self)
 	if not is_online:
@@ -2287,7 +2293,7 @@ func _update_fog_visibility():
 	for e in get_tree().get_nodes_in_group("vision_providers"):
 		if e.team == get_host_team() and e.health > 0:
 			var g = world_to_grid(e.global_position)
-			var r = e.vision_range
+			var r = get_effective_vision(e)
 			for dx in range(-r, r+1):
 				for dy in range(-r, r+1):
 					if dx*dx+dy*dy > r*r: continue
@@ -2319,7 +2325,7 @@ func _update_visibility():
 			continue
 		var seen = false
 		for p in players:
-			if p.global_position.distance_to(e.global_position) <= p.vision_range:
+			if p.global_position.distance_to(e.global_position) <= get_effective_vision(p):
 				seen = true
 				break
 		e.visible = seen
@@ -2520,6 +2526,29 @@ func get_terrain_at_grid(gx: int, gy: int) -> int:
 	if not $Map or not $Map.has_method("get_terrain"):
 		return -1
 	return $Map.get_terrain(gx, gy)
+
+# 覆盖层：0=无 1=森林 2=沼泽 3=浅滩（只影响移速/视野，不改地形判定）
+func get_overlay_at_grid(gx: int, gy: int) -> int:
+	if not $Map or not $Map.has_method("get_overlay"):
+		return 0
+	return $Map.get_overlay(gx, gy)
+
+# 有效视野：地图倍率 × 高地加成 × 森林遮蔽，供迷雾与可见性判定共用
+func get_effective_vision(e) -> int:
+	if not e:
+		return 0
+	var r := float(e.vision_range)
+	if r <= 0.0:
+		return 0
+	r *= float(map_modifiers.get("vision", 1.0))
+	var g := world_to_grid(e.global_position)
+	var ov := get_overlay_at_grid(g.x, g.y)
+	if ov == 1:
+		r *= 0.55
+	var hg := float(map_modifiers.get("high_ground_vision", 0.0))
+	if hg > 0.0 and get_height_at_grid(g.x, g.y) >= float(map_modifiers.get("high_ground_min", 1.0)):
+		r *= 1.0 + hg
+	return maxi(1, int(round(r)))
 # 将网格坐标 (gx, gy) 转换为世界坐标 (以地图中心为原点)
 func grid_to_world(gx: int, gy: int) -> Vector3:
 	return Vector3(gx - RTSConfig.MAP_SIZE / 2.0, 0, gy - RTSConfig.MAP_SIZE / 2.0)

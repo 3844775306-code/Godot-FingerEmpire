@@ -436,6 +436,9 @@ func _get_terrain_cost(tile: Vector2i, bm: RTSBattleManager, wall_cache: Diction
 	if _army.water_capable:
 		# 水军无法通过桥
 		return 999.0 if _bridge_set.has(tile) else (0.8 if terrain == 2 else 999.0)
+	# 浅滩：仍是水格，但陆军可以涉水通过
+	if bm.get_overlay_at_grid(tile.x, tile.y) == 3:
+		return 2.5
 	match terrain:
 		0: return 1.0
 		1: return 2.5

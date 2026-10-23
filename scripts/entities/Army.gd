@@ -321,12 +321,18 @@ func _physics_process(delta):
 				for dy in [-1, 0, 1]:
 					if dx == 0 and dy == 0: continue
 					var t = bm.get_terrain_at_grid(gpos.x + dx, gpos.y + dy)
-					if t != 2: all_water = false
-					if t == 2: all_land = false
+					var ov = bm.get_overlay_at_grid(gpos.x + dx, gpos.y + dy)
+					if t != 2 or ov == 3: all_water = false
+					if t == 2 and ov != 3: all_land = false
+			var here_overlay: int = bm.get_overlay_at_grid(gpos.x, gpos.y)
 			if not water_capable and all_water:
 				_cached_speed_mod = 0.01
 			elif water_capable and all_land:
 				_cached_speed_mod = 0.01
+			elif not water_capable and here_overlay == 3:
+				_cached_speed_mod = float(bm.map_modifiers.get("ford_speed", 0.55))
+			elif not water_capable and here_overlay == 1:
+				_cached_speed_mod = 0.9
 			elif _cached_terrain == 1:
 				_cached_speed_mod = 0.5
 			else:

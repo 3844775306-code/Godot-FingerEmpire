@@ -15,6 +15,8 @@ func _get_map_size() -> int:
 # 地形数据 0=平原, 1=山地, 2=水域
 var terrain_grid: Array = []
 var height_grid: Array = []            # per-tile height values
+# 覆盖层 0=无, 1=森林, 2=沼泽(预留), 3=浅滩。只影响移速/视野/观感，不改变地形类型判定
+var overlay_grid: Array = []
 const CLIFF_THRESHOLD: float = 2.0     # height diff > this = impassable
 var base_colors: Array = []           # 原始颜色 (MAP_SIZE x MAP_SIZE)
 var terrain_image: Image
@@ -47,6 +49,7 @@ var _val_grid: Array = []              # 噪声值，供山脊等算子叠加
 var _mountain_threshold: float = 0.3
 var _water_threshold: float = -0.25
 var _pass_centers: Array = []          # 隘口中心（格坐标），用于争议资源布点
+var _river_center: Array = []          # 每行河流中心 x（格坐标），供浅滩算子使用
 
 # 防止重复生成
 var map_generated: bool = false
@@ -82,6 +85,13 @@ func apply_received_map(p_terrain: Array, p_height: Array, p_resources: Array):
 	terrain_grid = p_terrain.duplicate(true)
 	base_colors.clear()
 	height_grid = p_height.duplicate(true)
+	# 覆盖层暂由两端默认全 0（联机下发在后续阶段接入）
+	overlay_grid.clear()
+	for x in range(size):
+		var orow := []
+		orow.resize(size)
+		orow.fill(0)
+		overlay_grid.append(orow)
 	for x in range(size):
 		var color_col = []
 		for y in range(size):
@@ -173,6 +183,10 @@ func _generate_with_stages(size: int, stages: Array) -> void:
 				_op_ridge(size, params)
 			"passes":
 				_op_passes(size, params)
+			"river":
+				_op_river(size, params)
+			"fords":
+				_op_fords(size, params)
 			_:
 				push_warning("[地图] 未知生成算子: %s" % op)
 	_colorize_grid(size)
@@ -181,19 +195,23 @@ func _init_stage_grids(size: int) -> void:
 	_val_grid = []
 	terrain_grid = []
 	height_grid = []
+	overlay_grid = []
 	base_colors = []
 	_pass_centers = []
 	for x in range(size):
 		var vcol := []
 		var tcol := []
 		var hcol := []
+		var ocol := []
 		for y in range(size):
 			vcol.append(0.0)
 			tcol.append(0)
 			hcol.append(0.0)
+			ocol.append(0)
 		_val_grid.append(vcol)
 		terrain_grid.append(tcol)
 		height_grid.append(hcol)
+		overlay_grid.append(ocol)
 
 # 按噪声值判定类型与高度：公式与经典生成保持一致，两张图的山地/草地观感统一
 func _classify_tile(x: int, y: int, val: float) -> void:
@@ -258,12 +276,55 @@ func _op_passes(size: int, params: Dictionary) -> void:
 				height_grid[gx][gy] = flat_h
 		_pass_centers.append(Vector2i(cx, int(size * 0.5)))
 
+# 河流：沿南北方向的 S 形水带；bulge 在河心加宽，形成可放油井的水面
+func _op_river(size: int, params: Dictionary) -> void:
+	var center := float(params.get("center", 0.5)) * float(size)
+	var width := maxf(2.0, float(params.get("width", 7.0)))
+	var amp := float(params.get("amp", 0.05)) * float(size)
+	var freq := float(params.get("freq", 0.06))
+	var bulge_at := float(params.get("bulge_at", 0.5)) * float(size)
+	var bulge_extra := maxf(0.0, float(params.get("bulge_extra", 0.0)))
+	var bulge_len := maxf(2.0, float(params.get("bulge_len", 10.0)))
+	_river_center = []
+	for y in range(size):
+		var bulge := bulge_extra * exp(-pow(float(y) - bulge_at, 2.0) / (2.0 * bulge_len * bulge_len))
+		var cx := center + sin(float(y) * freq) * amp
+		_river_center.append(int(round(cx)))
+		var half_w := (width + bulge) * 0.5
+		var x0 := maxi(0, int(round(cx - half_w)))
+		var x1 := mini(size - 1, int(round(cx + half_w)))
+		for x in range(x0, x1 + 1):
+			terrain_grid[x][y] = 2
+			height_grid[x][y] = -height_scale * 0.5
+
+# 浅滩：在指定行位横切河流，标 overlay=3（仍是水，但陆军可按 2.5 成本涉水通过）
+func _op_fords(size: int, params: Dictionary) -> void:
+	if _river_center.is_empty():
+		push_warning("[地图] fords 需要先执行 river")
+		return
+	var positions: Array = params.get("positions", [0.3, 0.7])
+	var width := maxi(1, int(params.get("width", 3)))
+	var half_w := int(width / 2.0)
+	for p in positions:
+		var fy := clampi(int(float(p) * float(size)), 0, size - 1)
+		var cx: int = _river_center[fy]
+		var left := cx
+		while left - 1 >= 0 and terrain_grid[left - 1][fy] == 2:
+			left -= 1
+		var right := cx
+		while right + 1 < size and terrain_grid[right + 1][fy] == 2:
+			right += 1
+		for dy in range(-half_w, half_w + 1):
+			var yy := clampi(fy + dy, 0, size - 1)
+			for x in range(left, right + 1):
+				overlay_grid[x][yy] = 3
+
 func _colorize_grid(size: int) -> void:
 	base_colors.clear()
 	for x in range(size):
 		var color_col := []
 		for y in range(size):
-			color_col.append(_terrain_color_for(terrain_grid[x][y], height_grid[x][y], x, y))
+			color_col.append(_terrain_color_for(terrain_grid[x][y], height_grid[x][y], x, y, get_overlay(x, y)))
 		base_colors.append(color_col)
 
 # ---------- 地形着色 ----------
@@ -271,7 +332,7 @@ func _colorize_grid(size: int) -> void:
 # 主机用噪声算出的高度，客户端用服务器同步来的高度网格，因此同一块地两端配色完全一致。
 # 纯观感，不参与任何寻路/建造判定（那些只认 terrain_grid 的类型）。
 
-func _terrain_color_for(terrain_type: int, h: float, gx: int, gy: int) -> Color:
+func _terrain_color_for(terrain_type: int, h: float, gx: int, gy: int, overlay: int = 0) -> Color:
 	var color: Color
 	match terrain_type:
 		1:  # 山地：山脚土棕 -> 高处灰岩
@@ -280,6 +341,11 @@ func _terrain_color_for(terrain_type: int, h: float, gx: int, gy: int) -> Color:
 			color = Color(0.10, 0.28, 0.50).lerp(Color(0.24, 0.58, 0.72), _shore_amount(gx, gy))
 		_:  # 草原：低地深绿 -> 高地黄绿
 			color = Color(0.12, 0.33, 0.14).lerp(Color(0.42, 0.51, 0.22), clamp((h + 0.075) / 0.165, 0.0, 1.0))
+	# 覆盖层着色：森林压暗偏绿、浅滩提亮偏沙青
+	if overlay == 1:
+		color = color.lerp(Color(0.10, 0.26, 0.12), 0.55)
+	elif overlay == 3:
+		color = color.lerp(Color(0.34, 0.60, 0.60), 0.60)
 	# 高频细节噪声：明暗微扰打散整片纯色，远看是自然纹理而不是塑料色块
 	var d := _get_detail_noise().get_noise_2d(float(gx), float(gy))
 	if d > 0.0:
@@ -327,8 +393,8 @@ func _build_terrain_images() -> void:
 		for y in range(size):
 			var y_start = int(floor(float(y) / size * TEX_SIZE))
 			var y_end = int(floor(float(y + 1) / size * TEX_SIZE))
-			# 一格一个颜色，整格平铺 —— 着色只由 (类型, 高度) 决定，两端一致
-			var c := _terrain_color_for(terrain_grid[x][y], height_grid[x][y], x, y)
+			# 一格一个颜色，整格平铺 —— 着色只由 (类型, 高度, 覆盖层) 决定，两端一致
+			var c := _terrain_color_for(terrain_grid[x][y], height_grid[x][y], x, y, get_overlay(x, y))
 			var d := c.darkened(0.7)
 			d.a = 1.0
 			for px in range(x_start, x_end):
@@ -481,6 +547,8 @@ func _flatten_area(gx: int, gy: int, radius: int) -> void:
 			var ny := clampi(gy + dy, 0, size - 1)
 			terrain_grid[nx][ny] = 0
 			height_grid[nx][ny] = 0.0
+			if not overlay_grid.is_empty():
+				overlay_grid[nx][ny] = 0
 
 func _find_flat_plain(gx_min,gy_min,gx_max,gy_max,ps:int) -> Vector3:
 	var size=_get_map_size()
@@ -911,6 +979,13 @@ func get_terrain(gx: int, gy: int) -> int:
 	if gx >= 0 and gx < terrain_grid.size() and gy >= 0 and gy < terrain_grid[0].size():
 		return terrain_grid[gx][gy]
 	return -1
+
+func get_overlay(gx: int, gy: int) -> int:
+	if overlay_grid.is_empty():
+		return 0
+	if gx >= 0 and gx < overlay_grid.size() and gy >= 0 and gy < overlay_grid[0].size():
+		return overlay_grid[gx][gy]
+	return 0
 
 func get_height_at_grid(gx:int,gy:int)->float:
 	if gx>=0 and gx<height_grid.size() and gy>=0 and gy<height_grid[0].size():

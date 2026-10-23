@@ -54,8 +54,16 @@ func _report(g, s: int) -> void:
 		for y in range(size):
 			counts[int(g.terrain_grid[x][y])] += 1
 	var total := float(size * size)
-	print("  STATS plain=%.1f%% mountain=%.1f%% water=%.1f%% passes=%d" % [
-		counts[0] / total * 100.0, counts[1] / total * 100.0, counts[2] / total * 100.0, g._pass_centers.size()])
+	var overlay_stats := {1: 0, 3: 0}
+	if not g.overlay_grid.is_empty():
+		for x in range(size):
+			for y in range(size):
+				var ov: int = int(g.overlay_grid[x][y])
+				if overlay_stats.has(ov):
+					overlay_stats[ov] += 1
+	print("  STATS plain=%.1f%% mountain=%.1f%% water=%.1f%% passes=%d forest=%.1f%% ford=%.1f%%" % [
+		counts[0] / total * 100.0, counts[1] / total * 100.0, counts[2] / total * 100.0,
+		g._pass_centers.size(), overlay_stats[1] / total * 100.0, overlay_stats[3] / total * 100.0])
 
 	for label in ["PLAYER", "ENEMY"]:
 		var p: Vector3 = g.player_castle_pos if label == "PLAYER" else g.enemy_castle_pos
@@ -76,7 +84,9 @@ func _report(g, s: int) -> void:
 		print("  %s grid=%d,%d terrain=%d h=%.2f flat5=%s res20=%s" % [
 			label, gx, gz, g.terrain_grid[gx][gz], g.height_grid[gx][gz], str(flat), str(res)])
 
-	print("  PLAIN_PATH=%s" % str(_plain_connected(g, size, g.player_castle_pos, g.enemy_castle_pos)))
+	print("  CROSS ford=%s noford=%s" % [
+		str(_cross_connected(g, size, g.player_castle_pos, g.enemy_castle_pos, true)),
+		str(_cross_connected(g, size, g.player_castle_pos, g.enemy_castle_pos, false))])
 
 # 2 倍降采样的字符画：. 平原  ^ 山地  ~ 水域  P/E 城堡  | 隘口
 func _ascii(g, size: int) -> void:
@@ -86,7 +96,15 @@ func _ascii(g, size: int) -> void:
 		var line := ""
 		for x in range(0, size, step):
 			var t: int = g.terrain_grid[x][y]
-			line += "." if t == 0 else ("^" if t == 1 else "~")
+			var ov: int = 0
+			if not g.overlay_grid.is_empty():
+				ov = int(g.overlay_grid[x][y])
+			if ov == 3:
+				line += "="
+			elif ov == 1:
+				line += "f"
+			else:
+				line += "." if t == 0 else ("^" if t == 1 else "~")
 		rows.append(line)
 	for pc in g._pass_centers:
 		_set_char(rows, int(pc.x / step), int(pc.y / step), "|")
@@ -104,7 +122,8 @@ func _set_char(rows: Array, x: int, y: int, ch: String) -> void:
 		return
 	rows[y] = line.substr(0, x) + ch + line.substr(x + 1)
 
-func _plain_connected(g, size: int, a: Vector3, b: Vector3) -> bool:
+# 陆地连通性：allow_ford 时浅滩算可通行（仍挡山地/深水）
+func _cross_connected(g, size: int, a: Vector3, b: Vector3, allow_ford: bool) -> bool:
 	var start := Vector2i(int(a.x + size / 2.0), int(a.z + size / 2.0))
 	var goal := Vector2i(int(b.x + size / 2.0), int(b.z + size / 2.0))
 	var seen := {start: true}
@@ -119,7 +138,11 @@ func _plain_connected(g, size: int, a: Vector3, b: Vector3) -> bool:
 				continue
 			if seen.has(n):
 				continue
-			if g.terrain_grid[n.x][n.y] != 0:
+			var t: int = g.terrain_grid[n.x][n.y]
+			var ov: int = 0
+			if not g.overlay_grid.is_empty():
+				ov = int(g.overlay_grid[n.x][n.y])
+			if t != 0 and not (allow_ford and ov == 3):
 				continue
 			seen[n] = true
 			q.append(n)
