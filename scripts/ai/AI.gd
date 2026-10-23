@@ -74,6 +74,7 @@ const HOME_ASSEMBLE_RANGE: float = 50.0
 const MILITARY_PRODUCER_TARGETS = {21: 3, 24: 2, 29: 2}
 const BOAT_VISION_RANGE: float = 12.0
 const SHIPYARD_SPACING: float = 35.0
+const SHIPYARD_FISHER_RADIUS: float = 15.0
 var built_shipyard_pos: Array[Vector3] = []
 
 const RAID_MIN_SPECIAL_TROOPS: int = 3
@@ -1823,13 +1824,20 @@ func _process_line_5():
 			shipyards.append(e)
 	if shipyards.is_empty(): return
 	for sy in shipyards:
-		var warships = 0; var gunboats = 0
+		var warships = 0; var gunboats = 0; var fishermen = 0
 		for e in battle.entities.get_children():
-			if e is Army and e.health > 0 and entity_belongs_to_me(e) and e.global_position.distance_to(sy.global_position) < 15.0:
+			if e is Army and e.health > 0 and entity_belongs_to_me(e) and e.global_position.distance_to(sy.global_position) < SHIPYARD_FISHER_RADIUS:
 				if e.entity_id == 13: warships += 1
 				elif e.entity_id == 39: gunboats += 1
+				elif e.entity_id == 14: fishermen += 1
 		while warships < 2 and can_afford(13) and _can_train_unit(): produce_unit(13); warships += 1
 		while gunboats < 2 and can_afford(39) and _can_train_unit(): produce_unit(39); gunboats += 1
+		# 每个船坞至少保证 1 艘采集船，直接在该船坞排队，避免被别的船坞抢走产能
+		var has_fisher_queued: bool = false
+		for pid in sy.production_queue:
+			if int(pid) == 14: has_fisher_queued = true; break
+		if fishermen < 1 and not has_fisher_queued and can_afford(14) and _can_train_unit():
+			sy.try_produce(14)
 
 # ═══ Merchants (castle Lv3+) ═══
 func _get_academy_lv() -> int:
