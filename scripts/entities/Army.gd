@@ -724,17 +724,72 @@ func _grandmaster_attack(target, delta):
 	target.attack -= reduce
 	_spawn_effect_marker(target, Color.YELLOW)
 	if target.attack < 0:
-		# 招降
-		target.team = team
-		target.owner_peer_id = owner_peer_id
+		# 招降：先恢复攻击力，再完整转移阵营/所有权并清理旧命令与仇恨目标
 		target.attack = target.get_meta("_original_attack")
 		target.remove_meta("_original_attack")
-		var bm = _get_bm()
-		if bm and bm.has_method("_apply_team_tint"):
-			var tint = Color(0.3, 0.6, 1.0) if team == RTSConfig.Team.BLUE else Color(1.0, 0.4, 0.4)
-			bm._apply_team_tint(target, tint)
+		target.convert_to_team(team, owner_peer_id)
 		_spawn_effect_marker(target, Color.YELLOW)
 	attack_timer = attack_speed
+
+# 完整转换单位的阵营与所有权。只改 team/owner 不够：
+# 旧目标的攻击者仍会锁着它，它自己也可能还锁着原友军；缓存和颜色也要同步刷新。
+func convert_to_team(new_team: int, new_owner: int) -> void:
+	if new_team == team and new_owner == owner_peer_id:
+		return
+	var bm = _get_bm()
+	# 清理自身旧命令、目标、驻扎点和路径
+	current_target = null
+	attack_move_target = Vector3.ZERO
+	is_attack_moving = false
+	garrison_point = Vector3.ZERO
+	_garrison_target_id = -1
+	delivery_target = null
+	last_resource_target = null
+	_clear_command_queue()
+	_set_order(UnitState.IDLE)
+	if _movement:
+		_movement.astar_target = Vector3.ZERO
+		_movement.astar_path.clear()
+	for meta_key in ["ai_home_guard", "ai_resource_guard", "ai_harass", "ai_flee_until"]:
+		if has_meta(meta_key):
+			remove_meta(meta_key)
+
+	team = new_team
+	owner_peer_id = new_owner
+
+	if bm:
+		if bm.has_method("mark_entity_cache_dirty"):
+			bm.mark_entity_cache_dirty()
+		var tint: Color = Color(0.3, 0.6, 1.0) if new_team == RTSConfig.Team.BLUE else Color(1.0, 0.4, 0.4)
+		if bm.has_method("get_entity_color"):
+			tint = bm.get_entity_color(self)
+		if bm.has_method("_apply_team_tint"):
+			bm._apply_team_tint(self, tint)
+		# 解除所有仍把本单位当作目标的攻击锁定，并丢掉针对它的排队攻击命令。
+		# 否则转换后的第一秒内，我方部队仍会继续攻击这个新友军。
+		for other in bm.entities.get_children():
+			if other == self or not (other is Army) or not is_instance_valid(other):
+				continue
+			var other_army := other as Army
+			if other_army.command_queue.size() > 0:
+				var kept: Array = []
+				for cmd in other_army.command_queue:
+					if cmd.get("target") == self:
+						continue
+					kept.append(cmd)
+				other_army.command_queue = kept
+				if other_army.loop_index >= kept.size():
+					other_army.loop_index = 0
+			if other_army.current_target == self:
+				other_army.current_target = null
+				other_army.is_attack_moving = false
+				if other_army.current_order == "attack" or other_army.current_order == "attack_move":
+					other_army._set_order(UnitState.IDLE)
+				if other_army._movement:
+					other_army._movement.astar_target = Vector3.ZERO
+					other_army._movement.astar_path.clear()
+		if bm.has_method("_update_entity_animation"):
+			bm._update_entity_animation(self)
 
 # 特效标记：在目标头顶生成彩色球体，1秒后消失
 func _spawn_effect_marker(target, color: Color):
