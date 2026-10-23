@@ -214,6 +214,11 @@ func _is_combat_enemy(e) -> bool:
 
 func _manage_defense(castle, delta: float) -> void:
 	if int(castle.upgrade_level) < 2:
+		# 箭塔/炮塔需要主城 2 级；威胁已经到家门口时优先补这一级，否则防线永远无法开工
+		if threat_level >= 1 and castle.can_upgrade():
+			var up_cost: Dictionary = castle.get_upgrade_cost()
+			if not up_cost.is_empty() and _can_spend(up_cost, 0.15):
+				ai.upgrade_building(20)
 		return
 	_defense_check_timer -= delta
 	if not defense_initialized:
