@@ -44,7 +44,7 @@ func _ready() -> void:
 	_preview_selfcheck()
 	_sync_selfcheck()
 	# 多人布局自检会改 NetworkManager 模式，放最后
-	for id in ["ridge", "ford", "forest", "marsh", "strait", "desert"]:
+	for id in ["ridge", "ford", "forest", "marsh", "strait", "desert", "ring"]:
 		for k in [2, 3]:
 			_team_probe(id, k)
 	get_tree().quit()
@@ -74,7 +74,13 @@ func _team_probe(map_id: String, team_size: int) -> void:
 		var bz := int(b.z + mid)
 		var rx := int(r.x + mid)
 		var rz := int(r.z + mid)
-		if map_id == "ridge":
+		if map_id == "ring":
+			# 环形河：内圈基地必须落在河心岛内，外圈基地必须落在环外陆地上
+			var bd := sqrt((bx - mid) * (bx - mid) + (bz - mid) * (bz - mid)) / float(size)
+			var rd := sqrt((rx - mid) * (rx - mid) + (rz - mid) * (rz - mid)) / float(size)
+			if bd > 0.27 or rd < 0.35:
+				mirror_ok = false
+		elif map_id == "ridge":
 			# 山脊东西走向 → 南北镜像（z 互补，x 相同）
 			if absi(bx - rx) > 2 or absi((bz + rz) - size) > 3:
 				mirror_ok = false
@@ -111,7 +117,7 @@ func _team_probe(map_id: String, team_size: int) -> void:
 # 模拟联机下发：主机打包覆盖层 → 客户端解压并还原，地形/覆盖层/配色必须一致
 func _sync_selfcheck() -> void:
 	var size := 100
-	for pid in ["marsh", "desert", "strait"]:
+	for pid in ["marsh", "desert", "strait", "ring"]:
 		var src = GroundScript.new()
 		src.map_size_override = size
 		src.map_preset = MapPresets.get_preset(pid)

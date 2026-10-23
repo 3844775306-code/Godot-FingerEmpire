@@ -51,6 +51,8 @@ var _water_threshold: float = -0.25
 var _pass_centers: Array = []          # 隘口中心（格坐标），用于争议资源布点
 var _river_center: Array = []          # 每行河流中心 x（格坐标），供浅滩算子使用
 var _sea_width: float = 0.0            # 海峡算子的水面宽度（格），供小岛算子参考
+var _ring_radius: float = 0.0          # 环形河中心半径（归一化）
+var _ring_width: float = 0.0           # 环形河宽度（归一化）
 var _reach_tiles: Dictionary = {}      # 从城堡可达的格集合（仅 reachable_only 地图计算）
 
 # 防止重复生成
@@ -214,6 +216,10 @@ func _generate_with_stages(size: int, stages: Array) -> void:
 				_op_islets(size, params)
 			"oasis":
 				_op_oasis(size, params)
+			"ring_river":
+				_op_ring_river(size, params)
+			"ring_fords":
+				_op_ring_fords(size, params)
 			_:
 				push_warning("[地图] 未知生成算子: %s" % op)
 	_colorize_grid(size)
@@ -532,6 +538,63 @@ func _op_oasis(size: int, params: Dictionary) -> void:
 				if not overlay_grid.is_empty():
 					overlay_grid[nx][ny] = 0
 
+# 环形河：以地图中心为圆心的环状水面，圈内保留河中大岛，圈外保留连续陆地
+func _op_ring_river(size: int, params: Dictionary) -> void:
+	var radius_frac := clampf(float(params.get("radius_frac", 0.29)), 0.12, 0.46)
+	var width_frac := clampf(float(params.get("width_frac", 0.07)), 0.02, 0.16)
+	_ring_radius = radius_frac
+	_ring_width = width_frac
+	var wave := float(params.get("wave", 0.012))
+	var seed_val := custom_seed if custom_seed != 0 else randi()
+	var noise := FastNoiseLite.new()
+	noise.seed = seed_val + 4177
+	noise.frequency = 0.05
+	noise.fractal_octaves = 2
+	var cx := float(size) * 0.5
+	var cy := float(size) * 0.5
+	var half := width_frac * 0.5
+	for x in range(size):
+		for y in range(size):
+			var dx := float(x) - cx
+			var dy := float(y) - cy
+			var r := sqrt(dx * dx + dy * dy) / float(size)
+			# 环半径带一点噪声起伏，避免看起来像用圆规画的
+			var wobble := noise.get_noise_2d(x, y) * wave
+			if r >= radius_frac - half + wobble and r <= radius_frac + half + wobble:
+				terrain_grid[x][y] = 2
+				height_grid[x][y] = -height_scale * 0.5
+				if not overlay_grid.is_empty():
+					overlay_grid[x][y] = 0
+
+# 环河浅滩：沿若干条径向线把环状水面打通，标记 overlay=3 供陆军涉水
+func _op_ring_fords(size: int, params: Dictionary) -> void:
+	if _ring_radius <= 0.0:
+		push_warning("[地图] ring_fords 需要先执行 ring_river")
+		return
+	var angles: Array = params.get("angles", [0.0, 120.0, 240.0])
+	var width := maxi(1, int(params.get("width", 3)))
+	var half := int(width / 2.0)
+	var cx := float(size) * 0.5
+	var cy := float(size) * 0.5
+	var r0 := maxf(1.0, (_ring_radius - _ring_width * 0.5 - 0.02) * float(size))
+	var r1 := minf(float(size) * 0.48, (_ring_radius + _ring_width * 0.5 + 0.02) * float(size))
+	for adeg in angles:
+		var a := deg_to_rad(float(adeg))
+		var dir := Vector2(cos(a), sin(a))
+		var perp := Vector2(-dir.y, dir.x)
+		var r := r0
+		while r <= r1:
+			for w in range(-half, half + 1):
+				var px := int(round(cx + dir.x * r + perp.x * float(w)))
+				var py := int(round(cy + dir.y * r + perp.y * float(w)))
+				if px < 0 or py < 0 or px >= size or py >= size:
+					continue
+				if terrain_grid[px][py] != 2:
+					continue
+				overlay_grid[px][py] = 3
+				height_grid[px][py] = -height_scale * 0.25
+			r += 1.0
+
 func _colorize_grid(size: int) -> void:
 	base_colors.clear()
 	for x in range(size):
@@ -655,6 +718,9 @@ func _build_terrain_images() -> void:
 # 返回 [blue1..blueK, red1..redK]；镜像轴由 castle_layout.type 决定
 func _preset_team_anchors(k: int) -> Array:
 	var layout: Dictionary = map_preset.get("castle_layout", {})
+	# 环形河布局：内圈（蓝方）在河心岛上，外圈（红方）沿环外陆地均分，角度错开浅滩
+	if String(layout.get("type", "mirror_x")) == "ring":
+		return _ring_anchors(k, layout)
 	var anchors: Array = layout.get("anchors", [])
 	if anchors.size() < 2 or k <= 1:
 		return anchors.duplicate()
@@ -670,6 +736,24 @@ func _preset_team_anchors(k: int) -> Array:
 			out.append([float(anchors[0][0]), float(f)])
 		for f in free_vals:
 			out.append([float(anchors[1][0]), float(f)])
+	return out
+
+# 环形河基地锚点：蓝方在岛内按角度均分（1 人时居中），红方在环外陆地按角度均分，
+# 外圈角度取 30° + 360/k 的倍数，与 0/120/240 的三处浅滩错开，避免基地压在渡口上
+func _ring_anchors(k: int, layout: Dictionary) -> Array:
+	var inner_r := float(layout.get("inner_radius", 0.13))
+	var outer_r := float(layout.get("outer_radius", 0.42))
+	var out: Array = []
+	if k <= 1:
+		out.append([0.5, 0.5])
+	else:
+		for i in range(k):
+			var a := deg_to_rad(90.0 + 360.0 * float(i) / float(k))
+			out.append([clampf(0.5 + inner_r * cos(a), 0.06, 0.94), clampf(0.5 + inner_r * sin(a), 0.06, 0.94)])
+	var n := maxi(1, k)
+	for i in range(n):
+		var a2 := deg_to_rad(30.0 + 360.0 * float(i) / float(n))
+		out.append([clampf(0.5 + outer_r * cos(a2), 0.06, 0.94), clampf(0.5 + outer_r * sin(a2), 0.06, 0.94)])
 	return out
 
 # 团队锚点压平后转世界坐标

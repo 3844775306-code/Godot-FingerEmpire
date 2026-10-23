@@ -139,6 +139,33 @@ const PRESETS := {
 		"chips": ["开阔沙海", "视野 +20%", "农田稀少靠狩猎"],
 		"recommended": "1v1 / 2v2 / 3v3",
 	},
+	# 环河要塞：环形护城河 + 河心大岛，内圈（蓝方）守岛、外圈（红方）围攻，三处浅滩是唯一陆路
+	"ring": {
+		"id": "ring",
+		"name": "环河要塞",
+		"battle": "君士坦丁堡 1453",
+		"desc": "环形护城河把战场分成内外两圈：河心大岛是内圈据点，环外是开阔陆地，三处浅滩是陆军唯一通路。",
+		"stages": [
+			["noise_base", {"freq": 0.035, "octaves": 3, "mountain_threshold": 0.44, "water_threshold": -0.6}],
+			["ring_river", {"radius_frac": 0.31, "width_frac": 0.065, "wave": 0.012}],
+			["ring_fords", {"angles": [0.0, 120.0, 240.0], "width": 3}],
+		],
+		"castle_layout": {"type": "ring", "anchors": [[0.5, 0.5], [0.864, 0.71]], "flat_radius": 6, "inner_radius": 0.13, "outer_radius": 0.42},
+		"palette": {
+			"plain_low": [0.30, 0.42, 0.22],
+			"plain_high": [0.52, 0.62, 0.34],
+			"mountain_low": [0.38, 0.36, 0.30],
+			"mountain_high": [0.62, 0.58, 0.48],
+			"water_deep": [0.08, 0.26, 0.40],
+			"water_shallow": [0.24, 0.52, 0.58],
+		},
+		"resources": {"gold": 1.15, "wood": 1.0, "stone": 0.9, "wood_near": "any", "stone_near": "any", "oil": 1.0},
+		"modifiers": {"ford_speed": 0.5},
+		"reachable_only": true,
+		"oil_near_shore": true,
+		"chips": ["环形大河", "河心大岛", "三处浅滩", "内外对峙"],
+		"recommended": "1v1 / 2v2 / 3v3",
+	},
 }
 
 static func has_preset(id: String) -> bool:
