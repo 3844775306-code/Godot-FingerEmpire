@@ -731,6 +731,8 @@ func _1v1_right_click(team: int, data: Dictionary):
 					entity.move_to(target.global_position)
 				else:
 					entity.move_to(target.global_position)
+			else:
+				# 点到空地：移动到目标坐标（多单位按编队偏移散开）
 				var fp = pos
 				if offsets.size() > fi:
 					var off = offsets[fi]
@@ -828,6 +830,8 @@ func _2v2_right_click(peer_id: int, data: Dictionary):
 					entity.move_to(target.global_position)
 				else:
 					entity.move_to(target.global_position)
+			else:
+				# 点到空地：移动到目标坐标（多单位按编队偏移散开）
 				var fp = pos
 				if offsets.size() > fi:
 					var off = offsets[fi]
