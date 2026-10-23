@@ -680,6 +680,7 @@ func _visible_enemy_military() -> int:
 	for e in _visible_enemies:
 		if not is_instance_valid(e) or e.health <= 0: continue
 		if not (e is Army): continue
+		if int(e.team) == RTSConfig.Team.NEUTRAL: continue
 		if not _entity_is_enemy(e): continue
 		if not _is_visible_to_ai(e): continue
 		if e.entity_id != 10 and e.entity_id != 14 and int(e.entity_id) not in [43,44,45,46,47,48,49,50,51]:

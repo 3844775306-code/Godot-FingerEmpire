@@ -88,6 +88,11 @@ func tick(delta: float) -> void:
 		return
 	var castle = ai.get_peer_castle(ai.my_peer_id)
 	if castle == null or not is_instance_valid(castle):
+		# 没有主城时不能保留上一场战斗的高威胁分数，否则调试面板会显示“敌军 0 却高度警戒”
+		threat_level = 0
+		threat_score = 0.0
+		_threat_smoothed = 0.0
+		threat_enemy_count = 0
 		return
 	_threat_timer -= delta
 	if _threat_timer <= 0.0:
@@ -161,8 +166,11 @@ func _evaluate_threat(castle) -> void:
 	_last_castle_health = castle.health
 	if now < _castle_damage_until:
 		raw += 4.0
-		if count == 0:
-			count = 1
+
+	# 没有任何可见威胁、主城也没有正在挨打时，直接把威胁清零。
+	# 否则之前大战留下的高分只会缓慢衰减，出现“全场无军队但威胁很高”的假状态。
+	if count == 0 and now >= _castle_damage_until:
+		_threat_smoothed = 0.0
 
 	threat_enemy_count = count
 	if raw > _threat_smoothed:
@@ -207,6 +215,9 @@ func _enemy_castle_dir(castle) -> Vector3:
 
 func _is_combat_enemy(e) -> bool:
 	if not (e is Army) or e.health <= 0:
+		return false
+	# 中立动物/中立单位不是敌军，不能触发防守
+	if int(e.team) == RTSConfig.Team.NEUTRAL:
 		return false
 	if not ai._entity_is_enemy(e):
 		return false
