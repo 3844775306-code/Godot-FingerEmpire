@@ -46,12 +46,13 @@ func _process(delta):
 	if entity_id == 27 and Engine.get_process_frames() % 30 == 0:
 		var has_x_neg = false; var has_x_pos = false
 		var has_z_neg = false; var has_z_pos = false
-		var bm = get_tree().get_first_node_in_group("battle_manager")
+		var bm = _get_bm()
 		if bm:
 			# Adjacent wall spacing = body_radius * 2.0; add 20% tolerance
 			var half_len = body_radius * 2.0 * 1.2
 			var half_wid = body_radius * 0.8
-			for e in bm.entities.get_children():
+			# 只查空间索引附近的墙，避免每面墙每 30 帧遍历全场实体
+			for e in bm.get_nearby_entities(global_position, body_radius * 3.0):
 				if e is Building and e.entity_id == 27 and e.health > 0 and e != self:
 					var d = e.global_position - global_position
 					if abs(d.z) <= half_len and abs(d.x) < half_wid:
