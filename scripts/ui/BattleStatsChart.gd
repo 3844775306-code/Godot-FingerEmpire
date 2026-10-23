@@ -11,7 +11,9 @@ const PAD_TOP: float = 18.0
 const PAD_BOTTOM: float = 42.0
 
 func _ready() -> void:
-	custom_minimum_size = Vector2(980, 420)
+	# 主图与性能小图共用同一个 Chart；调用方可以预设较小的尺寸
+	if custom_minimum_size == Vector2.ZERO:
+		custom_minimum_size = Vector2(980, 420)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
 func set_data(p_series: Array, p_duration: float, p_metric: String) -> void:

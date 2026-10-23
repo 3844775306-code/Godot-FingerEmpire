@@ -3,6 +3,7 @@ extends RefCounted
 
 # 战斗统计：累计指标在事件发生时累加，实时指标每 5 秒采样一次。
 # 结算面板按“国家”或“阵营”聚合，并提供全部 8 条曲线。
+# 性能曲线（帧率 / 总单位数）使用同一批采样点，随联机结算 payload 一起下发。
 
 const SAMPLE_INTERVAL: float = 5.0
 
@@ -36,6 +37,8 @@ var _totals: Dictionary = {}      # key -> { gathered, produced, kills, damage }
 var _metas: Dictionary = {}       # key -> { owner, team, nation }
 var _timer: float = 0.0
 var _finalized: bool = false
+var _fps_sum: float = 0.0         # 一个采样周期内的逐帧 FPS 累加
+var _fps_frames: int = 0
 
 func _init(p_battle = null) -> void:
 	battle = p_battle
@@ -43,6 +46,10 @@ func _init(p_battle = null) -> void:
 func tick(delta: float) -> void:
 	if _finalized or battle == null:
 		return
+	# 逐帧累积真实帧率，采样时取周期均值，避免只看采样瞬间的 FPS
+	if delta > 0.0:
+		_fps_sum += minf(1.0 / delta, 500.0)
+		_fps_frames += 1
 	if samples.is_empty():
 		sample_now()
 		_timer = 0.0
@@ -295,8 +302,16 @@ func sample_now() -> void:
 		owner_data[key]["resources"] = _resource_sum(owner, team)
 		owner_data[key]["vision"] = owner_vision.get(key, {}).size()
 
+	# 性能采样：全场存活军队 + 建筑总数；帧率取本周期逐帧均值
+	var total_units: int = 0
+	for key in owner_data.keys():
+		total_units += int(owner_data[key].get("buildings", 0)) + int(owner_data[key].get("army", 0))
+	var avg_fps: float = _consume_average_fps()
+
 	var sample := {
 		"time": duration_now,
+		"fps": avg_fps,
+		"units": total_units,
 		"owners": {},
 		"team_vision": {},
 		"nation_vision": {},
@@ -338,6 +353,37 @@ func sample_now() -> void:
 	else:
 		samples.append(sample)
 	duration = duration_now
+
+func _consume_average_fps() -> float:
+	var value: float = 0.0
+	if _fps_frames > 0:
+		value = _fps_sum / float(_fps_frames)
+	else:
+		value = float(Engine.get_frames_per_second())
+	_fps_sum = 0.0
+	_fps_frames = 0
+	return clampf(value, 0.0, 1000.0)
+
+# 性能曲线：帧率与总单位数都是全局指标，不按国家/阵营拆分
+func get_performance_series(field: String) -> Array:
+	var points: Array = []
+	for s in samples:
+		var value: float = float(s.get(field, 0.0))
+		# 首帧 Engine FPS 可能为 0，跳过，避免性能图最低值被启动瞬间拉到 0
+		if field == "fps" and value <= 0.0:
+			continue
+		points.append({ "x": float(s.get("time", 0.0)), "y": value })
+	if points.is_empty():
+		return []
+	var color: Color = Color(0.42, 0.92, 0.58) if field == "fps" else Color(0.32, 0.78, 0.98)
+	var title: String = "帧率" if field == "fps" else "总单位数"
+	return [{
+		"key": field,
+		"name": title,
+		"color": color,
+		"points": points,
+		"final": float(points[-1]["y"]),
+	}]
 
 func get_metric(metric_id: String) -> Dictionary:
 	for m in METRICS:
@@ -413,8 +459,10 @@ func get_series(metric_id: String, mode: String) -> Array:
 	return result
 
 func format_value(metric_id: String, value: float) -> String:
-	if metric_id in ["gathered", "produced", "kills", "damage", "resources", "buildings", "army", "vision"]:
+	if metric_id in ["gathered", "produced", "kills", "damage", "resources", "buildings", "army", "vision", "units"]:
 		return "%d" % int(round(value))
+	if metric_id == "fps":
+		return "%.1f" % value
 	return "%.1f" % value
 
 # 联机结算：只传采样结果，客户端不需要拥有战斗实体也能绘制曲线

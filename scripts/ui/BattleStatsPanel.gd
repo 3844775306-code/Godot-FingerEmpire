@@ -18,6 +18,10 @@ var mode_buttons: Dictionary = {}
 var metric_buttons: Dictionary = {}
 var restart_scene_path: String = "res://scenes/rts_battle.tscn"
 var _result_panel: Panel = null
+var _perf_fps_chart = null
+var _perf_units_chart = null
+var _perf_fps_summary: Label = null
+var _perf_units_summary: Label = null
 
 func _init() -> void:
 	_build_ui()
@@ -225,6 +229,92 @@ func _build_ui() -> void:
 	hint.add_theme_color_override("font_color", Color(0.58, 0.68, 0.82))
 	side.add_child(hint)
 
+	# ── 性能专栏：帧率 / 总单位数 ──
+	var perf_panel := PanelContainer.new()
+	perf_panel.custom_minimum_size = Vector2(0, 232)
+	perf_panel.size_flags_vertical = Control.SIZE_SHRINK_END
+	var perf_style := StyleBoxFlat.new()
+	perf_style.bg_color = Color(0.024, 0.036, 0.06, 0.96)
+	perf_style.border_color = Color(0.20, 0.34, 0.50, 0.85)
+	perf_style.border_width_left = 1
+	perf_style.border_width_right = 1
+	perf_style.border_width_top = 1
+	perf_style.border_width_bottom = 1
+	perf_style.corner_radius_top_left = 8
+	perf_style.corner_radius_top_right = 8
+	perf_style.corner_radius_bottom_left = 8
+	perf_style.corner_radius_bottom_right = 8
+	perf_panel.add_theme_stylebox_override("panel", perf_style)
+	root.add_child(perf_panel)
+
+	var perf_margin := MarginContainer.new()
+	perf_margin.add_theme_constant_override("margin_left", 10)
+	perf_margin.add_theme_constant_override("margin_right", 10)
+	perf_margin.add_theme_constant_override("margin_top", 6)
+	perf_margin.add_theme_constant_override("margin_bottom", 6)
+	perf_panel.add_child(perf_margin)
+
+	var perf_root := VBoxContainer.new()
+	perf_root.add_theme_constant_override("separation", 4)
+	perf_margin.add_child(perf_root)
+
+	var perf_header := HBoxContainer.new()
+	perf_header.add_theme_constant_override("separation", 12)
+	perf_root.add_child(perf_header)
+
+	var perf_title := Label.new()
+	perf_title.text = "⚙ 性能专栏"
+	perf_title.add_theme_font_size_override("font_size", 18)
+	perf_title.add_theme_color_override("font_color", Color(1.0, 0.84, 0.38))
+	perf_header.add_child(perf_title)
+
+	var perf_hint := Label.new()
+	perf_hint.text = "帧率与总单位数 · 每 5 秒采样"
+	perf_hint.add_theme_font_size_override("font_size", 12)
+	perf_hint.add_theme_color_override("font_color", Color(0.58, 0.68, 0.82))
+	perf_hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	perf_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	perf_header.add_child(perf_hint)
+
+	var perf_row := HBoxContainer.new()
+	perf_row.add_theme_constant_override("separation", 14)
+	perf_row.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	perf_root.add_child(perf_row)
+
+	var fps_box: Dictionary = _build_perf_chart_box(perf_row, "帧率 FPS（周期均值）", Color(0.42, 0.92, 0.58))
+	_perf_fps_chart = fps_box["chart"]
+	_perf_fps_summary = fps_box["summary"]
+
+	var units_box: Dictionary = _build_perf_chart_box(perf_row, "总单位数（军队 + 建筑）", Color(0.32, 0.78, 0.98))
+	_perf_units_chart = units_box["chart"]
+	_perf_units_summary = units_box["summary"]
+
+func _build_perf_chart_box(parent: Control, title_text: String, color: Color) -> Dictionary:
+	var box := VBoxContainer.new()
+	box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	box.add_theme_constant_override("separation", 2)
+	parent.add_child(box)
+
+	var title := Label.new()
+	title.text = title_text
+	title.add_theme_font_size_override("font_size", 14)
+	title.add_theme_color_override("font_color", color)
+	box.add_child(title)
+
+	var perf_chart = BattleStatsChartScript.new()
+	perf_chart.custom_minimum_size = Vector2(0, 150)
+	perf_chart.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	perf_chart.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	box.add_child(perf_chart)
+
+	var summary := Label.new()
+	summary.text = "暂无数据"
+	summary.add_theme_font_size_override("font_size", 13)
+	summary.add_theme_color_override("font_color", Color(0.70, 0.80, 0.92))
+	box.add_child(summary)
+
+	return { "chart": perf_chart, "summary": summary }
+
 func _make_button(text: String, min_width: float) -> Button:
 	var b := Button.new()
 	b.text = text
@@ -263,6 +353,42 @@ func _refresh() -> void:
 	for id in metric_buttons.keys():
 		metric_buttons[id].button_pressed = id == metric
 	_rebuild_legend(series)
+	_refresh_performance()
+
+func _refresh_performance() -> void:
+	if stats == null or _perf_fps_chart == null or _perf_units_chart == null:
+		return
+	var fps_series: Array = stats.get_performance_series("fps")
+	var units_series: Array = stats.get_performance_series("units")
+	_perf_fps_chart.set_data(fps_series, stats.duration, "fps")
+	_perf_units_chart.set_data(units_series, stats.duration, "units")
+	_perf_fps_summary.text = _perf_summary(fps_series, "fps", true)
+	_perf_units_summary.text = _perf_summary(units_series, "units", false)
+
+func _perf_summary(series: Array, metric_id: String, with_min: bool) -> String:
+	if series.is_empty():
+		return "暂无数据"
+	var points: Array = series[0].get("points", [])
+	if points.is_empty():
+		return "暂无数据"
+	var total: float = 0.0
+	var lowest: float = INF
+	var peak: float = -INF
+	for p in points:
+		var y: float = float(p.get("y", 0.0))
+		total += y
+		lowest = minf(lowest, y)
+		peak = maxf(peak, y)
+	if with_min:
+		var avg: float = total / float(points.size())
+		return "均值 %s · 最低 %s" % [
+			stats.format_value(metric_id, avg),
+			stats.format_value(metric_id, lowest),
+		]
+	return "峰值 %s · 最终 %s" % [
+		stats.format_value(metric_id, peak),
+		stats.format_value(metric_id, float(series[0].get("final", 0.0))),
+	]
 
 func _rebuild_legend(series: Array) -> void:
 	for c in legend_box.get_children():
