@@ -28,6 +28,7 @@ const RESOURCE_INTERVAL: float = 1.5
 const RESOURCE_ZONE_INTERVAL: float = 12.0
 const OUTPOST_INTERVAL: float = 24.0
 const RESOURCE_GUARD_HOLD: float = 9.0
+const DEFENSE_RECALL_SAFE_RADIUS: float = 25.0
 const WORKER_FLEE_TIME: float = 9.0
 const FORCE_GUARD_TIME: float = 16.0
 
@@ -738,6 +739,25 @@ func _manage_defense_upgrades(castle, delta: float) -> void:
 # 守军调度
 # ═══════════════════════════════════════════════════════════════
 
+func _defense_mode_active() -> bool:
+	if threat_level >= 2:
+		return true
+	if ai != null and float(ai.battle.game_time) < _force_guard_until:
+		return true
+	if ai != null and ai.has_method("_is_defending"):
+		return bool(ai._is_defending())
+	return false
+
+# 判断“防守回撤”时是否应跳过该单位：
+# 已经在主城 25 单位内、并且正有攻击目标，说明它正在家门口交战，不能被召回换目标。
+func _skip_near_castle_active(unit, castle) -> bool:
+	if unit == null or not is_instance_valid(unit) or castle == null or not is_instance_valid(castle):
+		return false
+	if unit.global_position.distance_squared_to(castle.global_position) > DEFENSE_RECALL_SAFE_RADIUS * DEFENSE_RECALL_SAFE_RADIUS:
+		return false
+	var target = unit.current_target
+	return target != null and is_instance_valid(target)
+
 func _manage_home_guard(castle, delta: float) -> void:
 	_guard_timer -= delta
 	if _guard_timer > 0.0:
@@ -749,6 +769,7 @@ func _manage_home_guard(castle, delta: float) -> void:
 	if own.is_empty():
 		return
 	var now: float = float(ai.battle.game_time)
+	var is_defending: bool = _defense_mode_active()
 	var desired: int = 0
 	if now < _force_guard_until:
 		desired = own.size()
@@ -765,6 +786,17 @@ func _manage_home_guard(castle, delta: float) -> void:
 				desired = own.size()
 	desired = mini(desired, own.size())
 
+	# 家门口已有目标、正在交战的部队算作有效防守力量，不重复从远处抽兵填补名额
+	if is_defending:
+		var active_near: int = 0
+		for u in own:
+			if _skip_near_castle_active(u, castle):
+				active_near += 1
+				var active_uid: int = u.get_instance_id()
+				if _home_guard_ids.has(active_uid):
+					_release_guard(active_uid)
+		desired = maxi(0, desired - active_near)
+
 	own.sort_custom(func(a, b):
 		return a.global_position.distance_squared_to(castle.global_position) < b.global_position.distance_squared_to(castle.global_position)
 	)
@@ -774,6 +806,9 @@ func _manage_home_guard(castle, delta: float) -> void:
 		if assigned >= desired:
 			break
 		if not is_instance_valid(u) or u.health <= 0:
+			continue
+		if is_defending and _skip_near_castle_active(u, castle):
+			# 家门口正在交战的部队保留当前目标；驻扎点已在前面统一解除
 			continue
 		# 已经在执行主攻的单位不能再被拉回主城驻扎；否则 attack_move 会被守军调度覆盖
 		if threat_level < 2 and (u.is_attack_moving or u.current_order == "attack_move"):
@@ -813,8 +848,18 @@ func _assign_home_guard(castle, force: bool) -> void:
 	var own: Array = _land_combat_units()
 	if own.is_empty():
 		return
+	var is_defending: bool = _defense_mode_active()
 	var rally: Vector3 = _guard_rally(castle)
 	var desired: int = own.size() if force else mini(own.size(), maxi(4, threat_enemy_count * 2 + 2))
+	if is_defending:
+		var active_near: int = 0
+		for u in own:
+			if _skip_near_castle_active(u, castle):
+				active_near += 1
+				var active_uid: int = u.get_instance_id()
+				if _home_guard_ids.has(active_uid):
+					_release_guard(active_uid)
+		desired = maxi(0, desired - active_near)
 	var assigned: int = 0
 	own.sort_custom(func(a, b):
 		return a.global_position.distance_squared_to(castle.global_position) < b.global_position.distance_squared_to(castle.global_position)
@@ -823,6 +868,8 @@ func _assign_home_guard(castle, force: bool) -> void:
 		if assigned >= desired:
 			break
 		if not is_instance_valid(u) or u.health <= 0:
+			continue
+		if is_defending and _skip_near_castle_active(u, castle):
 			continue
 		if force or threat_level >= 3:
 			_clear_special_role(u)
