@@ -234,6 +234,8 @@ func _ai_report(ai: Node, bm: Node) -> Dictionary:
 		"nation": nation,
 		"phase": _i(ai.get("phase")),
 		"tactic": _i(ai.get("current_tactic")),
+		"defense": _defense_text(ai),
+		"hunt": _f(ai.get("_hunt_timer")),
 		"pop": pop,
 		"res": res,
 		"limits": {},
@@ -243,6 +245,12 @@ func _ai_report(ai: Node, bm: Node) -> Dictionary:
 		"under_construction": detail["under_construction"],
 		"stats": _final_stats(bm, peer, team),
 	}
+
+func _defense_text(ai: Node) -> String:
+	var d = ai.get("_defense")
+	if d == null or not is_instance_valid(d) or not d.has_method("get_status_text"):
+		return ""
+	return String(d.call("get_status_text"))
 
 func _castle_info(castle) -> Dictionary:
 	if castle == null or not is_instance_valid(castle):
@@ -325,6 +333,9 @@ func _make_card(r: Dictionary) -> PanelContainer:
 		var tactic_txt := _tactic_name(tactic)
 		var line := Label.new()
 		line.text = "▸ %s ｜ %s" % [phase_txt, tactic_txt]
+		var dtxt := String(r.get("defense", ""))
+		if dtxt != "":
+			line.text += " ｜ 🛡 %s" % dtxt
 		line.add_theme_font_size_override("font_size", UILayout.font_dp(10.0))
 		line.add_theme_color_override("font_color", Color(0.6, 0.85, 1.0))
 		vb.add_child(line)
@@ -381,6 +392,13 @@ func _make_card(r: Dictionary) -> PanelContainer:
 		accum.add_theme_font_size_override("font_size", UILayout.font_dp(9.0))
 		accum.add_theme_color_override("font_color", Color(UITheme.PARCHMENT, 0.75))
 		vb.add_child(accum)
+	# 狩猎计时（AI 决策面板里也有这一项）
+	if String(r.get("kind", "")) == "ai" and _f(r.get("hunt")) > 0.0:
+		var hunt := Label.new()
+		hunt.text = "🏹 狩猎 %.0fs" % _f(r.get("hunt"))
+		hunt.add_theme_font_size_override("font_size", UILayout.font_dp(9.0))
+		hunt.add_theme_color_override("font_color", Color(1.0, 0.85, 0.5))
+		vb.add_child(hunt)
 	return card
 
 func _detail_line(title: String, table: Array, counts: Dictionary, color: Color) -> RichTextLabel:
