@@ -377,8 +377,8 @@ func _spawn_produced_unit():
 		# 在线模式：按玩家统计人口（单人模式 spawn_entity 已处理，避免双计）
 		if owner_peer_id != -1 and bm is OnlineBattleManager:
 			bm.increase_player_population(owner_peer_id, 1)
-		# 训练完成警报（含编队和位置）
-		if team == RTSConfig.Team.BLUE and bm.has_method("_show_hud_alert"):
+		# 训练完成警报（仅人类玩家自己，含编队和位置）
+		if bm.has_method("_show_hud_alert") and bm.is_human_owned(owner_peer_id, team):
 			var unit_name = config.get("name", "单位")
 			var group_str = ""
 			var sm = bm.get_node_or_null("SelectionManager")
@@ -387,7 +387,7 @@ func _spawn_produced_unit():
 				if groups.size() > 0:
 					group_str = " [T%d]" % groups[0]
 			var loc_str = "(%d,%d)" % [int(global_position.x), int(global_position.z)]
-			bm._show_hud_alert("训练完成: %s%s %s" % [unit_name, group_str, loc_str], Color(0.2, 1.0, 0.3))
+			bm._show_hud_alert("训练完成: %s%s %s" % [unit_name, group_str, loc_str], Color(0.2, 1.0, 0.3), team)
 	# 继承建筑的驻扎点
 	if self is Building and self.garrison_point != Vector3.ZERO:
 		if entity is Army and entity.has_method("_is_military") and entity._is_military():

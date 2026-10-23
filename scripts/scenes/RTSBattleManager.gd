@@ -2167,6 +2167,18 @@ func _update_visibility():
 		e.visible = seen
 
 # ==================== 警报辅助 ====================
+# 该实体是否由“人类玩家”控制：单机只认玩家本人（排除同队 AI），联机排除 1000+ 的 AI 合成 peer_id
+func is_human_owned(owner: int, team: int) -> bool:
+	if is_online:
+		if owner >= 1000:
+			return false
+		if owner < 0:
+			return team != RTSConfig.Team.NEUTRAL   # 1v1 单位没有 owner，按队伍区分
+		return true
+	if owner != -1:
+		return owner == player_owner_id
+	return team == get_host_team()
+
 func _show_hud_alert(msg: String, color: Color = Color(1.0, 0.2, 0.1), _target_team: int = -1):
 	if color == Color(1.0, 0.2, 0.1) or color == Color(1.0, 0.8, 0.1): AudioManager.play_sfx("alert")
 	if has_node("UI"):

@@ -55,14 +55,24 @@ func _get_and_clear_alerts(target_key) -> Array:
 
 # Override: queue alerts for clients in online mode
 func _show_hud_alert(msg: String, color: Color = Color(1.0, 0.2, 0.1), _target_team: int = -1):
-	super._show_hud_alert(msg, color)
-	if _target_team >= 0:
-		# Entity-specific alert: only for the owner's team
-		_queue_client_alert(_target_team, msg, color)
-	else:
-		# Global alert: all players
+	if _target_team < 0:
+		# 全局警报（城堡被毁、游戏结束等）：双方都发，房主本地也显示
+		super._show_hud_alert(msg, color)
 		_queue_client_alert(RTSConfig.Team.BLUE, msg, color)
 		_queue_client_alert(RTSConfig.Team.RED, msg, color)
+	else:
+		# 阵营事件：只发给该阵营；房主仅在本方阵营事件时本地显示，避免看到敌方播报
+		if _target_team == _host_player_team():
+			super._show_hud_alert(msg, color)
+		_queue_client_alert(_target_team, msg, color)
+
+# 房主（peer 1）所在队伍：用于过滤服务器本地 HUD 上的播报
+func _host_player_team() -> int:
+	if player_info.has(1):
+		return int(player_info[1].team)
+	if player_teams.has(1):
+		return int(player_teams[1])
+	return RTSConfig.Team.BLUE
 
 # ==================== 采集统计（服务器端统一计算） ====================
 var team_gather_counts: Dictionary = {}     # team 或 peer_id -> {"gold":0, "wood":0, ...}

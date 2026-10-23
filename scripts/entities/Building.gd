@@ -230,8 +230,8 @@ func _finish_construction():
 			bm.update_player_limits(owner_peer_id)
 			bm.update_player_population(owner_peer_id)
 
-	# 建造完成警报（仅己方，含位置和编队）
-	if team == RTSConfig.Team.BLUE and bm and bm.has_method("_show_hud_alert"):
+	# 建造完成警报（仅人类玩家自己，含位置和编队）
+	if bm and bm.has_method("_show_hud_alert") and bm.is_human_owned(owner_peer_id, team):
 		var group_str = ""
 		var sm = bm.get_node_or_null("SelectionManager")
 		if sm and sm.has_method("get_entity_groups"):
@@ -239,7 +239,7 @@ func _finish_construction():
 			if groups.size() > 0:
 				group_str = " [T%d]" % groups[0]
 		var loc_str = "(%d,%d)" % [int(global_position.x), int(global_position.z)]
-		bm._show_hud_alert("建造完成: %s%s %s" % [display_name, group_str, loc_str], Color(0.2, 1.0, 0.3))
+		bm._show_hud_alert("建造完成: %s%s %s" % [display_name, group_str, loc_str], Color(0.2, 1.0, 0.3), team)
 	# 城堡建成立刻解锁民族兵种
 	if entity_id == 53 and bm and bm.has_method("get_team_nation"):
 		var nation = bm.get_team_nation(team)
@@ -414,8 +414,8 @@ func _finish_upgrade():
 	if bm and bm.has_method("upgrade_building_type"):
 		bm.upgrade_building_type(team, entity_id, self)
 
-	# 升级完成警报（仅己方，含位置和编队）
-	if team == RTSConfig.Team.BLUE and bm and bm.has_method("_show_hud_alert"):
+	# 升级完成警报（仅人类玩家自己，含位置和编队）
+	if bm and bm.has_method("_show_hud_alert") and bm.is_human_owned(owner_peer_id, team):
 		var group_str = ""
 		var sm = bm.get_node_or_null("SelectionManager")
 		if sm and sm.has_method("get_entity_groups"):
@@ -423,7 +423,7 @@ func _finish_upgrade():
 			if groups.size() > 0:
 				group_str = " [T%d]" % groups[0]
 		var loc_str = "(%d,%d)" % [int(global_position.x), int(global_position.z)]
-		bm._show_hud_alert("升级完成: %s%s %s" % [display_name, group_str, loc_str], Color(0.2, 1.0, 0.3))
+		bm._show_hud_alert("升级完成: %s%s %s" % [display_name, group_str, loc_str], Color(0.2, 1.0, 0.3), team)
 
 func get_prod_cooldown(unit_id: int) -> float:
 	var spd3 = 1.0
