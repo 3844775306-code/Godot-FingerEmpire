@@ -325,6 +325,24 @@ func get_entity_color(entity) -> Color:
 			return Color(0.7, 0.7, 0.7)   # 中立灰色
 
 # ==================== 获取主城堡 ====================
+var _initial_focus_done: bool = false   # 开局镜头是否已对准玩家主城
+
+# 开局视角定位：各模式的城堡都是延迟生成的，因此每帧尝试一次，成功后不再执行
+func _focus_camera_on_player_castle_once() -> void:
+	if _initial_focus_done:
+		return
+	var castle := get_player_castle()
+	if castle == null or not is_instance_valid(castle):
+		return
+	var cam := get_viewport().get_camera_3d()
+	if cam == null:
+		return
+	if cam.has_method("focus_on_ground"):
+		cam.call("focus_on_ground", castle.global_position)
+	else:
+		cam.global_position = Vector3(castle.global_position.x, cam.global_position.y, castle.global_position.z)
+	_initial_focus_done = true
+
 func get_player_castle() -> Building:
 	_ensure_cache_fresh()
 	for entity in _buildings:
@@ -2402,6 +2420,7 @@ func _process(delta):
 				if not Input.is_key_pressed(KEY_SHIFT):
 					_exit_build_mode()
 	game_time += delta
+	_focus_camera_on_player_castle_once()
 	if battle_stats:
 		battle_stats.tick(delta)
 	# 乱斗外交推进（联盟到期 / 二人存活强制解除等）

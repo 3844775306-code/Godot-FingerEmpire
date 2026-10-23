@@ -105,6 +105,11 @@ func _draw():
 	var bm = get_tree().get_first_node_in_group("battle_manager")
 	if bm and bm.has_method("get_host_team"):
 		player_team = bm.get_host_team()
+	elif bm == null:
+		# 纯客户端没有 battle_manager，队伍归属从渲染器取
+		var renderer = get_tree().get_first_node_in_group("client_renderer")
+		if renderer and renderer.has_method("get_host_team"):
+			player_team = renderer.get_host_team()
 	if terrain_colors.is_empty() or explored_grid.is_empty():
 		return
 
@@ -176,6 +181,19 @@ func _draw():
 		var pos = Vector2(gx * cell, gz * cell)
 		draw_rect(Rect2(pos - Vector2(3, 3), Vector2(7, 7)), Color(0, 0, 0, 0.55))
 		draw_rect(Rect2(pos - Vector2(2, 2), Vector2(5, 5)), dot_color)
+
+	# —— 友方主城：金色圆环单独特标，混在单位点里也能一眼找到 ——
+	for ent in entity_snapshots:
+		if int(ent.get("entity_id", -1)) != 20: continue
+		if int(ent.get("team", -2)) != player_team: continue
+		var cgx = int(ent["x"] + ms / 2)
+		var cgz = int(ent["z"] + ms / 2)
+		if cgx < 0 or cgx >= ms or cgz < 0 or cgz >= ms: continue
+		var cpos = Vector2(cgx * cell, cgz * cell)
+		var cr = 8.0
+		draw_circle(cpos, cr + 3.0, Color(0, 0, 0, 0.6))
+		draw_circle(cpos, cr, Color(UITheme.GOLD, 0.95))
+		draw_arc(cpos, cr + 4.0, 0.0, TAU, 28, Color(1.0, 1.0, 1.0, 0.85), 1.5)
 
 	# 战事警报
 	for alert in alert_signals:
