@@ -32,6 +32,9 @@ var _last_pos: Vector2 = Vector2.ZERO
 var _start_msec: int = 0
 var _camera: Camera3D = null
 var _bm: Node = null
+# 落在移动端面板上的那根手指：只负责翻译成鼠标事件，不参与手势
+var _ui_touch_index: int = -1
+var _ui_touch_down: bool = false
 
 func _ready() -> void:
 	set_process_input(true)
@@ -83,9 +86,14 @@ func _handle_touch(event: InputEventScreenTouch) -> void:
 		return
 
 	if event.pressed:
-		if _touch_index != -1:
+		if _touch_index != -1 or _ui_touch_index != -1:
 			return
 		if _point_on_ui(event.position):
+			# 引擎的触摸→鼠标模拟已被关掉，面板上的按钮/滚动容器需要我们自己补鼠标事件
+			_ui_touch_index = event.index
+			_ui_touch_down = true
+			_emit_ui_button(event.position, true)
+			get_viewport().set_input_as_handled()
 			return
 		_touch_index = event.index
 		_start_pos = event.position
@@ -94,12 +102,23 @@ func _handle_touch(event: InputEventScreenTouch) -> void:
 		_mode = Mode.TAP_CANDIDATE
 		get_viewport().set_input_as_handled()
 	else:
+		if event.index == _ui_touch_index:
+			_ui_touch_index = -1
+			_ui_touch_down = false
+			_emit_ui_button(event.position, false)
+			get_viewport().set_input_as_handled()
+			return
 		if event.index != _touch_index:
 			return
 		_finish_gesture(event.position)
 		get_viewport().set_input_as_handled()
 
 func _handle_drag(event: InputEventScreenDrag) -> void:
+	if event.index == _ui_touch_index:
+		# 面板上的拖动转发成鼠标拖动，ScrollContainer 才能滚动
+		if _ui_touch_down:
+			_emit_ui_motion(event.position, event.relative)
+		return
 	if event.index != _touch_index:
 		return
 	var pos: Vector2 = event.position
@@ -178,6 +197,21 @@ func _pan_camera(delta: Vector2) -> void:
 		var vh := get_viewport().get_visible_rect().size.y
 		var wpp := cam.size / maxf(vh, 1.0)
 		cam.global_translate(Vector3(-delta.x * wpp, 0.0, -delta.y * wpp))
+
+# ==================== 面板触摸 → 鼠标 ====================
+
+# 与下面的世界点击一样走 get_viewport().push_input(ev, true)：
+# 坐标已经是视口坐标，必须显式告诉引擎，否则会被 stretch 变换二次缩放。
+func _emit_ui_button(pos: Vector2, pressed: bool) -> void:
+	_push_left_button(pos, pressed)
+
+func _emit_ui_motion(pos: Vector2, relative: Vector2) -> void:
+	var ev := InputEventMouseMotion.new()
+	ev.position = pos
+	ev.global_position = pos
+	ev.relative = relative
+	ev.button_mask = MOUSE_BUTTON_MASK_LEFT
+	get_viewport().push_input(ev, true)
 
 # ==================== 鼠标事件合成 ====================
 

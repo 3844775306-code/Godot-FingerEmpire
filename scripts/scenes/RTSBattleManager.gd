@@ -2375,6 +2375,13 @@ func is_local_player_owned(owner: int, team: int) -> bool:
 		return owner == get_local_owner_id()
 	return team == get_local_team()
 
+# 移动端：判断屏幕坐标是否落在触屏面板上（面板点击交给 GUI，不做世界选择）
+func is_mobile_ui_point(pos: Vector2) -> bool:
+	var mh = get_tree().get_first_node_in_group("mobile_hud")
+	if mh and mh.has_method("is_point_over_panel"):
+		return bool(mh.call("is_point_over_panel", pos))
+	return false
+
 func _show_hud_alert(msg: String, color: Color = Color(1.0, 0.2, 0.1), _target_team: int = -1):
 	if color == Color(1.0, 0.2, 0.1) or color == Color(1.0, 0.8, 0.1): AudioManager.play_sfx("alert")
 	if has_node("UI"):

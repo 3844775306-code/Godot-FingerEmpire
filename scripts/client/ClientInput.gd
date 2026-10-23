@@ -392,6 +392,9 @@ func _input(event):
 
 	# ========== 左键处理（照搬 SelectionManager._input） ==========
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		# 移动端：触屏面板上的点击交给 GUI，不做世界选择
+		if _is_mobile_ui_point(event.position):
+			return
 		if event.pressed:
 			# Alt+左键 → 设置驻扎点
 			if Input.is_key_pressed(KEY_ALT) and not client_selected_ids.is_empty():
@@ -678,6 +681,13 @@ func get_last_world_pos() -> Vector3:
 
 func _get_client_hud():
 	return get_tree().get_first_node_in_group("client_hud")
+
+# 移动端：判断屏幕坐标是否落在触屏面板上（面板点击由 GUI 处理）
+func _is_mobile_ui_point(pos: Vector2) -> bool:
+	var mh = get_tree().get_first_node_in_group("mobile_hud")
+	if mh and mh.has_method("is_point_over_panel"):
+		return bool(mh.call("is_point_over_panel", pos))
+	return false
 
 func _jump_camera_to_group(g: int):
 	if not local_groups.has(g): return
