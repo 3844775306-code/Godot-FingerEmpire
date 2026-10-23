@@ -467,8 +467,44 @@ func _build_terrain_images() -> void:
 					_dark_image.set_pixel(px, py, d)
 
 # ---------- 城堡选址 ----------
+# 特殊地图团队锚点：沿镜像轴把每方 2/3 个基地均匀排开
+# 返回 [blue1..blueK, red1..redK]；镜像轴由 castle_layout.type 决定
+func _preset_team_anchors(k: int) -> Array:
+	var layout: Dictionary = map_preset.get("castle_layout", {})
+	var anchors: Array = layout.get("anchors", [])
+	if anchors.size() < 2 or k <= 1:
+		return anchors.duplicate()
+	var free_vals: Array = [0.33, 0.67] if k == 2 else [0.25, 0.5, 0.75]
+	var out: Array = []
+	if String(layout.get("type", "mirror_x")) == "mirror_z":
+		for f in free_vals:
+			out.append([float(f), float(anchors[0][1])])
+		for f in free_vals:
+			out.append([float(f), float(anchors[1][1])])
+	else:
+		for f in free_vals:
+			out.append([float(anchors[0][0]), float(f)])
+		for f in free_vals:
+			out.append([float(anchors[1][0]), float(f)])
+	return out
+
+# 团队锚点压平后转世界坐标
+func _preset_team_points(k: int) -> Array:
+	var size := _get_map_size()
+	var radius: int = clampi(int(map_preset.get("castle_layout", {}).get("flat_radius", 5)), 2, 8)
+	var pts: Array = []
+	for a in _preset_team_anchors(k):
+		var gx := int(clampf(float(a[0]) * float(size), float(radius + 1), float(size - radius - 2)))
+		var gy := int(clampf(float(a[1]) * float(size), float(radius + 1), float(size - radius - 2)))
+		_flatten_area(gx, gy, radius)
+		pts.append(grid_to_world(gx, gy))
+	return pts
+
 func get_four_castle_positions() -> Array:
 	if not _cached_four_castle_positions.is_empty():
+		return _cached_four_castle_positions
+	if _use_preset_layout():
+		_cached_four_castle_positions = _preset_team_points(2)
 		return _cached_four_castle_positions
 	var size = _get_map_size()
 	var half = size / 2.0
@@ -488,6 +524,9 @@ func get_four_castle_positions() -> Array:
 # 3v3 六城堡选址：每边 3 个，沿南北两侧三分分布，返回 [blue1, blue2, blue3, red1, red2, red3]
 func get_six_castle_positions() -> Array:
 	if not _cached_six_castle_positions.is_empty():
+		return _cached_six_castle_positions
+	if _use_preset_layout():
+		_cached_six_castle_positions = _preset_team_points(3)
 		return _cached_six_castle_positions
 	var size = _get_map_size()
 	var half = size / 2.0
@@ -573,14 +612,21 @@ func _force_flat_spot(gx: int, gy: int, safe_size: int) -> Vector3:
 				height_grid[nx][ny] = 0.0
 	return grid_to_world(gx, gy)
 
-# 特殊地图是否使用预设的城堡锚点（试点仅 1V1 生效：团队/乱斗仍走多人布局）
+# 特殊地图适用范围：单机/联机的 1V1 与 2V2/3V3；乱斗是环绕布局，锚点体系不适用
 func _special_map_supported() -> bool:
-	if GameSettings.ai_mode >= 2 or GameSettings.is_ffa:
-		return false
-	# 单机不参考 selected_mode（它是跨场景静态量，可能残留上次联机的模式）
-	if NetworkManager.mode == NetworkManager.Mode.NONE:
-		return true
-	return NetworkManager.selected_mode == NetworkManager.GameMode.ONEvONE
+	return not GameSettings.is_ffa
+
+# 当前对局每队人数：1=1V1，2=2V2，3=3V3（联机看 selected_mode，单机看 ai_mode）
+func _team_size_for_layout() -> int:
+	if NetworkManager.mode != NetworkManager.Mode.NONE:
+		match NetworkManager.selected_mode:
+			NetworkManager.GameMode.TWOVTWO:
+				return 2
+			NetworkManager.GameMode.THREEvTHREE:
+				return 3
+			_:
+				return 1
+	return clampi(GameSettings.ai_mode, 1, 3)
 
 func _use_preset_layout() -> bool:
 	return _special_map_supported() and not map_preset.get("castle_layout", {}).is_empty()
@@ -640,8 +686,15 @@ func _place_castles():
 	var half = size / 2.0
 	var margin = 10
 	var ps = 5
-	# 特殊地图：按预设锚点压平，保证城堡一定落在平地上
+	# 特殊地图：1V1 用锚点对；2V2/3V3 按镜像轴展开成每方 2/3 个基地
 	if _use_preset_layout():
+		var team_size := _team_size_for_layout()
+		if team_size >= 2:
+			var layout := get_four_castle_positions() if team_size == 2 else get_six_castle_positions()
+			multi_castle_positions = layout
+			player_castle_pos = layout[0]
+			enemy_castle_pos = layout[team_size]
+			return
 		_place_castles_from_anchors(map_preset.get("castle_layout", {}))
 		return
 	# 乱斗模式（FFA）：N 国环绕布局，玩家=layout[0]，其余 AI 国依次分布
@@ -817,9 +870,14 @@ func _place_resources():
 		_place_forest_wood(size, castles, placed, mult)
 
 	# 特殊地图：隘口上的争议金矿，逼双方争夺通道
-	# 山脊图全图金矿只在隘口：每处固定 2 组
+	# 山脊图全图金矿只在隘口：1V1 每处 2 组，2V2/3V3 按人数加组
+	var players := 2
+	if is_team_mode:
+		players = 4 if not is_3v3 else 6
 	for pc in _pass_centers:
-		var per_pass := 2 if gold_at_passes else 1
+		var per_pass := 1
+		if gold_at_passes:
+			per_pass = 2 + maxi(0, int((players - 2) / 2))
 		var gold_dist := 6 if gold_at_passes else 10
 		for _i in range(per_pass):
 			_place_group_near(0, 2, 3, pc.x, pc.y, gold_dist, 0, placed, size)

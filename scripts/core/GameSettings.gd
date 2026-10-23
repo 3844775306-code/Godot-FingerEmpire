@@ -33,11 +33,25 @@ var command_mode: int = CommandMode.CONTINUOUS  # 单次/连续命令模式（_r
 var post_game_data: Dictionary = {}  # {power_history, player_is_blue} for results screen
 
 func _ready() -> void:
-	# 调试构建支持命令行指定地图：godot ... -- --map=ford（导出包不生效）
+	# 调试构建支持命令行指定地图与模式：godot ... -- --map=ford --mode=2v2（导出包不生效）
 	if OS.is_debug_build():
 		for a in OS.get_cmdline_user_args():
 			if a.begins_with("--map="):
 				map_id = a.substr(6)
+			elif a.begins_with("--mode="):
+				var m := a.substr(7)
+				is_ffa = false
+				match m:
+					"2v2":
+						ai_mode = 2
+					"3v3":
+						ai_mode = 3
+					"ffa3", "ffa4", "ffa5":
+						is_ffa = true
+						ffa_nation_count = int(m.substr(3))
+						ai_mode = 1
+					_:
+						ai_mode = 1
 	# 移动端默认单次命令（下令后取消选择），PC端默认连续命令
 	if OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios"):
 		command_mode = CommandMode.SINGLE

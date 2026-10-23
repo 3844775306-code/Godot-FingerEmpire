@@ -307,12 +307,17 @@ func get_block_reason() -> String:
 			return "Waiting for players (%d/%d connected)" % [count, max_players]
 		return ""  # 可以开始
 
+# 团队模式地图更大：必须在场景加载前设定——Ground 在自己 _ready（子节点先于场景根）里就按当时尺寸生成
+func _apply_map_size_for_mode() -> void:
+	RTSConfig.MAP_SIZE = 100 if selected_mode == GameMode.ONEvONE else 150
+
 func start_game():
 	var reason = get_block_reason()
 	if reason != "":
 		print("[NetworkManager] start_game blocked: ", reason)
 		return reason  # 返回阻止原因给调用方
 	game_started = true
+	_apply_map_size_for_mode()
 	print("[NetworkManager] Starting game, use_steam=", use_steam, " peers=", multiplayer.get_peers().size())
 	if use_steam:
 		SteamManager.set_lobby_data("game_status", "starting")
@@ -363,6 +368,7 @@ func notify_team_info(peer_id: int, team: int, slot: int, color: Color):
 func _load_battle_scene():
 	if mode == Mode.CLIENT:
 		_invalidate_cache()
+		_apply_map_size_for_mode()
 		var _t = get_tree(); if _t: _t.change_scene_to_file("res://scenes/rts_battle_client.tscn")
 
 @rpc("any_peer", "call_remote", "reliable")

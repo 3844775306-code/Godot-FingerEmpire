@@ -5,6 +5,8 @@ const MapSelectDialog = preload("res://scripts/ui/MapSelectDialog.gd")
 
 var nation_select: OptionButton
 var _map_button: Button = null
+var _last_map_id: String = "classic"
+var _map_allowed: bool = true
 
 func _ready():
 	AudioManager.play_music("menu")
@@ -283,14 +285,20 @@ func _set_cmd_toggle(btn: Button, on: bool) -> void:
 	else:
 		UITheme.apply_muted_button(btn, UITheme.FONT_SM)
 
-## 特殊地形只支持 1V1，其余模式禁用选图并回到经典大陆
+## 特殊地形支持 1V1 / 2V2 / 3V3，乱斗（3/4/5 国环绕）禁用并回退经典大陆
 func _update_map_availability(mode_idx: int) -> void:
 	if not _map_button:
 		return
-	var allow := mode_idx == 0
-	_map_button.disabled = not allow
-	if not allow:
+	var allow := mode_idx <= 2
+	if not allow and _map_allowed:
+		# 只有从"可选"切到"不可选"时才记下选择，避免每次切模式都把选图清掉
+		if GameSettings.map_id != "classic":
+			_last_map_id = GameSettings.map_id
 		GameSettings.map_id = "classic"
+	elif allow and not _map_allowed:
+		GameSettings.map_id = _last_map_id
+	_map_allowed = allow
+	_map_button.disabled = not allow
 	_refresh_map_button()
 
 func _refresh_map_button() -> void:
@@ -302,7 +310,7 @@ func _refresh_map_button() -> void:
 		suffix = " · " + String(info["battle"])
 	_map_button.text = "  %s%s ▸" % [String(info["name"]), suffix]
 	if _map_button.disabled:
-		_map_button.text += "（仅 1V1）"
+		_map_button.text += "（乱斗不支持）"
 
 # ---------- 战场地形卡片选择器 ----------
 func _open_map_dialog() -> void:
@@ -347,7 +355,8 @@ func _on_multiplayer_pressed():
 	var ds = get_node_or_null("DiffSelect")
 	if ds: GameSettings.ai_difficulty = ds.selected
 	GameSettings.ai_mode = 1   # 联机模式不使用单机模式
-	GameSettings.map_id = "classic"   # 联机选图在后续阶段接入
+	GameSettings.is_ffa = false
+	GameSettings.map_id = "classic"   # 联机选图在联机大厅里选
 	var fc = get_node_or_null("FastCheck")
 	GameSettings.fast_mode = fc.button_pressed if fc else false
 	get_tree().change_scene_to_file("res://scenes/online_menu.tscn")

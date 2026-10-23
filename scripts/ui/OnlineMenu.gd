@@ -15,6 +15,7 @@ var enet_toggle_btn: Button
 var ws_toggle_btn: Button
 var map_btn: Button
 var _last_map_id: String = "classic"
+var _map_allowed: bool = true
 
 func _ready():
 	NetworkManager.connection_success.connect(_on_connected)
@@ -127,7 +128,7 @@ func _ready():
 	map_btn = _make_btn(" 经典大陆 ▸", Color(0.2, 0.28, 0.2), Vector2(x0, y + 38), Vector2(500, 44), "muted")
 	map_btn.pressed.connect(_open_map_dialog)
 	panel.add_child(map_btn)
-	_update_map_availability(NetworkManager.selected_mode == NetworkManager.GameMode.ONEvONE)
+	_update_map_availability(true)
 
 	y += 100
 	_lb.call("📡 传输方式", y)
@@ -321,7 +322,7 @@ func _select_mode(mode: int):
 	blue_ai_spin.max_value = max_ai
 	red_ai_spin.value = mini(int(red_ai_spin.value), max_ai)
 	blue_ai_spin.value = mini(int(blue_ai_spin.value), max_ai)
-	_update_map_availability(mode == NetworkManager.GameMode.ONEvONE)
+	_update_map_availability(true)
 
 # ---------- 战场地形（特殊地图仅 1V1，跟随房主选择） ----------
 func _open_map_dialog() -> void:
@@ -349,18 +350,19 @@ func _refresh_map_button() -> void:
 		suffix = " · " + String(info["battle"])
 	map_btn.text = "  %s%s ▸" % [String(info["name"]), suffix]
 	if map_btn.disabled:
-		map_btn.text += "（仅 1V1）"
+		map_btn.text += "（当前模式不支持）"
 
 func _update_map_availability(allow: bool) -> void:
 	if not map_btn:
 		return
-	if not allow:
-		# 离开 1V1 时记住上次选择，切回来时恢复
+	if not allow and _map_allowed:
+		# 只有从"可选"切到"不可选"时才记下选择，避免每次切模式都把选图清掉
 		if GameSettings.map_id != "classic":
 			_last_map_id = GameSettings.map_id
 		GameSettings.map_id = "classic"
-	else:
+	elif allow and not _map_allowed:
 		GameSettings.map_id = _last_map_id
+	_map_allowed = allow
 	map_btn.disabled = not allow
 	_refresh_map_button()
 
@@ -581,6 +583,8 @@ func _on_steam_game_starting():
 	print("[OnlineMenu] Host started the game! Loading battle scene...")
 	var tree = get_tree()
 	if tree:
+		# 与房主同尺寸加载：客户端场景不生成地图，但客户端网格/小地图按此尺寸预分配
+		RTSConfig.MAP_SIZE = 150 if NetworkManager.selected_mode != NetworkManager.GameMode.ONEvONE else 100
 		tree.change_scene_to_file("res://scenes/rts_battle_client.tscn")
 
 func _on_return_pressed(): var _t = get_tree(); if _t: _t.change_scene_to_file("res://scenes/main_menu.tscn")

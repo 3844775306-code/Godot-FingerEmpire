@@ -43,7 +43,70 @@ func _ready() -> void:
 
 	_preview_selfcheck()
 	_sync_selfcheck()
+	# 多人布局自检会改 NetworkManager 模式，放最后
+	for id in ["ridge", "ford", "forest"]:
+		for k in [2, 3]:
+			_team_probe(id, k)
 	get_tree().quit()
+
+# 多人布局自检：2V2/3V3（150 格）每方 2/3 个基地，沿镜像轴对称、脚下必为平原
+func _team_probe(map_id: String, team_size: int) -> void:
+	NetworkManager.mode = NetworkManager.Mode.SERVER
+	NetworkManager.selected_mode = NetworkManager.GameMode.TWOVTWO if team_size == 2 else NetworkManager.GameMode.THREEvTHREE
+	GameSettings.is_ffa = false
+	NetworkManager._apply_map_size_for_mode()
+	print("MAPSIZE %s %dv%d -> %d" % [map_id, team_size, team_size, RTSConfig.MAP_SIZE])
+	var size := 150
+	var g = GroundScript.new()
+	g.map_size_override = size
+	g.map_preset = MapPresets.get_preset(map_id)
+	g.custom_seed = 4242
+	g._generate_with_stages(size, g.map_preset["stages"])
+	g._place_castles()
+	g._place_resources()
+	var pts: Array = g.multi_castle_positions
+	var mid := size / 2.0
+	var mirror_ok := true
+	for i in range(team_size):
+		var b = pts[i]
+		var r = pts[team_size + i]
+		var bx := int(b.x + mid)
+		var bz := int(b.z + mid)
+		var rx := int(r.x + mid)
+		var rz := int(r.z + mid)
+		if map_id == "ridge":
+			# 山脊东西走向 → 南北镜像（z 互补，x 相同）
+			if absi(bx - rx) > 2 or absi((bz + rz) - size) > 3:
+				mirror_ok = false
+		else:
+			# 渡口/黑森林河流南北走向 → 东西镜像（x 互补，z 相同）
+			if absi(bz - rz) > 2 or absi((bx + rx) - size) > 3:
+				mirror_ok = false
+	var flat_ok := true
+	for p in pts:
+		var gx := int(p.x + mid)
+		var gy := int(p.z + mid)
+		for dx in range(-2, 3):
+			for dy in range(-2, 3):
+				if g.terrain_grid[gx + dx][gy + dy] != 0:
+					flat_ok = false
+	var gold := 0
+	var wood := 0
+	for r in g.resource_positions:
+		var t: int = int(r["type"])
+		if t == 0:
+			gold += 1
+		elif t == 1:
+			wood += 1
+	var water := 0
+	for x in range(size):
+		for y in range(size):
+			if int(g.terrain_grid[x][y]) == 2:
+				water += 1
+	print("TEAM %s %dv%d bases=%d mirror=%s flat=%s gold=%d wood=%d water=%.1f%%" % [
+		map_id, team_size, team_size, pts.size(), str(mirror_ok), str(flat_ok),
+		gold, wood, float(water) / float(size * size) * 100.0])
+	g.free()
 
 # 模拟联机下发：主机打包覆盖层 → 客户端解压并还原，地形/覆盖层/配色必须一致
 func _sync_selfcheck() -> void:
