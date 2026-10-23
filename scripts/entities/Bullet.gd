@@ -41,8 +41,11 @@ func _ready():
 			var arrow_scene = load("res://models/forest/weapon-arrow.glb")
 			if arrow_scene:
 				var arrow = arrow_scene.instantiate()
-				# 模型本身沿 Z 轴水平（顶点包围盒在 Z 方向最长），无需额外旋转
-				if arrow: arrow.scale = Vector3.ONE; add_child(arrow)
+				# 模型自身箭头朝向与飞行方向相反，绕 Y 轴掉头 180°
+				if arrow:
+					arrow.scale = Vector3.ONE
+					arrow.rotation.y = deg_to_rad(180)
+					add_child(arrow)
 	if get_child_count() == 0:
 		var mesh = MeshInstance3D.new()
 		var sphere = SphereMesh.new()

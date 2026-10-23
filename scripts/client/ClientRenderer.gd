@@ -980,8 +980,12 @@ func _create_bullet_node(info: Dictionary) -> Node3D:
 		var arrow_scene = load("res://models/forest/weapon-arrow.glb")
 		if arrow_scene:
 			var arrow = arrow_scene.instantiate()
-			# 模型本身沿 Z 轴水平（顶点包围盒在 Z 方向最长），无需额外旋转
-			if arrow: arrow.scale = Vector3.ONE; n.add_child(arrow); loaded = true
+			# 模型自身箭头朝向与飞行方向相反，绕 Y 轴掉头 180°
+			if arrow:
+				arrow.scale = Vector3.ONE
+				arrow.rotation.y = deg_to_rad(180)
+				n.add_child(arrow)
+				loaded = true
 	if not loaded:
 		var mesh = MeshInstance3D.new()
 		var s = SphereMesh.new()
