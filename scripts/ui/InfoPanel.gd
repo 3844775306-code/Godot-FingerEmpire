@@ -198,12 +198,35 @@ func _army_task_text(a: Army) -> String:
 		"move":
 			return "👣 移动"
 		"gather":
-			return "⛏ 采集"
+			var gres := _gather_resource_name(a, false)
+			return ("⛏ 采集 · %s" % gres) if gres != "" else "⛏ 采集"
 		"deliver":
-			return "📦 交付"
+			var dres := _gather_resource_name(a, true)
+			return ("📦 交付 · %s" % dres) if dres != "" else "📦 交付"
 	if not a.command_queue.is_empty():
 		return "📋 待执行指令 %d" % a.command_queue.size()
 	return "空闲"
+
+# 采集/交付的物资种类（黄金/木材/石头/食物/石油）；取不到时返回空串
+# 采集阶段看当前资源点的 resource_type，交付阶段看农民身上携带的 cargo
+func _gather_resource_name(a: Army, prefer_cargo: bool) -> String:
+	var rk: String = ""
+	if not prefer_cargo:
+		var t = a.current_target
+		if t != null and is_instance_valid(t):
+			var rt = t.get("resource_type")
+			if rt != null:
+				rk = str(rt)
+	if rk == "":
+		var cargo = a.get("cargo")
+		if cargo is Dictionary:
+			for k in ["gold", "wood", "stone", "food", "oil"]:
+				if int(cargo.get(k, 0)) > 0:
+					rk = k
+					break
+	if rk == "":
+		return ""
+	return str(UITheme.RESOURCE_NAMES.get(rk, rk))
 
 func _make_rtl_label() -> RichTextLabel:
 	var l = RichTextLabel.new(); l.bbcode_enabled = true; l.fit_content = true; l.autowrap_mode = TextServer.AUTOWRAP_OFF
