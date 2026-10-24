@@ -37,7 +37,7 @@ var placement_preview: MeshInstance3D
 
 # ==================== 定时器 ====================
 var health_bar_timer: float = 0.0
-const HEALTH_BAR_INTERVAL: float = 0.05  # 20Hz，血条丝滑跟随
+const HEALTH_BAR_INTERVAL: float = 0.5  # 2Hz：血条位置与血量每 0.5 秒刷新一次
 # 头顶血条尺寸：与单机版一致，50×8 基准，正交相机按 30/size 缩放
 const HP_BAR_SIZE: Vector2 = Vector2(50.0, 8.0)
 const HP_BAR_REF_ORTHO: float = 30.0
