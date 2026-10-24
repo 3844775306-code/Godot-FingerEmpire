@@ -38,6 +38,12 @@ var _boat_update_timer: float = 0.0
 var _boat_prev: Dictionary = {}        # 船只 instance_id -> 上次采样位置（算航向）
 var _boat_prev_cleanup: float = 10.0
 const BOAT_SHADER_SLOTS: int = 8
+# 平面反射：镜像相机把水面上方的场景渲染到 SubViewport，水面按反射射线落点取样
+const WATER_LAYER: int = 19
+const WATER_WORLD_Y: float = -0.9
+var _refl_viewport: SubViewport = null
+var _refl_cam: Camera3D = null
+var _refl_enabled: bool = true
 
 # 城堡坐标（世界坐标）
 var player_castle_pos: Vector3 = Vector3.ZERO
@@ -2485,7 +2491,9 @@ func _add_water_box():
 		plane.subdivide_width = 128
 		plane.subdivide_depth = 128
 		w.mesh = plane
-		w.position = Vector3(0, -0.9, 0)
+		w.position = Vector3(0, WATER_WORLD_Y, 0)
+		# 水面单独占一层，镜像相机剔除这一层，避免镜子反射自身
+		w.layers = 1 << WATER_LAYER
 		var shader = load("res://resources/water_noise.gdshader")
 		if shader:
 			var mat = ShaderMaterial.new()
@@ -2495,6 +2503,7 @@ func _add_water_box():
 			var empty_boats := PackedVector3Array()
 			empty_boats.resize(BOAT_SHADER_SLOTS)
 			mat.set_shader_parameter("boats", empty_boats)
+			mat.set_shader_parameter("boat_dirs", empty_boats)
 			mat.set_shader_parameter("boat_count", 0)
 			_water_mat = mat
 			w.material_override = mat
@@ -2507,6 +2516,64 @@ func _add_water_box():
 			w.material_override = mat
 		print("[Water-Server] box added, shader_loaded=%s, fog_tex=%s" % [str(shader != null), str(terrain_texture)])
 		add_child(w)
+		_setup_planar_reflection()
+
+# ---------- 平面反射 ----------
+# 在水面下方镜像位置放一台相机渲染场景，得到"从水里看到的水上世界"；
+# 它的投影参数与主相机一致，所以反射射线落点坐标可直接作为取样坐标。
+
+func _setup_planar_reflection() -> void:
+	if _water_mat == null:
+		return
+	if _refl_viewport != null and is_instance_valid(_refl_viewport):
+		return
+	_refl_viewport = SubViewport.new()
+	_refl_viewport.name = "WaterReflection"
+	_refl_viewport.size = Vector2i(480, 270)
+	_refl_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS
+	_refl_viewport.transparent_bg = false
+	_refl_viewport.msaa_3d = Viewport.MSAA_DISABLED
+	add_child(_refl_viewport)
+	_refl_cam = Camera3D.new()
+	_refl_cam.name = "ReflectionCamera"
+	_refl_cam.cull_mask = 0xFFFFF & ~(1 << WATER_LAYER)
+	_refl_cam.current = true
+	_refl_viewport.add_child(_refl_cam)
+	_water_mat.set_shader_parameter("reflection_tex", _refl_viewport.get_texture())
+	_water_mat.set_shader_parameter("reflection_enabled", 1.0 if _refl_enabled else 0.0)
+
+func _update_planar_reflection() -> void:
+	if _refl_cam == null or _refl_viewport == null or not _refl_enabled:
+		return
+	var cam := get_viewport().get_camera_3d()
+	if cam == null:
+		return
+	# 反射纹理取主画面一半分辨率，控制每帧多渲染一遍场景的开销
+	var vs: Vector2i = get_viewport().size
+	var target := Vector2i(maxi(160, vs.x / 2), maxi(90, vs.y / 2))
+	if _refl_viewport.size != target:
+		_refl_viewport.size = target
+	if _refl_cam.fov != cam.fov:
+		_refl_cam.fov = cam.fov
+	_refl_cam.near = maxf(cam.near, 0.05)
+	_refl_cam.far = cam.far
+	_refl_cam.projection = cam.projection
+	_refl_cam.size = cam.size
+	# 以水面为镜面镜像相机变换：位置 y -> 2h - y，朝向上下翻转
+	var xf: Transform3D = cam.global_transform
+	var flip := Basis(Vector3(1, 0, 0), Vector3(0, -1, 0), Vector3(0, 0, 1))
+	_refl_cam.global_transform = Transform3D(flip * xf.basis, flip * xf.origin + Vector3(0, 2.0 * WATER_WORLD_Y, 0))
+
+func set_planar_reflection(enabled: bool) -> void:
+	_refl_enabled = enabled
+	if _refl_viewport != null and is_instance_valid(_refl_viewport):
+		_refl_viewport.render_target_update_mode = SubViewport.UPDATE_ALWAYS if enabled else SubViewport.UPDATE_DISABLED
+	if _water_mat != null:
+		_water_mat.set_shader_parameter("reflection_enabled", 1.0 if enabled else 0.0)
+
+func _process(delta: float) -> void:
+	_update_planar_reflection()
+	_update_water_boats(delta)
 
 # 把水面单位位置喂给水面着色器：船体周围生成涟漪与泡沫尾迹
 func _update_water_boats(delta: float) -> void:
@@ -2571,9 +2638,8 @@ func set_water_quality(level: int) -> void:
 	var wake: float = 1.0 if level <= 2 else 0.7
 	_water_mat.set_shader_parameter("reflect_strength", refl)
 	_water_mat.set_shader_parameter("wake_strength", wake)
-
-func _process(delta: float) -> void:
-	_update_water_boats(delta)
+	# 最低两档关掉平面反射（每帧多渲染一遍场景），水面退回屏幕空间近似
+	set_planar_reflection(level < 2)
 
 func get_height_at(world_pos: Vector3) -> float:
 	var size = _get_map_size()

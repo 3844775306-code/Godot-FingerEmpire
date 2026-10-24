@@ -8,6 +8,9 @@ uniform sampler2D fog_tex : source_color;
 // —— 水面镜面反射：屏幕空间近似（不需要额外相机/反射探针）——
 uniform sampler2D screen_tex : hint_screen_texture, filter_linear_mipmap;
 uniform float reflect_strength : hint_range(0.0, 2.0) = 1.0;
+// 平面反射：水面上方场景由镜像相机渲染到这张纹理
+uniform sampler2D reflection_tex : filter_linear;
+uniform float reflection_enabled : hint_range(0.0, 1.0) = 0.0;
 
 // —— 船只航行时水面变化：附近涟漪 + 泡沫尾迹 ——
 uniform vec3 boats[8];
@@ -33,8 +36,8 @@ float fbm(vec2 p) {
 void vertex() {
 	vec3 wv = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	// 大尺度涌浪：幅度加大到肉眼可见（原来只有 4cm，几乎看不出起伏）
-	float w = sin(wv.x * 1.1 + TIME * 0.5) * cos(wv.z * 1.4 + TIME * 0.4) * 0.09;
-	w += sin(wv.x * 2.6 + TIME * 0.7) * cos(wv.z * 2.2 - TIME * 0.6) * 0.05;
+	float w = sin(wv.x * 1.1 + TIME * 0.5) * cos(wv.z * 1.4 + TIME * 0.4) * 0.05;
+	w += sin(wv.x * 2.6 + TIME * 0.7) * cos(wv.z * 2.2 - TIME * 0.6) * 0.03;
 
 	// 船只附近：向外扩散的环形涟漪 + 船体抬起的船首波 + 后方尾流带
 	float foam = 0.0;
@@ -45,7 +48,7 @@ void vertex() {
 		float r = length(rel);
 		float ring = sin(r * 3.2 - TIME * 4.5) * exp(-r * 0.5);
 		float bow = exp(-r * 0.7);
-		w += (ring * 0.22 + bow * 0.12) * wake_strength;
+		w += (ring * 0.10 + bow * 0.05) * wake_strength;
 		foam += (bow * 1.5 + max(0.0, ring) * 1.0) * wake_strength;
 		lift += bow;
 		// 尾流带：沿航行反方向拉长的泡沫条
@@ -56,7 +59,7 @@ void vertex() {
 			if (along < 0.0) {
 				float wake = exp(-across * 1.25) * exp(along * 0.22);
 				foam += wake * 1.6 * wake_strength;
-				w += wake * 0.05 * wake_strength;
+				w += wake * 0.03 * wake_strength;
 			}
 		}
 	}
@@ -122,18 +125,27 @@ void fragment() {
 		float up = clamp(refl.y, 0.0, 1.0);
 		vec3 sky_refl = mix(vec3(0.52, 0.72, 0.92), vec3(0.22, 0.42, 0.74), up) * (0.9 + 0.1 * n);
 		vec3 refl_col = sky_refl;
+		// NDC 的 y 向上、屏幕 UV 的 y 向下，取样前必须翻转，否则倒影会上下颠倒
+		vec2 suv = vec2(-1.0, -1.0);
 		if (clip.w > 0.0) {
-			vec2 suv = clip.xy / clip.w * 0.5 + 0.5;
-			if (suv.x > 0.002 && suv.x < 0.998 && suv.y > 0.002 && suv.y < 0.998) {
-				vec3 sc = texture(screen_tex, suv).rgb;
-				// 采样区太暗（天空洞/阴影）时降低屏幕权重，避免整片水面发黑
-				float slum = dot(sc, vec3(0.333));
-				float wgt = smoothstep(0.03, 0.22, slum);
-				refl_col = mix(sky_refl, sc, 0.75 * wgt);
-			}
+			suv = vec2(clip.x / clip.w * 0.5 + 0.5, 0.5 - clip.y / clip.w * 0.5);
+		}
+		bool in_screen = (suv.x > 0.002 && suv.x < 0.998 && suv.y > 0.002 && suv.y < 0.998);
+		if (reflection_enabled > 0.5) {
+			// 镜像相机是主相机关于水面的镜像：同一屏幕坐标上，它看到的正是
+			// 主相机在水面该点反射出去的内容，直接按屏幕坐标取样即得倒影。
+			vec3 rc = texture(reflection_tex, SCREEN_UV).rgb;
+			// 反射纹理里水面之上的天空是暗色背景，提亮并叠一点天空色，避免水面被压黑
+			refl_col = rc * 1.9 + sky_refl * 0.32;
+		} else if (in_screen) {
+			vec3 sc = texture(screen_tex, suv).rgb;
+			// 采样区太暗（天空洞/阴影）时降低屏幕权重，避免整片水面发黑
+			float slum = dot(sc, vec3(0.333));
+			float wgt = smoothstep(0.03, 0.22, slum);
+			refl_col = mix(sky_refl, sc, 0.9 * wgt);
 		}
 		// 俯视角也保留较高基础反射，否则水面看起来只是一块半透明色块
-		float refl_amt = clamp(mix(0.55, 0.98, fres) * reflect_strength, 0.0, 0.94);
+		float refl_amt = clamp(mix(0.72, 0.99, fres) * reflect_strength, 0.0, 0.96);
 		col = mix(col, refl_col, refl_amt);
 	}
 
@@ -152,9 +164,9 @@ void fragment() {
 	col = mix(col, vec3(0.05, 0.05, 0.08), fog_amt);
 
 	ALBEDO = col + spec * vec3(1.0, 1.0, 1.0);
-	ALPHA = clamp(mix(0.5, 0.74, f) + spec * 0.15 + v_boat_foam * 0.25, 0.0, 0.96);
 	// 金属度保持很低：场景没有天空/反射探针，金属反射取到的是黑色，水会整片发黑
+	ALPHA = clamp(mix(0.5, 0.74, f) + spec * 0.15 + v_boat_foam * 0.25, 0.0, 0.96);
 	METALLIC = 0.02;
-	ROUGHNESS = 0.32;
+	ROUGHNESS = 0.25;
 	SPECULAR = spec + v_boat_lift * 0.25;
 }
