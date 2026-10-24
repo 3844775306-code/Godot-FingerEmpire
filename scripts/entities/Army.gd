@@ -83,6 +83,7 @@ const CART_CHASE_SPEED_MULT: float = 2.0 # 追赶速度倍数
 
 # 爆破船/运载船 vars
 var _has_exploded: bool = false
+var _death_cleanup_done: bool = false
 var _boarded_units: Array = []       # 运载船上的单位
 var _boarded_on: int = -1            # 登上的运载船instance_id
 
@@ -2130,6 +2131,11 @@ func stop_movement():
 
 # Override die() for official cleanup
 func die_official_cleanup():
+	# 沉降动画会让死亡实体多存活 1 秒，清理逻辑只能执行一次，
+	# 否则商人会重复扣减市场名额、官员会重复移除光环。
+	if _death_cleanup_done:
+		return
+	_death_cleanup_done = true
 	# 爆破船死亡时未爆炸则立即爆炸
 	if entity_id == 40 and not _has_exploded:
 		_demolition_explode()

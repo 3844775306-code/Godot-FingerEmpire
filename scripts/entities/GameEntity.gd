@@ -256,7 +256,6 @@ func _should_sink_death() -> bool:
 func _start_sink_death() -> void:
 	collision_layer = 0
 	collision_mask = 0
-	set_process(false)
 	set_selected(false)
 	for child in get_children():
 		if child is CollisionShape3D:
