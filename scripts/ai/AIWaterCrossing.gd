@@ -50,6 +50,9 @@ var own_shore_land: Vector3 = Vector3.ZERO
 var enemy_shore_water: Vector3 = Vector3.ZERO
 var enemy_shore_land: Vector3 = Vector3.ZERO
 var _transport_shores_valid: bool = false
+# 上岸点定期更换：固定登陆场容易被对手守死，每分钟重新选一次
+const SHORES_REFRESH_SEC: float = 60.0
+var _shores_set_at_ms: int = 0
 
 var _transport_state: int = STATE_IDLE
 var _transport_timer: float = 0.0
@@ -85,8 +88,11 @@ func _refresh_plan():
 	# 运载船舰队已经集结/出航时也不要重算两岸，避免把船队中途改道。
 	# 还在等船/等兵（STATE_IDLE）时同样要冻结：如果每 6 秒重算一次，
 	# 岸点可能在几处候选之间来回跳，运载船永远开不到停泊点，也就不会上船。
+	# 例外：上岸点每分钟强制换一次，避免固定登陆场被对手守死。
 	if mode == MODE_TRANSPORT and _transport_shores_valid and (not _transports.is_empty() or _transport_state != STATE_IDLE):
-		return
+		if Time.get_ticks_msec() - _shores_set_at_ms < int(SHORES_REFRESH_SEC * 1000.0):
+			return
+		# 到点：继续走下面的重算流程，用新的登陆/停泊岸点替换（船队状态不变）
 	var my_castle = ai.get_peer_castle(ai.my_peer_id)
 	var enemy_castle = ai._get_attack_target_castle()
 	if not is_instance_valid(my_castle) or not is_instance_valid(enemy_castle):
@@ -120,13 +126,14 @@ func _refresh_plan():
 		mode = MODE_BRIDGE
 		return
 	bridge_plan.clear()
-	var shores: Dictionary = _find_transport_shores(own_set, enemy_set, bridges)
+	var shores: Dictionary = _find_transport_shores(own_set, enemy_set, bridges, enemy_shore_water)
 	if not shores.is_empty():
 		own_shore_water = shores["own_water"]
 		own_shore_land = shores["own_land"]
 		enemy_shore_water = shores["enemy_water"]
 		enemy_shore_land = shores["enemy_land"]
 		_transport_shores_valid = true
+		_shores_set_at_ms = Time.get_ticks_msec()
 		mode = MODE_TRANSPORT
 	else:
 		_stop_all()
@@ -256,7 +263,8 @@ func _point_segment_distance(p: Vector2, a: Vector2, b: Vector2) -> float:
 	return p.distance_to(a + ab * t)
 
 # 在双方各自可达陆地之间寻找最短的可通航水面
-func _find_transport_shores(own_set: Dictionary, enemy_set: Dictionary, bridges: Dictionary) -> Dictionary:
+# avoid_pos 非零时优先挑一个离它较远的候选岸点（用于每分钟轮换登陆场）
+func _find_transport_shores(own_set: Dictionary, enemy_set: Dictionary, bridges: Dictionary, avoid_pos: Vector3 = Vector3.ZERO) -> Dictionary:
 	var own_shores: Dictionary = {}
 	var own_land: Dictionary = {}
 	var enemy_shores: Dictionary = {}
@@ -302,12 +310,14 @@ func _find_transport_shores(own_set: Dictionary, enemy_set: Dictionary, bridges:
 	var head: int = 0
 	var best_enemy: Vector2i = Vector2i(-1, -1)
 	var best_score: float = INF
+	var cands: Array = []
 	while head < queue.size():
 		var c: Vector2i = queue[head]
 		head += 1
 		if enemy_shores.has(c):
 			var src: Vector2i = source[c]
 			var score: float = Vector2(src).distance_to(Vector2(own_grid)) + Vector2(c).distance_to(Vector2(enemy_grid))
+			cands.append({"cell": c, "src": src, "score": score})
 			if score < best_score:
 				best_score = score
 				best_enemy = c
@@ -327,13 +337,26 @@ func _find_transport_shores(own_set: Dictionary, enemy_set: Dictionary, bridges:
 			queue.append(n)
 	if best_enemy == Vector2i(-1, -1):
 		return {}
-	var best_src: Vector2i = source[best_enemy]
-	var own_land_cell: Vector2i = own_land.get(best_src, best_src)
-	var enemy_land_cell: Vector2i = enemy_land.get(best_enemy, best_enemy)
+	var pick: Dictionary = {}
+	# 轮换：优先挑离上次登陆场较远的候选，避免固定岸点被对手守死
+	if avoid_pos != Vector3.ZERO:
+		cands.sort_custom(func(a, b): return a.score < b.score)
+		for cd in cands:
+			var wpos: Vector3 = battle.grid_to_world(cd["cell"].x, cd["cell"].y)
+			if wpos.distance_to(avoid_pos) > 6.0:
+				pick = cd
+				break
+	if pick.is_empty():
+		var best_src: Vector2i = source[best_enemy]
+		pick = {"cell": best_enemy, "src": best_src}
+	var best_src2: Vector2i = pick["src"]
+	var best_enemy2: Vector2i = pick["cell"]
+	var own_land_cell: Vector2i = own_land.get(best_src2, best_src2)
+	var enemy_land_cell: Vector2i = enemy_land.get(best_enemy2, best_enemy2)
 	return {
-		"own_water": battle.grid_to_world(best_src.x, best_src.y),
+		"own_water": battle.grid_to_world(best_src2.x, best_src2.y),
 		"own_land": battle.grid_to_world(own_land_cell.x, own_land_cell.y),
-		"enemy_water": battle.grid_to_world(best_enemy.x, best_enemy.y),
+		"enemy_water": battle.grid_to_world(best_enemy2.x, best_enemy2.y),
 		"enemy_land": battle.grid_to_world(enemy_land_cell.x, enemy_land_cell.y)
 	}
 
