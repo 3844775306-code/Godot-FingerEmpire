@@ -1621,6 +1621,8 @@ func build_snapshot_for_team(team: int) -> Dictionary:
 		r["enemy_nation"] = team_nations.get(RTSConfig.Team.RED if team == RTSConfig.Team.BLUE else RTSConfig.Team.BLUE, -1)
 		r["gather_counts"] = team_gather_counts.get(team, {"gold":0, "wood":0, "stone":0, "food":0, "oil":0})
 		r["income_rate"] = team_income_rates.get(team, {"gold":0.0, "wood":0.0, "stone":0.0, "food":0.0, "oil":0.0})
+		if is_full:
+			r["nation_colors"] = RTSConfig.get_nation_colors()
 	return r
 
 func _broadcast_1v1():
@@ -1984,6 +1986,7 @@ func build_snapshot_for_player(peer_id: int) -> Dictionary:
 	if is_full:
 		result["team_nations"] = team_nations
 		result["player_info"] = player_info
+		result["nation_colors"] = RTSConfig.get_nation_colors()
 	result["player_castles"] = _serialize_castles()
 
 	# Granular profiling: only print when total > 2.5ms

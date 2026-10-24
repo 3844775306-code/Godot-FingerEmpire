@@ -363,6 +363,9 @@ func _safe_process_snapshot(data: Dictionary) -> bool:
 	return true
 
 func _process_snapshot(data: Dictionary):
+	# 全量快照会下发本局随机国家配色；必须先于实体创建/着色应用。
+	if data.has("nation_colors"):
+		RTSConfig.set_nation_colors(data["nation_colors"])
 	# 缓存人口
 	last_population = data.get("population", last_population)
 	# Sync game time from server
@@ -1302,8 +1305,8 @@ const GROUP_LABEL_COLORS = {
 # 快照没有 nation 时按 owner_peer_id / 队伍兜底。
 func _get_entity_color(info: Dictionary) -> Color:
 	var nation: int = int(info.get("nation", -1))
-	if nation >= 0 and nation < RTSConfig.NATION_COLORS.size():
-		return RTSConfig.NATION_COLORS[nation]
+	if nation >= 0 and RTSConfig.has_nation_color(nation):
+		return RTSConfig.get_nation_color(nation)
 	var owner_id = info.get("owner_peer_id", -1)
 	if owner_id != -1 and player_colors.has(owner_id):
 		return player_colors[owner_id]

@@ -15,23 +15,36 @@ const COLOR_POOL = [
 	Color(0.5, 0.3, 0.9),
 	Color(0.2, 0.85, 0.4),
 	Color(1.0, 0.45, 0.75),
+	Color(0.0, 0.85, 0.85),   # 青，补足 7 国所需的 7 个不重复颜色
 ]
 
-# 国家专属色：单机/服务器 HUD、单位模型、血条、小地图统一使用。
-# 这组颜色与阵营解耦，方便在混编队伍中一眼区分不同国家的部队。
-const NATION_COLORS = [
-	Color(0.92, 0.26, 0.20),   # 维京：红
-	Color(0.22, 0.55, 1.00),   # 英格兰：蓝
-	Color(0.98, 0.72, 0.12),   # 法兰西：金
-	Color(0.92, 0.22, 0.70),   # 中国：品红
-	Color(0.28, 0.82, 0.32),   # 匈牙利：绿
-	Color(0.72, 0.40, 0.98),   # 日本：紫
-	Color(0.10, 0.82, 0.82),   # 拜占庭：青
-]
+# 国家颜色不再绑定 Nation 枚举，而是每局开始时随机打乱颜色池后分配。
+# 颜色池容量 >= 国家数量，按排列分配即可保证同一局内所有国家颜色唯一。
+static var _nation_colors: Dictionary = {}
+
+# 每局初始化时调用一次：随机打乱颜色池，再把前 N 个颜色分配给 N 个国家。
+static func randomize_nation_colors() -> void:
+	var pool: Array = COLOR_POOL.duplicate()
+	pool.shuffle()
+	_nation_colors.clear()
+	for i in range(mini(pool.size(), Nation.size())):
+		_nation_colors[i] = pool[i]
+
+# 联机客户端从服务器全量快照恢复同一套国家配色。
+static func set_nation_colors(colors: Dictionary) -> void:
+	_nation_colors.clear()
+	for key in colors:
+		_nation_colors[int(key)] = colors[key]
+
+static func get_nation_colors() -> Dictionary:
+	return _nation_colors.duplicate()
+
+static func has_nation_color(nation: int) -> bool:
+	return _nation_colors.has(nation)
 
 static func get_nation_color(nation: int, fallback: Color = Color(0.7, 0.7, 0.7)) -> Color:
-	if nation >= 0 and nation < NATION_COLORS.size():
-		return NATION_COLORS[nation]
+	if _nation_colors.has(nation):
+		return _nation_colors[nation]
 	return fallback
 
 # 队伍基准色：同队玩家/单位统一使用同一色系（蓝队蓝色系、红队红色系）

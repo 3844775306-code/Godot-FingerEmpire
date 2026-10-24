@@ -566,8 +566,8 @@ func get_entity_color(entity) -> Color:
 	if entity == null:
 		return Color(0.7, 0.7, 0.7)
 	var nation: int = get_entity_nation(entity)
-	if nation >= 0 and nation < RTSConfig.NATION_COLORS.size():
-		var nation_color: Color = RTSConfig.NATION_COLORS[nation]
+	if nation >= 0 and RTSConfig.has_nation_color(nation):
+		var nation_color: Color = RTSConfig.get_nation_color(nation)
 		# 单机理论上已避开同国；直接启动战斗场景等极端情况下给异队同国一个暗色变体，
 		# 避免完全撞色。
 		if not is_online and entity.team != get_host_team() and nation == int(team_nations.get(get_host_team(), -1)):
@@ -926,8 +926,8 @@ func can_train_unit(team: int) -> bool:
 	
 # ==================== 初始化 ====================
 func _ready():
-	
-	
+	# 每局重新随机国家颜色；颜色不再固定对应某个国家。
+	RTSConfig.randomize_nation_colors()
 	add_to_group("battle_manager")
 	_physics_tick_original = Engine.physics_ticks_per_second
 	_physics_max_steps_original = Engine.max_physics_steps_per_frame
