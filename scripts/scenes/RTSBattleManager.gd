@@ -164,7 +164,8 @@ var _snap_rate_label: Label = null
 
 # ==================== 后期自动画质 ====================
 # 后期实体数量上来后，大量单位模型 + 实时阴影会把 GPU 压到 30~40 FPS。
-# 这里按真实 FPS 分档降低 3D 渲染分辨率和阴影，帧率恢复后再逐级还原。
+# 这里按真实 FPS 分档降低 3D 渲染分辨率，并缩短阴影距离/降低阴影分片；
+# 不再直接关闭实时阴影，否则单位会完全失去影子。
 var _perf_quality_level: int = 0
 var _perf_sample_timer: float = 5.0
 var _perf_low_streak: int = 0
@@ -174,9 +175,13 @@ var _perf_base_scale: float = 1.0
 var _perf_viewport: Viewport = null
 var _perf_light: DirectionalLight3D = null
 var _perf_light_shadow_original: bool = true
+var _perf_light_shadow_distance_original: float = 60.0
+var _perf_light_shadow_mode_original: int = -1
 var _perf_env: Environment = null
 var _perf_ssao_original: bool = false
 const PERF_LEVEL_SCALES: Array[float] = [1.0, 0.85, 0.72, 0.62, 0.52]
+# 阴影始终保留，低画质只缩短阴影投射距离，单位近处仍有影子
+const PERF_SHADOW_DISTANCE_SCALES: Array[float] = [1.0, 0.9, 0.8, 0.7, 0.6]
 
 func _create_diag_label():
 	_fps_label = Label.new()
@@ -2891,6 +2896,8 @@ func _tick_adaptive_quality(delta: float) -> void:
 		_perf_light = _find_directional_light()
 		if _perf_light:
 			_perf_light_shadow_original = _perf_light.shadow_enabled
+			_perf_light_shadow_distance_original = _perf_light.directional_shadow_max_distance
+			_perf_light_shadow_mode_original = _perf_light.directional_shadow_mode
 		_perf_env = _find_world_environment()
 		if _perf_env:
 			_perf_ssao_original = _perf_env.ssao_enabled
@@ -2899,6 +2906,8 @@ func _tick_adaptive_quality(delta: float) -> void:
 		_perf_light = _find_directional_light()
 		if _perf_light:
 			_perf_light_shadow_original = _perf_light.shadow_enabled
+			_perf_light_shadow_distance_original = _perf_light.directional_shadow_max_distance
+			_perf_light_shadow_mode_original = _perf_light.directional_shadow_mode
 	if _perf_env == null:
 		_perf_env = _find_world_environment()
 		if _perf_env:
@@ -2941,10 +2950,18 @@ func _apply_perf_quality() -> void:
 		var scale_factor: float = PERF_LEVEL_SCALES[_perf_quality_level]
 		vp.scaling_3d_scale = clampf(_perf_base_scale * scale_factor, 0.5, 2.0)
 	if _perf_light and is_instance_valid(_perf_light):
-		# 第二档起关闭实时阴影；阴影是后期大量单位最主要的额外 GPU 开销之一
-		var want_shadow: bool = _perf_light_shadow_original and _perf_quality_level < 2
+		# 单位影子必须保留：不再按画质关闭实时阴影，只缩短投射距离并减少分片。
+		# 这样中后期近处单位仍有影子，远处阴影先消失，GPU 压力明显小于全距离阴影。
+		var want_shadow: bool = _perf_light_shadow_original
 		if _perf_light.shadow_enabled != want_shadow:
 			_perf_light.shadow_enabled = want_shadow
+		if want_shadow:
+			var distance_scale: float = PERF_SHADOW_DISTANCE_SCALES[clampi(_perf_quality_level, 0, PERF_SHADOW_DISTANCE_SCALES.size() - 1)]
+			_perf_light.directional_shadow_max_distance = maxf(_perf_light_shadow_distance_original * distance_scale, 15.0)
+			if _perf_light_shadow_mode_original == DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS:
+				_perf_light.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS if _perf_quality_level >= 2 else _perf_light_shadow_mode_original
+			else:
+				_perf_light.directional_shadow_mode = _perf_light_shadow_mode_original
 	if _perf_env and is_instance_valid(_perf_env):
 		# 第一档就关闭 SSAO；全屏环境光遮蔽在几百个单位同屏时开销很高，关掉后画面差异很小
 		var want_ssao: bool = _perf_ssao_original and _perf_quality_level < 1
@@ -2957,6 +2974,9 @@ func _exit_tree() -> void:
 		_perf_viewport.scaling_3d_scale = _perf_base_scale
 	if _perf_light and is_instance_valid(_perf_light):
 		_perf_light.shadow_enabled = _perf_light_shadow_original
+		_perf_light.directional_shadow_max_distance = _perf_light_shadow_distance_original
+		if _perf_light_shadow_mode_original != -1:
+			_perf_light.directional_shadow_mode = _perf_light_shadow_mode_original
 	if _perf_env and is_instance_valid(_perf_env):
 		_perf_env.ssao_enabled = _perf_ssao_original
 
