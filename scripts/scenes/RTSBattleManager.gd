@@ -374,6 +374,7 @@ func mark_entity_cache_dirty():
 
 # 落水判定：桥所在格视为可站立，不参与溺水伤害
 func is_bridge_at(world_pos: Vector3) -> bool:
+	_ensure_cache_fresh()
 	return _bridge_entity_grid.has(world_to_grid(world_pos))
 
 func _ensure_cache_fresh():
