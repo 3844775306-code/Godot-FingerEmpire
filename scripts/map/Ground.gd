@@ -56,6 +56,10 @@ var _ring_radius: float = 0.0          # 环形河中心半径（归一化）
 var _ring_width: float = 0.0           # 环形河宽度（归一化）
 var _reach_tiles: Dictionary = {}      # 从城堡可达的格集合（仅 reachable_only 地图计算）
 
+# 三岛登陆布局：三座攻方孤岛中心（归一化）、守方大陆中心（归一化）
+var _siege_island_centers: Array = []
+var _siege_mainland_anchor: Array = [0.5, 0.27]
+
 # 防止重复生成
 var map_generated: bool = false
 
@@ -244,6 +248,8 @@ func _generate_with_stages(size: int, stages: Array) -> void:
 				_op_maze(size, params)
 			"four_islands":
 				_op_four_islands(size, params)
+			"coastal_siege":
+				_op_coastal_siege(size, params)
 			_:
 				push_warning("[地图] 未知生成算子: %s" % op)
 	_colorize_grid(size)
@@ -929,6 +935,138 @@ func _op_four_islands(size: int, params: Dictionary) -> void:
 				height_grid[nx][ny] = 0.0
 				overlay_grid[nx][ny] = 0
 
+# 三岛登陆：上半图一块随机海岸线的大陆（守方），下半图三座随机形状孤岛（攻方）；
+# 大陆中部一条小河横贯全图并汇入外海，两处浅滩是越过河线直取主城的必经之路
+func _op_coastal_siege(size: int, params: Dictionary) -> void:
+	var water_h := -height_scale * 0.5
+	for x in range(size):
+		for y in range(size):
+			terrain_grid[x][y] = 2
+			height_grid[x][y] = water_h
+			overlay_grid[x][y] = 0
+
+	var seed_val := custom_seed if custom_seed != 0 else randi()
+	var rng := RandomNumberGenerator.new()
+	rng.seed = seed_val + 6151
+	var coast := FastNoiseLite.new()
+	coast.seed = seed_val + 4207
+	coast.frequency = float(params.get("coast_freq", 0.075))
+	coast.fractal_octaves = 3
+	var coast_detail := FastNoiseLite.new()
+	coast_detail.seed = seed_val + 5507
+	coast_detail.frequency = float(params.get("coast_detail_freq", 0.19))
+	coast_detail.fractal_octaves = 2
+	var hills := FastNoiseLite.new()
+	hills.seed = seed_val + 8811
+	hills.frequency = float(params.get("hill_freq", 0.085))
+	hills.fractal_octaves = 2
+
+	# ── 大陆：扰动椭圆，只占上半图，四周留出外海 ──
+	var cx := (0.5 + rng.randf_range(-0.02, 0.02)) * float(size)
+	var cy := float(params.get("mainland_cy", 0.27)) * float(size)
+	var rx := float(params.get("mainland_rx", 0.44)) * float(size)
+	var ry := float(params.get("mainland_ry", 0.205)) * float(size)
+	var bottom := mini(size - 1, int(float(params.get("mainland_bottom", 0.53)) * float(size)))
+	var coast_amp := float(params.get("coast_amp", 0.30))
+	var margin := maxi(2, int(float(size) * 0.025))
+	var mountain_th := float(params.get("mountain_threshold", 0.66))
+	for x in range(size):
+		for y in range(margin, bottom + 1):
+			if x < margin or x >= size - margin:
+				continue
+			var nx := (float(x) - cx) / rx
+			var ny := (float(y) - cy) / ry
+			var d := sqrt(nx * nx + ny * ny)
+			var edge := d + coast.get_noise_2d(float(x), float(y)) * coast_amp \
+				+ coast_detail.get_noise_2d(float(x), float(y)) * coast_amp * 0.35
+			if edge > 1.0:
+				continue
+			var hv := hills.get_noise_2d(float(x), float(y))
+			terrain_grid[x][y] = 0
+			height_grid[x][y] = clampf(hv, 0.0, 1.0) * 0.16
+			# 内陆少量山地，作为守方纵深与远程掩护；海岸带保持可登陆
+			if hv > mountain_th and edge < 0.84:
+				terrain_grid[x][y] = 1
+				height_grid[x][y] = clampf((hv - mountain_th) / maxf(0.001, 1.0 - mountain_th), 0.0, 1.0) * height_scale * 1.8
+			overlay_grid[x][y] = 0
+
+	# ── 小河：横向蜿蜒穿过大陆，两端汇入外海；只切陆地，不动海面 ──
+	var river_y := float(params.get("river_y", 0.375)) * float(size)
+	var river_amp := float(params.get("river_amp", 0.028)) * float(size)
+	var river_freq := float(params.get("river_freq", 0.055))
+	var river_half := maxi(0, int(params.get("river_width", 2)) / 2)
+	var meander := FastNoiseLite.new()
+	meander.seed = seed_val + 3313
+	meander.frequency = 0.09
+	meander.fractal_octaves = 2
+	var river_tiles := {}
+	for x in range(size):
+		var line_y := river_y + sin(float(x) * river_freq) * river_amp + meander.get_noise_1d(float(x)) * float(size) * 0.012
+		for dy in range(-river_half, river_half + 1):
+			var yy := clampi(int(round(line_y)) + dy, 0, size - 1)
+			if terrain_grid[x][yy] == 2:
+				continue
+			terrain_grid[x][yy] = 2
+			height_grid[x][yy] = water_h
+			overlay_grid[x][yy] = 0
+			river_tiles[Vector2i(x, yy)] = true
+
+	# 两处浅滩：守方可南北调兵，攻方渡河多两个选择（只标在河身上，绝不改海面）
+	var fords: Array = params.get("fords", [0.34, 0.66])
+	for f in fords:
+		var fx := clampi(int(float(f) * float(size)), 1, size - 2)
+		for xx in range(fx - 1, fx + 2):
+			for y in range(int(float(size) * 0.2), bottom + 1):
+				if not river_tiles.has(Vector2i(xx, y)):
+					continue
+				overlay_grid[xx][y] = 3
+				height_grid[xx][y] = -height_scale * 0.25
+
+	# ── 三座孤岛：位置/大小/形状随机，与大陆及彼此之间强制隔水 ──
+	var island_centers: Array = []
+	var planted: Array = []   # [中心x, 中心y, 横半径, 纵半径]
+	var base_x: Array = params.get("island_x", [0.17, 0.5, 0.83])
+	var base_y := float(params.get("island_y", 0.78))
+	var irx := float(params.get("island_rx", 0.115))
+	var iry := float(params.get("island_ry", 0.095))
+	var island_amp := float(params.get("island_amp", 0.30))
+	var island_top_limit := int(float(size) * 0.60)
+	for i in range(base_x.size()):
+		var icx := (float(base_x[i]) + rng.randf_range(-0.016, 0.016)) * float(size)
+		var icy := (base_y + rng.randf_range(-0.022, 0.022)) * float(size)
+		var sx := irx * float(size) * rng.randf_range(0.88, 1.10)
+		var sy := iry * float(size) * rng.randf_range(0.88, 1.10)
+		var x0 := maxi(1, int(icx - sx * 1.5))
+		var x1 := mini(size - 2, int(icx + sx * 1.5))
+		var y0 := maxi(island_top_limit, int(icy - sy * 1.5))
+		var y1 := mini(size - 2, int(icy + sy * 1.5))
+		for x in range(x0, x1 + 1):
+			for y in range(y0, y1 + 1):
+				var nx := (float(x) - icx) / sx
+				var ny := (float(y) - icy) / sy
+				var d := sqrt(nx * nx + ny * ny)
+				var edge := d + coast.get_noise_2d(float(x) + 711.0, float(y) + 353.0) * island_amp \
+					+ coast_detail.get_noise_2d(float(x) + 711.0, float(y) + 353.0) * island_amp * 0.4
+				if edge > 1.0:
+					continue
+				# 与已生成岛屿之间至少留 2 格水道，避免三岛连成一块
+				var blocked := false
+				for p in planted:
+					var pdx := (float(x) - float(p[0])) / (float(p[2]) * (1.0 + island_amp) + 2.0)
+					var pdy := (float(y) - float(p[1])) / (float(p[3]) * (1.0 + island_amp) + 2.0)
+					if pdx * pdx + pdy * pdy < 1.0:
+						blocked = true
+						break
+				if blocked:
+					continue
+				terrain_grid[x][y] = 0
+				height_grid[x][y] = 0.05
+				overlay_grid[x][y] = 0
+		planted.append([icx, icy, sx, sy])
+		island_centers.append([icx / float(size), icy / float(size)])
+	_siege_island_centers = island_centers
+	_siege_mainland_anchor = [cx / float(size), cy / float(size)]
+
 func _colorize_grid(size: int) -> void:
 	base_colors.clear()
 	for x in range(size):
@@ -1057,6 +1195,8 @@ func _preset_team_anchors(k: int) -> Array:
 		return _ring_anchors(k, layout)
 	if String(layout.get("type", "mirror_x")) == "corners":
 		return _corner_anchors(k, layout)
+	if String(layout.get("type", "mirror_x")) == "siege":
+		return _siege_anchors(k, layout)
 	var anchors: Array = layout.get("anchors", [])
 	if anchors.size() < 2 or k <= 1:
 		return anchors.duplicate()
@@ -1111,6 +1251,34 @@ func _corner_anchors(k: int, layout: Dictionary) -> Array:
 		out.append([c, 1.0 - c])
 		out.append([0.5, 1.0 - c])
 		out.append([1.0 - c, 1.0 - c])
+	return out
+
+# 三岛登陆基地锚点：蓝方（攻方）取三座孤岛，1 人用中岛、2 人用左右岛、3 人各占一岛；
+# 红方（守方）沿大陆中轴线均分，落在小河以北，背靠主城、面向南岸登陆场
+func _siege_anchors(k: int, layout: Dictionary) -> Array:
+	var centers: Array = _siege_island_centers
+	if centers.size() < 3:
+		centers = [[0.17, 0.78], [0.5, 0.78], [0.83, 0.78]]
+	var picks: Array = []
+	if k <= 1:
+		picks = [centers[1]]
+	elif k == 2:
+		picks = [centers[0], centers[2]]
+	else:
+		picks = [centers[0], centers[1], centers[2]]
+	var out: Array = []
+	for c in picks:
+		out.append([float(c[0]), float(c[1])])
+	var dy := float(layout.get("defender_y", 0.26))
+	var xs: Array
+	if k <= 1:
+		xs = [0.5]
+	elif k == 2:
+		xs = [0.33, 0.67]
+	else:
+		xs = [0.25, 0.5, 0.75]
+	for fx in xs:
+		out.append([float(fx), dy])
 	return out
 
 # 团队锚点压平后转世界坐标
@@ -1260,6 +1428,9 @@ func _use_preset_layout() -> bool:
 func _place_castles_from_anchors(layout: Dictionary) -> void:
 	var size := _get_map_size()
 	var anchors: Array = layout.get("anchors", [])
+	# 三岛登陆：主城位置随生成的三座孤岛随机，不能写死，运行时按岛屿实际中心取锚点
+	if String(layout.get("type", "mirror_x")) == "siege":
+		anchors = _preset_team_anchors(1)
 	if anchors.size() < 2:
 		return
 	var radius: int = clampi(int(layout.get("flat_radius", 5)), 2, 8)
@@ -1444,6 +1615,19 @@ func _place_resources():
 	for castle in castles:
 		for gu in guaranteed:
 			_place_group_near(gu.type, gu.min_sz, gu.max_sz, castle[0], castle[1], gu.dist, gu.terrain, placed, size, gu.get("near_mountain", false), gu.get("adjacent_mountains", 0))
+	# 三岛登陆：三座孤岛都要能独立开局/中转，空岛也保底补木石金田
+	if bool(map_preset.get("island_staging", false)):
+		var staging = [
+			{"type":3, "min_sz":2, "max_sz":3, "dist":9},
+			{"type":1, "min_sz":4, "max_sz":5, "dist":11},
+			{"type":2, "min_sz":2, "max_sz":3, "dist":18},
+			{"type":0, "min_sz":2, "max_sz":3, "dist":9},
+		]
+		for ic in _siege_island_centers:
+			var igx := clampi(int(float(ic[0]) * float(size)), 0, size - 1)
+			var igy := clampi(int(float(ic[1]) * float(size)), 0, size - 1)
+			for gu in staging:
+				_place_group_near(gu.type, gu.min_sz, gu.max_sz, igx, igy, gu.dist, 0, placed, size)
 	# Extra resources for Hard/Hell AI near enemy/red castles
 	var hard_extra = [
 		{"type":3, "min_sz":3, "max_sz":4, "dist":10, "terrain":0},  # farmland
@@ -1516,7 +1700,13 @@ func _place_resources():
 
 	# 海峡图：岛上的资源工人够不着（没桥/浅滩），生成完直接剔除不可达资源与动物
 	if bool(map_preset.get("reachable_only", false)):
-		_drop_unreachable_resources(size, castles)
+		var drop_origins: Array = castles.duplicate()
+		# 三岛登陆：空岛是攻方渡海后的中转站，岛上资源要保留（登陆占地后才采得到），
+		# 这里只把它们当作可达性起点，不改变 AI 的就近采集决策
+		if bool(map_preset.get("island_staging", false)):
+			for ic in _siege_island_centers:
+				drop_origins.append([int(float(ic[0]) * float(size)), int(float(ic[1]) * float(size))])
+		_drop_unreachable_resources(size, drop_origins)
 
 	# ── Animals ──
 	# 沙漠等以狩猎为主的图：food=0 后动物是主要食物来源，兽群数量按 animals 倍率放大

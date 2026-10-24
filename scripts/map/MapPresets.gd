@@ -374,6 +374,45 @@ const PRESETS := {
 		"chips": ["四角孤岛", "全图海水", "运载船登陆", "海军争霸"],
 		"recommended": "1v1 / 2v2 / 3v3",
 	},
+	# 三岛登陆：上半图是一块随机海岸线的大陆，由红方（守方）镇守；下半图是三座随机形状的孤岛，
+	# 蓝方（攻方/玩家）从岛上组织登陆；大陆中部一条小河横贯全图，两处浅滩是越过河线的必经之路
+	"siege": {
+		"id": "siege",
+		"name": "三岛登陆",
+		"battle": "西西里远征 415 BC",
+		"desc": "上半图是一整块被外海环抱的大陆，由守方镇守；下半图是三座随机形状的孤岛，攻方在岛上集结、造船、组织登陆。大陆中部有一条小河横贯全图，两处浅滩是越过河线直取主城的必经之路。",
+		"stages": [
+			["coastal_siege", {
+				"mainland_cy": 0.27,
+				"mainland_rx": 0.44,
+				"mainland_ry": 0.205,
+				"coast_amp": 0.30,
+				"river_y": 0.375,
+				"river_amp": 0.028,
+				"fords": [0.34, 0.66],
+				"island_y": 0.78,
+				"island_rx": 0.115,
+				"island_ry": 0.095,
+				"mountain_threshold": 0.66,
+			}],
+		],
+		"castle_layout": {"type": "siege", "defender_y": 0.26, "flat_radius": 5},
+		"palette": {
+			"plain_low": [0.28, 0.40, 0.21],
+			"plain_high": [0.50, 0.58, 0.31],
+			"mountain_low": [0.42, 0.37, 0.28],
+			"mountain_high": [0.66, 0.62, 0.52],
+			"water_deep": [0.06, 0.27, 0.47],
+			"water_shallow": [0.24, 0.58, 0.68],
+		},
+		"resources": {"gold": 1.15, "wood": 1.4, "stone": 1.05, "oil": 1.4, "wood_near": "any", "stone_near": "any"},
+		"modifiers": {"ford_speed": 0.55},
+		"reachable_only": true,
+		"oil_near_shore": true,
+		"island_staging": true,
+		"chips": ["整块大陆守方", "三座随机孤岛", "大陆内小河", "两处浅滩", "登陆战"],
+		"recommended": "1v1 / 2v2 / 3v3",
+	},
 }
 
 static func has_preset(id: String) -> bool:
