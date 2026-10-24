@@ -16,6 +16,8 @@ var _cached_speed_mod: float = 1.0
 var cargo: Dictionary = {"gold": 0, "wood": 0, "stone": 0, "food": 0, "oil": 0}
 var max_cargo: int = 50
 var gatherable_resources: Array = []             
+# 自动搜索资源点的半径（默认与视野一致，农民在 setup 里取视野的一半）
+var gather_search_range: float = 0.0
 var delivery_target: Building = null
 var last_resource_target: WorldResource = null   
 # 采集时朝资源点移动的累计时长：走不到就放弃重找，避免永久假采集
@@ -144,6 +146,8 @@ func setup(config: Dictionary):
 		target_type = 0
 	else:
 		target_type = 1
+	# 农民自动找资源点的半径：取视野的一半，采集距离更短、更贴近身边
+	gather_search_range = vision_range * 0.5
 	_animal_type = config.get("animal_type", "")
 	_animal_food_reward = config.get("food_reward", 0)
 	call_deferred("_apply_nation_bonus")
@@ -173,6 +177,8 @@ func _apply_nation_bonus():
 		attack_range *= mults["attack_range"]
 	if mults.has("vision_range"):
 		vision_range *= int(mults["vision_range"])
+		# 国家加成改视野后，采集搜索半径同步取新视野的一半
+		gather_search_range = vision_range * 0.5
 	  # ²»Ö÷¶¯×·»÷£¬Ö»¹¥»÷½øÈëÉä³ÌµÄµÐÈË
 	# Ô­ÓÐ×·»÷Âß¼­...
 func _ready():
@@ -1142,13 +1148,14 @@ func find_delivery_point() -> Building:
 
 # ----------------- Ñ°µÐ / Ñ°×ÊÔ´ -----------------
 func _find_nearest_resource():
+	var search_r: float = gather_search_range if gather_search_range > 0.0 else vision_range
 	var bm = _get_bm()
 	if bm:
-		var best = bm.get_nearest_resource(global_position, vision_range, gatherable_resources)
+		var best = bm.get_nearest_resource(global_position, search_r, gatherable_resources)
 		if best: gather_at(best)
 		return
 	# 回退：如果没有 battle_manager，使用全量扫描
-	var best_dist = vision_range
+	var best_dist = search_r
 	var best_target: WorldResource = null
 	for entity in get_tree().get_nodes_in_group("entities"):
 		if entity is WorldResource and entity.health > 0:
