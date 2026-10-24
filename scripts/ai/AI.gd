@@ -5,6 +5,7 @@ extends Node
 class_name AIController
 
 const AIDefenseScript = preload("res://scripts/ai/AIDefense.gd")
+const AIWaterCrossingScript = preload("res://scripts/ai/AIWaterCrossing.gd")
 
 enum Phase { PRODUCTION, DEVELOPMENT, ASSAULT }
 enum LateTactic { NONE, HARASS, OVERWHELM, RAID, DEFEND }
@@ -34,6 +35,7 @@ var _defense_queue: Array = []          # 待建防线队列：[{"id": 建筑id,
 const DEFENSE_CHECK_INTERVAL: float = 120.0
 const DEFENSE_STEP_MAX: int = 3         # 每个 think tick 至多尝试建造的防线建筑数
 var _defense = null                      # AIDefense 模块：威胁/防线/守军/资源区
+var _water_crossing = null               # AIWaterCrossing 模块：搭桥/运载船渡水
 var _harass_ids: Dictionary = {}         # 当前骚扰小队 instance_id -> true
 var _harass_until: float = -999.0        # 骚扰小队回收时间
 var _upgrade_cycle_timer: float = 20.0   # 每20秒切换
@@ -506,6 +508,11 @@ func _can_place_ai_building(building_id: int, pos: Vector3) -> bool:
 	var gz = int(round(pos.z + half))
 	if gx < 0 or gx >= RTSConfig.MAP_SIZE or gz < 0 or gz >= RTSConfig.MAP_SIZE:
 		return false
+	# 桥只能建在水上，使用战斗管理器与玩家共用的选址校验
+	if building_id == 7:
+		if battle.has_method("is_valid_bridge_position"):
+			return battle.is_valid_bridge_position(pos)
+		return false
 	var terrain = battle.get_terrain_at_grid(gx, gz)
 	if terrain == 2:
 		return false
@@ -555,7 +562,23 @@ func build_building(building_id: int, pos: Vector3, facing: Vector3 = Vector3.ZE
 	if _enemy_army_within(pos):
 		return false
 	# Non-shipyard buildings: must be within AI vision range
-	if building_id != 23:
+	if building_id == 7:
+		# 桥从己方岸边向对岸延伸：第一段允许在 20 距离内建造，
+		# 后续桥段允许紧邻已有桥继续往前修，否则远端会因视野不足中断
+		var bridge_world_pos = Vector3(pos.x, 0, pos.z)
+		var bridge_visible = false
+		for e in battle.entities.get_children():
+			if e is GameEntity and e.health > 0 and entity_belongs_to_me(e):
+				if e is Building and e.entity_id == 7:
+					if e.global_position.distance_to(bridge_world_pos) <= 3.0:
+						bridge_visible = true
+						break
+				if e.global_position.distance_to(bridge_world_pos) <= maxf(float(e.vision_range), 20.0):
+					bridge_visible = true
+					break
+		if not bridge_visible:
+			return false
+	elif building_id != 23:
 		var world_pos = Vector3(pos.x, 0, pos.z)
 		var visible = false
 		for e in battle.entities.get_children():
@@ -651,6 +674,7 @@ func _ready():
 	_add_nation_special_unit()
 	_create_debug_panel()
 	_defense = AIDefenseScript.new(self)
+	_water_crossing = AIWaterCrossingScript.new(self)
 
 func _process(delta):
 	# Set think interval based on difficulty (once)
@@ -837,6 +861,8 @@ func decide(_delta):
 		var army_count = count_military(my_peer_id if my_peer_id != -1 else my_team)
 		if army_count >= 30:
 			phase = Phase.ASSAULT
+	if _water_crossing:
+		_water_crossing.tick(_delta)
 	if OS.is_debug_build() and Engine.get_process_frames() % 30 == 0:
 		update_debug_label()
 func get_team_castle(tm) -> Building:
@@ -1277,8 +1303,11 @@ func attack_move(target_position: Vector3, max_units: int):
 	var sent = 0
 	for entity in battle.entities.get_children():
 		if sent >= max_units: break
-		if entity is Army and entity.health > 0 and int(entity.entity_id) not in [5,6,10,14,43,44,45,46,47,48,49,50,51] and entity_belongs_to_me(entity):
-			if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass"):
+		if entity is Army and entity.health > 0 and int(entity.entity_id) not in [5,6,9,10,14,43,44,45,46,47,48,49,50,51] and entity_belongs_to_me(entity):
+			if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass") or entity.has_meta("ai_transporting"):
+				continue
+			var boarded = entity.get("_boarded_on")
+			if boarded != null and int(boarded) != -1:
 				continue
 			entity.attack_move_to(target_position)
 			sent += 1
@@ -1587,7 +1616,10 @@ func _pick_harass_squad(my_castle) -> Array:
 		var sgb = e.get("_soldier_garrison_building")
 		if sgb != null and sgb.get_ref() != null:
 			continue
-		if e.has_meta("ai_home_guard") or e.has_meta("ai_resource_guard"):
+		if e.has_meta("ai_home_guard") or e.has_meta("ai_resource_guard") or e.has_meta("ai_transporting"):
+			continue
+		var boarded = e.get("_boarded_on")
+		if boarded != null and int(boarded) != -1:
 			continue
 		if int(e.entity_id) in [16, 17, 18, 58, 59]:
 			continue
@@ -2224,7 +2256,10 @@ func _rally_land_army_to_castle():
 		if entity.water_capable: continue
 		# 已集合过的单位不再重复集合
 		if entity.has_meta("ai_rallied"): continue
-		if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass"): continue
+		if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass") or entity.has_meta("ai_transporting"): continue
+		# 已登船单位由 AIWaterCrossing 管理，不再被集结点重新下令
+		var boarded = entity.get("_boarded_on")
+		if boarded != null and int(boarded) != -1: continue
 		# Only rally idle units (刚生产出来的单位处于空闲状态)
 		if entity.current_order != "" or entity.current_target != null: continue
 		entity.set_meta("ai_rallied", true)
@@ -2243,6 +2278,8 @@ func _patrol_navy_around_water():
 		if not entity_belongs_to_me(entity): continue
 		if not entity.water_capable: continue
 		if entity.entity_id == 14: continue  # skip fishing boats
+		if entity.entity_id == 9: continue  # 运载船由渡水模块调度，不能当成巡逻舰
+		if entity.has_meta("ai_transporting"): continue
 		if entity.current_order != "" or entity.current_target != null: continue
 		idle_naval.append(entity)
 	if idle_naval.is_empty(): return

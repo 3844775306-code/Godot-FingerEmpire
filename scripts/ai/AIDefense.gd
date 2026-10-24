@@ -944,6 +944,12 @@ func _land_combat_units() -> Array:
 			continue
 		if e.water_capable:
 			continue
+		# 正在登船/坐船渡水的单位由 AIWaterCrossing 管理，不能被守军调度拉回
+		if e.has_meta("ai_transporting"):
+			continue
+		var boarded = e.get("_boarded_on")
+		if boarded != null and int(boarded) != -1:
+			continue
 		var sgb = e.get("_soldier_garrison_building")
 		if sgb != null and sgb.get_ref() != null:
 			continue
