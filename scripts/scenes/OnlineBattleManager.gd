@@ -5,9 +5,9 @@ extends RTSBattleManager
 var game_mode: int = NetworkManager.GameMode.ONEvONE
 
 # Compact entity array indices (no string keys = faster + smaller)
-enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ATTACK_SPEED, MELEE_ARMOR, SHIELD_ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH, GARRISONED }
+enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ATTACK_SPEED, MELEE_ARMOR, SHIELD_ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH, GARRISONED, NATION }
 enum EB { UPGRADE=0, MAX_UPGRADE, CAN_UPGRADE, BUILD_TIMER, MAX_BUILD, PROD_CURRENT, PROD_PROGRESS, PROD_QSIZE, UPGRADE_TIMER, MAX_UPGRADE_TIME, GARRISON_COUNT }
-const SNAP_VERSION = 4  # 4 = added GARRISONED (Army) + GARRISON_COUNT (Building)
+const SNAP_VERSION = 5  # 5 = added NATION (entity compact array)
 
 # 1v1 专用
 var player_teams: Dictionary = {}         # peer_id -> team
@@ -1239,6 +1239,7 @@ func _compute_entity_hash(entity: GameEntity) -> int:
 	# 队伍也要进哈希：中立废墟被占领时 team 会变（NEUTRAL→BLUE/RED），
 	# 不算进哈希的话增量快照会认为"没变化"，客户端永远停留在中立灰色。
 	h = ((h << 5) ^ (h >> 27)) ^ int(entity.team)
+	h = ((h << 5) ^ (h >> 27)) ^ int(get_entity_nation(entity))
 	if entity is Building:
 		h = ((h << 5) ^ (h >> 27)) ^ entity.upgrade_level
 		h = ((h << 5) ^ (h >> 27)) ^ entity.production_queue.size()
@@ -1667,6 +1668,9 @@ func _serialize_entity_compact(entity: GameEntity, snapshot_key: String) -> Arra
 	if entity is Army and entity._soldier_garrison_building and entity._soldier_garrison_building.get_ref():
 		_is_garrisoned = true
 	a[E.GARRISONED] = _is_garrisoned
+	# 所属国家（客户端血条文字需要「中国」这类国家前缀；owner/队伍都相同的
+	# 混编队伍里只能靠这个字段区分）
+	a[E.NATION] = get_entity_nation(entity)
 	# Building extra
 	if entity is Building:
 		var ba = []

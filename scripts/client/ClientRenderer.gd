@@ -2,8 +2,10 @@ class_name ClientRenderer
 extends Node3D
 const StatsScript = preload("res://scripts/core/BattleStats.gd")
 const StatsPanelScript = preload("res://scripts/ui/BattleStatsPanel.gd")
-enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ATTACK_SPEED, MELEE_ARMOR, SHIELD_ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH, GARRISONED }
+enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ATTACK_SPEED, MELEE_ARMOR, SHIELD_ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH, GARRISONED, NATION }
 enum EB { UPGRADE=0, MAX_UPGRADE, CAN_UPGRADE, BUILD_TIMER, MAX_BUILD, PROD_CURRENT, PROD_PROGRESS, PROD_QSIZE, UPGRADE_TIMER, MAX_UPGRADE_TIME, GARRISON_COUNT }
+# 与 RTSBattleManager.get_nation_name() 保持一致；客户端不跑服务端脚本，血条文字单独查表
+const NATION_LABELS := ["维京", "英格兰", "法兰西", "中国", "匈牙利", "日本", "拜占庭"]
 var last_applied_seq = -1
 # ==================== 玩家信息 ====================
 var player_team: int = -1          # 1v1 模式队伍 (BLUE=0, RED=1)
@@ -593,6 +595,7 @@ func _update_single_entity(info):
 			# 服务端路径增量：null = 未变化，沿用旧路径（否则每帧重发整条 A* 路径太占带宽）
 			"astar_path": arr[E.ASTAR_PATH] if arr.size() > E.ASTAR_PATH and arr[E.ASTAR_PATH] is Array else [],
 			"is_garrisoned": arr[E.GARRISONED] if arr.size() > E.GARRISONED else false,
+			"nation": arr[E.NATION] if arr.size() > E.NATION else -1,
 		}
 		# Building extras
 		if arr.size() > E.size() and arr[E.size()] is Array:
@@ -1269,6 +1272,13 @@ func _get_entity_group_prefix(eid: int) -> String:
 		s += "T%d " % g
 	return s
 
+# 血条文字里的国家前缀，与单机 HUD 的 _nat_tag() 格式一致
+func _get_entity_nation_prefix(info: Dictionary) -> String:
+	var nation := int(info.get("nation", -1))
+	if nation >= 0 and nation < NATION_LABELS.size():
+		return "「%s」" % NATION_LABELS[nation]
+	return ""
+
 const GROUP_LABEL_COLORS = {
 	1: Color(1.0, 0.3, 0.2),   # Red
 	2: Color(0.2, 0.6, 1.0),   # Blue
@@ -1446,7 +1456,7 @@ func _update_health_bars():
 			bar.value = bp
 			var nm2 = info["name"]
 			var _gpfx3 = _get_entity_group_prefix(info["id"])
-			lab.text = _gpfx3 + "%s (建造中 %d%%)" % [nm2, int(bp * 100.0)]
+			lab.text = _gpfx3 + _get_entity_nation_prefix(info) + "%s (建造中 %d%%)" % [nm2, int(bp * 100.0)]
 			var _lbc3 = _get_entity_label_color(info)
 			lab.add_theme_color_override("font_color", _lbc3)
 			_apply_label_nation_outline(lab, info)
@@ -1535,7 +1545,7 @@ func _update_health_bars():
 					var _ord = info.get("order", "")
 					if _ord == "deliver": _res_info = "\n返回"
 					elif _ord == "gather": _res_info = "\n采集中"
-				lab.text = _gpfx2 + "%s Lv.%d%s\n%d/%d" % [info["name"], info.get("level", 1), _res_info, hp, max_hp]
+				lab.text = _gpfx2 + _get_entity_nation_prefix(info) + "%s Lv.%d%s\n%d/%d" % [info["name"], info.get("level", 1), _res_info, hp, max_hp]
 
 				var _lbc4 = _get_entity_label_color(info)
 				lab.add_theme_color_override("font_color", _lbc4)
