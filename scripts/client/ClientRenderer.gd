@@ -16,6 +16,7 @@ var my_color: Color = Color.WHITE
 var entity_nodes: Dictionary = {}   # instance_id -> Node3D
 # 客户端水面材质：用于把船只位置喂给着色器做涟漪/尾迹
 var _water_mat: ShaderMaterial = null
+var _boat_prev: Dictionary = {}   # 船只 instance_id -> 上次采样位置（算航向）
 const BOAT_SHADER_SLOTS: int = 8
 
 # ==================== 战争迷雾 ====================
@@ -2037,8 +2038,8 @@ func _add_water_box(map_size: int = 100, fog_texture = null):
 	var plane = PlaneMesh.new()
 	plane.size = Vector2(map_size, map_size)
 	# 细分后才能看到顶点波浪与船只附近的涟漪
-	plane.subdivide_width = 96
-	plane.subdivide_depth = 96
+	plane.subdivide_width = 128
+	plane.subdivide_depth = 128
 	w.mesh = plane
 	w.position = Vector3(0, -0.9, 0)
 	var shader = load("res://resources/water_noise.gdshader")
@@ -2060,6 +2061,8 @@ func _update_water_boats() -> void:
 		return
 	var arr := PackedVector3Array()
 	arr.resize(BOAT_SHADER_SLOTS)
+	var dirs := PackedVector3Array()
+	dirs.resize(BOAT_SHADER_SLOTS)
 	var count: int = 0
 	for n in entity_nodes.values():
 		if count >= BOAT_SHADER_SLOTS:
@@ -2071,7 +2074,19 @@ func _update_water_boats() -> void:
 		var hp = n.get("health")
 		if hp != null and int(hp) <= 0:
 			continue
-		arr[count] = n.global_position
+		var id: int = n.get_instance_id()
+		var pos: Vector3 = n.global_position
+		var dir := Vector3.ZERO
+		var prev = _boat_prev.get(id)
+		if prev is Vector3:
+			var d: Vector3 = pos - prev
+			d.y = 0.0
+			if d.length() > 0.03:
+				dir = d.normalized()
+		_boat_prev[id] = pos
+		arr[count] = pos
+		dirs[count] = dir
 		count += 1
 	_water_mat.set_shader_parameter("boats", arr)
+	_water_mat.set_shader_parameter("boat_dirs", dirs)
 	_water_mat.set_shader_parameter("boat_count", count)

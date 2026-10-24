@@ -35,6 +35,8 @@ var height_scale: float = 2.0         # 高度缩放系数
 # 水面材质（用于把船只位置推给着色器做涟漪/尾迹，以及按画质档调反射强度）
 var _water_mat: ShaderMaterial = null
 var _boat_update_timer: float = 0.0
+var _boat_prev: Dictionary = {}        # 船只 instance_id -> 上次采样位置（算航向）
+var _boat_prev_cleanup: float = 10.0
 const BOAT_SHADER_SLOTS: int = 8
 
 # 城堡坐标（世界坐标）
@@ -2422,8 +2424,8 @@ func _add_water_box():
 		var plane = PlaneMesh.new()
 		plane.size = Vector2(size, size)
 		# 细分后才能看到顶点波浪与船只附近的涟漪（默认 4 个顶点几乎没有任何位移）
-		plane.subdivide_width = 96
-		plane.subdivide_depth = 96
+		plane.subdivide_width = 128
+		plane.subdivide_depth = 128
 		w.mesh = plane
 		w.position = Vector3(0, -0.9, 0)
 		var shader = load("res://resources/water_noise.gdshader")
@@ -2458,6 +2460,8 @@ func _update_water_boats(delta: float) -> void:
 	_boat_update_timer = 0.15
 	var arr := PackedVector3Array()
 	arr.resize(BOAT_SHADER_SLOTS)
+	var dirs := PackedVector3Array()
+	dirs.resize(BOAT_SHADER_SLOTS)
 	var count: int = 0
 	var bm = get_tree().get_first_node_in_group("battle_manager")
 	var armies: Array = []
@@ -2467,6 +2471,7 @@ func _update_water_boats(delta: float) -> void:
 	else:
 		# 联机客户端没有服务端实体缓存，退化为直接遍历实体组
 		armies = get_tree().get_nodes_in_group("entities")
+	var seen: Dictionary = {}
 	for e in armies:
 		if count >= BOAT_SHADER_SLOTS:
 			break
@@ -2474,9 +2479,30 @@ func _update_water_boats(delta: float) -> void:
 			continue
 		if not bool(e.get("water_capable")):
 			continue
-		arr[count] = e.global_position
+		var id: int = e.get_instance_id()
+		var pos: Vector3 = e.global_position
+		# 与上一次采样位置相减得到航向，供着色器沿航行反方向拉出尾流带
+		var dir := Vector3.ZERO
+		var prev = _boat_prev.get(id)
+		if prev is Vector3:
+			var d: Vector3 = pos - prev
+			d.y = 0.0
+			if d.length() > 0.03:
+				dir = d.normalized()
+		_boat_prev[id] = pos
+		seen[id] = true
+		arr[count] = pos
+		dirs[count] = dir
 		count += 1
+	# 定期清掉已经消失的船的缓存，避免字典无限增长
+	_boat_prev_cleanup -= delta
+	if _boat_prev_cleanup <= 0.0:
+		_boat_prev_cleanup = 10.0
+		for k in _boat_prev.keys():
+			if not seen.has(k):
+				_boat_prev.erase(k)
 	_water_mat.set_shader_parameter("boats", arr)
+	_water_mat.set_shader_parameter("boat_dirs", dirs)
 	_water_mat.set_shader_parameter("boat_count", count)
 
 # 画质档位联动：低画质关掉屏幕空间反射，减少全屏水面的采样开销
