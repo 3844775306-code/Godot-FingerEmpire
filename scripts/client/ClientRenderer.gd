@@ -403,7 +403,7 @@ func _process_snapshot(data: Dictionary):
 						# 毁坏模型随本体一起放大，否则塔倒后残骸会明显偏小
 						if eid == 41: inst.scale = Vector3.ONE * (0.5 * RTSConfig.get_model_scale(eid))
 						node.add_child(inst)
-					var t = Timer.new(); t.one_shot = true; t.wait_time = 0.5
+					var t = Timer.new(); t.one_shot = true; t.wait_time = 0.3
 					t.timeout.connect(node.queue_free); node.add_child(t); t.start()
 				else:
 					node.queue_free()

@@ -333,7 +333,7 @@ func die():
 			var inst = s.instantiate()
 			inst.name = "DemolishedModel"
 			add_child(inst)
-		var t = Timer.new(); t.one_shot = true; t.wait_time = 1.0
+		var t = Timer.new(); t.one_shot = true; t.wait_time = 0.3
 		t.timeout.connect(queue_free); add_child(t); t.start()
 		return
 	# 播放死亡动画后再删除
