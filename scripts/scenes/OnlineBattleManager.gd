@@ -1236,6 +1236,9 @@ func _compute_entity_hash(entity: GameEntity) -> int:
 	h = ((h << 5) ^ (h >> 27)) ^ hash(entity.current_order)
 	h = ((h << 5) ^ (h >> 27)) ^ (1 if entity.hold_position else 0)
 	h = ((h << 5) ^ (h >> 27)) ^ int(entity.owner_peer_id)
+	# 朝向也要进哈希：单位站定攻击、位置不变但目标绕后时，只有 rotation.y
+	# 变化；不哈希的话增量快照不会把新朝向发给客户端。
+	h = ((h << 5) ^ (h >> 27)) ^ int(entity.rotation.y * 100.0)
 	# 队伍也要进哈希：中立废墟被占领时 team 会变（NEUTRAL→BLUE/RED），
 	# 不算进哈希的话增量快照会认为"没变化"，客户端永远停留在中立灰色。
 	h = ((h << 5) ^ (h >> 27)) ^ int(entity.team)

@@ -850,6 +850,8 @@ func recalculate_path():
 # 大规模交战时把每个单位的攻击更新错峰到 2~3 帧一次，并用累积 delta 保持
 # 相同攻击频率。攻击本身的冷却、音效和弹丸数量不变，只减少每帧 GDScript 调用。
 func _attack_tick(target, delta, bm) -> void:
+	# 站定攻击时每帧保持面向目标；目标绕后/移动后不能还朝旧方向挥击。
+	_face_attack_target(target)
 	var stride: int = 1
 	if bm:
 		var total: int = bm._all_entities.size()
@@ -860,6 +862,16 @@ func _attack_tick(target, delta, bm) -> void:
 	if stride > 1 and (Engine.get_physics_frames() + get_instance_id()) % stride != 0:
 		return
 	_attack(target, delta * stride)
+
+# 攻击时面向目标。只转水平方向，避免目标高低差导致单位俯仰。
+func _face_attack_target(target) -> void:
+	if target == null or not is_instance_valid(target):
+		return
+	var to_target: Vector3 = target.global_position - global_position
+	to_target.y = 0.0
+	if to_target.length_squared() < 0.0001:
+		return
+	look_at(global_position + to_target, Vector3.UP)
 
 func _attack(target, delta):
 	if target == null or not is_instance_valid(target) or target.health <= 0:
