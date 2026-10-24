@@ -37,9 +37,11 @@ static func _cached_scene(path: String) -> PackedScene:
 	_scene_cache[path] = ps
 	return ps
 
-# 只有炮弹/巨石这一类推重弹走抛物线；箭矢、弩矢仍保持直线。
-# 源实体 ID 和溅射半径都能识别重弹：炮塔/炮台没有伤害半径时也要靠 ID 兜底。
+# 只有炮弹/巨石这一类推重弹走抛物线；弓箭、弩矢无论配置是否带溅射都保持直线。
+# 弓手 12/31/33/37/58、箭塔 25、战船 13 是箭矢来源，显式排除。
 func _is_ballistic_projectile() -> bool:
+	if source_entity_id in [12, 13, 25, 31, 33, 37, 58]:
+		return false
 	return damage_radius > 0.0 or source_entity_id in [16, 17, 26, 39, 59, 64]
 
 func _reset_ballistic_state() -> void:
