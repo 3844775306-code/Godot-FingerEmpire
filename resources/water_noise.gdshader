@@ -50,7 +50,7 @@ void vertex() {
 		float r = length(rel);
 		float ring = sin(r * 3.2 - TIME * 4.5) * exp(-r * 0.5);
 		float bow = exp(-r * 0.7);
-		w += (ring * 0.10 + bow * 0.05) * wake_strength;
+		w += (ring * 0.05 + bow * 0.02) * wake_strength;
 		foam += (bow * 1.5 + max(0.0, ring) * 1.0) * wake_strength;
 		lift += bow;
 		// 尾流带：沿航行反方向拉长的泡沫条
@@ -61,7 +61,7 @@ void vertex() {
 			if (along < 0.0) {
 				float wake = exp(-across * 1.25) * exp(along * 0.22);
 				foam += wake * 1.6 * wake_strength;
-				w += wake * 0.03 * wake_strength;
+				w += wake * 0.015 * wake_strength;
 			}
 		}
 	}
