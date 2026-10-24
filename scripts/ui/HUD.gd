@@ -805,6 +805,15 @@ func _on_board_screen_pressed():
 
 
 func _ready():
+	# 电脑版左下角的虚拟摇杆用不上：隐藏并停掉它的输入处理，避免抢占鼠标
+	if not InputSource.use_mobile_ui():
+		var stick := get_node_or_null("VirtualStick")
+		if stick is Control:
+			stick.visible = false
+			stick.set_process(false)
+			stick.set_process_input(false)
+			stick.set_process_unhandled_input(false)
+
 	_create_unit_stats_panel()
 
 	# 全局指令：6 个按钮排成两行，统一放在一块半透明底板里

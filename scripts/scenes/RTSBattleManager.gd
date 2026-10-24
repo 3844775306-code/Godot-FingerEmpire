@@ -2552,6 +2552,8 @@ func _tint_preview(node: Node, color: Color):
 func _on_building_selected_for_build(building_id: int):
 	selected_building_id = building_id
 	build_mode = true
+	# 手机端「连续建造」开关打开时，放置完一个建筑后保持建造模式（等价电脑端按住 Shift）
+	mobile_keep_build_mode = GameSettings.mobile_continuous_build
 	var cfg = EntityDatabase.get_config(building_id)
 	if not cfg: return
 

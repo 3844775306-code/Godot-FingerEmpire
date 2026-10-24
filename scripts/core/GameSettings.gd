@@ -30,6 +30,10 @@ var map_seed: int = 0              # 0 = 随机；非 0 可复现同一张图
 enum CommandMode { SINGLE = 0, CONTINUOUS = 1 }
 var command_mode: int = CommandMode.CONTINUOUS  # 单次/连续命令模式（_ready 中按平台设定）
 
+# 手机端专用开关：没有键盘修饰键，用命令栏里的开关代替
+var mobile_batch_produce: bool = false     # 批量生产：点生产按钮 = 电脑端 Ctrl+生产（同类型建筑一起产）
+var mobile_continuous_build: bool = false  # 连续建造：放置完不退出建造模式 = 电脑端 Shift 连续建造
+
 var post_game_data: Dictionary = {}  # {power_history, player_is_blue} for results screen
 
 func _ready() -> void:

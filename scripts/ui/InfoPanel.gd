@@ -199,9 +199,13 @@ func _make_rtl_label() -> RichTextLabel:
 	_set_rtl_font(l, _mobile_font(UITheme.FONT_XS))
 	return l
 
+# 批量生产条件：电脑端 Ctrl，手机端「批量生产」开关（没有键盘修饰键）
+func _is_batch_produce() -> bool:
+	return Input.is_key_pressed(KEY_CTRL) or (InputSource.use_mobile_ui() and GameSettings.mobile_batch_produce)
+
 func _get_same_type_buildings(entity: Building) -> Array[Building]:
 	var result: Array[Building] = []
-	if Input.is_key_pressed(KEY_CTRL) and _is_local_owned_entity(entity):
+	if _is_batch_produce() and _is_local_owned_entity(entity):
 		# Ctrl: ALL player buildings of same type（只批量自己的建筑，队友建筑只读）
 		var bm = get_tree().get_first_node_in_group("battle_manager")
 		if bm and bm.has_node("Entities"):
@@ -377,7 +381,7 @@ func _on_produce_pressed(unit_id: int):
 	if not observed_entity or not is_instance_valid(observed_entity): return
 	if not _is_local_owned_entity(observed_entity): return
 	var n = 5 if Input.is_key_pressed(KEY_SHIFT) else 1
-	var targets = _get_same_type_buildings(observed_entity) if Input.is_key_pressed(KEY_CTRL) else [observed_entity]
+	var targets = _get_same_type_buildings(observed_entity) if _is_batch_produce() else [observed_entity]
 	for b in targets:
 		if not _is_local_owned_entity(b): continue
 		for _i in range(n):

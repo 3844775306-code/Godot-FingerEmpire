@@ -13,6 +13,8 @@ var router: TouchGestureRouter = null
 
 var _box_mode_btn: Button = null
 var _auto_btn: Button = null
+var _batch_produce_btn: Button = null
+var _cont_build_btn: Button = null
 var _panel: Panel = null
 
 func _ready() -> void:
@@ -20,7 +22,7 @@ func _ready() -> void:
 	_build()
 
 func _build() -> void:
-	UILayout.place_dp(self, "br", WIDTH_DP, 186.0)
+	UILayout.place_dp(self, "br", WIDTH_DP, 220.0)
 
 	_panel = Panel.new()
 	_panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -60,6 +62,18 @@ func _build() -> void:
 	_auto_btn = _make_command_button("自动进攻：关", UILayout.font_dp(12.0), "_on_attack_all_pressed")
 	vb.add_child(_auto_btn)
 	sync_auto_attack()
+
+	# 手机端替代键盘修饰键的两个开关
+	var row3 := _make_row()
+	_batch_produce_btn = _make_button("批量生产：关", UILayout.font_dp(11.0))
+	_batch_produce_btn.toggle_mode = true
+	_batch_produce_btn.toggled.connect(_on_batch_produce_toggled)
+	row3.add_child(_batch_produce_btn)
+	_cont_build_btn = _make_button("连续建造：关", UILayout.font_dp(11.0))
+	_cont_build_btn.toggle_mode = true
+	_cont_build_btn.toggled.connect(_on_cont_build_toggled)
+	row3.add_child(_cont_build_btn)
+	vb.add_child(row3)
 	set_process(true)
 
 func _make_row() -> HBoxContainer:
@@ -88,6 +102,21 @@ func _on_box_mode_toggled(pressed: bool) -> void:
 	_box_mode_btn.text = "框选：开" if pressed else "框选：关"
 	if router:
 		router.set_box_select_mode(pressed)
+
+# 批量生产开关：打开后点生产按钮 = 电脑端 Ctrl+生产（同类型建筑一起产）
+func _on_batch_produce_toggled(pressed: bool) -> void:
+	GameSettings.mobile_batch_produce = pressed
+	_batch_produce_btn.text = "批量生产：开" if pressed else "批量生产：关"
+	_batch_produce_btn.add_theme_color_override("font_color", Color(0.55, 0.95, 0.55) if pressed else Color(0.9, 0.9, 0.9))
+
+# 连续建造开关：打开后放置建筑不退出建造模式 = 电脑端按住 Shift
+func _on_cont_build_toggled(pressed: bool) -> void:
+	GameSettings.mobile_continuous_build = pressed
+	_cont_build_btn.text = "连续建造：开" if pressed else "连续建造：关"
+	_cont_build_btn.add_theme_color_override("font_color", Color(0.55, 0.95, 0.55) if pressed else Color(0.9, 0.9, 0.9))
+	var bm := get_tree().get_first_node_in_group("battle_manager")
+	if bm:
+		bm.mobile_keep_build_mode = pressed
 
 func sync_auto_attack() -> void:
 	if _auto_btn == null:
