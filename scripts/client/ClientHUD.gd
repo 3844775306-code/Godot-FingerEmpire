@@ -35,7 +35,7 @@ var _stats_res_bars: Dictionary = {}
 var _stats_res_info: Dictionary = {}
 var _stats_castle_bar: HealthBarControl
 var _stats_castle_label: Label
-var _toggle_stats_btn: Button
+var _cmd_panel: Panel = null
 var _unit_stats_timer: float = 1.0
 
 # ==================== 警报系统 ====================
@@ -95,32 +95,11 @@ func _refresh_stats_nation() -> void:
 
 
 # ==================== 单位统计面板创建 ====================
-func _create_stats_toggle_button():
-	_toggle_stats_btn = Button.new()
-	_toggle_stats_btn.name = "StatsToggleButton"
-	_toggle_stats_btn.text = "📊 统计"
-	_toggle_stats_btn.position = Vector2(620, 10)
-	_toggle_stats_btn.toggle_mode = true
-	_toggle_stats_btn.button_pressed = true
-	_toggle_stats_btn.custom_minimum_size = Vector2(140, 32)
-	UITheme.apply_muted_button(_toggle_stats_btn, UITheme.FONT_MD)
-	_toggle_stats_btn.pressed.connect(_on_toggle_stats_pressed)
-	add_child(_toggle_stats_btn)
-	UITheme.hover_scale(_toggle_stats_btn)
-
-func _on_toggle_stats_pressed():
-	unit_stats_visible = _toggle_stats_btn.button_pressed
-	if unit_stats_panel:
-		unit_stats_panel.visible = unit_stats_visible
-
-# 联机客户端结算时隐藏统计面板与切换按钮
+# 联机客户端结算时隐藏统计面板
 func hide_stat_panels() -> void:
 	unit_stats_visible = false
 	if unit_stats_panel:
 		unit_stats_panel.visible = false
-	if _toggle_stats_btn:
-		_toggle_stats_btn.button_pressed = false
-		_toggle_stats_btn.visible = false
 
 func _create_unit_stats_panel():
 	unit_stats_panel = Control.new()
@@ -583,49 +562,46 @@ func _on_alert_gui_input(event: InputEvent) -> void:
 func _ready():
 	# 与单机版一致：左上统计面板（含资源/人口/主城/经济/军队/建筑），原左下角资源 HUD 已移除
 	_create_unit_stats_panel()
-	_create_stats_toggle_button()
 
-	# 全军指令：位置对齐单机版（统计面板右侧两列）
-	attack_all_btn = Button.new()
-	attack_all_btn.text = "全选屏幕军队 (F1)"
-	attack_all_btn.position = Vector2(620, 50)
-	attack_all_btn.custom_minimum_size = Vector2(210, 32)
-	UITheme.apply_primary_button(attack_all_btn, UITheme.FONT_MD)
-	attack_all_btn.pressed.connect(_on_select_screen_pressed)
-	add_child(attack_all_btn)
+	# 电脑版左下角摇杆用不上：隐藏并停掉它的输入处理，避免抢占鼠标
+	if not InputSource.use_mobile_ui():
+		var parent_node := get_parent()
+		var stick := parent_node.get_node_or_null("VirtualStick") if parent_node else null
+		if stick is Control:
+			stick.visible = false
+			stick.set_process(false)
+			stick.set_process_input(false)
+			stick.set_process_unhandled_input(false)
 
-	retreat_all_btn = Button.new()
-	retreat_all_btn.text = "全选所有军队 (Ctrl+F1)"
-	retreat_all_btn.position = Vector2(840, 50)
-	retreat_all_btn.custom_minimum_size = Vector2(210, 32)
-	UITheme.apply_primary_button(retreat_all_btn, UITheme.FONT_MD)
-	retreat_all_btn.pressed.connect(_on_select_all_pressed)
-	add_child(retreat_all_btn)
+	# 全军指令：与单机版一致，5 个按钮统一放在半透明底板里（620,10）
+	_cmd_panel = Panel.new()
+	_cmd_panel.name = "GlobalCommandPanel"
+	_cmd_panel.position = Vector2(620, 10)
+	_cmd_panel.size = Vector2(662, 86)
+	_cmd_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var cmd_style := StyleBoxFlat.new()
+	cmd_style.bg_color = Color(0.0, 0.0, 0.0, 0.38)
+	cmd_style.set_corner_radius_all(6)
+	cmd_style.set_border_width_all(1)
+	cmd_style.border_color = Color(UITheme.GOLD, 0.25)
+	_cmd_panel.add_theme_stylebox_override("panel", cmd_style)
+	add_child(_cmd_panel)
 
-	var b_auto = Button.new()
-	b_auto.text = "⚔️ 自动进攻：关 (F2)"
-	b_auto.position = Vector2(620, 92)
-	b_auto.custom_minimum_size = Vector2(210, 32)
-	UITheme.apply_danger_button(b_auto, UITheme.FONT_MD)
-	b_auto.pressed.connect(_on_attack_all_pressed)
-	add_child(b_auto)
-	auto_attack_btn = b_auto
+	var cmd_grid := GridContainer.new()
+	cmd_grid.columns = 3
+	cmd_grid.position = Vector2(8, 8)
+	cmd_grid.add_theme_constant_override("h_separation", 8)
+	cmd_grid.add_theme_constant_override("v_separation", 6)
+	cmd_grid.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_cmd_panel.add_child(cmd_grid)
 
-	var b_ret_screen = Button.new()
-	b_ret_screen.text = "屏幕军队撤退 (F3)"
-	b_ret_screen.position = Vector2(840, 92)
-	b_ret_screen.custom_minimum_size = Vector2(210, 32)
-	UITheme.apply_primary_button(b_ret_screen, UITheme.FONT_MD)
-	b_ret_screen.pressed.connect(_on_retreat_screen_pressed)
-	add_child(b_ret_screen)
-
-	var b_ret_all = Button.new()
-	b_ret_all.text = "所有军队撤退 (Ctrl+F3)"
-	b_ret_all.position = Vector2(620, 134)
-	b_ret_all.custom_minimum_size = Vector2(210, 32)
-	UITheme.apply_primary_button(b_ret_all, UITheme.FONT_MD)
-	b_ret_all.pressed.connect(_on_retreat_all_pressed)
-	add_child(b_ret_all)
+	attack_all_btn = _make_cmd_button("全选屏幕军队 (F1)", _on_select_screen_pressed, false)
+	retreat_all_btn = _make_cmd_button("全选所有军队 (Ctrl+F1)", _on_select_all_pressed, false)
+	auto_attack_btn = _make_cmd_button("⚔️ 自动进攻：关 (F2)", _on_attack_all_pressed, true)
+	var b_ret_screen = _make_cmd_button("屏幕军队撤退 (F3)", _on_retreat_screen_pressed, false)
+	var b_ret_all = _make_cmd_button("所有军队撤退 (Ctrl+F3)", _on_retreat_all_pressed, false)
+	for b in [attack_all_btn, retreat_all_btn, auto_attack_btn, b_ret_screen, b_ret_all]:
+		cmd_grid.add_child(b)
 
 	# 顶部中央偏右两行大字：第一行性能、第二行对局/网络信息（只保留这两条）
 	# 桌面端偏右（0.675）避开左侧全局指令按钮与右上小地图；手机端顶部没按钮，保持居中
@@ -655,7 +631,7 @@ func _ready():
 	bg_style.set_corner_radius_all(int(UILayout.dp(6.0)))
 	_top_bg.add_theme_stylebox_override("panel", bg_style)
 	diag.add_child(_top_bg)
-	_fps_label = _make_top_label(diag, "DiagFPS", y1, line_h, f1, half_w, center_anchor, UITheme.EMERALD)
+	_fps_label = _make_top_label(diag, "DiagFPS", y1, line_h, f1, half_w, center_anchor, Color.LIME_GREEN)
 	_net_stat_label = _make_top_label(diag, "DiagInfo", y1 + line_h, line_h, f2, half_w, center_anchor, Color(1.0, 0.9, 0.3))
 	# 游戏时间 / 延迟已并入第二行，不再单独显示
 	_game_time_label = null
@@ -671,6 +647,17 @@ func _ready():
 		_mobile_hud = MobileHUD.new()
 		add_child(_mobile_hud)
 		_mobile_hud.setup(self)
+
+func _make_cmd_button(text: String, cb: Callable, danger: bool) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.custom_minimum_size = Vector2(210, 30)
+	if danger:
+		UITheme.apply_danger_button(b, UITheme.FONT_MD)
+	else:
+		UITheme.apply_primary_button(b, UITheme.FONT_MD)
+	b.pressed.connect(cb)
+	return b
 
 func _connect_client_input():
 	var ci = _get_client_input_node()

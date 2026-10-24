@@ -36,8 +36,12 @@ var placement_preview: MeshInstance3D
 # ==================== 定时器 ====================
 var health_bar_timer: float = 0.0
 const HEALTH_BAR_INTERVAL: float = 0.05  # 20Hz，血条丝滑跟随
-# 头顶血条尺寸：原 60x10，宽度 ×0.5、高度 ×0.25 后再把高度 ×2
-const HP_BAR_SIZE: Vector2 = Vector2(30.0, 5.0)
+# 头顶血条尺寸：与单机版一致，50×8 基准，正交相机按 30/size 缩放
+const HP_BAR_SIZE: Vector2 = Vector2(50.0, 8.0)
+const HP_BAR_REF_ORTHO: float = 30.0
+const HP_BAR_BASE_FONT: int = 18
+var _bar_scale: float = 1.0
+var _bar_size: Vector2 = HP_BAR_SIZE
 
 # 客户端诊断
 var _diag_snap_age: float = 999.0
@@ -1393,6 +1397,11 @@ func _prune_missing_own_entities(seen_ids: Dictionary):
 func _update_health_bars():
 	var cam = get_viewport().get_camera_3d()
 	if not cam: return
+	# 血条随相机缩放，与单机版 HUD._update_health_bars 保持一致
+	_bar_scale = 1.0
+	if cam.projection == Camera3D.PROJECTION_ORTHOGONAL:
+		_bar_scale = HP_BAR_REF_ORTHO / maxf(cam.size, 0.001)
+	_bar_size = HP_BAR_SIZE * _bar_scale
 	var viewport_rect = get_viewport().get_visible_rect().grow(50)
 
 	for id in entity_nodes.keys():
@@ -1499,7 +1508,7 @@ func _update_health_bars():
 				# 血条颜色与模型一致：按 owner_peer_id 取该玩家专属阵营色
 				bar.update_bar(hp, max_hp, team, _get_entity_color(info))
 				if viewport_rect.has_point(screen_pos):
-					bar.position = screen_pos - Vector2(HP_BAR_SIZE.x * 0.5, HP_BAR_SIZE.y * 0.5) + Vector2(0, -22)
+					bar.position = screen_pos - Vector2(_bar_size.x * 0.5, _bar_size.y * 0.5) + Vector2(0, -22.0 * _bar_scale)
 				else: bar.visible = false
 			else:
 				if unit_bars.has(id) and unit_bars[id].bar: unit_bars[id].bar.visible = false
@@ -1517,8 +1526,8 @@ func _update_health_bars():
 			# 血条颜色与模型一致：按 owner_peer_id 取该玩家专属阵营色
 			bar.update_bar(hp, max_hp, team, _get_entity_color(info))
 			if viewport_rect.has_point(screen_pos):
-				bar.position = screen_pos - Vector2(HP_BAR_SIZE.x * 0.5, HP_BAR_SIZE.y * 0.5)
-				lab.position = bar.position + Vector2(0, -22)
+				bar.position = screen_pos - Vector2(_bar_size.x * 0.5, _bar_size.y * 0.5)
+				lab.position = bar.position + Vector2(0, -22.0 * _bar_scale)
 				lab.visible = show_unit_text
 				var _gpfx2 = _get_entity_group_prefix(info["id"])
 				var _res_info = ""
@@ -1556,12 +1565,17 @@ func _get_or_create_health_bar(id) -> HealthBarControl:
 		unit_bars[id] = { "bar":null, "label":null, "prod_bar":null, "prod_label":null, "order_label":null }
 	if not unit_bars[id].bar:
 		var b = HealthBarControl.new()
-		b.size = HP_BAR_SIZE
+		b.size = _bar_size
 		add_child(b)
 		# add_child 会触发 HealthBarControl._ready 写入默认最小尺寸，需在其后覆盖
-		b.custom_minimum_size = HP_BAR_SIZE
-		b.size = HP_BAR_SIZE
+		b.custom_minimum_size = _bar_size
+		b.size = _bar_size
 		unit_bars[id].bar = b
+	# 相机缩放变化时同步已有血条尺寸
+	var bar0 = unit_bars[id].bar
+	if bar0.custom_minimum_size != _bar_size:
+		bar0.custom_minimum_size = _bar_size
+	bar0.size = _bar_size
 	return unit_bars[id].bar
 
 func _get_or_create_label(id) -> Label:
@@ -1569,12 +1583,14 @@ func _get_or_create_label(id) -> Label:
 		unit_bars[id] = { "bar":null, "label":null, "prod_bar":null, "prod_label":null, "order_label":null }
 	if not unit_bars[id].label:
 		var l = Label.new()
-		l.add_theme_font_size_override("font_size", 20)
+		l.add_theme_font_size_override("font_size", HP_BAR_BASE_FONT)
 		l.add_theme_color_override("font_color", Color.WHITE)
 		l.add_theme_color_override("font_outline_color", Color.BLACK)
 		l.add_theme_constant_override("outline_size", 1)
 		add_child(l)
 		unit_bars[id].label = l
+	# 字号随血条一起缩放，与单机版一致
+	unit_bars[id].label.add_theme_font_size_override("font_size", maxi(12, int(float(HP_BAR_BASE_FONT) * _bar_scale)))
 	return unit_bars[id].label
 
 func _get_or_create_prod_bar(id) -> ProgressBar:
