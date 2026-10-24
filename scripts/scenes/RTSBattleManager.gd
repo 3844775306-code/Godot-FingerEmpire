@@ -202,7 +202,7 @@ var _diag_line_h: float = 34.0
 # 这里按真实 FPS 分档降低 3D 渲染分辨率，并缩短阴影距离/降低阴影分片；
 # 不再直接关闭实时阴影，否则单位会完全失去影子。
 var _perf_quality_level: int = 0
-# 玩家在对局设置里手动选过画质后置 true：自动画质让位，不再每秒覆盖
+# 默认锁定“极致”画质，不再参与后期自动降档；玩家仍可在设置面板手动选档
 var hand_quality_mode: bool = false
 var _perf_sample_timer: float = 5.0
 var _perf_low_streak: int = 0
@@ -971,6 +971,8 @@ func _ready():
 	_create_diag_label()
 	AudioManager.play_music("battle")
 	set_process(true)
+	# 默认画质固定为“极致”，不进入后期自动降档逻辑。
+	_apply_default_quality()
 
 # ==================== 乱斗模式（FFA） ====================
 # 开局：N 国环绕布局，各国独立 team/owner/颜色/国家加成/AI控制器。
@@ -3150,10 +3152,25 @@ func _process(delta):
 	_tick_physics_rate(delta)
 
 # ==================== 后期自动画质 ====================
+# 默认画质固定为“极致”，并锁定档位；玩家在设置面板手动选择其他画质时仍会覆盖该档位。
+func _apply_default_quality() -> void:
+	hand_quality_mode = true
+	_perf_quality_level = 0
+	var vp := get_viewport()
+	if vp:
+		vp.scaling_3d_scale = 1.0
+	var light := _find_directional_light()
+	if light:
+		light.shadow_enabled = true
+		light.directional_shadow_max_distance = 120.0
+	var env := _find_world_environment()
+	if env:
+		env.ssao_enabled = true
+
 func _tick_adaptive_quality(delta: float) -> void:
 	if game_over or DisplayServer.get_name() == "headless":
 		return
-	# 玩家手动锁定画质后不再自动降档
+	# 默认锁定最高画质，或玩家手动选定画质后，不再自动降档
 	if hand_quality_mode:
 		return
 	if not _perf_initialized:
