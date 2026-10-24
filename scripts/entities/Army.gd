@@ -503,6 +503,11 @@ func _think(delta, bm):
 		current_target = null
 		_set_order(UnitState.IDLE)
 		is_attack_moving = false
+	# 队列里可能还有已采空/被摧毁的目标；整队清掉，避免循环命令反复撞失效目标
+	for cmd in command_queue:
+		if cmd.has("target") and not _is_valid_command_target(cmd["target"]):
+			_clear_command_queue()
+			break
 	# 驻扎追击距离限制：敌人离驻扎点超过视野则放弃追击
 	if garrison_point != Vector3.ZERO and current_target != null and _order_is(UnitState.ATTACKING):
 		if current_target.global_position.distance_to(garrison_point) > 10.0:
