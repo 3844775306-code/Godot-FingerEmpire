@@ -627,22 +627,40 @@ func _ready():
 	b_ret_all.pressed.connect(_on_retreat_all_pressed)
 	add_child(b_ret_all)
 
-	# 顶部中央两行大字：第一行性能、第二行对局/网络信息（只保留这两条）
+	# 顶部中央偏右两行大字：第一行性能、第二行对局/网络信息（只保留这两条）
+	# 桌面端偏右（0.675）避开左侧全局指令按钮与右上小地图；手机端顶部没按钮，保持居中
 	var mobile := InputSource.use_mobile_ui()
+	var center_anchor: float = 0.5 if mobile else 0.675
 	var f1: int = UILayout.font_dp(12.0) if mobile else 24
 	var f2: int = UILayout.font_dp(11.0) if mobile else 22
 	var y1: float = UILayout.dp(76.0) if mobile else 6.0
 	var line_h: float = UILayout.dp(18.0) if mobile else 34.0
-	var half_w: float = UILayout.dp(336.0) if mobile else 760.0
+	var half_w: float = UILayout.dp(336.0) if mobile else 560.0
+	_top_top_y = y1
+	_top_line_h = line_h
 	var diag := CanvasLayer.new()
 	diag.name = "TopInfoLayer"
 	diag.layer = 90
 	add_child(diag)
-	_fps_label = _make_top_label(diag, "DiagFPS", y1, line_h, f1, half_w, UITheme.EMERALD)
-	_net_stat_label = _make_top_label(diag, "DiagInfo", y1 + line_h, line_h, f2, half_w, Color(1.0, 0.9, 0.3))
+	_top_bg = Panel.new()
+	_top_bg.name = "TopInfoBG"
+	_top_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_top_bg.z_index = 89
+	_top_bg.anchor_left = center_anchor
+	_top_bg.anchor_right = center_anchor
+	_top_bg.anchor_top = 0.0
+	_top_bg.anchor_bottom = 0.0
+	var bg_style := StyleBoxFlat.new()
+	bg_style.bg_color = Color(0.0, 0.0, 0.0, 0.45)
+	bg_style.set_corner_radius_all(int(UILayout.dp(6.0)))
+	_top_bg.add_theme_stylebox_override("panel", bg_style)
+	diag.add_child(_top_bg)
+	_fps_label = _make_top_label(diag, "DiagFPS", y1, line_h, f1, half_w, center_anchor, UITheme.EMERALD)
+	_net_stat_label = _make_top_label(diag, "DiagInfo", y1 + line_h, line_h, f2, half_w, center_anchor, Color(1.0, 0.9, 0.3))
 	# 游戏时间 / 延迟已并入第二行，不再单独显示
 	_game_time_label = null
 	_ping_label = null
+	_update_top_bg()
 
 	set_process(true)
 	add_to_group("client_hud")
@@ -690,16 +708,36 @@ var _net_stat_timer: float = 1.0
 var _ping_label: Label = null
 var _net_stat_label: Label = null
 var _ping_rtt: int = 0
+var _top_bg: Panel = null
+var _top_top_y: float = 6.0
+var _top_line_h: float = 34.0
 
-# 顶部中央居中的一行信息（挂在独立 CanvasLayer 上，锚点按视口算）
+# 半透明底板按两行文字的实际宽度自适应
+func _update_top_bg() -> void:
+	if _top_bg == null or not is_instance_valid(_top_bg) or _fps_label == null:
+		return
+	var pad_x: float = UILayout.dp(10.0)
+	var pad_y: float = UILayout.dp(4.0)
+	var text_w: float = _fps_label.get_minimum_size().x
+	if _net_stat_label:
+		text_w = maxf(text_w, _net_stat_label.get_minimum_size().x)
+	var w: float = text_w + pad_x * 2.0
+	var h: float = _top_line_h * 2.0 + pad_y * 2.0
+	var bg_top: float = maxf(_top_top_y - pad_y, 0.0)
+	_top_bg.offset_left = -w * 0.5
+	_top_bg.offset_right = w * 0.5
+	_top_bg.offset_top = bg_top
+	_top_bg.offset_bottom = bg_top + h
+
+# 顶部中央的一行信息（挂在独立 CanvasLayer 上，锚点按视口算）
 func _make_top_label(parent: CanvasLayer, node_name: String, top_y: float, line_h: float,
-		font_size: int, half_w: float, color: Color) -> Label:
+		font_size: int, half_w: float, center_anchor: float, color: Color) -> Label:
 	var lb := Label.new()
 	lb.name = node_name
 	lb.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	lb.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	lb.anchor_left = 0.5
-	lb.anchor_right = 0.5
+	lb.anchor_left = center_anchor
+	lb.anchor_right = center_anchor
 	lb.anchor_top = 0.0
 	lb.anchor_bottom = 0.0
 	lb.offset_left = -half_w
@@ -745,6 +783,7 @@ func _process(delta):
 			_net_stat_label.text = "AI:%s | 地图:%s | 时间:%02d:%02d | 延迟:%s | 快照:%d/s" % [
 				dn, map_name, t_min, t_sec, ping_txt, _snap_recv_rate
 			]
+		_update_top_bg()
 
 	# 快照率每秒统计一次
 	_net_stat_timer -= delta

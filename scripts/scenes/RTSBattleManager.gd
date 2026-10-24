@@ -163,6 +163,9 @@ var _diag_active_frame: int = 0
 var _diag_physics_heartbeat: int = 0
 var _fps_label: Label = null
 var _snap_rate_label: Label = null
+var _diag_bg: Panel = null
+var _diag_top_y: float = 6.0
+var _diag_line_h: float = 34.0
 
 # ==================== 后期自动画质 ====================
 # 后期实体数量上来后，大量单位模型 + 实时阴影会把 GPU 压到 30~40 FPS。
@@ -187,30 +190,65 @@ const PERF_SHADOW_DISTANCE_SCALES: Array[float] = [1.0, 0.9, 0.8, 0.7, 0.6]
 var _distant_shadow_timer: float = 2.0
 
 func _create_diag_label():
-	# 顶部中央两行大字：第一行性能（帧率/画质/实体），第二行对局信息（AI/地图/时间）
+	# 顶部中央偏右的两行大字：第一行性能（帧率/画质/实体），第二行对局信息（AI/地图/时间）
+	# 桌面端放偏右（0.675）避开左侧那排全局指令按钮，右侧也不压小地图；手机端顶部没有按钮，保持居中
 	var mobile := InputSource.use_mobile_ui()
+	var center_anchor: float = 0.5 if mobile else 0.675
 	var f1: int = UILayout.font_dp(12.0) if mobile else 24
 	var f2: int = UILayout.font_dp(11.0) if mobile else 22
 	var y1: float = UILayout.dp(76.0) if mobile else 6.0
 	var line_h: float = UILayout.dp(18.0) if mobile else 34.0
-	var half_w: float = UILayout.dp(330.0) if mobile else 700.0
-	_fps_label = _make_top_label("DiagFPS", y1, line_h, f1, half_w, Color.LIME_GREEN)
-	_snap_rate_label = _make_top_label("DiagInfo", y1 + line_h, line_h, f2, half_w, Color(1.0, 0.9, 0.3))
+	var half_w: float = UILayout.dp(330.0) if mobile else 520.0
+	_diag_top_y = y1
+	_diag_line_h = line_h
+	_diag_bg = Panel.new()
+	_diag_bg.name = "DiagBG"
+	_diag_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_diag_bg.z_index = 199
+	_diag_bg.anchor_left = center_anchor
+	_diag_bg.anchor_right = center_anchor
+	_diag_bg.anchor_top = 0.0
+	_diag_bg.anchor_bottom = 0.0
+	var bg_style := StyleBoxFlat.new()
+	bg_style.bg_color = Color(0.0, 0.0, 0.0, 0.45)
+	bg_style.set_corner_radius_all(int(UILayout.dp(6.0)))
+	_diag_bg.add_theme_stylebox_override("panel", bg_style)
+	_fps_label = _make_top_label("DiagFPS", y1, line_h, f1, half_w, center_anchor, Color.LIME_GREEN)
+	_snap_rate_label = _make_top_label("DiagInfo", y1 + line_h, line_h, f2, half_w, center_anchor, Color(1.0, 0.9, 0.3))
 	var canvas = CanvasLayer.new()
 	canvas.name = "DiagLayer"
 	canvas.layer = 100
+	canvas.add_child(_diag_bg)
 	canvas.add_child(_fps_label)
 	canvas.add_child(_snap_rate_label)
 	add_child(canvas)
+	_update_diag_bg(y1, line_h)
 
-# 顶部中央居中的一行信息（带黑描边，浅色地面也看得清）
-func _make_top_label(node_name: String, top_y: float, line_h: float, font_size: int, half_w: float, color: Color) -> Label:
+# 半透明底板按两行文字的实际宽度自适应，文字换长（实体数变大）时也不会露在外面
+func _update_diag_bg(top_y: float, line_h: float) -> void:
+	if _diag_bg == null or not is_instance_valid(_diag_bg) or _fps_label == null:
+		return
+	var pad_x: float = UILayout.dp(10.0)
+	var pad_y: float = UILayout.dp(4.0)
+	var text_w: float = _fps_label.get_minimum_size().x
+	if _snap_rate_label:
+		text_w = maxf(text_w, _snap_rate_label.get_minimum_size().x)
+	var w: float = text_w + pad_x * 2.0
+	var h: float = line_h * 2.0 + pad_y * 2.0
+	var bg_top: float = maxf(top_y - pad_y, 0.0)
+	_diag_bg.offset_left = -w * 0.5
+	_diag_bg.offset_right = w * 0.5
+	_diag_bg.offset_top = bg_top
+	_diag_bg.offset_bottom = bg_top + h
+
+# 顶部中央的一行信息（带黑描边，浅色地面也看得清）
+func _make_top_label(node_name: String, top_y: float, line_h: float, font_size: int, half_w: float, center_anchor: float, color: Color) -> Label:
 	var lb := Label.new()
 	lb.name = node_name
 	lb.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	lb.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	lb.anchor_left = 0.5
-	lb.anchor_right = 0.5
+	lb.anchor_left = center_anchor
+	lb.anchor_right = center_anchor
 	lb.anchor_top = 0.0
 	lb.anchor_bottom = 0.0
 	lb.offset_left = -half_w
@@ -2893,6 +2931,8 @@ func _process(delta):
 			var map_name := String(MapPresets.get_info(GameSettings.map_id).get("name", "经典大陆"))
 			var clock := "%02d:%02d" % [int(game_time / 60.0), int(game_time) % 60]
 			_snap_rate_label.text = "AI:%s | 地图:%s | 时间:%s" % [dn, map_name, clock]
+		# 底板宽度跟着文字走
+		_update_diag_bg(_diag_top_y, _diag_line_h)
 		_diag_physics_heartbeat = phys_frames
 		_diag_step = (_diag_step + 1) % 1000
 

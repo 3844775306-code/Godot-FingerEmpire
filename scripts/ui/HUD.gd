@@ -57,6 +57,12 @@ var _stats_res_info: Dictionary = {}
 var _stats_castle_bar: HealthBarControl
 var _stats_castle_label: Label
 var _toggle_stats_btn: Button
+# 折叠态：面板收成一条「资源 + 人口」胶囊
+var _stats_collapsed: bool = false
+var _stats_collapse_btn: Button = null
+var _stats_capsule: Panel = null
+var _capsule_pop_label: Label = null
+var _capsule_res_labels: Dictionary = {}
 var _alert_label: Label = null
 var _alert_bg: Control = null
 var _alert_timer: float = 0.0
@@ -141,19 +147,90 @@ func _create_stats_toggle_button():
 
 func _on_toggle_stats_pressed():
 	unit_stats_visible = _toggle_stats_btn.button_pressed
-	if unit_stats_panel:
-		unit_stats_panel.visible = unit_stats_visible
+	_set_stats_collapsed(_stats_collapsed)
 
 # 战斗结算面板弹出时，隐藏所有统计/决策类面板，避免压在结算层上
 func hide_stat_panels() -> void:
 	unit_stats_visible = false
 	if unit_stats_panel:
 		unit_stats_panel.visible = false
+	if _stats_capsule:
+		_stats_capsule.visible = false
 	if _toggle_stats_btn:
 		_toggle_stats_btn.button_pressed = false
 		_toggle_stats_btn.visible = false
 	if _diplo_panel:
 		_diplo_panel.visible = false
+
+# 统计面板折叠：展开是完整面板，折叠后只留一条「资源 + 人口」胶囊
+func _set_stats_collapsed(collapsed: bool) -> void:
+	_stats_collapsed = collapsed
+	if unit_stats_panel:
+		unit_stats_panel.visible = (not collapsed) and unit_stats_visible
+	if _stats_capsule:
+		_stats_capsule.visible = collapsed and unit_stats_visible
+
+func _on_stats_collapse_pressed() -> void:
+	_set_stats_collapsed(true)
+
+func _on_stats_capsule_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		_set_stats_collapsed(false)
+
+func _res_color_for(key: String) -> Color:
+	match key:
+		"gold": return UITheme.RES_GOLD
+		"wood": return UITheme.RES_WOOD
+		"stone": return UITheme.RES_STONE
+		"food": return UITheme.RES_FOOD
+		"oil": return UITheme.RES_OIL
+	return Color.WHITE
+
+func _update_stats_capsule(res: Dictionary, pop: int, max_pop: int) -> void:
+	if _capsule_pop_label:
+		_capsule_pop_label.text = "👥 %d/%d" % [pop, max_pop]
+	for rk in _capsule_res_labels.keys():
+		var l: Label = _capsule_res_labels[rk]
+		if l:
+			l.text = "%s %d" % [UITheme.RESOURCE_ICONS.get(rk, ""), int(res.get(rk, 0))]
+
+# 折叠后的胶囊：一行显示人口与五项资源，点击展开回完整统计面板
+func _create_stats_capsule() -> void:
+	_stats_capsule = Panel.new()
+	_stats_capsule.name = "StatsCapsule"
+	_stats_capsule.z_index = 100
+	_stats_capsule.position = Vector2(10, 10)
+	_stats_capsule.size = Vector2(600, 40)
+	_stats_capsule.visible = false
+	_stats_capsule.mouse_filter = Control.MOUSE_FILTER_STOP
+	var st := StyleBoxFlat.new()
+	st.bg_color = Color(UITheme.INK, UITheme.ALPHA_BG)
+	st.set_corner_radius_all(8)
+	st.set_border_width_all(2)
+	st.border_color = Color(UITheme.GOLD, UITheme.ALPHA_BORDER)
+	_stats_capsule.add_theme_stylebox_override("panel", st)
+	var row := HBoxContainer.new()
+	row.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	row.offset_left = 12
+	row.offset_right = -12
+	row.add_theme_constant_override("separation", 14)
+	_stats_capsule.add_child(row)
+	_capsule_pop_label = Label.new()
+	_capsule_pop_label.add_theme_font_size_override("font_size", 17)
+	_capsule_pop_label.add_theme_color_override("font_color", Color.WHITE)
+	_capsule_pop_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_capsule_pop_label.text = "👥 0/0"
+	row.add_child(_capsule_pop_label)
+	for rk in ["gold", "wood", "stone", "food", "oil"]:
+		var l := Label.new()
+		l.add_theme_font_size_override("font_size", 16)
+		l.add_theme_color_override("font_color", _res_color_for(rk))
+		l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		l.text = "0"
+		row.add_child(l)
+		_capsule_res_labels[rk] = l
+	_stats_capsule.gui_input.connect(_on_stats_capsule_input)
+	add_child(_stats_capsule)
 
 func _create_unit_stats_panel():
 	unit_stats_panel = Control.new()
@@ -284,6 +361,17 @@ func _create_unit_stats_panel():
 
 	add_child(unit_stats_panel)
 
+	# 标题栏右上角的折叠按钮：收成资源/人口胶囊
+	_stats_collapse_btn = Button.new()
+	_stats_collapse_btn.name = "StatsCollapseButton"
+	_stats_collapse_btn.text = "▴ 折叠"
+	_stats_collapse_btn.position = Vector2(500, 8)
+	_stats_collapse_btn.custom_minimum_size = Vector2(88, 30)
+	UITheme.apply_muted_button(_stats_collapse_btn, UITheme.FONT_SM)
+	_stats_collapse_btn.pressed.connect(_on_stats_collapse_pressed)
+	unit_stats_panel.add_child(_stats_collapse_btn)
+	_create_stats_capsule()
+
 func _make_stats_rtl() -> RichTextLabel:
 	var r = RichTextLabel.new()
 	r.bbcode_enabled = true
@@ -367,6 +455,10 @@ func _update_unit_stats():
 	if _stats_pop_label and _stats_pop_bar:
 		_stats_pop_label.text = "👥 人口: %d/%d" % [pop, max_pop]
 		_stats_pop_bar.value = min(float(pop) / max(max_pop, 1) * 100, 100)
+
+	# 折叠时只刷新资源/人口胶囊
+	if _stats_capsule and _stats_capsule.visible:
+		_update_stats_capsule(res, pop, max_pop)
 
 	# 各资源采集人数 + 增长速率
 	gather_counts = {"gold": 0, "wood": 0, "stone": 0, "food": 0, "oil": 0}

@@ -56,6 +56,8 @@ func _hide_desktop_controls() -> void:
 	# 桌面端常驻面板改为移动端组件：统计面板、AI 决策面板、外交面板不在战场常驻
 	_set_member_visible(hud, "unit_stats_panel", false)
 	_set_member_visible(hud, "_toggle_stats_btn", false)
+	# 折叠胶囊也不用：手机上已经有一整套资源胶囊
+	_set_member_visible(hud, "_stats_capsule", false)
 	_set_member_visible(hud, "_diplo_panel", false)
 	_set_member_visible(hud, "_diplo_toggle_btn", false)
 	_set_member_visible(hud, "auto_attack_btn", false)
