@@ -35,7 +35,9 @@ const HEIGHT_AT_MAX: float = 95.0    # size 最大时相机的离地高度
 
 func _ready():
 	if projection == PROJECTION_ORTHOGONAL:
-		size = 30.0
+		# 默认视野取缩放范围的中值：原来写死 30，比允许的最远视角（max_zoom 20）还大，
+		# 开局视野过大、单位显得很小，而且第一次滚轮/双指缩放会瞬间跳到 20
+		size = (min_zoom + max_zoom) * 0.5
 
 func _input(event):
 	# 跟随视角模式：禁用平移/缩放输入，画面完全由跟随逻辑控制
