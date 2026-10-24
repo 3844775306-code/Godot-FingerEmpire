@@ -2,7 +2,7 @@ class_name ClientRenderer
 extends Node3D
 const StatsScript = preload("res://scripts/core/BattleStats.gd")
 const StatsPanelScript = preload("res://scripts/ui/BattleStatsPanel.gd")
-enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ATTACK_SPEED, MELEE_ARMOR, SHIELD_ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH, GARRISONED, NATION }
+enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ATTACK_SPEED, MELEE_ARMOR, SHIELD_ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH, GARRISONED, NATION, IN_ACTION_RANGE }
 enum EB { UPGRADE=0, MAX_UPGRADE, CAN_UPGRADE, BUILD_TIMER, MAX_BUILD, PROD_CURRENT, PROD_PROGRESS, PROD_QSIZE, UPGRADE_TIMER, MAX_UPGRADE_TIME, GARRISON_COUNT }
 # 与 RTSBattleManager.get_nation_name() 保持一致；客户端不跑服务端脚本，血条文字单独查表
 const NATION_LABELS := ["维京", "英格兰", "法兰西", "中国", "匈牙利", "日本", "拜占庭"]
@@ -597,6 +597,7 @@ func _update_single_entity(info):
 			"astar_path": arr[E.ASTAR_PATH] if arr.size() > E.ASTAR_PATH and arr[E.ASTAR_PATH] is Array else [],
 			"is_garrisoned": arr[E.GARRISONED] if arr.size() > E.GARRISONED else false,
 			"nation": arr[E.NATION] if arr.size() > E.NATION else -1,
+			"in_action_range": arr[E.IN_ACTION_RANGE] if arr.size() > E.IN_ACTION_RANGE else 0,
 		}
 		# Building extras
 		if arr.size() > E.size() and arr[E.size()] is Array:
@@ -671,8 +672,11 @@ func _update_single_entity(info):
 			AudioManager.play_sfx_3d("produce", node.global_position, _get_cam_pos())
 
 	# 快照状态切换时立即同步动画（不等30帧轮询）
-	if not prev_info.is_empty() and prev_info.get("current_order", "") != info.get("current_order", ""):
-		_update_entity_animation(node, info)
+	if not prev_info.is_empty():
+		var order_changed: bool = prev_info.get("current_order", "") != info.get("current_order", "")
+		var range_changed: bool = int(prev_info.get("in_action_range", 0)) != int(info.get("in_action_range", 0))
+		if order_changed or range_changed:
+			_update_entity_animation(node, info)
 	node.set_meta("_prev_info", info.duplicate())
 	# Update waypoint markers if present
 	_update_waypoint_markers(node, info)
@@ -761,9 +765,12 @@ func _update_entity_animation(node: Node3D, info: Dictionary):
 	var ord = info.get("current_order", "")
 	if info.get("health", 0) <= 0:
 		anim = "die"
-	elif ord in ["attack", "gather"]:
-		anim = "attack-melee-left"
-	elif ord in ["move", "deliver", "attack_move"]:
+	elif ord in ["attack", "attack_move", "gather"]:
+		# 锁定目标后还要先走到攻击/采集距离；服务端在快照里标记是否已进入距离。
+		# 追击途中播放走路，进入距离后才播放攻击/采集动作。
+		var in_range := int(info.get("in_action_range", 0)) == 1
+		anim = "attack-melee-left" if in_range else "walk"
+	elif ord in ["move", "deliver"]:
 		anim = "walk"
 	else:
 		anim = "idle"

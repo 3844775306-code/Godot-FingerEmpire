@@ -1839,10 +1839,18 @@ func _update_entity_animation(entity: GameEntity):
 	var anim = ""
 	if entity.health <= 0:
 		anim = "die"
-	elif entity is Army and entity._order_in([entity.UnitState.ATTACKING, entity.UnitState.GATHERING]):
-		anim = "attack-melee-left"
-	elif entity is Army and entity._order_in([entity.UnitState.MOVING, entity.UnitState.DELIVERING, entity.UnitState.ATTACK_MOVING]):
-		anim = "walk"
+	elif entity is Army:
+		var army := entity as Army
+		if army._order_is(army.UnitState.GATHERING):
+			# 采集途中播放走路；进入采集距离后才播放挥动
+			anim = "attack-melee-left" if _is_entity_in_action_range(army) else "walk"
+		elif army._order_is(army.UnitState.ATTACKING) or army._order_is(army.UnitState.ATTACK_MOVING):
+			# 锁定目标但还在接近时仍然是走路动画，进入攻击距离后才挥击
+			anim = "attack-melee-left" if _is_entity_in_action_range(army) else "walk"
+		elif army._order_in([army.UnitState.MOVING, army.UnitState.DELIVERING]):
+			anim = "walk"
+		else:
+			anim = "idle"
 	else:
 		anim = "idle"
 	if anim != "" and ap.has_animation(anim):
@@ -1855,6 +1863,23 @@ func _update_entity_animation(entity: GameEntity):
 		ap.speed_scale = spd
 		if ap.current_animation != anim:
 			ap.play(anim)
+
+# 判断单位是否已经进入实际出手距离。攻击/攻击移动看攻击距离，
+# 采集看资源点采集距离；还没走到时统一按走路处理。
+func _is_entity_in_action_range(entity: Army) -> bool:
+	var target = entity.current_target
+	if target == null or not is_instance_valid(target):
+		return false
+	if not (target is GameEntity):
+		return false
+	var dx: float = entity.global_position.x - target.global_position.x
+	var dz: float = entity.global_position.z - target.global_position.z
+	var dist: float = Vector2(dx, dz).length() - entity.body_radius - target.body_radius
+	if entity._order_is(entity.UnitState.GATHERING):
+		return dist <= 0.5
+	if entity._order_in([entity.UnitState.ATTACKING, entity.UnitState.ATTACK_MOVING]):
+		return dist <= entity.attack_range + 0.05
+	return false
 
 func _enable_vertex_colors(node: Node):
 	for child in node.get_children():

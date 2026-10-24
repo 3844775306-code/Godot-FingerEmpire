@@ -5,9 +5,9 @@ extends RTSBattleManager
 var game_mode: int = NetworkManager.GameMode.ONEvONE
 
 # Compact entity array indices (no string keys = faster + smaller)
-enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ATTACK_SPEED, MELEE_ARMOR, SHIELD_ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH, GARRISONED, NATION }
+enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ATTACK_SPEED, MELEE_ARMOR, SHIELD_ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH, GARRISONED, NATION, IN_ACTION_RANGE }
 enum EB { UPGRADE=0, MAX_UPGRADE, CAN_UPGRADE, BUILD_TIMER, MAX_BUILD, PROD_CURRENT, PROD_PROGRESS, PROD_QSIZE, UPGRADE_TIMER, MAX_UPGRADE_TIME, GARRISON_COUNT }
-const SNAP_VERSION = 5  # 5 = added NATION (entity compact array)
+const SNAP_VERSION = 6  # 6 = added IN_ACTION_RANGE (entity compact array)
 
 # 1v1 专用
 var player_teams: Dictionary = {}         # peer_id -> team
@@ -1252,6 +1252,9 @@ func _compute_entity_hash(entity: GameEntity) -> int:
 	# 进驻状态
 	if entity is Army:
 		h = ((h << 5) ^ (h >> 27)) ^ (1 if entity._soldier_garrison_building and entity._soldier_garrison_building.get_ref() else 0)
+		# 是否已进入出手距离：进入/离开攻击范围时动画要从走路切到攻击，
+		# 必须让增量快照感知到这个变化。
+		h = ((h << 5) ^ (h >> 27)) ^ (1 if _is_entity_in_action_range(entity as Army) else 0)
 	return h & 0x7FFFFFFF
 
 # 建造/升级是"一次性状态切换"：完工瞬间只产生一条增量，丢包/跳帧会让客户端
@@ -1671,6 +1674,8 @@ func _serialize_entity_compact(entity: GameEntity, snapshot_key: String) -> Arra
 	# 所属国家（客户端血条文字需要「中国」这类国家前缀；owner/队伍都相同的
 	# 混编队伍里只能靠这个字段区分）
 	a[E.NATION] = get_entity_nation(entity)
+	# 是否已进入攻击/采集距离：客户端据此区分“追击途中走路”和“站定出手”
+	a[E.IN_ACTION_RANGE] = 1 if (entity is Army and _is_entity_in_action_range(entity as Army)) else 0
 	# Building extra
 	if entity is Building:
 		var ba = []
