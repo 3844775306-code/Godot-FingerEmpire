@@ -64,12 +64,15 @@ func _ready():
 	name_rtl.add_theme_font_size_override("font_size", UITheme.FONT_XL)
 	name_rtl.add_theme_color_override("default_color", UITheme.PARCHMENT)
 	name_rtl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	# fit_content 遇到自动换行时高度可能滞后一帧算成 0；先给最小高度，保证名字始终占位可见
+	name_rtl.custom_minimum_size = Vector2(0, float(UITheme.FONT_XL) + 6.0)
 	stats_rtl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	stats_rtl.add_theme_color_override("default_color", UITheme.PARCHMENT)
 	if _is_mobile():
 		# 手机上名称与属性两行都要能看清：名称 15dp、属性 12dp
 		_set_rtl_font(name_rtl, UILayout.font_dp(15.0))
 		_set_rtl_font(stats_rtl, UILayout.font_dp(12.0))
+		name_rtl.custom_minimum_size = Vector2(0, UILayout.font_dp(15.0) + UILayout.dp(3.0))
 
 	# 血条：黑色背景条 + 锚点前景（宽度 = 血量比例）
 	hp_bar_bg = ColorRect.new(); hp_bar_bg.name = "HPBarBg"
@@ -263,7 +266,8 @@ func update_info(entity):
 	if batch_count > 1:
 		nm += "  [color=%s][Ctrl + x%d][/color]" % [UITheme.hex_str(UITheme.ALERT_WARNING), batch_count]
 	if readonly:
-		nm += "  [color=%s]（队友 · 仅查看）[/color]" % UITheme.hex_str(UITheme.PARCHMENT)
+		# 另起一行：和名字挤在同一行时，长中文会把名字挤出可视区域，看起来像"名字不见了"
+		nm += "\n[color=%s]（队友 · 仅查看）[/color]" % UITheme.hex_str(UITheme.ALERT_WARNING)
 	name_rtl.text = nm
 
 	var pct = float(entity.health) / max(float(entity.max_health), 1.0)
