@@ -916,11 +916,12 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 		# character 与步兵模型默认朝向相反，统一绕 Y 轴旋转 180° 掉头（entity 10 原特例已并入）
 		if RTSConfig.model_needs_flip(model_path):
 			loaded_model.rotation.y = deg_to_rad(180)
-		if info.get("entity_id", 0) in [25, 26]: loaded_model.scale *= 0.5
-		# 诸葛连弩保持放大
-		if info.get("entity_id", 0) == 33: loaded_model.scale *= 2.0
-		if info.get("entity_id", 0) == 33: loaded_model.scale *= 1.5
-		if info.get("entity_id", 0) in [25, 26, 33]: loaded_model.scale *= 1.5
+		# 炮塔/箭塔尺寸统一走 RTSConfig.ENTITY_MODEL_SCALE，避免联机端与服务端不一致
+		# 诸葛连弩保持原有放大倍率
+		if info.get("entity_id", 0) == 33:
+			loaded_model.scale *= 2.0
+			loaded_model.scale *= 1.5
+			loaded_model.scale *= 1.5
 		entity.add_child(loaded_model)
 		_ensure_model_shadows(loaded_model)
 		# GLB 动画默认不循环；缓存 AnimationPlayer 并配置 idle/walk/attack 循环
