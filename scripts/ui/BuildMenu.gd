@@ -34,22 +34,15 @@ func get_menu_size() -> Vector2:
 func _ready():
 	var bm = get_tree().get_first_node_in_group("battle_manager")
 	var mobile := is_mobile()
-	var item_h: float = UILayout.dp(ITEM_H_DP) if mobile else 38.0
+	var item_h: float = UILayout.dp(ITEM_H_DP) if mobile else 42.0
 	var gap: float = UILayout.dp(5.0) if mobile else 4.0
 	var font: int = UILayout.font_dp(11.0) if mobile else 13
-	var pad: float = UILayout.dp(PAD_DP) if mobile else 8.0
-	var menu_w: float = UILayout.dp(MENU_W_DP) if mobile else 165.0
+	var pad: float = UILayout.dp(PAD_DP) if mobile else 10.0
+	var menu_w: float = UILayout.dp(MENU_W_DP) if mobile else 200.0
 
-	# Background panel
+	# 皇庭卡片底：暖黑 + 金边（与联机客户端 BuildMenu 同一套皮肤）
 	var bg = Panel.new()
-	var bs = StyleBoxFlat.new()
-	bs.bg_color = Color(0.06, 0.07, 0.13, 0.93)
-	bs.corner_radius_top_left = 6; bs.corner_radius_top_right = 6
-	bs.corner_radius_bottom_left = 6; bs.corner_radius_bottom_right = 6
-	bs.border_width_left = 1; bs.border_width_right = 1
-	bs.border_width_top = 1; bs.border_width_bottom = 1
-	bs.border_color = Color(0.25, 0.5, 0.8, 0.5)
-	bg.add_theme_stylebox_override("panel", bs)
+	bg.add_theme_stylebox_override("panel", UITheme.card_style(UITheme.GOLD))
 	add_child(bg)
 
 	var vbox = VBoxContainer.new()
@@ -100,24 +93,27 @@ func _ready():
 				var cc = "white" if have >= need else "red"
 				ct += "[color=%s]%s[/color]:[color=%s]%d[/color] " % [rc, res, cc, need]
 
+		UITheme.apply_row_button(btn, UITheme.GOLD)
 		btn.disabled = not affordable or is_locked
+		btn.modulate = Color(0.55, 0.55, 0.55) if (not affordable or is_locked) else Color.WHITE
 		if mobile:
 			btn.custom_minimum_size = Vector2(cell_w, item_h)
 		else:
-			btn.custom_minimum_size = Vector2(150, 38)
+			btn.custom_minimum_size = Vector2(180, 42)
 		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		btn.add_theme_font_size_override("font_size", font)
+		if mobile:
+			btn.add_theme_font_size_override("font_size", font)
 		var rtl = RichTextLabel.new(); rtl.bbcode_enabled = true; rtl.fit_content = true
 		rtl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		rtl.anchor_left = 0; rtl.anchor_right = 1; rtl.anchor_top = 0; rtl.anchor_bottom = 1
-		# 移动端字号必须用 normal_font_size，只设 font_size 对 RichTextLabel 无效
-		if mobile:
-			rtl.add_theme_font_size_override("normal_font_size", font)
-			rtl.add_theme_font_size_override("bold_font_size", font)
+		rtl.add_theme_color_override("default_color", UITheme.PARCHMENT)
+		# 字号必须用 normal_font_size，只设 font_size 对 RichTextLabel 无效
+		rtl.add_theme_font_size_override("normal_font_size", font)
+		rtl.add_theme_font_size_override("bold_font_size", font)
 
 		if is_locked:
 			var req_lv = BUILDING_REQUIRED_CASTLE[bid]
-			rtl.text = "%s\n[color=red]城堡Lv.%d解锁[/color]" % [bd.name, req_lv]
+			rtl.text = "%s\n[color=#C0392B]城堡Lv.%d解锁[/color]" % [bd.name, req_lv]
 		else:
 			rtl.text = "%s\n%s" % [bd.name, ct.strip_edges()]
 
@@ -126,15 +122,15 @@ func _ready():
 			btn.pressed.connect(_on_building_pressed.bind(bd.id))
 		container.add_child(btn)
 
-	var cancel_h: float = item_h
 	var close_btn = Button.new()
 	close_btn.text = "取消"
+	UITheme.apply_muted_button(close_btn, UITheme.FONT_MD)
 	if mobile:
-		close_btn.custom_minimum_size = Vector2(cell_w, cancel_h)
+		close_btn.custom_minimum_size = Vector2(cell_w, item_h)
+		close_btn.add_theme_font_size_override("font_size", font)
 	else:
-		close_btn.custom_minimum_size = Vector2(0, cancel_h)
+		close_btn.custom_minimum_size = Vector2(0, 42)
 		close_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	close_btn.add_theme_font_size_override("font_size", font)
 	close_btn.pressed.connect(queue_free)
 	container.add_child(close_btn)
 
@@ -143,8 +139,10 @@ func _ready():
 		custom_minimum_size = _menu_size
 		size = _menu_size
 	else:
-		_menu_size = Vector2(165, 20 + building_defs.size() * 45)
+		# 与联机客户端一致的行高/内边距：每行 48、上下各 10
+		_menu_size = Vector2(200, (building_defs.size() + 1) * 48 + 20)
 		bg.size = _menu_size
+		custom_minimum_size = _menu_size
 		size = _menu_size
 
 # 触屏：点菜单外面即关闭（合成鼠标事件会经过这里）

@@ -76,6 +76,8 @@ func _refresh_ui():
 	var close_btn = Button.new()
 	close_btn.text = "取消"
 	UITheme.apply_muted_button(close_btn, UITheme.FONT_MD)
+	close_btn.custom_minimum_size = Vector2(0, 42)
+	close_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	close_btn.pressed.connect(hide)
 	vbox.add_child(close_btn)
 

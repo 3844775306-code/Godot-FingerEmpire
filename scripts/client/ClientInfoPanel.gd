@@ -8,6 +8,7 @@ extends Panel
 var name_rtl: RichTextLabel
 var stats_rtl: RichTextLabel
 var hp_bar: ColorRect
+var hp_bar_bg: ColorRect = null
 var observed_entity_id: int = -1
 var renderer: ClientRenderer = null
 var demolish_btn: Button = null
@@ -19,34 +20,43 @@ const RC = {"wood": "green", "stone": "gray", "gold": "gold", "food": "orange", 
 
 func _ready():
 	visible = false
-	var s = StyleBoxFlat.new()
-	s.bg_color = Color(0.06, 0.07, 0.13, 0.93)
-	s.corner_radius_top_left = 8; s.corner_radius_top_right = 8
-	s.corner_radius_bottom_left = 8; s.corner_radius_bottom_right = 8
-	s.border_width_left = 2; s.border_width_right = 2
-	s.border_width_top = 2; s.border_width_bottom = 2
-	s.border_color = Color(0.25, 0.5, 0.8, 0.6)
-	add_theme_stylebox_override("panel", s)
+	# 与单机版信息面板同一套皇庭皮肤：暖黑底 + 金边
+	add_theme_stylebox_override("panel", UITheme.panel_style(UITheme.RADIUS_LG, UITheme.BORDER_MED))
 	custom_minimum_size = Vector2(200, 0)
 
 	_swap_rtl("NameLabel"); _swap_rtl("StatsLabel")
 	name_rtl = $VBox.get_node("NameLabel")
 	stats_rtl = $VBox.get_node("StatsLabel")
+	name_rtl.add_theme_font_size_override("font_size", UITheme.FONT_XL)
+	name_rtl.add_theme_color_override("default_color", UITheme.PARCHMENT)
+	name_rtl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	stats_rtl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	stats_rtl.add_theme_color_override("default_color", UITheme.PARCHMENT)
 
+	# 血条：黑色背景条 + 锚点前景（宽度 = 血量比例），与单机版一致
+	hp_bar_bg = ColorRect.new(); hp_bar_bg.name = "HPBarBg"
+	hp_bar_bg.custom_minimum_size = Vector2(1, 16)
+	hp_bar_bg.color = Color(0, 0, 0, 0.55)
+	hp_bar_bg.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	hp_bar = ColorRect.new(); hp_bar.name = "HPBar"
-	hp_bar.custom_minimum_size = Vector2(1, 14); hp_bar.color = Color.GREEN
-	var vb = $VBox; vb.add_child(hp_bar); vb.move_child(hp_bar, 1)
+	hp_bar.color = Color.GREEN
+	hp_bar.anchor_top = 0; hp_bar.anchor_bottom = 1
+	hp_bar.anchor_left = 0; hp_bar.anchor_right = 1
+	hp_bar_bg.add_child(hp_bar)
+	var vb = $VBox; vb.add_child(hp_bar_bg); vb.move_child(hp_bar_bg, 1)
 	close_btn.pressed.connect(_on_close_pressed)
+	close_btn.text = "✕ 关闭"
+	UITheme.apply_muted_button(close_btn, UITheme.FONT_SM)
+	UITheme.apply_primary_button(upgrade_btn, UITheme.FONT_MD)
 
-	# 拆除按钮
+	# 拆除按钮 — 危险红
 	demolish_btn = Button.new()
 	demolish_btn.name = "DemolishBtn"
-	demolish_btn.text = "拆除建筑"
-	demolish_btn.add_theme_font_size_override("font_size", 13)
-	demolish_btn.custom_minimum_size = Vector2(180, 32)
-	demolish_btn.add_theme_color_override("font_color", Color.RED)
+	demolish_btn.text = "💥 拆除建筑"
+	demolish_btn.custom_minimum_size = Vector2(180, 36)
 	demolish_btn.visible = false
 	demolish_btn.pressed.connect(_on_demolish_pressed)
+	UITheme.apply_danger_button(demolish_btn, UITheme.FONT_SM)
 	$VBox.add_child(demolish_btn)
 
 	set_process(true)
@@ -63,18 +73,15 @@ func _swap_rtl(nm: String):
 	p.add_child(r); p.move_child(r, i)
 
 func _bc(pct: float) -> Color:
-	if pct > 0.6: return Color(0.15, 0.75, 0.15)
-	if pct > 0.3: return Color(0.85, 0.75, 0.1)
-	return Color(0.85, 0.15, 0.1)
+	return UITheme.health_bar_color(pct)
 
 func _hc(pct: float) -> String:
-	if pct > 0.6: return "green"
-	if pct > 0.3: return "yellow"
-	return "red"
+	return UITheme.hex_str(UITheme.health_bar_color(pct))
 
 func _make_rtl_label() -> RichTextLabel:
 	var l = RichTextLabel.new(); l.bbcode_enabled = true; l.fit_content = true; l.autowrap_mode = TextServer.AUTOWRAP_OFF
-	l.add_theme_font_size_override("font_size", 14)
+	l.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	l.add_theme_color_override("default_color", UITheme.PARCHMENT)
 	return l
 
 func set_resources(res: Dictionary, lim: Dictionary, pop: Dictionary = {}):
@@ -100,13 +107,18 @@ func update_info(entity_id: int):
 
 	var group_prefix = ""
 	# Client side: group display not available (needs server-side GameEntity ref)
-	var nm = group_prefix + "%s  [color=royalblue]Lv.%d[/color]" % [info["name"], info.get("level", 1)]
+	var nm = group_prefix + "%s %s  [color=%s]Lv.%d[/color]" % [
+		UITheme.entity_emoji(info.get("entity_id", -1), info.get("type", 2)),
+		info["name"], UITheme.hex_str(UITheme.GOLD), info.get("level", 1)]
 	if batch_count > 1:
-		nm += "  [color=orange][Ctrl+x%d][/color]" % batch_count
+		nm += "  [color=%s][Ctrl + x%d][/color]" % [UITheme.hex_str(UITheme.ALERT_WARNING), batch_count]
 	name_rtl.text = nm
 
 	var pct = float(info["health"]) / max(float(info["max_health"]), 1.0)
-	hp_bar.color = _bc(pct); hp_bar.size.x = 180 * pct; hp_bar.visible = true
+	hp_bar.color = _bc(pct)
+	hp_bar.anchor_right = pct
+	if hp_bar_bg: hp_bar_bg.visible = true
+	hp_bar.visible = true
 
 	# Construction / upgrade progress
 	var hc = _hc(pct)
@@ -138,7 +150,7 @@ func update_info(entity_id: int):
 			demolish_btn.visible = (info.get("entity_id", 0) != 20)
 		if info.get("can_upgrade", false):
 
-			upgrade_btn.visible = true; upgrade_btn.text = "Upgrade"
+			upgrade_btn.visible = true; upgrade_btn.text = "升级"
 			if upgrade_btn.pressed.is_connected(_on_upgrade_pressed):
 				upgrade_btn.pressed.disconnect(_on_upgrade_pressed)
 			upgrade_btn.pressed.connect(_on_upgrade_pressed)
@@ -171,7 +183,7 @@ func update_info(entity_id: int):
 			for prod in pl:
 				var uc = EntityDatabase.get_config(prod["unit_id"])
 				if not uc: continue
-				var btn = Button.new(); btn.text = ""; btn.add_theme_font_size_override("font_size", 13); btn.custom_minimum_size = Vector2(180, 32); btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				var btn = Button.new(); btn.text = ""; UITheme.apply_button(btn, UITheme.FONT_SM); btn.custom_minimum_size = Vector2(200, 40); btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 				var ok = population.get("current", 0) < population.get("max", 0); var cs = []
 				var cost = prod.get("current_cost", uc.get("cost", {}))
 				for res in cost:
@@ -184,12 +196,14 @@ func update_info(entity_id: int):
 				var rtl = RichTextLabel.new(); rtl.bbcode_enabled = true; rtl.fit_content = true; rtl.autowrap_mode = TextServer.AUTOWRAP_OFF
 				rtl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 				rtl.anchor_left = 0; rtl.anchor_right = 1; rtl.anchor_top = 0; rtl.anchor_bottom = 1
+				rtl.add_theme_color_override("default_color", UITheme.PARCHMENT)
+				rtl.add_theme_font_size_override("normal_font_size", UITheme.FONT_SM)
 				var ct = ""
 				for ci in cs:
 					var rc = RC.get(ci.res, "white")
 					var cc = "white" if ci.have >= ci.need else "red"
 					ct += "%s[color=%s]%d[/color] " % [UITheme.RESOURCE_ICONS.get(ci.res, ""), cc, ci.need]
-				rtl.text = "%s  [%s]" % [uc.get("name", "?"), ct.strip_edges()]
+				rtl.text = "%s %s  [%s]" % [UITheme.entity_emoji(int(uc.get("id", -1)), int(uc.get("type", 2))), uc.get("name", "?"), ct.strip_edges()]
 				btn.add_child(rtl)
 				btn.pressed.connect(func(): _on_produce_pressed(prod["unit_id"]))
 				produce_vbox.add_child(btn)
@@ -271,11 +285,12 @@ func show_multi_selection(ids: Array):
 	if demolish_btn: demolish_btn.visible = false
 	produce_vbox.visible = true
 	hp_bar.visible = false
+	if hp_bar_bg: hp_bar_bg.visible = false
 	var old_box = $VBox.get_node_or_null("UpgradeInfoBox")
 	if old_box:
 		$VBox.remove_child(old_box)
 		old_box.queue_free()
-	name_rtl.text = "[color=white]选中 %d 个单位[/color]" % ids.size()
+	name_rtl.text = "[color=%s]⚔️ 选中 %d 个单位[/color]" % [UITheme.hex_str(UITheme.GOLD), ids.size()]
 	stats_rtl.text = ""
 	for c in produce_vbox.get_children(): c.queue_free()
 
@@ -307,41 +322,12 @@ func show_multi_selection(ids: Array):
 		var row_color = ROW_COLORS[i % ROW_COLORS.size()]
 
 		var btn = Button.new()
-		btn.custom_minimum_size = Vector2(180, 36)
-		btn.add_theme_font_size_override("font_size", 14)
+		btn.custom_minimum_size = Vector2(200, 40)
 		btn.toggle_mode = true
-
-		# Normal style
-		var sb = StyleBoxFlat.new()
-		sb.bg_color = Color(row_color.r * 0.15, row_color.g * 0.15, row_color.b * 0.15, 0.9)
-		sb.border_width_left = 3
-		sb.border_color = row_color
-		sb.corner_radius_top_left = 4; sb.corner_radius_top_right = 4
-		sb.corner_radius_bottom_left = 4; sb.corner_radius_bottom_right = 4
-		btn.add_theme_stylebox_override("normal", sb)
-
-		# Hover style
-		var hover_sb = StyleBoxFlat.new()
-		hover_sb.bg_color = Color(row_color.r * 0.25, row_color.g * 0.25, row_color.b * 0.25, 0.95)
-		hover_sb.border_width_left = 3
-		hover_sb.border_color = row_color.lightened(0.3)
-		hover_sb.corner_radius_top_left = 4; hover_sb.corner_radius_top_right = 4
-		hover_sb.corner_radius_bottom_left = 4; hover_sb.corner_radius_bottom_right = 4
-		btn.add_theme_stylebox_override("hover", hover_sb)
-
-		# Pressed/selected style (brighter)
-		var pressed_sb = StyleBoxFlat.new()
-		pressed_sb.bg_color = Color(row_color.r * 0.4, row_color.g * 0.4, row_color.b * 0.4, 0.95)
-		pressed_sb.border_width_left = 3
-		pressed_sb.border_color = row_color.lightened(0.5)
-		pressed_sb.corner_radius_top_left = 4; pressed_sb.corner_radius_top_right = 4
-		pressed_sb.corner_radius_bottom_left = 4; pressed_sb.corner_radius_bottom_right = 4
-		btn.add_theme_stylebox_override("pressed", pressed_sb)
+		UITheme.apply_row_button(btn, row_color)
 
 		var lvl_text = " Lv.%d" % g["min_level"] if g["min_level"] == g["max_level"] else " Lv.%d~%d" % [g["min_level"], g["max_level"]]
-		btn.text = "%d x %s%s" % [g["count"], g["name"], lvl_text]
-		btn.add_theme_color_override("font_color", row_color)
-		btn.add_theme_color_override("font_pressed_color", row_color.lightened(0.3))
+		btn.text = "%s %d x %s%s" % [UITheme.entity_emoji(g["entity_id"], 2), g["count"], g["name"], lvl_text]
 
 		var row_ids = g["ids"].duplicate()
 		btn.pressed.connect(func():

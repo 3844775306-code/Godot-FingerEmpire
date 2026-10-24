@@ -57,7 +57,7 @@ var _stats_castle_bar: HealthBarControl
 var _stats_castle_label: Label
 var _toggle_stats_btn: Button
 var _alert_label: Label = null
-var _alert_bg: ColorRect = null
+var _alert_bg: Control = null
 var _alert_timer: float = 0.0
 var _unit_stats_timer: float = 1.0
 
@@ -126,18 +126,17 @@ func _get_sm():
 
 # ==================== 单位统计面板 ====================
 func _create_stats_toggle_button():
-	var btn_theme = Theme.new()
-	btn_theme.set_font_size("font_size", "Button", 18)
-
 	_toggle_stats_btn = Button.new()
 	_toggle_stats_btn.name = "StatsToggleButton"
 	_toggle_stats_btn.text = "📊 统计"
 	_toggle_stats_btn.position = Vector2(620, 10)
-	_toggle_stats_btn.theme = btn_theme
 	_toggle_stats_btn.toggle_mode = true
 	_toggle_stats_btn.button_pressed = true
+	_toggle_stats_btn.custom_minimum_size = Vector2(140, 32)
+	UITheme.apply_muted_button(_toggle_stats_btn, UITheme.FONT_MD)
 	_toggle_stats_btn.pressed.connect(_on_toggle_stats_pressed)
 	add_child(_toggle_stats_btn)
+	UITheme.hover_scale(_toggle_stats_btn)
 
 func _on_toggle_stats_pressed():
 	unit_stats_visible = _toggle_stats_btn.button_pressed
@@ -614,7 +613,7 @@ func _on_attack_all_pressed():
 
 func _update_auto_attack_button():
 	if auto_attack_btn:
-		auto_attack_btn.text = "自动进攻：%s (F2)" % ("开" if auto_attack_on else "关")
+		auto_attack_btn.text = "⚔️ 自动进攻：%s (F2)" % ("开" if auto_attack_on else "关")
 
 func _retreat_units(units: Array):
 	var bm = _get_bm()
@@ -643,14 +642,11 @@ func _ready():
 	_create_unit_stats_panel()
 	_create_stats_toggle_button()
 
-	var btn_theme = Theme.new()
-	btn_theme.set_font_size("font_size", "Button", 16)
-
 	var b_select_screen = Button.new()
 	b_select_screen.text = "全选屏幕军队 (F1)"
 	b_select_screen.position = Vector2(620, 50)
 	b_select_screen.custom_minimum_size = Vector2(210, 32)
-	b_select_screen.theme = btn_theme
+	UITheme.apply_primary_button(b_select_screen, UITheme.FONT_MD)
 	b_select_screen.pressed.connect(_on_select_screen_pressed)
 	add_child(b_select_screen)
 
@@ -658,15 +654,15 @@ func _ready():
 	b_select_all.text = "全选所有军队 (Ctrl+F1)"
 	b_select_all.position = Vector2(840, 50)
 	b_select_all.custom_minimum_size = Vector2(210, 32)
-	b_select_all.theme = btn_theme
+	UITheme.apply_primary_button(b_select_all, UITheme.FONT_MD)
 	b_select_all.pressed.connect(_on_select_all_pressed)
 	add_child(b_select_all)
 
 	var b_auto_attack = Button.new()
-	b_auto_attack.text = "自动进攻：关 (F2)"
+	b_auto_attack.text = "⚔️ 自动进攻：关 (F2)"
 	b_auto_attack.position = Vector2(620, 92)
 	b_auto_attack.custom_minimum_size = Vector2(210, 32)
-	b_auto_attack.theme = btn_theme
+	UITheme.apply_danger_button(b_auto_attack, UITheme.FONT_MD)
 	b_auto_attack.pressed.connect(_on_attack_all_pressed)
 	add_child(b_auto_attack)
 	auto_attack_btn = b_auto_attack
@@ -675,7 +671,7 @@ func _ready():
 	b_retreat_screen.text = "屏幕军队撤退 (F3)"
 	b_retreat_screen.position = Vector2(840, 92)
 	b_retreat_screen.custom_minimum_size = Vector2(210, 32)
-	b_retreat_screen.theme = btn_theme
+	UITheme.apply_primary_button(b_retreat_screen, UITheme.FONT_MD)
 	b_retreat_screen.pressed.connect(_on_retreat_screen_pressed)
 	add_child(b_retreat_screen)
 
@@ -683,7 +679,7 @@ func _ready():
 	b_retreat_all.text = "所有军队撤退 (Ctrl+F3)"
 	b_retreat_all.position = Vector2(620, 134)
 	b_retreat_all.custom_minimum_size = Vector2(210, 32)
-	b_retreat_all.theme = btn_theme
+	UITheme.apply_primary_button(b_retreat_all, UITheme.FONT_MD)
 	b_retreat_all.pressed.connect(_on_retreat_all_pressed)
 	add_child(b_retreat_all)
 
@@ -702,47 +698,48 @@ const ALERT_GROUP = UITheme.ALERT_GROUP     # 蓝色 — 编队反馈
 func show_alert_message(msg: String, color: Color = ALERT_DANGER):
 	var mobile := InputSource.use_mobile_ui()
 	if not _alert_label:
-		# 手机上按 dp 放大警报条：默认 24 号字在 2400 宽屏里只有约 7dp，读不出来
-		var bar_w: float = UILayout.dp(320.0) if mobile else 420.0
-		var bar_h: float = UILayout.dp(40.0) if mobile else 36.0
-		var font_sz: int = UILayout.font_dp(14.0) if mobile else 24
-		# 半透明黑色背景（可点击：点一下跳到警报位置）
-		_alert_bg = ColorRect.new()
-		_alert_bg.color = Color(0, 0, 0, 0.55)
-		_alert_bg.anchor_left = 0.5; _alert_bg.anchor_right = 0.5
-		_alert_bg.anchor_top = 0.15
-		_alert_bg.offset_left = -bar_w; _alert_bg.offset_right = bar_w
-		_alert_bg.offset_top = -bar_h * 0.5
-		_alert_bg.offset_bottom = bar_h * 0.5
-		_alert_bg.mouse_filter = Control.MOUSE_FILTER_STOP
-		_alert_bg.gui_input.connect(_on_alert_gui_input)
-		add_child(_alert_bg)
+		# 皇庭横幅背景：暖黑底 + 警报色细边 + 顶部警报色强调条（与联机客户端同一套皮肤）
+		_alert_bg = Panel.new()
 		# 文字标签
 		_alert_label = Label.new()
 		_alert_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 		_alert_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		_alert_label.add_theme_font_size_override("font_size", font_sz)
 		_alert_label.add_theme_color_override("font_outline_color", Color.BLACK)
 		_alert_label.add_theme_constant_override("outline_size", 3)
-		_alert_label.anchor_left = 0.5; _alert_label.anchor_right = 0.5
-		_alert_label.anchor_top = 0.15
-		_alert_label.offset_left = -bar_w; _alert_label.offset_right = bar_w
-		_alert_label.offset_top = -bar_h * 0.5
-		_alert_label.offset_bottom = bar_h * 0.5
-		_alert_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		if mobile:
+			# 手机端按 dp 放大并居中，且可点击跳转
+			var w: float = UILayout.dp(320.0)
+			var h: float = UILayout.dp(40.0)
+			_alert_bg.anchor_left = 0.5; _alert_bg.anchor_right = 0.5
+			_alert_bg.anchor_top = 0.15
+			_alert_bg.offset_left = -w; _alert_bg.offset_right = w
+			_alert_bg.offset_top = -h * 0.5; _alert_bg.offset_bottom = h * 0.5
+			_alert_bg.mouse_filter = Control.MOUSE_FILTER_STOP
+			_alert_bg.gui_input.connect(_on_alert_gui_input)
+			_alert_label.anchor_left = 0.5; _alert_label.anchor_right = 0.5
+			_alert_label.anchor_top = 0.15
+			_alert_label.offset_left = -w; _alert_label.offset_right = w
+			_alert_label.offset_top = -h * 0.5; _alert_label.offset_bottom = h * 0.5
+			_alert_label.add_theme_font_size_override("font_size", UILayout.font_dp(14.0))
+			_alert_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		else:
+			_alert_bg.position = Vector2(755, 196)
+			_alert_bg.size = Vector2(810, 46)
+			_alert_label.add_theme_font_size_override("font_size", UITheme.FONT_XXL)
+			_alert_label.position = Vector2(760, 202)
+			_alert_label.size = Vector2(800, 40)
+		add_child(_alert_bg)
 		add_child(_alert_label)
-	else:
-		# 布局在创建时定死，场景重新加载/切换设备后按当前模式重新套一次尺寸
-		var bar_w2: float = UILayout.dp(320.0) if mobile else 420.0
-		var bar_h2: float = UILayout.dp(40.0) if mobile else 36.0
-		var font_sz2: int = UILayout.font_dp(14.0) if mobile else 24
-		for c in [_alert_bg, _alert_label]:
-			if c:
-				c.offset_left = -bar_w2; c.offset_right = bar_w2
-				c.offset_top = -bar_h2 * 0.5; c.offset_bottom = bar_h2 * 0.5
-		_alert_label.add_theme_font_size_override("font_size", font_sz2)
 	_alert_label.text = msg
 	_alert_label.add_theme_color_override("font_color", color)
+	# 横幅边框色跟随警报类型（危险红 / 警告黄 / 信息绿 / 编队蓝）
+	var ab := StyleBoxFlat.new()
+	ab.bg_color = Color(UITheme.INK, 0.88)
+	ab.set_corner_radius_all(UITheme.RADIUS_MD)
+	ab.set_border_width_all(UITheme.BORDER_THIN)
+	ab.border_color = Color(color, 0.5)
+	ab.border_width_top = UITheme.BORDER_THICK
+	_alert_bg.add_theme_stylebox_override("panel", ab)
 	_alert_label.visible = true
 	_alert_bg.visible = true
 	_alert_timer = 3.0
