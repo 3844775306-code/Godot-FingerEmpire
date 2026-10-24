@@ -747,6 +747,15 @@ func _ready():
 		add_child(_mobile_hud)
 		_mobile_hud.setup(self)
 
+	# 服务器警报：走 NetworkManager 的可靠 RPC 信号（快照里的 alerts 已弃用，丢包就永久丢失）
+	if NetworkManager.has_signal("client_alert_received"):
+		if not NetworkManager.client_alert_received.is_connected(_on_server_alert):
+			NetworkManager.client_alert_received.connect(_on_server_alert)
+
+# 收到服务器警报：直接走本地播报条
+func _on_server_alert(msg: String, color: Color) -> void:
+	show_alert_message(msg, color)
+
 func _make_cmd_button(text: String, cb: Callable, danger: bool) -> Button:
 	var b := Button.new()
 	b.text = text

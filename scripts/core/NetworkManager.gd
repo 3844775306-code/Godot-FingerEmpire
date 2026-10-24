@@ -358,6 +358,15 @@ func notify_all_player_colors(colors: Dictionary):
 		var renderer = _get_renderer()
 		if renderer: renderer.set_all_player_colors(colors)
 
+# 服务器 → 客户端警报：可靠通道直发。警报是一次性事件，
+# 塞进 unreliable 快照里一旦丢包就永久丢失，客户端会完全收不到播报
+signal client_alert_received(msg: String, color: Color)
+
+@rpc("authority", "call_remote", "reliable")
+func _client_receive_alert(msg: String, color: Color):
+	if mode == Mode.CLIENT:
+		client_alert_received.emit(msg, color)
+
 @rpc("authority", "call_remote", "reliable")
 func _notify_team(team: int):
 	if mode == Mode.CLIENT:

@@ -47,17 +47,18 @@ var _mp_shift_held: bool = false
 var _bullet_cache: Array = []       # cached bullet list, refreshed once per snap
 
 # ==================== 警报系统（服务器→客户端） ====================
-var _pending_client_alerts: Dictionary = {}   # peer_id or team -> Array of {msg, color}
-
+# 警报是一次性事件：走可靠 RPC 直发给该阵营的每个玩家，
+# 若塞进 unreliable 快照，一旦那一帧快照丢包客户端就永远收不到
 func _queue_client_alert(target_key, msg: String, color: Color = Color(1.0, 0.2, 0.1)):
-	if not _pending_client_alerts.has(target_key):
-		_pending_client_alerts[target_key] = []
-	_pending_client_alerts[target_key].append({"msg": msg, "color": color})
-
-func _get_and_clear_alerts(target_key) -> Array:
-	var alerts = _pending_client_alerts.get(target_key, [])
-	_pending_client_alerts[target_key] = []
-	return alerts
+	if multiplayer.multiplayer_peer == null:
+		return
+	var peers: PackedInt32Array = multiplayer.get_peers()
+	for pid in player_teams.keys():
+		if int(player_teams[pid]) != int(target_key):
+			continue
+		# 只发给真实连接的客户端：AI 座位占着 peer_id 但没连接，rpc_id 会报无效目标
+		if int(pid) != 1 and peers.has(int(pid)):
+			NetworkManager._client_receive_alert.rpc_id(int(pid), msg, color)
 
 # Override: queue alerts for clients in online mode
 func _show_hud_alert(msg: String, color: Color = Color(1.0, 0.2, 0.1), _target_team: int = -1):
@@ -1608,7 +1609,6 @@ func build_snapshot_for_team(team: int) -> Dictionary:
 		r["enemy_nation"] = team_nations.get(RTSConfig.Team.RED if team == RTSConfig.Team.BLUE else RTSConfig.Team.BLUE, -1)
 		r["gather_counts"] = team_gather_counts.get(team, {"gold":0, "wood":0, "stone":0, "food":0, "oil":0})
 		r["income_rate"] = team_income_rates.get(team, {"gold":0.0, "wood":0.0, "stone":0.0, "food":0.0, "oil":0.0})
-	r["alerts"] = _get_and_clear_alerts(team)
 	return r
 
 func _broadcast_1v1():
@@ -1968,7 +1968,6 @@ func build_snapshot_for_player(peer_id: int) -> Dictionary:
 		result["team_nations"] = team_nations
 		result["player_info"] = player_info
 	result["player_castles"] = _serialize_castles()
-	result["alerts"] = _get_and_clear_alerts(team)
 
 	# Granular profiling: only print when total > 2.5ms
 	var _t_total = (Time.get_ticks_usec() - _t0) / 1000.0
