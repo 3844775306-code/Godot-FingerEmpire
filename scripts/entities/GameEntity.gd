@@ -5,6 +5,7 @@ extends CharacterBody3D
 signal died
 
 const BuildingDeathEffect = preload("res://scripts/effects/BuildingDeathEffect.gd")
+const TreeFallEffect = preload("res://scripts/effects/TreeFallEffect.gd")
 const EntityDamageVisual = preload("res://scripts/effects/EntityDamageVisual.gd")
 
 var entity_id: int = 0
@@ -395,6 +396,14 @@ func die():
 			model_ref = get_meta("_model_instance")
 		var effect_duration: float = BuildingDeathEffect.play(self, entity_id, body_radius, model_ref)
 		if effect_duration > 0.0:
+			return
+	# 木材资源被采空：整棵树绕根部倒下，扬尘/落叶后释放。
+	if self is WorldResource and (entity_id == 1 or str(get("resource_type")) == "wood"):
+		var tree_model_ref: Node3D = null
+		if has_meta("_model_instance") and is_instance_valid(get_meta("_model_instance")):
+			tree_model_ref = get_meta("_model_instance")
+		var tree_effect_duration: float = TreeFallEffect.play(self, body_radius, tree_model_ref)
+		if tree_effect_duration > 0.0:
 			return
 	# 船只被击沉 / 陆地单位落水：沉入水中 1 秒后移除。
 	# 此时 health 已为 0、碰撞已关闭，敌方无法再选中或攻击它。

@@ -62,8 +62,12 @@ static func update_resource(host: Node3D, ratio: float) -> void:
 			base_state[root.get_instance_id()] = {"pos": root.position, "scale": root.scale}
 		host.set_meta(RESOURCE_BASE_META, base_state)
 	var radius := _get_body_radius(host)
-	var scale_factor := lerpf(RESOURCE_MIN_SCALE, 1.0, normalized)
-	var sink := radius * 0.18 * (1.0 - normalized)
+	var entity_id := _get_entity_id(host)
+	# 树木保留接近完整尺寸，采空时才有足够的树身用于倒地动画；其他资源正常缩小。
+	var min_scale := 0.9 if entity_id == 1 else RESOURCE_MIN_SCALE
+	var sink_ratio := 0.04 if entity_id == 1 else 0.18
+	var scale_factor := lerpf(min_scale, 1.0, normalized)
+	var sink := radius * sink_ratio * (1.0 - normalized)
 	for root in roots:
 		var key: int = root.get_instance_id()
 		if not base_state.has(key):
@@ -78,6 +82,29 @@ static func _can_update(host: Node3D) -> bool:
 	if not is_instance_valid(host) or not host.is_inside_tree():
 		return false
 	return DisplayServer.get_name() != "headless"
+
+# 资源枯竭倒地前恢复成完整尺寸和原色，避免树木在缩到很小时才倒下。
+static func reset_resource(host: Node3D) -> void:
+	if not is_instance_valid(host):
+		return
+	var base_state = _get_optional_meta(host, RESOURCE_BASE_META)
+	if base_state is Dictionary and not base_state.is_empty():
+		for root in _collect_visual_roots(host):
+			var key: int = root.get_instance_id()
+			if not base_state.has(key):
+				continue
+			var base: Dictionary = base_state[key]
+			root.scale = base["scale"]
+			root.position = base["pos"]
+	var entries = _get_optional_meta(host, RESOURCE_MATERIALS_META)
+	if entries is Array and not entries.is_empty():
+		for entry in entries:
+			var mat = entry.get("mat")
+			if not is_instance_valid(mat):
+				continue
+			if "albedo_color" in mat:
+				mat.set("albedo_color", entry["base"])
+	host.set_meta(LAST_RATIO_META, 1.0)
 
 static func _should_update(host: Node3D, ratio: float) -> bool:
 	var last := float(host.get_meta(LAST_RATIO_META, -1.0))
@@ -307,7 +334,7 @@ static func _apply_resource_materials(host: Node3D, roots: Array, ratio: float) 
 		host.set_meta(RESOURCE_MATERIALS_META, entries)
 	if entries.is_empty():
 		return
-	var tint := lerpf(1.0, 0.55, 1.0 - ratio)
+	var tint := lerpf(1.0, 0.72 if _get_entity_id(host) == 1 else 0.55, 1.0 - ratio)
 	for entry in entries:
 		var mat = entry.get("mat")
 		if not is_instance_valid(mat):
@@ -334,6 +361,15 @@ static func _get_optional_meta(host: Node3D, key: String):
 	if host.has_meta(key):
 		return host.get_meta(key)
 	return null
+
+static func _get_entity_id(host: Node3D) -> int:
+	var meta_id = _get_optional_meta(host, "_entity_id")
+	if meta_id != null:
+		return int(meta_id)
+	var value = host.get("entity_id")
+	if value == null:
+		return -1
+	return int(value)
 
 static func _get_body_radius(host: Node3D) -> float:
 	var meta_radius = _get_optional_meta(host, "_body_radius")

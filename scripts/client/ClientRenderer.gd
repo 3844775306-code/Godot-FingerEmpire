@@ -3,6 +3,7 @@ extends Node3D
 const StatsScript = preload("res://scripts/core/BattleStats.gd")
 const StatsPanelScript = preload("res://scripts/ui/BattleStatsPanel.gd")
 const BuildingDeathEffect = preload("res://scripts/effects/BuildingDeathEffect.gd")
+const TreeFallEffect = preload("res://scripts/effects/TreeFallEffect.gd")
 const EntityDamageVisual = preload("res://scripts/effects/EntityDamageVisual.gd")
 enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ATTACK_SPEED, MELEE_ARMOR, SHIELD_ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH, GARRISONED, NATION, IN_ACTION_RANGE }
 enum EB { UPGRADE=0, MAX_UPGRADE, CAN_UPGRADE, BUILD_TIMER, MAX_BUILD, PROD_CURRENT, PROD_PROGRESS, PROD_QSIZE, UPGRADE_TIMER, MAX_UPGRADE_TIME, GARRISON_COUNT }
@@ -406,6 +407,8 @@ func _process_snapshot(data: Dictionary):
 					var effect_duration := 0.0
 					if int(info.get("type", -1)) == 1:
 						effect_duration = BuildingDeathEffect.play(node, int(info.get("entity_id", -1)), float(info.get("body_radius", 0.5)))
+					elif int(info.get("type", -1)) == 0 and int(info.get("entity_id", -1)) == 1:
+						effect_duration = TreeFallEffect.play(node, float(info.get("body_radius", 0.5)))
 					if effect_duration > 0.0:
 						entity_nodes.erase(id)
 					else:
@@ -963,6 +966,7 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 	var col_shape = CollisionShape3D.new()
 	var r = info["body_radius"]
 	entity.set_meta("_body_radius", float(r))
+	entity.set_meta("_entity_id", int(info.get("entity_id", -1)))
 	if info["type"] == 1:
 		var box = BoxShape3D.new()
 		box.size = Vector3(r*2, r*1.5, r*2)
