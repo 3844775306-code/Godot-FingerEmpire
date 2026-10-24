@@ -871,6 +871,10 @@ func _update_health_bars():
 		text_tick_interval = 6
 	var refresh_text := (_health_text_tick % text_tick_interval == 0)
 	var sm = _get_sm()
+	var ent_total: int = bm_for_text._all_entities.size() if bm_for_text else 0
+	# 后期实体多时，满血单位连名字/血量文字一起省掉：几百个 Label 的布局与绘制
+	# 是 UI 侧最大开销，战斗中的受伤单位仍会照常显示
+	var text_budget: bool = ent_total <= 220
 
 	# 移除失效实体
 	var to_remove = []
@@ -1034,8 +1038,9 @@ func _update_health_bars():
 				prod_bar.visible = false
 				prod_label.visible = false
 
-		label.visible = show_unit_text
-		if refresh_text_now:
+		var show_text: bool = show_unit_text and (text_budget or entity.health < entity.max_health)
+		label.visible = show_text
+		if refresh_text_now and show_text:
 			var group_prefix = ""
 			if sm and sm.has_method("get_entity_groups"):
 				var groups = sm.get_entity_groups(entity)
@@ -1060,6 +1065,7 @@ func _update_health_bars():
 
 		if entity.health >= entity.max_health:
 			bar.visible = false
+			label.visible = false
 			continue
 
 		bar.visible = true

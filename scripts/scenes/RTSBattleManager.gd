@@ -184,6 +184,7 @@ var _perf_ssao_original: bool = false
 const PERF_LEVEL_SCALES: Array[float] = [1.0, 0.85, 0.72, 0.62, 0.52]
 # 阴影始终保留，低画质只缩短阴影投射距离，单位近处仍有影子
 const PERF_SHADOW_DISTANCE_SCALES: Array[float] = [1.0, 0.9, 0.8, 0.7, 0.6]
+var _distant_shadow_timer: float = 2.0
 
 func _create_diag_label():
 	# 顶部中央两行大字：第一行性能（帧率/画质/实体），第二行对局信息（AI/地图/时间）
@@ -2964,6 +2965,7 @@ func _process(delta):
 		_detect_enemy_near_base()
 
 	_tick_adaptive_quality(delta)
+	_tick_distant_shadows(delta)
 
 # ==================== 后期自动画质 ====================
 func _tick_adaptive_quality(delta: float) -> void:
@@ -3000,10 +3002,10 @@ func _tick_adaptive_quality(delta: float) -> void:
 	_perf_sample_timer -= delta
 	if _perf_sample_timer > 0.0:
 		return
-	_perf_sample_timer = 2.0
+	_perf_sample_timer = 1.5
 
 	var fps := Engine.get_frames_per_second()
-	if fps < 45.0:
+	if fps < 50.0:
 		_perf_low_streak += 1
 		_perf_high_streak = 0
 	elif fps > 56.0:
@@ -3013,10 +3015,11 @@ func _tick_adaptive_quality(delta: float) -> void:
 		_perf_low_streak = 0
 		_perf_high_streak = 0
 
-	# 连续 4 秒低于 45 才降档，避免交战时瞬时掉帧误触发；
-	# 连续 8 秒高于 56 才升档，避免画质来回跳。
+	# 降档要快：连续约 3 秒低于 50 就降，低于 40 一次降两档；
+	# 升档仍要连续 6 秒高于 56，避免画质来回跳。
 	if _perf_low_streak >= 2 and _perf_quality_level < PERF_LEVEL_SCALES.size() - 1:
-		_perf_quality_level += 1
+		var steps: int = 2 if fps < 40.0 else 1
+		_perf_quality_level = mini(_perf_quality_level + steps, PERF_LEVEL_SCALES.size() - 1)
 		_perf_low_streak = 0
 		_perf_high_streak = 0
 		_apply_perf_quality()
@@ -3024,6 +3027,15 @@ func _tick_adaptive_quality(delta: float) -> void:
 		_perf_quality_level -= 1
 		_perf_low_streak = 0
 		_perf_high_streak = 0
+		_apply_perf_quality()
+	# 实体数本身就是压力信号：后期几百个单位时即使还没掉到 50 也先降档，
+	# 否则等帧率继续下滑，玩家已经感到卡顿了
+	var ent_count: int = entities.get_child_count() if entities else 0
+	if ent_count >= 300 and _perf_quality_level < 2:
+		_perf_quality_level = 2
+		_apply_perf_quality()
+	elif ent_count >= 220 and _perf_quality_level < 1:
+		_perf_quality_level = 1
 		_apply_perf_quality()
 
 func _apply_perf_quality() -> void:
@@ -3034,12 +3046,21 @@ func _apply_perf_quality() -> void:
 	if _perf_light and is_instance_valid(_perf_light):
 		# 单位影子必须保留：不再按画质关闭实时阴影，只缩短投射距离并减少分片。
 		# 这样中后期近处单位仍有影子，远处阴影先消失，GPU 压力明显小于全距离阴影。
-		var want_shadow: bool = _perf_light_shadow_original
+		var ent_count: int = entities.get_child_count() if entities else 0
+		# 最低画质档连实时阴影一起关掉：几百个单位各投一次影是后期 GPU 的最大单项开销
+		var want_shadow: bool = _perf_light_shadow_original and _perf_quality_level < PERF_LEVEL_SCALES.size() - 1
 		if _perf_light.shadow_enabled != want_shadow:
 			_perf_light.shadow_enabled = want_shadow
+			if not want_shadow:
+				_restore_shadow_casting()
 		if want_shadow:
 			var distance_scale: float = PERF_SHADOW_DISTANCE_SCALES[clampi(_perf_quality_level, 0, PERF_SHADOW_DISTANCE_SCALES.size() - 1)]
-			_perf_light.directional_shadow_max_distance = maxf(_perf_light_shadow_distance_original * distance_scale, 15.0)
+			# 实体越多阴影越短，避免后期几百单位同时投影
+			if ent_count > 320:
+				distance_scale *= 0.68
+			elif ent_count > 240:
+				distance_scale *= 0.85
+			_perf_light.directional_shadow_max_distance = maxf(_perf_light_shadow_distance_original * distance_scale, 12.0)
 			if _perf_light_shadow_mode_original == DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS:
 				_perf_light.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS if _perf_quality_level >= 2 else _perf_light_shadow_mode_original
 			else:
@@ -3049,6 +3070,52 @@ func _apply_perf_quality() -> void:
 		var want_ssao: bool = _perf_ssao_original and _perf_quality_level < 1
 		if _perf_env.ssao_enabled != want_ssao:
 			_perf_env.ssao_enabled = want_ssao
+
+# 远景单位不投影：相机远处的单位在屏幕上只有几个像素，阴影 pass 却仍要画一遍完整几何。
+# 节流到 2 秒一次，按相机距离批量开关，后期能明显减少阴影绘制量。
+func _tick_distant_shadows(delta: float) -> void:
+	if DisplayServer.get_name() == "headless" or game_over:
+		return
+	_distant_shadow_timer -= delta
+	if _distant_shadow_timer > 0.0:
+		return
+	_distant_shadow_timer = 2.0
+	if not _perf_light or not is_instance_valid(_perf_light):
+		return
+	if not _perf_light.shadow_enabled:
+		# 阴影已整体关闭：把之前按距离关掉的节点恢复，避免下次开阴影时状态错乱
+		_restore_shadow_casting()
+		return
+	var cam := get_viewport().get_camera_3d()
+	if cam == null:
+		return
+	_ensure_cache_fresh()
+	var cam_pos := cam.global_position
+	var limit: float = 46.0 - float(_perf_quality_level) * 6.0
+	for a in _armies:
+		if not is_instance_valid(a):
+			continue
+		var far: bool = cam_pos.distance_to(a.global_position) > limit
+		_toggle_shadow_recursive(a, far)
+
+func _toggle_shadow_recursive(node: Node, far: bool) -> void:
+	for c in node.get_children():
+		if c is GeometryInstance3D:
+			var gi := c as GeometryInstance3D
+			if far:
+				if not gi.has_meta("_shadow_orig"):
+					gi.set_meta("_shadow_orig", gi.cast_shadow)
+				if gi.cast_shadow != GeometryInstance3D.SHADOW_CASTING_SETTING_OFF:
+					gi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+			elif gi.has_meta("_shadow_orig"):
+				gi.cast_shadow = int(gi.get_meta("_shadow_orig"))
+				gi.remove_meta("_shadow_orig")
+		_toggle_shadow_recursive(c, far)
+
+func _restore_shadow_casting() -> void:
+	for a in _armies:
+		if is_instance_valid(a):
+			_toggle_shadow_recursive(a, false)
 
 func _exit_tree() -> void:
 	# 自动画质改的是根 Viewport/场景光照，切回主菜单或开下一局前必须还原

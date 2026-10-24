@@ -1507,18 +1507,6 @@ func _update_health_bars():
 		# 普通实体
 		_hide_prod_bars(id)
 		var lab = _get_or_create_label(id)
-		var nm3 = info["name"]
-		var _gpfx1 = _get_entity_group_prefix(info["id"])
-		var _res_info2 = ""
-		if info.get("entity_id") in [10, 14]:
-			var _ord2 = info.get("order", "")
-			if _ord2 == "deliver": _res_info2 = "\n返回"
-			elif _ord2 == "gather": _res_info2 = "\n采集中"
-		lab.text = _gpfx1 + "%s Lv.%d%s" % [nm3, info.get("level", 1), _res_info2]
-
-		var _lbc = _get_entity_label_color(info)
-		lab.add_theme_color_override("font_color", _lbc)
-		_apply_label_nation_outline(lab, info)
 		var world_pos = node.global_position + Vector3.UP * (info["body_radius"]*2 + 0.5)
 		var screen_pos = cam.unproject_position(world_pos)
 
@@ -1546,10 +1534,8 @@ func _update_health_bars():
 				bar.visible = false; lab.visible = false
 		else:
 			if unit_bars.has(id) and unit_bars[id].bar: unit_bars[id].bar.visible = false
-			if viewport_rect.has_point(screen_pos):
-				lab.position = screen_pos - Vector2(30, 15)
-				lab.visible = show_unit_text
-			else: lab.visible = false
+			# 满血单位不显示名字：后期几百个 Label 的布局与绘制是客户端 UI 侧最大开销
+			lab.visible = false
 
 # 隐藏某实体的所有血条/标签控件
 func _hide_unit_bars(id):
