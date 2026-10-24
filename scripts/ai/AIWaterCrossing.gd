@@ -60,6 +60,14 @@ var _transport_shores_valid: bool = false
 # 上岸点定期更换：固定登陆场容易被对手守死，每分钟重新选一次
 const SHORES_REFRESH_SEC: float = 60.0
 var _shores_set_at_ms: int = 0
+# 登陆场防御评估：先在最近上岸点登陆；若该点敌军/防御塔过强，
+# 再在同一片岸线附近换一个防御更弱的点，而不是直接放弃渡海。
+const LANDING_DEFENSE_RADIUS := 16.0
+const LANDING_DEFENSE_MIN_LIMIT := 7.0
+const LANDING_DEFENSE_PER_TROOP := 0.22
+const LANDING_ALTERNATIVE_RADIUS := 28.0
+const LANDING_ALTERNATIVE_SEA_GAP := 12
+const LANDING_AVOID_MAX_DETOUR := 0.1
 
 var _transport_state: int = STATE_IDLE
 var _transport_timer: float = 0.0
@@ -317,25 +325,31 @@ func _find_transport_shores(own_set: Dictionary, enemy_set: Dictionary, bridges:
 	var enemy_grid: Vector2i = battle.world_to_grid(enemy_castle.global_position)
 	var visited: Dictionary = {}
 	var source: Dictionary = {}
+	var sea_dist: Dictionary = {}
 	var queue: Array = []
 	for w in own_shores.keys():
 		visited[w] = true
 		source[w] = w
+		sea_dist[w] = 0
 		queue.append(w)
 	var head: int = 0
-	var best_enemy: Vector2i = Vector2i(-1, -1)
-	var best_score: float = INF
 	var cands: Array = []
 	while head < queue.size():
 		var c: Vector2i = queue[head]
 		head += 1
-		if enemy_shores.has(c):
+		if enemy_shores.has(c) and enemy_land.has(c):
 			var src: Vector2i = source[c]
-			var score: float = Vector2(src).distance_to(Vector2(own_grid)) + Vector2(c).distance_to(Vector2(enemy_grid))
-			cands.append({"cell": c, "src": src, "score": score})
-			if score < best_score:
-				best_score = score
-				best_enemy = c
+			var land_cell: Vector2i = enemy_land[c]
+			var own_land_cell: Vector2i = own_land.get(src, src)
+			cands.append({
+				"cell": c,
+				"src": src,
+				"sea_dist": float(sea_dist.get(c, 0)),
+				"own_land": own_land_cell,
+				"enemy_land": land_cell,
+				"own_castle_dist": Vector2(src).distance_to(Vector2(own_grid)),
+				"enemy_castle_dist": Vector2(land_cell).distance_to(Vector2(enemy_grid))
+			})
 		for d in dirs:
 			var n: Vector2i = c + d
 			if n.x < 0 or n.x >= RTSConfig.MAP_SIZE or n.y < 0 or n.y >= RTSConfig.MAP_SIZE:
@@ -349,31 +363,133 @@ func _find_transport_shores(own_set: Dictionary, enemy_set: Dictionary, bridges:
 				continue
 			visited[n] = true
 			source[n] = source[c]
+			sea_dist[n] = int(sea_dist.get(c, 0)) + 1
 			queue.append(n)
-	if best_enemy == Vector2i(-1, -1):
+	if cands.is_empty():
 		return {}
-	var pick: Dictionary = {}
-	# 轮换：优先挑离上次登陆场较远的候选，避免固定岸点被对手守死
-	if avoid_pos != Vector3.ZERO:
-		cands.sort_custom(func(a, b): return a.score < b.score)
+	# 一次收集敌岸附近的守军/防御塔，避免为每个候选岸点重复全实体扫描。
+	var defenses: Array = _collect_landing_defenses()
+	for cd in cands:
+		var land_world: Vector3 = battle.grid_to_world(cd["enemy_land"].x, cd["enemy_land"].y)
+		cd["defense"] = _landing_defense_score(land_world, defenses)
+		# 先比较“从己方主城到登陆点”的实际接近距离（陆路到己岸 + 最短海路），
+		# 再比较登陆后到敌方主城的陆路距离；距离最近的上岸点优先。
+		cd["approach"] = float(cd["own_castle_dist"]) + float(cd["sea_dist"])
+		cd["route"] = float(cd["approach"]) + float(cd["enemy_castle_dist"]) * 0.35
+	cands.sort_custom(func(a, b):
+		if not is_equal_approx(float(a["approach"]), float(b["approach"])):
+			return float(a["approach"]) < float(b["approach"])
+		return float(a["route"]) < float(b["route"])
+	)
+	var nearest: Dictionary = cands[0]
+	var defense_limit: float = _landing_defense_limit()
+	var pick: Dictionary = nearest
+	# 最近上岸点敌军过强：只在这片岸线附近找替代点，保证运载船仍然就近登陆。
+	if float(nearest["defense"]) > defense_limit:
+		var nearby: Array = []
+		var nearest_land: Vector3 = battle.grid_to_world(nearest["enemy_land"].x, nearest["enemy_land"].y)
 		for cd in cands:
-			var wpos: Vector3 = battle.grid_to_world(cd["cell"].x, cd["cell"].y)
-			if wpos.distance_to(avoid_pos) > 6.0:
+			if cd == nearest:
+				continue
+			# 只考虑防御确实更低的附近岸点；否则换过去反而更危险，不如保持最近点。
+			if float(cd["defense"]) >= float(nearest["defense"]) - 0.5:
+				continue
+			var near_land: Vector3 = battle.grid_to_world(cd["enemy_land"].x, cd["enemy_land"].y)
+			if _flat_distance(near_land, nearest_land) <= LANDING_ALTERNATIVE_RADIUS \
+					or absf(float(cd["sea_dist"]) - float(nearest["sea_dist"])) <= LANDING_ALTERNATIVE_SEA_GAP:
+				nearby.append(cd)
+		# 优先换到“仍在附近、且防御已降到可接受范围”的最近岸点；
+		# 如果附近没有可接受的点，再退而求其次选防御最低的。
+		nearby.sort_custom(func(a, b):
+			var a_safe: bool = float(a["defense"]) <= defense_limit
+			var b_safe: bool = float(b["defense"]) <= defense_limit
+			if a_safe != b_safe:
+				return a_safe
+			if not a_safe:
+				if not is_equal_approx(float(a["defense"]), float(b["defense"])):
+					return float(a["defense"]) < float(b["defense"])
+			var a_land: Vector3 = battle.grid_to_world(a["enemy_land"].x, a["enemy_land"].y)
+			var b_land: Vector3 = battle.grid_to_world(b["enemy_land"].x, b["enemy_land"].y)
+			var a_d: float = _flat_distance(a_land, nearest_land)
+			var b_d: float = _flat_distance(b_land, nearest_land)
+			if not is_equal_approx(a_d, b_d):
+				return a_d < b_d
+			return float(a["approach"]) < float(b["approach"])
+		)
+		if not nearby.is_empty():
+			pick = nearby[0]
+	# 定期轮换只作为“几乎同距”的微调：不把船队强行拉到明显更远的岸点。
+	if avoid_pos != Vector3.ZERO and pick == nearest:
+		for cd in cands:
+			if float(cd["defense"]) > defense_limit:
+				continue
+			if float(cd["approach"]) > float(nearest["approach"]) + LANDING_AVOID_MAX_DETOUR:
+				continue
+			var cd_land: Vector3 = battle.grid_to_world(cd["enemy_land"].x, cd["enemy_land"].y)
+			if _flat_distance(cd_land, avoid_pos) > 6.0:
 				pick = cd
 				break
-	if pick.is_empty():
-		var best_src: Vector2i = source[best_enemy]
-		pick = {"cell": best_enemy, "src": best_src}
 	var best_src2: Vector2i = pick["src"]
 	var best_enemy2: Vector2i = pick["cell"]
-	var own_land_cell: Vector2i = own_land.get(best_src2, best_src2)
-	var enemy_land_cell: Vector2i = enemy_land.get(best_enemy2, best_enemy2)
+	var own_land_cell2: Vector2i = own_land.get(best_src2, best_src2)
+	var enemy_land_cell2: Vector2i = enemy_land.get(best_enemy2, best_enemy2)
 	return {
 		"own_water": battle.grid_to_world(best_src2.x, best_src2.y),
-		"own_land": battle.grid_to_world(own_land_cell.x, own_land_cell.y),
+		"own_land": battle.grid_to_world(own_land_cell2.x, own_land_cell2.y),
 		"enemy_water": battle.grid_to_world(best_enemy2.x, best_enemy2.y),
-		"enemy_land": battle.grid_to_world(enemy_land_cell.x, enemy_land_cell.y)
+		"enemy_land": battle.grid_to_world(enemy_land_cell2.x, enemy_land_cell2.y)
 	}
+
+# 统计登陆点附近的敌方防御强度。只算能反击的陆军、战船与防御建筑；
+# 农民/商人/官员以及资源点不参与，避免把普通村庄误判成重兵把守。
+func _collect_landing_defenses() -> Array:
+	var out: Array = []
+	for e in ai._cached_armies():
+		if not is_instance_valid(e) or e.health <= 0:
+			continue
+		if int(e.team) == RTSConfig.Team.NEUTRAL:
+			continue
+		if not ai._entity_is_enemy(e):
+			continue
+		var uid: int = int(e.entity_id)
+		if uid == 10 or uid == 14 or uid in [43, 44, 45, 46, 47, 48, 49, 50, 51]:
+			continue
+		if int(e.target_type) <= 0 and float(e.attack) <= 0.0:
+			continue
+		out.append({
+			"pos": e.global_position,
+			"score": 1.0 + maxf(0.0, float(e.attack)) * 0.06 + maxf(0.0, float(e.target_type)) * 0.18
+		})
+	for b in ai._cached_buildings():
+		if not is_instance_valid(b) or b.health <= 0:
+			continue
+		if int(b.team) == RTSConfig.Team.NEUTRAL or b.build_timer > 0.0:
+			continue
+		if not ai._entity_is_enemy(b):
+			continue
+		var bid: int = int(b.entity_id)
+		var bscore: float = 0.0
+		if bid == 20:
+			bscore = 8.0
+		elif bid == 25 or bid == 26:
+			bscore = 5.0 + maxf(0.0, float(b.attack)) * 0.08
+		if bscore > 0.0:
+			out.append({"pos": b.global_position, "score": bscore})
+	return out
+
+func _landing_defense_limit() -> float:
+	var troops: int = _wave_troop_target if _wave_troop_target > 0 else MIN_TRANSPORT_TROOPS
+	return maxf(LANDING_DEFENSE_MIN_LIMIT, float(troops) * LANDING_DEFENSE_PER_TROOP)
+
+func _landing_defense_score(pos: Vector3, defenses: Array) -> float:
+	var total: float = 0.0
+	for d in defenses:
+		var dist: float = _flat_distance(pos, d["pos"])
+		if dist > LANDING_DEFENSE_RADIUS:
+			continue
+		var prox: float = clampf(1.0 - dist / LANDING_DEFENSE_RADIUS, 0.0, 1.0)
+		total += float(d["score"]) * (0.35 + prox * 0.65)
+	return total
 
 # ═══════════════════════ 搭桥 ═══════════════════════
 
