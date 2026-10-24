@@ -2817,7 +2817,15 @@ func _relation_tag() -> String:
 		-1: return "[color=#ff6b5a]⚔ 敌方[/color] "
 		_: return ""
 
-# 面板边框/底色按友方蓝、敌方红区分（乱斗联盟变化时随之刷新）
+# AI 所属国家的颜色：面板底色用它，一眼能看出是哪个国家在指挥
+func _nation_color() -> Color:
+	if battle != null and battle.has_method("get_team_nation"):
+		var nn: int = int(battle.get_team_nation(my_team))
+		if nn >= 0:
+			return RTSConfig.get_nation_color(nn)
+	return Color(0.7, 0.7, 0.7)
+
+# 面板边框按友方蓝、敌方红区分（乱斗联盟变化时随之刷新），底色用 AI 国家色
 func _apply_panel_relation() -> void:
 	if _panel_bg_style == null: return
 	var rel = _relation_to_player()
@@ -2829,12 +2837,9 @@ func _apply_panel_relation() -> void:
 	_panel_bg_style.border_width_right = 2
 	_panel_bg_style.border_width_top = 2
 	_panel_bg_style.border_width_bottom = 2
-	if rel == 1:
-		_panel_bg_style.bg_color = Color(0.04, 0.09, 0.16, 0.93)
-	elif rel == -1:
-		_panel_bg_style.bg_color = Color(0.15, 0.05, 0.06, 0.93)
-	else:
-		_panel_bg_style.bg_color = Color(0.05, 0.06, 0.12, 0.92)
+	# 底色取 AI 所属国家的颜色并压暗，敌我关系靠边框颜色区分，不影响文字可读性
+	var nc := _nation_color()
+	_panel_bg_style.bg_color = Color(nc.r * 0.22, nc.g * 0.22, nc.b * 0.22, 0.93)
 
 func _create_debug_panel():
 	debug_panel = Control.new(); debug_panel.name = "AIDebugPanel"; debug_panel.z_index = 100
