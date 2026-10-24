@@ -22,7 +22,7 @@ float smooth_noise(vec2 p) {
 float fbm(vec2 p) {
 	float v = 0.0;
 	float a = 0.5;
-	for (int i = 0; i < 2; i++) { v += a * smooth_noise(p); p *= 2.3; a *= 0.5; }
+	for (int i = 0; i < 4; i++) { v += a * smooth_noise(p); p *= 2.3; a *= 0.5; }
 	return v;
 }
 
@@ -31,6 +31,8 @@ void vertex() {
 	// 长波长缓坡：波长 10 米上下，幅度只有几厘米，肉眼看到的是明暗缓变
 	float w = sin(wv.x * 0.55 + TIME * wave_speed) * cos(wv.z * 0.62 + TIME * wave_speed * 0.7) * wave_amp;
 	w += sin(wv.x * 1.35 - TIME * wave_speed * 1.2) * cos(wv.z * 1.21 + TIME * wave_speed * 0.9) * wave_amp * 0.35;
+	// 叠一层更细的起伏，模拟地表的碎小凹凸（波长 2 米左右）
+	w += sin(wv.x * 3.1 + TIME * wave_speed * 2.1) * cos(wv.z * 2.7 - TIME * wave_speed * 1.6) * wave_amp * 0.18;
 	VERTEX.y += w;
 	v_h = w;
 }
@@ -44,15 +46,25 @@ void fragment() {
 	// 必须用 INV_VIEW_MATRIX 还原到世界空间；若在这里用 MODEL_MATRIX，
 	// 法线扰动的图案会跟着摄像机滑动（之前就是这个 bug）
 	vec3 wpos = (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xyz;
-	vec2 np = wpos.xz * 0.6;
-	float e = 0.35;
+	// 与水面一致的高频差分，再叠一层更细的，避免只有大块明暗而显得粗糙
+	vec2 np = wpos.xz * 1.8;
+	float e = 0.05;
 	float h0 = fbm(np);
 	float hx = fbm(np + vec2(e, 0.0));
 	float hz = fbm(np + vec2(0.0, e));
-	vec3 wn = normalize(vec3((h0 - hx) * 2.5, 1.0, (h0 - hz) * 2.5));
+	vec2 np2 = wpos.xz * 5.5;
+	float e2 = 0.03;
+	float g0 = fbm(np2);
+	float gx = fbm(np2 + vec2(e2, 0.0));
+	float gz = fbm(np2 + vec2(0.0, e2));
+	// 粗层给大起伏、细层给细密颗粒，系数都调高，光影层次才接近水面
+	vec3 wn = normalize(vec3(
+		(h0 - hx) * 12.0 + (g0 - gx) * 6.0,
+		1.0,
+		(h0 - hz) * 12.0 + (g0 - gz) * 6.0));
 	NORMAL = normalize((VIEW_MATRIX * vec4(wn, 0.0)).xyz);
 	// 波峰略亮、波谷略暗，起伏更可读
-	ALBEDO *= (1.0 + v_h * 1.5);
+	ALBEDO *= (1.0 + v_h * 1.2);
 	ROUGHNESS = 1.0;
 	METALLIC = 0.0;
 }
