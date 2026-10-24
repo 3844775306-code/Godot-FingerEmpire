@@ -4,7 +4,7 @@
 [ext_resource type="Script" uid="uid://y3juibmibwfb" path="res://scripts/map/CameraController.gd" id="2_iwg4n"]
 [ext_resource type="Script" uid="uid://dhhgdpux4mj07" path="res://scripts/map/Ground.gd" id="3_2568k"]
 [ext_resource type="Script" uid="uid://bxf8iltldpqaf" path="res://scripts/client/ClientHUD.gd" id="4_13id7"]
-[ext_resource type="Script" uid="uid://c575bxyaplsdx" path="res://scripts/map/map.gd" id="5_13id7"]
+[ext_resource type="Script" uid="uid://d178itb4ttdku" path="res://scripts/map/Minimap.gd" id="5_13id7"]
 [ext_resource type="Script" uid="uid://cn007ft5a15hj" path="res://scripts/client/ClientInfoPanel.gd" id="6_j6f5n"]
 [ext_resource type="Script" uid="uid://cwosj0mjw2wwc" path="res://scripts/ui/ClientBuildMenu.gd" id="7_iwg4n"]
 [ext_resource type="Script" uid="uid://cnuevma7jdo8w" path="res://scripts/client/ClientInput.gd" id="7_j6f5n"]

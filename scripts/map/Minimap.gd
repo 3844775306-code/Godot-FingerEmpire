@@ -131,6 +131,11 @@ func _draw():
 	bm = get_tree().get_first_node_in_group("battle_manager")
 	if bm and bm.has_method("get_player_colors"):
 		pc = bm.get_player_colors()
+	if pc.is_empty():
+		# 纯客户端从渲染器取玩家配色（2v2/3v3 按玩家着色）
+		var client_renderer = get_tree().get_first_node_in_group("client_renderer")
+		if client_renderer:
+			pc = client_renderer.player_colors
 
 	# —— 资源点：先画、弱化为 2x2 暗点，避免与单位方块混淆 ——
 	for ent in entity_snapshots:
