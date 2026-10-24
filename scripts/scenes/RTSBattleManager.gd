@@ -22,6 +22,9 @@ var enemy_max_pop: int = 50
 var game_mode_2v2: bool = false               # 是否单机2v2模式
 var is_ffa: bool = false                      # 是否乱斗模式（多国自由结盟/进贡/决裂/背叛）
 var player_owner_id: int = 1                  # 玩家自己的owner_peer_id (单机2v2=1, 1v1=-1)
+# 单机每局随机分配红/蓝阵营；联机由 OnlineBattleManager 决定，两者都通过 get_host_team() 读取。
+var player_team: int = RTSConfig.Team.BLUE
+var enemy_team: int = RTSConfig.Team.RED
 var local_auto_attack: bool = false           # 本地玩家的自动进攻开关
 const AUTO_ATTACK_EXCLUDE_IDS = [5, 6, 9, 10, 14, 43, 44, 45, 51, 46, 47, 48, 49, 50]
 var ai_players: Dictionary = {}               # { peer_id: { "team":, "slot":, "castle": } }
@@ -549,7 +552,7 @@ func _focus_camera_on_player_castle_once() -> void:
 func get_player_castle() -> Building:
 	_ensure_cache_fresh()
 	for entity in _buildings:
-		if is_instance_valid(entity) and entity.team == RTSConfig.Team.BLUE and entity.entity_id == 20:
+		if is_instance_valid(entity) and entity.team == get_host_team() and entity.entity_id == 20:
 			return entity
 	return null
 
@@ -557,7 +560,7 @@ func get_player_castle_level() -> int:
 	_ensure_cache_fresh()
 	var max_lv = 1
 	for e in _buildings:
-		if is_instance_valid(e) and e.entity_id == 20 and e.team == RTSConfig.Team.BLUE and e.health > 0:
+		if is_instance_valid(e) and e.entity_id == 20 and e.team == get_host_team() and e.health > 0:
 			if e.upgrade_level > max_lv:
 				max_lv = e.upgrade_level
 	return max_lv
@@ -587,7 +590,7 @@ func get_building_required_castle_level(building_id: int) -> int:
 func get_enemy_castle() -> Building:
 	_ensure_cache_fresh()
 	for entity in _buildings:
-		if is_instance_valid(entity) and entity.team == RTSConfig.Team.RED and entity.entity_id == 20:
+		if is_instance_valid(entity) and entity.team == get_enemy_team() and entity.entity_id == 20:
 			return entity
 	return null
 
@@ -806,8 +809,8 @@ func _on_2v2_castle_died(team: int, owner: int = -1):
 	_team_castle_count[team] = _team_castle_count.get(team, 2) - 1
 	if _team_castle_count[team] > 0: return   # 还有存活城堡，继续
 	game_over = true
-	AudioManager.play_music("defeat" if team == RTSConfig.Team.BLUE else "victory")
-	if team == RTSConfig.Team.BLUE:
+	AudioManager.play_music("defeat" if team == get_host_team() else "victory")
+	if team == get_host_team():
 		_show_hud_alert("我方基地正遭受攻击！", Color(1.0, 0.2, 0.1))
 		game_over_label.text = "你输了！"
 		game_over_label.add_theme_color_override("font_color", Color.RED)
@@ -821,9 +824,9 @@ func _on_castle_died(team: int):
 	if battle_stats:
 		battle_stats.sample_now()
 	game_over = true
-	AudioManager.play_music("defeat" if team == RTSConfig.Team.BLUE else "victory")
+	AudioManager.play_music("defeat" if team == get_host_team() else "victory")
 
-	if team == RTSConfig.Team.BLUE:
+	if team == get_host_team():
 		_show_hud_alert("我方基地正遭受攻击！", Color(1.0, 0.2, 0.1))
 		game_over_label.text = "你输了！"
 		game_over_label.add_theme_color_override("font_color", Color.RED)
@@ -840,32 +843,32 @@ func update_population_limits():
 	var e_max = 0
 	for entity in get_tree().get_nodes_in_group("pop_buildings"):
 		if entity.health <= 0 or entity.build_timer > 0: continue
-		if entity.team == RTSConfig.Team.BLUE:
+		if entity.team == get_host_team():
 			if entity.entity_id == 20: p_max += 20
 			elif entity.entity_id == 28: p_max += 10
-		elif entity.team == RTSConfig.Team.RED:
+		elif entity.team == get_enemy_team():
 			if entity.entity_id == 20: e_max += 20
 			elif entity.entity_id == 28: e_max += 10
 	player_max_pop = p_max
 	enemy_max_pop = e_max
 
-	player_max_pop += NationBonuses.get_population_bonus(team_nations[RTSConfig.Team.BLUE])
-	enemy_max_pop += NationBonuses.get_population_bonus(team_nations[RTSConfig.Team.RED])
+	player_max_pop += NationBonuses.get_population_bonus(team_nations.get(get_host_team(), -1))
+	enemy_max_pop += NationBonuses.get_population_bonus(team_nations.get(get_enemy_team(), -1))
 
 func increase_population(team: int, amount: int = 1):
-	if team == RTSConfig.Team.BLUE:
+	if team == get_host_team():
 		player_pop += amount
 	else:
 		enemy_pop += amount
 
 func decrease_population(team: int, amount: int = 1):
-	if team == RTSConfig.Team.BLUE:
+	if team == get_host_team():
 		player_pop = max(0, player_pop - amount)
 	else:
 		enemy_pop = max(0, enemy_pop - amount)
 
 func can_train_unit(team: int) -> bool:
-	return (team == RTSConfig.Team.BLUE and player_pop < player_max_pop) or (team == RTSConfig.Team.RED and enemy_pop < enemy_max_pop)
+	return (team == get_host_team() and player_pop < player_max_pop) or (team == get_enemy_team() and enemy_pop < enemy_max_pop)
 
 	
 # ==================== 初始化 ====================
@@ -880,6 +883,15 @@ func _ready():
 			map_modifiers = preset.get("modifiers", {})
 	_init_building_defs()
 	battle_stats = BattleStatsScript.new(self)
+	if not is_online and not GameSettings.is_ffa:
+		# 单机版每局随机分配红/蓝阵营（1v1/2v2/3v3 的出生侧与颜色一起交换）。
+		# 乱斗模式玩家固定蓝方（其余国家使用独立 team 3..），不参与红蓝对调。
+		if randi() % 2 == 1:
+			player_team = RTSConfig.Team.RED
+			enemy_team = RTSConfig.Team.BLUE
+		else:
+			player_team = RTSConfig.Team.BLUE
+			enemy_team = RTSConfig.Team.RED
 	if not is_online:
 		if GameSettings.is_ffa:
 			_init_ffa_single(GameSettings.ffa_nation_count)
@@ -1069,20 +1081,28 @@ func _on_ffa_castle_died(owner: int):
 
 
 func _init_2v2_single():
-	# 定义四个玩家：玩家槽0(蓝)、AI槽1(蓝)、AI槽0(红)、AI槽1(红)
+	# 定义四个玩家：玩家+1名AI队友同阵营，2名AI敌人另一阵营。
+	# 阵营每局随机，所以这里按 player_team/enemy_team 生成，而不是写死蓝/红。
 	var setup = [
-		{ "peer_id": 1, "team": RTSConfig.Team.BLUE, "slot": 0, "is_human": true, "nation": GameSettings.player_nation },
-		{ "peer_id": 2, "team": RTSConfig.Team.BLUE, "slot": 1, "is_human": false, "nation": randi() % RTSConfig.Nation.size() },
-		{ "peer_id": 3, "team": RTSConfig.Team.RED, "slot": 0, "is_human": false, "nation": randi() % RTSConfig.Nation.size() },
-		{ "peer_id": 4, "team": RTSConfig.Team.RED, "slot": 1, "is_human": false, "nation": randi() % RTSConfig.Nation.size() },
+		{ "peer_id": 1, "team": player_team, "slot": 0, "is_human": true, "nation": GameSettings.player_nation },
+		{ "peer_id": 2, "team": player_team, "slot": 1, "is_human": false, "nation": randi() % RTSConfig.Nation.size() },
+		{ "peer_id": 3, "team": enemy_team, "slot": 0, "is_human": false, "nation": randi() % RTSConfig.Nation.size() },
+		{ "peer_id": 4, "team": enemy_team, "slot": 1, "is_human": false, "nation": randi() % RTSConfig.Nation.size() },
 	]
 
 	var map = $Map
 	if not map: return
 	var positions = map.get_four_castle_positions()   # [blue1, blue2, red1, red2]
+	var enemy_nation = GameSettings.enemy_nation
+	if enemy_nation < 0 or enemy_nation >= RTSConfig.Nation.size():
+		enemy_nation = randi() % RTSConfig.Nation.size()
+	team_nations = {
+		player_team: GameSettings.player_nation,
+		enemy_team: enemy_nation
+	}
 
-	_team_castle_count[RTSConfig.Team.BLUE] = 2
-	_team_castle_count[RTSConfig.Team.RED] = 2
+	_team_castle_count[player_team] = 2
+	_team_castle_count[enemy_team] = 2
 	for info in setup:
 		var pid = info.peer_id
 		var team = info.team
@@ -1169,51 +1189,62 @@ func _init_multi_single(mode: int):
 	player_resources = {"gold": 500, "wood": 500, "stone": 300, "food": 500, "oil": 0}
 	player_pop = 0; player_max_pop = 20
 	player_resource_limits = {"gold": 500, "wood": 500, "stone": 500, "food": 500, "oil": 0}
-	team_nations[RTSConfig.Team.BLUE] = GameSettings.player_nation
+	# 阵营每局随机：玩家可能占用蓝/红任意一侧，AI 队友和敌人随之整体对调。
+	var enemy_nation = GameSettings.enemy_nation
+	if enemy_nation < 0 or enemy_nation >= RTSConfig.Nation.size():
+		enemy_nation = randi() % RTSConfig.Nation.size()
+	team_nations = {
+		player_team: GameSettings.player_nation,
+		enemy_team: enemy_nation
+	}
 
-	_team_castle_count[RTSConfig.Team.BLUE] = mode
-	_team_castle_count[RTSConfig.Team.RED] = mode
+	_team_castle_count[player_team] = mode
+	_team_castle_count[enemy_team] = mode
 
 	# 所有 AI 国家独立随机（排除玩家国家，尽量互不重复）
 	var ai_nation_order: Array = _random_ai_nation_pool((mode - 1) + mode)
 	var ai_nation_idx: int = 0
 
-	# 玩家城堡（layout[0]，蓝方主城）
+	# 玩家城堡：蓝方取 layout[0]，红方取 layout[mode]（各自阵营的 0 号位）
+	var player_pos = layout[0] if player_team == RTSConfig.Team.BLUE else layout[mode]
 	var player_castle = null
 	var player_cfg = EntityDatabase.get_config(20)
 	player_cfg["owner_peer_id"] = player_owner_id
-	player_cfg["team"] = RTSConfig.Team.BLUE
-	player_castle = spawn_entity(player_cfg, RTSConfig.Team.BLUE, layout[0], 1)
+	player_cfg["team"] = player_team
+	player_castle = spawn_entity(player_cfg, player_team, player_pos, 1)
 	if player_castle:
 		player_castle.owner_peer_id = player_owner_id
-		player_castle.died.connect(_on_2v2_castle_died.bind(RTSConfig.Team.BLUE))
+		player_castle.died.connect(_on_2v2_castle_died.bind(player_team))
 		var start_lv = NationBonuses.get_castle_start_level(GameSettings.player_nation)
 		player_castle.upgrade_level = start_lv
 		player_castle.level = start_lv
 		if start_lv >= 3:
 			player_castle._unlock_nation_units(GameSettings.player_nation)
-	ai_players[player_owner_id] = {"castle": player_castle, "team": RTSConfig.Team.BLUE, "slot": 0, "nation": GameSettings.player_nation}
+	_player_colors[player_owner_id] = RTSConfig.COLOR_POOL[player_team]
+	ai_players[player_owner_id] = {"castle": player_castle, "team": player_team, "slot": 0, "nation": GameSettings.player_nation}
 
 	# 玩家初始农民
 	var peasant_cfg = EntityDatabase.get_config(10)
 	for i in range(3):
 		var cfg = peasant_cfg.duplicate()
 		cfg["owner_peer_id"] = player_owner_id
-		spawn_entity(cfg, RTSConfig.Team.BLUE, layout[0] + Vector3(randf_range(-3,3), 0, randf_range(-3,3)), 1)
+		spawn_entity(cfg, player_team, player_pos + Vector3(randf_range(-3,3), 0, randf_range(-3,3)), 1)
 
-	# 蓝方 AI（队友，与玩家同国）与红方 AI（对手），各自独立资源/人口/上限/颜色/AI控制器
+	# 玩家阵营 AI（队友）与敌方 AI，各自独立资源/人口/上限/颜色/AI控制器
 	var blue_colors = [Color(0.35, 0.6, 1.0), Color(0.5, 0.75, 1.0)]
 	var red_colors = [Color(1.0, 0.3, 0.25), Color(1.0, 0.5, 0.25), Color(1.0, 0.35, 0.55)]
-	for team in [RTSConfig.Team.BLUE, RTSConfig.Team.RED]:
-		var count = (mode - 1) if team == RTSConfig.Team.BLUE else mode
+	for team in [player_team, enemy_team]:
+		var is_ally_team = team == player_team
+		var count = (mode - 1) if is_ally_team else mode
 		var base_pid = 1000 if team == RTSConfig.Team.BLUE else 2000
 		var colors = blue_colors if team == RTSConfig.Team.BLUE else red_colors
 		for ai_index in range(count):
 			var pid = base_pid + ai_index
 			var nation = ai_nation_order[ai_nation_idx] if ai_nation_idx < ai_nation_order.size() else (randi() % RTSConfig.Nation.size())
 			ai_nation_idx += 1
-			# 位置：蓝方 AI 占 layout[1..mode-1]，红方 AI 占 layout[mode..2*mode-1]
-			var castle_pos = layout[ai_index + 1] if team == RTSConfig.Team.BLUE else layout[mode + ai_index]
+			# 玩家阵营 AI 队友占 1..mode-1 号位，敌方 AI 占 0..mode-1 号位
+			var slot = (ai_index + 1) if is_ally_team else ai_index
+			var castle_pos = layout[slot] if team == RTSConfig.Team.BLUE else layout[mode + slot]
 			_player_colors[pid] = colors[ai_index % colors.size()]
 
 			ai_resources[pid] = {"gold": 500, "wood": 500, "stone": 300, "food": 500, "oil": 0}
@@ -1232,7 +1263,7 @@ func _init_multi_single(mode: int):
 				castle.level = start_lv_ai
 				if start_lv_ai >= 3:
 					castle._unlock_nation_units(nation)
-			ai_players[pid] = {"castle": castle, "team": team, "slot": ai_index + 1, "nation": nation}
+			ai_players[pid] = {"castle": castle, "team": team, "slot": slot, "nation": nation}
 
 			# AI初始农民
 			for j in range(3):
@@ -1267,7 +1298,29 @@ func _init_multi_single(mode: int):
 			cam.global_position = Vector3(player_castle.global_position.x, cam.global_position.y, player_castle.global_position.z)
 # 获取房主队伍的统一入口（子类 OnlineBattleManager 重写为实际队伍）
 func get_host_team() -> int:
-	return RTSConfig.Team.BLUE
+	return player_team
+
+# 与房主敌对的队伍（1v1/2v2/3v3 只有红蓝两队；乱斗另有独立 team）
+func get_enemy_team() -> int:
+	return RTSConfig.Team.RED if get_host_team() == RTSConfig.Team.BLUE else RTSConfig.Team.BLUE
+
+# 把 team 判断统一收敛到这两个接口：单机随机阵营后，玩家不一定还是 BLUE。
+func is_host_team(team: int) -> bool:
+	return team == get_host_team()
+
+func get_team_resources(team: int) -> Dictionary:
+	return player_resources if is_host_team(team) else enemy_resources
+
+func get_team_resource_limits(team: int) -> Dictionary:
+	return player_resource_limits if is_host_team(team) else enemy_resource_limits
+
+# 按队伍找主城（单机 2v2/3v3 同队多城时只取第一座；调用方需要 owner 精度时自行过滤）
+func get_castle_by_team(team: int) -> Building:
+	_ensure_cache_fresh()
+	for entity in _buildings:
+		if is_instance_valid(entity) and entity.entity_id == 20 and entity.team == team:
+			return entity
+	return null
 
 # 获取房主资源的统一入口（子类 OnlineBattleManager 重写为 peer_id=1 格式）
 func get_host_resources() -> Dictionary:
@@ -1395,7 +1448,7 @@ func update_player_population(owner_id: int):
 		if entity.owner_peer_id == owner_id and entity.health > 0 and entity.build_timer <= 0:
 			if entity.entity_id == 20: p_max += 20
 			elif entity.entity_id == 28: p_max += 10
-	var nation = team_nations.get(RTSConfig.Team.BLUE, -1) if owner_id == player_owner_id else ai_players.get(owner_id, {}).get("nation", -1)
+	var nation = team_nations.get(get_host_team(), -1) if owner_id == player_owner_id else ai_players.get(owner_id, {}).get("nation", -1)
 	p_max += NationBonuses.get_population_bonus(nation)
 	if owner_id == player_owner_id:
 		player_max_pop = p_max
@@ -1420,9 +1473,9 @@ func recount_current_population():
 			continue
 		if e.owner_peer_id != -1:
 			counts[e.owner_peer_id] = counts.get(e.owner_peer_id, 0) + 1
-		elif e.team == RTSConfig.Team.BLUE:
+		elif e.team == get_host_team():
 			team_blue += 1
-		elif e.team == RTSConfig.Team.RED:
+		elif e.team == get_enemy_team():
 			team_red += 1
 	if ai_players.is_empty():
 		# 纯队伍制（离线 1v1）：玩家/敌方各维护一份
@@ -1513,8 +1566,15 @@ func _init_entities_deferred():
 	var map = $Map
 	if not map: return
 
-	player_castle_pos = map.player_castle_pos
-	enemy_castle_pos = map.enemy_castle_pos
+	# 单机随机到红方时，玩家使用红方出生点、敌方使用蓝方出生点；
+	# 这样海岸登陆等非对称地图也会随机决定玩家在海岛还是外周。
+	var host_pos = map.player_castle_pos
+	var foe_pos = map.enemy_castle_pos
+	if not is_online and get_host_team() == RTSConfig.Team.RED:
+		host_pos = map.enemy_castle_pos
+		foe_pos = map.player_castle_pos
+	player_castle_pos = host_pos
+	enemy_castle_pos = foe_pos
 
 	# 获取国家
 	var player_nation = GameSettings.player_nation
@@ -1523,16 +1583,16 @@ func _init_entities_deferred():
 		enemy_nation = randi() % RTSConfig.Nation.size()
 
 	team_nations = {
-		RTSConfig.Team.BLUE: player_nation,
-		RTSConfig.Team.RED: enemy_nation
+		get_host_team(): player_nation,
+		get_enemy_team(): enemy_nation
 	}
 
 	# 生成玩家城堡
 	var castle_cfg = EntityDatabase.get_config(20)
-	castle_cfg["team"] = RTSConfig.Team.BLUE
-	var player_castle = spawn_entity(castle_cfg, RTSConfig.Team.BLUE, player_castle_pos)
+	castle_cfg["team"] = get_host_team()
+	var player_castle = spawn_entity(castle_cfg, get_host_team(), player_castle_pos)
 	if player_castle:
-		player_castle.died.connect(_on_castle_died.bind(RTSConfig.Team.BLUE))
+		player_castle.died.connect(_on_castle_died.bind(get_host_team()))
 		var start_lv = NationBonuses.get_castle_start_level(player_nation)
 		player_castle.upgrade_level = start_lv
 		player_castle.level = start_lv
@@ -1541,10 +1601,10 @@ func _init_entities_deferred():
 
 	# 生成敌人城堡
 	castle_cfg = EntityDatabase.get_config(20)
-	castle_cfg["team"] = RTSConfig.Team.RED
-	var enemy_castle = spawn_entity(castle_cfg, RTSConfig.Team.RED, enemy_castle_pos)
+	castle_cfg["team"] = get_enemy_team()
+	var enemy_castle = spawn_entity(castle_cfg, get_enemy_team(), enemy_castle_pos)
 	if enemy_castle:
-		enemy_castle.died.connect(_on_castle_died.bind(RTSConfig.Team.RED))
+		enemy_castle.died.connect(_on_castle_died.bind(get_enemy_team()))
 		var start_lv_enemy = NationBonuses.get_castle_start_level(enemy_nation)
 		enemy_castle.upgrade_level = start_lv_enemy
 		enemy_castle.level = start_lv_enemy
@@ -1563,18 +1623,23 @@ func _init_entities_deferred():
 		var fz = player_castle_pos.z + randf_range(-3, 3)
 		var ft = get_terrain_at(Vector3(fx, 0, fz))
 		if ft == 0:
-			spawn_entity(peasant_cfg, RTSConfig.Team.BLUE, Vector3(fx, 0, fz))
+			spawn_entity(peasant_cfg, get_host_team(), Vector3(fx, 0, fz))
 		else:
-			spawn_entity(peasant_cfg, RTSConfig.Team.BLUE, player_castle_pos + Vector3(randf_range(-3,3), 0, randf_range(-3,3)))
+			spawn_entity(peasant_cfg, get_host_team(), player_castle_pos + Vector3(randf_range(-3,3), 0, randf_range(-3,3)))
 	for _i in range(3):
 		var fx = enemy_castle_pos.x + randf_range(-3, 3)
 		var fz = enemy_castle_pos.z + randf_range(-3, 3)
 		var ft = get_terrain_at(Vector3(fx, 0, fz))
 		if ft == 0:
-			spawn_entity(peasant_cfg, RTSConfig.Team.RED, Vector3(fx, 0, fz))
+			spawn_entity(peasant_cfg, get_enemy_team(), Vector3(fx, 0, fz))
 		else:
-			spawn_entity(peasant_cfg, RTSConfig.Team.RED, enemy_castle_pos + Vector3(randf_range(-3,3), 0, randf_range(-3,3)))
-	
+			spawn_entity(peasant_cfg, get_enemy_team(), enemy_castle_pos + Vector3(randf_range(-3,3), 0, randf_range(-3,3)))
+
+	# 1v1 静态 AI 默认写死红方；玩家随机到红方时必须同步改成蓝方。
+	if not is_online:
+		var static_ai = get_node_or_null("AIController")
+		if static_ai:
+			static_ai.my_team = get_enemy_team()
 
 	# 相机聚焦玩家城堡
 	var cam = get_viewport().get_camera_3d()
@@ -1834,7 +1899,7 @@ func demolish_building(building: Building) -> bool:
 
 # ==================== 资源系统 ====================
 func update_resource_limits(team: int):
-	var limits = player_resource_limits if team == RTSConfig.Team.BLUE else enemy_resource_limits
+	var limits = get_team_resource_limits(team)
 	var castle = 0
 	var warehouse = 0
 	var shipyard = 0
@@ -1852,14 +1917,14 @@ func update_resource_limits(team: int):
 	limits.oil = shipyard * 700
 
 func add_resource(type: String, amount: int, team: int):
-	var res = player_resources if team == RTSConfig.Team.BLUE else enemy_resources
-	var lim = player_resource_limits if team == RTSConfig.Team.BLUE else enemy_resource_limits
+	var res = get_team_resources(team)
+	var lim = get_team_resource_limits(team)
 	if res.has(type):
 		res[type] = min(res[type] + amount, lim[type])
 
 func deliver_resources(cargo: Dictionary, team: int):
 	var mult = 1.0
-	if team == RTSConfig.Team.RED:
+	if team == get_enemy_team():
 		if GameSettings.ai_difficulty == GameSettings.AIDifficulty.NORMAL: mult = 2.0
 		elif GameSettings.ai_difficulty >= GameSettings.AIDifficulty.HARD: mult = 3.0
 	for t in cargo:
@@ -2331,7 +2396,7 @@ func _is_valid_build_position(pos: Vector3) -> bool:
 				if abs(dx) + abs(dy) != 1: continue  # 仅正交方向
 				var wx = g.x + dx; var wy = g.y + dy
 				for e in entities.get_children():
-					if e is Building and e.entity_id == 27 and e.team != RTSConfig.Team.BLUE and e.team != RTSConfig.Team.NEUTRAL and e.health > 0:
+					if e is Building and e.entity_id == 27 and e.team != get_host_team() and e.team != RTSConfig.Team.NEUTRAL and e.health > 0:
 						var wg = world_to_grid(e.global_position)
 						if wg.x == wx and wg.y == wy:
 							# 检查城墙在此方向是否裸露(反方向无同队城墙)
@@ -2660,7 +2725,7 @@ func _detect_enemy_near_base():
 
 	var threat_detected = false
 	for e in get_tree().get_nodes_in_group("vision_providers"):
-		if not (e is Army) or e.team != RTSConfig.Team.RED or e.health <= 0: continue
+		if not (e is Army) or e.team == get_host_team() or e.team == RTSConfig.Team.NEUTRAL or e.health <= 0: continue
 		var dist = e.global_position.distance_to(player_castle.global_position)
 		if dist < player_castle.vision_range * 1.2:
 			threat_detected = true
@@ -2929,8 +2994,7 @@ func _process(delta):
 			var diff_names = ["简单", "普通", "困难", "地狱"]
 			var dn = diff_names[clampi(GameSettings.ai_difficulty, 0, 3)]
 			var map_name := String(MapPresets.get_info(GameSettings.map_id).get("name", "经典大陆"))
-			var clock := "%02d:%02d" % [int(game_time / 60.0), int(game_time) % 60]
-			_snap_rate_label.text = "AI:%s | 地图:%s | 时间:%s" % [dn, map_name, clock]
+			_snap_rate_label.text = "AI:%s | 地图:%s" % [dn, map_name]
 		# 底板宽度跟着文字走
 		_update_diag_bg(_diag_top_y, _diag_line_h)
 		_diag_physics_heartbeat = phys_frames
@@ -2980,7 +3044,7 @@ func _process(delta):
 	if _limit_update_timer <= 0:
 		_limit_update_timer = 1.0
 		update_resource_limits(get_host_team())
-		update_resource_limits(RTSConfig.Team.RED)
+		update_resource_limits(get_enemy_team())
 		_update_command_card_sp()
 		if ai_players.size() > 0:
 			for pid in ai_players.keys():
@@ -3250,7 +3314,7 @@ func stop_all_gather():
 	if gather_paused:
 		# 暂停所有己方农民和采集船
 		for entity in entities.get_children():
-			if entity is Army and is_instance_valid(entity) and entity.team == RTSConfig.Team.BLUE and entity.health > 0:
+			if entity is Army and is_instance_valid(entity) and entity.team == get_host_team() and entity.health > 0:
 				if entity.entity_id == 10 or entity.entity_id == 14:
 					entity.current_target = null
 					entity.current_order = ""
@@ -3259,7 +3323,7 @@ func stop_all_gather():
 	else:
 		# 恢复：让空闲农民重新寻找资源
 		for entity in entities.get_children():
-			if entity is Army and is_instance_valid(entity) and entity.team == RTSConfig.Team.BLUE and entity.health > 0:
+			if entity is Army and is_instance_valid(entity) and entity.team == get_host_team() and entity.health > 0:
 				if (entity.entity_id == 10 or entity.entity_id == 14) and entity.current_order == "":
 					entity._find_nearest_resource()
 
@@ -3305,7 +3369,7 @@ func garrison_nearest_for_selected():
 	var avg = _get_selected_avg_pos()
 	var best_dist = 30.0 * 30.0; var best_target: GameEntity = null
 	for entity in _all_entities:
-		if entity.team != RTSConfig.Team.BLUE: continue
+		if entity.team != get_host_team(): continue
 		var ok = (entity is Building and entity.entity_id in [20,21,22,23,24,25,26,29,41,42,52,53,54]) or (entity is Army and entity.entity_id in [9,18])
 		if not ok: continue
 		var d = entity.global_position.distance_squared_to(avg)
@@ -3370,7 +3434,7 @@ func can_afford_building(build_id: int, team: int) -> bool:
 	if cfg.is_empty(): return false
 	var cost = cfg.get("cost", {})
 	if cost.is_empty(): return true
-	var res = player_resources if team == RTSConfig.Team.BLUE else enemy_resources
+	var res = get_team_resources(team)
 	for k in cost:
 		if res.get(k, 0) < cost[k]: return false
 	return true

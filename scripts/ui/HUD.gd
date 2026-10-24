@@ -56,7 +56,6 @@ var _stats_res_bars: Dictionary = {}
 var _stats_res_info: Dictionary = {}
 var _stats_castle_bar: HealthBarControl
 var _stats_castle_label: Label
-var _toggle_stats_btn: Button
 # 折叠态：面板收成一条「资源 + 人口」胶囊
 var _stats_collapsed: bool = false
 var _stats_collapse_btn: Button = null
@@ -134,23 +133,6 @@ func _get_sm():
 
 
 # ==================== 单位统计面板 ====================
-func _create_stats_toggle_button():
-	_toggle_stats_btn = Button.new()
-	_toggle_stats_btn.name = "StatsToggleButton"
-	_toggle_stats_btn.text = "📊 统计"
-	_toggle_stats_btn.position = Vector2(620, 10)
-	_toggle_stats_btn.toggle_mode = true
-	_toggle_stats_btn.button_pressed = true
-	_toggle_stats_btn.custom_minimum_size = Vector2(140, 32)
-	UITheme.apply_muted_button(_toggle_stats_btn, UITheme.FONT_MD)
-	_toggle_stats_btn.pressed.connect(_on_toggle_stats_pressed)
-	add_child(_toggle_stats_btn)
-	UITheme.hover_scale(_toggle_stats_btn)
-
-func _on_toggle_stats_pressed():
-	unit_stats_visible = _toggle_stats_btn.button_pressed
-	_set_stats_collapsed(_stats_collapsed)
-
 # 战斗结算面板弹出时，隐藏所有统计/决策类面板，避免压在结算层上
 func hide_stat_panels() -> void:
 	unit_stats_visible = false
@@ -158,9 +140,6 @@ func hide_stat_panels() -> void:
 		unit_stats_panel.visible = false
 	if _stats_capsule:
 		_stats_capsule.visible = false
-	if _toggle_stats_btn:
-		_toggle_stats_btn.button_pressed = false
-		_toggle_stats_btn.visible = false
 	if _diplo_panel:
 		_diplo_panel.visible = false
 
@@ -825,12 +804,11 @@ func _on_board_screen_pressed():
 
 func _ready():
 	_create_unit_stats_panel()
-	_create_stats_toggle_button()
 
 	# 全局指令：6 个按钮排成两行，统一放在一块半透明底板里
 	_cmd_panel = Panel.new()
 	_cmd_panel.name = "GlobalCommandPanel"
-	_cmd_panel.position = Vector2(620, 46)
+	_cmd_panel.position = Vector2(620, 10)
 	_cmd_panel.size = Vector2(662, 86)
 	_cmd_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var cmd_style := StyleBoxFlat.new()
