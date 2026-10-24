@@ -91,11 +91,13 @@ func _spawn_impact_effect(pos: Vector3, big: bool) -> void:
 	p.initial_velocity_min = 3.0
 	p.initial_velocity_max = 8.0 if big else 5.5
 	p.gravity = Vector3(0.0, -14.0, 0.0)
-	p.scale_amount_min = 0.18
-	p.scale_amount_max = 0.55 if big else 0.38
+	p.scale_amount_min = 1.0
+	p.scale_amount_max = 2.0 if big else 1.5
 	var mesh := SphereMesh.new()
-	mesh.radius = 0.13
-	mesh.height = 0.26
+	# 注意：scale_amount 是相对网格尺寸的倍率，不是绝对大小。
+	# 之前网格半径只有 0.13，再乘 0.18 的倍率实际直径才 5 厘米，几乎看不见。
+	mesh.radius = 0.30 if big else 0.22
+	mesh.height = 0.60 if big else 0.44
 	var mat := StandardMaterial3D.new()
 	if big:
 		# 石头：白色碎屑，带一点自发光，阴影里也能看清
