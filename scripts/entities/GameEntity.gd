@@ -61,6 +61,12 @@ func _get_bm():
 		_bm = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
 	return _bm
 
+func _exit_tree() -> void:
+	# 任何实体离开场景树都让实体缓存失效。相比只依赖 die()，这里还能覆盖
+	# queue_free、运输船销毁、场景切换等没有走正常死亡流程的移除。
+	if is_instance_valid(_bm) and _bm.is_inside_tree():
+		_bm.mark_entity_cache_dirty()
+
 func _get_cam_pos() -> Vector3:
 	var cam = get_viewport().get_camera_3d()
 	return cam.global_position if cam else Vector3.ZERO
