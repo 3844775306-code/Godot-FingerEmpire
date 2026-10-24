@@ -29,6 +29,8 @@ var has_latest_alert: bool = false
 var _last_cam_pos: Vector2 = Vector2(999999.0, 999999.0)
 var _last_cam_yaw: float = 99999.0
 var _last_cam_size: float = -1.0
+# 屏幕中心对应的地面点（由 _process 每帧算好给绘制用）
+var _view_center: Vector3 = Vector3.ZERO
 
 func _ready():
 	custom_minimum_size = Vector2(MINIMAP_SIZE, MINIMAP_SIZE)
@@ -67,12 +69,15 @@ func _process(delta):
 			changed = true
 	if changed:
 		queue_redraw()
-	# 相机移动/旋转/缩放时刷新小地图上的视角框
+	# 准星跟随屏幕中心的地面点：正交相机 global_position 只是「眼睛」位置，
+	# 有俯角时屏幕中心对应的是相机前下方的地面点，直接用相机 x/z 会明显偏前
 	if camera != null and is_instance_valid(camera):
-		var cam_pos := Vector2(camera.global_position.x, camera.global_position.z)
+		var c: Vector3 = camera.call("_screen_center_ground") if camera.has_method("_screen_center_ground") else camera.global_position
+		_view_center = c
+		var cam_pos := Vector2(c.x, c.z)
 		var cam_yaw: float = float(camera.get("yaw_deg")) if camera.get("yaw_deg") != null else 0.0
 		var cam_size: float = camera.size
-		if cam_pos.distance_to(_last_cam_pos) > 0.3 \
+		if cam_pos.distance_to(_last_cam_pos) > 0.05 \
 				or absf(cam_yaw - _last_cam_yaw) > 0.3 \
 				or absf(cam_size - _last_cam_size) > 0.3:
 			_last_cam_pos = cam_pos
@@ -258,8 +263,8 @@ func _draw():
 func _draw_view_frame(ms: float, cell: float) -> void:
 	if camera == null or not is_instance_valid(camera):
 		return
-	var center := Vector2(camera.global_position.x, camera.global_position.z)
-	var px := Vector2((center.x + ms * 0.5) * cell, (center.y + ms * 0.5) * cell)
+	var center := _view_center
+	var px := Vector2((center.x + ms * 0.5) * cell, (center.z + ms * 0.5) * cell)
 	# 先垫一层暗底，浅色地形（沙漠、雪地）上也看得清
 	draw_circle(px, 8.0, Color(0.0, 0.0, 0.0, 0.40))
 	draw_arc(px, 6.0, 0.0, TAU, 24, Color(1.0, 1.0, 1.0, 0.95), 1.5)
