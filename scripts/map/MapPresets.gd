@@ -216,16 +216,16 @@ const PRESETS := {
 		"chips": ["三级台地", "台缘山脊", "坡道争夺", "高地视野 +25%"],
 		"recommended": "1v1 / 2v2 / 3v3",
 	},
-	# 桥头堡：宽河横断，中央为深水，南北两侧各留一处细浅滩，还能自建桥开辟新渡口
+	# 桥头堡：宽河横断，中央为深水，靠近地图南北边缘各留一处细浅滩，还能自建桥开辟新渡口
 	"bridge": {
 		"id": "bridge",
 		"name": "桥头堡",
 		"battle": "斯坦福桥 1066",
-		"desc": "十四格宽的九曲大河横贯全图，中央为深水，南北两侧河岸各有一处三格浅滩；玩家可以花资源在河上自建桥梁，把两处窄渡口变成多点渡河。",
+		"desc": "十四格宽的九曲大河横贯全图，中央为深水，靠近地图南北边缘各有一处三格浅滩；玩家可以花资源在河上自建桥梁，把两处边缘窄渡口变成多点渡河。",
 		"stages": [
 			["noise_base", {"freq": 0.04, "octaves": 3, "mountain_threshold": 0.42, "water_threshold": -1.2}],
 			["river", {"center": 0.5, "width": 14, "amp": 0.055, "freq": 0.035, "amp2": 0.024, "freq2": 0.1, "width_wave": 0.16}],
-			["fords", {"positions": [0.3, 0.7], "width": 3}],
+			["fords", {"positions": [0.12, 0.88], "width": 3}],
 		],
 		"castle_layout": {"type": "mirror_x", "anchors": [[0.18, 0.5], [0.82, 0.5]], "spread": 0.08, "flat_radius": 6},
 		"palette": {
@@ -240,7 +240,7 @@ const PRESETS := {
 		"modifiers": {"ford_speed": 0.55},
 		"oil_near_shore": true,
 		"reachable_only": true,
-		"chips": ["宽河十四格", "两侧细浅滩", "中央深水", "可自建桥"],
+		"chips": ["宽河十四格", "边缘细浅滩", "中央深水", "可自建桥"],
 		"recommended": "1v1 / 2v2 / 3v3",
 	},
 	# 双河三岸：两条大河把地图切成三条长条陆地，渡口错位逼玩家多线分兵
