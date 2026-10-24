@@ -77,10 +77,10 @@ func _input(event):
 		_rig_over_center(rotate_center)
 
 	elif event is InputEventMouseMotion and is_dragging:
-		# 鼠标中键拖拽移动相机
+		# 鼠标中键拖拽移动相机：按当前视角方向换算，转视角后拖动仍然跟手
 		var delta = event.position - drag_start
 		var factor = size / 30.0
-		global_translate(Vector3(-delta.x * 0.1 * factor, 0, -delta.y * 0.1 * factor))
+		global_translate((-_view_right() * delta.x + _view_forward() * delta.y) * 0.1 * factor)
 		drag_start = event.position
 
 	# ========== 手机触摸操作 ==========
@@ -100,10 +100,10 @@ func _input(event):
 
 	elif event is InputEventScreenDrag:
 		if touch_pan_active:
-			# 三指拖动移动相机
+			# 三指拖动移动相机：同样按当前视角方向换算
 			var delta = event.position - touch_pan_start
 			var factor = size / 30.0
-			global_translate(Vector3(-delta.x * 0.1 * factor, 0, -delta.y * 0.1 * factor))
+			global_translate((-_view_right() * delta.x + _view_forward() * delta.y) * 0.1 * factor)
 			touch_pan_start = event.position
 
 	# 双指捏合缩放
@@ -112,13 +112,23 @@ func _input(event):
 		# 通常放大应减小视野大小（size），缩小应增大视野
 		_apply_zoom_to(size / event.factor)
 
+# 当前视角下的水平右方向与前方向：平移要跟着 Ctrl+中键 转出来的视角走，
+# 否则转过镜头以后拖中键的方向会和画面错开。
+func _view_right() -> Vector3:
+	var yaw := deg_to_rad(yaw_deg)
+	return Vector3(cos(yaw), 0.0, -sin(yaw))
+
+func _view_forward() -> Vector3:
+	var yaw := deg_to_rad(yaw_deg)
+	return Vector3(-sin(yaw), 0.0, -cos(yaw))
+
 # 触屏单指拖动平移：把屏幕位移按当前视野比例换算成世界位移（跟手）
 func pan_by_screen_delta(screen_delta: Vector2) -> void:
 	if _follow_target:
 		return
 	var view_h := get_viewport().get_visible_rect().size.y
 	var world_per_px := size / maxf(view_h, 1.0)
-	global_translate(Vector3(-screen_delta.x * world_per_px, 0.0, -screen_delta.y * world_per_px))
+	global_translate((-_view_right() * screen_delta.x + _view_forward() * screen_delta.y) * world_per_px)
 
 func _process(delta):
 	# 跟随视角模式：相机位置/朝向由跟随目标决定，禁用键盘移动
@@ -132,12 +142,14 @@ func _process(delta):
 	if Input.is_action_pressed("ui_right"): direction.x += 1
 	if Input.is_action_pressed("ui_up"): direction.z -= 1
 	if Input.is_action_pressed("ui_down"): direction.z += 1
-	# 虚拟摇杆平移（左下摇杆）：分量已归一化，与世界坐标轴同向
+	# 虚拟摇杆平移（左下摇杆）：分量已归一化
 	if external_pan != Vector2.ZERO:
 		direction.x += external_pan.x
 		direction.z += external_pan.y
 	var factor = size / 30.0
-	global_translate(direction * move_speed * delta * factor)
+	# 方向键/摇杆也按当前视角换算：x 沿屏幕右、z 正值为后退（-z 为前进）
+	var move = _view_right() * direction.x + _view_forward() * (-direction.z)
+	global_translate(move * move_speed * delta * factor)
 
 # ═══ 缩放联动（视野大小 ↔ 相机高度/俯角）═══
 # 应用缩放：保持屏幕中心的地面点不变，同步调整相机高度与俯角
