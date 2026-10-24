@@ -478,7 +478,9 @@ func _physics_process(delta):
 		current_target = null
 		_set_order(UnitState.IDLE)
 		is_attack_moving = false
-		if target_type == 0:   # Å©ÃñÀà£¬Ñ°ÕÒÐÂ×ÊÔ´
+		if _is_healer():       # 僧侣：目标没了就重新找伤兵
+			_find_wounded_ally()
+		elif target_type == 0:   # Å©ÃñÀà£¬Ñ°ÕÒÐÂ×ÊÔ´
 			_find_nearest_resource()
 		else:                  # Õ½¶·µ¥Î»£¬Á¢¿ÌËÑË÷µÐÈË
 			_find_enemy_in_range()
@@ -486,7 +488,9 @@ func _physics_process(delta):
 		if current_target == null:
 			_set_order(UnitState.IDLE)
 			is_attack_moving = false
-			if target_type == 0:   # Å©ÃñÀà£¬Ñ°ÕÒÐÂ×ÊÔ´
+			if _is_healer():       # 僧侣：治疗目标消失后继续找伤兵
+				_find_wounded_ally()
+			elif target_type == 0:   # Å©ÃñÀà£¬Ñ°ÕÒÐÂ×ÊÔ´
 				_find_nearest_resource()
 			else:                  # Õ½¶·µ¥Î»£¬Á¢¿ÌËÑË÷µÐÈË
 				_find_enemy_in_range()
@@ -725,6 +729,9 @@ func _retarget_interval(bm) -> float:
 # 当前目标不在攻击范围时，每秒最多切换一次：只在确实存在更近的敌人时改锁。
 # 驻扎单位只在驻扎防御圈内找目标，避免被视野边缘的敌人引走。
 func _try_retarget_closer(current_dist: float) -> void:
+	# 僧侣的目标是友方伤兵，不能被「换更近的敌人」逻辑替换
+	if _is_healer():
+		return
 	if current_target == null or not is_instance_valid(current_target):
 		return
 	if not (current_target is GameEntity) or current_target.health <= 0:
@@ -828,6 +835,9 @@ func _think(delta, bm):
 	if current_target == null and _order_is(UnitState.IDLE) and not is_attack_moving:
 		if _get_cargo_total() > 0:
 			_return_to_deliver()
+		elif _is_healer():
+			# 僧侣空闲时只找伤兵治疗，不去采集
+			_find_wounded_ally()
 		elif target_type == 0:
 			if not _is_gather_paused():
 				_find_nearest_resource()
@@ -1251,7 +1261,34 @@ func _find_nearest_entity(search_range: float, filter_func: Callable, use_cache:
 			best_dist = dist
 			best_target = entity
 	return best_target
+# 僧侣专用：找附近血量百分比最低的友方非建筑单位，走过去治疗
+func _find_wounded_ally() -> void:
+	var bm = _get_bm()
+	var cands: Array = []
+	if bm and bm.has_method("get_nearby_entities"):
+		cands = bm.get_nearby_entities(global_position, vision_range + 4.0)
+	else:
+		cands = get_tree().get_nodes_in_group("entities")
+	var best = null
+	var best_pct: float = 1.0
+	for e in cands:
+		if e == self or not is_instance_valid(e) or not (e is Army):
+			continue
+		if e.team != team or e.health <= 0:
+			continue
+		var pct: float = e.health / maxf(1.0, e.max_health)
+		if pct < 0.999 and pct < best_pct:
+			best_pct = pct
+			best = e
+	if best != null:
+		current_target = best
+		_set_order(UnitState.ATTACKING)
+		is_attack_moving = false
+		_movement.set_move_target(best.global_position, attack_range)
+
 func _find_enemy_in_range():
+	# 僧侣不索敌：它的目标是受伤的友军（由 _find_wounded_ally 处理）
+	if _is_healer(): return
 	if entity_id in [46, 47, 48, 50]: return
 	var best_dist = vision_range * 1.2
 	var best_target: GameEntity = null
@@ -2020,8 +2057,22 @@ func _is_hostile_to(entity) -> bool:
 		return bm.is_hostile_to(team, owner_peer_id, entity)
 	return entity.team != team and not (entity is WorldResource)
 
+# 修道院生产的单位（僧侣/长老/宗师）：索敌时跳过建筑，只打单位
+func _is_monastery_unit() -> bool:
+	return entity_id in [55, 56, 57]
+
+# 僧侣：永不攻击敌人，只找友方非建筑单位治疗
+func _is_healer() -> bool:
+	return entity_id == 55
+
 func _can_attack_target(target: GameEntity) -> bool:
 	if not is_instance_valid(target) or target.health <= 0: return false
+	# 僧侣不参与任何攻击（包括手动指派的敌人目标）
+	if _is_healer():
+		return false
+	# 修道院单位跳过攻击建筑
+	if _is_monastery_unit() and target is Building:
+		return false
 	# 近战不能攻击城墙上的敌人（包括炮台）
 	if attack_range <= 1.0 and target is not Building:
 		var bm = _get_bm()
