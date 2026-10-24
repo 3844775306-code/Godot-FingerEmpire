@@ -96,12 +96,11 @@ const PRESETS := {
 		"id": "strait",
 		"name": "群岛海峡",
 		"battle": "萨拉米斯 480 BC",
-		"desc": "宽阔海峡把大陆切成两半，两处浅滩是陆军唯一通路；海面上十几座孤立岛屿只作地标，近岸油井提供额外资源。",
+		"desc": "宽阔海峡把大陆切成两半，全程没有浅滩，陆军只能靠水军与运输船跨越；海面上十几座孤立岛屿只作地标，近岸油井提供额外资源。",
 		"stages": [
 			["noise_base", {"freq": 0.03, "octaves": 4}],
 			["sea", {"center": 0.5, "width_frac": 0.16, "amp": 0.055, "freq": 0.03, "amp2": 0.01, "freq2": 0.07}],
 			["islets", {"count": 14, "big": 2, "band": 0.5, "radius_min": 2, "radius_max": 4, "big_radius": 6, "avoid": [0.28, 0.5, 0.72]}],
-			["fords", {"positions": [0.28, 0.5, 0.72], "width": 5}],
 		],
 		"castle_layout": {"type": "mirror_x", "anchors": [[0.16, 0.5], [0.84, 0.5]], "spread": 0.2, "flat_radius": 6},
 		"palette": {
@@ -109,10 +108,9 @@ const PRESETS := {
 			"water_shallow": [0.22, 0.56, 0.70],
 		},
 		"resources": {"oil": 1.8, "wood": 0.9, "stone": 0.9},
-		"modifiers": {"ford_speed": 0.5},
 		"reachable_only": true,
 		"oil_near_shore": true,
-		"chips": ["海峡横断", "孤立岛屿", "两处渡口", "海上油井"],
+		"chips": ["海峡横断", "孤立岛屿", "全程无浅滩", "海上油井"],
 		"recommended": "1v1 / 2v2 / 3v3",
 	},
 	"desert": {
@@ -218,17 +216,16 @@ const PRESETS := {
 		"chips": ["三级台地", "台缘山脊", "坡道争夺", "高地视野 +25%"],
 		"recommended": "1v1 / 2v2 / 3v3",
 	},
-	# 桥头堡：宽河横断，只有中央大浅滩与两条远渡，还能自建桥开辟新渡口
+	# 桥头堡：宽河横断，只有中央大浅滩，两侧河岸没有浅滩，还能自建桥开辟新渡口
 	"bridge": {
 		"id": "bridge",
 		"name": "桥头堡",
 		"battle": "斯坦福桥 1066",
-		"desc": "十四格宽的九曲大河横贯全图，中央只有一处五格浅滩，两侧各有一条偏僻远渡；玩家还可以花资源在河上自建桥梁，把单点强攻变成多点渡河。",
+		"desc": "十四格宽的九曲大河横贯全图，中央只有一处五格浅滩，两侧河岸均为深水、没有浅滩；玩家可以花资源在河上自建桥梁，把单点强攻变成多点渡河。",
 		"stages": [
 			["noise_base", {"freq": 0.04, "octaves": 3, "mountain_threshold": 0.42, "water_threshold": -1.2}],
 			["river", {"center": 0.5, "width": 14, "amp": 0.055, "freq": 0.035, "amp2": 0.024, "freq2": 0.1, "width_wave": 0.16}],
 			["fords", {"positions": [0.5], "width": 7}],
-			["fords", {"positions": [0.09, 0.91], "width": 2}],
 		],
 		"castle_layout": {"type": "mirror_x", "anchors": [[0.18, 0.5], [0.82, 0.5]], "spread": 0.08, "flat_radius": 6},
 		"palette": {
@@ -243,7 +240,7 @@ const PRESETS := {
 		"modifiers": {"ford_speed": 0.55},
 		"oil_near_shore": true,
 		"reachable_only": true,
-		"chips": ["宽河十四格", "中央浅滩", "两侧远渡", "可自建桥"],
+		"chips": ["宽河十四格", "中央浅滩", "两侧无渡口", "可自建桥"],
 		"recommended": "1v1 / 2v2 / 3v3",
 	},
 	# 双河三岸：两条大河把地图切成三条长条陆地，渡口错位逼玩家多线分兵
@@ -251,11 +248,10 @@ const PRESETS := {
 		"id": "tworivers",
 		"name": "双河三岸",
 		"battle": "雅穆克 636",
-		"desc": "两条南北向大河把战场切成三条长条陆地，河身弯曲、河道宽窄交替；两岸渡口遥相呼应，分兵多线与守渡口成为主旋律。",
+		"desc": "两条南北向大河把战场切成三条长条陆地，河身弯曲、河道宽窄交替；西侧大河没有浅滩，只有东侧大河保留三处渡口，分兵多线与守渡口成为主旋律。",
 		"stages": [
 			["noise_base", {"freq": 0.04, "octaves": 3, "mountain_threshold": 0.44, "water_threshold": -1.2}],
 			["river", {"name": "a", "center": 0.36, "width": 7, "amp": 0.045, "freq": 0.03, "amp2": 0.015, "freq2": 0.07, "width_wave": 0.10}],
-			["fords", {"river": "a", "positions": [0.3, 0.5, 0.7], "width": 3}],
 			["river", {"name": "b", "center": 0.64, "width": 7, "amp": 0.045, "freq": 0.03, "amp2": 0.015, "freq2": 0.07, "width_wave": 0.10, "phase2": 2.1}],
 			["fords", {"river": "b", "positions": [0.3, 0.5, 0.7], "width": 3}],
 		],
@@ -272,7 +268,7 @@ const PRESETS := {
 		"modifiers": {"ford_speed": 0.55},
 		"oil_near_shore": true,
 		"reachable_only": true,
-		"chips": ["双河夹岸", "三块陆地", "渡口呼应", "分兵多线"],
+		"chips": ["双河夹岸", "三块陆地", "西河无浅滩", "分兵多线"],
 		"recommended": "1v1 / 2v2 / 3v3",
 	},
 	# 环形山：中央环形山壁 + 四处山口，争议金矿集中在山心与东西山口
@@ -300,17 +296,17 @@ const PRESETS := {
 		"chips": ["环形山壁", "四处山口", "山心聚金", "单金源"],
 		"recommended": "1v1 / 2v2 / 3v3",
 	},
-	# 海岸登陆：整块大陆四面环海，双方面海登陆、向内陆推进
+	# 海岸登陆：外围一圈陆地环绕，中央一座大岛，二者之间是环状海面
 	"coast": {
 		"id": "coast",
 		"name": "海岸登陆",
 		"battle": "诺曼底 1944",
-		"desc": "整块大陆被外海四面环抱，岸边是一圈平坦滩头，内陆丘陵起伏；双方各自面海登陆后向内陆推进，海面小岛既是地标也是油井落点。",
+		"desc": "地图外围是一圈环绕全图的陆地，中央是一座被海水隔开的大岛；双方基地沿外环陆地展开，必须渡海争夺中央大岛与海上油井。",
 		"stages": [
 			["noise_base", {"freq": 0.032, "octaves": 3, "mountain_threshold": 0.45, "water_threshold": -1.2}],
-			["coast", {"width_frac": 0.07, "beach_frac": 0.05, "islets": [[0.5, 0.04], [0.5, 0.96], [0.04, 0.5], [0.96, 0.5]]}],
+			["coast", {"width_frac": 0.16, "island_frac": 0.20, "coast_freq": 0.055, "island_freq": 0.045}],
 		],
-		"castle_layout": {"type": "mirror_z", "anchors": [[0.5, 0.20], [0.5, 0.80]], "flat_radius": 6},
+		"castle_layout": {"type": "mirror_z", "anchors": [[0.5, 0.12], [0.5, 0.88]], "flat_radius": 6},
 		"palette": {
 			"plain_low": [0.42, 0.48, 0.26],
 			"plain_high": [0.66, 0.64, 0.40],
@@ -323,7 +319,7 @@ const PRESETS := {
 		"modifiers": {},
 		"reachable_only": true,
 		"oil_near_shore": true,
-		"chips": ["四面环海", "滩头平地", "海上小岛", "沿岸油井"],
+		"chips": ["外环陆地", "中央大岛", "环海隔断", "渡海争夺"],
 		"recommended": "1v1 / 2v2 / 3v3",
 	},
 	# 迷宫山：三层方环山壁螺旋套叠，缺口内外交替，中心是唯一金矿区
@@ -414,17 +410,16 @@ const PRESETS := {
 		"chips": ["整块大陆守方", "三座随机孤岛", "大陆内小河", "两处浅滩", "登陆战"],
 		"recommended": "1v1 / 2v2 / 3v3",
 	},
-	# 赤壁之战：长江天堑横贯全图，江心沙洲点缀，只有中央一处浅滩能渡陆军；水军控江、陆军抢渡
+	# 赤壁之战：长江天堑横贯全图，江心沙洲点缀，全线无浅滩，陆军只能靠水军/运输船渡江
 	"chibi": {
 		"id": "chibi",
 		"name": "赤壁之战",
 		"battle": "赤壁 208",
-		"desc": "长江天堑横贯全图，江心散落沙洲，江面上有三处浅滩可供陆军涉渡；水军争夺江面控制权与陆军抢夺渡口同时进行，水陆并进才能破局。",
+		"desc": "长江天堑横贯全图，江心散落沙洲，江面没有任何浅滩；陆军必须依靠水军与运输船渡江，水军争夺江面控制权、陆军寻找登陆场，水陆并进才能破局。",
 		"stages": [
 			["noise_base", {"freq": 0.03, "octaves": 4, "mountain_threshold": 0.44, "water_threshold": -1.2}],
 			["sea", {"center": 0.5, "width_frac": 0.15, "amp": 0.05, "freq": 0.028, "amp2": 0.015, "freq2": 0.09, "width_wave": 0.06}],
 			["islets", {"count": 10, "big": 1, "band": 0.55, "radius_min": 2, "radius_max": 3, "big_radius": 5, "avoid": [0.28, 0.5, 0.72], "freq": 0.08}],
-			["fords", {"positions": [0.28, 0.5, 0.72], "width": 5}],
 		],
 		"castle_layout": {"type": "mirror_x", "anchors": [[0.15, 0.5], [0.85, 0.5]], "spread": 0.2, "flat_radius": 6},
 		"palette": {
@@ -436,10 +431,9 @@ const PRESETS := {
 			"water_shallow": [0.22, 0.54, 0.66],
 		},
 		"resources": {"gold": 1.0, "wood": 0.9, "stone": 0.95, "oil": 1.7, "wood_near": "any", "stone_near": "any"},
-		"modifiers": {"ford_speed": 0.5},
 		"reachable_only": true,
 		"oil_near_shore": true,
-		"chips": ["长江天堑", "江心沙洲", "三处浅滩", "水陆并进"],
+		"chips": ["长江天堑", "江心沙洲", "全线无浅滩", "水陆并进"],
 		"recommended": "1v1 / 2v2 / 3v3",
 	},
 	# 官渡之战：大河横断、两岸泥沼，只有两处渡口；抢渡、绕后与粮道拉锯
@@ -549,19 +543,18 @@ const PRESETS := {
 		"chips": ["雄关独隘", "厚重山脊", "关城金矿", "关外密林"],
 		"recommended": "1v1 / 2v2 / 3v3",
 	},
-	# 鄱阳湖之战：大湖居中，南北两条入湖水道各留两处浅滩，湖心一条沙洲便道贯通两岸
+	# 鄱阳湖之战：大湖居中，南北两条入湖水道各留两处浅滩，湖心不再有沙洲便道
 	"poyang": {
 		"id": "poyang",
 		"name": "鄱阳湖之战",
 		"battle": "鄱阳湖 1363",
-		"desc": "大湖横在战场中央，南北两条入湖水道各留两处浅滩，湖心还有一条沙洲便道贯穿东西；水军控湖、陆军抢滩，谁能同时封住滩头和湖心谁就掌握主动。",
+		"desc": "大湖横在战场中央，南北两条入湖水道各留两处浅滩，湖心没有沙洲便道；水军控湖、陆军抢滩，谁能封住入湖滩头谁就掌握主动。",
 		"stages": [
 			["noise_base", {"freq": 0.032, "octaves": 3, "mountain_threshold": 0.46, "water_threshold": -1.2}],
 			["lake", {"name": "poyang", "center": [0.5, 0.5], "radius": 0.19, "aspect": 0.82, "rough": 0.20, "islets": 3, "islet_frac": 0.014}],
 			["river_path", {"name": "north", "points": [[0.5, -0.04], [0.46, 0.12], [0.54, 0.26], [0.5, 0.5]], "width": 6.5, "width_end": 7.5, "width_wave": 0.18, "wiggle": 0.022, "wiggle_freq": 1.3}],
 			["river_path", {"name": "south", "points": [[0.5, 0.5], [0.53, 0.72], [0.46, 0.86], [0.5, 1.04]], "width": 6.5, "width_end": 7.5, "width_wave": 0.18, "wiggle": 0.022, "wiggle_freq": 1.1, "wiggle_phase": 1.7}],
 			["crossings", {"points": [[0.5, 0.19], [0.5, 0.31], [0.5, 0.69], [0.5, 0.81]], "width": 5, "reach": 12}],
-			["crossings", {"points": [[0.5, 0.5]], "width": 4, "reach_frac": 0.33, "angle": 90}],
 		],
 		"castle_layout": {"type": "mirror_x", "anchors": [[0.15, 0.5], [0.85, 0.5]], "spread": 0.2, "flat_radius": 6},
 		"palette": {
@@ -576,7 +569,7 @@ const PRESETS := {
 		"modifiers": {"ford_speed": 0.5},
 		"reachable_only": true,
 		"oil_near_shore": true,
-		"chips": ["中心大湖", "南北入湖水道", "湖心沙洲便道", "四处浅滩"],
+		"chips": ["中心大湖", "南北入湖水道", "湖心无便道", "四处浅滩"],
 		"recommended": "1v1 / 2v2 / 3v3",
 	},
 	# 淝水之战：九曲主河横贯全图，南北支流与河湾湖沼相连，渡口呼应逼多线分兵

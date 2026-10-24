@@ -1043,59 +1043,42 @@ func _op_crater(size: int, params: Dictionary) -> void:
 		_pass_centers.append(Vector2i(int(round(cx + cos(a) * ring_r)), int(round(cy + sin(a) * ring_r))))
 	_pass_centers.append(Vector2i(size / 2, size / 2))
 
-# 海岸登陆：整张图是一块被外海包围的大陆，四边浪蚀出弯曲海岸线，近岸留一圈滩头平地；
-# 双方基地都在滩头，向内陆推进，海上散落几座小岛作地标
+# 海岸登陆：外围一圈陆地（玩家出生带），中央一座大岛，二者之间是环状海面
 func _op_coast(size: int, params: Dictionary) -> void:
-	var width_frac := clampf(float(params.get("width_frac", 0.13)), 0.06, 0.24)
-	var beach_frac := clampf(float(params.get("beach_frac", 0.06)), 0.0, 0.12)
-	var islets: Array = params.get("islets", [])
-	var islet_r := maxi(1, int(params.get("islet_radius", 2)))
+	var width_frac := clampf(float(params.get("width_frac", 0.16)), 0.08, 0.26)
+	var island_frac := clampf(float(params.get("island_frac", 0.20)), 0.10, 0.30)
 	var seed_val := custom_seed if custom_seed != 0 else randi()
-	var noise := FastNoiseLite.new()
-	noise.seed = seed_val + 9973
-	noise.frequency = float(params.get("coast_freq", 0.055))
-	noise.fractal_octaves = 2
+	var coast_noise := FastNoiseLite.new()
+	coast_noise.seed = seed_val + 9973
+	coast_noise.frequency = float(params.get("coast_freq", 0.055))
+	coast_noise.fractal_octaves = 2
+	var island_noise := FastNoiseLite.new()
+	island_noise.seed = seed_val + 2719
+	island_noise.frequency = float(params.get("island_freq", 0.045))
+	island_noise.fractal_octaves = 2
 	var base := width_frac * float(size)
-	var beach_w := beach_frac * float(size)
 	var water_h := -height_scale * 0.5
+	var cx := float(size) * 0.5
+	var cy := float(size) * 0.5
+	var island_r := island_frac * float(size)
 	for x in range(size):
 		for y in range(size):
 			var edge := float(mini(mini(x, y), mini(size - 1 - x, size - 1 - y)))
-			var coast := base + noise.get_noise_2d(x + 91, y + 43) * 3.0
-			if edge < coast:
-				terrain_grid[x][y] = 2
-				height_grid[x][y] = water_h
-				overlay_grid[x][y] = 0
-			elif edge < coast + beach_w:
-				# 滩头：整片平地，登陆场必须能展开
+			var coast := base + coast_noise.get_noise_2d(x + 91, y + 43) * 3.0
+			var nx := (float(x) - cx) / island_r
+			var ny := (float(y) - cy) / island_r
+			var d := sqrt(nx * nx + ny * ny)
+			var island_edge := d + island_noise.get_noise_2d(float(x) + 317.0, float(y) + 127.0) * 0.18
+			if edge < coast or island_edge <= 1.0:
+				# 外环陆地与中央大岛：平地，保证基地和登陆场能展开
 				terrain_grid[x][y] = 0
 				height_grid[x][y] = 0.0
 				overlay_grid[x][y] = 0
-	# 外海上的小岛：整座落在水里才生成，纯作地标
-	for s in islets:
-		var cx := int(float(s[0]) * float(size))
-		var cy := int(float(s[1]) * float(size))
-		var ok := true
-		for dx in range(-islet_r - 1, islet_r + 2):
-			for dy in range(-islet_r - 1, islet_r + 2):
-				var nx := cx + dx
-				var ny := cy + dy
-				if nx < 0 or ny < 0 or nx >= size or ny >= size:
-					ok = false
-					break
-				if terrain_grid[nx][ny] != 2:
-					ok = false
-					break
-			if not ok:
-				break
-		if not ok:
-			continue
-		for dx in range(-islet_r, islet_r + 1):
-			for dy in range(-islet_r, islet_r + 1):
-				if dx * dx + dy * dy > islet_r * islet_r:
-					continue
-				terrain_grid[cx + dx][cy + dy] = 0
-				height_grid[cx + dx][cy + dy] = 0.0
+			else:
+				# 外环与中央岛之间全部是海水，没有任何陆桥
+				terrain_grid[x][y] = 2
+				height_grid[x][y] = water_h
+				overlay_grid[x][y] = 0
 
 # 迷宫山：三层方环状山壁围成螺旋迷宫，缺口方向内外交替；
 # 整片迷宫区先清成平地再叠山墙，保证每条走廊都能走通；中心是唯一金矿区
