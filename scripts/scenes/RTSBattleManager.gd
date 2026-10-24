@@ -127,6 +127,7 @@ var _perf_low_streak: int = 0
 var _perf_high_streak: int = 0
 var _perf_initialized: bool = false
 var _perf_base_scale: float = 1.0
+var _perf_viewport: Viewport = null
 var _perf_light: DirectionalLight3D = null
 var _perf_light_shadow_original: bool = true
 var _perf_env: Environment = null
@@ -202,7 +203,7 @@ func _rebuild_entity_cache():
 	var layout_sig: int = 0
 	for e in _all_entities:
 		if e is Building:
-			layout_sig = hash(layout_sig + e.get_instance_id() * 31 + int(e.team) * 131)
+			layout_sig = hash(layout_sig + e.get_instance_id() * 31 + int(e.team) * 131 + int(e.entity_id) * 17)
 		elif e is WorldResource:
 			layout_sig = hash(layout_sig + e.get_instance_id() * 17)
 	if not _wall_signature_initialized or layout_sig != _wall_layout_signature:
@@ -2794,8 +2795,8 @@ func _tick_adaptive_quality(delta: float) -> void:
 		_perf_initialized = true
 		if DisplayServer.get_name() == "headless":
 			return
-		var vp0 := get_viewport()
-		_perf_base_scale = vp0.scaling_3d_scale if vp0 else 1.0
+		_perf_viewport = get_viewport()
+		_perf_base_scale = _perf_viewport.scaling_3d_scale if _perf_viewport else 1.0
 		_perf_light = _find_directional_light()
 		if _perf_light:
 			_perf_light_shadow_original = _perf_light.shadow_enabled
@@ -2834,9 +2835,13 @@ func _tick_adaptive_quality(delta: float) -> void:
 	# 连续 8 秒高于 56 才升档，避免画质来回跳。
 	if _perf_low_streak >= 2 and _perf_quality_level < PERF_LEVEL_SCALES.size() - 1:
 		_perf_quality_level += 1
+		_perf_low_streak = 0
+		_perf_high_streak = 0
 		_apply_perf_quality()
 	elif _perf_high_streak >= 4 and _perf_quality_level > 0:
 		_perf_quality_level -= 1
+		_perf_low_streak = 0
+		_perf_high_streak = 0
 		_apply_perf_quality()
 
 func _apply_perf_quality() -> void:
@@ -2854,6 +2859,15 @@ func _apply_perf_quality() -> void:
 		var want_ssao: bool = _perf_ssao_original and _perf_quality_level < 1
 		if _perf_env.ssao_enabled != want_ssao:
 			_perf_env.ssao_enabled = want_ssao
+
+func _exit_tree() -> void:
+	# 自动画质改的是根 Viewport/场景光照，切回主菜单或开下一局前必须还原
+	if _perf_viewport and is_instance_valid(_perf_viewport):
+		_perf_viewport.scaling_3d_scale = _perf_base_scale
+	if _perf_light and is_instance_valid(_perf_light):
+		_perf_light.shadow_enabled = _perf_light_shadow_original
+	if _perf_env and is_instance_valid(_perf_env):
+		_perf_env.ssao_enabled = _perf_ssao_original
 
 func _find_world_environment() -> Environment:
 	var scene := get_tree().current_scene

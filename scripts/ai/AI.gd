@@ -897,13 +897,13 @@ func decide(_delta):
 		update_debug_label()
 func get_team_castle(tm) -> Building:
 	for entity in _cached_buildings():
-		if entity.entity_id == 20 and entity.team == tm:
+		if entity.entity_id == 20 and entity.team == tm and entity.health > 0:
 			return entity
 	return null
 
 func get_peer_castle(peer) -> Building:
 	for entity in _cached_buildings():
-		if entity.entity_id == 20:
+		if entity.entity_id == 20 and entity.health > 0:
 			if my_peer_id != -1 and entity.owner_peer_id == peer: return entity
 			if my_peer_id == -1 and entity.team == my_team: return entity
 	return null
