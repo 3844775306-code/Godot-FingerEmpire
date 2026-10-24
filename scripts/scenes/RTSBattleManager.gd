@@ -1587,6 +1587,10 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 	cfg["level"] = level
 	cfg["team"] = team
 	entities.add_child(entity)
+	# 实体以任何方式离开场景树（死亡动画结束、销毁、场景退出）都立即标记缓存失效，
+	# 避免 AI/统计缓存里残留已释放实例，访问属性时报 "previously freed"。
+	if not entity.tree_exiting.is_connected(mark_entity_cache_dirty):
+		entity.tree_exiting.connect(mark_entity_cache_dirty)
 	entity.setup(cfg)
 	# 尝试加载3D模型
 	var model_loaded = _apply_entity_model(entity)

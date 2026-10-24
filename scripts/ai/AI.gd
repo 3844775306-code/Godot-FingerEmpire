@@ -192,6 +192,8 @@ func count_unit(id: int, include_queue: bool = true) -> int:
 	var cnt = 0
 	# Count existing units
 	for entity in _cached_armies():
+		if not is_instance_valid(entity) or entity.health <= 0:
+			continue
 		if entity.entity_id == id:
 			if my_peer_id != -1 and entity.owner_peer_id != my_peer_id: continue
 			if my_peer_id == -1 and entity.team != my_team: continue
@@ -199,6 +201,8 @@ func count_unit(id: int, include_queue: bool = true) -> int:
 	# Count units in production queues（决策用；面板统计传 false，避免把队列当成已存在单位）
 	if include_queue:
 		for entity in _cached_buildings():
+			if not is_instance_valid(entity) or entity.health <= 0:
+				continue
 			if my_peer_id != -1 and entity.owner_peer_id != my_peer_id: continue
 			if my_peer_id == -1 and entity.team != my_team: continue
 			for pid in entity.production_queue:
@@ -208,6 +212,8 @@ func count_unit(id: int, include_queue: bool = true) -> int:
 func count_building(id: int) -> int:
 	var cnt = 0
 	for entity in _cached_buildings():
+		if not is_instance_valid(entity) or entity.health <= 0:
+			continue
 		if entity.entity_id == id:
 			if my_peer_id != -1 and entity.owner_peer_id != my_peer_id: continue
 			if my_peer_id == -1 and entity.team != my_team: continue
@@ -216,12 +222,16 @@ func count_building(id: int) -> int:
 func count_military(peer: int) -> int:
 	var total = 0
 	for entity in _cached_armies():
+		if not is_instance_valid(entity) or entity.health <= 0:
+			continue
 		if my_peer_id != -1 and entity.owner_peer_id != peer: continue
 		if my_peer_id == -1 and entity.team != peer: continue
 		if entity.entity_id != 10 and entity.entity_id != 14 and entity.entity_id not in [43,44,45,46,47,48,49,50,51]:
 			total += 1
 	# Count queued military units in production
 	for entity in _cached_buildings():
+		if not is_instance_valid(entity) or entity.health <= 0:
+			continue
 		if my_peer_id != -1 and entity.owner_peer_id != peer: continue
 		if my_peer_id == -1 and entity.team != peer: continue
 		for pid in entity.production_queue:
@@ -232,11 +242,15 @@ func count_military(peer: int) -> int:
 func count_military_by_team(tm: int) -> int:
 	var total = 0
 	for entity in _cached_armies():
+		if not is_instance_valid(entity) or entity.health <= 0:
+			continue
 		if entity.team != tm: continue
 		if entity.entity_id != 10 and entity.entity_id != 14 and entity.entity_id not in [43,44,45,46,47,48,49,50,51]:
 			total += 1
 	# Count queued military units in production
 	for entity in _cached_buildings():
+		if not is_instance_valid(entity) or entity.health <= 0:
+			continue
 		if entity.team != tm: continue
 		for pid in entity.production_queue:
 			if pid != 10 and pid != 14 and pid not in [43,44,45,46,47,48,49,50,51]:
@@ -664,6 +678,8 @@ func analyze_enemy_composition() -> Dictionary:
 # 检查是否有建筑能生产指定单位
 func _can_produce_unit(unit_id: int) -> bool:
 	for entity in _cached_buildings():
+		if not is_instance_valid(entity) or entity.health <= 0:
+			continue
 		if entity.build_timer <= 0:
 			if not entity_belongs_to_me(entity): continue
 			for prod in entity.production_list:
@@ -897,13 +913,17 @@ func decide(_delta):
 		update_debug_label()
 func get_team_castle(tm) -> Building:
 	for entity in _cached_buildings():
-		if entity.entity_id == 20 and entity.team == tm and entity.health > 0:
+		if not is_instance_valid(entity) or entity.health <= 0:
+			continue
+		if entity.entity_id == 20 and entity.team == tm:
 			return entity
 	return null
 
 func get_peer_castle(peer) -> Building:
 	for entity in _cached_buildings():
-		if entity.entity_id == 20 and entity.health > 0:
+		if not is_instance_valid(entity) or entity.health <= 0:
+			continue
+		if entity.entity_id == 20:
 			if my_peer_id != -1 and entity.owner_peer_id == peer: return entity
 			if my_peer_id == -1 and entity.team == my_team: return entity
 	return null

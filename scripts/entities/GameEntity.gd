@@ -246,6 +246,10 @@ func die():
 	# 从此刻起也按不存活处理（health<=0 是全项目的死亡判据，
 	# 缓存重建、人口重算、上限统计、寻敌过滤都据此排除本实体）
 	health = 0
+	# 立即让实体缓存失效，避免 AI 在本帧后续查询中继续拿到已死亡/即将释放的对象
+	var _bm_cache = _get_bm()
+	if _bm_cache and _bm_cache.has_method("mark_entity_cache_dirty"):
+		_bm_cache.mark_entity_cache_dirty()
 	_play_sfx_if_visible("unit_die")
 	# 音效触发时立即同步死亡动画
 	var _bm_anim = _get_bm()

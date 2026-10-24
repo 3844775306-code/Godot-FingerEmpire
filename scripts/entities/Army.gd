@@ -858,7 +858,7 @@ func find_delivery_point() -> Building:
 	var bm = _get_bm()
 	var candidates = bm._buildings if bm else get_tree().get_nodes_in_group("entities")
 	for entity in candidates:
-		if entity is Building and entity.team == team and entity.health > 0:
+		if entity and entity is Building and entity.team == team and entity.health > 0:
 			if cargo.get("oil", 0) > 0:
 				if entity.entity_id == 23:   # ´¬Îë
 					var dist = global_position.distance_to(entity.global_position)
