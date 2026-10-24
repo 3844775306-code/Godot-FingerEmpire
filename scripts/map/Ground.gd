@@ -1502,20 +1502,22 @@ func _corner_anchors(k: int, layout: Dictionary) -> Array:
 	return out
 
 # 海岸登陆基地锚点：蓝方（玩家/攻方）在外周陆地上，红方（守方）据守中央大岛；
-# 2V2/3V3 时同阵营基地在各自区域里横向均分，避免跨海混编
+# 2V2/3V3 时同阵营基地不再并排挤在北岸，而是沿外周大陆分散到不同海岸方向。
 func _coast_anchors(k: int, layout: Dictionary) -> Array:
 	var outer_y := clampf(float(layout.get("outer_y", 0.12)), 0.07, 0.20)
 	var island_off := clampf(float(layout.get("island_offset", 0.10)), 0.06, 0.14)
 	var out: Array = []
-	var outer_xs: Array
 	if k <= 1:
-		outer_xs = [0.5]
+		out.append([0.5, outer_y])
 	elif k == 2:
-		outer_xs = [0.33, 0.67]
+		# 2 国分处大陆南北两端，避免两个登陆基地挤在同一片海滩。
+		out.append([0.5, outer_y])
+		out.append([0.5, 1.0 - outer_y])
 	else:
-		outer_xs = [0.25, 0.5, 0.75]
-	for fx in outer_xs:
-		out.append([float(fx), outer_y])
+		# 3 国沿海岸线取北、东南、西南三个方向，尽量拉大同阵营基地间距。
+		out.append([0.5, outer_y])
+		out.append([1.0 - outer_y, 1.0 - outer_y])
+		out.append([outer_y, 1.0 - outer_y])
 	if k <= 1:
 		out.append([0.5, 0.5])
 	elif k == 2:
