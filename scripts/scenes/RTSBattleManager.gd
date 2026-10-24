@@ -1215,6 +1215,8 @@ func _init_multi_single(mode: int):
 	# 玩家城堡：蓝方取 layout[0]，红方取 layout[mode]（各自阵营的 0 号位）
 	var player_pos = layout[0] if player_team == RTSConfig.Team.BLUE else layout[mode]
 	var player_castle = null
+	# 先登记玩家颜色，再生成城堡与农民，保证模型/血条一开始就是随机到的阵营色。
+	_player_colors[player_owner_id] = RTSConfig.COLOR_POOL[player_team]
 	var player_cfg = EntityDatabase.get_config(20)
 	player_cfg["owner_peer_id"] = player_owner_id
 	player_cfg["team"] = player_team
@@ -1227,7 +1229,6 @@ func _init_multi_single(mode: int):
 		player_castle.level = start_lv
 		if start_lv >= 3:
 			player_castle._unlock_nation_units(GameSettings.player_nation)
-	_player_colors[player_owner_id] = RTSConfig.COLOR_POOL[player_team]
 	ai_players[player_owner_id] = {"castle": player_castle, "team": player_team, "slot": 0, "nation": GameSettings.player_nation}
 
 	# 玩家初始农民
