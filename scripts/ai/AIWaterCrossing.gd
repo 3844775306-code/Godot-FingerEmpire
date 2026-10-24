@@ -4,7 +4,9 @@ extends RefCounted
 # AI 渡水行为：
 # 1) 如果敌方城堡与己方城堡在陆地上不连通，先尝试在较窄的水面搭桥；
 # 2) 桥搭不过去（海面太宽/没有落点）时，升级船坞到3级、组织运载船队，
-#    一次运至少30名陆军过海，并派多艘战船/炮艇护航，再发起进攻。
+#    基础一波至少运30名陆军过海，并派多艘战船/炮艇/爆破船护航，再发起进攻。
+#    每组织一次新的登陆波次，编队规模按当前对局时间增长：运载船、运输兵力和
+#    护航舰都会随游戏时间逐步增加，后期登陆波次明显更大。
 # 这里只做“怎么过水”的规划与下令，不直接修改单位/建筑内部状态。
 
 const BRIDGE_ID := 7
@@ -15,13 +17,18 @@ const MAX_BRIDGE_SPAN := 10
 const MAX_BRIDGES := 10
 const PLAN_INTERVAL := 6.0
 const TRANSPORT_CAPACITY := 8
-# 跨岛进攻至少需要30兵力，因此固定组织4艘运载船（32容量），
-# 并带至少2艘、最多4艘战船/炮艇护航。
+# 跨岛登陆波次规模：基础4艘运载船（32容量）、30名陆军、4艘护航舰。
+# 每过 FLEET_GROWTH_INTERVAL 秒，下一次组织的登陆波次多1艘运载船、1艘护航舰，
+# 并多运8名陆军；上限8艘运载船、8艘护航舰，避免后期人口/产能完全崩溃。
 const TRANSPORT_FLEET_SIZE := 4
+const MAX_TRANSPORT_FLEET_SIZE := 8
 const MIN_TRANSPORT_TROOPS := 30
-const MAX_TRANSPORT_TROOPS := TRANSPORT_FLEET_SIZE * TRANSPORT_CAPACITY
 const ESCORT_TARGET := 4
-const MIN_ESCORTS := 2
+const MAX_ESCORT_TARGET := 8
+const FLEET_GROWTH_INTERVAL := 240.0
+const TROOP_GROWTH_PER_STEP := 8
+# 兵力不足时等待集结的宽限时间；超时后只要基础30兵仍会出发，避免永远不登陆
+const TROOP_GATHER_GRACE := 20.0
 const ESCORT_IDS := [13, 39, 40]
 const BOARD_DISTANCE := 3.5
 const PARK_DISTANCE := 3.0
@@ -62,6 +69,12 @@ var _escorts: Array = []
 var _unit_ship: Dictionary = {}
 var _transport_slots: Array = []
 var _escort_advanced: bool = false
+# 当前这次登陆波次的目标规模。波次一旦开始组织就固定下来，
+# 避免舰队已经在海上时因为时间增长又要求追加船只，导致中途返航/放弃。
+var _wave_transport_target: int = 0
+var _wave_escort_target: int = 0
+var _wave_troop_target: int = 0
+var _wave_troop_quota: int = 0
 
 func _init(owner):
 	ai = owner
@@ -168,6 +181,8 @@ func _abort_transport():
 	_escort_advanced = false
 	_transport_state = STATE_IDLE
 	_transport_timer = 0.0
+	# 中断后下一次组织登陆按当时时间重新计算波次规模
+	_reset_wave_targets()
 
 func _collect_bridges() -> Dictionary:
 	var out: Dictionary = {}
@@ -408,6 +423,31 @@ func _recalculate_army_paths():
 
 # ═══════════════════════ 运载船 ═══════════════════════
 
+# 当前时间对应的登陆波次成长档位：每 FLEET_GROWTH_INTERVAL 秒升一档。
+func _wave_step() -> int:
+	if battle == null:
+		return 0
+	return int(maxf(0.0, float(battle.game_time)) / FLEET_GROWTH_INTERVAL)
+
+# 在“开始组织新一轮登陆”时固定本波规模，避免舰队出航途中目标继续膨胀。
+func _prepare_wave_targets():
+	if _wave_transport_target > 0:
+		return
+	var step: int = _wave_step()
+	_wave_transport_target = mini(TRANSPORT_FLEET_SIZE + step, MAX_TRANSPORT_FLEET_SIZE)
+	_wave_escort_target = mini(ESCORT_TARGET + step, MAX_ESCORT_TARGET)
+	_wave_troop_target = mini(
+		MIN_TRANSPORT_TROOPS + step * TROOP_GROWTH_PER_STEP,
+		_wave_transport_target * TRANSPORT_CAPACITY
+	)
+	_wave_troop_quota = 0
+
+func _reset_wave_targets():
+	_wave_transport_target = 0
+	_wave_escort_target = 0
+	_wave_troop_target = 0
+	_wave_troop_quota = 0
+
 func _refresh_fleet():
 	_transports.clear()
 	_escorts.clear()
@@ -425,10 +465,12 @@ func _refresh_fleet():
 	for e in battle.entities.get_children():
 		if e is Army and int(e.entity_id) in ESCORT_IDS and ai.entity_belongs_to_me(e):
 			e.remove_meta("ai_escorting")
-	if _transports.size() > TRANSPORT_FLEET_SIZE:
-		_transports = _transports.slice(0, TRANSPORT_FLEET_SIZE)
-	if _escorts.size() > ESCORT_TARGET:
-		_escorts = _escorts.slice(0, ESCORT_TARGET)
+	var transport_cap: int = maxi(1, _wave_transport_target)
+	var escort_cap: int = maxi(1, _wave_escort_target)
+	if _transports.size() > transport_cap:
+		_transports = _transports.slice(0, transport_cap)
+	if _escorts.size() > escort_cap:
+		_escorts = _escorts.slice(0, escort_cap)
 	for e in _escorts:
 		e.set_meta("ai_escorting", true)
 
@@ -439,14 +481,17 @@ func _tick_transport(delta: float):
 		# 防守时释放护航舰/运载船；不要把海军锁在渡水任务里
 		_abort_transport()
 		return
+	_prepare_wave_targets()
 	_refresh_fleet()
 	# 没有船坞就永远造不出运载船。优先保证己方登陆岸边有一座船坞，
 	# 而不是被动等待 AI 通用的“油田旁船坞”逻辑（很多地图近岸没有油田）。
 	_ensure_shore_shipyard()
-	# 必须凑够4艘运载船（32容量，至少运30兵）和至少2艘护航舰再出发
-	if _transports.size() < TRANSPORT_FLEET_SIZE or _escorts.size() < MIN_ESCORTS:
+	# 必须凑够本次登陆波次要求的运载船和护航舰再出发。
+	# 波次规模由 _prepare_wave_targets() 在开始组织时按对局时间固定。
+	if _transports.size() < _wave_transport_target or _escorts.size() < _wave_escort_target:
 		if _transport_state != STATE_IDLE:
 			_abort_transport()
+			_prepare_wave_targets()
 		_ensure_transport_tech()
 		_ensure_transport_fleet()
 		_ensure_escort_ships()
@@ -471,6 +516,8 @@ func _tick_transport(delta: float):
 					_transports[i].move_to(home_slots[i])
 			_transport_state = STATE_IDLE
 			_transport_timer = 0.0
+			# 下一次组织登陆时按当时的时间重新计算更大的波次规模
+			_reset_wave_targets()
 
 func _tick_fleet_idle(delta: float):
 	# 运载船要用“靠岸停泊点”，而不是随便一个水面点
@@ -500,15 +547,25 @@ func _tick_fleet_idle(delta: float):
 			escorts_home = false
 	if not escorts_home:
 		return
-	var units: Array = _pick_units()
-	if units.size() < MIN_TRANSPORT_TROOPS:
-		# 兵力还不够30，继续等生产/集结，避免小股送人头
+	# 本波次实际目标兵力：不超过本次运载船总容量
+	var desired_troops: int = mini(
+		maxi(_wave_troop_target, MIN_TRANSPORT_TROOPS),
+		_transports.size() * TRANSPORT_CAPACITY
+	)
+	var units: Array = _pick_units(desired_troops)
+	if units.size() < desired_troops:
+		# 尽量等本波次要求的兵力到齐；兵力实在不足时等待 TROOP_GATHER_GRACE 后
+		# 仍按基础30兵出发，避免一波永远凑不齐导致 AI 再也不从海上进攻。
 		_transport_timer += delta
-		return
+		if _transport_timer < TROOP_GATHER_GRACE or units.size() < MIN_TRANSPORT_TROOPS:
+			return
+	else:
+		_transport_timer = 0.0
+	_wave_troop_quota = units.size()
 	_transport_units = units
 	_unit_ship.clear()
 	# 按“离哪艘船最近 + 该船还有空位”分配，而不是按队列顺序硬塞。
-	# 4 艘船沿岸排开时，靠岸单位如果被分到另一端的船，很容易永远走不到
+	# 多艘船沿岸排开时，靠岸单位如果被分到另一端的船，很容易永远走不到
 	# 3.5 格登船距离内，最后超时放弃；就近分配能让每艘船都有人上。
 	var assigned_counts: Dictionary = {}
 	for u in units:
@@ -552,7 +609,7 @@ func _tick_fleet_gather(delta: float):
 	var slots: Array = _transport_slots
 	if slots.size() != _transports.size():
 		slots = _shore_slots(own_shore_water, _transports.size(), 2.5)
-	# 各船各自靠岸即可，不再要求 4 艘同时停在泊位才允许上船。
+	# 各船各自靠岸即可，不再要求所有运载船同时停在泊位才允许上船。
 	# 只要某艘船已经靠岸，它附近的士兵就先上；其他船继续开，避免一艘船
 	# 被挤住/寻路慢导致整支舰队都停在岸边等人。
 	for i in range(_transports.size()):
@@ -593,9 +650,10 @@ func _tick_fleet_gather(delta: float):
 		if is_instance_valid(u) and u.has_meta("_boarded_on"):
 			boarded_units.append(u)
 			boarded_now += 1
-	# 已经够 30 人时不要为了等最后几个掉队的兵一直拖到 50 秒超时；
+	# 已经够本波次目标人数时不要为了等最后几个掉队的兵一直拖到 50 秒超时；
 	# 给落单单位一个短暂追赶窗口后直接出发。
-	var stop_waiting: bool = _transport_timer > BOARD_WAIT_TIMEOUT or (boarded_now >= MIN_TRANSPORT_TROOPS and _transport_timer > 8.0)
+	var troop_quota: int = maxi(_wave_troop_quota, MIN_TRANSPORT_TROOPS)
+	var stop_waiting: bool = _transport_timer > BOARD_WAIT_TIMEOUT or (boarded_now >= troop_quota and _transport_timer > 8.0)
 	for u in _transport_units:
 		if is_instance_valid(u) and not u.has_meta("_boarded_on") and stop_waiting:
 			u.remove_meta("ai_transporting")
@@ -603,7 +661,7 @@ func _tick_fleet_gather(delta: float):
 		return
 	_transport_units = boarded_units
 	if _transport_units.size() < MIN_TRANSPORT_TROOPS:
-		# 没凑够30人上船，回岸边重来，不把不足30人的部队送过去
+		# 连基础30人都没上船，回岸边重来，不把过小的部队送过去
 		_abort_transport()
 		return
 	_transport_state = STATE_SAIL
@@ -782,7 +840,7 @@ func _clean_transport_units():
 			alive.append(u)
 	_transport_units = alive
 
-func _pick_units() -> Array:
+func _pick_units(max_count: int) -> Array:
 	var candidates: Array = []
 	var exclusions: Array = [5, 6, 9, 10, 13, 14, 39, 40, 43, 44, 45, 46, 47, 48, 49, 50, 51, 55, 56, 57]
 	for e in battle.entities.get_children():
@@ -815,7 +873,7 @@ func _pick_units() -> Array:
 	var out: Array = []
 	for item in candidates:
 		out.append(item["unit"])
-		if out.size() >= MAX_TRANSPORT_TROOPS:
+		if out.size() >= max_count:
 			break
 	return out
 
@@ -907,7 +965,7 @@ func _ensure_transport_tech():
 		ai.upgrade_building(SHIPYARD_ID)
 
 func _ensure_transport_fleet():
-	if ai.count_unit(TRANSPORT_ID) >= TRANSPORT_FLEET_SIZE:
+	if ai.count_unit(TRANSPORT_ID) >= _wave_transport_target:
 		return
 	var sy = ai._find_own_building(SHIPYARD_ID)
 	if not is_instance_valid(sy) or sy.build_timer > 0.0:
@@ -927,7 +985,7 @@ func _ensure_transport_fleet():
 	if ai.can_afford(TRANSPORT_ID):
 		if sy.try_produce(TRANSPORT_ID):
 			# 船坞平时会被战船/渔船排满；运载船如果排在十几艘船后面，
-			# AI 可能几分钟都凑不齐 4 艘。把运载船插到当前生产项之后，
+			# AI 可能几分钟都凑不齐本波次的运载船。把运载船插到当前生产项之后，
 			# 保留正在建造的那一艘的计时，同时让运载船尽快下水。
 			var idx: int = sy.production_queue.rfind(TRANSPORT_ID)
 			if idx > 1:
@@ -936,7 +994,7 @@ func _ensure_transport_fleet():
 
 func _ensure_escort_ships():
 	var total: int = ai.count_unit(13) + ai.count_unit(39) + ai.count_unit(40)
-	if total >= ESCORT_TARGET:
+	if total >= _wave_escort_target:
 		return
 	var sy = ai._find_own_building(SHIPYARD_ID)
 	if not is_instance_valid(sy) or sy.build_timer > 0.0:
