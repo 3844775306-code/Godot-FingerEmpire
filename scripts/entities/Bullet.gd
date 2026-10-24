@@ -27,6 +27,16 @@ var _arc_apex: float = 1.0
 var _prev_pos: Vector3 = Vector3.ZERO
 const BALLISTIC_HIT_RADIUS: float = 0.45
 
+# 箭矢命中后不立即消失：插在目标身上保留一段时间，让中箭有个明确的视觉反馈。
+const ARROW_STICK_TIME: float = 1.5
+var _stuck_to: Node3D = null          # 命中后箭矢附着的目标
+var _stuck_offset: Vector3 = Vector3.ZERO  # 命中瞬间相对目标的偏移，跟着目标一起动
+var _stuck_timer: float = 0.0
+# 巨石的伤害倍率：命中中心 1.5 倍，扩散到边缘降到 0.45 倍
+const BOULDER_CENTER_MULT: float = 1.5
+const BOULDER_EDGE_MULT: float = 0.45
+const BOULDER_SOURCE_ID: int = 59     # 巨型投石机：唯一走距离衰减的巨石
+
 # 弹丸模型缓存：后期每秒会生成几十到上百发子弹，不能每发都做
 # ResourceLoader.exists + load + GLB 实例化。PackedScene 只加载一次，之后只 instantiate。
 static var _scene_cache: Dictionary = {}
@@ -50,6 +60,54 @@ func _reset_ballistic_state() -> void:
 	_arc_span = 1.0
 	_arc_apex = 1.0
 	_prev_pos = Vector3.ZERO
+
+# 弓箭类弹丸：命中后要插在目标身上。弓手 12/31/33/37/58、箭塔 25、战船 13。
+func _is_arrow_bullet() -> bool:
+	return source_entity_id in [12, 13, 25, 31, 33, 37, 58]
+
+# 巨型投石机的巨石按落点距离衰减伤害；其它弹丸保持原样
+func _damage_multiplier(dist: float) -> float:
+	if source_entity_id != BOULDER_SOURCE_ID:
+		return 1.0
+	var t: float = clampf(dist / maxf(damage_radius, 0.01), 0.0, 1.0)
+	return lerpf(BOULDER_CENTER_MULT, BOULDER_EDGE_MULT, t)
+
+# 炮弹与巨石的命中特效：一次性尘土/碎屑爆发，节点播完自行销毁
+func _spawn_impact_effect(pos: Vector3, big: bool) -> void:
+	var bm = _get_bm()
+	var parent: Node = bm if bm != null else get_tree().current_scene
+	if parent == null:
+		return
+	var p := CPUParticles3D.new()
+	p.one_shot = true
+	p.amount = 26 if big else 14
+	p.lifetime = 0.6
+	p.explosiveness = 1.0
+	p.direction = Vector3.UP
+	p.spread = 180.0
+	p.initial_velocity_min = 2.0
+	p.initial_velocity_max = 5.5 if big else 3.5
+	p.gravity = Vector3(0.0, -12.0, 0.0)
+	p.scale_amount_min = 0.08
+	p.scale_amount_max = 0.26 if big else 0.16
+	var mesh := SphereMesh.new()
+	mesh.radius = 0.14
+	mesh.height = 0.28
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = Color(1.0, 0.78, 0.42) if big else Color(1.0, 0.92, 0.7)
+	mat.emission_enabled = true
+	mat.emission = Color(1.0, 0.62, 0.25) if big else Color(1.0, 0.85, 0.5)
+	mat.emission_energy_multiplier = 2.0
+	mesh.material = mat
+	p.mesh = mesh
+	parent.add_child(p)
+	p.global_position = pos
+	p.emitting = true
+	var timer := get_tree().create_timer(1.3)
+	timer.timeout.connect(func():
+		if is_instance_valid(p):
+			p.queue_free())
 
 func _ready():
 	add_to_group("bullets")
@@ -121,6 +179,9 @@ func reset_for_reuse(new_source, p_damage_radius: float, p_team: int, p_key: Str
 	target_pos = Vector3.ZERO
 	_saved_dir = Vector3.ZERO
 	hit = false
+	_stuck_to = null
+	_stuck_offset = Vector3.ZERO
+	_stuck_timer = 0.0
 	time_alive = 0.0
 	attack_type = 1
 	rotation = Vector3.ZERO
@@ -137,6 +198,9 @@ func recycle() -> void:
 	hit = true
 	visible = false
 	set_physics_process(false)
+	_stuck_to = null
+	_stuck_offset = Vector3.ZERO
+	_stuck_timer = 0.0
 	target = null
 	source = null
 	source_entity_id = -1
@@ -188,6 +252,13 @@ func _step_ballistic(goal: Vector3, delta: float) -> float:
 
 func _physics_process(delta):
 	if hit:
+		# 箭矢命中后插在目标身上：跟着目标移动，到时间再回收
+		if _stuck_to != null:
+			if is_instance_valid(_stuck_to):
+				global_position = _stuck_to.global_position + _stuck_offset
+			_stuck_timer -= delta
+			if _stuck_timer <= 0.0 or not is_instance_valid(_stuck_to):
+				recycle()
 		return
 	time_alive += delta
 	if time_alive > max_lifetime:
@@ -241,26 +312,33 @@ func _on_hit(entity: GameEntity):
 
 	# 确保 source 有效，无效则不传
 	var src = source if is_instance_valid(source) else null
-	entity.take_damage(damage, src)
+	entity.take_damage(damage * _damage_multiplier(0.0), src)
 
 	if damage_radius > 0:
+		_spawn_impact_effect(global_position, source_entity_id in [17, 59])
 		var bm = _get_bm()
 		if bm:
 			var nearby = bm.get_nearby_enemies(global_position, damage_radius, team, owner_peer_id)
 			for e in nearby:
 				if e == entity or e == src: continue
 				if e.global_position.distance_to(global_position) <= damage_radius:
-					e.take_damage(damage, src)
+					e.take_damage(damage * _damage_multiplier(e.global_position.distance_to(global_position)), src)
 		else:
 			for e in get_tree().get_nodes_in_group("entities"):
 				if e == entity or e == src: continue
 				if e is GameEntity and e.team != team:
 					if e.global_position.distance_to(global_position) <= damage_radius:
-						e.take_damage(damage, src)
+						e.take_damage(damage * _damage_multiplier(e.global_position.distance_to(global_position)), src)
 
 	if attack_type == 2: entity.shock(0.5)
 	elif attack_type == 3: entity.freeze(3.0)
 
+	# 箭矢：不立刻回收，插在目标身上保留 1.5 秒
+	if _is_arrow_bullet() and is_instance_valid(entity):
+		_stuck_to = entity
+		_stuck_offset = global_position - entity.global_position
+		_stuck_timer = ARROW_STICK_TIME
+		return
 	recycle()
 
 # 让弹丸模型朝向飞行方向；方向接近竖直时换用备用 up 向量避免万向锁翻转
@@ -275,18 +353,24 @@ func _on_hit_pos():
 	if damage_radius > 0: AudioManager.play_sfx("cannon_hit")
 	var src = source if is_instance_valid(source) else null
 
+	# 炮弹/巨石砸地：先放命中特效，巨石带更大的碎屑爆发
+	if damage_radius > 0:
+		_spawn_impact_effect(global_position, source_entity_id in [17, 59])
+
 	if damage_radius > 0:
 		var bm = _get_bm()
 		if bm:
 			var nearby = bm.get_nearby_enemies(global_position, damage_radius, team, owner_peer_id)
 			for e in nearby:
 				if e == src: continue
-				if e.global_position.distance_to(global_position) <= damage_radius:
-					e.take_damage(damage, src)
+				var d: float = e.global_position.distance_to(global_position)
+				if d <= damage_radius:
+					e.take_damage(damage * _damage_multiplier(d), src)
 		else:
 			for e in get_tree().get_nodes_in_group("entities"):
 				if e == src: continue
 				if e is GameEntity and e.team != team:
-					if e.global_position.distance_to(global_position) <= damage_radius:
-						e.take_damage(damage, src)
+					var d: float = e.global_position.distance_to(global_position)
+					if d <= damage_radius:
+						e.take_damage(damage * _damage_multiplier(d), src)
 	recycle()
