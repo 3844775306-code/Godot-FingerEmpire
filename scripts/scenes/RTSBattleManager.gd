@@ -1915,6 +1915,10 @@ func _play_entity_attack_anim(entity: Army, model: Node3D) -> void:
 			_procedural_cannon_recoil(model)
 		58:
 			_procedural_repeater_fire(model)
+		13:
+			_procedural_warship_fire(model)
+		39:
+			_procedural_gunboat_fire(model)
 		_:
 			_procedural_attack(model)
 
@@ -1989,6 +1993,50 @@ func _procedural_repeater_fire(model: Node3D) -> void:
 	tw.tween_property(model, "position", base_pos + Vector3(0.0, 0.0, 0.06), dur * 0.35) \
 		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	tw.tween_property(model, "position", base_pos, dur * 0.65) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_callback(func():
+		if is_instance_valid(model):
+			model.set_meta("_proc_anim_running", false))
+
+# 战船：侧舷齐射，船身轻微后坐、下沉并侧倾一下（幅度小，船在水上本来就晃）
+func _procedural_warship_fire(model: Node3D) -> void:
+	if not _begin_proc_anim(model):
+		return
+	var base_pos: Vector3 = model.position
+	var base_rz: float = model.rotation.z
+	var dur: float = 0.45
+	var tw := model.create_tween()
+	# 后坐 + 微下沉 + 侧倾
+	tw.tween_property(model, "position", base_pos + Vector3(0.0, -0.04, 0.10), dur * 0.3) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(model, "rotation:z", base_rz - 0.04, dur * 0.3) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	# 回浮归位
+	tw.tween_property(model, "position", base_pos, dur * 0.7) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.parallel().tween_property(model, "rotation:z", base_rz, dur * 0.7) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_callback(func():
+		if is_instance_valid(model):
+			model.set_meta("_proc_anim_running", false))
+
+# 炮艇：开炮后坐力比战船大得多，整船后退、下沉，再浮回原位
+func _procedural_gunboat_fire(model: Node3D) -> void:
+	if not _begin_proc_anim(model):
+		return
+	var base_pos: Vector3 = model.position
+	var base_rz: float = model.rotation.z
+	var dur: float = 0.65
+	var tw := model.create_tween()
+	# 后坐 + 明显下沉 + 侧倾
+	tw.tween_property(model, "position", base_pos + Vector3(0.0, -0.10, 0.24), dur * 0.22) \
+		.set_trans(Tween.TRANS_EXPO).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(model, "rotation:z", base_rz - 0.08, dur * 0.22) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	# 浮回原位（带一点弹跳，像船被涌起的浪顶回来）
+	tw.tween_property(model, "position", base_pos, dur * 0.78) \
+		.set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(model, "rotation:z", base_rz, dur * 0.78) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 	tw.tween_callback(func():
 		if is_instance_valid(model):
