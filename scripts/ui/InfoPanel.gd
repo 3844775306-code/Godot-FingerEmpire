@@ -6,6 +6,16 @@ var upgrade_btn: Button = null
 var produce_vbox: VBoxContainer = null
 var _vb: VBoxContainer = null
 var _panel_scroll: ScrollContainer = null
+
+# ==================== 运载船：上/下船 ====================
+const BOARD_RANGE: float = 2.5  # 只有船周围 2.5 米内的陆地单位才能上船
+
+var _board_box: VBoxContainer = null
+var _board_label: RichTextLabel = null
+var _board_up_btn: Button = null
+var _board_down_btn: Button = null
+var _board_near_units: Array = []
+var _board_shore: Vector3 = Vector3.ZERO
 @onready var close_btn = $CloseBtn
 
 var name_rtl: RichTextLabel
@@ -366,6 +376,11 @@ func update_info(entity):
 			produce_vbox.visible = false
 	else:
 		upgrade_btn.visible = false; produce_vbox.visible = false
+		# 运载船：信息面板里直接给「上船 / 下船」，按钮上标出可上/下船人数
+		if entity is Army and entity.entity_id == 9 and not readonly:
+			_update_board_ui(entity)
+		elif _board_box != null and is_instance_valid(_board_box):
+			_board_box.visible = false
 		if demolish_btn: demolish_btn.visible = false
 	hp_bar.visible = true
 
@@ -386,6 +401,111 @@ func _on_produce_pressed(unit_id: int):
 		if not _is_local_owned_entity(b): continue
 		for _i in range(n):
 			if not b.try_produce(unit_id): break
+
+# ==================== 运载船：上/下船 ====================
+func _ensure_board_box() -> void:
+	if _board_box != null and is_instance_valid(_board_box):
+		return
+	_board_box = VBoxContainer.new()
+	_board_box.name = "BoardBox"
+	_board_box.add_theme_constant_override("separation", 2)
+	_vb.add_child(_board_box)
+
+	_board_label = _make_rtl_label()
+	_board_box.add_child(_board_label)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", int(UILayout.dp(4.0)) if _is_mobile() else 4)
+	_board_box.add_child(row)
+
+	_board_up_btn = Button.new()
+	_board_up_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	if _is_mobile():
+		_board_up_btn.custom_minimum_size = Vector2(0, UILayout.dp(40.0))
+		UITheme.apply_primary_button(_board_up_btn, UILayout.font_dp(12.0))
+	else:
+		_board_up_btn.custom_minimum_size = Vector2(90, 32)
+		UITheme.apply_primary_button(_board_up_btn, UITheme.FONT_SM)
+	_board_up_btn.pressed.connect(_on_board_up_pressed)
+	row.add_child(_board_up_btn)
+
+	_board_down_btn = Button.new()
+	_board_down_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	if _is_mobile():
+		_board_down_btn.custom_minimum_size = Vector2(0, UILayout.dp(40.0))
+		UITheme.apply_muted_button(_board_down_btn, UILayout.font_dp(12.0))
+	else:
+		_board_down_btn.custom_minimum_size = Vector2(90, 32)
+		UITheme.apply_muted_button(_board_down_btn, UITheme.FONT_SM)
+	_board_down_btn.pressed.connect(_on_board_down_pressed)
+	row.add_child(_board_down_btn)
+
+# 船旁边最近的陆地格：找得到说明船已靠岸（可以下船），全水返回 Vector3.ZERO
+func _ship_shore_point(ship) -> Vector3:
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if bm == null:
+		return Vector3.ZERO
+	var base: Vector3 = ship.global_position
+	for r in [1.2, 2.0, 3.0, 4.5, 6.0]:
+		for i in 12:
+			var ang: float = TAU * float(i) / 12.0
+			var p := base + Vector3(cos(ang) * float(r), 0.0, sin(ang) * float(r))
+			if int(bm.get_terrain_at(p)) != 2:
+				return p
+	return Vector3.ZERO
+
+func _update_board_ui(ship) -> void:
+	_ensure_board_box()
+	_board_box.visible = true
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	var cap: int = int(ship.get_board_capacity()) if ship.has_method("get_board_capacity") else 8
+	var boarded: int = int(ship.get_boarded_count())
+	# 可上船单位：船周围 2.5 米内、还没上船的陆地单位（含农民等经济单位）
+	var near: Array = []
+	if bm:
+		bm._ensure_cache_fresh()
+		for u in bm._armies:
+			if not is_instance_valid(u) or u == ship or u.health <= 0:
+				continue
+			if int(u.entity_id) == 9:
+				continue
+			var boarded_on = u.get("_boarded_on")
+			if boarded_on != null and int(boarded_on) != -1:
+				continue
+			if u.global_position.distance_to(ship.global_position) > BOARD_RANGE:
+				continue
+			if int(bm.get_terrain_at(u.global_position)) == 2:
+				continue
+			near.append(u)
+	_board_near_units = near
+	_board_shore = _ship_shore_point(ship)
+
+	_board_label.text = "🚢 [color=%s]船上[/color]: [color=white]%d / %d[/color]" % [
+		UITheme.hex_str(UITheme.SAPPHIRE), boarded, cap]
+	_board_up_btn.text = "⬆ 上船 (%d)" % near.size()
+	_board_up_btn.disabled = near.is_empty() or boarded >= cap
+	_board_up_btn.tooltip_text = "只有船周围 %.1f 米内的陆地单位能上船" % BOARD_RANGE
+	_board_down_btn.text = "⬇ 下船 (%d)" % boarded
+	_board_down_btn.disabled = boarded <= 0 or _board_shore == Vector3.ZERO
+	_board_down_btn.tooltip_text = "船靠岸后才能下船"
+
+func _on_board_up_pressed() -> void:
+	var ship = observed_entity
+	if ship == null or not is_instance_valid(ship) or not (ship is Army):
+		return
+	for u in _board_near_units:
+		if is_instance_valid(u):
+			ship.board_unit(u)
+	update_info(ship)
+
+func _on_board_down_pressed() -> void:
+	var ship = observed_entity
+	if ship == null or not is_instance_valid(ship) or not (ship is Army):
+		return
+	if _board_shore == Vector3.ZERO:
+		return
+	ship.unboard_at(_board_shore)
+	update_info(ship)
 
 var _refresh_timer: float = 0.0
 

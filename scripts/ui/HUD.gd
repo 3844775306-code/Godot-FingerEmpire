@@ -730,80 +730,6 @@ func _make_cmd_button(text: String, cb: Callable, danger: bool) -> Button:
 	b.pressed.connect(cb)
 	return b
 
-# 在目标点附近找一个陆地格：由近到远绕圈找，找不到（全是水）返回 Vector3.ZERO
-func _shore_point_near(bm, pos: Vector3) -> Vector3:
-	for r in [2.0, 3.0, 4.0, 6.0]:
-		for i in 8:
-			var ang: float = TAU * float(i) / 8.0
-			var p := pos + Vector3(cos(ang) * r, 0.0, sin(ang) * r)
-			if int(bm.get_terrain_at(p)) != 2:
-				return p
-	return Vector3.ZERO
-
-# 屏幕内军队上/下船：
-#   在运载船上、且船已靠岸（附近有陆地）的军队集体下船；
-#   在岸上、且靠近未满运载船的军队上船
-func _on_board_screen_pressed():
-	var bm = _get_bm()
-	if bm == null:
-		return
-	bm._ensure_cache_fresh()
-	var cam := get_viewport().get_camera_3d()
-	if cam == null:
-		return
-	var vp_rect := get_viewport().get_visible_rect()
-	var ships: Array = []
-	var armies: Array = []
-	for e in bm._armies:
-		if not is_instance_valid(e) or e.health <= 0:
-			continue
-		if not vp_rect.has_point(cam.unproject_position(e.global_position)):
-			continue
-		if int(e.entity_id) == 9:
-			ships.append(e)
-		else:
-			var boarded = e.get("_boarded_on")
-			if boarded == null or int(boarded) == -1:
-				armies.append(e)
-	if ships.is_empty():
-		show_alert_message("屏幕内没有运载船", ALERT_WARNING)
-		return
-	var unboarded_ships := 0
-	var boarded_units := 0
-	# 1) 船上的军队：船靠岸了就全体下船
-	for s in ships:
-		if int(s.get_boarded_count()) <= 0:
-			continue
-		var shore: Vector3 = _shore_point_near(bm, s.global_position)
-		if shore == Vector3.ZERO:
-			continue
-		s.unboard_at(shore)
-		unboarded_ships += 1
-	# 2) 岸上的军队：走到船边（4 格内）的直接上船
-	for a in armies:
-		if int(bm.get_terrain_at(a.global_position)) == 2:
-			continue
-		for s in ships:
-			if int(s.get_boarded_count()) >= 8:
-				continue
-			var dx: float = s.global_position.x - a.global_position.x
-			var dz: float = s.global_position.z - a.global_position.z
-			if Vector2(dx, dz).length() > 4.0:
-				continue
-			s.board_unit(a)
-			boarded_units += 1
-			break
-	var parts: Array = []
-	if unboarded_ships > 0:
-		parts.append("%d 艘船下船" % unboarded_ships)
-	if boarded_units > 0:
-		parts.append("%d 个单位上船" % boarded_units)
-	if parts.is_empty():
-		show_alert_message("屏幕内没有可上/下船的军队（船未靠岸或距离太远）", ALERT_WARNING)
-	else:
-		show_alert_message("🚢 " + "，".join(parts), ALERT_INFO)
-
-
 func _ready():
 	# 电脑版左下角的虚拟摇杆用不上：隐藏并停掉它的输入处理，避免抢占鼠标
 	if not InputSource.use_mobile_ui():
@@ -816,7 +742,7 @@ func _ready():
 
 	_create_unit_stats_panel()
 
-	# 全局指令：6 个按钮排成两行，统一放在一块半透明底板里
+	# 全局指令：5 个按钮排成两行，统一放在一块半透明底板里
 	_cmd_panel = Panel.new()
 	_cmd_panel.name = "GlobalCommandPanel"
 	_cmd_panel.position = Vector2(620, 10)
@@ -843,8 +769,7 @@ func _ready():
 	auto_attack_btn = _make_cmd_button("⚔️ 自动进攻：关 (F2)", _on_attack_all_pressed, true)
 	var b_retreat_screen = _make_cmd_button("屏幕军队撤退 (F3)", _on_retreat_screen_pressed, false)
 	var b_retreat_all = _make_cmd_button("所有军队撤退 (Ctrl+F3)", _on_retreat_all_pressed, false)
-	var b_board = _make_cmd_button("🚢 屏幕军队上/下船", _on_board_screen_pressed, false)
-	for b in [b_select_screen, b_select_all, auto_attack_btn, b_retreat_screen, b_retreat_all, b_board]:
+	for b in [b_select_screen, b_select_all, auto_attack_btn, b_retreat_screen, b_retreat_all]:
 		cmd_grid.add_child(b)
 
 	set_process(true)

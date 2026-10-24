@@ -2100,6 +2100,11 @@ func _spawn_demolition_blast():
 	t.start()
 
 # ==================== Transport Ship ====================
+const BOARD_CAPACITY: int = 8  # 运载船最大载员
+
+func get_board_capacity() -> int:
+	return BOARD_CAPACITY
+
 func _process_transport(delta):
 	var bm = _get_bm()
 	if not bm: return
@@ -2111,7 +2116,7 @@ func _process_transport(delta):
 			u.global_position = global_position
 
 func board_unit(unit):
-	if _boarded_units.size() >= 8: return
+	if _boarded_units.size() >= BOARD_CAPACITY: return
 	_boarded_units.append(unit)
 	unit.visible = false
 	unit.collision_layer = 0

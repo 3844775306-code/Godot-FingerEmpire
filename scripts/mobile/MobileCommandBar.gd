@@ -62,7 +62,6 @@ func _build() -> void:
 	var row3 := _make_row()
 	_auto_btn = _make_command_button("自动进攻：关", UILayout.font_dp(12.0), "_on_attack_all_pressed")
 	row3.add_child(_auto_btn)
-	row3.add_child(_make_command_button("上/下船", UILayout.font_dp(12.0), "_on_board_screen_pressed"))
 	vb.add_child(row3)
 	sync_auto_attack()
 
