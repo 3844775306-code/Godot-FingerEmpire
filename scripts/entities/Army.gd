@@ -22,6 +22,9 @@ var delivery_target: Building = null
 var last_resource_target: WorldResource = null   
 # 采集时朝资源点移动的累计时长：走不到就放弃重找，避免永久假采集
 var _gather_approach_time: float = 0.0
+# 交付时朝仓库/主城移动的累计时长与失败次数：走不到就重算路径、换交付点
+var _deliver_approach_time: float = 0.0
+var _deliver_retry_count: int = 0
 
 # ¹¥»÷ÒÆ¶¯
 var is_attack_moving: bool = false
@@ -97,6 +100,10 @@ var _attack_move_search_timer: float = 0.0
 const GARRISON_DEFEND_RADIUS: float = 10.0
 # 采集时向资源点移动的最长容忍时间，超时放弃该目标并重找
 const GATHER_APPROACH_TIMEOUT: float = 8.0
+# 交付时向仓库移动的最长容忍时间，超时先重算路径，再次超时就换交付点
+const DELIVER_APPROACH_TIMEOUT: float = 10.0
+# 交付判定在建筑碰撞边缘外额外放宽的距离（农民会被碰撞体挡住，不能要求贴到 0.8 米内）
+const DELIVER_CONTACT_SLACK: float = 1.2
 
 # Åö×²·ÖÀë½ÚÁ÷
 
@@ -549,12 +556,22 @@ func _tick_think(delta, bm) -> void:
 # ----------------- ÐÐÎª´¦Àí -----------------
 func _process_action(delta, bm):
 	# ½»¸¶×´Ì¬
-	if _order_is(UnitState.DELIVERING) and delivery_target and is_instance_valid(delivery_target):
+	if _order_is(UnitState.DELIVERING):
+		if delivery_target == null or not is_instance_valid(delivery_target):
+			# 交付点失效（主城被拆/引用被清空）：重找一个；实在没有可送的地方就回空闲（货物保留）
+			delivery_target = null
+			_deliver_approach_time = 0.0
+			_deliver_retry_count = 0
+			current_target = null
+			if not _return_to_deliver():
+				_set_order(UnitState.IDLE)
+			return
 				# Ê¹ÓÃË®Æ½¾àÀë£¨ºöÂÔ¸ß¶È²î£©£¬±ÜÃâµØÐÎÆð·ü¸ÉÈÅ
 		var h_diff = Vector2(delivery_target.global_position.x - global_position.x,
 							delivery_target.global_position.z - global_position.z)
-		var h_dist = h_diff.length() - body_radius - delivery_target.body_radius
-		if h_dist <= 0.8:   # ·Å¿íÖÁ0.8Ã×£¬·ÀÖ¹¿¨±ßÔµ
+		# 用原始距离判断是否够近：农民会被建筑碰撞体挡在边缘（约 2.4~2.6 米），
+		# 老代码用 h_dist <= 0.8 会把「已到达但差几十厘米」误判成没到，导致永远交不了货
+		if h_diff.length() <= body_radius + delivery_target.body_radius + DELIVER_CONTACT_SLACK:
 			if bm and bm.has_method("deliver_player_resources") and owner_peer_id != -1:
 				bm.deliver_player_resources(owner_peer_id, cargo)
 			else:
@@ -564,14 +581,34 @@ func _process_action(delta, bm):
 			cargo.clear()
 			delivery_target = null
 			current_target = null
+			_deliver_approach_time = 0.0
+			_deliver_retry_count = 0
 			_set_order(UnitState.IDLE)
 			if is_instance_valid(last_resource_target) and last_resource_target.health > 0:
 				gather_at(last_resource_target)
 			elif target_type == 0 and not _is_gather_paused():
 				_find_nearest_resource()
 			last_resource_target = null
-		elif delivery_target.global_position != _movement.astar_target:
-			_movement.set_move_target(delivery_target.global_position, 1.0 if entity_id == 14 else 0.0)
+		else:
+			_deliver_approach_time += delta
+			if _deliver_approach_time > DELIVER_APPROACH_TIMEOUT:
+				_deliver_approach_time = 0.0
+				_deliver_retry_count += 1
+				if _deliver_retry_count >= 2:
+					# 反复走不到：换一个交付点；没有别的仓库就回空闲等玩家处理
+					_deliver_retry_count = 0
+					delivery_target = null
+					current_target = null
+					if not _return_to_deliver():
+						_set_order(UnitState.IDLE)
+				elif _movement:
+					# 主城周围被建筑/单位围住时 A* 会算不出完整路径，强制重算一次
+					_movement.recalculate()
+			else:
+				# 目标点取建筑外缘（走到城堡中心会导致路径不可达而原地卡住）
+				var arrive: float = delivery_target.body_radius + body_radius + 0.5
+				if delivery_target.global_position != _movement.astar_target:
+					_movement.set_move_target(delivery_target.global_position, arrive)
 		return
 		# Èç¹ûÊÇÒÆ¶¯ÃüÁîÇÒÒÑ½Ó½üÄ¿±ê£¬Çå³ýÃüÁî£¬×ªÎª¿ÕÏÐ
 	if _order_is(UnitState.MOVING) and not is_attack_moving:
@@ -1119,6 +1156,8 @@ func _return_to_deliver() -> bool:
 			last_resource_target = current_target
 		delivery_target = target
 		current_target = target
+		_deliver_approach_time = 0.0
+		_deliver_retry_count = 0
 		_set_order(UnitState.DELIVERING)
 		return true
 	return false
