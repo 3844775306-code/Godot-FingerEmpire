@@ -49,6 +49,11 @@ var _cached_renderer = null
 var _cached_battle = null
 var _cached_map = null
 
+# 开局握手：客户端战斗场景就绪后才发地图/队伍，避免数据早到被丢弃（表现为客户端黑屏）
+var _scene_ready_peers: Dictionary = {}
+var pending_map_data: Dictionary = {}   # 场景未就绪时暂存的地图数据
+var map_data_applied: bool = false      # 本次战斗的地图是否已应用到客户端
+
 func _ready():
 	multiplayer.peer_connected.connect(_on_peer_connected)
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
@@ -317,6 +322,7 @@ func start_game():
 		print("[NetworkManager] start_game blocked: ", reason)
 		return reason  # 返回阻止原因给调用方
 	game_started = true
+	_scene_ready_peers.clear()
 	_apply_map_size_for_mode()
 	print("[NetworkManager] Starting game, use_steam=", use_steam, " peers=", multiplayer.get_peers().size())
 	if use_steam:
@@ -368,33 +374,129 @@ func notify_team_info(peer_id: int, team: int, slot: int, color: Color):
 func _load_battle_scene():
 	if mode == Mode.CLIENT:
 		_invalidate_cache()
+		pending_map_data = {}
+		map_data_applied = false
 		_apply_map_size_for_mode()
 		var _t = get_tree(); if _t: _t.change_scene_to_file("res://scenes/rts_battle_client.tscn")
 
+# 客户端战斗场景进树后主动上报；主机收到后再下发地图/队伍，避免地图数据早到被丢弃
+@rpc("any_peer", "call_remote", "reliable")
+func client_scene_ready():
+	if mode == Mode.SERVER:
+		var sender := multiplayer.get_remote_sender_id()
+		if sender == 0: sender = 1
+		_scene_ready_peers[sender] = true
+
+# 主机等待所有真实客户端场景就绪（带超时兜底，避免旧客户端卡死开局）
+func wait_clients_scene_ready(peers: Array, timeout_sec: float = 8.0) -> void:
+	var deadline := Time.get_ticks_msec() + int(timeout_sec * 1000.0)
+	var pending: Array = peers.duplicate()
+	while not pending.is_empty() and Time.get_ticks_msec() < deadline:
+		pending = pending.filter(func(pid): return not _scene_ready_peers.has(pid))
+		if pending.is_empty():
+			break
+		await get_tree().create_timer(0.05).timeout
+	if not pending.is_empty():
+		print("[NetworkManager] 等待客户端场景就绪超时，仍继续开局: ", str(pending))
+
+# 客户端场景就绪后的兜底：先吃暂存地图，迟一点还没收到就主动补请（最多 3 次）
+func _client_map_ready() -> void:
+	if mode != Mode.CLIENT:
+		return
+	if consume_pending_map():
+		return
+	for attempt in range(3):
+		for _i in range(20):
+			await get_tree().create_timer(0.1).timeout
+			if mode != Mode.CLIENT or map_data_applied:
+				return
+			if consume_pending_map():
+				return
+		print("[NetworkManager] 客户端未收到地图数据，请求补发（第 %d 次）" % (attempt + 1))
+		request_map_data()
+
+@rpc("any_peer", "call_remote", "reliable")
+func _request_map_data():
+	if mode == Mode.SERVER:
+		var sender := multiplayer.get_remote_sender_id()
+		if sender == 0: sender = 1
+		var battle = _get_battle()
+		if battle and battle.has_method("_send_map_data"):
+			print("[NetworkManager] 客户端请求补发地图: ", sender)
+			battle._send_map_data([sender])
+
+func request_map_data() -> void:
+	if mode != Mode.CLIENT:
+		return
+	var peer = multiplayer.multiplayer_peer
+	if peer == null or peer is OfflineMultiplayerPeer:
+		return
+	if peer.get_connection_status() != MultiplayerPeer.CONNECTION_CONNECTED:
+		return
+	rpc_id(1, "_request_map_data")
+
 @rpc("any_peer", "call_remote", "reliable")
 func receive_map_data(terrain: Array, height_data: Array, resources: Array, map_id: String, overlay_zip: PackedByteArray):
-	if mode == Mode.CLIENT:
-		RTSConfig.MAP_SIZE = terrain.size()
-		GameSettings.map_id = map_id
-		# 覆盖层随地图下发（压缩字节流）；缺失时按全 0 处理，兼容旧格式
-		var overlay := PackedByteArray()
-		if overlay_zip.size() > 0:
-			overlay = overlay_zip.decompress(terrain.size() * terrain.size(), FileAccess.COMPRESSION_ZSTD)
-		var map = _get_map()
-		if map:
-			map.apply_received_map(terrain, height_data, resources, overlay, map_id)
-		var renderer = _get_renderer()
-		if renderer and renderer.has_method("_add_water_box"):
-			var fog_tex = null
-			if map and map.has_method("get_terrain_texture"):
-				fog_tex = map.get_terrain_texture()
-			renderer._add_water_box(terrain.size(), fog_tex)
-		if renderer:
-			# 客户端迷雾与主机同口径：地图倍率/高地/森林修正
-			if map and map.map_preset is Dictionary:
-				renderer.map_modifiers = map.map_preset.get("modifiers", {})
-			renderer.on_map_size_changed()
-			renderer._init_fog_grids()
+	if mode != Mode.CLIENT:
+		return
+	RTSConfig.MAP_SIZE = terrain.size()
+	GameSettings.map_id = map_id
+	var payload := {
+		"terrain": terrain, "height": height_data, "resources": resources,
+		"map_id": map_id, "overlay_zip": overlay_zip,
+	}
+	# 客户端场景可能还没加载完（Ground 还没进树）：先暂存，等场景就绪后再应用
+	if _get_map() == null or _get_renderer() == null:
+		pending_map_data = payload
+		print("[NetworkManager] 地图数据早到，暂存待客户端场景就绪后应用")
+		return
+	_apply_received_map_data(payload)
+
+func has_pending_map() -> bool:
+	return not pending_map_data.is_empty()
+
+func consume_pending_map() -> bool:
+	if pending_map_data.is_empty():
+		return false
+	if _get_map() == null or _get_renderer() == null:
+		return false
+	var payload: Dictionary = pending_map_data
+	pending_map_data = {}
+	_apply_received_map_data(payload)
+	return true
+
+func _apply_received_map_data(payload: Dictionary) -> void:
+	var terrain: Array = payload.get("terrain", [])
+	var height_data: Array = payload.get("height", [])
+	var resources: Array = payload.get("resources", [])
+	var map_id: String = String(payload.get("map_id", "classic"))
+	var overlay_zip: PackedByteArray = payload.get("overlay_zip", PackedByteArray())
+	var size: int = terrain.size()
+	if size <= 0:
+		return
+	# 覆盖层随地图下发（压缩字节流）；缺失时按全 0 处理，兼容旧格式
+	var overlay := PackedByteArray()
+	if overlay_zip.size() > 0:
+		overlay = overlay_zip.decompress(size * size, FileAccess.COMPRESSION_ZSTD)
+	var map = _get_map()
+	if map == null:
+		pending_map_data = payload
+		return
+	map.apply_received_map(terrain, height_data, resources, overlay, map_id)
+	map_data_applied = true
+	var renderer = _get_renderer()
+	if renderer and renderer.has_method("_add_water_box"):
+		var fog_tex = null
+		if map.has_method("get_terrain_texture"):
+			fog_tex = map.get_terrain_texture()
+		renderer._add_water_box(size, fog_tex)
+	if renderer:
+		# 客户端迷雾与主机同口径：地图倍率/高地/森林修正
+		if map.map_preset is Dictionary:
+			renderer.map_modifiers = map.map_preset.get("modifiers", {})
+		renderer.on_map_size_changed()
+		renderer._init_fog_grids()
+	print("[NetworkManager] 客户端地图已应用: %s %dx%d" % [map_id, size, size])
 
 
 

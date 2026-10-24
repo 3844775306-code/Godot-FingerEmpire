@@ -280,6 +280,8 @@ func _init_1v1():
 			team_nations[team] = pending_nations[peers[i]]
 			pending_nations.erase(peers[i])
 
+	# 等客户端把战斗场景加载完再发地图：数据早到会被丢弃，客户端就会黑屏
+	await NetworkManager.wait_clients_scene_ready(peers)
 	# 发送地图数据
 	_send_map_data(peers)
 	# 通知队伍
@@ -428,6 +430,13 @@ func _init_team_mode():
 
 	# 广播颜色、地图、队伍信息等（保持不变）
 	var all_player_colors = {}
+	# 只向真实远程客户端发送（跳过 AI 合成 peer_id 与房主自己）
+	var real_pids: Array = []
+	for pid in player_info.keys():
+		if not player_info[pid].is_ai and int(pid) != 1:
+			real_pids.append(pid)
+	# 等客户端战斗场景就绪后再下发颜色/地图/队伍，否则客户端会因数据早到而黑屏
+	await NetworkManager.wait_clients_scene_ready(real_pids)
 	for pid in player_info.keys():
 		all_player_colors[pid] = player_info[pid].color
 	_player_colors.clear()
@@ -436,11 +445,6 @@ func _init_team_mode():
 	for pid in player_info.keys():
 		NetworkManager.notify_all_player_colors.rpc_id(pid, all_player_colors)
 
-	# 只向真实客户端发送（跳过AI合成peer_id）
-	var real_pids: Array = []
-	for pid in player_info.keys():
-		if not player_info[pid].is_ai:
-			real_pids.append(pid)
 	_send_map_data(real_pids)
 	for pid in real_pids:
 		var info = player_info[pid]

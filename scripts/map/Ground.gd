@@ -59,9 +59,20 @@ var _reach_tiles: Dictionary = {}      # 从城堡可达的格集合（仅 reach
 # 防止重复生成
 var map_generated: bool = false
 
+# 是否真的连着远端（headless/单机探针里没有真实 peer，不能发 RPC）
+func _has_remote_peer() -> bool:
+	var peer = multiplayer.multiplayer_peer
+	if peer == null or peer is OfflineMultiplayerPeer:
+		return false
+	return peer.get_connection_status() == MultiplayerPeer.CONNECTION_CONNECTED
+
 func _ready():
 	# 联机客户端：不自动生成，等待服务器地图数据
 	if NetworkManager.mode == NetworkManager.Mode.CLIENT:
+		# 先上报"战斗场景已就绪"，主机据此再发地图；同时兜底处理早到/丢失的数据
+		if _has_remote_peer():
+			NetworkManager.client_scene_ready.rpc_id(1)
+		NetworkManager.call_deferred("_client_map_ready")
 		return
 	# 如果已经生成过，跳过
 	if map_generated:
