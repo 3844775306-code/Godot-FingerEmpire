@@ -2876,6 +2876,7 @@ func _is_garrisonable_unit() -> bool:
 	return entity_id == 10 or target_type > 0  # 农民或战斗单位
 
 func can_soldier_garrison(target) -> bool:
+	if not is_instance_valid(target): return false
 	if not _is_garrisonable_unit(): return false
 	if _soldier_garrison_building and _soldier_garrison_building.get_ref(): return false
 	if target is Building:
@@ -2885,6 +2886,7 @@ func can_soldier_garrison(target) -> bool:
 	return false
 
 func _do_soldier_garrison(target):
+	if not is_instance_valid(target): return
 	if target is Building:
 		if not target._add_soldier_to_garrison(self): return
 		_soldier_garrison_building = weakref(target)
