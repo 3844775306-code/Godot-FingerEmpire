@@ -2,6 +2,7 @@ class_name ClientRenderer
 extends Node3D
 const StatsScript = preload("res://scripts/core/BattleStats.gd")
 const StatsPanelScript = preload("res://scripts/ui/BattleStatsPanel.gd")
+const BuildingDeathEffect = preload("res://scripts/effects/BuildingDeathEffect.gd")
 enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ATTACK_SPEED, MELEE_ARMOR, SHIELD_ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH, GARRISONED, NATION, IN_ACTION_RANGE }
 enum EB { UPGRADE=0, MAX_UPGRADE, CAN_UPGRADE, BUILD_TIMER, MAX_BUILD, PROD_CURRENT, PROD_PROGRESS, PROD_QSIZE, UPGRADE_TIMER, MAX_UPGRADE_TIME, GARRISON_COUNT }
 # 与 RTSBattleManager.get_nation_name() 保持一致；客户端不跑服务端脚本，血条文字单独查表
@@ -389,7 +390,7 @@ func _process_snapshot(data: Dictionary):
 		for ent in data["entities"]:
 			_update_single_entity(ent)
 
-	# 删除死亡实体（先展示毁坏模型2秒）
+	# 删除死亡实体（先播放死亡/倒塌表现，再释放本地节点）
 	if data.has("dead_ids"):
 		for id in data["dead_ids"]:
 			if entity_nodes.has(id):
@@ -400,29 +401,36 @@ func _process_snapshot(data: Dictionary):
 					entity_nodes.erase(id)
 					_play_sink_animation(node, info)
 				else:
-					# 切换到毁坏模型
-					var eid = info.get("entity_id", -1)
-					var dem_path = RTSConfig.get_demolished_model(eid)
-					if dem_path != "" and ResourceLoader.exists(dem_path):
-						for child in node.get_children():
-							if child is MeshInstance3D: child.visible = false
-						var s = load(dem_path)
-						if s:
-							var inst = s.instantiate()
-							inst.name = "DemolishedModel"
-							# 毁坏模型也要按国家/队伍色染色，和正常模型保持一致
-							if info.get("type", -1) != 0:
-								var info_color = _get_entity_color(info)
-								var lt = Color(0.5 + info_color.r * 0.5, 0.5 + info_color.g * 0.5, 0.5 + info_color.b * 0.5)
-								_apply_model_tint(inst, lt)
-							# 毁坏模型随本体一起放大，否则塔倒后残骸会明显偏小
-							if eid == 41: inst.scale = Vector3.ONE * (0.5 * RTSConfig.get_model_scale(eid))
-							node.add_child(inst)
-						var t = Timer.new(); t.one_shot = true; t.wait_time = 0.3
-						t.timeout.connect(node.queue_free); node.add_child(t); t.start()
+					# 建筑走程序化倒塌特效；节点立即移出 entity_nodes，但保留到动画结束再释放。
+					var effect_duration := 0.0
+					if int(info.get("type", -1)) == 1:
+						effect_duration = BuildingDeathEffect.play(node, int(info.get("entity_id", -1)), float(info.get("body_radius", 0.5)))
+					if effect_duration > 0.0:
+						entity_nodes.erase(id)
 					else:
-						node.queue_free()
-					entity_nodes.erase(id)
+						# 其他实体仍使用原有毁坏模型/直接删除流程
+						var eid = info.get("entity_id", -1)
+						var dem_path = RTSConfig.get_demolished_model(eid)
+						if dem_path != "" and ResourceLoader.exists(dem_path):
+							for child in node.get_children():
+								if child is MeshInstance3D: child.visible = false
+							var s = load(dem_path)
+							if s:
+								var inst = s.instantiate()
+								inst.name = "DemolishedModel"
+								# 毁坏模型也要按国家/队伍色染色，和正常模型保持一致
+								if info.get("type", -1) != 0:
+									var info_color = _get_entity_color(info)
+									var lt = Color(0.5 + info_color.r * 0.5, 0.5 + info_color.g * 0.5, 0.5 + info_color.b * 0.5)
+									_apply_model_tint(inst, lt)
+								# 毁坏模型随本体一起放大，否则塔倒后残骸会明显偏小
+								if eid == 41: inst.scale = Vector3.ONE * (0.5 * RTSConfig.get_model_scale(eid))
+								node.add_child(inst)
+							var t = Timer.new(); t.one_shot = true; t.wait_time = 0.3
+							t.timeout.connect(node.queue_free); node.add_child(t); t.start()
+						else:
+							node.queue_free()
+						entity_nodes.erase(id)
 			_remove_all_bars(id)
 
 			if has_meta("_wp_markers"):

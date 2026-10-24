@@ -4,6 +4,8 @@ extends CharacterBody3D
 
 signal died
 
+const BuildingDeathEffect = preload("res://scripts/effects/BuildingDeathEffect.gd")
+
 var entity_id: int = 0
 var entity_type: int = 0        # 0=资源, 1=建筑, 2=军队
 var team: int = 0
@@ -369,6 +371,15 @@ func die():
 		else:
 			bm.decrease_population(team, 1)
 	_hide_garrison_marker()
+	# 建筑统一走程序化倒塌：模型倾斜下沉、碎屑尘土，动画结束后再释放实体。
+	# 死亡状态、人口扣除和缓存失效已在上面立即完成，动画不会影响战斗判定。
+	if self is Building:
+		var model_ref: Node3D = null
+		if has_meta("_model_instance") and is_instance_valid(get_meta("_model_instance")):
+			model_ref = get_meta("_model_instance")
+		var effect_duration: float = BuildingDeathEffect.play(self, entity_id, body_radius, model_ref)
+		if effect_duration > 0.0:
+			return
 	# 船只被击沉 / 陆地单位落水：沉入水中 1 秒后移除。
 	# 此时 health 已为 0、碰撞已关闭，敌方无法再选中或攻击它。
 	if _should_sink_death():
