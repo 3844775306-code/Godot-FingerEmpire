@@ -708,19 +708,21 @@ func show_alert_message(msg: String, color: Color = ALERT_DANGER):
 		_alert_label.add_theme_color_override("font_outline_color", Color.BLACK)
 		_alert_label.add_theme_constant_override("outline_size", 3)
 		if mobile:
-			# 手机端按 dp 放大并居中，且可点击跳转
+			# 手机端按 dp 放大并居中，且可点击跳转；
+			# 位置固定在资源胶囊（左上，收起 42dp / 展开 72dp）下方，避免挡住资源数值
 			var w: float = UILayout.dp(320.0)
 			var h: float = UILayout.dp(40.0)
+			var top_y: float = UILayout.dp(84.0)
 			_alert_bg.anchor_left = 0.5; _alert_bg.anchor_right = 0.5
-			_alert_bg.anchor_top = 0.15
+			_alert_bg.anchor_top = 0.0; _alert_bg.anchor_bottom = 0.0
 			_alert_bg.offset_left = -w; _alert_bg.offset_right = w
-			_alert_bg.offset_top = -h * 0.5; _alert_bg.offset_bottom = h * 0.5
+			_alert_bg.offset_top = top_y; _alert_bg.offset_bottom = top_y + h
 			_alert_bg.mouse_filter = Control.MOUSE_FILTER_STOP
 			_alert_bg.gui_input.connect(_on_alert_gui_input)
 			_alert_label.anchor_left = 0.5; _alert_label.anchor_right = 0.5
-			_alert_label.anchor_top = 0.15
+			_alert_label.anchor_top = 0.0; _alert_label.anchor_bottom = 0.0
 			_alert_label.offset_left = -w; _alert_label.offset_right = w
-			_alert_label.offset_top = -h * 0.5; _alert_label.offset_bottom = h * 0.5
+			_alert_label.offset_top = top_y; _alert_label.offset_bottom = top_y + h
 			_alert_label.add_theme_font_size_override("font_size", UILayout.font_dp(14.0))
 			_alert_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		else:

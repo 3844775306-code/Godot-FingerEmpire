@@ -2,8 +2,10 @@
 class_name InfoPanel
 extends Panel
 
-@onready var upgrade_btn = $VBox/UpgradeBtn
-@onready var produce_vbox = $VBox/ProduceVBox
+var upgrade_btn: Button = null
+var produce_vbox: VBoxContainer = null
+var _vb: VBoxContainer = null
+var _panel_scroll: ScrollContainer = null
 @onready var close_btn = $CloseBtn
 
 var name_rtl: RichTextLabel
@@ -40,12 +42,15 @@ func _set_rtl_font(rtl: RichTextLabel, size: int) -> void:
 
 func _ready():
 	visible = false
+	_vb = $VBox
+	upgrade_btn = _vb.get_node("UpgradeBtn")
+	produce_vbox = _vb.get_node("ProduceVBox")
 	add_theme_stylebox_override("panel", UITheme.panel_style(UITheme.RADIUS_LG, UITheme.BORDER_MED))
 	custom_minimum_size = Vector2(360, 0)
 
 	_swap_rtl("NameLabel"); _swap_rtl("StatsLabel")
-	name_rtl = $VBox.get_node("NameLabel")
-	stats_rtl = $VBox.get_node("StatsLabel")
+	name_rtl = _vb.get_node("NameLabel")
+	stats_rtl = _vb.get_node("StatsLabel")
 	name_rtl.add_theme_font_size_override("font_size", UITheme.FONT_XL)
 	name_rtl.add_theme_color_override("default_color", UITheme.PARCHMENT)
 	name_rtl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
@@ -66,7 +71,7 @@ func _ready():
 	hp_bar.anchor_top = 0; hp_bar.anchor_bottom = 1
 	hp_bar.anchor_left = 0; hp_bar.anchor_right = 1
 	hp_bar_bg.add_child(hp_bar)
-	var vb = $VBox; vb.add_child(hp_bar_bg); vb.move_child(hp_bar_bg, 1)
+	var vb = _vb; vb.add_child(hp_bar_bg); vb.move_child(hp_bar_bg, 1)
 	close_btn.pressed.connect(_on_close_pressed)
 	close_btn.text = "✕ 关闭"
 	UITheme.apply_muted_button(close_btn, UITheme.FONT_SM)
@@ -80,12 +85,47 @@ func _ready():
 	demolish_btn.visible = false
 	demolish_btn.pressed.connect(_on_demolish_pressed)
 	UITheme.apply_danger_button(demolish_btn, UITheme.FONT_SM)
-	$VBox.add_child(demolish_btn)
+	_vb.add_child(demolish_btn)
 
 	set_process(true)
+	if _is_mobile():
+		_build_mobile_scroll()
+
+# 手机端面板只有 260×200dp，建筑生产按钮一多就会超出屏幕底部；
+# 把内容包进滚动容器，触摸拖动由手势路由调用 UILayout.scroll_at 驱动。
+func _build_mobile_scroll() -> void:
+	# 关闭按钮放大到可点尺寸并固定在右上角，不随内容滚动
+	close_btn.custom_minimum_size = Vector2(UILayout.dp(46.0), UILayout.dp(18.0))
+	close_btn.anchor_left = 1.0
+	close_btn.anchor_right = 1.0
+	close_btn.offset_left = -UILayout.dp(54.0)
+	close_btn.offset_right = -UILayout.dp(5.0)
+	close_btn.offset_top = UILayout.dp(4.0)
+	close_btn.offset_bottom = UILayout.dp(21.0)
+
+	var sc := ScrollContainer.new()
+	sc.name = "PanelScroll"
+	sc.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	sc.offset_left = UILayout.dp(4.0)
+	sc.offset_right = -UILayout.dp(4.0)
+	sc.offset_top = UILayout.dp(24.0)   # 顶部给关闭按钮留一行
+	sc.offset_bottom = -UILayout.dp(4.0)
+	sc.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	sc.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	# 容器自身不吃事件：滚动由 UILayout.scroll_at 直接驱动，避免它把 scroll 值算回去
+	sc.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(sc)
+	move_child(sc, 0)   # 放到最底层，关闭按钮保持在上面
+
+	if _vb.get_parent():
+		_vb.get_parent().remove_child(_vb)
+	sc.add_child(_vb)
+	_vb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_vb.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_panel_scroll = sc
 
 func _swap_rtl(nm: String):
-	var old = $VBox.get_node_or_null(nm)
+	var old = _vb.get_node_or_null(nm)
 	if not old: return
 	var p = old.get_parent(); var i = old.get_index()
 	p.remove_child(old); old.queue_free()
@@ -179,9 +219,9 @@ func update_info(entity):
 	stats_rtl.text = t
 
 	# Always detach old upgrade box first (avoid deferred-deletion residue)
-	var old_box = $VBox.get_node_or_null("UpgradeInfoBox")
+	var old_box = _vb.get_node_or_null("UpgradeInfoBox")
 	if old_box:
-		$VBox.remove_child(old_box)
+		_vb.remove_child(old_box)
 		old_box.queue_free()
 	if entity is Building:
 		# 拆除按钮（城堡不可拆；队友建筑只读）
@@ -193,7 +233,7 @@ func update_info(entity):
 				upgrade_btn.pressed.disconnect(_on_upgrade_pressed)
 			upgrade_btn.pressed.connect(_on_upgrade_pressed)
 
-			var box = VBoxContainer.new(); box.name = "UpgradeInfoBox"; $VBox.add_child(box)
+			var box = VBoxContainer.new(); box.name = "UpgradeInfoBox"; _vb.add_child(box)
 			box.add_theme_constant_override("separation", 2)
 
 			# Show cost per building * batch count
@@ -314,9 +354,9 @@ var _pending_multi_entities: Array = []
 var _pending_multi_btns: Dictionary = {}
 
 func show_multi_selection(entities: Array):
-	var old_box = $VBox.get_node_or_null("UpgradeInfoBox")
+	var old_box = _vb.get_node_or_null("UpgradeInfoBox")
 	if old_box:
-		$VBox.remove_child(old_box)
+		_vb.remove_child(old_box)
 		old_box.queue_free()
 	visible = true
 	observed_entity = null
