@@ -368,6 +368,12 @@ func _physics_process(delta):
 		and velocity.length_squared() <= 0.04
 	)
 	if simple_idle:
+		# 完全空闲单位也不能永远不做分离，否则停下来的部队会互相穿模。
+		# 用 0.8s 的低频查询，成本远低于每帧碰撞，但能慢慢把重叠推开。
+		_movement.collision_timer -= delta
+		if _movement.collision_timer <= 0.0:
+			_movement.collision_timer = 0.8
+			_movement.apply_collision(delta)
 		_tick_think(delta, bm)
 		return
 
@@ -475,26 +481,29 @@ func _physics_process(delta):
 	else:
 		_movement.process_move(delta, bm)
 
-	# 碰撞分离：完全空闲或已经在射程内停稳的单位不再做近邻查询。
-	# 后期大量单位驻扎/站桩射击时，即使不动也会每 0.15~0.22s 查一次邻居，
-	# 300~500 个单位就能吃掉大量 CPU；移动/追击单位仍正常分离。
-	var collision_needed: bool = (
+	# 碰撞分离：移动单位保持较高频率；站桩/驻守单位也不能完全跳过，
+	# 否则远程单位挤在射程边缘会叠在一起。站桩时降到约 0.35s 一次，
+	# 既避免每帧近邻查询，又能把重叠慢慢推开。
+	var moving_collision: bool = (
 		is_attack_moving
 		or _movement.astar_target != Vector3.ZERO or _movement.astar_path.size() > 0
 		or velocity.length_squared() > 0.04
 	)
-	if not collision_needed:
-		_movement.collision_timer = 0.0
-	else:
-		_movement.collision_timer -= delta
-		if _movement.collision_timer <= 0:
-			# 后期单位多时降低碰撞分离频率：每次 apply_collision 都会做近邻空间查询，
-			# 几百个单位 × 每秒 6~7 次是稳定的 CPU 热点；略拉长间隔不会明显破坏队形。
-			var collision_interval: float = _movement.COLLISION_INTERVAL
+	if moving_collision and _movement.collision_timer > _movement.COLLISION_INTERVAL:
+		_movement.collision_timer = _movement.COLLISION_INTERVAL
+	_movement.collision_timer -= delta
+	if _movement.collision_timer <= 0.0:
+		# 后期单位多时降低碰撞分离频率：每次 apply_collision 都会做近邻空间查询，
+		# 几百个单位 × 每秒 6~7 次是稳定的 CPU 热点；移动单位略拉长间隔，
+		# 站桩单位用更长间隔，避免完全不做分离导致模型穿模。
+		var collision_interval: float = _movement.COLLISION_INTERVAL
+		if moving_collision:
 			if bm and bm._all_entities.size() > 300:
 				collision_interval *= 1.5
-			_movement.collision_timer = collision_interval
-			_movement.apply_collision(delta)
+		else:
+			collision_interval = 0.35
+		_movement.collision_timer = collision_interval
+		_movement.apply_collision(delta)
 	
 	# 决策节流
 	_tick_think(delta, bm)

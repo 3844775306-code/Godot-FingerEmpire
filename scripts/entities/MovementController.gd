@@ -332,10 +332,13 @@ func _separate_from(entity: GameEntity, delta: float) -> void:
 	if dist < min_dist and dist > 0.001:
 		var overlap = min_dist - dist
 		var push_dir = (_army.global_position - entity.global_position).normalized()
-		var push_s = 10.0 if entity is Building and entity.entity_id == 27 and entity.team != _army.team else 15.0 if entity is Building else 5.0
+		var push_s = 10.0 if entity is Building and entity.entity_id == 27 and entity.team != _army.team else 15.0 if entity is Building else 8.0
 		_army.global_position += push_dir * overlap * min(push_s * delta, 0.95)
 	elif dist < 0.001:
-		_army.global_position += Vector3(randf_range(-0.2, 0.2), 0, randf_range(-0.2, 0.2))
+		# 完全重叠时用实例 id 生成固定方向，避免随机抖动让整堆单位
+		# 长时间留在同一点；不同单位方向不同，能更快散开。
+		var angle: float = fmod(float(_army.get_instance_id()), 360.0) * (PI / 180.0)
+		_army.global_position += Vector3(cos(angle), 0, sin(angle)) * 0.15
 
 func _path_height(wp: Vector3, bm) -> float:
 	if bm.has_node("Map") and bm.get_node("Map").has_method("get_height_at"):
