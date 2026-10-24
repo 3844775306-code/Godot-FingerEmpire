@@ -25,7 +25,10 @@ var production_step: int = 0
 var wanted_buildings: Array = [20, 21, 29, 23, 42, 54, 24, 52, 53]
 var wanted_units: Array = [11,12,15,16,17,18,35,36,37,38,39,40,13,43,44,45,46,47,48,49,50,58,59,5,6,9]
 var target_army_count: int = 7
-var target_house_count: int = 10
+# 民居数量上限：第 X 分钟至少 X 座（X 最多 8），提前一分钟开工保证到点时已建成
+const HOUSE_TARGET_MAX: int = 8
+const HOUSE_BUILD_LEAD_MINUTES: int = 1
+var target_house_count: int = HOUSE_TARGET_MAX
 var desired_worker_count: int = 8
 
 var cached_shipyard_pos: Vector3 = Vector3.ZERO
@@ -609,7 +612,7 @@ func build_building(building_id: int, pos: Vector3, facing: Vector3 = Vector3.ZE
 	if not cfg: return false
 	# Check castle level requirement (matches RTSBattleManager.is_building_unlocked)
 	if not _ai_can_build(building_id): return false
-	# 城墙允许建 WALL_COUNT 面（防线需求），民居按人口需求上限，其余建筑上限 10
+	# 城墙允许建 WALL_COUNT 面（防线需求），民居最多 HOUSE_TARGET_MAX 座，其余建筑上限 10
 	var _cap = WALL_COUNT if building_id == 27 else (target_house_count if building_id == 28 else 10)
 	if count_building(building_id) >= _cap: return false
 	# 周围 10 单位内不能有敌方作战军队；否则直接放弃本次建造，不扣资源
@@ -920,6 +923,7 @@ func decide(_delta):
 	clear_invalid_targets()
 	_refresh_visibility()
 	_refresh_primary_enemy()
+	_ensure_house_quota()
 	_diplo_decide()
 	if _defense == null:
 		_defense = AIDefenseScript.new(self)
@@ -2289,6 +2293,34 @@ func _process_line_3():
 		if castle:
 			var hp2 = find_valid_build_position(castle.global_position, 28)
 			if hp2 != Vector3.ZERO: build_building(28, hp2)
+
+# 第 X 分钟至少 X 座民居，8 座封顶；提前一分钟开工，给建造时间留出余量。
+func _required_house_count() -> int:
+	if battle == null:
+		return 0
+	var minute: int = int(floor(battle.game_time / 60.0)) + HOUSE_BUILD_LEAD_MINUTES
+	return mini(minute, HOUSE_TARGET_MAX)
+
+# 民居优先于造兵/攒投石机资源；这里绕过 reserve 检查，只确认木材足够。
+# 否则人口满时 AI 会先把木材花在别处，导致“到点没有 X 座民居”。
+func _ensure_house_quota() -> void:
+	var required: int = _required_house_count()
+	if required <= 0 or count_building(28) >= required:
+		return
+	var cfg = EntityDatabase.get_config(28)
+	if cfg.is_empty():
+		return
+	var cost = cfg.get("cost", {})
+	var res = _get_resources()
+	for k in cost:
+		if int(res.get(k, 0)) < int(cost[k]):
+			return
+	var castle = get_peer_castle(my_peer_id)
+	if castle == null:
+		return
+	var hp: Vector3 = find_valid_build_position(castle.global_position, 28)
+	if hp != Vector3.ZERO:
+		build_building(28, hp)
 
 func _process_line_4():
 	# 威胁上升 / 防守姿态时不再把主力送出去；骚扰、突袭、全军压上时仍允许补发主攻
