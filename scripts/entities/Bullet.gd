@@ -52,7 +52,9 @@ static func _cached_scene(path: String) -> PackedScene:
 func _is_ballistic_projectile() -> bool:
 	if source_entity_id in [12, 13, 25, 31, 33, 37, 58]:
 		return false
-	return damage_radius > 0.0 or source_entity_id in [16, 17, 26, 39, 59, 64]
+	# 只有石头类（投石车 17、巨型投石机 59）走抛物线；
+	# 火炮 16、炮塔 26、炮艇 39、炮台 64 的炮弹一律直射
+	return source_entity_id in [17, 59]
 
 func _reset_ballistic_state() -> void:
 	_arc_active = false
@@ -78,36 +80,102 @@ func _spawn_impact_effect(pos: Vector3, big: bool) -> void:
 	var parent: Node = bm if bm != null else get_tree().current_scene
 	if parent == null:
 		return
+	# ── 1) 碎屑粒子：往外炸开的亮色颗粒 ──
 	var p := CPUParticles3D.new()
 	p.one_shot = true
-	p.amount = 26 if big else 14
-	p.lifetime = 0.6
+	p.amount = 42 if big else 24
+	p.lifetime = 0.75
 	p.explosiveness = 1.0
 	p.direction = Vector3.UP
 	p.spread = 180.0
-	p.initial_velocity_min = 2.0
-	p.initial_velocity_max = 5.5 if big else 3.5
-	p.gravity = Vector3(0.0, -12.0, 0.0)
-	p.scale_amount_min = 0.08
-	p.scale_amount_max = 0.26 if big else 0.16
+	p.initial_velocity_min = 3.0
+	p.initial_velocity_max = 8.0 if big else 5.5
+	p.gravity = Vector3(0.0, -14.0, 0.0)
+	p.scale_amount_min = 0.10
+	p.scale_amount_max = 0.38 if big else 0.22
 	var mesh := SphereMesh.new()
-	mesh.radius = 0.14
-	mesh.height = 0.28
+	mesh.radius = 0.13
+	mesh.height = 0.26
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.albedo_color = Color(1.0, 0.78, 0.42) if big else Color(1.0, 0.92, 0.7)
+	mat.albedo_color = Color(1.0, 0.85, 0.55) if big else Color(1.0, 0.95, 0.8)
 	mat.emission_enabled = true
-	mat.emission = Color(1.0, 0.62, 0.25) if big else Color(1.0, 0.85, 0.5)
-	mat.emission_energy_multiplier = 2.0
+	mat.emission = Color(1.0, 0.66, 0.28) if big else Color(1.0, 0.88, 0.55)
+	mat.emission_energy_multiplier = 3.0
 	mesh.material = mat
 	p.mesh = mesh
 	parent.add_child(p)
 	p.global_position = pos
 	p.emitting = true
-	var timer := get_tree().create_timer(1.3)
-	timer.timeout.connect(func():
+	get_tree().create_timer(1.4).timeout.connect(func():
 		if is_instance_valid(p):
 			p.queue_free())
+
+	# ── 2) 闪光球：命中瞬间炸亮一下再迅速缩掉，是最直观的"打中了"反馈 ──
+	var flash := MeshInstance3D.new()
+	var fmesh := SphereMesh.new()
+	fmesh.radius = 0.45 if big else 0.28
+	fmesh.height = 0.9 if big else 0.56
+	var fmat := StandardMaterial3D.new()
+	fmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	fmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	fmat.albedo_color = Color(1.0, 0.92, 0.7, 0.85)
+	fmat.emission_enabled = true
+	fmat.emission = Color(1.0, 0.7, 0.3)
+	fmat.emission_energy_multiplier = 5.0
+	fmesh.material = fmat
+	flash.mesh = fmesh
+	flash.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(flash)
+	flash.global_position = pos
+	var ftw := flash.create_tween()
+	ftw.set_parallel(true)
+	ftw.tween_property(flash, "scale", Vector3(2.2, 2.2, 2.2), 0.22) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	ftw.tween_property(fmat, "albedo_color:a", 0.0, 0.28)
+	ftw.chain().tween_callback(func():
+		if is_instance_valid(flash):
+			flash.queue_free())
+
+	# ── 3) 地面冲击环：贴着地面向外扩散的一圈亮边 ──
+	var ring := MeshInstance3D.new()
+	var rmesh := TorusMesh.new()
+	rmesh.inner_radius = 0.35
+	rmesh.outer_radius = 0.5
+	var rmat := StandardMaterial3D.new()
+	rmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	rmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	rmat.albedo_color = Color(1.0, 0.8, 0.45, 0.8)
+	rmat.emission_enabled = true
+	rmat.emission = Color(1.0, 0.72, 0.35)
+	rmat.emission_energy_multiplier = 2.5
+	rmesh.material = rmat
+	ring.mesh = rmesh
+	ring.rotation.x = -PI * 0.5   # 环平躺在地面上
+	ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	parent.add_child(ring)
+	ring.global_position = Vector3(pos.x, pos.y + 0.08, pos.z)
+	var rtw := ring.create_tween()
+	rtw.set_parallel(true)
+	rtw.tween_property(ring, "scale", Vector3(3.2 if big else 2.2, 1.0, 3.2 if big else 2.2), 0.4) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	rtw.tween_property(rmat, "albedo_color:a", 0.0, 0.45)
+	rtw.chain().tween_callback(func():
+		if is_instance_valid(ring):
+			ring.queue_free())
+
+	# ── 4) 点光源：短暂照亮周围，阴暗地形/逆光下也能看清 ──
+	var light := OmniLight3D.new()
+	light.light_color = Color(1.0, 0.75, 0.4)
+	light.light_energy = 6.0 if big else 3.5
+	light.omni_range = 6.0 if big else 4.0
+	parent.add_child(light)
+	light.global_position = pos + Vector3.UP * 0.6
+	var ltw := light.create_tween()
+	ltw.tween_property(light, "light_energy", 0.0, 0.3)
+	ltw.chain().tween_callback(func():
+		if is_instance_valid(light):
+			light.queue_free())
 
 func _ready():
 	add_to_group("bullets")
