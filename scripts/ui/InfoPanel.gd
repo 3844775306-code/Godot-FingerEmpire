@@ -282,8 +282,11 @@ func update_info(entity):
 		var groups = sm.get_node("SelectionManager").get_entity_groups(e)
 		for g in groups:
 			group_prefix += "[color=%s]T%d[/color] " % [UITheme.hex_str(UITheme.VERMILION), g]
-	var nm = group_prefix + "%s  [color=%s]Lv.%d[/color]" % [
+	# 选中后先显示单位名字（配置表里的 name，如“农民”“采集船”），再接等级
+	var unit_name := str(EntityDatabase.get_config(int(entity.entity_id)).get("name", "单位"))
+	var nm = group_prefix + "%s %s  [color=%s]Lv.%d[/color]" % [
 		UITheme.entity_emoji(entity.entity_id, entity.entity_type),
+		unit_name,
 		UITheme.hex_str(UITheme.GOLD), entity.level]
 	var readonly := not _is_local_owned_entity(entity)
 	if batch_count > 1:
