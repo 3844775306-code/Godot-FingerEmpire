@@ -17,7 +17,10 @@ var terrain_grid: Array = []
 var height_grid: Array = []            # per-tile height values
 # 覆盖层 0=无, 1=森林, 2=沼泽(预留), 3=浅滩。只影响移速/视野/观感，不改变地形类型判定
 var overlay_grid: Array = []
-const CLIFF_THRESHOLD: float = 2.0     # height diff > this = impassable
+const CLIFF_THRESHOLD: float = 3.0     # 与 MovementController 的 A* 陡坡阈值一致：高差 > 此值视为不可翻越
+# 人工山墙（迷宫/台地/环形山/峡谷）的墙高：必须比相邻地面高出 CLIFF_THRESHOLD 以上，
+# 否则部队会顺着缓坡直接翻墙；4.4 也为中层台地（0.9）和噪声起伏留出余量
+const WALL_CLIFF_HEIGHT: float = CLIFF_THRESHOLD + 1.4
 var base_colors: Array = []           # 原始颜色 (MAP_SIZE x MAP_SIZE)
 var terrain_image: Image
 var terrain_texture: ImageTexture
@@ -678,7 +681,7 @@ func _op_canyon(size: int, params: Dictionary) -> void:
 					overlay_grid[x][y] = 0
 				else:
 					terrain_grid[x][y] = 1
-					height_grid[x][y] = 1.4 + noise.get_noise_2d(x + 13, y + 5) * 0.5
+					height_grid[x][y] = WALL_CLIFF_HEIGHT + noise.get_noise_2d(x + 13, y + 5) * 0.5
 					overlay_grid[x][y] = 0
 			elif dy < inner:
 				# 谷道内部：清成平地，保证主力能展开
@@ -696,7 +699,7 @@ func _op_terrace(size: int, params: Dictionary) -> void:
 	var mid_top := clampf(float(params.get("mid_top", 0.68)), 0.55, 0.9)
 	var ridge_w := clampf(float(params.get("ridge_width", 0.07)), 0.03, 0.14)
 	var mid_h := float(params.get("mid_height", 0.9))
-	var ridge_h := float(params.get("ridge_height", 1.6))
+	var ridge_h := maxf(float(params.get("ridge_height", WALL_CLIFF_HEIGHT)), WALL_CLIFF_HEIGHT)
 	var gaps: Array = params.get("gaps", [0.22, 0.5, 0.78])
 	var gap_w := maxi(2, int(params.get("gap_width", 4)))
 	var seed_val := custom_seed if custom_seed != 0 else randi()
@@ -796,7 +799,7 @@ func _op_crater(size: int, params: Dictionary) -> void:
 					height_grid[x][y] = 0.0
 				else:
 					terrain_grid[x][y] = 1
-					height_grid[x][y] = 1.5 + noise.get_noise_2d(x + 29, y + 17) * 0.45
+					height_grid[x][y] = WALL_CLIFF_HEIGHT + noise.get_noise_2d(x + 29, y + 17) * 0.45
 				overlay_grid[x][y] = 0
 			elif r < ring_r - half_w:
 				# 山心洼地：整片平地，中央洼下去一点，金矿就撒在这里
@@ -897,7 +900,7 @@ func _op_maze(size: int, params: Dictionary) -> void:
 					in_gap = dy <= gap_half     # 东西向缺口
 				if not in_gap:
 					t = 1
-					h = 1.5
+					h = WALL_CLIFF_HEIGHT
 				break
 			terrain_grid[x][y] = t
 			height_grid[x][y] = h

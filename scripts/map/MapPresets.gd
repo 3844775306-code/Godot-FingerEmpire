@@ -199,7 +199,7 @@ const PRESETS := {
 		"desc": "战场被两道台缘山脊切成上中下三段，中央台地比两侧低地高出近两层，站上台地视野 +25%；台缘只有三条坡道，中央湖与坡道口的金矿是双方必争的高地。",
 		"stages": [
 			["noise_base", {"freq": 0.04, "octaves": 3, "mountain_threshold": 0.5, "water_threshold": -1.2}],
-			["terrace", {"low_top": 0.32, "mid_top": 0.68, "ridge_width": 0.07, "mid_height": 0.9, "ridge_height": 1.6, "gaps": [0.22, 0.5, 0.78], "gap_width": 4, "lake_radius": 0.05}],
+			["terrace", {"low_top": 0.32, "mid_top": 0.68, "ridge_width": 0.07, "mid_height": 0.9, "ridge_height": 4.4, "gaps": [0.22, 0.5, 0.78], "gap_width": 4, "lake_radius": 0.05}],
 		],
 		"castle_layout": {"type": "mirror_z", "anchors": [[0.5, 0.14], [0.5, 0.86]], "flat_radius": 6},
 		"palette": {
