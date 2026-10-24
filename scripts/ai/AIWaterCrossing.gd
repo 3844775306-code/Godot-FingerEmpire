@@ -3,8 +3,8 @@ extends RefCounted
 
 # AI 渡水行为：
 # 1) 如果敌方城堡与己方城堡在陆地上不连通，先尝试在较窄的水面搭桥；
-# 2) 桥搭不过去（海面太宽/没有落点）时，升级船坞到3级、造运载船，
-#    把陆军送到对岸再发起进攻。
+# 2) 桥搭不过去（海面太宽/没有落点）时，升级船坞到3级、组织运载船队，
+#    一次运至少30名陆军过海，并派多艘战船/炮艇护航，再发起进攻。
 # 这里只做“怎么过水”的规划与下令，不直接修改单位/建筑内部状态。
 
 const BRIDGE_ID := 7
@@ -15,6 +15,14 @@ const MAX_BRIDGE_SPAN := 10
 const MAX_BRIDGES := 10
 const PLAN_INTERVAL := 6.0
 const TRANSPORT_CAPACITY := 8
+# 跨岛进攻至少需要30兵力，因此固定组织4艘运载船（32容量），
+# 并带至少2艘、最多4艘战船/炮艇护航。
+const TRANSPORT_FLEET_SIZE := 4
+const MIN_TRANSPORT_TROOPS := 30
+const MAX_TRANSPORT_TROOPS := TRANSPORT_FLEET_SIZE * TRANSPORT_CAPACITY
+const ESCORT_TARGET := 4
+const MIN_ESCORTS := 2
+const ESCORT_IDS := [13, 39, 40]
 
 const MODE_NONE := 0
 const MODE_BRIDGE := 1
@@ -41,6 +49,10 @@ var _transport_shores_valid: bool = false
 var _transport_state: int = STATE_IDLE
 var _transport_timer: float = 0.0
 var _transport_units: Array = []
+var _transports: Array = []
+var _escorts: Array = []
+var _unit_ship: Dictionary = {}
+var _escort_advanced: bool = false
 
 func _init(owner):
 	ai = owner
@@ -63,6 +75,9 @@ func tick(delta: float):
 func _refresh_plan():
 	# 搭桥过程中不要每个周期都重算，否则会把已经建了一半的桥段丢掉
 	if mode == MODE_BRIDGE and not bridge_plan.is_empty():
+		return
+	# 运载船舰队已经集结/出航时也不要重算两岸，避免把船队中途改道
+	if mode == MODE_TRANSPORT and _transport_state != STATE_IDLE:
 		return
 	var my_castle = ai.get_peer_castle(ai.my_peer_id)
 	var enemy_castle = ai._get_attack_target_castle()
@@ -109,16 +124,25 @@ func _stop_all():
 	mode = MODE_NONE
 
 func _abort_transport():
-	if mode == MODE_TRANSPORT:
-		var ship = _get_transport()
+	# 让所有已登船的运载船就近靠岸放人，避免单位被永久藏在船里
+	for ship in _transports:
 		if is_instance_valid(ship) and ship.get_boarded_count() > 0:
-			var land = _find_land_near(ship.global_position)
+			var land: Vector3 = _find_land_near(ship.global_position)
+			if land == Vector3.ZERO:
+				land = own_shore_land
 			if land != Vector3.ZERO:
 				ship.unboard_at(land)
 	for u in _transport_units:
 		if is_instance_valid(u) and u is Army:
 			u.remove_meta("ai_transporting")
+	for e in _escorts:
+		if is_instance_valid(e):
+			e.remove_meta("ai_escorting")
 	_transport_units.clear()
+	_unit_ship.clear()
+	_transports.clear()
+	_escorts.clear()
+	_escort_advanced = false
 	_transport_state = STATE_IDLE
 	_transport_timer = 0.0
 
@@ -338,106 +362,248 @@ func _recalculate_army_paths():
 
 # ═══════════════════════ 运载船 ═══════════════════════
 
-func _get_transport():
+func _refresh_fleet():
+	_transports.clear()
+	_escorts.clear()
 	for e in battle.entities.get_children():
-		if e is Army and e.entity_id == TRANSPORT_ID and e.health > 0 and ai.entity_belongs_to_me(e):
-			return e
-	return null
+		if not (e is Army) or e.health <= 0:
+			continue
+		if not ai.entity_belongs_to_me(e):
+			continue
+		if e.entity_id == TRANSPORT_ID:
+			_transports.append(e)
+		elif int(e.entity_id) in ESCORT_IDS:
+			_escorts.append(e)
+	# 先清掉上一轮的护航标记，再把当前选中的护航舰重新标记，
+	# 防止海军巡逻/总攻把护航舰队拉去别处。
+	for e in battle.entities.get_children():
+		if e is Army and int(e.entity_id) in ESCORT_IDS and ai.entity_belongs_to_me(e):
+			e.remove_meta("ai_escorting")
+	if _transports.size() > TRANSPORT_FLEET_SIZE:
+		_transports = _transports.slice(0, TRANSPORT_FLEET_SIZE)
+	if _escorts.size() > ESCORT_TARGET:
+		_escorts = _escorts.slice(0, ESCORT_TARGET)
+	for e in _escorts:
+		e.set_meta("ai_escorting", true)
 
 func _tick_transport(delta: float):
 	if not _transport_shores_valid:
 		return
-	var ship = _get_transport()
-	if not is_instance_valid(ship):
+	if ai._is_defending():
+		# 防守时释放护航舰/运载船；不要把海军锁在渡水任务里
+		_abort_transport()
+		return
+	_refresh_fleet()
+	# 必须凑够4艘运载船（32容量，至少运30兵）和至少2艘护航舰再出发
+	if _transports.size() < TRANSPORT_FLEET_SIZE or _escorts.size() < MIN_ESCORTS:
 		if _transport_state != STATE_IDLE:
-			_reset_transport_state()
-		if ai._is_defending():
-			return
+			_abort_transport()
 		_ensure_transport_tech()
-		_ensure_transport_ship()
+		_ensure_transport_fleet()
+		_ensure_escort_ships()
 		return
 	if _transport_state == STATE_IDLE:
-		if not ai._is_defending() and ship.get_boarded_count() <= 0:
-			if ship.global_position.distance_to(own_shore_water) > 8.0:
-				ship.move_to(own_shore_water)
-				return
-			var units: Array = _pick_units()
-			if units.is_empty():
-				return
-			_transport_units = units
-			for u in units:
-				u.set_meta("ai_transporting", true)
-				u.move_to(own_shore_land)
-			_transport_state = STATE_GATHER
-			_transport_timer = 0.0
-		elif ship.get_boarded_count() > 0:
-			_transport_state = STATE_SAIL
-			_transport_timer = 0.0
-			ship.move_to(enemy_shore_water)
+		_tick_fleet_idle(delta)
 	elif _transport_state == STATE_GATHER:
-		_transport_timer += delta
-		_clean_transport_units()
-		if _transport_units.is_empty():
-			_reset_transport_state()
-			return
-		var all_close: bool = true
-		for u in _transport_units:
-			if u.global_position.distance_to(ship.global_position) > 7.0:
-				all_close = false
-				break
-		if all_close or _transport_timer > 25.0:
-			var boarded_units: Array = []
-			for u in _transport_units:
-				if is_instance_valid(u) and u is Army and u.global_position.distance_to(ship.global_position) <= 10.0:
-					ship.board_unit(u)
-					boarded_units.append(u)
-				elif is_instance_valid(u) and u is Army:
-					# 没赶上这班船的单位解除标记，避免被误当成已登船单位
-					u.remove_meta("ai_transporting")
-			if not boarded_units.is_empty():
-				_transport_units = boarded_units
-				_transport_state = STATE_SAIL
-				_transport_timer = 0.0
-				ship.move_to(enemy_shore_water)
-			else:
-				_reset_transport_state()
+		_tick_fleet_gather(delta)
 	elif _transport_state == STATE_SAIL:
-		_transport_timer += delta
-		if not is_instance_valid(ship):
-			_reset_transport_state()
-			return
-		if ship.global_position.distance_to(enemy_shore_water) < 6.0 or _transport_timer > 60.0:
-			var land: Vector3 = _find_land_near(ship.global_position)
-			if land == Vector3.ZERO:
-				# 极端情况下船停在离岸较远的水面，退回到规划好的敌岸落点，
-				# 避免单位一直藏在船里变成“幽灵单位”
-				land = enemy_shore_land
-			if land != Vector3.ZERO:
-				ship.unboard_at(land)
-			var enemy_castle = ai._get_attack_target_castle()
-			for u in _transport_units:
-				if is_instance_valid(u) and u is Army:
-					u.remove_meta("ai_transporting")
-					if is_instance_valid(enemy_castle):
-						u.attack_move_to(enemy_castle.global_position)
-			_transport_state = STATE_COOLDOWN
-			_transport_timer = 0.0
+		_tick_fleet_sail(delta)
 	elif _transport_state == STATE_COOLDOWN:
 		_transport_timer += delta
-		if _transport_timer > 4.0:
+		if _transport_timer > 5.0:
 			_transport_units.clear()
-			if is_instance_valid(ship):
-				ship.move_to(own_shore_water)
+			_unit_ship.clear()
+			for e in _escorts:
+				if is_instance_valid(e):
+					e.remove_meta("ai_escorting")
+			var home_slots := _fleet_slots(own_shore_water, _transports.size(), 2.5)
+			for i in range(_transports.size()):
+				if is_instance_valid(_transports[i]):
+					_transports[i].move_to(home_slots[i])
 			_transport_state = STATE_IDLE
 			_transport_timer = 0.0
 
-func _reset_transport_state():
+func _tick_fleet_idle(delta: float):
+	var slots := _fleet_slots(own_shore_water, _transports.size(), 2.5)
+	var all_close: bool = true
+	for i in range(_transports.size()):
+		var ship = _transports[i]
+		if not is_instance_valid(ship):
+			continue
+		if ship.global_position.distance_to(slots[i]) > 8.0:
+			ship.move_to(slots[i])
+			all_close = false
+	if not all_close:
+		return
+	# 护航舰也先回到出发海域，和运载船一起走，避免船队先冲出去、护航舰还在后面
+	var escort_slots := _fleet_slots(own_shore_water, _escorts.size(), 3.0)
+	var escorts_home: bool = true
+	for i in range(_escorts.size()):
+		if not is_instance_valid(_escorts[i]):
+			continue
+		if _escorts[i].global_position.distance_to(escort_slots[i]) > 12.0:
+			_escorts[i].move_to(escort_slots[i])
+			escorts_home = false
+	if not escorts_home:
+		return
+	var units: Array = _pick_units()
+	if units.size() < MIN_TRANSPORT_TROOPS:
+		# 兵力还不够30，继续等生产/集结，避免小股送人头
+		_transport_timer += delta
+		return
+	_transport_units = units
+	_unit_ship.clear()
+	for i in range(units.size()):
+		var u = units[i]
+		if not is_instance_valid(u) or not (u is Army):
+			continue
+		var ship_idx: int = int(floor(float(i) / float(TRANSPORT_CAPACITY)))
+		ship_idx = mini(ship_idx, _transports.size() - 1)
+		var ship = _transports[ship_idx]
+		if not is_instance_valid(ship):
+			continue
+		_unit_ship[u.get_instance_id()] = ship
+		u.set_meta("ai_transporting", true)
+		u.move_to(own_shore_land)
+	_order_escorts_to(own_shore_water, 3.0)
+	_transport_state = STATE_GATHER
+	_transport_timer = 0.0
+
+func _tick_fleet_gather(delta: float):
+	_transport_timer += delta
+	_clean_transport_units()
+	if _transport_units.is_empty():
+		_reset_transport_state()
+		return
+	var all_close: bool = true
+	for u in _transport_units:
+		var ship = _unit_ship.get(u.get_instance_id())
+		if is_instance_valid(ship) and u.global_position.distance_to(ship.global_position) > 8.0:
+			all_close = false
+			break
+	if not all_close and _transport_timer <= 30.0:
+		return
+	var boarded: Array = []
+	for u in _transport_units:
+		if not is_instance_valid(u) or not (u is Army):
+			continue
+		var ship = _unit_ship.get(u.get_instance_id())
+		if not is_instance_valid(ship):
+			u.remove_meta("ai_transporting")
+			continue
+		if ship.get_boarded_count() >= TRANSPORT_CAPACITY:
+			u.remove_meta("ai_transporting")
+			continue
+		ship.board_unit(u)
+		boarded.append(u)
+	_transport_units = boarded
+	if boarded.size() < MIN_TRANSPORT_TROOPS:
+		# 有船沉了或单位没上齐，先回岸边重来，不把不足30人的部队送过去
+		_abort_transport()
+		return
+	_transport_state = STATE_SAIL
+	_transport_timer = 0.0
+	_escort_advanced = false
+	_order_fleet_sail()
+
+func _tick_fleet_sail(delta: float):
+	_transport_timer += delta
+	var slots := _fleet_slots(enemy_shore_water, _transports.size(), 2.5)
+	var all_near: bool = true
+	var any_ship: bool = false
+	for i in range(_transports.size()):
+		var ship = _transports[i]
+		if not is_instance_valid(ship):
+			continue
+		any_ship = true
+		if ship.global_position.distance_to(slots[i]) > 6.0:
+			all_near = false
+	if not any_ship:
+		_reset_transport_state()
+		return
+	if not _escort_advanced and _transport_timer > 8.0:
+		_escort_advanced = true
+		_order_escorts_to(enemy_shore_water, 3.0)
+	if not all_near and _transport_timer <= 90.0:
+		return
+	# 所有运载船一起靠岸放人
+	for ship in _transports:
+		if not is_instance_valid(ship) or ship.get_boarded_count() <= 0:
+			continue
+		var land: Vector3 = _find_land_near(ship.global_position)
+		if land == Vector3.ZERO:
+			land = enemy_shore_land
+		if land == Vector3.ZERO:
+			land = own_shore_land
+		if land != Vector3.ZERO:
+			ship.unboard_at(land)
+	var enemy_castle = ai._get_attack_target_castle()
 	for u in _transport_units:
 		if is_instance_valid(u) and u is Army:
 			u.remove_meta("ai_transporting")
+			if is_instance_valid(enemy_castle):
+				u.attack_move_to(enemy_castle.global_position)
 	_transport_units.clear()
-	_transport_state = STATE_IDLE
+	_unit_ship.clear()
+	# 护航舰留在登陆场附近，继续掩护上岸部队
+	_order_escorts_to(enemy_shore_water, 3.0)
+	_transport_state = STATE_COOLDOWN
 	_transport_timer = 0.0
+
+func _order_fleet_sail():
+	var slots := _fleet_slots(enemy_shore_water, _transports.size(), 2.5)
+	for i in range(_transports.size()):
+		if is_instance_valid(_transports[i]):
+			_transports[i].move_to(slots[i])
+	var mids := _convoy_midpoint()
+	_order_escorts_to(mids, 3.0)
+
+func _convoy_midpoint() -> Vector3:
+	var mid: Vector3 = own_shore_water.lerp(enemy_shore_water, 0.55)
+	if _is_water_point(mid):
+		return mid
+	return enemy_shore_water
+
+func _order_escorts_to(base: Vector3, spacing: float):
+	var slots := _fleet_slots(base, _escorts.size(), spacing)
+	for i in range(_escorts.size()):
+		if is_instance_valid(_escorts[i]):
+			_escorts[i].move_to(slots[i])
+
+func _fleet_slots(base: Vector3, count: int, spacing: float) -> Array:
+	var out: Array = []
+	if count <= 0:
+		return out
+	var dir: Vector3 = enemy_shore_water - own_shore_water
+	dir.y = 0.0
+	if dir.length() < 0.1:
+		dir = Vector3(0, 0, 1)
+	var perp: Vector3 = Vector3(-dir.z, 0.0, dir.x).normalized()
+	var forward: Vector3 = dir.normalized()
+	for i in range(count):
+		var off: float = (float(i) - float(count - 1) * 0.5) * spacing
+		var candidates: Array = [
+			base + perp * off,
+			base - perp * abs(off),
+			base + forward * abs(off),
+			base - forward * abs(off)
+		]
+		var chosen: Vector3 = base
+		for c in candidates:
+			if _is_water_point(c):
+				chosen = c
+				break
+		out.append(chosen)
+	return out
+
+func _is_water_point(pos: Vector3) -> bool:
+	var g: Vector2i = battle.world_to_grid(pos)
+	if g.x < 0 or g.x >= RTSConfig.MAP_SIZE or g.y < 0 or g.y >= RTSConfig.MAP_SIZE:
+		return false
+	return battle.get_terrain_at_grid(g.x, g.y) == 2
+
+func _reset_transport_state():
+	_abort_transport()
 
 func _clean_transport_units():
 	var alive: Array = []
@@ -479,7 +645,7 @@ func _pick_units() -> Array:
 	var out: Array = []
 	for item in candidates:
 		out.append(item["unit"])
-		if out.size() >= TRANSPORT_CAPACITY:
+		if out.size() >= MAX_TRANSPORT_TROOPS:
 			break
 	return out
 
@@ -516,8 +682,8 @@ func _ensure_transport_tech():
 	if ai.can_afford_upgrade(SHIPYARD_ID):
 		ai.upgrade_building(SHIPYARD_ID)
 
-func _ensure_transport_ship():
-	if ai.count_unit(TRANSPORT_ID) > 0:
+func _ensure_transport_fleet():
+	if ai.count_unit(TRANSPORT_ID) >= TRANSPORT_FLEET_SIZE:
 		return
 	var sy = ai._find_own_building(SHIPYARD_ID)
 	if not is_instance_valid(sy) or sy.build_timer > 0.0:
@@ -536,3 +702,24 @@ func _ensure_transport_ship():
 		return
 	if ai.can_afford(TRANSPORT_ID):
 		sy.try_produce(TRANSPORT_ID)
+
+func _ensure_escort_ships():
+	var total: int = ai.count_unit(13) + ai.count_unit(39) + ai.count_unit(40)
+	if total >= ESCORT_TARGET:
+		return
+	var sy = ai._find_own_building(SHIPYARD_ID)
+	if not is_instance_valid(sy) or sy.build_timer > 0.0:
+		return
+	if sy.upgrade_level < 2:
+		return
+	var has_warship: bool = false
+	for prod in sy.production_list:
+		if int(prod.get("unit_id", -1)) == 13:
+			has_warship = true
+			break
+	if not has_warship:
+		sy.production_list.append({"unit_id": 13, "cooldown": 7.0, "queue_limit": 5})
+	if not ai._can_train_unit():
+		return
+	if ai.can_afford(13):
+		sy.try_produce(13)

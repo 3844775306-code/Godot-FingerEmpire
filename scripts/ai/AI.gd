@@ -1304,7 +1304,7 @@ func attack_move(target_position: Vector3, max_units: int):
 	for entity in battle.entities.get_children():
 		if sent >= max_units: break
 		if entity is Army and entity.health > 0 and int(entity.entity_id) not in [5,6,9,10,14,43,44,45,46,47,48,49,50,51] and entity_belongs_to_me(entity):
-			if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass") or entity.has_meta("ai_transporting"):
+			if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass") or entity.has_meta("ai_transporting") or entity.has_meta("ai_escorting"):
 				continue
 			var boarded = entity.get("_boarded_on")
 			if boarded != null and int(boarded) != -1:
@@ -1616,7 +1616,7 @@ func _pick_harass_squad(my_castle) -> Array:
 		var sgb = e.get("_soldier_garrison_building")
 		if sgb != null and sgb.get_ref() != null:
 			continue
-		if e.has_meta("ai_home_guard") or e.has_meta("ai_resource_guard") or e.has_meta("ai_transporting"):
+		if e.has_meta("ai_home_guard") or e.has_meta("ai_resource_guard") or e.has_meta("ai_transporting") or e.has_meta("ai_escorting"):
 			continue
 		var boarded = e.get("_boarded_on")
 		if boarded != null and int(boarded) != -1:
@@ -2280,7 +2280,7 @@ func _patrol_navy_around_water():
 		if entity.entity_id == 14: continue  # skip fishing boats
 		if entity.entity_id == 9: continue  # 运载船由渡水模块调度，不能当成巡逻舰
 		if entity.entity_id == 40: continue  # 爆破船应冲向敌舰/敌岸，不能拿去绕圈巡逻
-		if entity.has_meta("ai_transporting"): continue
+		if entity.has_meta("ai_transporting") or entity.has_meta("ai_escorting"): continue
 		if entity.current_order != "" or entity.current_target != null: continue
 		idle_naval.append(entity)
 	if idle_naval.is_empty(): return
