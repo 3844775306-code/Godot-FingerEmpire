@@ -18,6 +18,8 @@ var max_cargo: int = 50
 var gatherable_resources: Array = []             
 var delivery_target: Building = null
 var last_resource_target: WorldResource = null   
+# 采集时朝资源点移动的累计时长：走不到就放弃重找，避免永久假采集
+var _gather_approach_time: float = 0.0
 
 # ¹¥»÷ÒÆ¶¯
 var is_attack_moving: bool = false
@@ -91,6 +93,8 @@ var _attack_move_search_timer: float = 0.0
 
 # 驻扎防御：驻扎点附近这个半径内的敌人优先清掉，再返回驻扎点
 const GARRISON_DEFEND_RADIUS: float = 10.0
+# 采集时向资源点移动的最长容忍时间，超时放弃该目标并重找
+const GATHER_APPROACH_TIMEOUT: float = 8.0
 
 # Åö×²·ÖÀë½ÚÁ÷
 
@@ -617,9 +621,22 @@ func _process_action(delta, bm):
 
 		if current_target is WorldResource:
 			if h_dist <= 0.5:
+				_gather_approach_time = 0.0
 				_gather(current_target, delta)
 			else:
+				# 超过 GATHER_APPROACH_TIMEOUT 秒还没走到资源点（地形阻挡/被单位挤住/不可达）：
+				# 放弃并重找，否则农民会一直停在原地显示「采集」却收获不到任何资源
+				_gather_approach_time += delta
+				if _gather_approach_time > GATHER_APPROACH_TIMEOUT:
+					_gather_approach_time = 0.0
+					current_target = null
+					_set_order(UnitState.IDLE)
+					return
 				_movement.set_move_target(current_target.global_position)
+		elif _order_is(UnitState.GATHERING):
+			# 采集状态却锁着非资源目标（命令误给/资源点被替换）：清掉回空闲，避免永久假采集
+			current_target = null
+			_set_order(UnitState.IDLE)
 		elif current_target is GameEntity:
 			var target_id: int = current_target.get_instance_id()
 			if target_id != _retarget_target_id:
@@ -896,9 +913,11 @@ func _play_attack_feedback() -> void:
 	elif entity_id in [38, 40]: _sfx = "sword_swing"
 	if _sfx != "":
 		AudioManager.play_sfx_3d(_sfx, global_position, _get_cam_pos())
-		var bm = _get_bm()
-		if bm and bm.has_method("_update_entity_animation"):
-			bm._update_entity_animation(self)
+	# 真正出手时刷新一次动画：单位可能刚进入攻击距离，不能只等 30 帧轮询
+	# 才从走路切到攻击；这里每次攻击只调用一次，不会形成每帧音效/动画刷新。
+	var bm = _get_bm()
+	if bm and bm.has_method("_update_entity_animation"):
+		bm._update_entity_animation(self)
 
 # ==================== 特殊攻击 ====================
 
@@ -1054,6 +1073,11 @@ func _gather(resource_node, delta):
 	if gather_timer <= 0:
 		var res_type = resource_node.resource_type
 		if gatherable_resources.size() > 0 and not res_type in gatherable_resources:
+			# 这类资源单位采不了（例如误派它去采不支持的种类）：
+			# 清掉目标重找一个能采的，否则会一直站在资源点旁显示「采集」却零产出
+			current_target = null
+			_set_order(UnitState.IDLE)
+			_find_nearest_resource()
 			return
 		var amount = int(attack)
 		if GameSettings.fast_mode: amount *= 3
@@ -1062,7 +1086,10 @@ func _gather(resource_node, delta):
 			var nation = bm.get_team_nation(team)
 			amount = int(amount * NationBonuses.get_gather_mult(nation, res_type))
 		if _get_cargo_total() + amount > max_cargo:
-			_return_to_deliver()
+			# 满载回城交付；找不到交付点（基地被拆/附近没有仓库）时不能停在原地假采集
+			if not _return_to_deliver():
+				current_target = null
+				_set_order(UnitState.IDLE)
 			return
 		resource_node.take_damage(amount, self)
 		cargo[res_type] = cargo.get(res_type, 0) + amount
@@ -1078,7 +1105,8 @@ func _get_cargo_total() -> int:
 	for v in cargo.values(): total += v
 	return total
 
-func _return_to_deliver():
+# 回城交付；找不到可交付的建筑时返回 false（调用方据此退出采集状态）
+func _return_to_deliver() -> bool:
 	var target = find_delivery_point()
 	if target != null and is_instance_valid(target):
 		if is_instance_valid(current_target) and current_target is WorldResource :
@@ -1086,6 +1114,8 @@ func _return_to_deliver():
 		delivery_target = target
 		current_target = target
 		_set_order(UnitState.DELIVERING)
+		return true
+	return false
 
 # ----------------- Ñ°ÕÒ½»¸¶µã -----------------
 func find_delivery_point() -> Building:
@@ -1251,6 +1281,7 @@ func _execute_command(cmd: Dictionary):
 			if not _is_valid_command_target(gather_cmd_target):
 				return
 			current_target = gather_cmd_target
+			_gather_approach_time = 0.0
 			_set_order(UnitState.GATHERING)
 			is_attack_moving = false
 			_movement.set_move_target(gather_cmd_target.global_position)
