@@ -695,6 +695,25 @@ func _is_target_attackable_now(target) -> bool:
 		return false
 	return _can_attack_target(target)
 
+# 敌方建筑是否正挡在前往目的地的方向上（且已经贴身）。
+# A* 把建筑格当作高成本可通行格，普通移动/攻击移动的目的地在墙后时，
+# 单位会一直顶在墙上；用方向点积把“挡路的墙”和“从旁边擦过”区分开。
+func _is_blocking_building_ahead(blocker: Building, dest: Vector3) -> bool:
+	if blocker == null or not is_instance_valid(blocker) or blocker.health <= 0:
+		return false
+	if not _is_hostile_to(blocker):
+		return false
+	if global_position.distance_to(blocker.global_position) > body_radius + blocker.body_radius + 1.0:
+		return false
+	var to_dest := Vector3(dest.x - global_position.x, 0.0, dest.z - global_position.z)
+	if to_dest.length_squared() < 0.25:
+		return false
+	var to_block := Vector3(blocker.global_position.x - global_position.x, 0.0,
+							blocker.global_position.z - global_position.z)
+	if to_block.length_squared() < 0.0001:
+		return true
+	return to_dest.normalized().dot(to_block.normalized()) >= 0.6
+
 # 目标换阵营/上墙/上船/不再可攻击时立即放弃，避免长老/宗师把已招降的友军继续当目标。
 func _drop_current_attack_target() -> void:
 	current_target = null
@@ -884,6 +903,14 @@ func _process_action(delta, bm):
 			_set_order(UnitState.IDLE)
 			_movement.stop()
 			return
+		if _movement.blocking_building != null \
+				and _is_blocking_building_ahead(_movement.blocking_building, _movement.astar_target):
+			# 普通移动被敌方建筑挡住：停在墙前转空闲，由索敌逻辑决定是否反击，
+			# 不要保持 MOVING 一直顶着墙播放走路动画。
+			current_target = null
+			_set_order(UnitState.IDLE)
+			_movement.stop()
+			return
 	# ¹¥»÷ÒÆ¶¯
 	if is_attack_moving:
 		_attack_move_search_timer -= delta
@@ -941,6 +968,17 @@ func _process_action(delta, bm):
 				if current_target != null and is_instance_valid(current_target):
 					_movement.set_move_target(current_target.global_position, attack_range)
 		else:
+			var _dest_blocker: Building = _movement.blocking_building
+			if _dest_blocker != null and _can_attack_target(_dest_blocker) \
+					and _is_blocking_building_ahead(_dest_blocker, attack_move_target):
+				# 攻击移动被敌方建筑挡住：先拆挡路建筑，拆完继续去目的地
+				current_target = _dest_blocker
+				_retarget_target_id = _dest_blocker.get_instance_id()
+				_retarget_timer = _retarget_interval(bm)
+				_attack_watch_target_id = _dest_blocker.get_instance_id()
+				_attack_stall_time = 0.0
+				_movement.set_move_target(_dest_blocker.global_position, attack_range)
+				return
 			if _movement.move_path_failed:
 				is_attack_moving = false
 				attack_move_target = Vector3.ZERO
