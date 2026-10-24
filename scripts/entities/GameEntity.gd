@@ -24,6 +24,8 @@ var water_capable: bool = false
 var _animal_is_baby: bool = false
 var speed: float = 0.0
 var body_radius: float = 0.5
+# 推挤质量：0 表示按体半径自动推导（体积近似）；配置里可填 mass 覆盖
+var mass: float = 0.0
 var can_move: bool = false
 var vision_range: float = 10.0
 
@@ -121,6 +123,7 @@ func setup(config: Dictionary):
 	water_capable = config.get("water_capable", false)
 	speed = config.get("speed", 0.0)
 	body_radius = config.get("body_radius", 0.5)
+	mass = config.get("mass", 0.0)
 	can_move = config.get("can_move", false)
 	vision_range = config.get("vision_range", 10.0)
 	gather_amount = config.get("gather_amount", 0.0)

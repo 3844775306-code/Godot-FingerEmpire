@@ -322,7 +322,7 @@ func apply_collision(delta):
 		if entity == _army or not is_instance_valid(entity): continue
 		if not (entity is GameEntity) or entity.health <= 0: continue
 		if entity is Building or entity is WorldResource: continue
-		_separate_from(entity, delta)
+		_separate_from(entity, delta, bm)
 	for entity in buildings_nearby:
 		if entity == _army or not is_instance_valid(entity): continue
 		if not (entity is Building) or entity.health <= 0: continue
@@ -330,21 +330,64 @@ func apply_collision(delta):
 		if entity.entity_id == 27 and entity.team == _army.team: continue  # pass through friendly walls
 		if entity.entity_id == 27 and entity.team != _army.team:
 			if _has_adjacent_ladder(bm, bm.world_to_grid(entity.global_position), _army.team): continue  # pass through laddered enemy walls
-		_separate_from(entity, delta)
+		_separate_from(entity, delta, bm)
 
-func _separate_from(entity: GameEntity, delta: float) -> void:
+# 按体积近似推挤质量；配置里显式给了 mass 时优先使用。
+func _get_push_mass(entity: GameEntity) -> float:
+	if entity.mass > 0.0:
+		return entity.mass
+	return maxf(1.0, entity.body_radius * entity.body_radius * 10.0)
+
+# 推挤落点是否合法：陆军不能进深水/河流，海军不能上岸，桥面按各自通行规则处理。
+func _can_push_to(pos: Vector3, bm: RTSBattleManager) -> bool:
+	if bm == null:
+		return true
+	var g: Vector2i = bm.world_to_grid(pos)
+	var terrain: int = bm.get_terrain_at_grid(g.x, g.y)
+	if _army.water_capable:
+		# 海军只能待在可航行水域；桥面虽然是水格，但船不能开上去。
+		return terrain == 2 and not _bridge_set.has(g)
+	if terrain != 2:
+		return true
+	# 陆军允许浅滩和桥面，河流/海面等深水一律拒绝。
+	return bm.get_overlay_at_grid(g.x, g.y) == 3 or _bridge_set.has(g)
+
+# 尝试推挤；整段落水/上岸时退化为单轴滑动，避免贴着岸线完全卡死。
+func _try_push_position(step: Vector3, bm: RTSBattleManager) -> bool:
+	var base: Vector3 = _army.global_position
+	if _can_push_to(base + step, bm):
+		_army.global_position = base + step
+		return true
+	var step_x := Vector3(step.x, 0.0, 0.0)
+	if absf(step_x.x) > 0.0001 and _can_push_to(base + step_x, bm):
+		_army.global_position = base + step_x
+		return true
+	var step_z := Vector3(0.0, 0.0, step.z)
+	if absf(step_z.z) > 0.0001 and _can_push_to(base + step_z, bm):
+		_army.global_position = base + step_z
+		return true
+	return false
+
+func _separate_from(entity: GameEntity, delta: float, bm: RTSBattleManager) -> void:
 	var dist = _army.global_position.distance_to(entity.global_position)
 	var min_dist = _army.body_radius + entity.body_radius
 	if dist < min_dist and dist > 0.001:
 		var overlap = min_dist - dist
 		var push_dir = (_army.global_position - entity.global_position).normalized()
 		var push_s = 10.0 if entity is Building and entity.entity_id == 27 and entity.team != _army.team else 15.0 if entity is Building else 8.0
-		_army.global_position += push_dir * overlap * min(push_s * delta, 0.95)
+		var push_amount: float = overlap * min(push_s * delta, 0.95)
+		# 质量越大，自己承担的位移越小；建筑视为不可推动，全部由单位让位。
+		var self_mass: float = _get_push_mass(_army)
+		var other_mass: float = 1.0e9 if entity is Building else _get_push_mass(entity)
+		var mass_ratio: float = other_mass / (self_mass + other_mass)
+		_try_push_position(push_dir * push_amount * mass_ratio, bm)
 	elif dist < 0.001:
 		# 完全重叠时用实例 id 生成固定方向，避免随机抖动让整堆单位
 		# 长时间留在同一点；不同单位方向不同，能更快散开。
 		var angle: float = fmod(float(_army.get_instance_id()), 360.0) * (PI / 180.0)
-		_army.global_position += Vector3(cos(angle), 0, sin(angle)) * 0.15
+		var offset := Vector3(cos(angle), 0.0, sin(angle)) * 0.15
+		if not _try_push_position(offset, bm):
+			_try_push_position(-offset, bm)
 
 func _path_height(wp: Vector3, bm) -> float:
 	if bm.has_node("Map") and bm.get_node("Map").has_method("get_height_at"):

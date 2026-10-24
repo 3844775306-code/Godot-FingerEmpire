@@ -1736,6 +1736,9 @@ func _apply_entity_model(entity: GameEntity) -> bool:
 	if entity.entity_id == 16: model_instance.rotation.y = deg_to_rad(180)
 	elif entity.entity_id == 17: model_instance.rotation.y = deg_to_rad(90)
 	elif entity.entity_id == 18: model_instance.rotation.y = deg_to_rad(90)
+	elif entity.entity_id == 59:
+		# 巨型投石机：模型默认朝向与单位前方垂直，顺时针旋转 90° 校正
+		model_instance.rotation.y = deg_to_rad(-90)
 	elif entity.entity_id == 64:
 		# 炮台：顺时针旋转 90°，并按模型高度下移 30%，贴合城墙
 		model_instance.rotation.y = deg_to_rad(-90)
