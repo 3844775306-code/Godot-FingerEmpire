@@ -15,11 +15,11 @@ uniform float reflection_enabled : hint_range(0.0, 1.0) = 0.0;
 uniform float reflection_vflip : hint_range(0.0, 1.0) = 0.0;
 
 // —— 船只航行时水面变化：附近涟漪 + 泡沫尾迹 ——
-uniform vec3 boats[8];
-uniform vec3 boat_dirs[8];   // 每艘船的水平航向（未移动时为 0），用于拉出尾流带
+uniform vec3 boats[16];
+uniform vec3 boat_dirs[16];   // 每艘船的水平航向（未移动时为 0），用于拉出尾流带
 uniform int boat_count = 0;
 // 每艘船的当前速度（0..1，归一到巡航速度）：决定船首破浪与尾迹的强度
-uniform float boat_speeds[8];
+uniform float boat_speeds[16];
 uniform float wake_strength : hint_range(0.0, 2.0) = 1.0;
 
 varying float v_boat_foam;
@@ -46,7 +46,7 @@ void vertex() {
 	// 船只与沉船：环形涟漪 + 船首破浪 + 开尔文 V 形尾迹 + 沉没时的翻涌
 	float foam = 0.0;
 	float lift = 0.0;
-	for (int i = 0; i < 8; i++) {
+	for (int i = 0; i < 16; i++) {
 		if (i >= boat_count) { break; }
 		vec2 rel = wv.xz - boats[i].xz;
 		float r = length(rel);
@@ -110,7 +110,7 @@ void fragment() {
 	vec3 wn = normalize(vec3((h0 - hx) * 14.0, 1.0, (h0 - hz) * 14.0));
 
 	// 船只涟漪的法线扰动：与顶点位移用同一套环形波
-	for (int i = 0; i < 8; i++) {
+	for (int i = 0; i < 16; i++) {
 		if (i >= boat_count) { break; }
 		vec2 rel = world_pos.xz - boats[i].xz;
 		float r = length(rel);

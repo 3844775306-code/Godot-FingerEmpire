@@ -39,7 +39,7 @@ var _terrain_mat: ShaderMaterial = null
 var _boat_update_timer: float = 0.0
 var _boat_prev: Dictionary = {}        # 船只 instance_id -> 上次采样位置（算航向）
 var _boat_prev_cleanup: float = 10.0
-const BOAT_SHADER_SLOTS: int = 8
+const BOAT_SHADER_SLOTS: int = 16
 # 平面反射：镜像相机把水面上方的场景渲染到 SubViewport，水面按反射射线落点取样
 const WATER_LAYER: int = 19
 const WATER_WORLD_Y: float = -0.9
@@ -2614,6 +2614,27 @@ func _update_water_boats(delta: float) -> void:
 	var speeds := PackedFloat32Array()
 	speeds.resize(BOAT_SHADER_SLOTS)
 	var count: int = 0
+	var seen: Dictionary = {}
+	# 沉水单位优先进槽位：落水翻涌是最需要看见的反馈，不能被几十艘船挤掉
+	for n in get_tree().get_nodes_in_group("entities"):
+		if count >= BOAT_SHADER_SLOTS:
+			break
+		if not is_instance_valid(n):
+			continue
+		if not bool(n.get("is_sinking")):
+			continue
+		var sid: int = n.get_instance_id()
+		if seen.has(sid):
+			continue
+		# 沉水单位的位置在下沉，涟漪中心跟着水面高度走，避免波纹漂在船体上
+		var spos: Vector3 = n.global_position
+		spos.y = WATER_WORLD_Y
+		seen[sid] = true
+		arr[count] = spos
+		# z 分量是沉水标记：着色器据此在落水点溅起明显的翻涌与泡沫
+		dirs[count] = Vector3(0.0, 0.0, 1.0)
+		speeds[count] = 0.0
+		count += 1
 	var bm = get_tree().get_first_node_in_group("battle_manager")
 	var armies: Array = []
 	if bm != null and bm.get("_armies") != null:
@@ -2622,7 +2643,6 @@ func _update_water_boats(delta: float) -> void:
 	else:
 		# 联机客户端没有服务端实体缓存，退化为直接遍历实体组
 		armies = get_tree().get_nodes_in_group("entities")
-	var seen: Dictionary = {}
 	for e in armies:
 		if count >= BOAT_SHADER_SLOTS:
 			break
@@ -2642,33 +2662,13 @@ func _update_water_boats(delta: float) -> void:
 			var dist: float = d.length()
 			if dist > 0.03:
 				dir = d.normalized()
-			# 采样间隔 0.15 秒，按巡航速度 6 m/s 归一到 0..1
-			speed = clampf(dist / 0.15 / 6.0, 0.0, 1.0)
+			# 采样间隔 0.15 秒，按巡航速度 4.5 m/s 归一：慢速渔船也能看出船首破浪
+			speed = clampf(dist / 0.15 / 4.5, 0.0, 1.0)
 		_boat_prev[id] = pos
 		seen[id] = true
 		arr[count] = pos
 		dirs[count] = dir
 		speeds[count] = speed
-		count += 1
-	# 沉水中的单位（health 已归零，不在 _armies 缓存里）：落水点也要泛出涟漪与水花
-	for n in get_tree().get_nodes_in_group("entities"):
-		if count >= BOAT_SHADER_SLOTS:
-			break
-		if not is_instance_valid(n):
-			continue
-		if not bool(n.get("is_sinking")):
-			continue
-		var sid: int = n.get_instance_id()
-		if seen.has(sid):
-			continue
-		# 沉水单位的位置在下沉，涟漪中心跟着水面高度走，避免波纹漂在船体上
-		var spos: Vector3 = n.global_position
-		spos.y = WATER_WORLD_Y
-		seen[sid] = true
-		arr[count] = spos
-		# z 分量是沉水标记：着色器据此在落水点溅起明显的翻涌与泡沫
-		dirs[count] = Vector3(0.0, 0.0, 1.0)
-		speeds[count] = 0.0
 		count += 1
 	# 定期清掉已经消失的船的缓存，避免字典无限增长
 	_boat_prev_cleanup -= delta
