@@ -1308,17 +1308,17 @@ func _calc_trade_volume(_castle_level: int, distance: float) -> int:
 func _merchant_get_res(bm):
 	if owner_peer_id != -1 and bm.has_method("get_resources_for"):
 		return bm.get_resources_for(owner_peer_id)
-	return bm.player_resources if team == RTSConfig.Team.BLUE else bm.enemy_resources
+	return bm.get_team_resources(team) if bm.has_method("get_team_resources") else (bm.player_resources if team == RTSConfig.Team.BLUE else bm.enemy_resources)
 
 func _merchant_get_lim(bm):
 	if owner_peer_id != -1 and bm.has_method("get_limits_for"):
 		return bm.get_limits_for(owner_peer_id)
-	return bm.player_resource_limits if team == RTSConfig.Team.BLUE else bm.enemy_resource_limits
+	return bm.get_team_resource_limits(team) if bm.has_method("get_team_resource_limits") else (bm.player_resource_limits if team == RTSConfig.Team.BLUE else bm.enemy_resource_limits)
 
 func _merchant_deduct(bm, cost: Dictionary) -> bool:
 	if owner_peer_id != -1 and bm.has_method("deduct_player_resources"):
 		return bm.deduct_player_resources(owner_peer_id, cost)
-	var res = bm.player_resources if team == RTSConfig.Team.BLUE else bm.enemy_resources
+	var res = bm.get_team_resources(team) if bm.has_method("get_team_resources") else (bm.player_resources if team == RTSConfig.Team.BLUE else bm.enemy_resources)
 	for k in cost: if res.get(k,0) < cost[k]: return false
 	for k in cost: res[k] -= cost[k]
 	return true
@@ -1327,8 +1327,8 @@ func _merchant_add(bm, type: String, amount: int):
 	if owner_peer_id != -1 and bm.has_method("add_resource_for"):
 		bm.add_resource_for(owner_peer_id, type, amount)
 		return
-	var res = bm.player_resources if team == RTSConfig.Team.BLUE else bm.enemy_resources
-	var lim = bm.player_resource_limits if team == RTSConfig.Team.BLUE else bm.enemy_resource_limits
+	var res = bm.get_team_resources(team) if bm.has_method("get_team_resources") else (bm.player_resources if team == RTSConfig.Team.BLUE else bm.enemy_resources)
+	var lim = bm.get_team_resource_limits(team) if bm.has_method("get_team_resource_limits") else (bm.player_resource_limits if team == RTSConfig.Team.BLUE else bm.enemy_resource_limits)
 	res[type] = min(res[type] + amount, lim.get(type, 99999))
 
 func _process_merchant(delta):
@@ -1472,7 +1472,7 @@ func _process_official(delta):
 			if owner_peer_id != -1:
 				paid = _merchant_deduct(bm, {"gold": salary})
 			else:
-				var res = bm.player_resources if team == RTSConfig.Team.BLUE else bm.enemy_resources
+				var res = bm.get_team_resources(team) if bm.has_method("get_team_resources") else (bm.player_resources if team == RTSConfig.Team.BLUE else bm.enemy_resources)
 				if res.get("gold", 0) >= salary:
 					res["gold"] -= salary
 					paid = true

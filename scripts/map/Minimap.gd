@@ -181,9 +181,12 @@ func _draw():
 		elif owner != -1 and pc.has(owner):
 			dot_color = pc[owner].lightened(0.25)
 		elif ent["team"] == player_team:
-			dot_color = UITheme.SAPPHIRE.lightened(0.25)
-		elif ent["team"] == RTSConfig.Team.RED:
-			dot_color = UITheme.VERMILION.lightened(0.15)
+			dot_color = UITheme.VERMILION.lightened(0.15) if player_team == RTSConfig.Team.RED else UITheme.SAPPHIRE.lightened(0.25)
+		elif ent["team"] == RTSConfig.Team.RED or (bm and bm.has_method("get_enemy_team") and ent["team"] == bm.get_enemy_team()):
+			var enemy_team: int = RTSConfig.Team.RED
+			if bm and bm.has_method("get_enemy_team"):
+				enemy_team = bm.get_enemy_team()
+			dot_color = UITheme.SAPPHIRE.lightened(0.25) if enemy_team == RTSConfig.Team.BLUE else UITheme.VERMILION.lightened(0.15)
 		else:
 			dot_color = UITheme.GOLD.lightened(0.2)
 		var pos = Vector2(gx * cell, gz * cell)

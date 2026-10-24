@@ -455,7 +455,7 @@ func perform_upgrade(bm: RTSBattleManager) -> bool:
 	if owner_peer_id != -1 and bm.has_method("deduct_player_resources"):
 		paid = bm.deduct_player_resources(owner_peer_id, cost)
 	else:
-		var res_dict = bm.player_resources if team == RTSConfig.Team.BLUE else bm.enemy_resources
+		var res_dict = bm.get_team_resources(team) if bm.has_method("get_team_resources") else (bm.player_resources if team == RTSConfig.Team.BLUE else bm.enemy_resources)
 		var can_pay = true
 		for k in cost:
 			if res_dict[k] < cost[k]: can_pay = false

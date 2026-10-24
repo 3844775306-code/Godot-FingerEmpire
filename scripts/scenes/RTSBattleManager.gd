@@ -892,6 +892,11 @@ func _ready():
 		else:
 			player_team = RTSConfig.Team.BLUE
 			enemy_team = RTSConfig.Team.RED
+		# 1v1 的静态 AI 在子节点 _ready 已跑完，这里立刻把它的阵营改成玩家对立面；
+		# 2v2/3v3 会在 _init_multi_single 里销毁这个静态 AI。
+		var static_ai = get_node_or_null("AIController")
+		if static_ai:
+			static_ai.my_team = enemy_team
 	if not is_online:
 		if GameSettings.is_ffa:
 			_init_ffa_single(GameSettings.ffa_nation_count)

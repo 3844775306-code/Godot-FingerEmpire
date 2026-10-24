@@ -139,7 +139,7 @@ func _can_train_unit() -> bool:
 			return battle.can_player_train(my_peer_id)
 		if battle.has_method("can_train_for"):
 			return battle.can_train_for(my_peer_id)
-	return battle.can_train_unit(RTSConfig.Team.RED)
+	return battle.can_train_unit(my_team)
 
 func _deduct_resources(cost: Dictionary) -> bool:
 	if my_peer_id != -1:
@@ -649,7 +649,7 @@ func build_building(building_id: int, pos: Vector3, facing: Vector3 = Vector3.ZE
 	cfg["owner_peer_id"] = my_peer_id
 	# 队伍判定：在线走 player_info；本地乱斗/多人各 AI 有唯一 team(my_team)，
 	# 若始终用 RED 会让 AI 建筑建错阵营，被自己和盟友攻击。
-	var team = RTSConfig.Team.RED
+	var team = my_team
 	if my_peer_id != -1:
 		if battle is OnlineBattleManager:
 			team = battle.player_info[my_peer_id].team
@@ -915,7 +915,7 @@ func decide(_delta):
 		battle.update_player_limits(my_peer_id)
 		battle.update_player_population(my_peer_id)
 	else:
-		battle.update_resource_limits(RTSConfig.Team.RED)
+		battle.update_resource_limits(my_team)
 		battle.update_population_limits()
 	clear_invalid_targets()
 	_refresh_visibility()

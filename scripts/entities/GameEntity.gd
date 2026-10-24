@@ -204,7 +204,7 @@ func take_damage(amount: float, source = null):
 	# 战事警报：己方单位被攻击时通知小地图和屏幕提示
 	var bm = get_tree().get_first_node_in_group("battle_manager")
 	var _is_animal_attacker = source and source.get("_animal_type") != null and str(source.get("_animal_type")) != ""
-	var _should_alert = (team == RTSConfig.Team.BLUE) and not _is_animal_attacker
+	var _should_alert = (bm != null and team == bm.get_host_team()) and not _is_animal_attacker
 	if bm and bm.get("is_online") == true:
 		_should_alert = (team != RTSConfig.Team.NEUTRAL) and not _is_animal_attacker
 	if _should_alert and actual_damage > 0:
@@ -536,7 +536,7 @@ func try_produce(unit_id: int) -> bool:
 	else:
 		# 原有 1v1 逻辑
 		
-		res_dict = bm.player_resources if team == RTSConfig.Team.BLUE else bm.enemy_resources
+		res_dict = bm.get_team_resources(team) if bm.has_method("get_team_resources") else (bm.player_resources if team == RTSConfig.Team.BLUE else bm.enemy_resources)
 		for res in scaled_cost.keys():
 			if res_dict[res] < scaled_cost[res]: return false
 		for res in scaled_cost.keys():

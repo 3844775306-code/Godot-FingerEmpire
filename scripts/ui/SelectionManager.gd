@@ -136,7 +136,7 @@ func _input(event):
 				KEY_C: build_id = 25
 				KEY_V: build_id = 26; 
 				KEY_B: build_id = 8
-			if build_id != -1 and bm and bm.can_afford_building(build_id, RTSConfig.Team.BLUE):
+			if build_id != -1 and bm and bm.can_afford_building(build_id, bm.get_host_team()):
 				bm.enter_build_mode(build_id)
 				get_viewport().set_input_as_handled(); return
 
