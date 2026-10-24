@@ -81,6 +81,14 @@ var _current_move_queued: bool = false # Current move originated from queue
 var think_timer: float = 0.0
 const THINK_INTERVAL: float = 0.3
 
+# 目标重选：锁定目标不在攻击范围时，每秒找一次更近的敌人
+const TARGET_RETARGET_INTERVAL: float = 1.0
+var _retarget_timer: float = TARGET_RETARGET_INTERVAL
+var _retarget_target_id: int = -1
+
+# 驻扎防御：驻扎点附近这个半径内的敌人优先清掉，再返回驻扎点
+const GARRISON_DEFEND_RADIUS: float = 10.0
+
 # Åö×²·ÖÀë½ÚÁ÷
 
 # A* Ñ°Â·
@@ -506,10 +514,57 @@ func _process_action(delta, bm):
 			else:
 				_movement.set_move_target(current_target.global_position)
 		elif current_target is GameEntity:
+			var target_id: int = current_target.get_instance_id()
+			if target_id != _retarget_target_id:
+				_retarget_target_id = target_id
+				_retarget_timer = TARGET_RETARGET_INTERVAL
 			if h_dist <= attack_range:
+				_retarget_timer = TARGET_RETARGET_INTERVAL
 				_attack(current_target, delta)
 			else:
-				_movement.set_move_target(current_target.global_position, attack_range)
+				# 目标不在攻击范围：每秒检查一次是否有更近的敌人，避免一直追远目标
+				_retarget_timer -= delta
+				if _retarget_timer <= 0.0:
+					_retarget_timer = TARGET_RETARGET_INTERVAL
+					_try_retarget_closer(h_dist)
+				if current_target != null and is_instance_valid(current_target):
+					_movement.set_move_target(current_target.global_position, attack_range)
+
+# 当前目标不在攻击范围时，每秒最多切换一次：只在确实存在更近的敌人时改锁。
+# 驻扎单位只在驻扎防御圈内找目标，避免被视野边缘的敌人引走。
+func _try_retarget_closer(current_dist: float) -> void:
+	if current_target == null or not is_instance_valid(current_target):
+		return
+	if not (current_target is GameEntity) or current_target.health <= 0:
+		return
+	var best = null
+	if garrison_point != Vector3.ZERO:
+		best = _find_nearest_enemy_near(garrison_point, GARRISON_DEFEND_RADIUS)
+	else:
+		best = _find_nearest_enemy_in_vision()
+	if best == null or not is_instance_valid(best) or best == current_target:
+		return
+	if not _can_attack_target(best):
+		return
+	var h_diff = Vector2(best.global_position.x - global_position.x,
+						best.global_position.z - global_position.z)
+	var best_dist = h_diff.length() - body_radius - best.body_radius
+	if best_dist + 0.05 < current_dist:
+		current_target = best
+		_set_order(UnitState.ATTACKING)
+		is_attack_moving = false
+		_retarget_target_id = best.get_instance_id()
+		_retarget_timer = TARGET_RETARGET_INTERVAL
+
+# 只有“正在回驻扎点”的移动才允许被驻扎防御逻辑接管；
+# 玩家/AI 的其他移动命令仍然优先，避免驻扎点把单位永久拉回去。
+func _is_returning_to_garrison() -> bool:
+	if not _order_is(UnitState.MOVING) or _movement == null:
+		return false
+	var dest: Vector3 = _movement.astar_target
+	if dest == Vector3.ZERO:
+		return false
+	return dest.distance_to(garrison_point) <= 3.0
 
 # ----------------- ¾ö²ß£¨½ÚÁ÷£© -----------------
 
@@ -523,30 +578,26 @@ func _think(delta, bm):
 		if cmd.has("target") and not _is_valid_command_target(cmd["target"]):
 			_clear_command_queue()
 			break
-	# 驻扎追击距离限制：敌人离驻扎点超过视野则放弃追击
-	if garrison_point != Vector3.ZERO and current_target != null and _order_is(UnitState.ATTACKING):
-		if current_target.global_position.distance_to(garrison_point) > 10.0:
-			current_target = null
-			_set_order(UnitState.IDLE)
-			is_attack_moving = false
-			move_to(garrison_point)
-			return
-
-	# 驻扎行为：空闲时追击视野内敌人，无敌人则返回驻扎点
-	if garrison_point != Vector3.ZERO and current_target == null and _order_is(UnitState.IDLE) and not is_attack_moving:
-		var enemy = _find_nearest_enemy_in_vision()
-		if enemy and is_instance_valid(enemy) and enemy.health > 0:
-			if enemy.global_position.distance_to(garrison_point) <= 10.0:
+	# 驻扎防御：驻扎点附近有敌人时先清敌，不要立刻回驻扎点；
+	# 清空驻扎防御圈后再返回。追击目标跑出防御圈则放弃并回防。
+	if garrison_point != Vector3.ZERO:
+		if current_target != null and _order_is(UnitState.ATTACKING):
+			if current_target.global_position.distance_to(garrison_point) > GARRISON_DEFEND_RADIUS:
+				current_target = null
+				_set_order(UnitState.IDLE)
+				is_attack_moving = false
+				move_to(garrison_point)
+				return
+		if current_target == null and not is_attack_moving and (_order_is(UnitState.IDLE) or _is_returning_to_garrison()):
+			var enemy = _find_nearest_enemy_near(garrison_point, GARRISON_DEFEND_RADIUS)
+			if enemy and is_instance_valid(enemy) and enemy.health > 0:
 				attack_target(enemy)
 			else:
 				var gdist = global_position.distance_to(garrison_point)
-				if gdist > 2.0:
+				# 已经在回驻扎点的路上就不要每 0.3s 重设一次路径，避免反复重算 A*
+				if gdist > 2.0 and not _is_returning_to_garrison():
 					move_to(garrison_point)
-		else:
-			var gdist = global_position.distance_to(garrison_point)
-			if gdist > 2.0:
-				move_to(garrison_point)
-		return
+			return
 
 	# If current order done and queue has commands, pop next
 	if current_target == null and _order_is(UnitState.IDLE) and not is_attack_moving and command_queue.size() > 0:
@@ -1743,27 +1794,30 @@ func _is_unit_on_wall() -> bool:
 
 # ==================== Garrison System ====================
 func _find_nearest_enemy_in_vision():
-	var best_dist = vision_range
+	return _find_nearest_enemy_near(global_position, vision_range)
+
+# 以任意位置为中心找最近的敌人；驻扎单位用驻扎点做中心，
+# 这样即使敌人不在本单位视野内，只要靠近驻扎点也会被发现并清掉。
+func _find_nearest_enemy_near(center: Vector3, radius: float):
+	var best_dist: float = radius
 	var best_target = null
 	# 驻扎/守军单位空闲时每 0.3s 都会调用此函数。后期几十上百个守军若每个
 	# 都全量扫描 entities，会形成 O(n²) 的主线程热点；优先走空间索引。
 	var bm = _get_bm()
-	var candidates: Array = bm.get_nearby_enemies(global_position, vision_range, team, owner_peer_id) if bm else get_tree().get_nodes_in_group("entities")
+	var candidates: Array = bm.get_nearby_enemies(center, radius, team, owner_peer_id) if bm else get_tree().get_nodes_in_group("entities")
 	for entity in candidates:
 		if entity == self or not is_instance_valid(entity) or entity.health <= 0: continue
 		if not (entity is GameEntity): continue
 		if entity is WorldResource: continue
 		if not _is_hostile_to(entity): continue
 		if entity.get("_animal_type") != null and str(entity.get("_animal_type")) != "": continue  # 不自动攻击动物
-		var h_diff = Vector2(entity.global_position.x - global_position.x, entity.global_position.z - global_position.z)
+		if not _can_attack_target(entity): continue
+		var h_diff = Vector2(entity.global_position.x - center.x, entity.global_position.z - center.z)
 		var dist = h_diff.length() - body_radius - entity.body_radius
-		if dist <= vision_range and dist < best_dist:
+		if dist <= radius and dist < best_dist:
 			best_dist = dist
 			best_target = entity
 	return best_target
-
-	garrison_point = Vector3.ZERO
-	_hide_garrison_marker()
 
 func _clear_garrison():
 	garrison_point = Vector3.ZERO
