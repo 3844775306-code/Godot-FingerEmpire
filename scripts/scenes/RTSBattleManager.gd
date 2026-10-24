@@ -1927,13 +1927,13 @@ func _procedural_pike_thrust(model: Node3D) -> void:
 	if not _begin_proc_anim(model):
 		return
 	var base_pos: Vector3 = model.position
-	var dur: float = 0.5
+	var dur: float = 0.6
 	var tw := model.create_tween()
 	# 后收蓄力
-	tw.tween_property(model, "position", base_pos + Vector3(0.0, 0.0, 0.12), dur * 0.3) \
+	tw.tween_property(model, "position", base_pos + Vector3(0.0, 0.0, 0.35), dur * 0.3) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 	# 直线突刺（长枪的位移明显大于普通刺击）
-	tw.tween_property(model, "position", base_pos + Vector3(0.0, 0.0, -0.45), dur * 0.25) \
+	tw.tween_property(model, "position", base_pos + Vector3(0.0, 0.0, -1.2), dur * 0.25) \
 		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	# 收枪归位
 	tw.tween_property(model, "position", base_pos, dur * 0.45) \
@@ -1948,16 +1948,16 @@ func _procedural_catapult_throw(model: Node3D) -> void:
 		return
 	var base_pos: Vector3 = model.position
 	var base_rx: float = model.rotation.x
-	var dur: float = 1.1
+	var dur: float = 1.3
 	var tw := model.create_tween()
 	# 后仰蓄力（车体后倾、略微后移）
-	tw.tween_property(model, "rotation:x", base_rx + 0.28, dur * 0.35) \
+	tw.tween_property(model, "rotation:x", base_rx + 0.55, dur * 0.35) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-	tw.parallel().tween_property(model, "position", base_pos + Vector3(0.0, 0.0, 0.12), dur * 0.35)
+	tw.parallel().tween_property(model, "position", base_pos + Vector3(0.0, 0.0, 0.4), dur * 0.35)
 	# 前甩（甩臂瞬间）
-	tw.tween_property(model, "rotation:x", base_rx - 0.45, dur * 0.2) \
+	tw.tween_property(model, "rotation:x", base_rx - 0.85, dur * 0.2) \
 		.set_trans(Tween.TRANS_EXPO).set_ease(Tween.EASE_IN)
-	tw.parallel().tween_property(model, "position", base_pos + Vector3(0.0, 0.0, -0.18), dur * 0.2)
+	tw.parallel().tween_property(model, "position", base_pos + Vector3(0.0, 0.0, -0.5), dur * 0.2)
 	# 缓慢复位
 	tw.tween_property(model, "rotation:x", base_rx, dur * 0.45) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
@@ -1971,10 +1971,10 @@ func _procedural_cannon_recoil(model: Node3D) -> void:
 	if not _begin_proc_anim(model):
 		return
 	var base_pos: Vector3 = model.position
-	var dur: float = 0.55
+	var dur: float = 0.65
 	var tw := model.create_tween()
 	# 后坐 + 抬跳
-	tw.tween_property(model, "position", base_pos + Vector3(0.0, 0.10, 0.30), dur * 0.18) \
+	tw.tween_property(model, "position", base_pos + Vector3(0.0, 0.25, 0.8), dur * 0.18) \
 		.set_trans(Tween.TRANS_EXPO).set_ease(Tween.EASE_OUT)
 	# 落回原位（轻微弹跳）
 	tw.tween_property(model, "position", base_pos, dur * 0.82) \
@@ -1988,9 +1988,9 @@ func _procedural_repeater_fire(model: Node3D) -> void:
 	if not _begin_proc_anim(model):
 		return
 	var base_pos: Vector3 = model.position
-	var dur: float = 0.16
+	var dur: float = 0.25
 	var tw := model.create_tween()
-	tw.tween_property(model, "position", base_pos + Vector3(0.0, 0.0, 0.06), dur * 0.35) \
+	tw.tween_property(model, "position", base_pos + Vector3(0.0, 0.0, 0.2), dur * 0.35) \
 		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	tw.tween_property(model, "position", base_pos, dur * 0.65) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
@@ -2004,12 +2004,12 @@ func _procedural_warship_fire(model: Node3D) -> void:
 		return
 	var base_pos: Vector3 = model.position
 	var base_rz: float = model.rotation.z
-	var dur: float = 0.45
+	var dur: float = 0.55
 	var tw := model.create_tween()
 	# 后坐 + 微下沉 + 侧倾
-	tw.tween_property(model, "position", base_pos + Vector3(0.0, -0.04, 0.10), dur * 0.3) \
+	tw.tween_property(model, "position", base_pos + Vector3(0.0, -0.12, 0.35), dur * 0.3) \
 		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	tw.parallel().tween_property(model, "rotation:z", base_rz - 0.04, dur * 0.3) \
+	tw.parallel().tween_property(model, "rotation:z", base_rz - 0.10, dur * 0.3) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 	# 回浮归位
 	tw.tween_property(model, "position", base_pos, dur * 0.7) \
@@ -2026,12 +2026,12 @@ func _procedural_gunboat_fire(model: Node3D) -> void:
 		return
 	var base_pos: Vector3 = model.position
 	var base_rz: float = model.rotation.z
-	var dur: float = 0.65
+	var dur: float = 0.8
 	var tw := model.create_tween()
 	# 后坐 + 明显下沉 + 侧倾
-	tw.tween_property(model, "position", base_pos + Vector3(0.0, -0.10, 0.24), dur * 0.22) \
+	tw.tween_property(model, "position", base_pos + Vector3(0.0, -0.3, 0.7), dur * 0.22) \
 		.set_trans(Tween.TRANS_EXPO).set_ease(Tween.EASE_OUT)
-	tw.parallel().tween_property(model, "rotation:z", base_rz - 0.08, dur * 0.22) \
+	tw.parallel().tween_property(model, "rotation:z", base_rz - 0.2, dur * 0.22) \
 		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	# 浮回原位（带一点弹跳，像船被涌起的浪顶回来）
 	tw.tween_property(model, "position", base_pos, dur * 0.78) \
@@ -2061,13 +2061,13 @@ func _procedural_attack(model: Node3D) -> void:
 	model.set_meta("_proc_atk_running", true)
 	var base_pos: Vector3 = model.position
 	var base_rx: float = model.rotation.x
-	var dur: float = 0.42
+	var dur: float = 0.5
 	var tw := model.create_tween()
 	tw.set_parallel(true)
 	# 前半段：向攻击方向（模型 -Z）刺出并前倾
-	tw.tween_property(model, "position", base_pos + Vector3(0.0, 0.0, -0.3), dur * 0.3) \
+	tw.tween_property(model, "position", base_pos + Vector3(0.0, 0.0, -0.9), dur * 0.35) \
 		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	tw.tween_property(model, "rotation:x", base_rx - 0.4, dur * 0.3) \
+	tw.tween_property(model, "rotation:x", base_rx - 0.7, dur * 0.35) \
 		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	# 后半段：回到原位
 	tw.chain().tween_property(model, "position", base_pos, dur * 0.7) \
@@ -2088,15 +2088,15 @@ func _procedural_ram_attack(model: Node3D) -> void:
 	model.set_meta("_proc_ram_running", true)
 	var base_pos: Vector3 = model.position
 	var base_rx: float = model.rotation.x
-	var dur: float = 0.7
+	var dur: float = 0.85
 	var tw := model.create_tween()
 	# 1) 后拉蓄力
-	tw.tween_property(model, "position", base_pos + Vector3(0.0, 0.0, 0.18), dur * 0.25) \
+	tw.tween_property(model, "position", base_pos + Vector3(0.0, 0.0, 0.45), dur * 0.2) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 	# 2) 猛地前撞（位移 0.5 米，镜头下能明显看出整台车往前顶）
-	tw.tween_property(model, "position", base_pos + Vector3(0.0, 0.0, -0.5), dur * 0.22) \
+	tw.tween_property(model, "position", base_pos + Vector3(0.0, 0.0, -1.4), dur * 0.22) \
 		.set_trans(Tween.TRANS_EXPO).set_ease(Tween.EASE_IN)
-	tw.parallel().tween_property(model, "rotation:x", base_rx - 0.18, dur * 0.22) \
+	tw.parallel().tween_property(model, "rotation:x", base_rx - 0.35, dur * 0.22) \
 		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	# 3) 弹性回弹归位
 	tw.tween_property(model, "position", base_pos, dur * 0.53) \
