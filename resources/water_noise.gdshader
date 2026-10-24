@@ -11,8 +11,8 @@ uniform float reflect_strength : hint_range(0.0, 2.0) = 1.0;
 // 平面反射：水面上方场景由镜像相机渲染到这张纹理
 uniform sampler2D reflection_tex : filter_linear;
 uniform float reflection_enabled : hint_range(0.0, 1.0) = 0.0;
-// 镜像相机渲染出的图像上下颠倒，取样时要翻转 Y
-uniform float reflection_vflip : hint_range(0.0, 1.0) = 1.0;
+// 镜像相机与主相机像素一一对应，取样不翻转；翻转会让倒影的分界线跑到屏幕中线
+uniform float reflection_vflip : hint_range(0.0, 1.0) = 0.0;
 
 // —— 船只航行时水面变化：附近涟漪 + 泡沫尾迹 ——
 uniform vec3 boats[8];
@@ -160,7 +160,7 @@ void fragment() {
 	col += f * 0.12 * vec3(0.3, 0.6, 1.0);
 
 	// 船只泡沫尾巴：船体周围泛白，尾流处更明显
-	col = mix(col, vec3(0.93, 0.97, 1.0), clamp(v_boat_foam * 0.6, 0.0, 0.85));
+	col = mix(col, vec3(0.86, 0.92, 0.97), clamp(v_boat_foam * 0.3, 0.0, 0.45));
 
 	// Fog darkening：底图暗的时候只压暗一半，避免整片水面变成黑色
 	vec4 fog = texture(fog_tex, UV);
@@ -170,8 +170,8 @@ void fragment() {
 
 	ALBEDO = col + spec * vec3(1.0, 1.0, 1.0);
 	// 金属度保持很低：场景没有天空/反射探针，金属反射取到的是黑色，水会整片发黑
-	ALPHA = clamp(mix(0.5, 0.74, f) + spec * 0.15 + v_boat_foam * 0.25, 0.0, 0.96);
+	ALPHA = clamp(mix(0.5, 0.74, f) + spec * 0.15 + v_boat_foam * 0.12, 0.0, 0.96);
 	METALLIC = 0.02;
 	ROUGHNESS = 0.25;
-	SPECULAR = spec + v_boat_lift * 0.25;
+	SPECULAR = spec + v_boat_lift * 0.12;
 }

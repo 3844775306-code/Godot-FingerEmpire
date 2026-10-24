@@ -2558,6 +2558,10 @@ func _update_planar_reflection() -> void:
 	_refl_cam.near = maxf(cam.near, 0.05)
 	_refl_cam.far = cam.far
 	_refl_cam.projection = cam.projection
+	# 宽高比与画面偏移必须一并复制，否则倒影会与主画面错位
+	_refl_cam.keep_aspect = cam.keep_aspect
+	_refl_cam.h_offset = cam.h_offset
+	_refl_cam.v_offset = cam.v_offset
 	_refl_cam.size = cam.size
 	# 以水面为镜面镜像相机变换：位置 y -> 2h - y，朝向上下翻转
 	var xf: Transform3D = cam.global_transform
