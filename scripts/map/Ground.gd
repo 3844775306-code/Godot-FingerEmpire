@@ -2520,6 +2520,9 @@ func _add_water_box():
 			empty_boats.resize(BOAT_SHADER_SLOTS)
 			mat.set_shader_parameter("boats", empty_boats)
 			mat.set_shader_parameter("boat_dirs", empty_boats)
+			var empty_speeds := PackedFloat32Array()
+			empty_speeds.resize(BOAT_SHADER_SLOTS)
+			mat.set_shader_parameter("boat_speeds", empty_speeds)
 			mat.set_shader_parameter("boat_count", 0)
 			_water_mat = mat
 			w.material_override = mat
@@ -2607,6 +2610,9 @@ func _update_water_boats(delta: float) -> void:
 	arr.resize(BOAT_SHADER_SLOTS)
 	var dirs := PackedVector3Array()
 	dirs.resize(BOAT_SHADER_SLOTS)
+	# 每艘船的归一化速度：着色器用它决定船首破浪与尾迹的强弱
+	var speeds := PackedFloat32Array()
+	speeds.resize(BOAT_SHADER_SLOTS)
 	var count: int = 0
 	var bm = get_tree().get_first_node_in_group("battle_manager")
 	var armies: Array = []
@@ -2626,18 +2632,23 @@ func _update_water_boats(delta: float) -> void:
 			continue
 		var id: int = e.get_instance_id()
 		var pos: Vector3 = e.global_position
-		# 与上一次采样位置相减得到航向，供着色器沿航行反方向拉出尾流带
+		# 与上一次采样位置相减得到航向与速度，供着色器沿航行反方向拉出尾流带
 		var dir := Vector3.ZERO
+		var speed: float = 0.0
 		var prev = _boat_prev.get(id)
 		if prev is Vector3:
 			var d: Vector3 = pos - prev
 			d.y = 0.0
-			if d.length() > 0.03:
+			var dist: float = d.length()
+			if dist > 0.03:
 				dir = d.normalized()
+			# 采样间隔 0.15 秒，按巡航速度 6 m/s 归一到 0..1
+			speed = clampf(dist / 0.15 / 6.0, 0.0, 1.0)
 		_boat_prev[id] = pos
 		seen[id] = true
 		arr[count] = pos
 		dirs[count] = dir
+		speeds[count] = speed
 		count += 1
 	# 沉水中的单位（health 已归零，不在 _armies 缓存里）：落水点也要泛出涟漪与水花
 	for n in get_tree().get_nodes_in_group("entities"):
@@ -2655,7 +2666,9 @@ func _update_water_boats(delta: float) -> void:
 		spos.y = WATER_WORLD_Y
 		seen[sid] = true
 		arr[count] = spos
-		dirs[count] = Vector3.ZERO
+		# z 分量是沉水标记：着色器据此在落水点溅起明显的翻涌与泡沫
+		dirs[count] = Vector3(0.0, 0.0, 1.0)
+		speeds[count] = 0.0
 		count += 1
 	# 定期清掉已经消失的船的缓存，避免字典无限增长
 	_boat_prev_cleanup -= delta
@@ -2666,6 +2679,7 @@ func _update_water_boats(delta: float) -> void:
 				_boat_prev.erase(k)
 	_water_mat.set_shader_parameter("boats", arr)
 	_water_mat.set_shader_parameter("boat_dirs", dirs)
+	_water_mat.set_shader_parameter("boat_speeds", speeds)
 	_water_mat.set_shader_parameter("boat_count", count)
 
 # 画质档位联动：低画质关掉屏幕空间反射，减少全屏水面的采样开销

@@ -18,6 +18,8 @@ uniform float reflection_vflip : hint_range(0.0, 1.0) = 0.0;
 uniform vec3 boats[8];
 uniform vec3 boat_dirs[8];   // 每艘船的水平航向（未移动时为 0），用于拉出尾流带
 uniform int boat_count = 0;
+// 每艘船的当前速度（0..1，归一到巡航速度）：决定船首破浪与尾迹的强度
+uniform float boat_speeds[8];
 uniform float wake_strength : hint_range(0.0, 2.0) = 1.0;
 
 varying float v_boat_foam;
@@ -41,7 +43,7 @@ void vertex() {
 	float w = sin(wv.x * 1.1 + TIME * 0.5) * cos(wv.z * 1.4 + TIME * 0.4) * 0.05;
 	w += sin(wv.x * 2.6 + TIME * 0.7) * cos(wv.z * 2.2 - TIME * 0.6) * 0.03;
 
-	// 船只附近：向外扩散的环形涟漪 + 船体抬起的船首波 + 后方尾流带
+	// 船只与沉船：环形涟漪 + 船首破浪 + 开尔文 V 形尾迹 + 沉没时的翻涌
 	float foam = 0.0;
 	float lift = 0.0;
 	for (int i = 0; i < 8; i++) {
@@ -53,16 +55,34 @@ void vertex() {
 		w += (ring * 0.05 + bow * 0.02) * wake_strength;
 		foam += (bow * 1.5 + max(0.0, ring) * 1.0) * wake_strength;
 		lift += bow;
-		// 尾流带：沿航行反方向拉长的泡沫条
 		vec2 bd = boat_dirs[i].xz;
+		float sinking = boat_dirs[i].z;
+		float spd = clamp(boat_speeds[i], 0.0, 1.0);
 		if (dot(bd, bd) > 0.01) {
 			float along = dot(rel, bd);
 			float across = length(rel - bd * along);
+			// 船首破浪：船头前方推起一道白浪，速度越快越明显
+			float bowhead = exp(-max(0.0, along) * 1.5) * exp(-across * 2.0) * spd;
+			w += bowhead * 0.10;
+			foam += bowhead * 2.0;
 			if (along < 0.0) {
+				// 尾流带：船后拖出的泡沫条
 				float wake = exp(-across * 1.25) * exp(along * 0.22);
-				foam += wake * 1.6 * wake_strength;
+				foam += wake * (1.2 + 1.2 * spd) * wake_strength;
 				w += wake * 0.015 * wake_strength;
+				// 开尔文 V 形尾迹：船后两侧各一道细长浪脊
+				float side_dist = abs(across - (-along) * 0.40);
+				float kelvin = exp(-side_dist * 1.7) * exp(along * 0.15) * spd;
+				w += kelvin * 0.055;
+				foam += kelvin * 1.1;
 			}
+		}
+		// 沉没中：落水点剧烈翻涌，一圈圈向外扩散的浪与泡沫
+		if (sinking > 0.01) {
+			float sf = sin(r * 4.5 - TIME * 7.0) * exp(-r * 0.55);
+			w += (sf * 0.11 + bow * 0.06) * sinking;
+			foam += (max(0.0, sf) * 2.0 + bow * 1.8) * sinking;
+			lift += bow * sinking;
 		}
 	}
 	v_boat_foam = clamp(foam, 0.0, 2.0);
@@ -98,15 +118,29 @@ void fragment() {
 		float ring = cos(r * 3.2 - TIME * 4.5) * exp(-r * 0.5);
 		float bow = exp(-r * 0.7);
 		wn.xz += dir * (ring * 1.1 + bow * 0.6) * wake_strength;
-		// 尾流带也扰动法线，航行时后方能看到明显的水纹
 		vec2 bd = boat_dirs[i].xz;
+		float sinking = boat_dirs[i].z;
+		float spd = clamp(boat_speeds[i], 0.0, 1.0);
 		if (dot(bd, bd) > 0.01) {
 			float along = dot(rel, bd);
 			float across = length(rel - bd * along);
+			// 船首破浪的碎浪：船头前方法线明显起伏
+			float bowhead = exp(-max(0.0, along) * 1.5) * exp(-across * 2.0) * spd;
+			wn.xz += bd * bowhead * 2.0;
 			if (along < 0.0) {
+				// 尾流带：后方拖出的横向水纹
 				float wake = exp(-across * 1.25) * exp(along * 0.22);
 				wn.xz += bd * (sin(across * 6.0 - TIME * 3.0) * wake * 0.8 * wake_strength);
+				// 开尔文 V 形尾迹的两道浪脊
+				float side_dist = abs(across - (-along) * 0.40);
+				float kelvin = exp(-side_dist * 1.7) * exp(along * 0.15) * spd;
+				wn.xz += dir * kelvin * 1.4;
 			}
+		}
+		// 沉没中：落水点周围水面剧烈起伏
+		if (sinking > 0.01) {
+			float sf = sin(r * 4.5 - TIME * 7.0) * exp(-r * 0.55);
+			wn.xz += dir * (sf * 1.8 + bow * 1.4) * sinking;
 		}
 	}
 	wn = normalize(wn);
