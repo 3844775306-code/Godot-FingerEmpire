@@ -1201,7 +1201,14 @@ func find_valid_build_position(near_pos: Vector3, building_id: int) -> Vector3:
 		for _try in range(8):
 			var test = near_pos + Vector3(cos(randf_range(0, TAU))*dist, 0, sin(randf_range(0, TAU))*dist)
 			var overlap = false
-			for entity in battle.entities.get_children():
+			# 旧实现每个候选点都全表扫一遍建筑/资源；6×8 个候选点会放大成
+			# 几十次全场扫描。先用空间索引取附近实体，再按同样半径规则判断。
+			var nearby: Array = []
+			if battle.has_method("get_nearby_entities"):
+				nearby = battle.get_nearby_entities(test, float(radius) + 14.0)
+			else:
+				nearby = battle.entities.get_children()
+			for entity in nearby:
 				# 单位会移动，不能因为附近站着农民/士兵就判定无法建造；只避让建筑和资源点
 				if not (entity is Building or entity is WorldResource) or entity.health <= 0: continue
 				if test.distance_to(entity.global_position) < (radius + entity.body_radius + 2.0):
@@ -1491,10 +1498,16 @@ func _is_valid_build_ground(world_pos: Vector3) -> bool:
 	var gx = int(world_pos.x + RTSConfig.MAP_SIZE / 2); var gz = int(world_pos.z + RTSConfig.MAP_SIZE / 2)
 	if gx < 0 or gx >= RTSConfig.MAP_SIZE or gz < 0 or gz >= RTSConfig.MAP_SIZE: return false
 	if battle.get_terrain_at_grid(gx, gz) != 0: return false
-	for e in battle.entities.get_children():
+	# 只检查建造点周围：己方建筑要留出间距，敌人靠近则视为危险。
+	# 以前对每个候选点全表扫两遍，AI 每次选址会重复几十次。
+	var nearby: Array = []
+	if battle.has_method("get_nearby_entities"):
+		nearby = battle.get_nearby_entities(world_pos, 12.0)
+	else:
+		nearby = battle.entities.get_children()
+	for e in nearby:
 		if e is Building and e.team == my_team and e.health > 0:
 			if e.global_position.distance_to(world_pos) < (e.body_radius + 3.0): return false
-	for e in battle.entities.get_children():
 		if _entity_is_enemy(e):
 			if e.global_position.distance_to(world_pos) < 10.0: return false
 	return true
