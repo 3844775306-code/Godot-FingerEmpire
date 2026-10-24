@@ -96,6 +96,16 @@ const GARRISON_DEFEND_RADIUS: float = 10.0
 
 # A* Ñ°Â·
 var _movement: MovementController = null
+
+# 选择环按半径共享 Mesh/材质：后期几十上百个单位同时被框选时，
+# 每个单位各建一份 TorusMesh + StandardMaterial3D 会造成大量重复资源与状态切换。
+static var _selection_ring_meshes: Dictionary = {}
+static var _selection_ring_material: StandardMaterial3D = null
+
+# 动画 LOD：相机远处/屏幕外单位由战斗管理器停掉 AnimationPlayer，
+# 避免几百个角色每帧更新骨骼动画；重新进入视野时恢复。
+var _anim_player: AnimationPlayer = null
+var _anim_lod_off: bool = false
 # (moved to MovementController)
 # (moved to MovementController)
 # (moved to MovementController)
@@ -208,15 +218,40 @@ func _add_selection_ring():
 	if not has_node("SelectionRing"):
 		var ring = MeshInstance3D.new()
 		ring.name = "SelectionRing"
-		var ring_mesh = TorusMesh.new()
-		ring_mesh.inner_radius = body_radius + 0.1
-		ring_mesh.outer_radius = body_radius + 0.15
+		# 相同体型共用同一份环 Mesh；材质也全局共用，框选几百个单位时只增加实例，
+		# 不再为每个单位分配一份网格/材质资源。
+		var ring_key: String = "%.2f" % body_radius
+		var ring_mesh: TorusMesh = _selection_ring_meshes.get(ring_key)
+		if ring_mesh == null:
+			ring_mesh = TorusMesh.new()
+			ring_mesh.inner_radius = body_radius + 0.1
+			ring_mesh.outer_radius = body_radius + 0.15
+			_selection_ring_meshes[ring_key] = ring_mesh
 		ring.mesh = ring_mesh
 		ring.position = Vector3(0, body_radius * 2.5 + 0.1, 0)
-		ring.material_override = StandardMaterial3D.new()
-		ring.material_override.albedo_color = Color.GREEN
+		if _selection_ring_material == null:
+			_selection_ring_material = StandardMaterial3D.new()
+			_selection_ring_material.albedo_color = Color.GREEN
+			_selection_ring_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		ring.material_override = _selection_ring_material
 		ring.visible = false
 		add_child(ring)
+
+# 模型替换后重新绑定 AnimationPlayer；新模型默认播放，LOD 状态复位。
+func bind_animation_player(ap: AnimationPlayer) -> void:
+	_anim_player = ap
+	_anim_lod_off = false
+	if ap != null and is_instance_valid(ap):
+		ap.active = true
+
+# 远景/屏幕外动画 LOD：只停/恢复 AnimationPlayer 的推进，不销毁动画或模型。
+func set_animation_lod(disable: bool) -> void:
+	if _anim_player == null or not is_instance_valid(_anim_player):
+		return
+	if _anim_lod_off == disable:
+		return
+	_anim_lod_off = disable
+	_anim_player.active = not disable
 
 func _add_weapon():
 	var wpath = ""

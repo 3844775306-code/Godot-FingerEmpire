@@ -218,6 +218,7 @@ const PERF_LEVEL_SCALES: Array[float] = [1.0, 0.85, 0.72, 0.62, 0.52]
 # 阴影始终保留，低画质只缩短阴影投射距离，单位近处仍有影子
 const PERF_SHADOW_DISTANCE_SCALES: Array[float] = [1.0, 0.9, 0.8, 0.7, 0.6]
 var _distant_shadow_timer: float = 2.0
+var _anim_lod_timer: float = 1.0
 
 func _create_diag_label():
 	# 顶部中央偏右的两行大字：第一行性能（帧率/画质/实体），第二行对局信息（AI/地图/时间）
@@ -1727,6 +1728,9 @@ func _apply_entity_model(entity: GameEntity) -> bool:
 		model_instance.rotation.y = deg_to_rad(180)
 	# 存储模型引用用于动画
 	entity.set_meta("_model_instance", model_instance)
+	if entity is Army:
+		var ap := model_instance.get_node_or_null("AnimationPlayer") as AnimationPlayer
+		entity.bind_animation_player(ap)
 	# 角色模型启用顶点颜色（编辑器预览依赖此特性）
 	if entity.entity_id in [10, 43, 44, 45, 46, 47, 48, 49, 50, 51]:
 		_enable_vertex_colors(model_instance)
@@ -3118,6 +3122,7 @@ func _process(delta):
 
 	_tick_adaptive_quality(delta)
 	_tick_distant_shadows(delta)
+	_tick_animation_lod(delta)
 
 # ==================== 后期自动画质 ====================
 func _tick_adaptive_quality(delta: float) -> void:
@@ -3249,6 +3254,33 @@ func _tick_distant_shadows(delta: float) -> void:
 			continue
 		var far: bool = cam_pos.distance_to(a.global_position) > limit
 		_toggle_shadow_recursive(a, far)
+
+# 动画 LOD：几百个角色即使屏幕外，AnimationPlayer 仍会推进骨骼动画。
+# 每秒按“是否在相机视锥内 + 距离”批量停掉远景/屏幕外单位的动画，
+# 重新进入视野时恢复；单位少时全部恢复，避免影响正常战斗画面。
+func _tick_animation_lod(delta: float) -> void:
+	if game_over:
+		return
+	_anim_lod_timer -= delta
+	if _anim_lod_timer > 0.0:
+		return
+	_anim_lod_timer = 1.0
+	_ensure_cache_fresh()
+	var cam := get_viewport().get_camera_3d() if is_inside_tree() else null
+	if cam == null or _armies.size() < 260:
+		for a in _armies:
+			if is_instance_valid(a):
+				a.set_animation_lod(false)
+		return
+	var cam_pos := cam.global_position
+	var distance_limit: float = 55.0 - float(_perf_quality_level) * 4.0
+	for a in _armies:
+		if not is_instance_valid(a) or a.health <= 0:
+			continue
+		var p: Vector3 = a.global_position + Vector3(0, 1.0, 0)
+		var offscreen: bool = not cam.is_position_in_frustum(p)
+		var too_far: bool = cam_pos.distance_to(p) > distance_limit
+		a.set_animation_lod(offscreen or too_far)
 
 func _toggle_shadow_recursive(node: Node, far: bool) -> void:
 	for c in node.get_children():
