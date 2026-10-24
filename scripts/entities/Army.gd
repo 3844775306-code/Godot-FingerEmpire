@@ -12,6 +12,10 @@ var _cached_bm = null
 var _last_grid_pos: Vector2i = Vector2i(-999, -999)
 var _cached_terrain: int = 0
 var _cached_speed_mod: float = 1.0
+# 落水伤害：陆地单位在深水、且未上桥/运载船时，每秒损失 20% 最大生命
+const WATER_DAMAGE_INTERVAL: float = 1.0
+const WATER_DAMAGE_RATIO: float = 0.2
+var _water_damage_timer: float = WATER_DAMAGE_INTERVAL
 # ²É¼¯½»¸¶
 var cargo: Dictionary = {"gold": 0, "wood": 0, "stone": 0, "food": 0, "oil": 0}
 var max_cargo: int = 50
@@ -32,6 +36,13 @@ var _deliver_last_dist: float = -1.0
 # ¹¥»÷ÒÆ¶¯
 var is_attack_moving: bool = false
 var attack_move_target: Vector3 = Vector3.ZERO
+# 攻击目标寻路持续失败（目标在墙后/河对岸/山崖上）时，不要一直原地播放走路，
+# 改为尝试攻击最近的敌方建筑（拆墙）或放弃该目标。
+const ATTACK_APPROACH_STUCK_TIME: float = 1.2
+const UNREACHABLE_TARGET_MEMORY_MS: int = 5000
+var _attack_stall_time: float = 0.0
+var _attack_watch_target_id: int = -1
+var _unreachable_targets: Dictionary = {}  # instance_id -> expire msec
 
 # Shift Á¬ÐøÖ¸Áî¶ÓÁÐ
 var command_queue: Array = []           # Command queue [{type, target, pos, is_loop}]
@@ -374,6 +385,30 @@ func _clear_dead_target() -> bool:
 	_refresh_animation_now()
 	return true
 
+# 陆地单位在深水且不在桥/运载船上时，每秒损失 20% 最大生命。
+# 浅滩（overlay=3）是给陆军涉水通过的，不算落水。
+func _tick_water_damage(delta: float) -> void:
+	if water_capable or _boarded_on != -1:
+		_water_damage_timer = WATER_DAMAGE_INTERVAL
+		return
+	_water_damage_timer -= delta
+	if _water_damage_timer > 0.0:
+		return
+	_water_damage_timer = WATER_DAMAGE_INTERVAL
+	var bm = _get_bm()
+	if bm == null:
+		return
+	if bm.get_terrain_at(global_position) != 2:
+		return
+	var gpos: Vector2i = bm.world_to_grid(global_position)
+	if bm.get_overlay_at_grid(gpos.x, gpos.y) == 3:
+		return
+	if bm.is_bridge_at(global_position):
+		return
+	health = maxf(health - max_health * WATER_DAMAGE_RATIO, 0.0)
+	if health <= 0.0:
+		die()
+
 func _physics_process(delta):
 	if health <= 0:
 		die_official_cleanup()
@@ -381,6 +416,11 @@ func _physics_process(delta):
 
 	# 进驻中的士兵跳过所有行为
 	if _soldier_garrison_building and _soldier_garrison_building.get_ref() and is_instance_valid(_soldier_garrison_building.get_ref()):
+		return
+
+	# 陆地单位落水持续伤害（上桥、进运载船、浅滩涉水不受伤）
+	_tick_water_damage(delta)
+	if health <= 0:
 		return
 
 	# 爆破船/运载船/手推车/贸易车 特殊行为
@@ -594,6 +634,98 @@ func _tick_think(delta, bm) -> void:
 		_think(delta, bm)
 	
 	
+# 暂时记下“寻路到不了”的目标，避免自动索敌反复锁回同一个墙后/对岸目标。
+func _is_target_marked_unreachable(target) -> bool:
+	if target == null or not is_instance_valid(target) or not (target is GameEntity):
+		return false
+	var tid: int = target.get_instance_id()
+	var until: int = int(_unreachable_targets.get(tid, 0))
+	if until <= 0:
+		return false
+	if Time.get_ticks_msec() >= until:
+		_unreachable_targets.erase(tid)
+		return false
+	return true
+
+func _mark_target_unreachable(target) -> void:
+	if target == null or not is_instance_valid(target) or not (target is GameEntity):
+		return
+	_unreachable_targets[target.get_instance_id()] = Time.get_ticks_msec() + UNREACHABLE_TARGET_MEMORY_MS
+
+# 目标打不到时，优先改打最近的敌方建筑（城墙/建筑），让近战单位去拆挡路物，
+# 而不是站在原地看着目标播放走路动画。
+func _find_attack_fallback_building(bm: RTSBattleManager) -> Building:
+	if bm == null:
+		return null
+	var candidates: Array = bm.get_nearby_enemies(global_position, vision_range, team, owner_peer_id)
+	var best: Building = null
+	var best_dist: float = INF
+	for e in candidates:
+		if not is_instance_valid(e) or e.health <= 0:
+			continue
+		if not (e is Building) or e == current_target:
+			continue
+		if not _can_attack_target(e):
+			continue
+		if _is_target_marked_unreachable(e):
+			continue
+		var h_diff = Vector2(e.global_position.x - global_position.x,
+							e.global_position.z - global_position.z)
+		var dist: float = h_diff.length() - body_radius - e.body_radius
+		if dist < best_dist:
+			best_dist = dist
+			best = e
+	return best
+
+func _handle_unreachable_attack_target(bm: RTSBattleManager) -> void:
+	if hold_position:
+		current_target = null
+		_attack_watch_target_id = -1
+		_attack_stall_time = 0.0
+		_set_order(UnitState.IDLE)
+		_movement.stop()
+		return
+	var old_target = current_target
+	if old_target != null and is_instance_valid(old_target):
+		_mark_target_unreachable(old_target)
+	var fallback: Building = _find_attack_fallback_building(bm)
+	if fallback != null:
+		current_target = fallback
+		_retarget_target_id = fallback.get_instance_id()
+		_retarget_timer = _retarget_interval(bm)
+		_attack_watch_target_id = fallback.get_instance_id()
+		_attack_stall_time = 0.0
+		_set_order(UnitState.ATTACKING)
+		is_attack_moving = false
+		_movement.set_move_target(fallback.global_position, attack_range)
+		return
+	current_target = null
+	_attack_watch_target_id = -1
+	_attack_stall_time = 0.0
+	_set_order(UnitState.IDLE)
+	is_attack_moving = false
+	_movement.stop()
+	_find_enemy_in_range()
+
+# 攻击目标不在射程内且 A* 持续无路时，1.2 秒后触发兜底处理。
+func _check_attack_approach(delta: float, bm: RTSBattleManager) -> void:
+	if current_target == null or not is_instance_valid(current_target) or _movement == null:
+		return
+	var tid: int = current_target.get_instance_id()
+	if tid != _attack_watch_target_id:
+		_attack_watch_target_id = tid
+		_attack_stall_time = 0.0
+	if _movement._pending_path:
+		return
+	if not _movement.attack_path_failed:
+		_attack_stall_time = 0.0
+		return
+	_attack_stall_time += delta
+	if _attack_stall_time < ATTACK_APPROACH_STUCK_TIME:
+		return
+	_attack_stall_time = 0.0
+	_handle_unreachable_attack_target(bm)
+
 # ----------------- ÐÐÎª´¦Àí -----------------
 func _process_action(delta, bm):
 	# ½»¸¶×´Ì¬
@@ -741,11 +873,37 @@ func _process_action(delta, bm):
 				_retarget_timer = _retarget_interval(bm)
 				_attack_tick(current_target, delta, bm)
 			else:
+				# 原地防守单位不追出射程，否则目标在墙后时会站在原地播放走路动画
+				if hold_position:
+					current_target = null
+					_attack_watch_target_id = -1
+					_attack_stall_time = 0.0
+					_set_order(UnitState.IDLE)
+					_movement.stop()
+					return
+				# A* 允许穿过建筑格（成本较高），追击墙后目标时单位会实际顶在墙上。
+				# 已经撞到敌方建筑就改打这面挡路的墙/建筑，不要对着墙原地踏步。
+				var blocker: Building = _movement.blocking_building
+				if blocker != null and is_instance_valid(blocker) and blocker != current_target \
+						and blocker.health > 0 and _can_attack_target(blocker):
+					if current_target != null and is_instance_valid(current_target):
+						_mark_target_unreachable(current_target)
+					current_target = blocker
+					_retarget_target_id = blocker.get_instance_id()
+					_retarget_timer = _retarget_interval(bm)
+					_attack_watch_target_id = blocker.get_instance_id()
+					_attack_stall_time = 0.0
+					_set_order(UnitState.ATTACKING)
+					is_attack_moving = false
+					_movement.set_move_target(blocker.global_position, attack_range)
+					return
 				# 目标不在攻击范围：每秒检查一次是否有更近的敌人，避免一直追远目标
 				_retarget_timer -= delta
 				if _retarget_timer <= 0.0:
 					_retarget_timer = _retarget_interval(bm)
 					_try_retarget_closer(h_dist)
+				if current_target != null and is_instance_valid(current_target):
+					_check_attack_approach(delta, bm)
 				if current_target != null and is_instance_valid(current_target):
 					_movement.set_move_target(current_target.global_position, attack_range)
 
@@ -781,6 +939,8 @@ func _try_retarget_closer(current_dist: float) -> void:
 	if best == null or not is_instance_valid(best) or best == current_target:
 		return
 	if not _can_attack_target(best):
+		return
+	if _is_target_marked_unreachable(best):
 		return
 	var h_diff = Vector2(best.global_position.x - global_position.x,
 						best.global_position.z - global_position.z)
@@ -889,6 +1049,9 @@ func _think(delta, bm):
 			global_position.y = move_toward(global_position.y, target_height, elevation_speed * delta)
 
 func recalculate_path():
+	# 建筑布局变化后，之前“打不到”的目标可能已经可达
+	_unreachable_targets.clear()
+	_attack_stall_time = 0.0
 	if _movement: _movement.recalculate()
 
 # 大规模交战时把每个单位的攻击更新错峰到 2~3 帧一次，并用累积 delta 保持
@@ -1345,6 +1508,7 @@ func _find_enemy_in_range():
 		if entity.get("_animal_type") != null and str(entity.get("_animal_type")) != "": continue
 		# 攻击类型过滤
 		if not _can_attack_target(entity): continue
+		if _is_target_marked_unreachable(entity): continue
 		if not bm:  # fallback: filter by team
 			if entity.team == team: continue
 			if entity is Building and entity.team == team: continue
@@ -1360,6 +1524,8 @@ func _find_enemy_in_range():
 			_set_order(UnitState.ATTACKING)
 			is_attack_moving = false
 			return
+		if hold_position:
+			continue
 		if dist <= vision_range and dist < best_dist:
 			best_dist = dist
 			best_target = entity
@@ -1559,6 +1725,9 @@ func attack_target(p_target):
 	# 手动指定目标时也拒绝陆军近战攻击海军，避免单位一直追到岸边
 	if _is_land_melee() and p_target is Army and p_target.water_capable:
 		return
+	# 玩家手动重新指定目标时清除“不可达”记忆，允许再试一次
+	if p_target is GameEntity:
+		_unreachable_targets.erase(p_target.get_instance_id())
 	_queue_command({"type": "attack", "target": p_target})
 
 func gather_at(source):
@@ -2180,6 +2349,7 @@ func _find_nearest_enemy_near(center: Vector3, radius: float):
 		if not _is_hostile_to(entity): continue
 		if entity.get("_animal_type") != null and str(entity.get("_animal_type")) != "": continue  # 不自动攻击动物
 		if not _can_attack_target(entity): continue
+		if _is_target_marked_unreachable(entity): continue
 		var h_diff = Vector2(entity.global_position.x - center.x, entity.global_position.z - center.z)
 		var dist = h_diff.length() - body_radius - entity.body_radius
 		if dist <= attack_range:

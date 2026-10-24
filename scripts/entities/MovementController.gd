@@ -8,6 +8,8 @@ var _army: Army  # parent unit reference
 # Movement state
 var astar_path: Array = []
 var astar_target: Vector3 = Vector3.ZERO
+# 攻击追击目标时 A* 完全无路的标记，供 Army 做“打不到目标就换目标/拆墙”的兜底
+var attack_path_failed: bool = false
 var astar_recalc_timer: float = 0.0
 const ASTAR_RECALC_INTERVAL: float = 2.0
 # 追击移动目标时目标位置每帧都在变；若每次变化都重算 A*（最多 1000 节点），
@@ -32,6 +34,9 @@ var _is_selected: bool = false
 
 # Collision
 var collision_timer: float = 0.0
+# 当前物理挤靠的敌方建筑：攻击目标在墙后时 A* 常从建筑格穿过去，
+# 单位实际会顶在墙上原地踏步；Army 用它改打这面挡路的墙。
+var blocking_building: Building = null
 const COLLISION_INTERVAL: float = 0.15
 # 攻城单位体积较大，A* 只避开建筑中心格时路径会贴着建筑边角；
 # 碰撞推挤会让大体型单位在两个建筑/墙角之间来回弹，表现为“被建筑卡住”。
@@ -132,12 +137,15 @@ func _apply_path(pos: Vector3, path: Array, stop_range: float) -> void:
 	astar_path = path
 	var key = Vector2i(int(pos.x), int(pos.z))
 	if astar_path.size() > 0:
+		attack_path_failed = false
 		if not is_attack_move:
 			_path_cache[key] = astar_path
 	elif is_attack_move:
 		# 追击目标寻路失败时不写永久黑名单；重置目标，让冷却后还能重试
+		attack_path_failed = true
 		astar_target = Vector3.ZERO
 	else:
+		attack_path_failed = false
 		_blacklist[key] = true
 	if _is_selected: _show_path()
 
@@ -161,6 +169,7 @@ func recalculate():
 	
 	_path_cache.clear()  # new building may block cached paths
 	_blacklist.clear()  # new building may open paths
+	attack_path_failed = false
 	_last_attack_path_ms = -100000  # 建筑变化后允许立即重算追击路径
 	# building recalc - cached paths cleared
 	# 采集/交付/攻击移动也属于「有固定终点」的状态，卡住时必须能重算路径
@@ -168,6 +177,7 @@ func recalculate():
 		var key = Vector2i(int(astar_target.x), int(astar_target.z))
 		_path_cache.erase(key)
 		astar_path = _calculate_astar_path(astar_target)
+		attack_path_failed = astar_path.is_empty()
 		_pending_path = false
 		if astar_path.size() > 0: _path_cache[key] = astar_path  # only cache valid paths
 		if _is_selected:
@@ -185,6 +195,7 @@ func get_current_target() -> Vector3:
 func stop():
 	astar_path.clear()
 	astar_target = Vector3.ZERO
+	attack_path_failed = false
 	_pending_path = false
 	_stop_velocity()
 
@@ -312,6 +323,7 @@ func process_move(delta, bm: RTSBattleManager):
 # ==================== Collision separation ====================
 
 func apply_collision(delta):
+	blocking_building = null
 	var bm = _army._get_bm()
 	if bm == null:
 		return
@@ -374,6 +386,28 @@ func _try_push_position(step: Vector3, bm: RTSBattleManager) -> bool:
 		return true
 	return false
 
+# 友军挡在正前方时也加一个切向分量，让后排单位从旁边绕过去；
+# 否则密集近战里后排会被径向推力顶回原地，只播放走路动画。
+func _unit_slide_dir(push_dir: Vector3, velocity: Vector3) -> Vector3:
+	var radial := Vector3(push_dir.x, 0.0, push_dir.z)
+	if radial.length_squared() < 0.000001:
+		return Vector3.ZERO
+	radial = radial.normalized()
+	var vel := Vector3(velocity.x, 0.0, velocity.z)
+	if vel.length_squared() < 0.0001:
+		return radial
+	# 只有正在朝友军方向顶时才改走切向；被友军从后方/侧面推时保持径向
+	if vel.normalized().dot(radial) >= -0.05:
+		return radial
+	var tangent := Vector3(-radial.z, 0.0, radial.x)
+	var side_dot := tangent.dot(vel)
+	if side_dot < -0.0001:
+		tangent = -tangent
+	elif absf(side_dot) <= 0.0001:
+		if _army.get_instance_id() % 2 == 0:
+			tangent = -tangent
+	return (radial * 0.55 + tangent * 0.85).normalized()
+
 # 建筑推挤时朝径向推开；单位仍在前进时，沿建筑边缘加一个切向分量，
 # 让它顺着墙/建筑角滑过去，而不是被径向推力顶回去原地抖动。
 func _building_slide_dir(push_dir: Vector3, velocity: Vector3) -> Vector3:
@@ -401,6 +435,8 @@ func _separate_from(entity: GameEntity, delta: float, bm: RTSBattleManager) -> v
 	var dist = _army.global_position.distance_to(entity.global_position)
 	var min_dist = _army.body_radius + entity.body_radius
 	if dist < min_dist and dist > 0.001:
+		if entity is Building and entity.team != _army.team:
+			blocking_building = entity
 		var overlap = min_dist - dist
 		var push_dir = (_army.global_position - entity.global_position).normalized()
 		var push_s = 10.0 if entity is Building and entity.entity_id == 27 and entity.team != _army.team else 15.0 if entity is Building else 8.0
@@ -414,6 +450,10 @@ func _separate_from(entity: GameEntity, delta: float, bm: RTSBattleManager) -> v
 			var slide_dir := _building_slide_dir(push_dir, _army.velocity)
 			if slide_dir != Vector3.ZERO:
 				push_step = slide_dir
+		else:
+			var unit_slide := _unit_slide_dir(push_dir, _army.velocity)
+			if unit_slide != Vector3.ZERO:
+				push_step = unit_slide
 		_try_push_position(push_step * push_amount * mass_ratio, bm)
 	elif dist < 0.001:
 		# 完全重叠时用实例 id 生成固定方向，避免随机抖动让整堆单位

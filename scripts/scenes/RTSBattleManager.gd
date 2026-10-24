@@ -124,6 +124,7 @@ var _wall_layout_signature: int = 0       # 建筑/资源布局签名，避免�
 var _wall_signature_initialized: bool = false
 var _wall_entity_grid: Dictionary = {}    # Vector2i -> Building(城墙 id==27)，供 process_move 高度平滑 O(1) 查询
 var _ladder_entity_grid: Dictionary = {}  # Vector2i -> Building(梯子 id==8)，供 _has_adjacent_ladder O(8) 查询
+var _bridge_entity_grid: Dictionary = {}  # Vector2i -> Building(桥 id==7)，供落水判定 O(1) 查询
 # 弹丸对象池：后期每秒几十上百发箭/炮弹，复用节点可避免反复 new + GLB instantiate + 物理形状创建
 var _bullet_pool: Dictionary = {}         # pool_key -> Array[Bullet]
 # 同模型同队伍的单位共享 tint / 顶点色材质，避免每个单位复制出独立材质，
@@ -344,6 +345,7 @@ func _rebuild_entity_cache():
 	# 同步构建墙体/梯子网格（MovementController 寻路与高度平滑的 O(1)/O(8) 缓存）
 	_wall_entity_grid.clear()
 	_ladder_entity_grid.clear()
+	_bridge_entity_grid.clear()
 	for b in _buildings:
 		if b.health <= 0:
 			continue
@@ -351,6 +353,8 @@ func _rebuild_entity_cache():
 			_wall_entity_grid[world_to_grid(b.global_position)] = b
 		elif b.entity_id == 8:
 			_ladder_entity_grid[world_to_grid(b.global_position)] = b
+		elif b.entity_id == 7:
+			_bridge_entity_grid[world_to_grid(b.global_position)] = b
 	# 只有建筑/资源布局真的变化时才让寻路墙缓存失效。实体缓存本身每 0.5s
 	# 会因刷新而重建，若这里无条件 +1，所有单位每 0.5s 都会重新扫描全图建墙集合。
 	var layout_sig: int = 0
@@ -367,6 +371,10 @@ func _rebuild_entity_cache():
 
 func mark_entity_cache_dirty():
 	_entity_cache_dirty = true
+
+# 落水判定：桥所在格视为可站立，不参与溺水伤害
+func is_bridge_at(world_pos: Vector3) -> bool:
+	return _bridge_entity_grid.has(world_to_grid(world_pos))
 
 func _ensure_cache_fresh():
 	if _entity_cache_dirty:
