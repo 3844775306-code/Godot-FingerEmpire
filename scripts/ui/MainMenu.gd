@@ -343,12 +343,20 @@ func _select_map(id: String) -> void:
 	GameSettings.map_id = id
 	_refresh_map_button()
 
+# 桌面版控件直接挂在根节点下，手机版嵌在滚动容器里；
+# 统一递归查找，否则手机端读不到 ModeSelect/DiffSelect，模式永远落到 1V1。
+func _find_ui(node_name: String) -> Node:
+	var n = find_child(node_name, true, false)
+	if n:
+		return n
+	return get_node_or_null(node_name)
+
 func _on_play_pressed():
 	GameSettings.player_nation = nation_select.selected
 	GameSettings.enemy_nation = randi() % RTSConfig.Nation.size()
-	var ds = get_node_or_null("DiffSelect")
+	var ds = _find_ui("DiffSelect")
 	if ds: GameSettings.ai_difficulty = ds.selected
-	var ms = get_node_or_null("ModeSelect")
+	var ms = _find_ui("ModeSelect")
 	var mode_idx = ms.selected if ms else 0
 	GameSettings.is_ffa = mode_idx >= 3   # 3/4/5 国乱斗
 	if GameSettings.is_ffa:
@@ -361,17 +369,17 @@ func _on_play_pressed():
 	# 战场地形：仅 1V1 生效，其余模式回经典大陆
 	if _map_button and _map_button.disabled:
 		GameSettings.map_id = "classic"
-	var fc = get_node_or_null("FastCheck")
+	var fc = _find_ui("FastCheck")
 	GameSettings.fast_mode = fc.button_pressed if fc else false
 	get_tree().change_scene_to_file("res://scenes/rts_battle.tscn")
 
 func _on_multiplayer_pressed():
-	var ds = get_node_or_null("DiffSelect")
+	var ds = _find_ui("DiffSelect")
 	if ds: GameSettings.ai_difficulty = ds.selected
 	GameSettings.ai_mode = 1   # 联机模式不使用单机模式
 	GameSettings.is_ffa = false
 	GameSettings.map_id = "classic"   # 联机选图在联机大厅里选
-	var fc = get_node_or_null("FastCheck")
+	var fc = _find_ui("FastCheck")
 	GameSettings.fast_mode = fc.button_pressed if fc else false
 	get_tree().change_scene_to_file("res://scenes/online_menu.tscn")
 
