@@ -315,6 +315,27 @@ func _start_sink_death() -> void:
 	roll_tw.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 	tween.chain().tween_callback(queue_free)
 
+# 动物死亡表现：模型侧倒并下沉一点，动画结束后再释放，
+# 避免被一箭射死后直接凭空消失。鱼的死亡走沉水逻辑，这里不处理。
+func _play_animal_death() -> void:
+	collision_layer = 0
+	collision_mask = 0
+	var model: Node3D = null
+	if has_meta("_model_instance") and is_instance_valid(get_meta("_model_instance")):
+		model = get_meta("_model_instance")
+	if model == null:
+		queue_free()
+		return
+	var dur: float = 0.85
+	var tween := create_tween()
+	tween.set_parallel(true)
+	# 绕侧向轴倒下 86 度，最后一帧看着像躺在地上
+	tween.tween_property(model, "rotation:z", model.rotation.z + deg_to_rad(86.0), dur * 0.65) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tween.tween_property(model, "position:y", model.position.y - 0.3, dur) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+	tween.chain().tween_callback(queue_free)
+
 func die():
 	if _is_dead:
 		return
@@ -409,6 +430,10 @@ func die():
 	# 此时 health 已为 0、碰撞已关闭，敌方无法再选中或攻击它。
 	if _should_sink_death():
 		_start_sink_death()
+		return
+	# 动物死亡：侧倒并下沉后释放（鱼走上面的沉水逻辑，这里排除）
+	if self is Army and str(get("_animal_type")) != "" and str(get("_animal_type")) != "fish":
+		_play_animal_death()
 		return
 	# 切换到毁坏模型
 	var dem_path = RTSConfig.get_demolished_model(entity_id)

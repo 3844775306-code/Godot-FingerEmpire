@@ -1578,75 +1578,69 @@ func _is_hunting_heavy_map() -> bool:
 func _ai_hunt_animals(delta):
 	_hunt_timer -= delta
 	if _hunt_timer > 0: return
-	var heavy: bool = _is_hunting_heavy_map()
-	_hunt_timer = 45.0 if heavy else 120.0
+	_hunt_timer = 8.0   # 持续狩猎：每 8 秒补齐一次猎手，动物死了能自动换目标
 
-	# Collect idle military units (not peasants, ships, merchants, officials)
-	var idle_land = []   # land-capable
-	var idle_water = []  # water-capable
+	# 只派农民；农民总数超过 15 才分人出去，前期不打断采集
+	var peasants: Array = []
 	for e in battle.entities.get_children():
 		if not (e is Army) or e.health <= 0: continue
+		if e.entity_id != 10: continue
 		if not entity_belongs_to_me(e): continue
-		# Exclude non-combat units
-		if e.entity_id == 10 or e.entity_id == 14: continue  # peasants, gathering ships
-		if e.entity_id == 5 or e.entity_id == 6: continue  # handcarts / trade carts
-		if e.entity_id >= 43: continue  # merchants, officials, food merchant
-		if e.has_meta("ai_home_guard") or e.has_meta("ai_resource_guard") or e.has_meta("ai_harass") or e.has_meta("ai_wall_guard"): continue
 		if _is_held_by_garrison(e): continue
-		if e.current_order != "" or e.current_target != null: continue  # only idle
-		if e.water_capable: idle_water.append(e)
-		else: idle_land.append(e)
+		peasants.append(e)
+	if peasants.size() <= HUNT_MIN_PEASANTS: return
 
-	# 沙漠图食物全靠狩猎：把空闲农民也编入猎手（农民对动物有 10 倍伤害）
-	if heavy:
-		for e in battle.entities.get_children():
-			if not (e is Army) or e.health <= 0: continue
-			if e.entity_id != 10: continue
-			if not entity_belongs_to_me(e): continue
-			if _is_held_by_garrison(e): continue
-			if e.current_order != "" or e.current_target != null: continue
-			idle_land.append(e)
-
-	if idle_land.is_empty() and idle_water.is_empty(): return
+	# 统计已经在打猎的农民（攻击目标带 _animal_type）
+	var hunters: Array = []
+	for e in peasants:
+		var t = e.current_target
+		if t != null and is_instance_valid(t):
+			var at0 = t.get("_animal_type")
+			if at0 != null and str(at0) != "":
+				hunters.append(e)
+	if hunters.size() >= HUNT_PEASANT_COUNT: return
 
 	var castle = get_peer_castle(my_peer_id)
 	if not castle: return
 
-	# Find animals within 30 units（沙漠图放宽到 60，兽群分布更散）
-	var search_r: float = 60.0 if heavy else 30.0
-	var swarm_limit: int = 6 if heavy else 3
-	var max_hunters: int = 10 if heavy else 5
+	# 找附近的陆地动物（农民不下水，鱼留给渔船）
+	var search_r: float = 60.0 if _is_hunting_heavy_map() else 30.0
 	var animals = []
 	for e in battle.entities.get_children():
 		if e is Army and e.health > 0:
 			var at = e.get("_animal_type")
 			if at != null and str(at) != "":
+				if str(at) == "fish": continue
 				var d = castle.global_position.distance_to(e.global_position)
 				if d < search_r:
-					animals.append({"entity": e, "dist": d, "is_fish": (at == "fish")})
+					animals.append({"entity": e, "dist": d})
 	if animals.is_empty(): return
 	animals.sort_custom(func(a, b): return a.dist < b.dist)
 
-	# Pick a target not already swarmed
-	var hunt_target = null; var is_fish_target = false
+	# 选一只还没围满猎手的动物
+	var hunt_target = null
 	for ai in animals:
 		var existing = 0
 		for e in battle.entities.get_children():
 			if e is Army and entity_belongs_to_me(e) and e.current_target == ai.entity: existing += 1
-		if existing < swarm_limit: hunt_target = ai.entity; is_fish_target = ai.is_fish; break
+		if existing < HUNT_PEASANT_COUNT: hunt_target = ai.entity; break
 	if not hunt_target: return
 
-	# Select hunters — strict water/land separation, no cross-terrain
-	var hunters = []
-	var pool = idle_water if is_fish_target else idle_land
-	if pool.is_empty(): return  # no suitable units for this terrain
-	for u in pool:
-		if hunters.size() >= max_hunters: break
-		hunters.append(u)
-	if hunters.is_empty(): return
-
-	for u in hunters:
+	# 补齐到固定 5 个：优先闲置农民，不够再从采集农民里抽（总数 >15 有余量）
+	var need: int = HUNT_PEASANT_COUNT - hunters.size()
+	var candidates: Array = []
+	for e in peasants:
+		if hunters.has(e): continue
+		if e.current_order == "" and e.current_target == null:
+			candidates.append(e)
+	if candidates.size() < need:
+		for e in peasants:
+			if hunters.has(e) or candidates.has(e): continue
+			candidates.append(e)
+	for u in candidates:
+		if need <= 0: break
 		u.attack_target(hunt_target)
+		need -= 1
 	_hunt_target = hunt_target; _hunt_target_id = hunt_target.get_instance_id()
 
 func _check_hunt_cleanup():
@@ -2787,6 +2781,10 @@ var _body_scroll: ScrollContainer = null   # 内容滚动区，避免建筑统�
 var _panel_collapsed: bool = false         # 面板是否已收起为标题条
 var _panel_bg_style: StyleBoxFlat = null   # 面板底板样式（按友方/敌方着色）
 var _last_relation: int = -2               # 上次计算的敌我关系，避免每帧重设样式
+# 狩猎：固定派几个农民持续打猎，农民总数超过阈值才开始（避免前期断经济）
+const HUNT_PEASANT_COUNT: int = 5
+const HUNT_MIN_PEASANTS: int = 15
+
 const PANEL_WIDTH: float = 540.0
 const PANEL_HEIGHT: float = 400.0
 const PANEL_COLLAPSED_HEIGHT: float = 44.0

@@ -1907,6 +1907,27 @@ func _enable_vertex_colors(node: Node):
 					child.set_surface_override_material(si, dup)
 		_enable_vertex_colors(child)
 
+# 计算模型自身坐标系里的最低点：动物模型的原点常不在脚底，
+# 用它把模型最低点对齐到实体原点（实体原点就是地面高度）。
+func _model_local_min_y(model: Node3D) -> float:
+	var inv: Transform3D = model.global_transform.affine_inverse()
+	var merged := AABB()
+	var has := false
+	var meshes: Array = model.find_children("*", "MeshInstance3D", true, false)
+	for c in meshes:
+		var mi := c as MeshInstance3D
+		if mi == null or mi.mesh == null:
+			continue
+		var a: AABB = (inv * mi.global_transform) * mi.get_aabb()
+		if not has:
+			merged = a
+			has = true
+		else:
+			merged = merged.merge(a)
+	if not has:
+		return 0.0
+	return merged.position.y
+
 func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -> GameEntity:
 	if not entities or config.is_empty(): return null
 
@@ -1938,6 +1959,14 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 	if entity.entity_id in [15, 19, 34, 38] and entity.has_meta("_model_instance"):
 		var mi = entity.get_meta("_model_instance")
 		if is_instance_valid(mi): mi.position.y += entity.body_radius * 0.5
+	# 动物模型的原点很多时候不在脚底，直接把 y 设成地面高度就会浮空或陷进地里。
+	# 这里按模型包围盒把最低点对齐到实体原点（原点即地面高度）。
+	if entity is Army and str(entity.get("_animal_type")) != "" and entity.has_meta("_model_instance"):
+		var ani = entity.get_meta("_model_instance")
+		if is_instance_valid(ani):
+			var animin: float = _model_local_min_y(ani)
+			if absf(animin) > 0.005:
+				ani.position.y -= animin
 	# 资源需要 setup 后再重建 visual
 	if entity.entity_type == 0 and not model_loaded and entity.has_method("_create_visual"):
 		entity._create_visual()
