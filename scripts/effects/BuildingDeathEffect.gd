@@ -3,8 +3,6 @@
 # 单机与联机主机由 GameEntity.die() 调用，联机客户端由 ClientRenderer 的 dead_ids 分支调用。
 extends RefCounted
 
-const RUBBLE_PATH := "res://models/arena/bricks.glb"
-
 const TIER_WALL := 0
 const TIER_BUILDING := 1
 const TIER_CASTLE := 2
@@ -13,15 +11,13 @@ const TIER_CASTLE := 2
 const WALL_COLLAPSE := 0.35
 const BUILDING_COLLAPSE := 0.85
 const CASTLE_COLLAPSE := 1.25
-const WALL_TOTAL := 0.9
-const BUILDING_TOTAL := 1.4
-const CASTLE_TOTAL := 2.0
+# 倒塌动作结束后只留极短时间让尘土收尾，然后释放实体。
+const POST_COLLAPSE_LINGER := 0.12
 
 static var _dust_texture: Texture2D = null
 static var _debris_mesh: BoxMesh = null
-static var _rubble_scene: PackedScene = null
 
-# 返回本次特效总时长；返回 0 表示没有播放（无头服务器、已播放过、节点无效）。
+# 返回本次特效总时长；返回 0 表示没有播放（无头服务器、节点无效）。
 static func play(host: Node3D, entity_id: int, body_radius: float, model_override: Node3D = null) -> float:
 	if not is_instance_valid(host) or not host.is_inside_tree():
 		return 0.0
@@ -60,11 +56,11 @@ static func play(host: Node3D, entity_id: int, body_radius: float, model_overrid
 	_spawn_debris(host, radius, tier)
 	_spawn_dust(host, radius, tier)
 
-	# 先隐藏模型并留下废墟，再等一小段让废墟可见，最后释放整个实体。
+	# 倒塌完成后隐藏模型，短暂保留尘土，然后释放整个实体。
 	var collapse_timer := Timer.new()
 	collapse_timer.one_shot = true
 	collapse_timer.wait_time = collapse_time
-	collapse_timer.timeout.connect(_on_collapsed.bind(host, visual, radius, tier))
+	collapse_timer.timeout.connect(_on_collapsed.bind(host, visual))
 	host.add_child(collapse_timer)
 	collapse_timer.start()
 
@@ -91,11 +87,7 @@ static func _get_collapse_time(tier: int) -> float:
 	return BUILDING_COLLAPSE
 
 static func _get_total_time(tier: int) -> float:
-	if tier == TIER_WALL:
-		return WALL_TOTAL
-	if tier == TIER_CASTLE:
-		return CASTLE_TOTAL
-	return BUILDING_TOTAL
+	return _get_collapse_time(tier) + POST_COLLAPSE_LINGER
 
 # 服务端模型在 _model_instance；客户端模型是实体的直接子节点。
 static func _find_visual_root(host: Node3D, override: Node3D) -> Node3D:
@@ -108,7 +100,7 @@ static func _find_visual_root(host: Node3D, override: Node3D) -> Node3D:
 	for child in host.get_children():
 		if child is Node3D and _has_visual_mesh(child):
 			var cname := String(child.name)
-			if cname == "SelectionRing" or cname == "ClickableBody" or cname == "BuildingRubble":
+			if cname == "SelectionRing" or cname == "ClickableBody":
 				continue
 			return child
 	return null
@@ -154,12 +146,11 @@ static func _start_collapse_tween(host: Node3D, visual: Node3D, base_pos: Vector
 	var scale_tw := tween.tween_property(visual, "scale", target_scale, collapse_time)
 	scale_tw.set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_IN)
 
-static func _on_collapsed(host: Node3D, visual: Node3D, radius: float, tier: int) -> void:
+static func _on_collapsed(host: Node3D, visual: Node3D) -> void:
 	if not is_instance_valid(host):
 		return
 	if is_instance_valid(visual):
 		visual.visible = false
-	_spawn_rubble(host, radius, tier)
 
 static func _spawn_debris(host: Node3D, radius: float, tier: int) -> void:
 	var particles := CPUParticles3D.new()
@@ -243,34 +234,3 @@ static func _get_dust_texture() -> Texture2D:
 		tex.height = 64
 		_dust_texture = tex
 	return _dust_texture
-
-static func _spawn_rubble(host: Node3D, radius: float, tier: int) -> void:
-	if not is_instance_valid(host):
-		return
-	if _rubble_scene == null and ResourceLoader.exists(RUBBLE_PATH):
-		_rubble_scene = load(RUBBLE_PATH)
-	if _rubble_scene == null:
-		return
-	var rubble = _rubble_scene.instantiate()
-	if rubble == null:
-		return
-	var aabb := _get_aabb(rubble)
-	var max_dim := maxf(aabb.size.x, maxf(aabb.size.y, aabb.size.z))
-	var target_size := radius * (2.2 if tier == TIER_CASTLE else 1.6)
-	if max_dim > 0.01:
-		rubble.scale = Vector3.ONE * (target_size / max_dim)
-	rubble.name = "BuildingRubble"
-	rubble.position = Vector3(0, radius * 0.04, 0)
-	if rubble is Node3D:
-		rubble.set_meta("_building_rubble", true)
-	host.add_child(rubble)
-
-static func _get_aabb(node: Node) -> AABB:
-	var result := AABB()
-	if node is MeshInstance3D and node.mesh != null:
-		result = node.mesh.get_aabb()
-	for child in node.get_children():
-		var child_aabb := _get_aabb(child)
-		if child_aabb.size.length_squared() > 0.0:
-			result = result.merge(child_aabb)
-	return result
