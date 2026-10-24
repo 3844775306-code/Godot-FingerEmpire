@@ -16,6 +16,7 @@ var max_lifetime: float = 10.0
 var hit: bool = false
 var target_pos: Vector3 = Vector3.ZERO   # 固定目标点（非追踪模式）
 var _saved_dir: Vector3 = Vector3.ZERO
+var _pool_key: String = ""                # 对象池键；由 BattleManager 设置
 
 # 弹丸模型缓存：后期每秒会生成几十到上百发子弹，不能每发都做
 # ResourceLoader.exists + load + GLB 实例化。PackedScene 只加载一次，之后只 instantiate。
@@ -84,6 +85,47 @@ func _ready():
 	col_shape.shape.radius = 0.15
 	add_child(col_shape)
 
+func reset_for_reuse(new_source, p_damage_radius: float, p_team: int, p_key: String) -> void:
+	source = new_source
+	if new_source != null and is_instance_valid(new_source):
+		source_entity_id = int(new_source.entity_id)
+	else:
+		source_entity_id = -1
+	damage_radius = p_damage_radius
+	team = p_team
+	_pool_key = p_key
+	target = null
+	target_pos = Vector3.ZERO
+	_saved_dir = Vector3.ZERO
+	hit = false
+	time_alive = 0.0
+	attack_type = 1
+	rotation = Vector3.ZERO
+	visible = true
+	if not is_in_group("bullets"):
+		add_to_group("bullets")
+	set_physics_process(true)
+
+func recycle() -> void:
+	if not is_inside_tree():
+		queue_free()
+		return
+	hit = true
+	visible = false
+	set_physics_process(false)
+	target = null
+	source = null
+	source_entity_id = -1
+	target_pos = Vector3.ZERO
+	_saved_dir = Vector3.ZERO
+	time_alive = 0.0
+	remove_from_group("bullets")
+	var bm = _get_bm()
+	if bm and bm.has_method("recycle_bullet"):
+		bm.recycle_bullet(self)
+	else:
+		queue_free()
+
 var _cached_bm = null
 
 func _get_bm():
@@ -96,7 +138,7 @@ func _physics_process(delta):
 		return
 	time_alive += delta
 	if time_alive > max_lifetime:
-		queue_free()
+		recycle()
 		return
 
 	# 固定目标点模式（投石车/巨型投石机）：飞向固定位置
@@ -117,8 +159,9 @@ func _physics_process(delta):
 		# 检查是否足够近（命中）
 		if global_position.distance_to(target.global_position) < 0.3:
 			_on_hit(target)
+			return
 	else:
-		queue_free()
+		recycle()
 		return
 
 	# 使用缓存的 battle_manager 做碰撞检测
@@ -170,7 +213,7 @@ func _on_hit(entity: GameEntity):
 	if attack_type == 2: entity.shock(0.5)
 	elif attack_type == 3: entity.freeze(3.0)
 
-	queue_free()
+	recycle()
 
 # 让弹丸模型朝向飞行方向；方向接近竖直时换用备用 up 向量避免万向锁翻转
 func _orient_to_dir(dir: Vector3):
@@ -198,4 +241,4 @@ func _on_hit_pos():
 				if e is GameEntity and e.team != team:
 					if e.global_position.distance_to(global_position) <= damage_radius:
 						e.take_damage(damage, src)
-	queue_free()
+	recycle()

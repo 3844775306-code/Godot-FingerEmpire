@@ -1472,7 +1472,7 @@ func broadcast_snapshot():
 func _build_bullets_data() -> Array:
 	var bullets_data = []
 	for bullet in _bullet_cache:
-		if is_instance_valid(bullet):
+		if is_instance_valid(bullet) and bullet.visible and not bullet.hit:
 			# entity_id 供客户端判断弹丸模型（箭/炮弹/巨石），damage_radius 区分范围弹
 			bullets_data.append({
 				"id": bullet.get_instance_id(),

@@ -149,7 +149,11 @@ func _attack(target, delta):
 		if dir.length() > 0.01:
 			rotation.y = atan2(dir.x, dir.z) + deg_to_rad(90)
 	if damage_radius > 0 or attack_range > 1.0:
-		var bullet = Bullet.new()
+		var bm = _get_bm()
+		if bm == null:
+			attack_timer = attack_speed
+			return
+		var bullet = bm.acquire_bullet(self, damage_radius, team)
 		bullet.team = team
 		bullet.owner_peer_id = owner_peer_id
 		bullet.damage = attack
@@ -157,11 +161,8 @@ func _attack(target, delta):
 		bullet.target = target
 		bullet.source = self
 		bullet.damage_radius = damage_radius
-		var bm = _get_bm()
-		if bm:
-			bm.add_child(bullet)
-			# 入树后再设全局坐标，避免 !is_inside_tree() 报错刷日志
-			bullet.global_position = global_position + Vector3(0, body_radius * 1.5, 0)
+		# acquire_bullet 已把弹丸挂到 BattleManager 下，这里只设置入树后的全局坐标
+		bullet.global_position = global_position + Vector3(0, body_radius * 1.5, 0)
 	else:
 		target.take_damage(attack, self)
 	attack_timer = attack_speed

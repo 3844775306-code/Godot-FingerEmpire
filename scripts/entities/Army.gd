@@ -656,8 +656,11 @@ func _attack(target, delta):
 				spread_angle = deg_to_rad(multi[0])
 
 		var bullet_bm = _get_bm()
+		if bullet_bm == null:
+			attack_timer = attack_speed
+			return
 		for i in range(bullet_count):
-			var bullet = Bullet.new()
+			var bullet = bullet_bm.acquire_bullet(self, damage_radius, team)
 			bullet.team = team
 			bullet.owner_peer_id = owner_peer_id
 			bullet.damage = attack
@@ -683,11 +686,7 @@ func _attack(target, delta):
 			var spawn_dir = (target.global_position - global_position).normalized()
 			var perpendicular = Vector3(spawn_dir.z, 0, -spawn_dir.x)
 			var offset = perpendicular * sin(angle_offset) * 0.3
-			if bullet_bm == null:
-				continue
-			# 必须先入树再设置 global_position；未入树时设置全局坐标会每发子弹刷一条
-			# "Condition !is_inside_tree()" 错误，并把日志 I/O 拖成后期卡顿。
-			bullet_bm.add_child(bullet)
+			# acquire_bullet 已把弹丸挂到 BattleManager 下，这里只设置入树后的全局坐标
 			bullet.global_position = global_position + Vector3(0, body_radius * 2.5, 0) + offset
 	else:
 		var _dmg_m = attack

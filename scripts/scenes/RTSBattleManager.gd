@@ -111,6 +111,45 @@ var _wall_layout_signature: int = 0       # 建筑/资源布局签名，避免�
 var _wall_signature_initialized: bool = false
 var _wall_entity_grid: Dictionary = {}    # Vector2i -> Building(城墙 id==27)，供 process_move 高度平滑 O(1) 查询
 var _ladder_entity_grid: Dictionary = {}  # Vector2i -> Building(梯子 id==8)，供 _has_adjacent_ladder O(8) 查询
+# 弹丸对象池：后期每秒几十上百发箭/炮弹，复用节点可避免反复 new + GLB instantiate + 物理形状创建
+var _bullet_pool: Dictionary = {}         # pool_key -> Array[Bullet]
+
+func _bullet_pool_key(source, p_damage_radius: float, p_team: int) -> String:
+	var sid: int = -1
+	if source != null and is_instance_valid(source):
+		sid = int(source.entity_id)
+	if sid == 17 or sid == 59:
+		return "boulder_%d_%d" % [sid, p_team]
+	if p_damage_radius > 0.0 or sid in [16, 26, 39]:
+		return "cannon_%d" % p_team
+	return "arrow_%d" % p_team
+
+func acquire_bullet(source, p_damage_radius: float, p_team: int) -> Bullet:
+	var key: String = _bullet_pool_key(source, p_damage_radius, p_team)
+	var bucket: Array = _bullet_pool.get(key, [])
+	while bucket.size() > 0:
+		var pooled = bucket.pop_back()
+		if is_instance_valid(pooled):
+			pooled.reset_for_reuse(source, p_damage_radius, p_team, key)
+			return pooled
+	var b := Bullet.new()
+	b.team = p_team
+	b.source = source
+	b.damage_radius = p_damage_radius
+	b._pool_key = key
+	add_child(b)
+	return b
+
+func recycle_bullet(b: Bullet) -> void:
+	if not is_instance_valid(b):
+		return
+	var key: String = b._pool_key
+	if key == "":
+		b.queue_free()
+		return
+	var bucket: Array = _bullet_pool.get(key, [])
+	bucket.append(b)
+	_bullet_pool[key] = bucket
 
 # ==================== 诊断工具 ====================
 var _diag_timer: float = 5.0
