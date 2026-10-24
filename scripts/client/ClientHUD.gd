@@ -858,6 +858,9 @@ func _make_top_label(parent: CanvasLayer, node_name: String, top_y: float, line_
 	lb.add_theme_color_override("font_color", color)
 	lb.add_theme_color_override("font_outline_color", Color.BLACK)
 	lb.add_theme_constant_override("outline_size", maxi(3, int(font_size * 0.2)))
+	# 顶部底板 z_index=89；文字必须压在底板上方，否则会被半透明黑底盖住，
+	# 视觉上就像字体变暗、和单机版不一致。
+	lb.z_index = 90
 	parent.add_child(lb)
 	return lb
 

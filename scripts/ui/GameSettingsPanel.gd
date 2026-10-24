@@ -15,7 +15,7 @@ const QUALITY_DESC: Array = [
 
 var _is_online: bool = false
 var _is_client: bool = false
-var _quality_level: int = 1
+var _quality_level: int = 3
 var _quality_btns: Array = []
 var _pause_btn: Button = null
 var _hint_label: Label = null
