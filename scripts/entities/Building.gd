@@ -108,9 +108,11 @@ func _process(delta):
 
 	# 防御塔自动攻击
 	if attack > 0:
-		if not current_target or not is_instance_valid(current_target):
+		if current_target != null and not is_instance_valid(current_target):
+			current_target = null
+		if current_target == null:
 			_find_enemy_in_range()
-		if current_target:
+		if current_target != null:
 			var dist = global_position.distance_to(current_target.global_position) - body_radius - current_target.body_radius
 			if dist <= attack_range:
 				_attack(current_target, delta)

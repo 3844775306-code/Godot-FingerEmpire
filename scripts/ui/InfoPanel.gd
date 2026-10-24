@@ -9,7 +9,7 @@ extends Panel
 var name_rtl: RichTextLabel
 var stats_rtl: RichTextLabel
 var hp_bar: ColorRect
-var observed_entity: GameEntity = null
+var observed_entity = null
 var battle: RTSBattleManager = null
 var demolish_btn: Button = null
 var hp_bar_bg: ColorRect = null
@@ -120,7 +120,11 @@ func _get_same_type_buildings(entity: Building) -> Array[Building]:
 		result.append(entity)
 	return result
 
-func update_info(entity: GameEntity):
+func update_info(entity):
+	if entity == null or not is_instance_valid(entity) or entity.health <= 0:
+		observed_entity = null
+		visible = false
+		return
 	observed_entity = entity; visible = true
 
 	# Batch count from selection
@@ -269,7 +273,8 @@ func _on_produce_pressed(unit_id: int):
 var _refresh_timer: float = 0.0
 
 func _process(delta):
-	if not visible or not observed_entity or not is_instance_valid(observed_entity): return
+	if not visible or observed_entity == null or not is_instance_valid(observed_entity) or observed_entity.health <= 0:
+		return
 	_refresh_timer -= delta
 	if _refresh_timer <= 0:
 		_refresh_timer = 1.0

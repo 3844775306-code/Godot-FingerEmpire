@@ -36,7 +36,10 @@ var production_queue: Array = []
 
 var attack_timer: float = 0.0
 var gather_timer: float = 0.0
-var current_target: Node3D = null
+# 目标引用不设静态类型：实体可能在同一帧被击杀并 queue_free，强类型赋值会直接
+# 报 "Trying to assign invalid previously freed instance"。使用处统一用
+# is_instance_valid 判断，命令队列里的旧目标也要在执行前校验。
+var current_target = null
 var current_order: String = ""
 var nav_agent: NavigationAgent3D
 
@@ -153,9 +156,12 @@ func _process(delta):
 		if bm and bm.has_method("_update_entity_animation"):
 			bm._update_entity_animation(self)
 
-func take_damage(amount: float, source: GameEntity = null):
+func take_damage(amount: float, source = null):
 	if _is_dead or health <= 0.0:
 		return
+	# source 可能来自已经消失的弹丸/旧目标；先清空失效引用，避免后面强类型属性访问
+	if source != null and not is_instance_valid(source):
+		source = null
 	# Officials are immune while garrisoned
 	if entity_id >= 46 and entity_id <= 50:
 		var gb = get("_garrison_building")

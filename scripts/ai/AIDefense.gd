@@ -146,7 +146,7 @@ func _evaluate_threat(castle) -> void:
 
 	# 威胁只来自 AI 当前视野内、确实能看到的敌军；不做全图侦测
 	for e in ai._visible_enemies:
-		if not (e is Army) or e.health <= 0:
+		if not is_instance_valid(e) or not (e is Army) or e.health <= 0:
 			continue
 		# _visible_enemies 已经过视野筛选，不再重复扫描己方全部实体
 		if not _is_combat_enemy(e):
@@ -226,7 +226,7 @@ func _enemy_castle_dir(castle) -> Vector3:
 	return Vector3.FORWARD
 
 func _is_combat_enemy(e) -> bool:
-	if not (e is Army) or e.health <= 0:
+	if e == null or not is_instance_valid(e) or not (e is Army) or e.health <= 0:
 		return false
 	# 中立动物/中立单位不是敌军，不能触发防守
 	if int(e.team) == RTSConfig.Team.NEUTRAL:
@@ -1209,7 +1209,7 @@ func _is_valid_defense_ground(pos: Vector3, radius: float = 1.0, allow_under_fir
 				return false
 	if not allow_under_fire:
 		for e in ai._visible_enemies:
-			if not (e is Army or e is Building) or e.health <= 0:
+			if not is_instance_valid(e) or not (e is Army or e is Building) or e.health <= 0:
 				continue
 			if not ai._entity_is_enemy(e):
 				continue

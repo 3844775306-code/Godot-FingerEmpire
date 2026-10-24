@@ -14,9 +14,11 @@ var box_end: Vector2
 var box_rect: ColorRect
 
 # 双击相关
-var last_clicked_entity: GameEntity = null
+# 不设强类型：实体可能已经死亡释放，强类型赋值会报 previously freed
+var last_clicked_entity = null
 var last_click_time: float = 0.0
 const DOUBLE_CLICK_THRESHOLD = 0.3   # 双击时间阈值（秒）
+var _ref_cleanup_timer: float = 0.0
 
 # 编队系统
 var control_groups: Dictionary = {}   # int → Array[GameEntity]
@@ -32,6 +34,33 @@ func _ready():
 	# 延迟添加到 UI 层，确保 battle_manager 已就绪
 	call_deferred("_add_box_rect_to_ui")
 
+func _process(delta):
+	# 选中/编队/双击缓存都可能持有已死亡实体，定期清理，避免后续强类型参数或
+	# panel.update_info(selected_entities[0]) 之类的调用触发 previously freed。
+	_ref_cleanup_timer -= delta
+	if _ref_cleanup_timer <= 0.0:
+		_ref_cleanup_timer = 0.2
+		if _sanitize_entity_refs():
+			_update_info_panel()
+
+func _sanitize_entity_refs() -> bool:
+	var changed := false
+	for i in range(selected_entities.size() - 1, -1, -1):
+		var e = selected_entities[i]
+		if not is_instance_valid(e) or (e is GameEntity and e.health <= 0):
+			selected_entities.remove_at(i)
+			changed = true
+	if last_clicked_entity != null and (not is_instance_valid(last_clicked_entity) or last_clicked_entity.health <= 0):
+		last_clicked_entity = null
+	for key in control_groups.keys():
+		var arr: Array = control_groups[key]
+		for i in range(arr.size() - 1, -1, -1):
+			var e = arr[i]
+			if not is_instance_valid(e) or (e is GameEntity and e.health <= 0):
+				arr.remove_at(i)
+				changed = true
+	return changed
+
 func _add_box_rect_to_ui():
 	var bm = get_tree().get_first_node_in_group("battle_manager")
 	if bm and bm.has_node("UI"):
@@ -41,6 +70,7 @@ func _add_box_rect_to_ui():
 
 # ---------- 输入事件处理 ----------
 func _input(event):
+	_sanitize_entity_refs()
 	# 建筑模式优先：不进行任何选择操作
 	var bm = get_tree().get_first_node_in_group("battle_manager")
 	if bm and bm.build_mode:
@@ -268,7 +298,9 @@ func _on_left_mouse_released(event):
 					_add_to_selection(entity)
 
 # ---------- 选择同类 ----------
-func _select_all_of_same_type(target: GameEntity):
+func _select_all_of_same_type(target):
+	if target == null or not is_instance_valid(target):
+		return
 	_clear_selection()
 	if target is Army:
 		for entity in get_tree().get_nodes_in_group("entities"):
@@ -308,7 +340,9 @@ func _get_ground_pos(screen_pos: Vector2) -> Vector3:
 	return res.position if res else Vector3.ZERO
 
 # 是否属于本地玩家（2v2/3v3 必须按 owner 判断，不能只看 team）
-func _is_local_owned(entity: GameEntity) -> bool:
+func _is_local_owned(entity) -> bool:
+	if entity == null or not is_instance_valid(entity):
+		return false
 	var bm = get_tree().get_first_node_in_group("battle_manager")
 	if not bm: return false
 	if bm.has_method("is_local_player_owned"):
@@ -316,7 +350,9 @@ func _is_local_owned(entity: GameEntity) -> bool:
 	return entity.team == bm.get_host_team()
 
 # ---------- 选择列表操作 ----------
-func _add_to_selection(entity: GameEntity):
+func _add_to_selection(entity):
+	if entity == null or not is_instance_valid(entity) or entity.health <= 0:
+		return
 	if not _is_local_owned(entity):
 		return
 	if entity not in selected_entities:
@@ -324,7 +360,9 @@ func _add_to_selection(entity: GameEntity):
 		entity.set_selected(true); if entity is Army and entity.has_method("show_waypoints"): entity.show_waypoints()
 		_update_info_panel()
 
-func _remove_from_selection(entity: GameEntity):
+func _remove_from_selection(entity):
+	if entity == null or not is_instance_valid(entity):
+		return
 	if entity in selected_entities:
 		selected_entities.erase(entity)
 		entity.set_selected(false); if entity is Army and entity.has_method("hide_waypoints"): entity.hide_waypoints()
@@ -344,6 +382,7 @@ func _clear_selection():
 
 # ---------- 同步信息面板 ----------
 func _update_info_panel():
+	_sanitize_entity_refs()
 	var bm = get_tree().get_first_node_in_group("battle_manager")
 	if not bm:
 		return

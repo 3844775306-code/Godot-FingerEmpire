@@ -4,9 +4,11 @@ extends Control
 signal upgrade_pressed
 signal produce_pressed(unit_id: int)
 
-var building: Building = null
+var building = null
 
-func setup(_building: Building):
+func setup(_building):
+	if _building == null or not is_instance_valid(_building):
+		return
 	building = _building
 
 	# 1. 菜单本身必须停止鼠标事件，但我们手动控制子元素

@@ -377,7 +377,7 @@ func _physics_process(delta):
 	# 目标有效性检查
 	# Ä¿±êÓÐÐ§ÐÔ¼ì²é
 		# Ä¿±êÓÐÐ§ÐÔ¼ì²é
-	if current_target and not is_instance_valid(current_target):
+	if current_target != null and not is_instance_valid(current_target):
 		current_target = null
 		_set_order(UnitState.IDLE)
 		is_attack_moving = false
@@ -499,6 +499,10 @@ func _process_action(delta, bm):
 # ----------------- ¾ö²ß£¨½ÚÁ÷£© -----------------
 
 func _think(delta, bm):
+	if current_target != null and not is_instance_valid(current_target):
+		current_target = null
+		_set_order(UnitState.IDLE)
+		is_attack_moving = false
 	# 驻扎追击距离限制：敌人离驻扎点超过视野则放弃追击
 	if garrison_point != Vector3.ZERO and current_target != null and _order_is(UnitState.ATTACKING):
 		if current_target.global_position.distance_to(garrison_point) > 10.0:
@@ -569,6 +573,9 @@ func recalculate_path():
 	if _movement: _movement.recalculate()
 
 func _attack(target, delta):
+	if target == null or not is_instance_valid(target) or target.health <= 0:
+		current_target = null
+		return
 
 	# 攻击音效
 	var _sfx = ""
@@ -813,7 +820,11 @@ func _spawn_effect_marker(target, color: Color):
 	t.timeout.connect(marker.queue_free)
 	marker.add_child(t); t.start()
 
-func _gather(resource_node: WorldResource, delta):
+func _gather(resource_node, delta):
+	if resource_node == null or not is_instance_valid(resource_node) or resource_node.health <= 0:
+		current_target = null
+		_set_order(UnitState.IDLE)
+		return
 	if gather_timer <= 0:
 		var res_type = resource_node.resource_type
 		if gatherable_resources.size() > 0 and not res_type in gatherable_resources:
@@ -843,7 +854,7 @@ func _get_cargo_total() -> int:
 
 func _return_to_deliver():
 	var target = find_delivery_point()
-	if target:
+	if target != null and is_instance_valid(target):
 		if is_instance_valid(current_target) and current_target is WorldResource :
 			last_resource_target = current_target
 		delivery_target = target
@@ -858,7 +869,9 @@ func find_delivery_point() -> Building:
 	var bm = _get_bm()
 	var candidates = bm._buildings if bm else get_tree().get_nodes_in_group("entities")
 	for entity in candidates:
-		if entity and entity is Building and entity.team == team and entity.health > 0:
+		if not is_instance_valid(entity):
+			continue
+		if entity is Building and entity.team == team and entity.health > 0:
 			if cargo.get("oil", 0) > 0:
 				if entity.entity_id == 23:   # ´¬Îë
 					var dist = global_position.distance_to(entity.global_position)
@@ -867,6 +880,8 @@ func find_delivery_point() -> Building:
 				if entity.entity_id == 20 or entity.entity_id == 22:  # ³Ç±¤or²Ö¿â
 					var dist = global_position.distance_to(entity.global_position)
 					if dist < best_dist: best_dist = dist; best = entity
+	if best != null and not is_instance_valid(best):
+		return null
 	return best
 
 # ----------------- Ñ°µÐ / Ñ°×ÊÔ´ -----------------
@@ -947,7 +962,18 @@ func _should_queue() -> bool:
 	if bm and bm.has_method("get_mp_shift") and bm.get_mp_shift(): return true
 	return false
 
+# 命令里保存的是实体引用；目标可能在排队期间被击杀/采空并释放。
+# 在执行和入队前都必须先校验，否则给 current_target 赋值会触发 previously freed。
+func _is_valid_command_target(target) -> bool:
+	if target == null or not is_instance_valid(target):
+		return false
+	if target is GameEntity and target.health <= 0:
+		return false
+	return true
+
 func _queue_command(cmd: Dictionary):
+	if cmd.has("target") and not _is_valid_command_target(cmd["target"]):
+		return
 	cmd["is_loop"] = false
 	var q = _should_queue()
 	if q:
@@ -979,16 +1005,22 @@ func _execute_command(cmd: Dictionary):
 			is_attack_moving = false
 			_movement.set_move_target(cmd["pos"])
 		"attack":
-			current_target = cmd["target"]
+			var attack_cmd_target = cmd.get("target")
+			if not _is_valid_command_target(attack_cmd_target):
+				return
+			current_target = attack_cmd_target
 			attack_move_target = Vector3.ZERO
 			_set_order(UnitState.ATTACKING)
 			is_attack_moving = false
-			_movement.set_move_target(cmd["target"].global_position, attack_range)
+			_movement.set_move_target(attack_cmd_target.global_position, attack_range)
 		"gather":
-			current_target = cmd["target"]
+			var gather_cmd_target = cmd.get("target")
+			if not _is_valid_command_target(gather_cmd_target):
+				return
+			current_target = gather_cmd_target
 			_set_order(UnitState.GATHERING)
 			is_attack_moving = false
-			_movement.set_move_target(cmd["target"].global_position)
+			_movement.set_move_target(gather_cmd_target.global_position)
 		"attack_move":
 			attack_move_target = cmd["pos"]
 			current_target = null
@@ -1105,10 +1137,14 @@ func _clear_waypoint_markers():
 func move_to(pos: Vector3):
 	_queue_command({"type": "move", "pos": pos})
 
-func attack_target(p_target: Node3D):
+func attack_target(p_target):
+	if not _is_valid_command_target(p_target):
+		return
 	_queue_command({"type": "attack", "target": p_target})
 
-func gather_at(source: Node3D):
+func gather_at(source):
+	if not _is_valid_command_target(source):
+		return
 	_queue_command({"type": "gather", "target": source})
 
 func attack_move_to(pos: Vector3):
@@ -1824,7 +1860,7 @@ func _spawn_baby_animal():
 	var cfg = EntityDatabase.get_config(entity_id)
 	if cfg.is_empty(): return
 	var baby = bm.spawn_entity(cfg, team, global_position + Vector3(randf_range(-3,3), 0, randf_range(-3,3)), 1)
-	if baby and baby is Army:
+	if baby != null and is_instance_valid(baby) and baby is Army:
 		baby.level = 1
 		baby._animal_grow_timer = 20.0
 		baby.max_health = int(max_health * 0.4)
