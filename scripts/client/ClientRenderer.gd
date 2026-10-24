@@ -188,7 +188,7 @@ func start_build_placement(bid: int):
 		var box = BoxMesh.new()
 		box.size = Vector3(cfg.body_radius*2, cfg.body_radius*1.5, cfg.body_radius*2)
 		placement_preview.mesh = box
-	var target_size = cfg.body_radius * 2.0
+	var target_size = cfg.body_radius * 2.0 * RTSConfig.get_model_scale(bid)
 	var aabb = _get_model_aabb(placement_preview)
 	var current_size = max(aabb.size.x, max(aabb.size.y, aabb.size.z))
 	if current_size > 0.01: placement_preview.scale = Vector3.ONE * (target_size / current_size)
@@ -391,7 +391,8 @@ func _process_snapshot(data: Dictionary):
 					if s:
 						var inst = s.instantiate()
 						inst.name = "DemolishedModel"
-						if eid == 41: inst.scale = Vector3(0.5, 0.5, 0.5)
+						# 毁坏模型随本体一起放大，否则塔倒后残骸会明显偏小
+						if eid == 41: inst.scale = Vector3.ONE * (0.5 * RTSConfig.get_model_scale(eid))
 						node.add_child(inst)
 					var t = Timer.new(); t.one_shot = true; t.wait_time = 0.5
 					t.timeout.connect(node.queue_free); node.add_child(t); t.start()
@@ -875,8 +876,8 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 		if model_scene: loaded_model = model_scene.instantiate()
 
 	if loaded_model:
-		# Scale model to match entity body_radius
-		var target_size = info["body_radius"] * 2.0
+		# Scale model to match entity body_radius（再乘特殊体型系数，与服务端一致）
+		var target_size = info["body_radius"] * 2.0 * RTSConfig.get_model_scale(eid)
 		var aabb = _get_model_aabb(loaded_model)
 		var current_size = max(aabb.size.x, max(aabb.size.y, aabb.size.z))
 		var scale_factor := 1.0

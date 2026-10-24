@@ -1707,7 +1707,7 @@ func _apply_entity_model(entity: GameEntity) -> bool:
 	var current_size = max(aabb.size.x, max(aabb.size.y, aabb.size.z))
 	var scale_factor := 1.0
 	if current_size > 0.01:
-		scale_factor = target_size / current_size
+		scale_factor = target_size / current_size * RTSConfig.get_model_scale(entity.entity_id)
 		model_instance.scale = Vector3.ONE * scale_factor
 	entity.add_child(model_instance)
 	_ensure_model_shadows(model_instance)
@@ -2594,7 +2594,7 @@ func _on_building_selected_for_build(building_id: int):
 		build_preview.mesh = BoxMesh.new()
 		build_preview.mesh.size = Vector3(cfg.body_radius*2, cfg.body_radius*1.5, cfg.body_radius*2)
 	# 缩放预览模型匹配实际大小
-	var target_size = cfg.body_radius * 2.0
+	var target_size = cfg.body_radius * 2.0 * RTSConfig.get_model_scale(building_id)
 	var aabb = _get_model_aabb(build_preview)
 	var current_size = max(aabb.size.x, max(aabb.size.y, aabb.size.z))
 	if current_size > 0.01: build_preview.scale = Vector3.ONE * (target_size / current_size)

@@ -124,6 +124,18 @@ static func get_entity_model(entity_id: int, level: int = 1) -> String:
 static func model_needs_flip(model_path: String) -> bool:
 	return model_path.contains("models/characters/") or model_path.ends_with("soldier.glb") or model_path.ends_with("archer.glb")
 
+# 特殊实体模型缩放系数：在“按体半径自动缩放”之后再乘一次，用于调整观感（1.0 = 不调整）
+# 服务端、客户端、放置预览三处共用，避免联机时两边大小不一致
+const ENTITY_MODEL_SCALE := {
+	41: 3.0,   # 瞭望塔：塔身放大三倍，功能性建筑更醒目
+	60: 0.6,   # 牛
+	61: 0.6,   # 猪
+	62: 0.6,   # 羊
+}
+
+static func get_model_scale(entity_id: int) -> float:
+	return float(ENTITY_MODEL_SCALE.get(entity_id, 1.0))
+
 const DEMOLISHED_MODELS = {
 	17: "res://models/castle/siege-catapult-demolished.glb",
 	18: "res://models/castle/siege-ram-demolished.glb",
