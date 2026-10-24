@@ -32,6 +32,10 @@ var _fog_prev_size: int = -1
 var terrain_mesh_instance: MeshInstance3D
 var vertex_grid: Array = []           # 存储顶点高度，用于快速查询
 var height_scale: float = 2.0         # 高度缩放系数
+# 水面材质（用于把船只位置推给着色器做涟漪/尾迹，以及按画质档调反射强度）
+var _water_mat: ShaderMaterial = null
+var _boat_update_timer: float = 0.0
+const BOAT_SHADER_SLOTS: int = 8
 
 # 城堡坐标（世界坐标）
 var player_castle_pos: Vector3 = Vector3.ZERO
@@ -2417,6 +2421,9 @@ func _add_water_box():
 		w.name = "WaterBox"
 		var plane = PlaneMesh.new()
 		plane.size = Vector2(size, size)
+		# 细分后才能看到顶点波浪与船只附近的涟漪（默认 4 个顶点几乎没有任何位移）
+		plane.subdivide_width = 96
+		plane.subdivide_depth = 96
 		w.mesh = plane
 		w.position = Vector3(0, -0.9, 0)
 		var shader = load("res://resources/water_noise.gdshader")
@@ -2424,6 +2431,12 @@ func _add_water_box():
 			var mat = ShaderMaterial.new()
 			mat.shader = shader
 			mat.set_shader_parameter("fog_tex", terrain_texture)
+			# 船只位置数组必须先把长度对齐到着色器里的固定数组大小
+			var empty_boats := PackedVector3Array()
+			empty_boats.resize(BOAT_SHADER_SLOTS)
+			mat.set_shader_parameter("boats", empty_boats)
+			mat.set_shader_parameter("boat_count", 0)
+			_water_mat = mat
 			w.material_override = mat
 		else:
 			var mat = StandardMaterial3D.new()
@@ -2434,6 +2447,50 @@ func _add_water_box():
 			w.material_override = mat
 		print("[Water-Server] box added, shader_loaded=%s, fog_tex=%s" % [str(shader != null), str(terrain_texture)])
 		add_child(w)
+
+# 把水面单位位置喂给水面着色器：船体周围生成涟漪与泡沫尾迹
+func _update_water_boats(delta: float) -> void:
+	if _water_mat == null:
+		return
+	_boat_update_timer -= delta
+	if _boat_update_timer > 0.0:
+		return
+	_boat_update_timer = 0.15
+	var arr := PackedVector3Array()
+	arr.resize(BOAT_SHADER_SLOTS)
+	var count: int = 0
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	var armies: Array = []
+	if bm != null and bm.get("_armies") != null:
+		bm._ensure_cache_fresh()
+		armies = bm.get("_armies")
+	else:
+		# 联机客户端没有服务端实体缓存，退化为直接遍历实体组
+		armies = get_tree().get_nodes_in_group("entities")
+	for e in armies:
+		if count >= BOAT_SHADER_SLOTS:
+			break
+		if not is_instance_valid(e) or e.health <= 0:
+			continue
+		if not bool(e.get("water_capable")):
+			continue
+		arr[count] = e.global_position
+		count += 1
+	_water_mat.set_shader_parameter("boats", arr)
+	_water_mat.set_shader_parameter("boat_count", count)
+
+# 画质档位联动：低画质关掉屏幕空间反射，减少全屏水面的采样开销
+func set_water_quality(level: int) -> void:
+	if _water_mat == null:
+		return
+	var refl: float = 0.85 if level <= 0 else (0.55 if level == 1 else 0.0)
+	var wake: float = 1.0 if level <= 2 else 0.7
+	_water_mat.set_shader_parameter("reflect_strength", refl)
+	_water_mat.set_shader_parameter("wake_strength", wake)
+
+func _process(delta: float) -> void:
+	_update_water_boats(delta)
+
 func get_height_at(world_pos: Vector3) -> float:
 	var size = _get_map_size()
 	var subdivisions = _get_map_size()

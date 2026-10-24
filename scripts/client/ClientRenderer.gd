@@ -14,6 +14,9 @@ var my_color: Color = Color.WHITE
 
 # ==================== 实体节点池 ====================
 var entity_nodes: Dictionary = {}   # instance_id -> Node3D
+# 客户端水面材质：用于把船只位置喂给着色器做涟漪/尾迹
+var _water_mat: ShaderMaterial = null
+const BOAT_SHADER_SLOTS: int = 8
 
 # ==================== 战争迷雾 ====================
 var local_explored_grid: Array = []
@@ -363,6 +366,7 @@ func _safe_process_snapshot(data: Dictionary) -> bool:
 	if not data.has('delta') and not data.has('entities'):
 		return false
 	_process_snapshot(data)
+	_update_water_boats()
 	return true
 
 func _process_snapshot(data: Dictionary):
@@ -2032,6 +2036,9 @@ func _add_water_box(map_size: int = 100, fog_texture = null):
 	w.name = "WaterBox"
 	var plane = PlaneMesh.new()
 	plane.size = Vector2(map_size, map_size)
+	# 细分后才能看到顶点波浪与船只附近的涟漪
+	plane.subdivide_width = 96
+	plane.subdivide_depth = 96
 	w.mesh = plane
 	w.position = Vector3(0, -0.9, 0)
 	var shader = load("res://resources/water_noise.gdshader")
@@ -2039,5 +2046,32 @@ func _add_water_box(map_size: int = 100, fog_texture = null):
 		var mat = ShaderMaterial.new()
 		mat.shader = shader
 		if fog_texture: mat.set_shader_parameter("fog_tex", fog_texture)
+		var empty_boats := PackedVector3Array()
+		empty_boats.resize(BOAT_SHADER_SLOTS)
+		mat.set_shader_parameter("boats", empty_boats)
+		mat.set_shader_parameter("boat_count", 0)
+		_water_mat = mat
 		w.material_override = mat
 	add_child(w)
+
+# 把客户端可见的水面单位位置喂给水面着色器（船体涟漪与泡沫尾迹）
+func _update_water_boats() -> void:
+	if _water_mat == null:
+		return
+	var arr := PackedVector3Array()
+	arr.resize(BOAT_SHADER_SLOTS)
+	var count: int = 0
+	for n in entity_nodes.values():
+		if count >= BOAT_SHADER_SLOTS:
+			break
+		if not is_instance_valid(n) or not (n is Node3D):
+			continue
+		if not bool(n.get("water_capable")):
+			continue
+		var hp = n.get("health")
+		if hp != null and int(hp) <= 0:
+			continue
+		arr[count] = n.global_position
+		count += 1
+	_water_mat.set_shader_parameter("boats", arr)
+	_water_mat.set_shader_parameter("boat_count", count)

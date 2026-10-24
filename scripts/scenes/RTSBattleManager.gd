@@ -3281,6 +3281,10 @@ func _apply_perf_quality() -> void:
 		var want_ssao: bool = _perf_ssao_original and _perf_quality_level < 1
 		if _perf_env.ssao_enabled != want_ssao:
 			_perf_env.ssao_enabled = want_ssao
+	# 水面：画质档越低，屏幕空间反射越弱（最低档完全关闭），船体尾迹略降
+	var map_node := get_node_or_null("Map")
+	if map_node and map_node.has_method("set_water_quality"):
+		map_node.set_water_quality(_perf_quality_level)
 
 # 远景单位不投影：相机远处的单位在屏幕上只有几个像素，阴影 pass 却仍要画一遍完整几何。
 # 节流到 2 秒一次，按相机距离批量开关，后期能明显减少阴影绘制量。
