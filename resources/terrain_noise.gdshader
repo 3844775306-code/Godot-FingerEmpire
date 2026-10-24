@@ -40,7 +40,10 @@ void fragment() {
 	ALBEDO = tex.rgb;
 	ALPHA = tex.a;
 	// 和水面同一套思路：只做顶点位移不改变光照，必须扰法线才有凹凸感
-	vec3 wpos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	// 与水面的写法保持一致：片元里的 VERTEX 已经是视图空间坐标，
+	// 必须用 INV_VIEW_MATRIX 还原到世界空间；若在这里用 MODEL_MATRIX，
+	// 法线扰动的图案会跟着摄像机滑动（之前就是这个 bug）
+	vec3 wpos = (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xyz;
 	vec2 np = wpos.xz * 0.6;
 	float e = 0.35;
 	float h0 = fbm(np);
