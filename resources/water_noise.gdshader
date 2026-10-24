@@ -11,6 +11,8 @@ uniform float reflect_strength : hint_range(0.0, 2.0) = 1.0;
 // 平面反射：水面上方场景由镜像相机渲染到这张纹理
 uniform sampler2D reflection_tex : filter_linear;
 uniform float reflection_enabled : hint_range(0.0, 1.0) = 0.0;
+// 镜像相机渲染出的图像上下颠倒，取样时要翻转 Y
+uniform float reflection_vflip : hint_range(0.0, 1.0) = 1.0;
 
 // —— 船只航行时水面变化：附近涟漪 + 泡沫尾迹 ——
 uniform vec3 boats[8];
@@ -134,9 +136,12 @@ void fragment() {
 		if (reflection_enabled > 0.5) {
 			// 镜像相机是主相机关于水面的镜像：同一屏幕坐标上，它看到的正是
 			// 主相机在水面该点反射出去的内容，直接按屏幕坐标取样即得倒影。
-			vec3 rc = texture(reflection_tex, SCREEN_UV).rgb;
-			// 反射纹理里水面之上的天空是暗色背景，提亮并叠一点天空色，避免水面被压黑
-			refl_col = rc * 1.9 + sky_refl * 0.32;
+			vec2 ruv = vec2(SCREEN_UV.x, mix(SCREEN_UV.y, 1.0 - SCREEN_UV.y, reflection_vflip));
+			vec3 rc = texture(reflection_tex, ruv).rgb;
+			// 反射纹理里的天空是一片很暗的纯背景色，用程序化天空替换掉，
+			// 物体部分保留，水面就既有亮天空倒影又能看到船/建筑的影子
+			float rlum = dot(rc, vec3(0.333));
+			refl_col = mix(sky_refl, rc * 2.2, smoothstep(0.03, 0.30, rlum));
 		} else if (in_screen) {
 			vec3 sc = texture(screen_tex, suv).rgb;
 			// 采样区太暗（天空洞/阴影）时降低屏幕权重，避免整片水面发黑
