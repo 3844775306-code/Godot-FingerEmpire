@@ -956,6 +956,19 @@ func _land_combat_units() -> Array:
 		out.append(e)
 	return out
 
+# 是否已有目标/正在执行任务：这类部队不应被资源守军调度拉走
+# 包括追击/攻击目标、移动/攻击移动/采集/交付中、有排队指令、已驻扎在其他据点的部队
+func _unit_has_existing_task(u) -> bool:
+	if u.current_target != null and is_instance_valid(u.current_target):
+		return true
+	if u.is_attack_moving or u.current_order != "":
+		return true
+	if not u.command_queue.is_empty():
+		return true
+	if u.garrison_point != Vector3.ZERO:
+		return true
+	return false
+
 # ═══════════════════════════════════════════════════════════════
 # 资源区控制
 # ═══════════════════════════════════════════════════════════════
@@ -1092,7 +1105,8 @@ func _defend_resources(castle) -> void:
 			for u in _land_combat_units():
 				if u.has_meta("ai_home_guard") or u.has_meta("ai_harass"):
 					continue
-				if u.is_attack_moving or u.current_order == "attack_move":
+				# 已有目标/正在执行任务的部队保持原命令，不拉来守资源
+				if _unit_has_existing_task(u):
 					continue
 				if _resource_guard_ids.has(u.get_instance_id()):
 					continue
