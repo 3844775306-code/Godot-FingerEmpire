@@ -25,6 +25,9 @@ func _ready():
 	position = (vs - Vector2(2400, 1400) * s) / 2.0
 	# 手机端：桌面绝对布局在 674×393dp 的屏幕上字只有 5~7dp，改用竖排滚动布局
 	if InputSource.use_mobile_ui():
+		# 场景里那套桌面节点必须一起隐藏，否则会和下面的竖排布局重叠，变成"两层 UI"
+		var old_box = get_node_or_null("VBoxContainer")
+		if old_box: old_box.visible = false
 		# 根 Control 默认 size 为 0，anchors 布局会整体塌成 0 高，必须先给设计尺寸
 		size = Vector2(2400, 1400)
 		_build_mobile_layout()

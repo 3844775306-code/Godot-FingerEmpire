@@ -698,6 +698,7 @@ func update_data(resources: Dictionary, population: Dictionary, limits: Dictiona
 var _fps_label: Label = null
 var _game_time_label: Label = null
 var _fps_update_timer: float = 0.5
+var _client_time_acc: float = 0.0
 # Network stats
 var _snap_recv_count: int = 0
 var _snap_recv_rate: int = 0
@@ -764,7 +765,11 @@ func _process(delta):
 		_unit_stats_timer = 1.0
 		_update_unit_stats()
 
-	# 顶部中央两行：第一行性能、第二行 AI/地图/延迟/快照
+	# 本地计时（联机没有可信的服务器时钟，用客户端累计时间显示）
+	_client_time_acc += delta
+	var t_min = int(_client_time_acc / 60)
+	var t_sec = int(_client_time_acc) % 60
+	# 顶部中央两行：第一行性能、第二行 AI/地图/时间/延迟/快照
 	_fps_update_timer -= delta
 	if _fps_update_timer <= 0:
 		_fps_update_timer = 0.5
@@ -775,8 +780,8 @@ func _process(delta):
 			var dn = diff_names[clampi(GameSettings.ai_difficulty, 0, 3)]
 			var map_name := String(MapPresets.get_info(GameSettings.map_id).get("name", "经典大陆"))
 			var ping_txt := "%dms" % _ping_rtt if _ping_rtt > 0 else "--"
-			_net_stat_label.text = "AI:%s | 地图:%s | 延迟:%s | 快照:%d/s" % [
-				dn, map_name, ping_txt, _snap_recv_rate
+			_net_stat_label.text = "AI:%s | 地图:%s | 时间:%02d:%02d | 延迟:%s | 快照:%d/s" % [
+				dn, map_name, t_min, t_sec, ping_txt, _snap_recv_rate
 			]
 		_update_top_bg()
 

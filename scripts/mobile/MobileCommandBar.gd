@@ -59,21 +59,24 @@ func _build() -> void:
 	row2.add_child(_make_command_button("全军撤退", UILayout.font_dp(12.0), "_on_retreat_all_pressed"))
 	vb.add_child(row2)
 
+	var row3 := _make_row()
 	_auto_btn = _make_command_button("自动进攻：关", UILayout.font_dp(12.0), "_on_attack_all_pressed")
-	vb.add_child(_auto_btn)
+	row3.add_child(_auto_btn)
+	row3.add_child(_make_command_button("上/下船", UILayout.font_dp(12.0), "_on_board_screen_pressed"))
+	vb.add_child(row3)
 	sync_auto_attack()
 
 	# 手机端替代键盘修饰键的两个开关
-	var row3 := _make_row()
+	var row4 := _make_row()
 	_batch_produce_btn = _make_button("批量生产：关", UILayout.font_dp(11.0))
 	_batch_produce_btn.toggle_mode = true
 	_batch_produce_btn.toggled.connect(_on_batch_produce_toggled)
-	row3.add_child(_batch_produce_btn)
+	row4.add_child(_batch_produce_btn)
 	_cont_build_btn = _make_button("连续建造：关", UILayout.font_dp(11.0))
 	_cont_build_btn.toggle_mode = true
 	_cont_build_btn.toggled.connect(_on_cont_build_toggled)
-	row3.add_child(_cont_build_btn)
-	vb.add_child(row3)
+	row4.add_child(_cont_build_btn)
+	vb.add_child(row4)
 	set_process(true)
 
 func _make_row() -> HBoxContainer:

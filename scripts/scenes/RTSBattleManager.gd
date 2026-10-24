@@ -110,6 +110,14 @@ var _cache_refresh_timer: float = 0.0
 const _SPATIAL_CELL_SIZE: float = 4.0
 var _spatial_cells: Dictionary = {}  # Vector2i -> Array[GameEntity]，随实体缓存重建
 var _building_cells: Dictionary = {}  # Vector2i -> Array[Building]，仅供碰撞分离精确查询建筑
+# ==================== A* 分帧预算 ====================
+# 大部队同时下令时，几十/上百个单位会在同一帧各跑一次 A*。这里按帧限制
+# 请求数和耗时，超出的单位延后到后续帧重试；调用方 MovementController 会等待。
+const ASTAR_REQUESTS_PER_FRAME: int = 8
+const ASTAR_TIME_BUDGET_USEC: int = 3500
+var _astar_budget_frame: int = -1
+var _astar_budget_count: int = 0
+var _astar_budget_usec: int = 0
 # ==================== 墙体/梯子网格缓存（O(1) 查询，随实体缓存重建） ====================
 var _wall_cache_version: int = 0          # 墙体/建筑布局实际变化时递增，MovementController 据此判断墙集合是否失效
 var _wall_layout_signature: int = 0       # 建筑/资源布局签名，避免实体缓存每 0.5s 刷新都让寻路墙缓存失效
@@ -155,6 +163,22 @@ func recycle_bullet(b: Bullet) -> void:
 	var bucket: Array = _bullet_pool.get(key, [])
 	bucket.append(b)
 	_bullet_pool[key] = bucket
+
+# 预扣一次 A* 请求的配额。返回 false 时调用方应把目标记为 pending，下一帧再试。
+func reserve_astar_request() -> bool:
+	var frame: int = Engine.get_process_frames()
+	if frame != _astar_budget_frame:
+		_astar_budget_frame = frame
+		_astar_budget_count = 0
+		_astar_budget_usec = 0
+	if _astar_budget_count >= ASTAR_REQUESTS_PER_FRAME or _astar_budget_usec >= ASTAR_TIME_BUDGET_USEC:
+		return false
+	_astar_budget_count += 1
+	return true
+
+func report_astar_cost(usec: int) -> void:
+	if usec > 0:
+		_astar_budget_usec += usec
 
 # ==================== 诊断工具 ====================
 var _diag_timer: float = 5.0
@@ -3004,7 +3028,8 @@ func _process(delta):
 			var diff_names = ["简单", "普通", "困难", "地狱"]
 			var dn = diff_names[clampi(GameSettings.ai_difficulty, 0, 3)]
 			var map_name := String(MapPresets.get_info(GameSettings.map_id).get("name", "经典大陆"))
-			_snap_rate_label.text = "AI:%s | 地图:%s" % [dn, map_name]
+			var clock := "%02d:%02d" % [int(game_time / 60.0), int(game_time) % 60]
+			_snap_rate_label.text = "AI:%s | 地图:%s | 时间:%s" % [dn, map_name, clock]
 		# 底板宽度跟着文字走
 		_update_diag_bg(_diag_top_y, _diag_line_h)
 		_diag_physics_heartbeat = phys_frames
