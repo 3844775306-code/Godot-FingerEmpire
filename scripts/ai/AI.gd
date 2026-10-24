@@ -91,7 +91,9 @@ const TREBUCHET_SAVE_TIMEOUT: float = 90.0
 const HEAVY_SIEGE_TECH_SAVE_TIMEOUT: float = 180.0
 var _trebuchet_save_started: float = -1.0
 var _heavy_siege_tech_save_started: float = -1.0
-const BOAT_VISION_RANGE: float = 12.0
+# 石油通常位于水域中央，船坞只要建在能出海的水岸即可，不必紧贴油田；
+# 该半径用于判断水岸是否可服务油田，以及已建船坞是否仍值得保留。
+const SHIPYARD_OIL_REACH: float = 32.0
 const SHIPYARD_SPACING: float = 35.0
 const SHIPYARD_FISHER_RADIUS: float = 15.0
 var built_shipyard_pos: Array[Vector3] = []
@@ -2100,7 +2102,7 @@ func _find_best_water_adjacent_plain() -> Vector3:
 			if too_close: continue
 			var reach_oil = false
 			for op in oil_pos_list:
-				if wp.distance_to(op) < BOAT_VISION_RANGE: reach_oil = true; break
+				if wp.distance_to(op) < SHIPYARD_OIL_REACH: reach_oil = true; break
 			if not reach_oil: continue
 			var dis = wp.distance_to(castle.global_position)
 			if dis < best_dist: best_dist = dis; best_pos = wp
@@ -2131,7 +2133,7 @@ func _manage_shipyards():
 			continue
 		var has_oil = false
 		for res in battle.entities.get_children():
-			if res is WorldResource and res.resource_type == "oil" and res.health > 0 and sy.global_position.distance_to(res.global_position) < 15.0: has_oil = true; break
+			if res is WorldResource and res.resource_type == "oil" and res.health > 0 and sy.global_position.distance_to(res.global_position) < SHIPYARD_OIL_REACH: has_oil = true; break
 		if not has_oil and shipyards.size() > 1:
 			sy.queue_free()
 			if can_afford_building(23):
@@ -2154,7 +2156,7 @@ func _find_shipyard_pos_near_oil() -> Vector3:
 				if adj: break
 			if not adj: continue
 			for res in battle.entities.get_children():
-				if res is WorldResource and res.resource_type == "oil" and res.health > 0 and tp.distance_to(res.global_position) < 10.0: return tp
+				if res is WorldResource and res.resource_type == "oil" and res.health > 0 and tp.distance_to(res.global_position) < SHIPYARD_OIL_REACH: return tp
 	return Vector3.ZERO
 
 # ═══ Official helpers ═══

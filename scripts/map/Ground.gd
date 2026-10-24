@@ -2008,9 +2008,30 @@ func _place_resources():
 		_mark_wood_as_forest(size)
 		_colorize_grid(size)
 
-# 油井是否只贴岸生成：海边/湖边油井离岸太远工人够不着，沙漠与海峡图要求贴岸
-func _oil_shore_only() -> bool:
-	return bool(map_preset.get("oil_near_shore", false))
+# 油井只能落在水域内部：8 邻格不能有任何陆地，且不能是浅滩。
+# 这样石油不会出现在岸边，而会优先落在开阔水面中央。
+func _is_oil_center_cell(tx: int, ty: int, size: int) -> bool:
+	if tx < 0 or ty < 0 or tx >= size or ty >= size:
+		return false
+	if terrain_grid[tx][ty] != 2:
+		return false
+	if get_overlay(tx, ty) == 3:
+		return false
+	return _count_adjacent_terrain(tx, ty, 0, size) == 0
+
+# 以候选格为中心统计半径2内的水面格数；周围水越多，权重越高。
+# 油井抽选时使用平方权重，让地图中央的开阔水域明显更容易出油。
+func _oil_water_weight(tx: int, ty: int, size: int) -> int:
+	var count := 0
+	for dx in range(-2, 3):
+		for dy in range(-2, 3):
+			var nx: int = tx + dx
+			var ny: int = ty + dy
+			if nx < 0 or ny < 0 or nx >= size or ny >= size:
+				continue
+			if terrain_grid[nx][ny] == 2 and get_overlay(nx, ny) != 3:
+				count += 1
+	return maxi(1, count)
 
 # 从每座城堡出发做一次洪水填充（地形 0/1 可走，水面仅浅滩可走），
 # 把落在孤岛上的资源点/兽群剔除，避免工人永远走不到、AI 反复尝试
@@ -2040,17 +2061,53 @@ func _drop_unreachable_resources(size: int, castles: Array) -> void:
 			reach[n] = true
 			q.append(n)
 	_reach_tiles = reach
+	# 石油改到水域中央后不再贴岸，不能再按“相邻陆地可达”判断。
+	# 从与可达陆地相邻的水格出发做水面包围扩展，能连通到这些岸边的水域才算可采。
+	var water_reach: Dictionary = {}
+	var has_water_resource := false
+	for r in resource_positions:
+		var r_gx := int(r["pos"].x + size / 2.0)
+		var r_gy := int(r["pos"].z + size / 2.0)
+		if r_gx >= 0 and r_gx < size and r_gy >= 0 and r_gy < size and int(terrain_grid[r_gx][r_gy]) == 2:
+			has_water_resource = true
+			break
+	if has_water_resource:
+		var wq: Array = []
+		for x in range(size):
+			for y in range(size):
+				if int(terrain_grid[x][y]) != 2:
+					continue
+				var c := Vector2i(x, y)
+				if water_reach.has(c):
+					continue
+				var touches_land := false
+				for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+					if reach.has(c + d):
+						touches_land = true
+						break
+				if touches_land:
+					water_reach[c] = true
+					wq.append(c)
+		while not wq.is_empty():
+			var cur: Vector2i = wq.pop_back()
+			for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+				var n: Vector2i = cur + d
+				if n.x < 0 or n.y < 0 or n.x >= size or n.y >= size:
+					continue
+				if water_reach.has(n):
+					continue
+				if int(terrain_grid[n.x][n.y]) != 2:
+					continue
+				water_reach[n] = true
+				wq.append(n)
 	var kept: Array = []
 	for r in resource_positions:
 		var gx := int(r["pos"].x + size / 2.0)
 		var gy := int(r["pos"].z + size / 2.0)
 		var ok: bool = reach.has(Vector2i(gx, gy))
-		# 水面资源（油井）站在岸边就能采，只要相邻陆地可达即可
+		# 水面资源（油井）由采集船从船坞出海采集，只要所在水域与可达岸边连通即可
 		if not ok and int(terrain_grid[gx][gy]) == 2:
-			for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
-				if reach.has(Vector2i(gx, gy) + d):
-					ok = true
-					break
+			ok = water_reach.has(Vector2i(gx, gy))
 		if ok:
 			kept.append(r)
 	resource_positions = kept
@@ -2175,13 +2232,13 @@ func _place_group_near(rtype, min_sz, max_sz, cx, cy, max_dist, terrain, placed,
 # ── Helper: place a group randomly on the map ──
 func _place_group_random(rtype, min_sz, max_sz, terrain, placed, size, castles, near_mountain=false, away_mountain=false, adjacent_mountains=0):
 	var cx = -1; var cy = -1
-	# 近岸油井的候选格很少（只有贴岸的水），随机采样 100 次几乎撞不到，改成先列候选再洗牌
-	if rtype == 4 and terrain == 2 and _oil_shore_only():
+	# 油井统一生成在水域内部，按周围水面开阔程度加权抽选：
+	# 离岸越远、周围水越多，被选中的概率越高；贴岸格和浅滩直接排除。
+	if rtype == 4 and terrain == 2:
 		var cands: Array = []
 		for tx in range(5, size - 5):
 			for ty in range(5, size - 5):
-				if terrain_grid[tx][ty] != 2: continue
-				if _count_ortho_terrain(tx, ty, 0, size) < 1: continue
+				if not _is_oil_center_cell(tx, ty, size): continue
 				if placed.has("g%d,%d,%d" % [rtype, tx, ty]): continue
 				var skip_c := false
 				for cs in castles:
@@ -2193,11 +2250,23 @@ func _place_group_random(rtype, min_sz, max_sz, terrain, placed, size, castles, 
 						var ox = int(k.split(",")[1]); var oy = int(k.split(",")[2])
 						if sqrt((tx-ox)**2 + (ty-oy)**2) < 15: near_dup = true; break
 				if near_dup: continue
-				cands.append(Vector2i(tx, ty))
+				var w: int = _oil_water_weight(tx, ty, size)
+				cands.append({"cell": Vector2i(tx, ty), "weight": float(w * w)})
 		if cands.is_empty():
 			return
-		cands.shuffle()
-		cx = cands[0].x; cy = cands[0].y
+		var total_w := 0.0
+		for c in cands:
+			total_w += float(c["weight"])
+		if total_w <= 0.0:
+			return
+		var pick := randf() * total_w
+		var chosen: Vector2i = cands[cands.size() - 1]["cell"]
+		for c in cands:
+			pick -= float(c["weight"])
+			if pick <= 0.0:
+				chosen = c["cell"]
+				break
+		cx = chosen.x; cy = chosen.y
 		placed["g%d,%d,%d" % [rtype, cx, cy]] = true
 		_spawn_group(rtype, min_sz, max_sz, cx, cy, terrain, placed, size, adjacent_mountains)
 		return
@@ -2235,24 +2304,13 @@ func _spawn_group(rtype, min_sz, max_sz, cx, cy, terrain, placed, size, adjacent
 		var mx = cx + randi_range(-4, 4); var my = cy + randi_range(-4, 4)
 		if mx < 0 or mx >= size or my < 0 or my >= size: continue
 		if terrain_grid[mx][my] != terrain: continue
-		# 近岸油井：工人只能在正对岸边采集，贴岸的水格才算有效资源点
-		if rtype == 4 and terrain == 2 and _oil_shore_only() and _count_ortho_terrain(mx, my, 0, size) < 1: continue
+		# 油井群内的其余油点也必须在水域内部，不能补到岸边
+		if rtype == 4 and terrain == 2 and not _is_oil_center_cell(mx, my, size): continue
 		if adjacent_mountains > 0 and _count_adjacent_terrain(mx, my, 1, size) < adjacent_mountains: continue
 		if placed.has("r%d,%d" % [mx, my]): continue
 		placed["r%d,%d" % [mx, my]] = true
 		resource_positions.append({"pos": grid_to_world(mx, my), "type": rtype})
 		placed_count += 1
-
-# Count orthogonal adjacent tiles (4 directions) of a specific terrain type
-func _count_ortho_terrain(x, y, terr_type, size) -> int:
-	var count := 0
-	for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
-		var nx: int = x + d.x
-		var ny: int = y + d.y
-		if nx >= 0 and nx < size and ny >= 0 and ny < size:
-			if terrain_grid[nx][ny] == terr_type:
-				count += 1
-	return count
 
 # ── Check if terrain type exists within range ──
 # Count adjacent tiles (8 directions) of a specific terrain type

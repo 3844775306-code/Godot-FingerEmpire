@@ -121,6 +121,9 @@ const GATHER_APPROACH_TIMEOUT: float = 8.0
 const DELIVER_APPROACH_TIMEOUT: float = 10.0
 # 交付判定在建筑碰撞边缘外额外放宽的距离（农民会被碰撞体挡住，不能要求贴到 0.8 米内）
 const DELIVER_CONTACT_SLACK: float = 1.2
+# 采集船自动搜索油井的半径：石油现在通常位于水域中央，离岸较远，
+# 需要比普通农民更大的搜索半径，否则船停在岸边找不到中心油井。
+const BOAT_GATHER_SEARCH_RANGE: float = 32.0
 
 # Åö×²·ÖÀë½ÚÁ÷
 
@@ -172,6 +175,8 @@ func setup(config: Dictionary):
 		target_type = 1
 	# 农民自动找资源点的半径：取视野的一半，采集距离更短、更贴近身边
 	gather_search_range = vision_range * 0.5
+	if entity_id == 14:
+		gather_search_range = maxf(gather_search_range, BOAT_GATHER_SEARCH_RANGE)
 	_animal_type = config.get("animal_type", "")
 	_animal_food_reward = config.get("food_reward", 0)
 	call_deferred("_apply_nation_bonus")
@@ -203,6 +208,8 @@ func _apply_nation_bonus():
 		vision_range *= int(mults["vision_range"])
 		# 国家加成改视野后，采集搜索半径同步取新视野的一半
 		gather_search_range = vision_range * 0.5
+		if entity_id == 14:
+			gather_search_range = maxf(gather_search_range, BOAT_GATHER_SEARCH_RANGE)
 	  # ²»Ö÷¶¯×·»÷£¬Ö»¹¥»÷½øÈëÉä³ÌµÄµÐÈË
 	# Ô­ÓÐ×·»÷Âß¼­...
 func _ready():
