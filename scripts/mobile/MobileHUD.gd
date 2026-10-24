@@ -355,6 +355,9 @@ func _refresh_resources() -> void:
 				"current": int(bm.get("player_pop")),
 				"max": int(bm.get("player_max_pop")),
 			}
+			var lim = bm.get("player_resource_limits")
+			if not lim is Dictionary:
+				lim = {}
 			var gather: Dictionary = {}
 			var rate: Dictionary = {}
 			if hud:
@@ -364,7 +367,7 @@ func _refresh_resources() -> void:
 				var r = hud.get("income_rate")
 				if r is Dictionary:
 					rate = r
-			capsule.apply_data(res, pop)
+			capsule.apply_data(res, pop, lim)
 			capsule.apply_rates(gather, rate)
 			return
 	if not _last_resources.is_empty():

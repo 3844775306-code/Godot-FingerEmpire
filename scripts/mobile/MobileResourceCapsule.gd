@@ -151,8 +151,12 @@ func apply_data(resources: Dictionary, population: Dictionary, limits: Dictionar
 		var lbl: Label = _res_value_labels.get(key)
 		if lbl == null:
 			continue
-		lbl.text = "%d" % int(resources.get(key, 0))
-		lbl.add_theme_color_override("font_color", _res_colors.get(key, Color.WHITE))
+		var cur: int = int(resources.get(key, 0))
+		lbl.text = "%d" % cur
+		# 资源满了字体变红：再采集就白费，提醒玩家赶紧花掉或升级仓储
+		var cap: int = int(limits.get(key, 0))
+		var full: bool = cap > 0 and cur >= cap
+		lbl.add_theme_color_override("font_color", UITheme.ALERT_DANGER if full else _res_colors.get(key, Color.WHITE))
 	if _pop_label:
 		_pop_label.text = "👥%d/%d" % [int(population.get("current", 0)), int(population.get("max", 0))]
 

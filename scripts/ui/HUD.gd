@@ -186,13 +186,18 @@ func _res_color_for(key: String) -> Color:
 		"oil": return UITheme.RES_OIL
 	return Color.WHITE
 
-func _update_stats_capsule(res: Dictionary, pop: int, max_pop: int) -> void:
+func _update_stats_capsule(res: Dictionary, lim: Dictionary, pop: int, max_pop: int) -> void:
 	if _capsule_pop_label:
 		_capsule_pop_label.text = "👥 %d/%d" % [pop, max_pop]
 	for rk in _capsule_res_labels.keys():
 		var l: Label = _capsule_res_labels[rk]
 		if l:
-			l.text = "%s %d" % [UITheme.RESOURCE_ICONS.get(rk, ""), int(res.get(rk, 0))]
+			var cur: int = int(res.get(rk, 0))
+			l.text = "%s %d" % [UITheme.RESOURCE_ICONS.get(rk, ""), cur]
+			# 资源满了字体变红：再采集就浪费
+			var cap: int = int(lim.get(rk, 0))
+			var full: bool = cap > 0 and cur >= cap
+			l.add_theme_color_override("font_color", UITheme.ALERT_DANGER if full else _res_color_for(rk))
 
 # 折叠后的胶囊：一行显示人口与五项资源，点击展开回完整统计面板
 func _create_stats_capsule() -> void:
@@ -458,7 +463,7 @@ func _update_unit_stats():
 
 	# 折叠时只刷新资源/人口胶囊
 	if _stats_capsule and _stats_capsule.visible:
-		_update_stats_capsule(res, pop, max_pop)
+		_update_stats_capsule(res, lim, pop, max_pop)
 
 	# 各资源采集人数 + 增长速率
 	gather_counts = {"gold": 0, "wood": 0, "stone": 0, "food": 0, "oil": 0}
