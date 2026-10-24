@@ -259,6 +259,9 @@ func _physics_process(delta):
 			_stuck_timer -= delta
 			if _stuck_timer <= 0.0 or not is_instance_valid(_stuck_to):
 				recycle()
+		else:
+			# 没有附着目标的异常路径也不能让弹丸永久留在场上
+			recycle()
 		return
 	time_alive += delta
 	if time_alive > max_lifetime:
@@ -337,6 +340,8 @@ func _on_hit(entity: GameEntity):
 	if _is_arrow_bullet() and is_instance_valid(entity):
 		_stuck_to = entity
 		_stuck_offset = global_position - entity.global_position
+		# 同一目标被多支箭命中时错开位置，否则会全部叠在同一点上
+		_stuck_offset += Vector3(randf_range(-0.30, 0.30), randf_range(-0.10, 0.45), randf_range(-0.30, 0.30))
 		_stuck_timer = ARROW_STICK_TIME
 		return
 	recycle()
