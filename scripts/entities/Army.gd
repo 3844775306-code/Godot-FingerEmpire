@@ -234,6 +234,9 @@ func _add_selection_ring():
 			_selection_ring_material.albedo_color = Color.GREEN
 			_selection_ring_material.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 		ring.material_override = _selection_ring_material
+		# 选择环只是操作提示，不参与阴影/GI；框选几百个单位时避免额外 shadow pass。
+		ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		ring.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
 		ring.visible = false
 		add_child(ring)
 

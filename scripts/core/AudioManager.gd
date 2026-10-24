@@ -7,6 +7,7 @@ var _sfx_pool: Array[AudioStreamPlayer] = []
 var _sfx_index: int = 0
 	# Network audio sync
 var _cooldowns: Dictionary = {}  # per-key frame cooldown
+var _sfx_cache: Dictionary = {}   # key -> AudioStream，避免每次播放都做 exists/load
 var _music_volume: float = 0.7
 var _sfx_volume: float = 0.8
 var _current_music: String = ""
@@ -76,20 +77,33 @@ func play_sfx(key: String):
 	var frame = Engine.get_process_frames()
 	if _cooldowns.get(key, -99) + 5 > frame: return  # 5-frame cooldown
 	_cooldowns[key] = frame
-	var path = SFX.get(key, "")
-	if path == "" or not ResourceLoader.exists(path): return
+	var stream = _get_sfx_stream(key)
+	if stream == null: return
 	var p = _sfx_pool[_sfx_index]
 	_sfx_index = (_sfx_index + 1) % SFX_POOL_SIZE
-	p.stream = load(path)
+	p.stream = stream
 	p.volume_db = linear_to_db(_sfx_volume)
 	p.play()
 
+# 音效资源按 key 懒缓存。后期混战时 play_sfx_3d 每秒会被调用很多次，
+# 每次都 ResourceLoader.exists + load 会造成不必要的资源系统开销。
+func _get_sfx_stream(key: String) -> AudioStream:
+	if _sfx_cache.has(key):
+		return _sfx_cache[key]
+	var path: String = SFX.get(key, "")
+	if path == "" or not ResourceLoader.exists(path):
+		_sfx_cache[key] = null
+		return null
+	var stream = load(path) as AudioStream
+	_sfx_cache[key] = stream
+	return stream
+
 func play_sfx_quiet(key: String):
-	var path = SFX.get(key, "")
-	if path == "" or not ResourceLoader.exists(path): return
+	var stream = _get_sfx_stream(key)
+	if stream == null: return
 	var p = _sfx_pool[_sfx_index]
 	_sfx_index = (_sfx_index + 1) % SFX_POOL_SIZE
-	p.stream = load(path)
+	p.stream = stream
 	p.volume_db = linear_to_db(_sfx_volume * 0.3)
 	p.play()
 
@@ -102,9 +116,11 @@ func play_sfx_3d(key: String, pos: Vector3, cam_pos: Vector3):
 	if dist > 50: return
 	var path = SFX.get(key, "")
 	if path == "": return
+	var stream = _get_sfx_stream(key)
+	if stream == null: return
 	var p = _sfx_pool[_sfx_index]
 	_sfx_index = (_sfx_index + 1) % SFX_POOL_SIZE
-	p.stream = load(path)
+	p.stream = stream
 	var vol = _sfx_volume * clamp(1.0 - dist / 50.0, 0.1, 1.0)
 	p.volume_db = linear_to_db(vol)
 	p.play()
