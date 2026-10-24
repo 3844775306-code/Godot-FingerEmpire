@@ -254,34 +254,17 @@ func _draw():
 	# 当前视角框（画在最后，压在地形与单位点上面）
 	_draw_view_frame(ms, cell)
 
-# 在小地图上标出相机当前能看到的范围：一个随视角旋转的半透明框
+# 在小地图上标出屏幕中心对应的地面位置：一个白色十字准星
 func _draw_view_frame(ms: float, cell: float) -> void:
 	if camera == null or not is_instance_valid(camera):
 		return
-	var vp_size := get_viewport_rect().size
-	if vp_size.y <= 0.0:
-		return
-	# 正交相机 size 是视野高度（世界单位），按视口宽高比换算出宽度
-	var half_h: float = camera.size * 0.5
-	var half_w: float = half_h * (vp_size.x / vp_size.y)
 	var center := Vector2(camera.global_position.x, camera.global_position.z)
-	var to_px := Vector2((center.x + ms * 0.5) * cell, (center.y + ms * 0.5) * cell)
-	var hw: float = half_w * cell
-	var hh: float = half_h * cell
-	var yaw: float = 0.0
-	var yaw_val = camera.get("yaw_deg")
-	if yaw_val != null:
-		yaw = deg_to_rad(float(yaw_val))
-	var corners := PackedVector2Array()
-	corners.append(to_px + Vector2(-hw, -hh).rotated(yaw))
-	corners.append(to_px + Vector2(hw, -hh).rotated(yaw))
-	corners.append(to_px + Vector2(hw, hh).rotated(yaw))
-	corners.append(to_px + Vector2(-hw, hh).rotated(yaw))
-	# 半透明填充 + 亮边，跟小地图本身的金色边框区分开
-	draw_colored_polygon(corners, Color(1.0, 1.0, 1.0, 0.10))
-	var outline := PackedVector2Array(corners)
-	outline.append(corners[0])
-	draw_polyline(outline, Color(1.0, 1.0, 1.0, 0.85), UITheme.BORDER_MED)
+	var px := Vector2((center.x + ms * 0.5) * cell, (center.y + ms * 0.5) * cell)
+	# 先垫一层暗底，浅色地形（沙漠、雪地）上也看得清
+	draw_circle(px, 8.0, Color(0.0, 0.0, 0.0, 0.40))
+	draw_arc(px, 6.0, 0.0, TAU, 24, Color(1.0, 1.0, 1.0, 0.95), 1.5)
+	draw_line(px + Vector2(-10.0, 0.0), px + Vector2(10.0, 0.0), Color(1.0, 1.0, 1.0, 0.85), 1.0)
+	draw_line(px + Vector2(0.0, -10.0), px + Vector2(0.0, 10.0), Color(1.0, 1.0, 1.0, 0.85), 1.0)
 
 func _gui_input(event):
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:

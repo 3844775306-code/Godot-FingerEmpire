@@ -20,6 +20,10 @@ var rotate_center: Vector3 = Vector3.ZERO
 var yaw_deg: float = 0.0
 const ROTATE_SENSITIVITY: float = 0.30   # 每像素对应的旋转角度（度）
 
+# 触屏多指：记录每个触点位置，双指拖动用来旋转视角
+var _fingers: Dictionary = {}
+var _two_finger_last: Vector2 = Vector2.ZERO
+
 # 触摸拖拽相关
 var _touch_count: int = 0           # 当前触摸点数
 var touch_pan_active: bool = false  # 三指拖拽移动相机
@@ -44,6 +48,29 @@ func _ready():
 		# 默认视野取缩放范围的中值：原来写死 30，比允许的最远视角（max_zoom 20）还大，
 		# 开局视野过大、单位显得很小，而且第一次滚轮/双指缩放会瞬间跳到 20
 		size = (min_zoom + max_zoom) * 0.5
+	# 开局视角朝太阳（逆光方向）：等场景里的方向光就绪后再摆相机
+	call_deferred("_apply_initial_sun_yaw")
+
+# 开局把水平朝向对准太阳，形成逆光：地形和单位有明显的背光明暗对比
+func _apply_initial_sun_yaw() -> void:
+	var scene := get_tree().current_scene
+	if scene == null:
+		return
+	var sun: Node3D = null
+	for n in scene.find_children("*", "DirectionalLight3D", true, false):
+		sun = n
+		break
+	if sun == null:
+		return
+	# DirectionalLight3D 沿自身 -Z 照射，所以指向太阳的方向是 +Z 轴
+	var to_sun: Vector3 = sun.global_transform.basis.z
+	to_sun.y = 0.0
+	if to_sun.length() < 0.001:
+		return
+	to_sun = to_sun.normalized()
+	# 相机水平视线 fwd = (-sin(yaw), 0, -cos(yaw))，令其等于 to_sun 反解 yaw
+	yaw_deg = rad_to_deg(atan2(-to_sun.x, -to_sun.z))
+	_rig_over_center(_screen_center_ground())
 
 func _input(event):
 	# 跟随视角模式：禁用平移/缩放输入，画面完全由跟随逻辑控制
@@ -84,12 +111,16 @@ func _input(event):
 		drag_start = event.position
 
 	# ========== 手机触摸操作 ==========
-	# 三指拖拽 → 平移地图；单/双指 → 框选（由 SelectionManager 处理）
+	# 三指拖拽 → 平移地图；双指拖拽 → 旋转视角；单指 → 框选（由 SelectionManager 处理）
 	if event is InputEventScreenTouch:
 		if event.pressed:
 			_touch_count += 1
+			_fingers[event.index] = event.position
 		else:
 			_touch_count = max(0, _touch_count - 1)
+			_fingers.erase(event.index)
+		# 触点数量变化时清掉旋转基准，避免换指/抬指瞬间视角跳一下
+		_two_finger_last = Vector2.ZERO
 		# 三指按下时开始平移，松手时停止
 		if _touch_count >= 3:
 			touch_pan_active = event.pressed
@@ -99,12 +130,28 @@ func _input(event):
 			touch_pan_active = false
 
 	elif event is InputEventScreenDrag:
+		_fingers[event.index] = event.position
 		if touch_pan_active:
 			# 三指拖动移动相机：同样按当前视角方向换算
 			var delta = event.position - touch_pan_start
 			var factor = size / 30.0
 			global_translate((-_view_right() * delta.x + _view_forward() * delta.y) * 0.1 * factor)
 			touch_pan_start = event.position
+		elif _fingers.size() == 2:
+			# 双指拖动旋转视角：用两指平均位置的水平位移，绕屏幕中心地面点转
+			var avg := Vector2.ZERO
+			for k in _fingers:
+				avg += _fingers[k]
+			avg /= float(_fingers.size())
+			if _two_finger_last == Vector2.ZERO:
+				_two_finger_last = avg
+				rotate_center = _screen_center_ground()
+			else:
+				var fdx: float = avg.x - _two_finger_last.x
+				if absf(fdx) > 0.01:
+					yaw_deg = fposmod(yaw_deg + fdx * ROTATE_SENSITIVITY, 360.0)
+					_rig_over_center(rotate_center)
+				_two_finger_last = avg
 
 	# 双指捏合缩放
 	if event is InputEventMagnifyGesture:
