@@ -56,8 +56,8 @@ var _stats_res_bars: Dictionary = {}
 var _stats_res_info: Dictionary = {}
 var _stats_castle_bar: HealthBarControl
 var _stats_castle_label: Label
-# 折叠态：面板收成一条「资源 + 人口」胶囊
-var _stats_collapsed: bool = false
+# 折叠态：面板收成一条「资源 + 人口」胶囊（电脑版默认折叠）
+var _stats_collapsed: bool = true
 var _stats_collapse_btn: Button = null
 var _stats_capsule: Panel = null
 var _capsule_pop_label: Label = null
@@ -357,6 +357,8 @@ func _create_unit_stats_panel():
 	_stats_collapse_btn.pressed.connect(_on_stats_collapse_pressed)
 	unit_stats_panel.add_child(_stats_collapse_btn)
 	_create_stats_capsule()
+	# 电脑版默认折叠：开局只显示资源/人口胶囊，点一下再展开完整面板
+	_set_stats_collapsed(true)
 
 func _make_stats_rtl() -> RichTextLabel:
 	var r = RichTextLabel.new()
