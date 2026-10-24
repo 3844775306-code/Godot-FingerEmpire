@@ -25,6 +25,9 @@ var production_step: int = 0
 var wanted_buildings: Array = [20, 21, 29, 23, 42, 54, 24, 52, 53]
 var wanted_units: Array = [11,12,15,16,17,18,35,36,37,38,39,40,13,43,44,45,46,47,48,49,50,58,59,5,6,9]
 var target_army_count: int = 7
+# 贸易车只跟随这四种商人；AI 生产贸易车时数量必须小于商人数量，避免刷出一堆闲置车
+const TRADE_CART_ID: int = 6
+const MERCHANT_UNIT_IDS: Array = [43, 44, 45, 51]
 # 民居数量上限：第 X 分钟至少 X 座（X 最多 8），提前一分钟开工保证到点时已建成
 const HOUSE_TARGET_MAX: int = 8
 const HOUSE_BUILD_LEAD_MINUTES: int = 1
@@ -211,6 +214,13 @@ func count_unit(id: int, include_queue: bool = true) -> int:
 			for pid in entity.production_queue:
 				if pid == id: cnt += 1
 	return cnt
+
+# 商人总数（含生产队列）；贸易车数量必须严格小于该值
+func _count_merchants() -> int:
+	var total: int = 0
+	for mid in MERCHANT_UNIT_IDS:
+		total += count_unit(mid)
+	return total
 
 func count_building(id: int) -> int:
 	var cnt = 0
@@ -532,16 +542,18 @@ func can_afford_upgrade(building_id: int) -> bool:
 
 # ═══ Production ═══
 func produce_unit(unit_id: int) -> bool:
-	
+	# 贸易车没有商人可跟就是废单位；生产时严格保证“车 < 商人”
+	if unit_id == TRADE_CART_ID and count_unit(TRADE_CART_ID) >= _count_merchants():
+		return false
 
-		var produced = 0
-		for entity in battle.entities.get_children():
-			if produced >= 1: break
-			if entity is Building and entity.health > 0 and entity.build_timer <= 0:
-				if not entity_belongs_to_me(entity): continue
-				if entity.try_produce(unit_id):
-					produced += 1
-		return produced > 0
+	var produced = 0
+	for entity in battle.entities.get_children():
+		if produced >= 1: break
+		if entity is Building and entity.health > 0 and entity.build_timer <= 0:
+			if not entity_belongs_to_me(entity): continue
+			if entity.try_produce(unit_id):
+				produced += 1
+	return produced > 0
 
 # 建造前安全检查：10 单位内存在敌方作战军队时不允许落建筑，
 # 避免 AI 当着敌军的面拍塔/拍民居，刚建好就被拆。
@@ -2283,6 +2295,8 @@ func _process_line_military():
 	var priority = get_counter_priority()
 	
 	for u_id in priority:
+		if u_id == TRADE_CART_ID and count_unit(TRADE_CART_ID) >= _count_merchants():
+			continue
 		if count_unit(u_id) < target_army_count and can_afford(u_id) and _can_train_unit():
 			
 			produce_unit(u_id); 

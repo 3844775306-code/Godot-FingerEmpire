@@ -432,13 +432,16 @@ func _spawn_produced_unit():
 
 	# Check if unit is water-capable and choose appropriate spawn
 	var is_water_unit = config.get("water_capable", false)
+	var spawn_margin: float = maxf(1.0, float(config.get("body_radius", 0.5)) + 0.5)
 	var spawn_pos = Vector3.ZERO
 	if is_water_unit:
-		spawn_pos = _find_water_spawn_near(global_position)
+		spawn_pos = _find_water_spawn_near(global_position, spawn_margin)
 	else:
-		spawn_pos = _find_land_spawn_pos()
+		spawn_pos = _find_land_spawn_pos(spawn_margin)
 	if spawn_pos == Vector3.ZERO:
-		spawn_pos = global_position + Vector3(randf_range(-2,2), 0, randf_range(-2,2))
+		# 最后的兜底坐标也必须夹在地图内，避免贴着地图边缘的建筑把单位刷到地图外
+		spawn_pos = _clamp_spawn_to_map(global_position + Vector3(randf_range(-2,2), 0, randf_range(-2,2)), spawn_margin)
+	spawn_pos = _clamp_spawn_to_map(spawn_pos, spawn_margin)
 	config["owner_peer_id"] = self.owner_peer_id  # 继承建筑所有权
 	var entity = bm.spawn_entity(config, team, spawn_pos, self.level)
 	if entity:
@@ -473,15 +476,70 @@ func _spawn_produced_unit():
 				break
 
 
+# 将生产坐标夹到地图内部并留出单位体积，避免贴边建筑把单位刷到地图外
+func _clamp_spawn_to_map(pos: Vector3, margin: float) -> Vector3:
+	var half: float = RTSConfig.MAP_SIZE / 2.0
+	var safe: float = maxf(0.5, margin)
+	return Vector3(clampf(pos.x, -half + safe, half - safe), pos.y, clampf(pos.z, -half + safe, half - safe))
+
+# 随机候选都失败时，从建筑中心向外按环搜索最近的可出生格子；保证落点仍在地图内
+func _find_nearest_spawn_tile(center: Vector3, want_water: bool, margin: float) -> Vector3:
+	var bm = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
+	if not bm or not bm.has_method("world_to_grid"):
+		return Vector3.ZERO
+	var center_tile: Vector2i = bm.world_to_grid(center)
+	var half: float = RTSConfig.MAP_SIZE / 2.0
+	var tile_margin: int = maxi(1, int(ceil(margin)))
+	for r in range(0, RTSConfig.MAP_SIZE):
+		# 只遍历当前环的边界，越靠近建筑越先找到
+		for dx in range(-r, r + 1):
+			var tiles: Array[Vector2i] = [
+				Vector2i(center_tile.x + dx, center_tile.y - r),
+				Vector2i(center_tile.x + dx, center_tile.y + r)
+			]
+			for tile in tiles:
+				if tile.x < tile_margin or tile.x > RTSConfig.MAP_SIZE - 1 - tile_margin:
+					continue
+				if tile.y < tile_margin or tile.y > RTSConfig.MAP_SIZE - 1 - tile_margin:
+					continue
+				var terrain: int = bm.get_terrain_at_grid(tile.x, tile.y)
+				if want_water:
+					if terrain != 2:
+						continue
+				elif terrain == 2 or terrain < 0:
+					continue
+				var world_pos := Vector3(tile.x - half, 0.0, tile.y - half)
+				return _clamp_spawn_to_map(world_pos, margin)
+		if r > 0:
+			for dy in range(-r + 1, r):
+				var side_tiles: Array[Vector2i] = [
+					Vector2i(center_tile.x - r, center_tile.y + dy),
+					Vector2i(center_tile.x + r, center_tile.y + dy)
+				]
+				for tile in side_tiles:
+					if tile.x < tile_margin or tile.x > RTSConfig.MAP_SIZE - 1 - tile_margin:
+						continue
+					if tile.y < tile_margin or tile.y > RTSConfig.MAP_SIZE - 1 - tile_margin:
+						continue
+					var terrain: int = bm.get_terrain_at_grid(tile.x, tile.y)
+					if want_water:
+						if terrain != 2:
+							continue
+					elif terrain == 2 or terrain < 0:
+						continue
+					var world_pos := Vector3(tile.x - half, 0.0, tile.y - half)
+					return _clamp_spawn_to_map(world_pos, margin)
+	return Vector3.ZERO
+
 # Find spawn position on LAND (terrain != water)
-func _find_land_spawn_pos() -> Vector3:
+func _find_land_spawn_pos(margin: float = 1.2) -> Vector3:
 	var bm = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
 	var attempts = 0
 	var max_attempts = 30
 	while attempts < max_attempts:
 		var angle = randf_range(0, TAU)
 		var dist = randf_range(2.0, 4.0)
-		var test_pos = global_position + Vector3(cos(angle) * dist, 0, sin(angle) * dist)
+		var test_pos = _clamp_spawn_to_map(global_position + Vector3(cos(angle) * dist, 0, sin(angle) * dist), margin)
 		# Check terrain: must be passable for land units
 		if bm and bm.get_terrain_at(test_pos) == 2:  # water
 			attempts += 1; continue
@@ -494,7 +552,7 @@ func _find_land_spawn_pos() -> Vector3:
 					conflict = true; break
 		if not conflict: return test_pos
 		attempts += 1
-	return Vector3.ZERO  # fallback: caller will use default position
+	return _find_nearest_spawn_tile(global_position, false, margin)
 func _find_outside_spawn_pos() -> Vector3:
 	var best_pos = Vector3.ZERO
 	var attempts = 0
@@ -590,17 +648,17 @@ func shock(duration: float):
 func freeze(duration: float):
 	freeze_timer = duration
 
-func _find_water_spawn_near(center: Vector3) -> Vector3:
+func _find_water_spawn_near(center: Vector3, margin: float = 1.5) -> Vector3:
 	var bm = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
 	if not bm:
-		return center + Vector3(0, 0, 2)
+		return _clamp_spawn_to_map(center + Vector3(0, 0, 2), margin)
 	
 	for radius in [3, 5, 7]:
 		for _try in range(30):
 			var angle = randf_range(0, TAU)
 			var dist = randf_range(1, radius)
-			var test_pos = center + Vector3(cos(angle) * dist, 0, sin(angle) * dist)
+			var test_pos = _clamp_spawn_to_map(center + Vector3(cos(angle) * dist, 0, sin(angle) * dist), margin)
 			var terrain = bm.get_terrain_at(test_pos)
 			if terrain == 2:
 				return test_pos
-	return center + Vector3(0, 0, 3)
+	return _find_nearest_spawn_tile(center, true, margin)
