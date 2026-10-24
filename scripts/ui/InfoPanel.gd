@@ -140,6 +140,58 @@ func _bc(pct: float) -> Color:
 func _hc(pct: float) -> String:
 	return UITheme.hex_str(UITheme.health_bar_color(pct))
 
+# 信息面板用：把目标名称缩短成可读文本，避免面板被长名字撑爆
+func _target_display_name(target) -> String:
+	if target == null or not is_instance_valid(target):
+		return "未知目标"
+	var nm: String = ""
+	if target is GameEntity:
+		nm = target.display_name
+	if nm == "":
+		var cfg: Dictionary = EntityDatabase.get_config(int(target.entity_id))
+		nm = str(cfg.get("name", "目标"))
+	return nm
+
+# 单位任务：驻守 / 攻击目标 / 反击，其余显示移动、采集、空闲。
+# 反击包括：驻扎圈内自动应战、AI 建筑被攻击后的临时支援、被同一个敌人攻击后的还击。
+func _army_task_text(a: Army) -> String:
+	var target = a.current_target
+	# 采集/交付的目标是资源点，不是作战目标；只把军队/建筑当作攻击目标显示
+	var has_target: bool = target != null and is_instance_valid(target) and target.health > 0 and (target is Army or target is Building)
+	var now: float = float(battle.game_time) if battle != null else 0.0
+	var counter: bool = false
+	if a.has_meta("ai_building_defense_until") and now < float(a.get_meta("ai_building_defense_until")):
+		counter = true
+	if has_target and a.garrison_point != Vector3.ZERO:
+		var defend_radius: float = 10.0
+		if a.has_meta("ai_building_defense_until"):
+			defend_radius = 45.0
+		if target.global_position.distance_to(a.garrison_point) <= defend_radius:
+			counter = true
+	var last_damager = a.get("_last_damager")
+	if has_target and last_damager != null and is_instance_valid(last_damager) and last_damager == target:
+		counter = true
+	if counter:
+		return "🛡 反击 · %s" % _target_display_name(target)
+	if has_target:
+		return "⚔ 攻击目标 · %s" % _target_display_name(target)
+	if a.garrison_point != Vector3.ZERO:
+		if a.current_order == "move":
+			return "🏰 驻守 · 返回驻扎点"
+		return "🏰 驻守"
+	if a.is_attack_moving or a.current_order == "attack_move":
+		return "🎯 攻击移动"
+	match a.current_order:
+		"move":
+			return "👣 移动"
+		"gather":
+			return "⛏ 采集"
+		"deliver":
+			return "📦 交付"
+	if not a.command_queue.is_empty():
+		return "📋 待执行指令 %d" % a.command_queue.size()
+	return "空闲"
+
 func _make_rtl_label() -> RichTextLabel:
 	var l = RichTextLabel.new(); l.bbcode_enabled = true; l.fit_content = true; l.autowrap_mode = TextServer.AUTOWRAP_OFF
 	l.add_theme_font_size_override("font_size", UITheme.FONT_XS)
@@ -216,6 +268,9 @@ func update_info(entity):
 		UITheme.hex_str(UITheme.STONE), entity.shield_armor]
 	t += "\n🎯 [color=%s]RANGE[/color]:  [color=white]%.1f[/color]" % [UITheme.hex_str(UITheme.GOLD), entity.attack_range]
 	t += "\n👟 [color=%s]SPEED[/color]:  [color=white]%.1f[/color]" % [UITheme.hex_str(UITheme.EMERALD), entity.speed]
+	if entity is Army:
+		t += "\n🧭 [color=%s]任务[/color]:  [color=white]%s[/color]" % [
+			UITheme.hex_str(UITheme.SAPPHIRE), _army_task_text(entity)]
 	stats_rtl.text = t
 
 	# Always detach old upgrade box first (avoid deferred-deletion residue)
