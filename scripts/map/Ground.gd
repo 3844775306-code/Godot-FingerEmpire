@@ -41,6 +41,9 @@ const BOAT_SHADER_SLOTS: int = 8
 # 平面反射：镜像相机把水面上方的场景渲染到 SubViewport，水面按反射射线落点取样
 const WATER_LAYER: int = 19
 const WATER_WORLD_Y: float = -0.9
+# 沉水中的模型所在层（GameEntity.REFLECT_SKIP_LAYER）：镜像相机不渲染，
+# 否则沉入水下的单位会从水下被看到，倒影高高浮在水面上方
+const REFLECT_SKIP_LAYER: int = 18
 var _refl_viewport: SubViewport = null
 var _refl_cam: Camera3D = null
 var _refl_enabled: bool = true
@@ -2536,7 +2539,7 @@ func _setup_planar_reflection() -> void:
 	add_child(_refl_viewport)
 	_refl_cam = Camera3D.new()
 	_refl_cam.name = "ReflectionCamera"
-	_refl_cam.cull_mask = 0xFFFFF & ~(1 << WATER_LAYER)
+	_refl_cam.cull_mask = 0xFFFFF & ~(1 << WATER_LAYER) & ~(1 << REFLECT_SKIP_LAYER)
 	_refl_cam.current = true
 	_refl_viewport.add_child(_refl_cam)
 	_water_mat.set_shader_parameter("reflection_tex", _refl_viewport.get_texture())
@@ -2622,6 +2625,24 @@ func _update_water_boats(delta: float) -> void:
 		seen[id] = true
 		arr[count] = pos
 		dirs[count] = dir
+		count += 1
+	# 沉水中的单位（health 已归零，不在 _armies 缓存里）：落水点也要泛出涟漪与水花
+	for n in get_tree().get_nodes_in_group("entities"):
+		if count >= BOAT_SHADER_SLOTS:
+			break
+		if not is_instance_valid(n):
+			continue
+		if not bool(n.get("is_sinking")):
+			continue
+		var sid: int = n.get_instance_id()
+		if seen.has(sid):
+			continue
+		# 沉水单位的位置在下沉，涟漪中心跟着水面高度走，避免波纹漂在船体上
+		var spos: Vector3 = n.global_position
+		spos.y = WATER_WORLD_Y
+		seen[sid] = true
+		arr[count] = spos
+		dirs[count] = Vector3.ZERO
 		count += 1
 	# 定期清掉已经消失的船的缓存，避免字典无限增长
 	_boat_prev_cleanup -= delta

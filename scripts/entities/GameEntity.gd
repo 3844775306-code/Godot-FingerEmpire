@@ -60,6 +60,10 @@ var _bm: RTSBattleManager = null
 # 死亡幂等标记：围殴时同一帧/死亡动画期间的多次命中不能重复触发 died，
 # 否则城堡计数的队伍会重复扣减，导致 2v2/3v3 提前判负
 var _is_dead: bool = false
+# 正在播放沉水动画：水面着色器据此在落水点生成涟漪，平面反射也会排除该模型
+var is_sinking: bool = false
+# 沉水模型要移出的渲染层（与 Ground.gd 的 REFLECT_SKIP_LAYER 保持一致）
+const REFLECT_SKIP_LAYER: int = 18
 
 func _get_bm():
 	if not is_instance_valid(_bm):
@@ -159,12 +163,18 @@ func _process(delta):
 		if bm and bm.has_method("_update_entity_animation"):
 			bm._update_entity_animation(self)
 
+# 子类覆盖：运载船上的单位、城墙上的单位在保护物存活时免疫伤害。
+func is_immune_to_damage() -> bool:
+	return false
+
 func take_damage(amount: float, source = null):
 	if _is_dead or health <= 0.0:
 		return
 	# source 可能来自已经消失的弹丸/旧目标；先清空失效引用，避免后面强类型属性访问
 	if source != null and not is_instance_valid(source):
 		source = null
+	if is_immune_to_damage():
+		return
 	# Officials are immune while garrisoned
 	if entity_id >= 46 and entity_id <= 50:
 		var gb = get("_garrison_building")
@@ -253,10 +263,27 @@ func _should_sink_death() -> bool:
 # 沉水动画：关闭碰撞与行为，1 秒内下沉并轻微倾斜，随后移除。
 # 死亡状态在 die() 中已立即生效（health=0、_is_dead=true），
 # 因此动画期间不会被选中、索敌或再次受伤。
+# 递归给所有可见网格加/去反射排除层（模型可能是多层嵌套的子节点）
+func _set_reflection_hidden(hidden: bool) -> void:
+	_apply_reflection_bit(self, hidden)
+
+func _apply_reflection_bit(node: Node, hidden: bool) -> void:
+	if node is GeometryInstance3D:
+		if hidden:
+			node.layers |= 1 << REFLECT_SKIP_LAYER
+		else:
+			node.layers &= ~(1 << REFLECT_SKIP_LAYER)
+	for child in node.get_children():
+		_apply_reflection_bit(child, hidden)
+
 func _start_sink_death() -> void:
 	collision_layer = 0
 	collision_mask = 0
+	is_sinking = true
 	set_selected(false)
+	# 沉入水下的模型会被水面下的镜像相机看到，倒影会"浮"到水面上方，
+	# 所以把下沉中的模型移出反射层，只保留主相机可见
+	_set_reflection_hidden(true)
 	for child in get_children():
 		if child is CollisionShape3D:
 			child.set_deferred("disabled", true)
