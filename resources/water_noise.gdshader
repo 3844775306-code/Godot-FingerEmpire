@@ -162,15 +162,18 @@ void fragment() {
 	// 船只泡沫尾巴：船体周围泛白，尾流处更明显
 	col = mix(col, vec3(0.86, 0.92, 0.97), clamp(v_boat_foam * 0.3, 0.0, 0.45));
 
-	// Fog darkening：底图暗的时候只压暗一半，避免整片水面变成黑色
+	// 战争迷雾：没有视野的水面同样要蒙上阴影。
+	// fog_tex 是地形的迷雾底图：未探索区几乎全黑(约0.1)，已探索未可见区是压暗底图，
+	// 可见区是正常亮度，用亮度阈值区分这两种压暗程度。
 	vec4 fog = texture(fog_tex, UV);
 	float fl = dot(fog.rgb, vec3(0.333));
-	float fog_amt = (1.0 - smoothstep(0.08, 0.25, fl)) * 0.45;
-	col = mix(col, vec3(0.05, 0.05, 0.08), fog_amt);
+	float fog_amt = clamp(1.0 - smoothstep(0.12, 0.40, fl), 0.0, 1.0);
+	// 未探索区压到接近全黑，已探索未可见区只压暗一半，避免整片海域糊成色块
+	col = mix(col, col * 0.06 + vec3(0.015, 0.02, 0.035), fog_amt * 0.96);
 
 	ALBEDO = col + spec * vec3(1.0, 1.0, 1.0);
-	// 金属度保持很低：场景没有天空/反射探针，金属反射取到的是黑色，水会整片发黑
-	ALPHA = clamp(mix(0.5, 0.74, f) + spec * 0.15 + v_boat_foam * 0.12, 0.0, 0.96);
+	// 迷雾里提高水面不透明度，让阴影盖住水下的地形，不然会透出底下的黑色
+	ALPHA = clamp(mix(0.5, 0.74, f) + spec * 0.15 + v_boat_foam * 0.12 + fog_amt * 0.5, 0.0, 0.98);
 	METALLIC = 0.02;
 	ROUGHNESS = 0.25;
 	SPECULAR = spec + v_boat_lift * 0.12;
