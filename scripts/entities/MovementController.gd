@@ -398,8 +398,10 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 	# 固定 1000 节点在 100×100 地图上不够跨河：桥头堡等地图的浅滩偏离起点/终点连线时，
 	# A* 会沿着河岸展开 1500~1800 个节点才找到渡口，旧上限会提前返回空路径。
 	# 表现就是 AI 部队堵在集结点、永远不发起进攻。按起终点距离放宽预算，同时保留硬上限。
+	# 150×150 的 2v2/3v3 河图上，双河/海湾类地图的绕行更远（实测最坏约 12k 节点），
+	# 因此预算与上限相应上调；普通短距离寻路命中节点数不变，不影响常规性能。
 	var tile_span: int = absi(start_tile.x - end_tile.x) + absi(start_tile.y - end_tile.y)
-	max_nodes = clampi(1200 + tile_span * 40, 1200, 8000)
+	max_nodes = clampi(2000 + tile_span * 80, 2000, 12000)
 	var nodes_explored := 0
 	var from_height := _get_tile_height(start_tile, bm)
 

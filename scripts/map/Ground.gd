@@ -57,6 +57,8 @@ var _water_threshold: float = -0.25
 var _pass_centers: Array = []          # 隘口中心（格坐标），用于争议资源布点
 var _river_center: Array = []          # 每行河流中心 x（格坐标），供浅滩算子使用
 var _river_centers: Dictionary = {}    # 命名河心记录：多河地图用 name 区分（"a"/"b"）
+var _river_paths: Dictionary = {}      # 自由曲线河道采样点：name -> [{pos, tan, w}]，供渡口朝向使用
+var _lake_centers: Dictionary = {}     # 湖泊记录：name -> {pos, radius}，供支流/渡口参考
 var _sea_width: float = 0.0            # 海峡算子的水面宽度（格），供小岛算子参考
 var _ring_radius: float = 0.0          # 环形河中心半径（归一化）
 var _ring_width: float = 0.0           # 环形河宽度（归一化）
@@ -226,8 +228,14 @@ func _generate_with_stages(size: int, stages: Array) -> void:
 				_op_passes(size, params)
 			"river":
 				_op_river(size, params)
+			"river_path":
+				_op_river_path(size, params)
+			"lake":
+				_op_lake(size, params)
 			"fords":
 				_op_fords(size, params)
+			"crossings":
+				_op_crossings(size, params)
 			"forest":
 				_op_forest(size, params)
 			"marsh":
@@ -269,6 +277,8 @@ func _init_stage_grids(size: int) -> void:
 	_pass_centers = []
 	_reach_tiles = {}
 	_river_centers = {}
+	_river_paths = {}
+	_lake_centers = {}
 	for x in range(size):
 		var vcol := []
 		var tcol := []
@@ -347,12 +357,18 @@ func _op_passes(size: int, params: Dictionary) -> void:
 				height_grid[gx][gy] = flat_h
 		_pass_centers.append(Vector2i(cx, int(size * 0.5)))
 
-# 河流：沿南北方向的 S 形水带；bulge 在河心加宽，形成可放油井的水面
+# 河流：沿南北方向的弯曲水带；amp/amp2 两层正弦叠加成自然蜿蜒，
+# width_wave 让河面宽窄交替，bulge 在河心加宽，形成可放油井的水面
 func _op_river(size: int, params: Dictionary) -> void:
 	var center := float(params.get("center", 0.5)) * float(size)
 	var width := maxf(2.0, float(params.get("width", 7.0)))
 	var amp := float(params.get("amp", 0.05)) * float(size)
 	var freq := float(params.get("freq", 0.06))
+	var amp2 := float(params.get("amp2", 0.0)) * float(size)
+	var freq2 := float(params.get("freq2", 0.11))
+	var phase2 := float(params.get("phase2", 0.0))
+	var width_wave := clampf(float(params.get("width_wave", 0.0)), 0.0, 0.6)
+	var width_freq := float(params.get("width_freq", 2.0))
 	var bulge_at := float(params.get("bulge_at", 0.5)) * float(size)
 	var bulge_extra := maxf(0.0, float(params.get("bulge_extra", 0.0)))
 	var bulge_len := maxf(2.0, float(params.get("bulge_len", 10.0)))
@@ -360,9 +376,10 @@ func _op_river(size: int, params: Dictionary) -> void:
 	_river_center = []
 	for y in range(size):
 		var bulge := bulge_extra * exp(-pow(float(y) - bulge_at, 2.0) / (2.0 * bulge_len * bulge_len))
-		var cx := center + sin(float(y) * freq) * amp
+		var cx := center + sin(float(y) * freq) * amp + sin(float(y) * freq2 + phase2) * amp2
 		_river_center.append(int(round(cx)))
-		var half_w := (width + bulge) * 0.5
+		var wmul := 1.0 + width_wave * sin(float(y) / float(size) * TAU * width_freq + phase2)
+		var half_w := (width + bulge) * 0.5 * wmul
 		var x0 := maxi(0, int(round(cx - half_w)))
 		var x1 := mini(size - 1, int(round(cx + half_w)))
 		for x in range(x0, x1 + 1):
@@ -398,6 +415,215 @@ func _op_fords(size: int, params: Dictionary) -> void:
 				overlay_grid[x][yy] = 3
 				# 浅滩略高于水面：沙洲露出水线，玩家能一眼看出这里可以涉水
 				height_grid[x][yy] = -height_scale * 0.25
+
+# Catmull-Rom 插值：用于自由曲线河道，保证拐弯处平滑
+func _catmull_rom(p0: Vector2, p1: Vector2, p2: Vector2, p3: Vector2, t: float) -> Vector2:
+	var t2 := t * t
+	var t3 := t2 * t
+	var v := 0.5 * ((2.0 * p1) + (-p0 + p2) * t + (2.0 * p0 - 5.0 * p1 + 4.0 * p2 - p3) * t2 + (-p0 + 3.0 * p1 - 3.0 * p2 + p3) * t3)
+	return v
+
+# 自由河道：沿一组归一化控制点画任意走向的曲线河，支持宽度起伏、沿岸摆动与河岸噪声。
+# 多次调用即形成支流（不同 name），河道可以穿过湖泊，也可以在任意位置汇合。
+func _op_river_path(size: int, params: Dictionary) -> void:
+	var river_name := String(params.get("name", "path"))
+	var pts_in: Array = params.get("points", [])
+	var ctrl: Array = []
+	if pts_in.size() < 2:
+		ctrl = [Vector2(0.5, -0.06) * float(size), Vector2(0.5, 1.06) * float(size)]
+	else:
+		for p in pts_in:
+			ctrl.append(Vector2(float(p[0]), float(p[1])) * float(size))
+	# 端点复制，让曲线严格从第一个控制点开始、到最后一个控制点结束
+	var ext: Array = [ctrl[0]]
+	for c in ctrl:
+		ext.append(c)
+	ext.append(ctrl[ctrl.size() - 1])
+	var raw: Array = []
+	for i in range(ext.size() - 3):
+		var p0: Vector2 = ext[i]
+		var p1: Vector2 = ext[i + 1]
+		var p2: Vector2 = ext[i + 2]
+		var p3: Vector2 = ext[i + 3]
+		var seg := p1.distance_to(p2)
+		var steps := maxi(2, int(ceil(seg / 0.6)))
+		for j in range(steps):
+			raw.append(_catmull_rom(p0, p1, p2, p3, float(j) / float(steps)))
+	if raw.size() < 2:
+		return
+	# 累积弧长，沿河道做宽度渐变与横向摆动（端点摆动为 0，保证河一定连到地图边缘）
+	var cum: Array = [0.0]
+	for i in range(1, raw.size()):
+		cum.append(float(cum[i - 1]) + raw[i].distance_to(raw[i - 1]))
+	var total: float = maxf(0.001, float(cum[cum.size() - 1]))
+	var base_w := maxf(2.0, float(params.get("width", 6.0)))
+	var end_w := maxf(2.0, float(params.get("width_end", base_w)))
+	var width_wave := clampf(float(params.get("width_wave", 0.0)), 0.0, 0.6)
+	var width_freq := float(params.get("width_freq", 3.0))
+	var width_phase := float(params.get("width_phase", 0.0))
+	var wiggle := float(params.get("wiggle", 0.0)) * float(size)
+	var wiggle_freq := float(params.get("wiggle_freq", 1.5))
+	var wiggle_phase := float(params.get("wiggle_phase", 0.0))
+	var samples: Array = []
+	for i in range(raw.size()):
+		var t := float(cum[i]) / total
+		var tan: Vector2 = (raw[mini(i + 1, raw.size() - 1)] - raw[maxi(i - 1, 0)]).normalized()
+		if tan == Vector2.ZERO:
+			tan = Vector2(0, 1)
+		var nrm := Vector2(-tan.y, tan.x)
+		var lateral := wiggle * sin(t * TAU * wiggle_freq + wiggle_phase) * sin(t * PI)
+		var w := lerpf(base_w, end_w, t) * (1.0 + width_wave * sin(t * TAU * width_freq + width_phase))
+		samples.append({"pos": raw[i] + nrm * lateral, "tan": tan, "w": maxf(2.0, w)})
+	# 河岸带一点噪声，避免边缘像圆规画出来的
+	var seed_val := custom_seed if custom_seed != 0 else randi()
+	var noise := FastNoiseLite.new()
+	noise.seed = seed_val + 3329
+	noise.frequency = float(params.get("bank_freq", 0.18))
+	noise.fractal_octaves = 2
+	var bank_amp := float(params.get("bank_noise", 0.9))
+	var water_h := -height_scale * 0.5
+	for s in samples:
+		var half_w := float(s.w) * 0.5
+		var rad := int(ceil(half_w + bank_amp)) + 1
+		var bx := int(round(float(s.pos.x)))
+		var by := int(round(float(s.pos.y)))
+		for dx in range(-rad, rad + 1):
+			for dy in range(-rad, rad + 1):
+				var nx := bx + dx
+				var ny := by + dy
+				if nx < 0 or ny < 0 or nx >= size or ny >= size:
+					continue
+				var d := sqrt(float(dx * dx + dy * dy))
+				var edge := half_w + noise.get_noise_2d(nx, ny) * bank_amp
+				if d > edge:
+					continue
+				terrain_grid[nx][ny] = 2
+				height_grid[nx][ny] = water_h
+				overlay_grid[nx][ny] = 0
+	if bool(params.get("record_path", true)):
+		_river_paths[river_name] = samples
+
+# 湖泊：噪声扰动的椭圆水面，可带湖心小洲；与 river_path 配合就是"河注入湖"
+func _op_lake(size: int, params: Dictionary) -> void:
+	var lake_name := String(params.get("name", "lake"))
+	var center: Array = params.get("center", [0.5, 0.5])
+	var cx := clampf(float(center[0]), 0.06, 0.94) * float(size)
+	var cy := clampf(float(center[1]), 0.06, 0.94) * float(size)
+	var radius := maxf(2.0, float(params.get("radius", 0.16)) * float(size))
+	var aspect := clampf(float(params.get("aspect", 1.0)), 0.5, 1.8)
+	var rough := clampf(float(params.get("rough", 0.22)), 0.0, 0.55)
+	var seed_val := custom_seed if custom_seed != 0 else randi()
+	var noise := FastNoiseLite.new()
+	noise.seed = seed_val + 6421
+	noise.frequency = float(params.get("freq", 0.09))
+	noise.fractal_octaves = 2
+	var water_h := -height_scale * 0.5
+	var bcx := int(round(cx))
+	var bcy := int(round(cy))
+	var rx := int(ceil(radius * (1.0 + rough))) + 1
+	var ry := int(ceil(radius * aspect * (1.0 + rough))) + 1
+	for dx in range(-rx, rx + 1):
+		for dy in range(-ry, ry + 1):
+			var nx := bcx + dx
+			var ny := bcy + dy
+			if nx < 0 or ny < 0 or nx >= size or ny >= size:
+				continue
+			var ex := float(dx)
+			var ey := float(dy) / aspect
+			var d := sqrt(ex * ex + ey * ey)
+			if d > radius * (1.0 + noise.get_noise_2d(nx, ny) * rough):
+				continue
+			terrain_grid[nx][ny] = 2
+			height_grid[nx][ny] = water_h
+			overlay_grid[nx][ny] = 0
+	# 湖心小洲：纯地标，给大湖一点层次；湖面太小时不放
+	var islet_count := maxi(0, int(params.get("islets", 0)))
+	if islet_count > 0 and radius >= 6.0:
+		var islet_r := maxi(1, int(round(float(params.get("islet_frac", 0.014)) * float(size))))
+		for i in range(islet_count):
+			var h := absi(hash(Vector2i(bcx + i * 17, bcy - i * 29)))
+			var ang := TAU * float(h % 1000) / 1000.0
+			var rr := radius * (0.18 + 0.34 * float((h >> 10) % 100) / 100.0)
+			var icx := bcx + int(round(cos(ang) * rr))
+			var icy := bcy + int(round(sin(ang) * rr * aspect))
+			for dx in range(-islet_r, islet_r + 1):
+				for dy in range(-islet_r, islet_r + 1):
+					if dx * dx + dy * dy > islet_r * islet_r:
+						continue
+					var nx2 := icx + dx
+					var ny2 := icy + dy
+					if nx2 < 0 or ny2 < 0 or nx2 >= size or ny2 >= size:
+						continue
+					if terrain_grid[nx2][ny2] != 2:
+						continue
+					terrain_grid[nx2][ny2] = 0
+					height_grid[nx2][ny2] = 0.1
+					overlay_grid[nx2][ny2] = 0
+	_lake_centers[lake_name] = {"pos": Vector2(cx, cy), "radius": radius}
+
+# 渡口：在任意水域上切一条垂直于水流的浅滩带（overlay=3）。
+# points 为归一化坐标；朝向优先取最近河道采样点的切线，也可用 angle 强制指定。
+# reach/width 分别控制横渡长度与沿河宽度，因此既能横渡窄河，也能在湖面上铺出浅滩沙洲。
+func _op_crossings(size: int, params: Dictionary) -> void:
+	var points: Array = params.get("points", [])
+	if points.is_empty():
+		push_warning("[地图] crossings 缺少 points")
+		return
+	var width := maxf(2.0, float(params.get("width", 4.0)))
+	var half_u := width * 0.5
+	var reach := float(params.get("reach", 0.0))
+	if reach <= 0.0:
+		reach = maxf(8.0, float(params.get("reach_frac", 0.18)) * float(size))
+	var path_name := String(params.get("path", ""))
+	var angle_deg := float(params.get("angle", NAN))
+	var water_shallow_h := -height_scale * 0.25
+	for p in points:
+		var target := Vector2(float(p[0]), float(p[1])) * float(size)
+		var tx := clampi(int(round(target.x)), 0, size - 1)
+		var ty := clampi(int(round(target.y)), 0, size - 1)
+		var tan := Vector2(0, 1)
+		var center := target
+		if is_nan(angle_deg):
+			# 找最近的一条河道采样点，取它的切线作为水流方向
+			var best := INF
+			var best_pos := target
+			var arrs: Array = []
+			if path_name != "" and _river_paths.has(path_name):
+				arrs.append(_river_paths[path_name])
+			else:
+				arrs = _river_paths.values()
+			for arr in arrs:
+				for s in arr:
+					var sp: Vector2 = s.pos
+					var dd: float = (sp - target).length_squared()
+					if dd < best:
+						best = dd
+						tan = s.tan
+						best_pos = sp
+			# 点本身就在水面上就以点为渡口中心，否则吸附到最近河道
+			if not (terrain_grid[tx][ty] == 2):
+				center = best_pos if best < INF else target
+		else:
+			tan = Vector2(cos(deg_to_rad(angle_deg)), sin(deg_to_rad(angle_deg)))
+		var nrm := Vector2(-tan.y, tan.x)
+		var bcx := int(round(center.x))
+		var bcy := int(round(center.y))
+		var r := int(ceil(reach))
+		for dx in range(-r, r + 1):
+			for dy in range(-r, r + 1):
+				var nx := bcx + dx
+				var ny := bcy + dy
+				if nx < 0 or ny < 0 or nx >= size or ny >= size:
+					continue
+				var off := Vector2(dx, dy)
+				if absf(off.dot(tan)) > half_u:
+					continue
+				if absf(off.dot(nrm)) > reach:
+					continue
+				if terrain_grid[nx][ny] != 2:
+					continue
+				overlay_grid[nx][ny] = 3
+				height_grid[nx][ny] = water_shallow_h
 
 # 森林：低频噪声圈出成片林地（按分位阈值保证覆盖率），再用另一层噪声挖出林间空地
 func _op_forest(size: int, params: Dictionary) -> void:
@@ -474,6 +700,10 @@ func _op_sea(size: int, params: Dictionary) -> void:
 		"width": _sea_width,
 		"amp": params.get("amp", 0.05),
 		"freq": params.get("freq", 0.035),
+		"amp2": params.get("amp2", 0.0),
+		"freq2": params.get("freq2", 0.11),
+		"width_wave": params.get("width_wave", 0.0),
+		"width_freq": params.get("width_freq", 2.0),
 	})
 
 # 岛屿：在海峡静水里撒岛，避开渡口行（那是唯一陆路通道）。
