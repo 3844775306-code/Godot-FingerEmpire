@@ -336,6 +336,12 @@ func die():
 			var inst = s.instantiate()
 			inst.name = "DemolishedModel"
 			add_child(inst)
+			# 毁坏模型也要按国家/队伍色染色，和正常模型保持一致
+			var bm_tint = _get_bm()
+			if bm_tint and bm_tint.has_method("_apply_team_tint") and entity_type != 0 and team != RTSConfig.Team.NEUTRAL:
+				var tint: Color = bm_tint.get_entity_color(self)
+				tint = Color(0.2 + tint.r * 0.8, 0.2 + tint.g * 0.8, 0.2 + tint.b * 0.8)
+				bm_tint._apply_team_tint(self, tint)
 		var t = Timer.new(); t.one_shot = true; t.wait_time = 0.3
 		t.timeout.connect(queue_free); add_child(t); t.start()
 		return

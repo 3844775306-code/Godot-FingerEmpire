@@ -400,6 +400,11 @@ func _process_snapshot(data: Dictionary):
 					if s:
 						var inst = s.instantiate()
 						inst.name = "DemolishedModel"
+						# 毁坏模型也要按国家/队伍色染色，和正常模型保持一致
+						if info.get("type", -1) != 0:
+							var info_color = _get_entity_color(info)
+							var lt = Color(0.5 + info_color.r * 0.5, 0.5 + info_color.g * 0.5, 0.5 + info_color.b * 0.5)
+							_apply_model_tint(inst, lt)
 						# 毁坏模型随本体一起放大，否则塔倒后残骸会明显偏小
 						if eid == 41: inst.scale = Vector3.ONE * (0.5 * RTSConfig.get_model_scale(eid))
 						node.add_child(inst)
