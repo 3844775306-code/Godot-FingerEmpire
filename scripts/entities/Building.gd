@@ -120,10 +120,12 @@ func _process(delta):
 
 	# 防御塔自动攻击
 	if attack > 0:
-		if current_target != null and not is_instance_valid(current_target):
+		# 目标被销毁后引用不是 null（已释放实例 == null 反而为真），
+		# 直接对已释放实例做 is 判断会报 previously freed instance，必须先 is_instance_valid
+		if not is_instance_valid(current_target):
 			current_target = null
 			_target_scan_timer = 0.0
-		if current_target is Army and current_target.is_immune_to_damage():
+		if is_instance_valid(current_target) and current_target is Army and current_target.is_immune_to_damage():
 			current_target = null
 			_target_scan_timer = 0.0
 		if current_target == null:
