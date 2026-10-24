@@ -356,7 +356,11 @@ func _find_ui(node_name: String) -> Node:
 
 func _on_play_pressed():
 	GameSettings.player_nation = nation_select.selected
-	GameSettings.enemy_nation = randi() % RTSConfig.Nation.size()
+	# 单机敌国避开玩家国家：国家色是主要识别手段，同国会撞色。
+	var enemy_nation = randi() % (RTSConfig.Nation.size() - 1)
+	if enemy_nation >= GameSettings.player_nation:
+		enemy_nation += 1
+	GameSettings.enemy_nation = enemy_nation
 	var ds = _find_ui("DiffSelect")
 	if ds: GameSettings.ai_difficulty = ds.selected
 	var ms = _find_ui("ModeSelect")

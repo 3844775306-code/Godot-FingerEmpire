@@ -921,7 +921,8 @@ func _process(delta):
 							"type": entity.entity_type,
 							"id": entity.get_instance_id(),
 							"entity_id": entity.entity_id,
-							"owner_peer_id": entity.owner_peer_id
+							"owner_peer_id": entity.owner_peer_id,
+							"color": bm.get_entity_color(entity) if bm.has_method("get_entity_color") else Color.WHITE
 						})
 				# 只有迷雾真正变化时才让小地图重建底图；单位点移动只重绘点
 				var fog_ver: int = int(bm.fog_version)

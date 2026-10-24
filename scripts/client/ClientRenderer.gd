@@ -1291,9 +1291,12 @@ const GROUP_LABEL_COLORS = {
 	9: Color(0.5, 1.0, 0.5),   # Mint
 }
 
-# 实体专属颜色：按 owner_peer_id 查玩家色（血条/模型/小地图统一着色）；
-# 无 owner 或未登记颜色时按队伍基础色兜底，中立/未知返回灰色
+# 实体专属颜色：国家色优先（与服务器 HUD/模型/小地图统一），
+# 快照没有 nation 时按 owner_peer_id / 队伍兜底。
 func _get_entity_color(info: Dictionary) -> Color:
+	var nation: int = int(info.get("nation", -1))
+	if nation >= 0 and nation < RTSConfig.NATION_COLORS.size():
+		return RTSConfig.NATION_COLORS[nation]
 	var owner_id = info.get("owner_peer_id", -1)
 	if owner_id != -1 and player_colors.has(owner_id):
 		return player_colors[owner_id]

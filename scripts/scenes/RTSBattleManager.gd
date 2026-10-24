@@ -523,6 +523,9 @@ var _player_colors: Dictionary = {
 	1: Color(0.2, 0.6, 1.0),   # 蓝方玩家（单机默认）
 	3: Color(1.0, 0.3, 0.2),   # 红方AI（单机默认）
 }
+# owner_peer_id -> nation。生成实体前先登记，保证城堡/农民一出生就用国家色，
+# 而不是等 ai_players 里补 nation 后才改色。
+var _owner_nations: Dictionary = {}
 func get_player_colors() -> Dictionary:
 	return _player_colors
 
@@ -546,23 +549,37 @@ func get_entity_nation(entity) -> int:
 	if entity == null:
 		return -1
 	if entity.owner_peer_id != -1:
+		if _owner_nations.has(entity.owner_peer_id):
+			return int(_owner_nations[entity.owner_peer_id])
 		var info = ai_players.get(entity.owner_peer_id, {})
-		return int(info.get("nation", -1))
+		if info.has("nation"):
+			return int(info.get("nation", -1))
+		# 玩家自己的实体在部分初始化阶段可能还没登记 ai_players，按玩家阵营兜底。
+		if entity.owner_peer_id == player_owner_id:
+			return int(team_nations.get(get_host_team(), -1))
+		return -1
 	return get_team_nation(entity.team)
 
-# 返回实体所属玩家的阵营颜色（血条与模型统一着色）：
-# owner 感知优先取 _player_colors[owner_peer_id]（乱斗/2v2/3v3 各 AI 颜色各不相同）；
-# 无 owner 或未登记颜色时按队伍推断默认色，中立/未知返回灰色
+# 返回实体所属国家的颜色（血条、模型、小地图统一着色）。
+# 国家颜色优先于阵营/玩家颜色，这样同队不同国家的部队也能一眼区分。
 func get_entity_color(entity) -> Color:
 	if entity == null:
 		return Color(0.7, 0.7, 0.7)
+	var nation: int = get_entity_nation(entity)
+	if nation >= 0 and nation < RTSConfig.NATION_COLORS.size():
+		var nation_color: Color = RTSConfig.NATION_COLORS[nation]
+		# 单机理论上已避开同国；直接启动战斗场景等极端情况下给异队同国一个暗色变体，
+		# 避免完全撞色。
+		if not is_online and entity.team != get_host_team() and nation == int(team_nations.get(get_host_team(), -1)):
+			nation_color = nation_color.darkened(0.35)
+		return nation_color
 	if entity.owner_peer_id != -1 and _player_colors.has(entity.owner_peer_id):
 		return _player_colors[entity.owner_peer_id]
 	match entity.team:
 		RTSConfig.Team.BLUE:
-			return Color(0.2, 0.6, 1.0)   # 蓝方默认色（_player_colors[1]）
+			return Color(0.2, 0.6, 1.0)
 		RTSConfig.Team.RED:
-			return Color(1.0, 0.3, 0.2)   # 红方默认色（_player_colors[3]）
+			return Color(1.0, 0.3, 0.2)
 		_:
 			return Color(0.7, 0.7, 0.7)   # 中立灰色
 
@@ -987,14 +1004,9 @@ func _init_ffa_single(_nation_count: int):
 	ai_nation_pool.shuffle()
 	var ai_nations = ai_nation_pool.slice(0, count - 1)
 
-	# AI 独立配色（避开玩家蓝），4 色足够覆盖最多 4 个 AI
-	var ai_color_pool: Array = [
-		RTSConfig.COLOR_POOL[0],   # 红
-		RTSConfig.COLOR_POOL[2],   # 橙
-		RTSConfig.COLOR_POOL[3],   # 紫
-		RTSConfig.COLOR_POOL[4],   # 绿
-	]
-	_player_colors[player_owner_id] = RTSConfig.COLOR_POOL[1]   # 玩家蓝色
+	# 玩家与 AI 都使用国家色；乱斗各国国家唯一，不会撞色。
+	_owner_nations[player_owner_id] = GameSettings.player_nation
+	_player_colors[player_owner_id] = RTSConfig.get_nation_color(GameSettings.player_nation)
 
 	# —— 玩家城堡 ——
 	var player_castle = null
@@ -1008,10 +1020,8 @@ func _init_ffa_single(_nation_count: int):
 		var start_lv = NationBonuses.get_castle_start_level(GameSettings.player_nation)
 		player_castle.upgrade_level = start_lv
 		player_castle.level = start_lv
-		if start_lv >= 3:
-			player_castle._unlock_nation_units(GameSettings.player_nation)
 	ai_players[player_owner_id] = {"castle": player_castle, "team": RTSConfig.Team.BLUE, "slot": 0, "nation": GameSettings.player_nation}
-	diplomacy.register_nation(player_owner_id, RTSConfig.Team.BLUE, GameSettings.player_nation, true, RTSConfig.COLOR_POOL[1])
+	diplomacy.register_nation(player_owner_id, RTSConfig.Team.BLUE, GameSettings.player_nation, true, RTSConfig.get_nation_color(GameSettings.player_nation))
 
 	# 玩家初始农民
 	var peasant_cfg = EntityDatabase.get_config(10)
@@ -1020,13 +1030,14 @@ func _init_ffa_single(_nation_count: int):
 		cfg["owner_peer_id"] = player_owner_id
 		spawn_entity(cfg, RTSConfig.Team.BLUE, layout[0] + Vector3(randf_range(-3, 3), 0, randf_range(-3, 3)), 1)
 
-	# —— AI 国家循环：独立资源/人口/上限/唯一 team/颜色/AI 控制器 ——
+	# —— AI 国家循环：独立资源/人口/上限/唯一 team/国家色/AI 控制器 ——
 	for ai_index in range(ai_nations.size()):
 		var pid = 3000 + ai_index        # AI owner_peer_id（乱斗独立段，不与 2v2/3v3 冲突）
 		var team = 3 + ai_index          # 唯一 team：3..（避开 RED=0/NEUTRAL=2/BLUE=1）
 		var nation = ai_nations[ai_index]
 		var castle_pos = layout[1 + ai_index]
-		var col = ai_color_pool[ai_index % ai_color_pool.size()]
+		var col: Color = RTSConfig.get_nation_color(nation)
+		_owner_nations[pid] = nation
 		_player_colors[pid] = col
 
 		ai_resources[pid] = {"gold": 500, "wood": 500, "stone": 300, "food": 500, "oil": 0}
@@ -1043,8 +1054,6 @@ func _init_ffa_single(_nation_count: int):
 			var start_lv_ai = NationBonuses.get_castle_start_level(nation)
 			castle.upgrade_level = start_lv_ai
 			castle.level = start_lv_ai
-			if start_lv_ai >= 3:
-				castle._unlock_nation_units(nation)
 		ai_players[pid] = {"castle": castle, "team": team, "slot": ai_index + 1, "nation": nation}
 		diplomacy.register_nation(pid, team, nation, false, col)
 
@@ -1146,12 +1155,17 @@ func _init_2v2_single():
 
 	_team_castle_count[player_team] = 2
 	_team_castle_count[enemy_team] = 2
-	# 玩家颜色随随机阵营走，避免红方玩家仍用默认蓝色模型/血条。
-	_player_colors[1] = RTSConfig.COLOR_POOL[player_team]
+	# 颜色按国家，不再按阵营。
+	_owner_nations[1] = GameSettings.player_nation
+	_player_colors[1] = RTSConfig.get_nation_color(GameSettings.player_nation)
 	for info in setup:
 		var pid = info.peer_id
 		var team = info.team
 		var slot = info.slot
+		var info_nation: int = int(info.get("nation", -1))
+		_owner_nations[pid] = info_nation
+		if pid != 1:
+			_player_colors[pid] = RTSConfig.get_nation_color(info_nation)
 		var castle_pos = positions[slot] if team == RTSConfig.Team.BLUE else positions[2 + slot]
 
 		# 初始化资源
@@ -1222,7 +1236,8 @@ func _random_ai_nation_pool(count: int) -> Array:
 		out.append(pool.pop_back())
 	return out
 
-# 单机对称团队战：玩家+蓝方AI vs 红方AI（2V2/3V3），每方人数=模式值
+# 单机对称团队战：玩家+同阵营AI vs 另一阵营AI（2V2/3V3），每方人数=模式值。
+# 颜色不再按阵营区分，而是按国家色区分，避免同队玩家/队友撞色。
 func _init_multi_single(mode: int):
 	var map = $Map
 	if not map: return
@@ -1242,6 +1257,8 @@ func _init_multi_single(mode: int):
 		player_team: GameSettings.player_nation,
 		enemy_team: enemy_nation
 	}
+	# 先登记 owner->nation，保证首座城堡/农民生成时就按国家色着色。
+	_owner_nations[player_owner_id] = GameSettings.player_nation
 
 	_team_castle_count[player_team] = mode
 	_team_castle_count[enemy_team] = mode
@@ -1253,8 +1270,8 @@ func _init_multi_single(mode: int):
 	# 玩家城堡：蓝方取 layout[0]，红方取 layout[mode]（各自阵营的 0 号位）
 	var player_pos = layout[0] if player_team == RTSConfig.Team.BLUE else layout[mode]
 	var player_castle = null
-	# 先登记玩家颜色，再生成城堡与农民，保证模型/血条一开始就是随机到的阵营色。
-	_player_colors[player_owner_id] = RTSConfig.COLOR_POOL[player_team]
+	# 颜色按国家，不再按阵营。
+	_player_colors[player_owner_id] = RTSConfig.get_nation_color(GameSettings.player_nation)
 	var player_cfg = EntityDatabase.get_config(20)
 	player_cfg["owner_peer_id"] = player_owner_id
 	player_cfg["team"] = player_team
@@ -1265,8 +1282,6 @@ func _init_multi_single(mode: int):
 		var start_lv = NationBonuses.get_castle_start_level(GameSettings.player_nation)
 		player_castle.upgrade_level = start_lv
 		player_castle.level = start_lv
-		if start_lv >= 3:
-			player_castle._unlock_nation_units(GameSettings.player_nation)
 	ai_players[player_owner_id] = {"castle": player_castle, "team": player_team, "slot": 0, "nation": GameSettings.player_nation}
 
 	# 玩家初始农民
@@ -1276,14 +1291,11 @@ func _init_multi_single(mode: int):
 		cfg["owner_peer_id"] = player_owner_id
 		spawn_entity(cfg, player_team, player_pos + Vector3(randf_range(-3,3), 0, randf_range(-3,3)), 1)
 
-	# 玩家阵营 AI（队友）与敌方 AI，各自独立资源/人口/上限/颜色/AI控制器
-	var blue_colors = [Color(0.35, 0.6, 1.0), Color(0.5, 0.75, 1.0)]
-	var red_colors = [Color(1.0, 0.3, 0.25), Color(1.0, 0.5, 0.25), Color(1.0, 0.35, 0.55)]
+	# 玩家阵营 AI（队友）与敌方 AI，各自独立资源/人口/上限/国家色/AI控制器
 	for team in [player_team, enemy_team]:
 		var is_ally_team = team == player_team
 		var count = (mode - 1) if is_ally_team else mode
 		var base_pid = 1000 if team == RTSConfig.Team.BLUE else 2000
-		var colors = blue_colors if team == RTSConfig.Team.BLUE else red_colors
 		for ai_index in range(count):
 			var pid = base_pid + ai_index
 			var nation = ai_nation_order[ai_nation_idx] if ai_nation_idx < ai_nation_order.size() else (randi() % RTSConfig.Nation.size())
@@ -1291,7 +1303,8 @@ func _init_multi_single(mode: int):
 			# 玩家阵营 AI 队友占 1..mode-1 号位，敌方 AI 占 0..mode-1 号位
 			var slot = (ai_index + 1) if is_ally_team else ai_index
 			var castle_pos = layout[slot] if team == RTSConfig.Team.BLUE else layout[mode + slot]
-			_player_colors[pid] = colors[ai_index % colors.size()]
+			_owner_nations[pid] = nation
+			_player_colors[pid] = RTSConfig.get_nation_color(nation)
 
 			ai_resources[pid] = {"gold": 500, "wood": 500, "stone": 300, "food": 500, "oil": 0}
 			ai_population[pid] = {"current": 0, "max": 20}
@@ -1307,8 +1320,6 @@ func _init_multi_single(mode: int):
 				var start_lv_ai = NationBonuses.get_castle_start_level(nation)
 				castle.upgrade_level = start_lv_ai
 				castle.level = start_lv_ai
-				if start_lv_ai >= 3:
-					castle._unlock_nation_units(nation)
 			ai_players[pid] = {"castle": castle, "team": team, "slot": slot, "nation": nation}
 
 			# AI初始农民
@@ -1642,8 +1653,6 @@ func _init_entities_deferred():
 		var start_lv = NationBonuses.get_castle_start_level(player_nation)
 		player_castle.upgrade_level = start_lv
 		player_castle.level = start_lv
-		if start_lv >= 3:
-			player_castle._unlock_nation_units(player_nation)
 
 	# 生成敌人城堡
 	castle_cfg = EntityDatabase.get_config(20)
@@ -1654,8 +1663,6 @@ func _init_entities_deferred():
 		var start_lv_enemy = NationBonuses.get_castle_start_level(enemy_nation)
 		enemy_castle.upgrade_level = start_lv_enemy
 		enemy_castle.level = start_lv_enemy
-		if start_lv_enemy >= 3:
-			enemy_castle._unlock_nation_units(enemy_nation)
 
 	# 资源点
 	for res in map.resource_positions:
@@ -1880,12 +1887,10 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 	entity.setup(cfg)
 	# 尝试加载3D模型
 	var model_loaded = _apply_entity_model(entity)
-	# 队伍色着色：非资源、非中立实体
+	# 国家色着色：非资源、非中立实体。颜色与阵营解耦，按国家统一。
 	if entity.entity_type != 0 and entity.team != RTSConfig.Team.NEUTRAL:
-		var tint = Color(0.3, 0.6, 1.0) if team == RTSConfig.Team.BLUE else Color(1.0, 0.4, 0.4)
-		if entity.owner_peer_id != -1 and _player_colors.has(entity.owner_peer_id):
-			var pc = _player_colors[entity.owner_peer_id]
-			tint = Color(0.2 + pc.r * 0.8, 0.2 + pc.g * 0.8, 0.2 + pc.b * 0.8)
+		var tint: Color = get_entity_color(entity)
+		tint = Color(0.2 + tint.r * 0.8, 0.2 + tint.g * 0.8, 0.2 + tint.b * 0.8)
 		_apply_team_tint(entity, tint)
 	# 有坐骑的单位抬高模型
 	if entity.entity_id in [15, 19, 34, 38] and entity.has_meta("_model_instance"):
@@ -2928,13 +2933,9 @@ func _capture_abandoned_site(site: Building, army: Army) -> void:
 	var owner_id: int = int(army.owner_peer_id)
 	site.team = team
 	site.owner_peer_id = owner_id
-	# 换成占领方的队伍色，和正常建筑一致
-	var tint: Color = Color(0.3, 0.6, 1.0) if team == RTSConfig.Team.BLUE else Color(1.0, 0.4, 0.4)
-	if team != RTSConfig.Team.BLUE and team != RTSConfig.Team.RED:
-		tint = Color(0.9, 0.75, 0.3)
-	if owner_id >= 0 and _player_colors.has(owner_id):
-		var pc: Color = _player_colors[owner_id]
-		tint = Color(0.2 + pc.r * 0.8, 0.2 + pc.g * 0.8, 0.2 + pc.b * 0.8)
+	# 换成占领方的国家色，和正常建筑一致
+	var tint: Color = get_entity_color(site)
+	tint = Color(0.2 + tint.r * 0.8, 0.2 + tint.g * 0.8, 0.2 + tint.b * 0.8)
 	_apply_team_tint(site, tint)
 	mark_entity_cache_dirty()
 	# 废弃仓库/民居从"中立"转为"己方"，仓储与人口上限要按新队伍重算

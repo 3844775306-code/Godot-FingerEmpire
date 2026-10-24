@@ -17,6 +17,23 @@ const COLOR_POOL = [
 	Color(1.0, 0.45, 0.75),
 ]
 
+# 国家专属色：单机/服务器 HUD、单位模型、血条、小地图统一使用。
+# 这组颜色与阵营解耦，方便在混编队伍中一眼区分不同国家的部队。
+const NATION_COLORS = [
+	Color(0.92, 0.26, 0.20),   # 维京：红
+	Color(0.22, 0.55, 1.00),   # 英格兰：蓝
+	Color(0.98, 0.72, 0.12),   # 法兰西：金
+	Color(0.92, 0.22, 0.70),   # 中国：品红
+	Color(0.28, 0.82, 0.32),   # 匈牙利：绿
+	Color(0.72, 0.40, 0.98),   # 日本：紫
+	Color(0.10, 0.82, 0.82),   # 拜占庭：青
+]
+
+static func get_nation_color(nation: int, fallback: Color = Color(0.7, 0.7, 0.7)) -> Color:
+	if nation >= 0 and nation < NATION_COLORS.size():
+		return NATION_COLORS[nation]
+	return fallback
+
 # 队伍基准色：同队玩家/单位统一使用同一色系（蓝队蓝色系、红队红色系）
 const TEAM_BASE_COLORS = {
 	Team.BLUE: Color(0.2, 0.6, 1.0),

@@ -199,7 +199,7 @@ func _reload_wall_model(bm, path):
 		var inst = s.instantiate()
 		if inst:
 			add_child(inst); set_meta("_model_instance", inst)
-			var tint = Color(0.3, 0.6, 1.0) if team == RTSConfig.Team.BLUE else Color(1.0, 0.4, 0.4)
+			var tint: Color = bm.get_entity_color(self) if bm.has_method("get_entity_color") else (Color(0.3, 0.6, 1.0) if team == RTSConfig.Team.BLUE else Color(1.0, 0.4, 0.4))
 			bm._apply_team_tint(self, tint)
 
 func _finish_construction():

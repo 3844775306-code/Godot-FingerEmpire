@@ -18,15 +18,6 @@ const METRICS: Array = [
 	{ "id": "vision", "label": "视野面积实时总量", "short": "视野实时", "unit": "格", "cumulative": false },
 ]
 
-const NATION_COLORS: Array = [
-	Color(0.95, 0.32, 0.24),   # 维京
-	Color(0.30, 0.62, 1.00),   # 英格兰
-	Color(0.96, 0.70, 0.20),   # 法兰西
-	Color(0.95, 0.32, 0.52),   # 中国
-	Color(0.40, 0.84, 0.36),   # 匈牙利
-	Color(0.78, 0.48, 0.95),   # 日本
-	Color(0.28, 0.84, 0.84),   # 拜占庭
-]
 const NATION_NAMES: Array = ["维京", "英格兰", "法兰西", "中国", "匈牙利", "日本", "拜占庭"]
 
 var battle = null
@@ -182,9 +173,7 @@ func _team_color(team: int) -> Color:
 	return pool[posmod(team, pool.size())]
 
 func _nation_color(nation: int) -> Color:
-	if nation >= 0 and nation < NATION_COLORS.size():
-		return NATION_COLORS[nation]
-	return Color(0.7, 0.7, 0.7)
+	return RTSConfig.get_nation_color(nation)
 
 func _nation_label(nation: int) -> String:
 	if battle and battle.has_method("get_nation_name"):

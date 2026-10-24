@@ -178,6 +178,12 @@ func _draw():
 		# 动物羊皮纸白
 		if eid >= 60 and eid <= 63:
 			dot_color = UITheme.PARCHMENT
+		elif ent.has("color"):
+			# 单机/服务器快照直接带国家色；与模型、血条保持同一套颜色。
+			dot_color = ent["color"].lightened(0.25)
+		elif int(ent.get("nation", -1)) >= 0:
+			# 联机客户端快照里带 nation，直接按国家色画点。
+			dot_color = RTSConfig.get_nation_color(int(ent["nation"])).lightened(0.25)
 		elif owner != -1 and pc.has(owner):
 			dot_color = pc[owner].lightened(0.25)
 		elif ent["team"] == player_team:
