@@ -21,11 +21,21 @@ var _target_scan_timer: float = randf_range(0.0, 0.25)
 
 # Hell difficulty speed bonus
 
+# 该建筑的拥有者是否为 AI：联机客户端的 peer_id 是随机大整数（实测见过 385949886），
+# 不能简单用 >= 1000 判断，否则人类客户端会被当成 AI 吃 HELL 难度加成
+func _owner_is_ai() -> bool:
+	if owner_peer_id < 0:
+		return false
+	var bm = _get_bm()
+	if bm and bm.is_online and bm.has_method("is_ai_peer"):
+		return bool(bm.call("is_ai_peer", owner_peer_id))
+	return owner_peer_id >= 1000
+
 func start_construction(time: float, data: Dictionary):
 	building_data = data
 	var spd = 1.0
 	if GameSettings.fast_mode: spd = 2.0
-	if owner_peer_id >= 1000 and GameSettings.ai_difficulty >= GameSettings.AIDifficulty.HELL: spd *= 1.2
+	if _owner_is_ai() and GameSettings.ai_difficulty >= GameSettings.AIDifficulty.HELL: spd *= 1.2
 	max_build_time = data["max_health"] / 75.0 / spd
 	build_timer = max_build_time
 	max_health = 10
@@ -478,7 +488,7 @@ func perform_upgrade(bm: RTSBattleManager) -> bool:
 	for k in cost: total_cost += cost[k]
 	var spd2 = 1.0
 	if GameSettings.fast_mode: spd2 = 2.0
-	if owner_peer_id >= 1000 and GameSettings.ai_difficulty >= GameSettings.AIDifficulty.HELL: spd2 *= 1.2
+	if _owner_is_ai() and GameSettings.ai_difficulty >= GameSettings.AIDifficulty.HELL: spd2 *= 1.2
 	max_upgrade_time = max(total_cost / 20.0, 5.0) / spd2
 	upgrade_timer = max_upgrade_time
 	return true
@@ -503,7 +513,7 @@ func _finish_upgrade():
 func get_prod_cooldown(unit_id: int) -> float:
 	var spd3 = 1.0
 	if GameSettings.fast_mode: spd3 = 2.0
-	if owner_peer_id >= 1000 and GameSettings.ai_difficulty >= GameSettings.AIDifficulty.HELL: spd3 *= 1.2
+	if _owner_is_ai() and GameSettings.ai_difficulty >= GameSettings.AIDifficulty.HELL: spd3 *= 1.2
 	for prod in production_list:
 		if prod.unit_id == unit_id:
 			return prod.cooldown / spd3

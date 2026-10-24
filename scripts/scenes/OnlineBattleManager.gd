@@ -74,6 +74,11 @@ func _show_hud_alert(msg: String, color: Color = Color(1.0, 0.2, 0.1), _target_t
 		_queue_client_alert(_target_team, msg, color)
 
 # 房主（peer 1）所在队伍：用于过滤服务器本地 HUD 上的播报
+func is_ai_peer(peer_id: int) -> bool:
+	if peer_id < 0:
+		return true
+	return bool(player_info.get(peer_id, {}).get("is_ai", false))
+
 func _host_player_team() -> int:
 	if player_info.has(1):
 		return int(player_info[1].team)
@@ -1163,8 +1168,11 @@ func _on_castle_died_team(peer_id: int):
 	_show_host_game_over(winner)
 	var stats_payload: Dictionary = battle_stats.export_payload() if battle_stats else {}
 	for pid in player_info.keys():
-		if pid >= 1000 or pid == 1: continue   # 跳过 AI 与房主（房主已本地结算）
-		NetworkManager.notify_game_over.rpc_id(pid, winner, stats_payload)
+		if int(pid) == 1: continue   # 房主已本地结算
+		# 客户端 peer_id 是随机大整数（实测见过 385949886），不能再用 pid >= 1000 判 AI，
+		# 否则真实客户端会被当成 AI 跳过、永远收不到结算
+		if player_info[pid].get("is_ai", false): continue
+		NetworkManager.notify_game_over.rpc_id(int(pid), winner, stats_payload)
 
 # 1v1 的城堡死亡已在 RTSBattleManager 中通过 _on_castle_died 处理（游戏结束通知玩家）
 

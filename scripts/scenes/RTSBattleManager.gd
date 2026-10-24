@@ -2715,10 +2715,14 @@ func _update_visibility():
 # 该实体是否由“人类玩家”控制：单机只认玩家本人（排除同队 AI），联机排除 1000+ 的 AI 合成 peer_id
 func is_human_owned(owner: int, team: int) -> bool:
 	if is_online:
-		if owner >= 1000:
-			return false
 		if owner < 0:
 			return team != RTSConfig.Team.NEUTRAL   # 1v1 单位没有 owner，按队伍区分
+		# 联机客户端 peer_id 是随机大整数（实测见过 385949886），不能按数值判断是否 AI，
+		# 交给 OnlineBattleManager 的 player_info 判定
+		if has_method("is_ai_peer"):
+			return not bool(call("is_ai_peer", owner))
+		if owner >= 1000:
+			return false
 		return true
 	if owner != -1:
 		return owner == player_owner_id
