@@ -1881,7 +1881,11 @@ func _update_entity_animation(entity: GameEntity):
 	elif anim == "attack-melee-left" and entity is Army and _is_entity_in_action_range(entity):
 		# 模型里没有内置攻击动画（很多单位的 GLB 只有 idle/walk）：
 		# 用代码做一次前刺+前倾的挥击，让攻击和采集都有看得见的动作反馈
-		_procedural_attack(model)
+		if entity.entity_id == 18:   # 攻城车
+			# 攻城车是撞门的：整套车往后蓄力再猛地前撞，比普通刺击更有重量感
+			_procedural_ram_attack(model)
+		else:
+			_procedural_attack(model)
 
 # 判断单位是否已经进入实际出手距离。攻击/攻击移动看攻击距离，
 # 采集看资源点采集距离；还没走到时统一按走路处理。
@@ -1926,6 +1930,35 @@ func _procedural_attack(model: Node3D) -> void:
 	tw.chain().tween_callback(func():
 		if is_instance_valid(model):
 			model.set_meta("_proc_atk_running", false))
+
+# 攻城车攻击动作：整车先后拉蓄力，再猛地向前撞击，最后回弹归位。
+# 位移比普通单位大得多，配合弹性缓动，看起来像整台撞车砸在城门上。
+func _procedural_ram_attack(model: Node3D) -> void:
+	if model == null or not is_instance_valid(model):
+		return
+	if bool(model.get_meta("_proc_ram_running", false)):
+		return
+	model.set_meta("_proc_ram_running", true)
+	var base_pos: Vector3 = model.position
+	var base_rx: float = model.rotation.x
+	var dur: float = 0.7
+	var tw := model.create_tween()
+	# 1) 后拉蓄力
+	tw.tween_property(model, "position", base_pos + Vector3(0.0, 0.0, 0.18), dur * 0.25) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	# 2) 猛地前撞（位移 0.5 米，镜头下能明显看出整台车往前顶）
+	tw.tween_property(model, "position", base_pos + Vector3(0.0, 0.0, -0.5), dur * 0.22) \
+		.set_trans(Tween.TRANS_EXPO).set_ease(Tween.EASE_IN)
+	tw.parallel().tween_property(model, "rotation:x", base_rx - 0.18, dur * 0.22) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	# 3) 弹性回弹归位
+	tw.tween_property(model, "position", base_pos, dur * 0.53) \
+		.set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
+	tw.parallel().tween_property(model, "rotation:x", base_rx, dur * 0.53) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.tween_callback(func():
+		if is_instance_valid(model):
+			model.set_meta("_proc_ram_running", false))
 
 func _enable_vertex_colors(node: Node):
 	for child in node.get_children():
