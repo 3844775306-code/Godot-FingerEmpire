@@ -33,6 +33,8 @@ var _blacklist: Dictionary = {}  # Vector2i -> true for unreachable targets
 
 func _init(army: Army):
 	_army = army
+	# 错开各单位首次碰撞分离的帧，避免几百个单位在同一物理帧集中做近邻查询
+	collision_timer = randf_range(0.0, COLLISION_INTERVAL)
 
 # ==================== Public API ====================
 
@@ -214,25 +216,41 @@ func process_move(delta, bm: RTSBattleManager):
 
 func apply_collision(delta):
 	var bm = _army._get_bm()
-	var entities_nearby = bm.get_nearby_entities(_army.global_position, 5.0) if bm else _army.get_tree().get_nodes_in_group("entities")
+	if bm == null:
+		return
+	# 单位碰撞只需要极近的邻居，过去固定查 5 格会把密集人群整片返回；
+	# 建筑中心半径较大，单独走建筑桶查询，避免为了命中建筑而扫描周围所有单位。
+	var near_range: float = maxf(_army.body_radius * 2.0 + 0.8, 1.2)
+	var entities_nearby: Array = bm.get_nearby_entities(_army.global_position, near_range)
+	var buildings_nearby: Array = []
+	if bm.has_method("get_nearby_buildings"):
+		buildings_nearby = bm.get_nearby_buildings(_army.global_position, _army.body_radius + 5.0)
+	else:
+		buildings_nearby = bm._buildings
 	for entity in entities_nearby:
 		if entity == _army or not is_instance_valid(entity): continue
 		if not (entity is GameEntity) or entity.health <= 0: continue
-		if entity is WorldResource: continue
-		if entity is Building and entity.entity_id == 7: continue  # 桥不阻挡通行
-		if entity is Building and entity.entity_id == 27 and entity.team == _army.team: continue  # pass through friendly walls
-		if entity is Building and entity.entity_id == 27 and entity.team != _army.team:
+		if entity is Building or entity is WorldResource: continue
+		_separate_from(entity, delta)
+	for entity in buildings_nearby:
+		if entity == _army or not is_instance_valid(entity): continue
+		if not (entity is Building) or entity.health <= 0: continue
+		if entity.entity_id == 7: continue  # 桥不阻挡通行
+		if entity.entity_id == 27 and entity.team == _army.team: continue  # pass through friendly walls
+		if entity.entity_id == 27 and entity.team != _army.team:
 			if _has_adjacent_ladder(bm, bm.world_to_grid(entity.global_position), _army.team): continue  # pass through laddered enemy walls
+		_separate_from(entity, delta)
 
-		var dist = _army.global_position.distance_to(entity.global_position)
-		var min_dist = _army.body_radius + entity.body_radius
-		if dist < min_dist and dist > 0.001:
-			var overlap = min_dist - dist
-			var push_dir = (_army.global_position - entity.global_position).normalized()
-			var push_s = 10.0 if entity is Building and entity.entity_id == 27 and entity.team != _army.team else 15.0 if entity is Building else 5.0
-			_army.global_position += push_dir * overlap * min(push_s * delta, 0.95)
-		elif dist < 0.001:
-			_army.global_position += Vector3(randf_range(-0.2, 0.2), 0, randf_range(-0.2, 0.2))
+func _separate_from(entity: GameEntity, delta: float) -> void:
+	var dist = _army.global_position.distance_to(entity.global_position)
+	var min_dist = _army.body_radius + entity.body_radius
+	if dist < min_dist and dist > 0.001:
+		var overlap = min_dist - dist
+		var push_dir = (_army.global_position - entity.global_position).normalized()
+		var push_s = 10.0 if entity is Building and entity.entity_id == 27 and entity.team != _army.team else 15.0 if entity is Building else 5.0
+		_army.global_position += push_dir * overlap * min(push_s * delta, 0.95)
+	elif dist < 0.001:
+		_army.global_position += Vector3(randf_range(-0.2, 0.2), 0, randf_range(-0.2, 0.2))
 
 func _path_height(wp: Vector3, bm) -> float:
 	if bm.has_node("Map") and bm.get_node("Map").has_method("get_height_at"):

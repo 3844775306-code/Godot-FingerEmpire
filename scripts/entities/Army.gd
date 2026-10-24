@@ -85,6 +85,9 @@ const THINK_INTERVAL: float = 0.3
 const TARGET_RETARGET_INTERVAL: float = 1.0
 var _retarget_timer: float = TARGET_RETARGET_INTERVAL
 var _retarget_target_id: int = -1
+# 攻击移动时不必每帧全量搜敌；0.25s 一次足够跟随战场变化
+const ATTACK_MOVE_SEARCH_INTERVAL: float = 0.25
+var _attack_move_search_timer: float = 0.0
 
 # 驻扎防御：驻扎点附近这个半径内的敌人优先清掉，再返回驻扎点
 const GARRISON_DEFEND_RADIUS: float = 10.0
@@ -317,6 +320,19 @@ func _physics_process(delta):
 	elif freeze_timer > 0: speed = max(base_speed * 0.5, 0.1)
 	else: speed = base_speed
 
+	# 完全空闲且没有队列/路径的单位只需要按决策节流跑 _think；
+	# 后期大量待命部队如果仍然每帧走 _process_action + process_move + 碰撞，
+	# 会在 300~500 单位时占掉大部分主线程时间。
+	var simple_idle: bool = (
+		(_order_is(UnitState.IDLE) or current_order == "") and current_target == null
+		and not is_attack_moving and command_queue.is_empty()
+		and _movement.astar_target == Vector3.ZERO and _movement.astar_path.is_empty()
+		and velocity.length_squared() <= 0.04
+	)
+	if simple_idle:
+		_tick_think(delta, bm)
+		return
+
 	if bm:
 		# Only recompute terrain/speed-mod when grid position changes
 		var gpos = bm.world_to_grid(global_position)
@@ -407,34 +423,47 @@ func _physics_process(delta):
 	# ÒÆ¶¯£¨ÊÖ¶¯ÉèÖÃ global_position£©
 	_movement.process_move(delta, bm)
 
-	# Åö×²·ÖÀë
-	_movement.collision_timer -= delta
-	if _movement.collision_timer <= 0:
-		# 后期单位多时降低碰撞分离频率：每次 apply_collision 都会做近邻空间查询，
-		# 几百个单位 × 每秒 6~7 次是稳定的 CPU 热点；略拉长间隔不会明显破坏队形。
-		var collision_interval: float = _movement.COLLISION_INTERVAL
-		if bm and bm._all_entities.size() > 300:
-			collision_interval *= 1.5
-		_movement.collision_timer = collision_interval
-		_movement.apply_collision(delta)
-		# ÊµÊ±Ñ°µÐ£ºÖ»Òª²»ÔÚ²É¼¯/½»¸¶/¹¥»÷ÒÆ¶¯£¬ÇÒÃ»ÓÐÄ¿±ê£¬¾ÍÁ¢¿ÌËÑË÷µÐÈË
+	# 碰撞分离：完全空闲或已经在射程内停稳的单位不再做近邻查询。
+	# 后期大量单位驻扎/站桩射击时，即使不动也会每 0.15~0.22s 查一次邻居，
+	# 300~500 个单位就能吃掉大量 CPU；移动/追击单位仍正常分离。
+	var collision_needed: bool = (
+		is_attack_moving
+		or _movement.astar_target != Vector3.ZERO or _movement.astar_path.size() > 0
+		or velocity.length_squared() > 0.04
+	)
+	if not collision_needed:
+		_movement.collision_timer = 0.0
+	else:
+		_movement.collision_timer -= delta
+		if _movement.collision_timer <= 0:
+			# 后期单位多时降低碰撞分离频率：每次 apply_collision 都会做近邻空间查询，
+			# 几百个单位 × 每秒 6~7 次是稳定的 CPU 热点；略拉长间隔不会明显破坏队形。
+			var collision_interval: float = _movement.COLLISION_INTERVAL
+			if bm and bm._all_entities.size() > 300:
+				collision_interval *= 1.5
+			_movement.collision_timer = collision_interval
+			_movement.apply_collision(delta)
 	
-	# ¾ö²ß½ÚÁ÷
+	# 决策节流
+	_tick_think(delta, bm)
+
+func _tick_think(delta, bm) -> void:
 	think_timer -= delta
 	if think_timer <= 0:
 		# 后期单位数量多时，降低每个单位的决策频率。绝大多数闲置单位的
 		# 目标搜索每 0.3s 做一次空间查询，几百个单位会形成稳定 CPU 负担；
-		# 拉到 0.45~0.55s 对操作手感影响很小，却能明显降低后期开销。
+		# 按规模拉开到 0.45~0.75s，对操作手感影响很小，却能明显降低后期开销。
 		var think_interval: float = THINK_INTERVAL
 		if bm:
 			var entity_total: int = bm._all_entities.size()
-			if entity_total > 360:
-				think_interval = 0.55
+			if entity_total > 450:
+				think_interval = 0.75
+			elif entity_total > 360:
+				think_interval = 0.6
 			elif entity_total > 240:
 				think_interval = 0.45
 		think_timer = think_interval
 		_think(delta, bm)
-		# ÔÚ _physics_process º¯ÊýµÄ×îºó
 	
 	
 # ----------------- ÐÐÎª´¦Àí -----------------
@@ -481,11 +510,14 @@ func _process_action(delta, bm):
 				# ²É¼¯µ¥Î»»áÓÉ¿ÕÏÐÂß¼­´¦Àí
 	# ¹¥»÷ÒÆ¶¯
 	if is_attack_moving:
-		_find_enemy_in_range()
+		_attack_move_search_timer -= delta
+		if current_target == null or not is_instance_valid(current_target) or _attack_move_search_timer <= 0.0:
+			_attack_move_search_timer = ATTACK_MOVE_SEARCH_INTERVAL
+			_find_enemy_in_range()
 		if current_target and is_instance_valid(current_target):
 			var dist = global_position.distance_to(current_target.global_position) - body_radius - current_target.body_radius
 			if dist <= attack_range:
-				_attack(current_target, delta)
+				_attack_tick(current_target, delta, bm)
 			else:
 				_movement.set_move_target(current_target.global_position, attack_range)
 		else:
@@ -520,7 +552,7 @@ func _process_action(delta, bm):
 				_retarget_timer = TARGET_RETARGET_INTERVAL
 			if h_dist <= attack_range:
 				_retarget_timer = TARGET_RETARGET_INTERVAL
-				_attack(current_target, delta)
+				_attack_tick(current_target, delta, bm)
 			else:
 				# 目标不在攻击范围：每秒检查一次是否有更近的敌人，避免一直追远目标
 				_retarget_timer -= delta
@@ -643,39 +675,46 @@ func _think(delta, bm):
 func recalculate_path():
 	if _movement: _movement.recalculate()
 
+# 大规模交战时把每个单位的攻击更新错峰到 2~3 帧一次，并用累积 delta 保持
+# 相同攻击频率。攻击本身的冷却、音效和弹丸数量不变，只减少每帧 GDScript 调用。
+func _attack_tick(target, delta, bm) -> void:
+	var stride: int = 1
+	if bm:
+		var total: int = bm._all_entities.size()
+		if total > 600:
+			stride = 3
+		elif total > 420:
+			stride = 2
+	if stride > 1 and (Engine.get_physics_frames() + get_instance_id()) % stride != 0:
+		return
+	_attack(target, delta * stride)
+
 func _attack(target, delta):
 	if target == null or not is_instance_valid(target) or target.health <= 0:
 		current_target = null
 		return
 
-	# 攻击音效
-	var _sfx = ""
-	if entity_id in [12, 26, 33, 13, 58]: _sfx = "arrow_shoot"
-	elif entity_id in [16, 17, 59]: _sfx = "cannon_fire" if entity_id == 16 else "treb_fire"
-	elif entity_id in [15]: _sfx = "sword_swing"
-	elif entity_id in [11, 30, 49, 18, 35]: _sfx = "heavy_swing"
-	elif entity_id in [38, 40]: _sfx = "sword_swing"
-	if _sfx != "":
-		AudioManager.play_sfx_3d(_sfx, global_position, _get_cam_pos())
-		# 音效触发时立即同步攻击动画
-		var bm = _get_bm()
-		if bm and bm.has_method("_update_entity_animation"):
-			bm._update_entity_animation(self)
-
 	# 特殊攻击类型：僧侣治疗 / 长老百分比伤害 / 宗师降攻招降
 	if entity_id == 55:
+		if attack_timer <= 0.0:
+			_play_attack_feedback()
 		_monk_heal(target, delta)
 		return
 	if entity_id == 56:
+		if attack_timer <= 0.0:
+			_play_attack_feedback()
 		_elder_attack(target, delta)
 		return
 	if entity_id == 57:
+		if attack_timer <= 0.0:
+			_play_attack_feedback()
 		_grandmaster_attack(target, delta)
 		return
 
 	if attack_timer > 0:
 		attack_timer -= delta
 		return
+	_play_attack_feedback()
 
 	# ½üÕ½·¶Î§ÉËº¦£¨³¤Ç¹±øµÈ£©
 	if damage_radius > 0 and attack_range <= 2.0:
@@ -747,6 +786,21 @@ func _attack(target, delta):
 		target.take_damage(_dmg_m, self)
 
 	attack_timer = attack_speed
+
+# 攻击音效/动画只在真正出手时触发；此前每帧调用会让上百个交战单位
+# 每秒尝试播放几千次音效，同时反复刷新动画状态。
+func _play_attack_feedback() -> void:
+	var _sfx = ""
+	if entity_id in [12, 26, 33, 13, 58]: _sfx = "arrow_shoot"
+	elif entity_id in [16, 17, 59]: _sfx = "cannon_fire" if entity_id == 16 else "treb_fire"
+	elif entity_id in [15]: _sfx = "sword_swing"
+	elif entity_id in [11, 30, 49, 18, 35]: _sfx = "heavy_swing"
+	elif entity_id in [38, 40]: _sfx = "sword_swing"
+	if _sfx != "":
+		AudioManager.play_sfx_3d(_sfx, global_position, _get_cam_pos())
+		var bm = _get_bm()
+		if bm and bm.has_method("_update_entity_animation"):
+			bm._update_entity_animation(self)
 
 # ==================== 特殊攻击 ====================
 
@@ -1019,6 +1073,13 @@ func _find_enemy_in_range():
 		if _movement and _movement._blacklist.has(bk): continue
 		var h_diff = Vector2(entity.global_position.x - global_position.x, entity.global_position.z - global_position.z)
 		var dist = h_diff.length() - body_radius - entity.body_radius
+		# 只要发现射程内敌人就立即锁定，不必在几百个候选里继续找“最近”的。
+		# 大规模混战时这会显著缩短每个单位的目标搜索循环。
+		if dist <= attack_range:
+			current_target = entity
+			_set_order(UnitState.ATTACKING)
+			is_attack_moving = false
+			return
 		if dist <= vision_range and dist < best_dist:
 			best_dist = dist
 			best_target = entity

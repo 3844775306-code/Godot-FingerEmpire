@@ -286,6 +286,24 @@ func _refresh_visibility():
 		sources.append([own.global_position, vision])
 	if sources.is_empty():
 		return
+	# 后期每个 AI 可能有上百个单位，若每个单位都作为视野源查询一次，
+	# 4 个 AI 每轮会做数百次空间查询。按 12×12 区域每格保留一个代表，
+	# 再做上限截断，既保持全图视野覆盖，又避免重复查询同一片区域。
+	if sources.size() > 24:
+		var by_cell: Dictionary = {}
+		for s in sources:
+			var key := Vector2i(int(floor((s[0] as Vector3).x / 12.0)), int(floor((s[0] as Vector3).z / 12.0)))
+			if not by_cell.has(key):
+				by_cell[key] = s
+			elif float(s[1]) > float(by_cell[key][1]):
+				by_cell[key] = s
+		sources = by_cell.values()
+		if sources.size() > 64:
+			var sampled: Array = []
+			var step: float = float(sources.size()) / 64.0
+			for i in 64:
+				sampled.append(sources[int(i * step)])
+			sources = sampled
 	# 有空间索引时按视野源查询附近敌军并去重，避免“己方单位数 × 全图敌人数”的
 	# 双重循环；没有 battle 空间索引时保留原来的全量扫描兜底。
 	if battle.has_method("get_nearby_enemies"):
@@ -754,10 +772,12 @@ func _process(delta):
 		# 不影响前期节奏，但能显著降低后期 AI 的固定开销。
 		var interval: float = think_interval
 		var entity_count: int = battle._all_entities.size() if battle else 0
-		if entity_count > 360:
-			interval *= 1.8
+		if entity_count > 450:
+			interval *= 2.4
+		elif entity_count > 360:
+			interval *= 1.9
 		elif entity_count > 260:
-			interval *= 1.4
+			interval *= 1.5
 		timer = interval
 		decide(interval)
 	worker_allocate_timer -= delta

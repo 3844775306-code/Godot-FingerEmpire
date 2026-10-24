@@ -103,8 +103,9 @@ var _global_wall_cache: Dictionary = {}  # cached entity positions for pathfindi
 var _wall_cache_dirty: bool = true
 var _cache_refresh_timer: float = 0.0
 # ==================== 空间索引（网格分桶，消除 O(n²) 近邻扫描） ====================
-const _SPATIAL_CELL_SIZE: float = 8.0
+const _SPATIAL_CELL_SIZE: float = 4.0
 var _spatial_cells: Dictionary = {}  # Vector2i -> Array[GameEntity]，随实体缓存重建
+var _building_cells: Dictionary = {}  # Vector2i -> Array[Building]，仅供碰撞分离精确查询建筑
 # ==================== 墙体/梯子网格缓存（O(1) 查询，随实体缓存重建） ====================
 var _wall_cache_version: int = 0          # 墙体/建筑布局实际变化时递增，MovementController 据此判断墙集合是否失效
 var _wall_layout_signature: int = 0       # 建筑/资源布局签名，避免实体缓存每 0.5s 刷新都让寻路墙缓存失效
@@ -237,6 +238,13 @@ func _rebuild_entity_cache():
 		if not _spatial_cells.has(key):
 			_spatial_cells[key] = []
 		_spatial_cells[key].append(e)
+	# 建筑单独分桶：碰撞分离只需要极近的建筑，避免从单位大桶里返回整片密集人群
+	_building_cells.clear()
+	for b in _buildings:
+		var bkey = Vector2i(int(floor(b.global_position.x / _SPATIAL_CELL_SIZE)), int(floor(b.global_position.z / _SPATIAL_CELL_SIZE)))
+		if not _building_cells.has(bkey):
+			_building_cells[bkey] = []
+		_building_cells[bkey].append(b)
 	# 同步构建墙体/梯子网格（MovementController 寻路与高度平滑的 O(1)/O(8) 缓存）
 	_wall_entity_grid.clear()
 	_ladder_entity_grid.clear()
@@ -268,13 +276,16 @@ func _ensure_cache_fresh():
 	if _entity_cache_dirty:
 		_rebuild_entity_cache()
 
-# 空间索引：返回 from_pos 周围 search_range + 1 格内的全部存活实体候选
-# （桶范围外扩 1 格覆盖缓存期内实体移动，外层函数再做精确距离过滤）
+# 空间索引：返回 from_pos 周围 search_range 外扩约 2.5 单位内的全部存活实体候选
+# （外扩用于覆盖缓存期内实体移动，外层函数再做精确距离过滤）
 func _spatial_query(from_pos: Vector3, search_range: float) -> Array:
 	_ensure_cache_fresh()
 	var result: Array = []
 	var csize = _SPATIAL_CELL_SIZE
-	var extend = search_range + csize  # 覆盖实体在缓存期内的位移
+	# 只外扩约 2.5 个单位覆盖实体在 0.5s 缓存期内的位移。
+	# 之前外扩整整一个 cell（8 格）会让密集人群查询把相邻 3x3 格的全部实体都返回，
+	# 实体只有 300 个时一次碰撞查询就会扫到几百个候选，是后期最大的 CPU 热点。
+	var extend = search_range + 2.5
 	var min_x = floori((from_pos.x - extend) / csize)
 	var max_x = floori((from_pos.x + extend) / csize)
 	var min_z = floori((from_pos.z - extend) / csize)
@@ -288,6 +299,27 @@ func _spatial_query(from_pos: Vector3, search_range: float) -> Array:
 				if not is_instance_valid(entity) or entity.health <= 0:
 					continue
 				result.append(entity)
+	return result
+
+# 建筑专用近邻查询：只遍历建筑桶，避免把周围单位一起返回。
+func get_nearby_buildings(from_pos: Vector3, search_range: float) -> Array:
+	_ensure_cache_fresh()
+	var result: Array = []
+	var csize = _SPATIAL_CELL_SIZE
+	var extend = search_range + 2.5
+	var min_x = floori((from_pos.x - extend) / csize)
+	var max_x = floori((from_pos.x + extend) / csize)
+	var min_z = floori((from_pos.z - extend) / csize)
+	var max_z = floori((from_pos.z + extend) / csize)
+	for cx in range(min_x, max_x + 1):
+		for cz in range(min_z, max_z + 1):
+			var bucket = _building_cells.get(Vector2i(cx, cz))
+			if bucket == null:
+				continue
+			for b in bucket:
+				if not is_instance_valid(b) or b.health <= 0:
+					continue
+				result.append(b)
 	return result
 
 # 权威敌对判定（乱斗 FFA 按国家 owner 关系，其余模式按队伍）。
@@ -305,16 +337,31 @@ func is_hostile_to(my_team: int, my_owner: int, entity) -> bool:
 		return diplomacy.is_hostile(my_owner, e_owner)
 	return entity.team != my_team
 
-# 获取范围内敌军实体（仅搜索敌对实体）— 空间索引加速
+# 获取范围内敌军实体（仅搜索敌对实体）— 空间索引加速。
+# 直接在桶内过滤，避免先把整片候选复制到临时数组再二次循环。
 func get_nearby_enemies(from_pos: Vector3, search_range: float, my_team: int, my_owner: int = -1) -> Array:
+	_ensure_cache_fresh()
 	var result: Array = []
-	for entity in _spatial_query(from_pos, search_range):
-		if not is_hostile_to(my_team, my_owner, entity):
-			continue
-		var dist = from_pos.distance_squared_to(entity.global_position)
-		var max_dist = search_range + entity.body_radius + 1.0
-		if dist <= max_dist * max_dist:
-			result.append(entity)
+	var csize = _SPATIAL_CELL_SIZE
+	var extend = search_range + 2.5
+	var min_x = floori((from_pos.x - extend) / csize)
+	var max_x = floori((from_pos.x + extend) / csize)
+	var min_z = floori((from_pos.z - extend) / csize)
+	var max_z = floori((from_pos.z + extend) / csize)
+	for cx in range(min_x, max_x + 1):
+		for cz in range(min_z, max_z + 1):
+			var bucket = _spatial_cells.get(Vector2i(cx, cz))
+			if bucket == null:
+				continue
+			for entity in bucket:
+				if not is_instance_valid(entity) or entity.health <= 0:
+					continue
+				if not is_hostile_to(my_team, my_owner, entity):
+					continue
+				var dist = from_pos.distance_squared_to(entity.global_position)
+				var max_dist = search_range + entity.body_radius + 1.0
+				if dist <= max_dist * max_dist:
+					result.append(entity)
 	return result
 
 # 获取最近资源 — 空间索引加速
@@ -347,15 +394,26 @@ func get_global_wall_cache() -> Dictionary:
 	_wall_cache_dirty = false
 	return _global_wall_cache
 func get_nearby_entities(from_pos: Vector3, search_range: float) -> Array:
+	_ensure_cache_fresh()
 	var result: Array = []
+	var csize = _SPATIAL_CELL_SIZE
+	var extend = search_range + 2.5
 	var sq_range = search_range * search_range
-	for entity in _spatial_query(from_pos, search_range):
-		if not is_instance_valid(entity): continue
-		if entity.health <= 0:
-			continue
-		var d = from_pos.distance_squared_to(entity.global_position)
-		if d <= sq_range:
-			result.append(entity)
+	var min_x = floori((from_pos.x - extend) / csize)
+	var max_x = floori((from_pos.x + extend) / csize)
+	var min_z = floori((from_pos.z - extend) / csize)
+	var max_z = floori((from_pos.z + extend) / csize)
+	for cx in range(min_x, max_x + 1):
+		for cz in range(min_z, max_z + 1):
+			var bucket = _spatial_cells.get(Vector2i(cx, cz))
+			if bucket == null:
+				continue
+			for entity in bucket:
+				if not is_instance_valid(entity) or entity.health <= 0:
+					continue
+				var d = from_pos.distance_squared_to(entity.global_position)
+				if d <= sq_range:
+					result.append(entity)
 	return result
 
 # ==================== 国家系统 ====================

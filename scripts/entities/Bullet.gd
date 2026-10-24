@@ -150,8 +150,10 @@ func _physics_process(delta):
 		# 到达目标点 → 对周围敌人造成AOE伤害
 		if global_position.distance_to(target_pos) < 0.5:
 			_on_hit_pos()
-			return
-	# 追踪模式：飞向目标单位
+		return
+	# 追踪模式：飞向目标单位。命中判定只看锁定目标本身：
+	# 后期几十上百发弹丸如果每帧都做一次空间查询，会扫描周围整片单位，
+	# 是战斗帧率最大的 CPU 热点；路径上的顺带命中改为由锁定目标承受。
 	elif target and is_instance_valid(target):
 		var dir = (target.global_position - global_position).normalized()
 		global_position += dir * speed * delta
@@ -159,29 +161,8 @@ func _physics_process(delta):
 		# 检查是否足够近（命中）
 		if global_position.distance_to(target.global_position) < 0.3:
 			_on_hit(target)
-			return
 	else:
 		recycle()
-		return
-
-	# 使用缓存的 battle_manager 做碰撞检测
-	var bm = _get_bm()
-	if bm:
-		var nearby = bm.get_nearby_enemies(global_position, 0.5, team, owner_peer_id)
-		for entity in nearby:
-			if entity == self or entity == source: continue
-			if global_position.distance_to(entity.global_position) < 0.3:
-				_on_hit(entity)
-				return
-	else:
-		# 回退：全量扫描
-		for entity in get_tree().get_nodes_in_group("entities"):
-			if entity == self or entity == source: continue
-			if not (entity is GameEntity): continue
-			if entity.team == team: continue
-			if global_position.distance_to(entity.global_position) < 0.3:
-				_on_hit(entity)
-				break
 
 func _on_hit(entity: GameEntity):
 	if hit: return
