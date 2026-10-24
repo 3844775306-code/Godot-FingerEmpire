@@ -389,30 +389,35 @@ func _process_snapshot(data: Dictionary):
 		for id in data["dead_ids"]:
 			if entity_nodes.has(id):
 				var node = entity_nodes[id]
-				# 切换到毁坏模型
 				var info = node.get_meta("snapshot_info", {})
-				var eid = info.get("entity_id", -1)
-				var dem_path = RTSConfig.get_demolished_model(eid)
-				if dem_path != "" and ResourceLoader.exists(dem_path):
-					for child in node.get_children():
-						if child is MeshInstance3D: child.visible = false
-					var s = load(dem_path)
-					if s:
-						var inst = s.instantiate()
-						inst.name = "DemolishedModel"
-						# 毁坏模型也要按国家/队伍色染色，和正常模型保持一致
-						if info.get("type", -1) != 0:
-							var info_color = _get_entity_color(info)
-							var lt = Color(0.5 + info_color.r * 0.5, 0.5 + info_color.g * 0.5, 0.5 + info_color.b * 0.5)
-							_apply_model_tint(inst, lt)
-						# 毁坏模型随本体一起放大，否则塔倒后残骸会明显偏小
-						if eid == 41: inst.scale = Vector3.ONE * (0.5 * RTSConfig.get_model_scale(eid))
-						node.add_child(inst)
-					var t = Timer.new(); t.one_shot = true; t.wait_time = 0.3
-					t.timeout.connect(node.queue_free); node.add_child(t); t.start()
+				if _should_sink_entity(info, node):
+					# 沉水动画期间从 entity_nodes 移除：选择、点选、小地图和血条都立即失效
+					entity_nodes.erase(id)
+					_play_sink_animation(node, info)
 				else:
-					node.queue_free()
-				entity_nodes.erase(id)
+					# 切换到毁坏模型
+					var eid = info.get("entity_id", -1)
+					var dem_path = RTSConfig.get_demolished_model(eid)
+					if dem_path != "" and ResourceLoader.exists(dem_path):
+						for child in node.get_children():
+							if child is MeshInstance3D: child.visible = false
+						var s = load(dem_path)
+						if s:
+							var inst = s.instantiate()
+							inst.name = "DemolishedModel"
+							# 毁坏模型也要按国家/队伍色染色，和正常模型保持一致
+							if info.get("type", -1) != 0:
+								var info_color = _get_entity_color(info)
+								var lt = Color(0.5 + info_color.r * 0.5, 0.5 + info_color.g * 0.5, 0.5 + info_color.b * 0.5)
+								_apply_model_tint(inst, lt)
+							# 毁坏模型随本体一起放大，否则塔倒后残骸会明显偏小
+							if eid == 41: inst.scale = Vector3.ONE * (0.5 * RTSConfig.get_model_scale(eid))
+							node.add_child(inst)
+						var t = Timer.new(); t.one_shot = true; t.wait_time = 0.3
+						t.timeout.connect(node.queue_free); node.add_child(t); t.start()
+					else:
+						node.queue_free()
+					entity_nodes.erase(id)
 			_remove_all_bars(id)
 
 			if has_meta("_wp_markers"):
@@ -854,6 +859,68 @@ func _apply_model_color(node: Node, c: Color):
 			m.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
 			child.material_override = m
 		_apply_model_color(child, c)
+
+# 死亡时是否播放沉水动画：船只（9/13/14/39/40）和落水身亡的陆地单位。
+# 桥面、浅滩不算落水；客户端已先从 entity_nodes 移除该节点，动画期间不可选中。
+func _should_sink_entity(info: Dictionary, node: Node3D) -> bool:
+	if node == null or not is_instance_valid(node):
+		return false
+	if int(info.get("type", -1)) != 2:
+		return false
+	var pos: Vector3 = node.global_position
+	if get_terrain_at(pos) != 2:
+		return false
+	var map = get_node_or_null("Map")
+	if map and map.has_method("get_overlay"):
+		var gx := int(pos.x + RTSConfig.MAP_SIZE / 2.0)
+		var gz := int(pos.z + RTSConfig.MAP_SIZE / 2.0)
+		if map.get_overlay(gx, gz) == 3:
+			return false
+	if _is_bridge_at_client(pos):
+		return false
+	var eid := int(info.get("entity_id", -1))
+	if eid in [9, 13, 14, 39, 40]:
+		return true
+	var cfg: Dictionary = EntityDatabase.get_config(eid)
+	if bool(cfg.get("water_capable", false)):
+		return false
+	return true
+
+func _is_bridge_at_client(pos: Vector3) -> bool:
+	var gx := int(pos.x + RTSConfig.MAP_SIZE / 2.0)
+	var gz := int(pos.z + RTSConfig.MAP_SIZE / 2.0)
+	for n in entity_nodes.values():
+		if not is_instance_valid(n) or not n.has_meta("snapshot_info"):
+			continue
+		var oi: Dictionary = n.get_meta("snapshot_info")
+		if int(oi.get("type", -1)) != 1 or int(oi.get("entity_id", -1)) != 7:
+			continue
+		if int(oi.get("health", 0)) <= 0:
+			continue
+		var bx := int(n.global_position.x + RTSConfig.MAP_SIZE / 2.0)
+		var bz := int(n.global_position.z + RTSConfig.MAP_SIZE / 2.0)
+		if bx == gx and bz == gz:
+			return true
+	return false
+
+func _play_sink_animation(node: Node3D, info: Dictionary) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	var body = node.get_node_or_null("ClickableBody")
+	if body:
+		body.collision_layer = 0
+		body.collision_mask = 0
+	for child in node.get_children():
+		if child is CollisionShape3D:
+			child.set_deferred("disabled", true)
+	var sink_depth := maxf(2.0, float(info.get("body_radius", 0.5)) * 4.0)
+	var tween := node.create_tween()
+	tween.set_parallel(true)
+	var down_tw = tween.tween_property(node, "global_position:y", node.global_position.y - sink_depth, 1.0)
+	down_tw.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	var roll_tw = tween.tween_property(node, "rotation:z", node.rotation.z + deg_to_rad(18.0), 1.0)
+	roll_tw.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tween.chain().tween_callback(node.queue_free)
 
 func _create_entity_node(info: Dictionary) -> Node3D:
 	if not info.has("body_radius") or not info.has("type") or not info.has("team"):

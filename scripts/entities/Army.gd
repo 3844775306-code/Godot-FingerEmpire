@@ -387,6 +387,18 @@ func _clear_dead_target() -> bool:
 
 # 陆地单位在深水且不在桥/运载船上时，每秒损失 20% 最大生命。
 # 浅滩（overlay=3）是给陆军涉水通过的，不算落水。
+func _is_deep_water_position(bm) -> bool:
+	if bm == null:
+		return false
+	if bm.get_terrain_at(global_position) != 2:
+		return false
+	var gpos: Vector2i = bm.world_to_grid(global_position)
+	if bm.get_overlay_at_grid(gpos.x, gpos.y) == 3:
+		return false
+	if bm.is_bridge_at(global_position):
+		return false
+	return true
+
 func _tick_water_damage(delta: float) -> void:
 	if water_capable or _boarded_on != -1:
 		_water_damage_timer = WATER_DAMAGE_INTERVAL
@@ -396,18 +408,22 @@ func _tick_water_damage(delta: float) -> void:
 		return
 	_water_damage_timer = WATER_DAMAGE_INTERVAL
 	var bm = _get_bm()
-	if bm == null:
-		return
-	if bm.get_terrain_at(global_position) != 2:
-		return
-	var gpos: Vector2i = bm.world_to_grid(global_position)
-	if bm.get_overlay_at_grid(gpos.x, gpos.y) == 3:
-		return
-	if bm.is_bridge_at(global_position):
+	if not _is_deep_water_position(bm):
 		return
 	health = maxf(health - max_health * WATER_DAMAGE_RATIO, 0.0)
 	if health <= 0.0:
 		die()
+
+# 船只被击沉、陆地单位落水时使用沉水动画，而不是毁坏模型/原地消失。
+func _should_sink_death() -> bool:
+	if _boarded_on != -1:
+		return false
+	var bm = _get_bm()
+	if not _is_deep_water_position(bm):
+		return false
+	if not water_capable:
+		return true
+	return entity_id in [9, 13, 14, 39, 40]
 
 func _physics_process(delta):
 	if health <= 0:

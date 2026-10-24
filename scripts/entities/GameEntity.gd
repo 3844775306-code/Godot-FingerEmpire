@@ -246,6 +246,30 @@ func take_damage(amount: float, source = null):
 			bm.diplomacy.notify_military_attack(source.owner_peer_id, owner_peer_id)
 	if health <= 0:
 		die()
+# 子类（Army）覆盖：是否播放沉水动画而不是毁坏模型/死亡动作
+func _should_sink_death() -> bool:
+	return false
+
+# 沉水动画：关闭碰撞与行为，1 秒内下沉并轻微倾斜，随后移除。
+# 死亡状态在 die() 中已立即生效（health=0、_is_dead=true），
+# 因此动画期间不会被选中、索敌或再次受伤。
+func _start_sink_death() -> void:
+	collision_layer = 0
+	collision_mask = 0
+	set_process(false)
+	set_selected(false)
+	for child in get_children():
+		if child is CollisionShape3D:
+			child.set_deferred("disabled", true)
+	var sink_depth: float = maxf(2.0, body_radius * 4.0)
+	var tween := create_tween()
+	tween.set_parallel(true)
+	var down_tw = tween.tween_property(self, "global_position:y", global_position.y - sink_depth, 1.0)
+	down_tw.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	var roll_tw = tween.tween_property(self, "rotation:z", rotation.z + deg_to_rad(18.0), 1.0)
+	roll_tw.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
+	tween.chain().tween_callback(queue_free)
+
 func die():
 	if _is_dead:
 		return
@@ -319,6 +343,11 @@ func die():
 		else:
 			bm.decrease_population(team, 1)
 	_hide_garrison_marker()
+	# 船只被击沉 / 陆地单位落水：沉入水中 1 秒后移除。
+	# 此时 health 已为 0、碰撞已关闭，敌方无法再选中或攻击它。
+	if _should_sink_death():
+		_start_sink_death()
+		return
 	# 切换到毁坏模型
 	var dem_path = RTSConfig.get_demolished_model(entity_id)
 	if dem_path != "" and ResourceLoader.exists(dem_path):
