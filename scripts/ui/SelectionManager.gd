@@ -19,6 +19,9 @@ var last_clicked_entity = null
 var last_click_time: float = 0.0
 const DOUBLE_CLICK_THRESHOLD = 0.3   # 双击时间阈值（秒）
 var _ref_cleanup_timer: float = 0.0
+# 框选/全选时 _add_to_selection 会被连续调用几十上百次；每次立刻重建
+# InfoPanel 会让“框选大部队”明显卡顿。合并到本帧结束只刷新一次。
+var _info_panel_refresh_pending: bool = false
 
 # 编队系统
 var control_groups: Dictionary = {}   # int → Array[GameEntity]
@@ -403,7 +406,7 @@ func _add_to_selection(entity):
 	if entity not in selected_entities:
 		selected_entities.append(entity)
 		entity.set_selected(true); if entity is Army and entity.has_method("show_waypoints"): entity.show_waypoints()
-		_update_info_panel()
+		_request_info_panel_refresh()
 
 func _remove_from_selection(entity):
 	if entity == null or not is_instance_valid(entity):
@@ -411,7 +414,7 @@ func _remove_from_selection(entity):
 	if entity in selected_entities:
 		selected_entities.erase(entity)
 		entity.set_selected(false); if entity is Army and entity.has_method("hide_waypoints"): entity.hide_waypoints()
-		_update_info_panel()
+		_request_info_panel_refresh()
 func select_all_military():
 	_clear_selection()
 	for entity in get_tree().get_nodes_in_group("entities"):
@@ -423,6 +426,16 @@ func _clear_selection():
 			e.set_selected(false)
 			if e is Army and e.has_method("hide_waypoints"): e.hide_waypoints()
 	selected_entities.clear()
+	_request_info_panel_refresh()
+
+func _request_info_panel_refresh() -> void:
+	if _info_panel_refresh_pending:
+		return
+	_info_panel_refresh_pending = true
+	call_deferred("_flush_info_panel_refresh")
+
+func _flush_info_panel_refresh() -> void:
+	_info_panel_refresh_pending = false
 	_update_info_panel()
 
 # ---------- 同步信息面板 ----------
