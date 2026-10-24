@@ -199,7 +199,7 @@ func _draw():
 		draw_rect(Rect2(pos - Vector2(3, 3), Vector2(7, 7)), Color(0, 0, 0, 0.55))
 		draw_rect(Rect2(pos - Vector2(2, 2), Vector2(5, 5)), dot_color)
 
-	# —— 友方主城：金色圆环单独特标，混在单位点里也能一眼找到 ——
+	# —— 友方主城：国家色圆环 + 白外弧单独特标，混在单位点里也能一眼找到 ——
 	for ent in entity_snapshots:
 		if int(ent.get("entity_id", -1)) != 20: continue
 		if int(ent.get("team", -2)) != player_team: continue
@@ -207,9 +207,19 @@ func _draw():
 		var cgz = int(ent["z"] + ms / 2)
 		if cgx < 0 or cgx >= ms or cgz < 0 or cgz >= ms: continue
 		var cpos = Vector2(cgx * cell, cgz * cell)
+		# 主城标记取所属势力的国家色，与单位点同色系、靠更大圆环 + 白色外弧区分
+		var ccolor: Color = UITheme.GOLD
+		if ent.has("color"):
+			ccolor = ent["color"]
+		elif int(ent.get("nation", -1)) >= 0:
+			ccolor = RTSConfig.get_nation_color(int(ent["nation"]))
+		elif bm and bm.has_method("get_team_nation"):
+			var nn: int = int(bm.get_team_nation(player_team))
+			if nn >= 0:
+				ccolor = RTSConfig.get_nation_color(nn)
 		var cr = 8.0
 		draw_circle(cpos, cr + 3.0, Color(0, 0, 0, 0.6))
-		draw_circle(cpos, cr, Color(UITheme.GOLD, 0.95))
+		draw_circle(cpos, cr, Color(ccolor.lightened(0.1), 0.95))
 		draw_arc(cpos, cr + 4.0, 0.0, TAU, 28, Color(1.0, 1.0, 1.0, 0.85), 1.5)
 
 	# 战事警报
