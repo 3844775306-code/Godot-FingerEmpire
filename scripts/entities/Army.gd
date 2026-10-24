@@ -459,7 +459,21 @@ func _physics_process(delta):
 	_process_action(delta, bm)
 
 	# ÒÆ¶¯£¨ÊÖ¶¯ÉèÖÃ global_position£©
-	_movement.process_move(delta, bm)
+	# 已经在攻击射程内站定的单位不必每帧再跑 process_move：后者会重复算一次
+	# 目标距离、清速度并做边界/地形检查；几百个单位混战时这是稳定的每帧开销。
+	var _stationary_in_range := false
+	if not is_attack_moving and current_target != null and is_instance_valid(current_target) and current_target is GameEntity:
+		var _sd := Vector2(global_position.x - current_target.global_position.x,
+							global_position.z - current_target.global_position.z)
+		_stationary_in_range = (_sd.length() - body_radius - current_target.body_radius) <= attack_range
+	if _stationary_in_range:
+		_movement.cancel_pending_path()
+		_movement.astar_path.clear()
+		_movement.astar_target = Vector3.ZERO
+		_movement._hide_path()
+		velocity = Vector3.ZERO
+	else:
+		_movement.process_move(delta, bm)
 
 	# 碰撞分离：完全空闲或已经在射程内停稳的单位不再做近邻查询。
 	# 后期大量单位驻扎/站桩射击时，即使不动也会每 0.15~0.22s 查一次邻居，
@@ -2172,6 +2186,11 @@ func _process_transport(delta):
 			u.global_position = global_position
 
 func board_unit(unit):
+	if unit == null or not is_instance_valid(unit):
+		return
+	# 水上单位（战船/渔船/爆破船等）不能上运载船，只有陆地单位能上
+	if bool(unit.get("water_capable")):
+		return
 	if _boarded_units.size() >= BOARD_CAPACITY: return
 	_boarded_units.append(unit)
 	unit.visible = false

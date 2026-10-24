@@ -473,6 +473,9 @@ func _update_board_ui(ship) -> void:
 				continue
 			if int(u.entity_id) == 9:
 				continue
+			# 水上单位（战船/渔船/爆破船）不能上运载船
+			if bool(u.get("water_capable")):
+				continue
 			var boarded_on = u.get("_boarded_on")
 			if boarded_on != null and int(boarded_on) != -1:
 				continue

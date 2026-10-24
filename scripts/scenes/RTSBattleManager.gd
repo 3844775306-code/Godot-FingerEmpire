@@ -219,6 +219,12 @@ const PERF_LEVEL_SCALES: Array[float] = [1.0, 0.85, 0.72, 0.62, 0.52]
 const PERF_SHADOW_DISTANCE_SCALES: Array[float] = [1.0, 0.9, 0.8, 0.7, 0.6]
 var _distant_shadow_timer: float = 2.0
 var _anim_lod_timer: float = 1.0
+# 大规模战斗自适应物理频率：渲染仍按60FPS，逻辑/物理降到30Hz，避免
+# 每帧追赶多个物理 tick 形成“越卡越追、越追越卡”的死循环。
+var _physics_tick_timer: float = 2.0
+var _physics_tick_original: int = 60
+var _physics_max_steps_original: int = 8
+var _physics_rate_low: bool = false
 
 func _create_diag_label():
 	# 顶部中央偏右的两行大字：第一行性能（帧率/画质/实体），第二行对局信息（AI/地图/时间）
@@ -904,6 +910,8 @@ func _ready():
 	
 	
 	add_to_group("battle_manager")
+	_physics_tick_original = Engine.physics_ticks_per_second
+	_physics_max_steps_original = Engine.max_physics_steps_per_frame
 	# 地图规则修正（子节点 Map 的 _ready 先于本节点执行，此时预设已解析完成）
 	if $Map:
 		var preset = $Map.get("map_preset")
@@ -2252,32 +2260,11 @@ func _command_selected_units(screen_pos: Vector2):
 	var fi = 0
 	for u in selection.selected_entities:
 		if is_instance_valid(u) and u is Army:
-			# 登船单位：右键岸边 → 下船
+			# 已登船单位不响应任何地面命令：上/下船统一在运载船信息面板里操作
 			if u.get("_boarded_on") != null and u._boarded_on != -1:
-				if target == null:
-					u.move_to(pos)
-				elif target is Building or target is WorldResource:
-					u.move_to(target.global_position)
-				else:
-					u.move_to(pos)
-				continue
-			# 运载船下船命令：右键岸边空地
-			if u.entity_id == 9 and target == null and u._boarded_units.size() > 0:
-				# 检查岸边（相邻陆地格）
-				var gpos = world_to_grid(pos)
-				if get_terrain_at_grid(gpos.x, gpos.y) == 0:
-					u.unboard_at(pos)
-				else:
-					u.move_to(pos)
 				continue
 			if target:
-				if target is Army and target.entity_id == 9 and target.team == u.team and u.water_capable == false:
-					# 陆军登船：右键己方运载船
-					if u.entity_id not in [5,6,55,56,57]:  # 排除cart和僧侣类
-						target.board_unit(u)
-					else:
-						u.move_to(target.global_position)
-				elif target is WorldResource:
+				if target is WorldResource:
 					if u.entity_id == 10 or u.entity_id == 14 or u.get("_animal_type") != "":
 						u.gather_at(target)
 					else:
@@ -3123,6 +3110,7 @@ func _process(delta):
 	_tick_adaptive_quality(delta)
 	_tick_distant_shadows(delta)
 	_tick_animation_lod(delta)
+	_tick_physics_rate(delta)
 
 # ==================== 后期自动画质 ====================
 func _tick_adaptive_quality(delta: float) -> void:
@@ -3282,6 +3270,36 @@ func _tick_animation_lod(delta: float) -> void:
 		var too_far: bool = cam_pos.distance_to(p) > distance_limit
 		a.set_animation_lod(offscreen or too_far)
 
+# 500 单位级战斗：每个物理 tick 的 Army 逻辑已经接近 16ms，再乘上帧末
+# 追赶的多个 physics tick 就会把帧时间推到几百毫秒。渲染保持 60FPS，
+# 单机大规模战斗把模拟降到 30Hz，并限制每帧追赶步数，打断“越卡越追”。
+func _tick_physics_rate(delta: float) -> void:
+	if game_over:
+		return
+	_physics_tick_timer -= delta
+	if _physics_tick_timer > 0.0:
+		return
+	_physics_tick_timer = 2.0
+	if is_online or NetworkManager.mode != NetworkManager.Mode.NONE:
+		_set_physics_rate_low(false)
+		return
+	var ent_count: int = entities.get_child_count() if entities else 0
+	if ent_count >= 420:
+		_set_physics_rate_low(true)
+	elif ent_count < 360:
+		_set_physics_rate_low(false)
+
+func _set_physics_rate_low(low: bool) -> void:
+	if _physics_rate_low == low:
+		return
+	_physics_rate_low = low
+	if low:
+		Engine.physics_ticks_per_second = 30
+		Engine.max_physics_steps_per_frame = 4
+	else:
+		Engine.physics_ticks_per_second = maxi(_physics_tick_original, 30)
+		Engine.max_physics_steps_per_frame = maxi(_physics_max_steps_original, 1)
+
 func _toggle_shadow_recursive(node: Node, far: bool) -> void:
 	for c in node.get_children():
 		if c is GeometryInstance3D:
@@ -3302,6 +3320,9 @@ func _restore_shadow_casting() -> void:
 			_toggle_shadow_recursive(a, false)
 
 func _exit_tree() -> void:
+	# 大规模战斗物理降频是全局 Engine 设置，离开战斗必须还原。
+	Engine.physics_ticks_per_second = maxi(_physics_tick_original, 30)
+	Engine.max_physics_steps_per_frame = maxi(_physics_max_steps_original, 1)
 	# 自动画质改的是根 Viewport/场景光照，切回主菜单或开下一局前必须还原
 	if _perf_viewport and is_instance_valid(_perf_viewport):
 		_perf_viewport.scaling_3d_scale = _perf_base_scale
