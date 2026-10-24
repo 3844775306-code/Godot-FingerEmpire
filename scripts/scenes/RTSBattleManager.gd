@@ -1878,6 +1878,10 @@ func _update_entity_animation(entity: GameEntity):
 		ap.speed_scale = spd
 		if ap.current_animation != anim:
 			ap.play(anim)
+	elif anim == "attack-melee-left" and entity is Army and _is_entity_in_action_range(entity):
+		# 模型里没有内置攻击动画（很多单位的 GLB 只有 idle/walk）：
+		# 用代码做一次前刺+前倾的挥击，让攻击和采集都有看得见的动作反馈
+		_procedural_attack(model)
 
 # 判断单位是否已经进入实际出手距离。攻击/攻击移动看攻击距离，
 # 采集看资源点采集距离；还没走到时统一按走路处理。
@@ -1895,6 +1899,33 @@ func _is_entity_in_action_range(entity: Army) -> bool:
 	if entity._order_in([entity.UnitState.ATTACKING, entity.UnitState.ATTACK_MOVING]):
 		return dist <= entity.attack_range + 0.05
 	return false
+
+# 程序化攻击动作：模型没有内置 attack 动画时，用 Tween 做一次前刺 + 前倾，
+# 攻击/采集时都有看得见的动作反馈。同一模型同时只跑一次，避免 Tween 叠加把模型拉飞。
+func _procedural_attack(model: Node3D) -> void:
+	if model == null or not is_instance_valid(model):
+		return
+	if bool(model.get_meta("_proc_atk_running", false)):
+		return
+	model.set_meta("_proc_atk_running", true)
+	var base_pos: Vector3 = model.position
+	var base_rx: float = model.rotation.x
+	var dur: float = 0.42
+	var tw := model.create_tween()
+	tw.set_parallel(true)
+	# 前半段：向攻击方向（模型 -Z）刺出并前倾
+	tw.tween_property(model, "position", base_pos + Vector3(0.0, 0.0, -0.3), dur * 0.3) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	tw.tween_property(model, "rotation:x", base_rx - 0.4, dur * 0.3) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
+	# 后半段：回到原位
+	tw.chain().tween_property(model, "position", base_pos, dur * 0.7) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.parallel().tween_property(model, "rotation:x", base_rx, dur * 0.7) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
+	tw.chain().tween_callback(func():
+		if is_instance_valid(model):
+			model.set_meta("_proc_atk_running", false))
 
 func _enable_vertex_colors(node: Node):
 	for child in node.get_children():
