@@ -399,12 +399,41 @@ func can_upgrade() -> bool:
 	if build_timer > 0: return false
 	if upgrade_timer > 0: return false
 	if upgrade_level >= max_upgrade_level: return false
+	# 同一国家/玩家的一种建筑同时只能有一个升级工程。
+	# 本作升级是全局生效的（升级完成后同类型建筑一起提升），
+	# 若允许两座同时读条，会重复扣费并让 team_building_levels 连升两级。
+	if _other_same_type_is_upgrading():
+		return false
 	# Cannot upgrade beyond own castle level (except castle itself)
 	if entity_id not in [20, 53]:
 		var castle = _get_upgrade_castle()
 		if castle and upgrade_level >= castle.upgrade_level:
 			return false
 	return true
+
+# 与 upgrade_building_type 使用的归属键保持一致：
+# 有 owner_peer_id 时按玩家区分（2v2/3v3/FFA），否则按阵营区分（1v1）。
+func _upgrade_owner_key() -> int:
+	return owner_peer_id if owner_peer_id != -1 else team
+
+func _other_same_type_is_upgrading() -> bool:
+	var bm = _get_bm()
+	if not bm:
+		return false
+	if bm.has_method("_ensure_cache_fresh"):
+		bm._ensure_cache_fresh()
+	var my_key: int = _upgrade_owner_key()
+	for other in bm._buildings:
+		if other == self or not is_instance_valid(other) or not (other is Building):
+			continue
+		if other.health <= 0 or other.entity_id != entity_id:
+			continue
+		if other.upgrade_timer <= 0.0:
+			continue
+		var other_key: int = other.owner_peer_id if other.owner_peer_id != -1 else other.team
+		if other_key == my_key:
+			return true
+	return false
 
 func try_produce(unit_id: int) -> bool:
 	if build_timer > 0: return false
