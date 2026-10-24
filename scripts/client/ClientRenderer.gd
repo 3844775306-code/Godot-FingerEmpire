@@ -555,7 +555,8 @@ func _rebuild_building_info(d: Dictionary):
 		prod["current_cost"] = scaled
 		pl.append(prod)
 	# Add nation-specific units (matching server _unlock_nation_units)
-	if my_nation >= 0 and d.get("entity_id", 0) in [20, 53]:
+	# 国家特色单位只由城堡(53)生产，主城(20)不再产
+	if my_nation >= 0 and d.get("entity_id", 0) == 53:
 		NationData._static_init()
 		var nation_units = NationData.NATION_UNITS.get(my_nation, [])
 		for nu in nation_units:
