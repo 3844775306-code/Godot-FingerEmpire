@@ -712,7 +712,7 @@ func show_alert_message(msg: String, color: Color = ALERT_DANGER):
 			# 位置固定在资源胶囊（左上，收起 42dp / 展开 72dp）下方，避免挡住资源数值
 			var w: float = UILayout.dp(320.0)
 			var h: float = UILayout.dp(40.0)
-			var top_y: float = UILayout.dp(84.0)
+			var top_y: float = UILayout.dp(118.0)
 			_alert_bg.anchor_left = 0.5; _alert_bg.anchor_right = 0.5
 			_alert_bg.anchor_top = 0.0; _alert_bg.anchor_bottom = 0.0
 			_alert_bg.offset_left = -w; _alert_bg.offset_right = w

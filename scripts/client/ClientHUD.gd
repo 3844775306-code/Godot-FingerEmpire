@@ -39,6 +39,7 @@ var _toggle_stats_btn: Button
 var _unit_stats_timer: float = 1.0
 
 # ==================== 警报系统 ====================
+const MapPresets = preload("res://scripts/map/MapPresets.gd")
 const ALERT_DANGER = UITheme.ALERT_DANGER
 const ALERT_WARNING = UITheme.ALERT_WARNING
 const ALERT_INFO = UITheme.ALERT_INFO
@@ -535,7 +536,7 @@ func show_alert_message(msg: String, color: Color = ALERT_DANGER):
 			# 位置固定在资源胶囊（左上，收起 42dp / 展开 72dp）下方，避免挡住资源数值
 			var w: float = UILayout.dp(320.0)
 			var h: float = UILayout.dp(40.0)
-			var top_y: float = UILayout.dp(84.0)
+			var top_y: float = UILayout.dp(118.0)
 			_alert_bg.anchor_left = 0.5; _alert_bg.anchor_right = 0.5
 			_alert_bg.anchor_top = 0.0; _alert_bg.anchor_bottom = 0.0
 			_alert_bg.offset_left = -w; _alert_bg.offset_right = w
@@ -626,29 +627,22 @@ func _ready():
 	b_ret_all.pressed.connect(_on_retreat_all_pressed)
 	add_child(b_ret_all)
 
-	# FPS + 游戏时间显示
-	_fps_label = Label.new()
-	_fps_label.position = Vector2(1100, 8)
-	_fps_label.add_theme_font_size_override("font_size", 16)
-	_fps_label.add_theme_color_override("font_color", UITheme.EMERALD)
-	add_child(_fps_label)
-
-	# Network stats display
-	_net_stat_label = Label.new()
-	_net_stat_label.position = Vector2(1100, 48)
-	_net_stat_label.add_theme_font_size_override("font_size", 14)
-	_net_stat_label.add_theme_color_override("font_color", UITheme.STONE)
-	add_child(_net_stat_label)
-	_ping_label = Label.new()
-	_ping_label.position = Vector2(1100, 65)
-	_ping_label.add_theme_font_size_override("font_size", 14)
-	_ping_label.add_theme_color_override("font_color", UITheme.SAPPHIRE.lightened(0.15))
-	add_child(_ping_label)
-	_game_time_label = Label.new()
-	_game_time_label.position = Vector2(1100, 28)
-	_game_time_label.add_theme_font_size_override("font_size", 16)
-	_game_time_label.add_theme_color_override("font_color", Color.WHITE)
-	add_child(_game_time_label)
+	# 顶部中央两行大字：第一行性能、第二行对局/网络信息（只保留这两条）
+	var mobile := InputSource.use_mobile_ui()
+	var f1: int = UILayout.font_dp(12.0) if mobile else 24
+	var f2: int = UILayout.font_dp(11.0) if mobile else 22
+	var y1: float = UILayout.dp(76.0) if mobile else 6.0
+	var line_h: float = UILayout.dp(18.0) if mobile else 34.0
+	var half_w: float = UILayout.dp(336.0) if mobile else 760.0
+	var diag := CanvasLayer.new()
+	diag.name = "TopInfoLayer"
+	diag.layer = 90
+	add_child(diag)
+	_fps_label = _make_top_label(diag, "DiagFPS", y1, line_h, f1, half_w, UITheme.EMERALD)
+	_net_stat_label = _make_top_label(diag, "DiagInfo", y1 + line_h, line_h, f2, half_w, Color(1.0, 0.9, 0.3))
+	# 游戏时间 / 延迟已并入第二行，不再单独显示
+	_game_time_label = null
+	_ping_label = null
 
 	set_process(true)
 	add_to_group("client_hud")
@@ -697,6 +691,28 @@ var _ping_label: Label = null
 var _net_stat_label: Label = null
 var _ping_rtt: int = 0
 
+# 顶部中央居中的一行信息（挂在独立 CanvasLayer 上，锚点按视口算）
+func _make_top_label(parent: CanvasLayer, node_name: String, top_y: float, line_h: float,
+		font_size: int, half_w: float, color: Color) -> Label:
+	var lb := Label.new()
+	lb.name = node_name
+	lb.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lb.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	lb.anchor_left = 0.5
+	lb.anchor_right = 0.5
+	lb.anchor_top = 0.0
+	lb.anchor_bottom = 0.0
+	lb.offset_left = -half_w
+	lb.offset_right = half_w
+	lb.offset_top = top_y
+	lb.offset_bottom = top_y + line_h
+	lb.add_theme_font_size_override("font_size", font_size)
+	lb.add_theme_color_override("font_color", color)
+	lb.add_theme_color_override("font_outline_color", Color.BLACK)
+	lb.add_theme_constant_override("outline_size", maxi(3, int(font_size * 0.2)))
+	parent.add_child(lb)
+	return lb
+
 func _process(delta):
 	# 同步自动进攻按钮状态（F2 可能由 ClientInput 直接触发）
 	if auto_attack_btn:
@@ -715,27 +731,29 @@ func _process(delta):
 	_client_time_acc += delta
 	var t_min = int(_client_time_acc / 60)
 	var t_sec = int(_client_time_acc) % 60
-	if _game_time_label:
-		_game_time_label.text = "%02d:%02d" % [t_min, t_sec]
-	# FPS + 游戏时间
+	# 顶部中央两行：第一行性能、第二行 AI/地图/时间/延迟/快照
 	_fps_update_timer -= delta
-	if _fps_update_timer <= 0 and _fps_label:
+	if _fps_update_timer <= 0:
 		_fps_update_timer = 0.5
-		_fps_label.text = "FPS: %.0f  |  %02d:%02d" % [Engine.get_frames_per_second(), t_min, t_sec]
+		if _fps_label:
+			_fps_label.text = "FPS:%.0f" % Engine.get_frames_per_second()
+		if _net_stat_label:
+			var diff_names = ["简单", "普通", "困难", "地狱"]
+			var dn = diff_names[clampi(GameSettings.ai_difficulty, 0, 3)]
+			var map_name := String(MapPresets.get_info(GameSettings.map_id).get("name", "经典大陆"))
+			var ping_txt := "%dms" % _ping_rtt if _ping_rtt > 0 else "--"
+			_net_stat_label.text = "AI:%s | 地图:%s | 时间:%02d:%02d | 延迟:%s | 快照:%d/s" % [
+				dn, map_name, t_min, t_sec, ping_txt, _snap_recv_rate
+			]
 
-	# Network stats every 1 second
+	# 快照率每秒统计一次
 	_net_stat_timer -= delta
 	if _net_stat_timer <= 0:
 		_net_stat_timer = 1.0
 		_snap_recv_rate = _snap_recv_count
 		_snap_recv_count = 0
-	_net_stat_label.text = "Snap: %d/s" % _snap_recv_rate
 	# Ping every 1s
 	NetworkManager.ping_server.rpc_id(1, Time.get_ticks_msec())
-	if _ping_label:
-		var pc = Color.GREEN if _ping_rtt < 60 else (Color.YELLOW if _ping_rtt < 120 else Color.RED)
-		_ping_label.add_theme_color_override("font_color", pc)
-		_ping_label.text = "Ping: %dms" % _ping_rtt if _ping_rtt > 0 else "Ping: --"
 	if _alert_label and _alert_timer > 0:
 		_alert_timer -= delta
 		if _alert_timer <= 0:

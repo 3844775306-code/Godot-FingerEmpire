@@ -2,6 +2,7 @@ class_name RTSBattleManager
 extends Node3D
 const BattleStatsScript = preload("res://scripts/core/BattleStats.gd")
 const BattleStatsPanelScript = preload("res://scripts/ui/BattleStatsPanel.gd")
+const MapPresets = preload("res://scripts/map/MapPresets.gd")
 var previous_emulate_mouse: bool
 # ==================== 资源 ====================
 var player_resources: Dictionary = {"gold": 100, "wood": 100, "stone": 100 ,"food": 100, "oil": 0}
@@ -185,25 +186,42 @@ const PERF_LEVEL_SCALES: Array[float] = [1.0, 0.85, 0.72, 0.62, 0.52]
 const PERF_SHADOW_DISTANCE_SCALES: Array[float] = [1.0, 0.9, 0.8, 0.7, 0.6]
 
 func _create_diag_label():
-	_fps_label = Label.new()
-	_fps_label.name = "DiagFPS"
-	_fps_label.position = Vector2(10, 700)
-	_fps_label.add_theme_font_size_override("font_size", 16)
-	_fps_label.add_theme_color_override("font_color", Color.LIME_GREEN)
-	_fps_label.z_index = 200
-	_snap_rate_label = Label.new()
-	_snap_rate_label.position = Vector2(900, 4)
-	_snap_rate_label.size = Vector2(600, 20)
-	_snap_rate_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	_snap_rate_label.add_theme_font_size_override("font_size", 14)
-	_snap_rate_label.add_theme_color_override("font_color", Color(1.0, 0.9, 0.3))
-	_snap_rate_label.z_index = 200
+	# 顶部中央两行大字：第一行性能（帧率/画质/实体），第二行对局信息（AI/地图/时间）
+	var mobile := InputSource.use_mobile_ui()
+	var f1: int = UILayout.font_dp(12.0) if mobile else 24
+	var f2: int = UILayout.font_dp(11.0) if mobile else 22
+	var y1: float = UILayout.dp(76.0) if mobile else 6.0
+	var line_h: float = UILayout.dp(18.0) if mobile else 34.0
+	var half_w: float = UILayout.dp(330.0) if mobile else 700.0
+	_fps_label = _make_top_label("DiagFPS", y1, line_h, f1, half_w, Color.LIME_GREEN)
+	_snap_rate_label = _make_top_label("DiagInfo", y1 + line_h, line_h, f2, half_w, Color(1.0, 0.9, 0.3))
 	var canvas = CanvasLayer.new()
 	canvas.name = "DiagLayer"
 	canvas.layer = 100
 	canvas.add_child(_fps_label)
 	canvas.add_child(_snap_rate_label)
 	add_child(canvas)
+
+# 顶部中央居中的一行信息（带黑描边，浅色地面也看得清）
+func _make_top_label(node_name: String, top_y: float, line_h: float, font_size: int, half_w: float, color: Color) -> Label:
+	var lb := Label.new()
+	lb.name = node_name
+	lb.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lb.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	lb.anchor_left = 0.5
+	lb.anchor_right = 0.5
+	lb.anchor_top = 0.0
+	lb.anchor_bottom = 0.0
+	lb.offset_left = -half_w
+	lb.offset_right = half_w
+	lb.offset_top = top_y
+	lb.offset_bottom = top_y + line_h
+	lb.add_theme_font_size_override("font_size", font_size)
+	lb.add_theme_color_override("font_color", color)
+	lb.add_theme_color_override("font_outline_color", Color.BLACK)
+	lb.add_theme_constant_override("outline_size", maxi(3, int(font_size * 0.2)))
+	lb.z_index = 200
+	return lb
 
 func _rebuild_entity_cache():
 	_all_entities.clear()
@@ -2852,28 +2870,28 @@ func _process(delta):
 			var secs = secs_total % 60
 			game_time_label.text = "%02d:%02d" % [mins, secs]
 
-	# ---- 诊断 FPS + 物理心跳 ----
+	# ---- 顶部中央两行信息：性能 + 对局信息 ----
 	if _fps_label and Engine.get_process_frames() % 10 == 0:
 		_ensure_cache_fresh()
 		var phys_frames = Engine.get_physics_frames()
 		var phys_ok = (phys_frames != _diag_physics_heartbeat)
 		if not phys_ok and _diag_physics_heartbeat > 0:
 			_fps_label.add_theme_color_override("font_color", Color.RED)
-			_fps_label.text = "🔴 物理卡死! FPS:%.0f | 实体:%d | 物理帧:%d(停滞)" % [
-				Engine.get_frames_per_second(), _all_entities.size(), phys_frames
+			_fps_label.text = "🔴 物理卡死 FPS:%.0f | 实体:%d" % [
+				Engine.get_frames_per_second(), _all_entities.size()
 			]
 		else:
 			_fps_label.add_theme_color_override("font_color", Color.LIME_GREEN)
+			_fps_label.text = "FPS:%.0f | 画质:%d | 实体:%d(A%d B%d) | 物理:%d" % [
+				Engine.get_frames_per_second(), _perf_quality_level,
+				_all_entities.size(), _armies.size(), _buildings.size(), phys_frames
+			]
 		if _snap_rate_label:
 			var diff_names = ["简单", "普通", "困难", "地狱"]
 			var dn = diff_names[clampi(GameSettings.ai_difficulty, 0, 3)]
-			var sr = get("_snap_sent_rate") if has_method("broadcast_snapshot") else 0
-			_snap_rate_label.text = "AI:%s  Snap:%d/s" % [dn, sr] if sr > 0 else "AI:%s" % dn
-			_fps_label.text = "FPS:%.0f | 实体:%d(A%d B%d) | 物理:%d | 步骤:%d | 画质:%d" % [
-				Engine.get_frames_per_second(),
-				_all_entities.size(), _armies.size(), _buildings.size(),
-				phys_frames, _diag_step, _perf_quality_level
-			]
+			var map_name := String(MapPresets.get_info(GameSettings.map_id).get("name", "经典大陆"))
+			var clock := "%02d:%02d" % [int(game_time / 60.0), int(game_time) % 60]
+			_snap_rate_label.text = "AI:%s | 地图:%s | 时间:%s" % [dn, map_name, clock]
 		_diag_physics_heartbeat = phys_frames
 		_diag_step = (_diag_step + 1) % 1000
 
