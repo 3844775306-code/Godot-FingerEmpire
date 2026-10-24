@@ -296,17 +296,17 @@ const PRESETS := {
 		"chips": ["环形山壁", "四处山口", "山心聚金", "单金源"],
 		"recommended": "1v1 / 2v2 / 3v3",
 	},
-	# 海岸登陆：外围一圈陆地环绕，中央一座大岛，二者之间是环状海面
+	# 海岸登陆：外围一圈陆地（玩家出发地）环绕，中央一座大岛（敌方据守），二者之间是环状海面
 	"coast": {
 		"id": "coast",
 		"name": "海岸登陆",
 		"battle": "诺曼底 1944",
-		"desc": "地图外围是一圈环绕全图的陆地，中央是一座被海水隔开的大岛；双方基地沿外环陆地展开，必须渡海争夺中央大岛与海上油井。",
+		"desc": "地图外围是一圈环绕全图的陆地，中央是一座被海水隔开的大岛；玩家从外周陆地出发，敌方阵营据守中央大岛，必须渡海登陆才能进攻。",
 		"stages": [
 			["noise_base", {"freq": 0.032, "octaves": 3, "mountain_threshold": 0.45, "water_threshold": -1.2}],
 			["coast", {"width_frac": 0.16, "island_frac": 0.20, "coast_freq": 0.055, "island_freq": 0.045}],
 		],
-		"castle_layout": {"type": "mirror_z", "anchors": [[0.5, 0.12], [0.5, 0.88]], "flat_radius": 6},
+		"castle_layout": {"type": "coast", "anchors": [[0.5, 0.12], [0.5, 0.5]], "outer_y": 0.12, "island_offset": 0.10, "flat_radius": 6},
 		"palette": {
 			"plain_low": [0.42, 0.48, 0.26],
 			"plain_high": [0.66, 0.64, 0.40],
@@ -319,7 +319,7 @@ const PRESETS := {
 		"modifiers": {},
 		"reachable_only": true,
 		"oil_near_shore": true,
-		"chips": ["外环陆地", "中央大岛", "环海隔断", "渡海争夺"],
+		"chips": ["外周登陆", "中央大岛", "环海隔断", "渡海攻坚"],
 		"recommended": "1v1 / 2v2 / 3v3",
 	},
 	# 迷宫山：三层方环山壁螺旋套叠，缺口内外交替，中心是唯一金矿区

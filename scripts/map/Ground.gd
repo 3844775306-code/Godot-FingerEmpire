@@ -1418,6 +1418,8 @@ func _preset_team_anchors(k: int) -> Array:
 		return _ring_anchors(k, layout)
 	if String(layout.get("type", "mirror_x")) == "corners":
 		return _corner_anchors(k, layout)
+	if String(layout.get("type", "mirror_x")) == "coast":
+		return _coast_anchors(k, layout)
 	if String(layout.get("type", "mirror_x")) == "siege":
 		return _siege_anchors(k, layout)
 	var anchors: Array = layout.get("anchors", [])
@@ -1482,6 +1484,32 @@ func _corner_anchors(k: int, layout: Dictionary) -> Array:
 		out.append([c, 1.0 - c])
 		out.append([0.5, 1.0 - c])
 		out.append([1.0 - c, 1.0 - c])
+	return out
+
+# 海岸登陆基地锚点：蓝方（玩家/攻方）在外周陆地上，红方（守方）据守中央大岛；
+# 2V2/3V3 时同阵营基地在各自区域里横向均分，避免跨海混编
+func _coast_anchors(k: int, layout: Dictionary) -> Array:
+	var outer_y := clampf(float(layout.get("outer_y", 0.12)), 0.07, 0.20)
+	var island_off := clampf(float(layout.get("island_offset", 0.10)), 0.06, 0.14)
+	var out: Array = []
+	var outer_xs: Array
+	if k <= 1:
+		outer_xs = [0.5]
+	elif k == 2:
+		outer_xs = [0.33, 0.67]
+	else:
+		outer_xs = [0.25, 0.5, 0.75]
+	for fx in outer_xs:
+		out.append([float(fx), outer_y])
+	if k <= 1:
+		out.append([0.5, 0.5])
+	elif k == 2:
+		out.append([0.5 - island_off, 0.5])
+		out.append([0.5 + island_off, 0.5])
+	else:
+		out.append([0.5 - island_off, 0.5])
+		out.append([0.5, 0.5])
+		out.append([0.5 + island_off, 0.5])
 	return out
 
 # 三岛登陆基地锚点：蓝方（攻方）取三座孤岛，1 人用中岛、2 人用左右岛、3 人各占一岛；
@@ -1660,8 +1688,8 @@ func _place_castles_from_anchors(layout: Dictionary) -> void:
 	var size := _get_map_size()
 	var type := String(layout.get("type", "mirror_x"))
 	var anchors: Array = layout.get("anchors", [])
-	# 三岛登陆/环形/四角等布局没有固定 anchors，1V1 的两人锚点需要按布局规则现算
-	if type == "siege" or type == "ring" or type == "corners":
+	# 三岛登陆/环形/四角/海岸登陆等布局没有固定 anchors，1V1 的两人锚点需要按布局规则现算
+	if type == "siege" or type == "ring" or type == "corners" or type == "coast":
 		anchors = _preset_team_anchors(1)
 	if anchors.size() < 2:
 		return
