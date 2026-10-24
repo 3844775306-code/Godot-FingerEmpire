@@ -76,18 +76,23 @@ void fragment() {
 		world_normal = normalize(vec3((h0 - hx) * 6.0, 1.0, (h0 - hz) * 6.0));
 
 		vec3 view_dir = normalize(world_pos - CAMERA_POSITION_WORLD);
-		fres = pow(1.0 - clamp(dot(-view_dir, world_normal), 0.0, 1.0), 4.0);
+		// 指数取 2：RTS 俯视角本身接近垂直，用 4 次方会让反射几乎完全消失
+		fres = pow(1.0 - clamp(dot(-view_dir, world_normal), 0.0, 1.0), 2.0);
 
-		// 屏幕空间镜面反射：把反射方向投到屏幕采样；越接近掠射角反射越强
+		// 屏幕空间镜面反射：把反射方向投到屏幕采样；越接近掠射角反射越强。
+		// 天空近似色兜底：没有天空盒时屏幕上方常是暗色，纯采样会把整片水压黑。
 		vec3 refl = reflect(view_dir, world_normal);
 		vec4 clip = PROJECTION_MATRIX * VIEW_MATRIX * vec4(world_pos + refl * 30.0, 1.0);
+		vec3 sky_refl = vec3(0.34, 0.55, 0.78) * (0.8 + 0.2 * n);
+		refl_col = sky_refl;
 		if (clip.w > 0.0) {
 			vec2 suv = clip.xy / clip.w * 0.5 + 0.5;
 			if (suv.x > 0.002 && suv.x < 0.998 && suv.y > 0.002 && suv.y < 0.998) {
-				refl_col = texture(screen_tex, suv).rgb;
+				refl_col = mix(sky_refl, texture(screen_tex, suv).rgb, 0.7);
 			}
 		}
-		float refl_amt = clamp(mix(0.12, 1.0, fres) * reflect_strength, 0.0, 0.92);
+		// 俯视角也保留基础反射，否则水面看起来只是一块半透明色块
+		float refl_amt = clamp(mix(0.28, 0.9, fres) * reflect_strength, 0.0, 0.8);
 		col = mix(col, refl_col, refl_amt);
 	}
 
@@ -99,14 +104,16 @@ void fragment() {
 	// 船只泡沫尾巴：船周围泛白，尾流处更明显
 	col = mix(col, vec3(0.92, 0.96, 1.0), clamp(v_boat_foam * 0.55, 0.0, 0.7));
 
-	// Fog darkening
+	// Fog darkening：底图暗的时候只压暗一半，避免整片水面变成黑色
 	vec4 fog = texture(fog_tex, UV);
 	float fl = dot(fog.rgb, vec3(0.333));
-	col = mix(col, vec3(0.05, 0.05, 0.08), 1.0 - smoothstep(0.08, 0.25, fl));
+	float fog_amt = (1.0 - smoothstep(0.08, 0.25, fl)) * 0.45;
+	col = mix(col, vec3(0.05, 0.05, 0.08), fog_amt);
 
 	ALBEDO = col + spec * vec3(1.0, 1.0, 1.0);
-	ALPHA = clamp(mix(0.4, 0.65, f) + spec * 0.15 + v_boat_foam * 0.22, 0.0, 0.95);
-	METALLIC = 0.15;
-	ROUGHNESS = 0.12;
+	ALPHA = clamp(mix(0.45, 0.7, f) + spec * 0.15 + v_boat_foam * 0.22, 0.0, 0.95);
+	// 金属度保持很低：场景没有天空/反射探针，金属反射取到的是黑色，水会整片发黑
+	METALLIC = 0.02;
+	ROUGHNESS = 0.32;
 	SPECULAR = spec + v_boat_lift * 0.2;
 }
