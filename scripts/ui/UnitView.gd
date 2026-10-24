@@ -228,20 +228,25 @@ func _prepare_data() -> void:
 				_producers[pid] = []
 			_producers[pid].append({ "name": bname, "kind": "produce", "note": p.get("cooldown", 0.0), "icon": _icon_for(b_id) })
 		for up in bc.get("upgrades", []):
-			var u_id: int = up.get("unlocks_unit", -1)
-			if u_id < 0:
-				continue
-			# 若该建筑已直接“生产”此单位（produces 同时含 unlock 的冗余写法），跳过
-			var dup := false
-			for src in _producers.get(u_id, []):
-				if src.get("kind") == "produce" and src.get("name") == bname:
-					dup = true
-					break
-			if dup:
-				continue
-			if not _producers.has(u_id):
-				_producers[u_id] = []
-			_producers[u_id].append({ "name": bname, "kind": "unlock", "note": up.get("level", 0), "icon": _icon_for(b_id) })
+			var unlock_ids: Array = []
+			if up.has("unlocks_units") and up["unlocks_units"] is Array:
+				unlock_ids = up["unlocks_units"]
+			elif up.has("unlocks_unit"):
+				unlock_ids = [up["unlocks_unit"]]
+			for u_id in unlock_ids:
+				if int(u_id) < 0:
+					continue
+				# 若该建筑已直接“生产”此单位（produces 同时含 unlock 的冗余写法），跳过
+				var dup := false
+				for src in _producers.get(u_id, []):
+					if src.get("kind") == "produce" and src.get("name") == bname:
+						dup = true
+						break
+				if dup:
+					continue
+				if not _producers.has(u_id):
+					_producers[u_id] = []
+				_producers[u_id].append({ "name": bname, "kind": "unlock", "note": up.get("level", 0), "icon": _icon_for(b_id) })
 
 
 # ═══════════ 画布 ═══════════
@@ -860,18 +865,23 @@ func _add_building_lines(cfg: Dictionary, id: int) -> void:
 	var ups: Array = cfg.get("upgrades", [])
 	var unlocks: Array = []
 	for u in ups:
-		var uid: int = u.get("unlocks_unit", -1)
-		if uid < 0 or uid in prod_ids:
-			continue
-		unlocks.append(u)
+		var unlock_ids: Array = []
+		if u.has("unlocks_units") and u["unlocks_units"] is Array:
+			unlock_ids = u["unlocks_units"]
+		elif u.has("unlocks_unit"):
+			unlock_ids = [u["unlocks_unit"]]
+		for uid in unlock_ids:
+			if int(uid) < 0 or int(uid) in prod_ids:
+				continue
+			unlocks.append({"level": u.get("level", 1), "unit_id": int(uid)})
 	if unlocks.size() > 0:
 		var l2 := _add_info_header("📈 升级解锁")
 		_detail_body.add_child(l2)
-		for u in unlocks:
-			var uid2: int = u.get("unlocks_unit", -1)
+		for item in unlocks:
+			var uid2: int = int(item["unit_id"])
 			var uc: Dictionary = _cfg.get(uid2, {})
 			var unm := str(uc.get("name", "单位 %d" % uid2))
-			_add_pair("  · Lv.%s %s" % [u.get("level", 1), _icon_for(uid2)], unm)
+			_add_pair("  · Lv.%s %s" % [item["level"], _icon_for(uid2)], unm)
 	elif prods.size() == 0 and ups.size() > 0:
 		# 无新增兵种的建筑：仅提示可升级强化
 		var l3 := _add_info_header("📈 可升级 %d 级（强化）" % ups.size())

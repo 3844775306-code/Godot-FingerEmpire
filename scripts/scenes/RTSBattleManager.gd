@@ -1276,31 +1276,25 @@ func upgrade_building_type(team: int, building_id: int, from_building: Building)
 			e.melee_armor += upgrade.get("melee_armor_bonus", upgrade.get("armor_bonus", 0))
 			e.shield_armor += upgrade.get("shield_armor_bonus", upgrade.get("armor_bonus", 0))
 			e.attack += upgrade.get("attack_bonus", 0)
-			# Unlock units
-			if e.building_data.has("produces") and e.building_data["produces"] is Array:
-				var full = e.building_data["produces"]
-				for i in range(min(new_lv, full.size())):
-					var prod = full[i].duplicate()
-					# Check by unit_id
-					var _dup = false
-					for _ep in e.production_list:
-						if _ep.get("unit_id") == prod.get("unit_id"): _dup = true; break
-					if not _dup:
-						e.production_list.append(prod)
-						e.production_list.append(prod)
-				# Also add unit from upgrade's unlocks_unit (for Market merchants etc.)
-				if upgrade.has("unlocks_unit"):
-					var uid = upgrade["unlocks_unit"]
-					var uc = EntityDatabase.get_config(uid)
-					if not uc.is_empty():
-						var uprod = {"unit_id": uid, "cooldown": uc.get("attack_speed", 5.0), "queue_limit": 3}
-						# Check by unit_id to avoid duplicates
-						var dup = false
-						for ep in e.production_list:
-							if ep.get("unit_id") == uid: dup = true; break
-						if not dup:
-							e.production_list.append(uprod)
-							e.production_list.append(uprod)
+			# 按 unlock_level / 当前等级同步生产列表，支持同一级解锁多个单位
+			e._sync_production_unlocks()
+			# 兼容不在 produces 中、只通过升级解锁的特殊单位（如集市商人）
+			var unlock_ids: Array = []
+			if upgrade.has("unlocks_units") and upgrade["unlocks_units"] is Array:
+				unlock_ids = upgrade["unlocks_units"]
+			elif upgrade.has("unlocks_unit"):
+				unlock_ids = [upgrade["unlocks_unit"]]
+			for uid in unlock_ids:
+				var uc = EntityDatabase.get_config(uid)
+				if uc.is_empty():
+					continue
+				var dup = false
+				for ep in e.production_list:
+					if ep.get("unit_id") == uid:
+						dup = true
+						break
+				if not dup:
+					e.production_list.append({"unit_id": uid, "cooldown": uc.get("attack_speed", 5.0), "queue_limit": 3})
 			# Warehouse bonus
 			if e.entity_id == 22 and upgrade.has("storage_bonus"):
 				e.building_data["storage_bonus"] = e.building_data.get("storage_bonus", 0) + upgrade["storage_bonus"]

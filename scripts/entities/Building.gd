@@ -33,13 +33,7 @@ func start_construction(time: float, data: Dictionary):
 	# 建造期间不提供视野
 	vision_range = 0
 	if building_data.has("produces") and building_data["produces"] is Array:
-		var full_produces = building_data["produces"]
-		# 清除当前生产列表中所有由升级解锁的单位（保留初始已有的？这里统一刷新）
-		
-		for i in range(min(upgrade_level, full_produces.size())):
-			var prod = full_produces[i].duplicate()
-			if not production_list.has(prod):
-				production_list.append(prod)
+		_sync_production_unlocks()
 func _process(delta):
 	super._process(delta)
 	# 城墙动态朝向 + 拐角模型切换
@@ -214,12 +208,7 @@ func _finish_construction():
 					attack += ug.get("attack_bonus", 0)
 			upgrade_level = glv
 			level = glv
-			if building_data.has("produces") and building_data["produces"] is Array:
-				var full = building_data["produces"]
-				for i in range(min(glv, full.size())):
-					var prod = full[i].duplicate()
-					if not production_list.has(prod):
-						production_list.append(prod)
+			_sync_production_unlocks()
 	
 	
 	if bm :
@@ -314,14 +303,33 @@ func setup(config: Dictionary):
 
 	# Store full produces list for later upgrades
 	building_data = config.duplicate(true)
-	# Filter production_list by current level
-	var full_produces = config.get("produces", [])
+	# Filter production_list by current level / unlock_level
 	production_list = []
-	for i in range(min(level, full_produces.size())):
-		production_list.append(full_produces[i].duplicate())
+	_sync_production_unlocks()
 
 	_create_visual()
 	_update_collision_shape()
+
+# 按 unlock_level 同步生产列表：
+# 旧数据没有 unlock_level 时仍按数组下标推导等级；
+# 同一等级可以一次解锁多个单位（如船坞4级的炮艇+爆破船）。
+func _sync_production_unlocks():
+	var full: Array = building_data.get("produces", [])
+	if full.is_empty():
+		return
+	for i in range(full.size()):
+		var prod: Dictionary = full[i]
+		var unlock_lv: int = int(prod.get("unlock_level", i + 1))
+		if unlock_lv > upgrade_level:
+			continue
+		var uid: int = int(prod.get("unit_id", -1))
+		var exists: bool = false
+		for old in production_list:
+			if int(old.get("unit_id", -1)) == uid:
+				exists = true
+				break
+		if not exists:
+			production_list.append(prod.duplicate())
 
 func _create_visual():
 	for child in get_children():

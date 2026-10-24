@@ -1621,7 +1621,7 @@ func _pick_harass_squad(my_castle) -> Array:
 		var boarded = e.get("_boarded_on")
 		if boarded != null and int(boarded) != -1:
 			continue
-		if int(e.entity_id) in [16, 17, 18, 58, 59]:
+		if int(e.entity_id) in [16, 17, 18, 40, 58, 59]:
 			continue
 		if float(e.speed) < 1.7:
 			continue
@@ -2279,6 +2279,7 @@ func _patrol_navy_around_water():
 		if not entity.water_capable: continue
 		if entity.entity_id == 14: continue  # skip fishing boats
 		if entity.entity_id == 9: continue  # 运载船由渡水模块调度，不能当成巡逻舰
+		if entity.entity_id == 40: continue  # 爆破船应冲向敌舰/敌岸，不能拿去绕圈巡逻
 		if entity.has_meta("ai_transporting"): continue
 		if entity.current_order != "" or entity.current_target != null: continue
 		idle_naval.append(entity)

@@ -1842,6 +1842,9 @@ func _process_demolition(delta):
 		else:
 			_movement.set_move_target(attack_move_target)
 			_movement.process_move(delta, bm)
+	elif _order_is(UnitState.MOVING):
+		# 爆破船也需要响应玩家右键移动，不能只处理攻击/攻击移动
+		_movement.process_move(delta, bm)
 	else:
 		_find_enemy_in_range()
 
@@ -1849,14 +1852,53 @@ func _demolition_explode():
 	if _has_exploded: return
 	_has_exploded = true
 	_play_sfx_if_visible("cannon_hit")
+	_spawn_demolition_blast()
 	var bm = _get_bm()
 	if bm:
 		for e in bm.entities.get_children():
-			if e is GameEntity and e != self and e.team != team and e.health > 0:
-				var d = global_position.distance_to(e.global_position) - e.body_radius
-				if d <= damage_radius:
-					e.take_damage(attack, self)
+			if not (e is GameEntity) or e == self or e.health <= 0:
+				continue
+			# 爆炸只伤害真正的敌方军队/建筑：不误伤盟友、中立资源、动物
+			if not (e is Army or e is Building):
+				continue
+			var hostile: bool = false
+			if bm.has_method("is_hostile_to"):
+				hostile = bm.is_hostile_to(team, owner_peer_id, e)
+			else:
+				hostile = e.team != team and e.team != RTSConfig.Team.NEUTRAL
+			if not hostile:
+				continue
+			if not _can_attack_target(e):
+				continue
+			var d = global_position.distance_to(e.global_position) - e.body_radius
+			if d <= damage_radius:
+				e.take_damage(attack, self)
 	die()
+
+# 简单的爆炸球特效；不依赖外部资源，避免爆破船只有音效没有视觉反馈
+func _spawn_demolition_blast():
+	var bm = _get_bm()
+	if bm == null:
+		return
+	var marker = MeshInstance3D.new()
+	var sphere = SphereMesh.new()
+	sphere.radius = maxf(damage_radius * 0.65, 1.0)
+	sphere.height = sphere.radius * 2.0
+	marker.mesh = sphere
+	var mat = StandardMaterial3D.new()
+	mat.albedo_color = Color(1.0, 0.35, 0.05, 0.65)
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.no_depth_test = true
+	marker.material_override = mat
+	bm.add_child(marker)
+	marker.global_position = global_position + Vector3(0, 1.0, 0)
+	var t = Timer.new()
+	t.one_shot = true
+	t.wait_time = 0.35
+	t.timeout.connect(marker.queue_free)
+	marker.add_child(t)
+	t.start()
 
 # ==================== Transport Ship ====================
 func _process_transport(delta):

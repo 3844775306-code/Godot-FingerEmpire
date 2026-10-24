@@ -192,17 +192,17 @@ func _init_data():
 			"cost": {"wood": 150, "gold": 80},
 			"max_health": 500, "melee_armor": 7, "shield_armor": 7, "body_radius": 1.0,
 			"produces": [
-				{ "unit_id": 14, "cooldown": 6.0, "queue_limit": 2 },
-				{ "unit_id": 13, "cooldown": 7.0, "queue_limit": 5 },   # 采集船
-				{ "unit_id": 39, "cooldown": 10.0, "queue_limit": 5 },   # 炮艇
-				{ "unit_id": 40, "cooldown": 5.0, "queue_limit": 8 },     # 爆破船
-				{ "unit_id": 9, "cooldown": 15.0, "queue_limit": 3 }     # 运载船
+				{ "unit_id": 14, "cooldown": 6.0, "queue_limit": 2, "unlock_level": 1 },   # 采集船
+				{ "unit_id": 13, "cooldown": 7.0, "queue_limit": 5, "unlock_level": 2 },   # 战船
+				{ "unit_id": 9,  "cooldown": 15.0, "queue_limit": 3, "unlock_level": 3 },  # 运载船
+				{ "unit_id": 39, "cooldown": 10.0, "queue_limit": 5, "unlock_level": 4 },  # 炮艇
+				{ "unit_id": 40, "cooldown": 5.0, "queue_limit": 8, "unlock_level": 4 }    # 爆破船
 			],
 			"upgrades": [
 				{ "level": 2, "cost": {"wood": 120, "stone": 80}, "health_bonus": 100, "unlocks_unit": 13 },
-				{ "level": 3, "cost": {"stone": 180, "gold": 100}, "health_bonus": 150,"unlocks_unit": 40 },
-				{ "level": 4, "cost": {"gold": 240, "oil": 150}, "health_bonus": 200 ,"unlocks_unit": 39},
-				{ "level": 5, "cost": {"gold": 400, "oil": 300}, "health_bonus": 250, "unlocks_unit": 9 }
+				{ "level": 3, "cost": {"stone": 180, "gold": 100}, "health_bonus": 150, "unlocks_unit": 9 },
+				{ "level": 4, "cost": {"gold": 240, "oil": 150}, "health_bonus": 200, "unlocks_units": [39, 40] },
+				{ "level": 5, "cost": {"gold": 400, "oil": 300}, "health_bonus": 250 }
 			]
 		},
 		{

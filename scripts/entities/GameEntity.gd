@@ -45,6 +45,7 @@ var freeze_timer: float = 0.0
 var owner_peer_id: int = -1
 var piercing: bool = false                  # 长枪兵穿透（无视军队护甲）
 var ignore_building_armor: bool = false     # 攻城车无视建筑护甲
+var ignore_armor: bool = false               # 无视目标护甲（爆破船等）
 var _base_attack: float = 0.0               # 驻军前原始攻击力（用于还原）
 var _base_attack_speed: float = 0.0         # 驻军前原始攻速（攻城车专用）
 var _base_speed: float = 0.0                # 驻军前原始移速（攻城车专用）
@@ -121,6 +122,7 @@ func setup(config: Dictionary):
 	owner_peer_id = config.get("owner_peer_id", -1)
 	piercing = config.get("piercing", false)
 	ignore_building_armor = config.get("ignore_building_armor", false)
+	ignore_armor = config.get("ignore_armor", false)
 	# 加入遍历分组 (Godot group)，避免每帧全量扫描 entities.get_children()
 	if entity_type != 0 and vision_range > 0:
 		add_to_group("vision_providers")
@@ -165,6 +167,9 @@ func take_damage(amount: float, source: GameEntity = null):
 		if source.target_type == 3:
 			eff_armor = shield_armor
 
+		# 爆破船等特殊单位无视护甲
+		if source.ignore_armor:
+			eff_armor = 0.0
 		# 长枪兵无视军队护甲
 		if source.piercing and self is Army:
 			eff_armor = 0

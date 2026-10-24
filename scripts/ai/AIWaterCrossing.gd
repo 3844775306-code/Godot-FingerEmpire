@@ -3,13 +3,14 @@ extends RefCounted
 
 # AI 渡水行为：
 # 1) 如果敌方城堡与己方城堡在陆地上不连通，先尝试在较窄的水面搭桥；
-# 2) 桥搭不过去（海面太宽/没有落点）时，升级船坞到5级、造运载船，
+# 2) 桥搭不过去（海面太宽/没有落点）时，升级船坞到3级、造运载船，
 #    把陆军送到对岸再发起进攻。
 # 这里只做“怎么过水”的规划与下令，不直接修改单位/建筑内部状态。
 
 const BRIDGE_ID := 7
 const TRANSPORT_ID := 9
 const SHIPYARD_ID := 23
+const TRANSPORT_SHIPYARD_LEVEL := 3
 const MAX_BRIDGE_SPAN := 10
 const MAX_BRIDGES := 10
 const PLAN_INTERVAL := 6.0
@@ -505,7 +506,7 @@ func _ensure_transport_tech():
 		return
 	if sy.build_timer > 0.0:
 		return
-	if sy.upgrade_level >= 5:
+	if sy.upgrade_level >= TRANSPORT_SHIPYARD_LEVEL:
 		return
 	var castle = ai.get_peer_castle(ai.my_peer_id)
 	if is_instance_valid(castle) and castle.upgrade_level <= sy.upgrade_level:
@@ -521,7 +522,7 @@ func _ensure_transport_ship():
 	var sy = ai._find_own_building(SHIPYARD_ID)
 	if not is_instance_valid(sy) or sy.build_timer > 0.0:
 		return
-	if sy.upgrade_level < 5:
+	if sy.upgrade_level < TRANSPORT_SHIPYARD_LEVEL:
 		return
 	var has_transport: bool = false
 	for prod in sy.production_list:
