@@ -83,7 +83,7 @@ func _spawn_impact_effect(pos: Vector3, big: bool) -> void:
 	# ── 1) 碎屑粒子：往外炸开的亮色颗粒 ──
 	var p := CPUParticles3D.new()
 	p.one_shot = true
-	p.amount = 42 if big else 24
+	p.amount = 18 if big else 12
 	p.lifetime = 0.75
 	p.explosiveness = 1.0
 	p.direction = Vector3.UP
@@ -91,17 +91,24 @@ func _spawn_impact_effect(pos: Vector3, big: bool) -> void:
 	p.initial_velocity_min = 3.0
 	p.initial_velocity_max = 8.0 if big else 5.5
 	p.gravity = Vector3(0.0, -14.0, 0.0)
-	p.scale_amount_min = 0.10
-	p.scale_amount_max = 0.38 if big else 0.22
+	p.scale_amount_min = 0.18
+	p.scale_amount_max = 0.55 if big else 0.38
 	var mesh := SphereMesh.new()
 	mesh.radius = 0.13
 	mesh.height = 0.26
 	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.albedo_color = Color(1.0, 0.85, 0.55) if big else Color(1.0, 0.95, 0.8)
-	mat.emission_enabled = true
-	mat.emission = Color(1.0, 0.66, 0.28) if big else Color(1.0, 0.88, 0.55)
-	mat.emission_energy_multiplier = 3.0
+	if big:
+		# 石头：白色碎屑，带一点自发光，阴影里也能看清
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.albedo_color = Color(0.93, 0.93, 0.95)
+		mat.emission_enabled = true
+		mat.emission = Color(0.7, 0.7, 0.75)
+		mat.emission_energy_multiplier = 1.0
+	else:
+		# 炮弹：黑色火药碎屑；受光照影响，暗处自然不会发亮
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+		mat.albedo_color = Color(0.05, 0.05, 0.06)
+		mat.emission_enabled = false
 	mesh.material = mat
 	p.mesh = mesh
 	parent.add_child(p)
@@ -151,7 +158,8 @@ func _spawn_impact_effect(pos: Vector3, big: bool) -> void:
 	rmat.emission_energy_multiplier = 2.5
 	rmesh.material = rmat
 	ring.mesh = rmesh
-	ring.rotation.x = -PI * 0.5   # 环平躺在地面上
+	# TorusMesh 默认就平躺在 XZ 平面上（环轴朝上），不要再绕 X 轴旋转，
+	# 否则冲击环会立起来变成竖直的一圈。
 	ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(ring)
 	ring.global_position = Vector3(pos.x, pos.y + 0.08, pos.z)
