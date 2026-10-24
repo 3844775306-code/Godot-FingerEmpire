@@ -749,8 +749,17 @@ func _process(delta):
 			_ai_income_rate[rk] = _ai_res_income.get(rk, 0) / 10.0
 			_ai_res_income[rk] = 0
 	if timer <= 0:
-		timer = think_interval
-		decide(think_interval)
+		# 后期实体多时 AI 决策降频：单次 decide 会做多轮全实体统计和可见性刷新，
+		# 4 个 AI 同时跑会造成周期性主线程尖峰。260 个实体后拉长间隔，
+		# 不影响前期节奏，但能显著降低后期 AI 的固定开销。
+		var interval: float = think_interval
+		var entity_count: int = battle._all_entities.size() if battle else 0
+		if entity_count > 360:
+			interval *= 1.8
+		elif entity_count > 260:
+			interval *= 1.4
+		timer = interval
+		decide(interval)
 	worker_allocate_timer -= delta
 	if worker_allocate_timer <= 0:
 		worker_allocate_timer = WORKER_ALLOCATE_INTERVAL

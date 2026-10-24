@@ -17,6 +17,16 @@ var hit: bool = false
 var target_pos: Vector3 = Vector3.ZERO   # 固定目标点（非追踪模式）
 var _saved_dir: Vector3 = Vector3.ZERO
 
+# 弹丸模型缓存：后期每秒会生成几十到上百发子弹，不能每发都做
+# ResourceLoader.exists + load + GLB 实例化。PackedScene 只加载一次，之后只 instantiate。
+static var _scene_cache: Dictionary = {}
+static func _cached_scene(path: String) -> PackedScene:
+	if _scene_cache.has(path):
+		return _scene_cache[path] as PackedScene
+	var ps: PackedScene = load(path) if ResourceLoader.exists(path) else null
+	_scene_cache[path] = ps
+	return ps
+
 func _ready():
 	add_to_group("bullets")
 	# 弹丸命中由 _physics_process 里的空间索引查询判定，不依赖物理碰撞信号。
@@ -26,26 +36,38 @@ func _ready():
 	collision_layer = 0
 	collision_mask = 0
 	# 快照序列化时 source 可能已被销毁，创建时先缓存发射方 entity_id
-	if source and is_instance_valid(source):
-		source_entity_id = source.entity_id
-	if damage_radius > 0 or (source and source.entity_id in [16,17,26,39]):
+	var source_valid: bool = source != null and is_instance_valid(source)
+	var source_id: int = int(source.entity_id) if source_valid else -1
+	if source_valid:
+		source_entity_id = source_id
+	if damage_radius > 0 or source_id in [16,17,26,39]:
 		# 投石车/巨型投石机用巨石
-		if source and source.entity_id in [17, 59] and ResourceLoader.exists("res://models/defense/weapon-ammo-boulder.glb"):
-			var st = load("res://models/defense/weapon-ammo-boulder.glb")
-			if st: var s = st.instantiate(); if s: s.scale = Vector3.ONE * (3.5 if source.entity_id == 59 else 2.5); add_child(s)
-		elif ResourceLoader.exists("res://models/pirate/cannon-ball.glb"):
-			var cb = load("res://models/pirate/cannon-ball.glb")
-			if cb: var c = cb.instantiate(); if c: add_child(c)
+		if source_id in [17, 59]:
+			var boulder = _cached_scene("res://models/defense/weapon-ammo-boulder.glb")
+			if boulder:
+				var s = boulder.instantiate()
+				if s:
+					s.scale = Vector3.ONE * (3.5 if source_id == 59 else 2.5)
+					add_child(s)
+			else:
+				var cannon_fallback = _cached_scene("res://models/pirate/cannon-ball.glb")
+				if cannon_fallback:
+					var cf = cannon_fallback.instantiate()
+					if cf: add_child(cf)
+		else:
+			var cannon = _cached_scene("res://models/pirate/cannon-ball.glb")
+			if cannon:
+				var c = cannon.instantiate()
+				if c: add_child(c)
 	else:
-		if ResourceLoader.exists("res://models/forest/weapon-arrow.glb"):
-			var arrow_scene = load("res://models/forest/weapon-arrow.glb")
-			if arrow_scene:
-				var arrow = arrow_scene.instantiate()
-				# 模型自身箭头朝向与飞行方向相反，绕 Y 轴掉头 180°
-				if arrow:
-					arrow.scale = Vector3.ONE
-					arrow.rotation.y = deg_to_rad(180)
-					add_child(arrow)
+		var arrow_scene = _cached_scene("res://models/forest/weapon-arrow.glb")
+		if arrow_scene:
+			var arrow = arrow_scene.instantiate()
+			# 模型自身箭头朝向与飞行方向相反，绕 Y 轴掉头 180°
+			if arrow:
+				arrow.scale = Vector3.ONE
+				arrow.rotation.y = deg_to_rad(180)
+				add_child(arrow)
 	if get_child_count() == 0:
 		var mesh = MeshInstance3D.new()
 		var sphere = SphereMesh.new()

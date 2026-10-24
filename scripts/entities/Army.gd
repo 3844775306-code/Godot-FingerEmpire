@@ -402,14 +402,29 @@ func _physics_process(delta):
 	# Åö×²·ÖÀë
 	_movement.collision_timer -= delta
 	if _movement.collision_timer <= 0:
-		_movement.collision_timer = _movement.COLLISION_INTERVAL
+		# 后期单位多时降低碰撞分离频率：每次 apply_collision 都会做近邻空间查询，
+		# 几百个单位 × 每秒 6~7 次是稳定的 CPU 热点；略拉长间隔不会明显破坏队形。
+		var collision_interval: float = _movement.COLLISION_INTERVAL
+		if bm and bm._all_entities.size() > 300:
+			collision_interval *= 1.5
+		_movement.collision_timer = collision_interval
 		_movement.apply_collision(delta)
 		# ÊµÊ±Ñ°µÐ£ºÖ»Òª²»ÔÚ²É¼¯/½»¸¶/¹¥»÷ÒÆ¶¯£¬ÇÒÃ»ÓÐÄ¿±ê£¬¾ÍÁ¢¿ÌËÑË÷µÐÈË
 	
 	# ¾ö²ß½ÚÁ÷
 	think_timer -= delta
 	if think_timer <= 0:
-		think_timer = THINK_INTERVAL
+		# 后期单位数量多时，降低每个单位的决策频率。绝大多数闲置单位的
+		# 目标搜索每 0.3s 做一次空间查询，几百个单位会形成稳定 CPU 负担；
+		# 拉到 0.45~0.55s 对操作手感影响很小，却能明显降低后期开销。
+		var think_interval: float = THINK_INTERVAL
+		if bm:
+			var entity_total: int = bm._all_entities.size()
+			if entity_total > 360:
+				think_interval = 0.55
+			elif entity_total > 240:
+				think_interval = 0.45
+		think_timer = think_interval
 		_think(delta, bm)
 		# ÔÚ _physics_process º¯ÊýµÄ×îºó
 	
@@ -640,6 +655,7 @@ func _attack(target, delta):
 			if multi[0] != 0:
 				spread_angle = deg_to_rad(multi[0])
 
+		var bullet_bm = _get_bm()
 		for i in range(bullet_count):
 			var bullet = Bullet.new()
 			bullet.team = team
@@ -667,9 +683,12 @@ func _attack(target, delta):
 			var spawn_dir = (target.global_position - global_position).normalized()
 			var perpendicular = Vector3(spawn_dir.z, 0, -spawn_dir.x)
 			var offset = perpendicular * sin(angle_offset) * 0.3
+			if bullet_bm == null:
+				continue
+			# 必须先入树再设置 global_position；未入树时设置全局坐标会每发子弹刷一条
+			# "Condition !is_inside_tree()" 错误，并把日志 I/O 拖成后期卡顿。
+			bullet_bm.add_child(bullet)
 			bullet.global_position = global_position + Vector3(0, body_radius * 2.5, 0) + offset
-
-			get_tree().get_first_node_in_group("battle_manager").add_child(bullet)
 	else:
 		var _dmg_m = attack
 		# 农民对动物伤害+900%

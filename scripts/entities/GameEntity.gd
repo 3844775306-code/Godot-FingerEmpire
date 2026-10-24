@@ -508,9 +508,7 @@ func try_produce(unit_id: int) -> bool:
 		if id == unit_id:
 			current_in_queue += 1
 	if current_in_queue >= prod_config.queue_limit:
-		print("[TryProduce] queue full: ", unit_id, " limit=", prod_config.queue_limit)
 		return false
-	print("[TryProduce] SUCCESS: ", unit_id, " queue=", current_in_queue + 1)
 	
 	var unit_cfg = EntityDatabase.get_config(unit_id)
 	if not unit_cfg:

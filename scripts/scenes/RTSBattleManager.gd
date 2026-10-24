@@ -51,6 +51,11 @@ var visible_grid: Array = []
 var fog_timer: float = 0.0
 var fog_version: int = 0             # 迷雾实际变化版本号，供小地图判断是否需要重建底图
 var map_modifiers: Dictionary = {}   # 当前地图的规则修正（视野/高地/浅滩等）
+# 视野增量覆盖计数：每个格子被多少个己方视野源覆盖。
+# 旧实现每 0.5s 清空全图并重算所有单位视野圆；后期几百个单位时是固定主线程热点。
+var _fog_cover: Array = []
+var _fog_sources: Dictionary = {}    # instance_id -> {"x","y","r"}
+var _fog_host_team: int = -999
 
 # ==================== 游戏状态 ====================
 var _pending_left_click: bool = false
@@ -132,7 +137,7 @@ var _perf_light: DirectionalLight3D = null
 var _perf_light_shadow_original: bool = true
 var _perf_env: Environment = null
 var _perf_ssao_original: bool = false
-const PERF_LEVEL_SCALES: Array[float] = [1.0, 0.85, 0.72, 0.62]
+const PERF_LEVEL_SCALES: Array[float] = [1.0, 0.85, 0.72, 0.62, 0.52]
 
 func _create_diag_label():
 	_fps_label = Label.new()
@@ -2341,34 +2346,79 @@ func _on_building_selected_for_build(building_id: int):
 func _init_fog_grid():
 	explored_grid.clear()
 	visible_grid.clear()
+	_fog_cover.clear()
+	_fog_sources.clear()
 	for x in range(RTSConfig.MAP_SIZE):
 		var col_exp = []
 		var col_vis = []
+		var col_cover = []
 		for y in range(RTSConfig.MAP_SIZE):
 			col_exp.append(false)
 			col_vis.append(false)
+			col_cover.append(0)
 		explored_grid.append(col_exp)
 		visible_grid.append(col_vis)
+		_fog_cover.append(col_cover)
+
+func _fog_apply_circle(gx: int, gy: int, r: int, delta: int) -> void:
+	var rr: int = r * r
+	for dx in range(-r, r + 1):
+		var nx: int = gx + dx
+		if nx < 0 or nx >= RTSConfig.MAP_SIZE:
+			continue
+		var cover_row: Array = _fog_cover[nx]
+		var vis_row: Array = visible_grid[nx]
+		var exp_row: Array = explored_grid[nx]
+		for dy in range(-r, r + 1):
+			if dx * dx + dy * dy > rr:
+				continue
+			var ny: int = gy + dy
+			if ny < 0 or ny >= RTSConfig.MAP_SIZE:
+				continue
+			var c: int = int(cover_row[ny]) + delta
+			if c > 0:
+				cover_row[ny] = c
+				vis_row[ny] = true
+				exp_row[ny] = true
+			else:
+				cover_row[ny] = 0
+				vis_row[ny] = false
 
 func _update_fog_visibility():
-	if visible_grid.is_empty():
+	if visible_grid.is_empty() or _fog_cover.is_empty():
 		_init_fog_grid()
-	for x in range(RTSConfig.MAP_SIZE):
-		for y in range(RTSConfig.MAP_SIZE):
-			visible_grid[x][y] = false
-
+	var host_team := get_host_team()
+	if host_team != _fog_host_team:
+		# 换阵营/重开一局时清空一次，之后只做增量覆盖
+		_init_fog_grid()
+		_fog_host_team = host_team
+	var current: Dictionary = {}
 	for e in get_tree().get_nodes_in_group("vision_providers"):
-		if e.team == get_host_team() and e.health > 0:
-			var g = world_to_grid(e.global_position)
-			var r = get_effective_vision(e)
-			for dx in range(-r, r+1):
-				for dy in range(-r, r+1):
-					if dx*dx+dy*dy > r*r: continue
-					var nx = g.x+dx
-					var ny = g.y+dy
-					if nx>=0 and nx<RTSConfig.MAP_SIZE and ny>=0 and ny<RTSConfig.MAP_SIZE:
-						visible_grid[nx][ny] = true
-						explored_grid[nx][ny] = true
+		if not is_instance_valid(e) or e.health <= 0 or e.team != host_team:
+			continue
+		var g = world_to_grid(e.global_position)
+		current[e.get_instance_id()] = {
+			"x": g.x,
+			"y": g.y,
+			"r": get_effective_vision(e),
+		}
+	# 移除已经死亡/离开视野组的单位，先扣掉它原来的覆盖
+	for id in _fog_sources.keys():
+		if current.has(id):
+			continue
+		var old: Dictionary = _fog_sources[id]
+		_fog_apply_circle(int(old["x"]), int(old["y"]), int(old["r"]), -1)
+		_fog_sources.erase(id)
+	# 只更新移动过或视野范围变化的单位；静止单位不再每 0.5s 重画视野圆
+	for id in current.keys():
+		var val: Dictionary = current[id]
+		if _fog_sources.has(id):
+			var old2: Dictionary = _fog_sources[id]
+			if int(old2["x"]) == int(val["x"]) and int(old2["y"]) == int(val["y"]) and int(old2["r"]) == int(val["r"]):
+				continue
+			_fog_apply_circle(int(old2["x"]), int(old2["y"]), int(old2["r"]), -1)
+		_fog_apply_circle(int(val["x"]), int(val["y"]), int(val["r"]), 1)
+		_fog_sources[id] = val
 
 func _apply_fog():
 	if $Map and $Map.has_method("apply_fog"):

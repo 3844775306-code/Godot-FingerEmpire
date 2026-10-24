@@ -821,11 +821,16 @@ func _process(delta):
 
 	health_bar_timer -= delta
 	if health_bar_timer <= 0:
-		# 后期实体过多时把血条刷新降到约 12.5Hz；画面仍有连续感，但明显减少
-		# 大量 Label/Control 的投影与排版开销。
+		# 后期实体越多，血条/文字 Control 的布局开销越大；分档降频，
+		# 220 个以内保持 20Hz，超过后降到约 10Hz / 7Hz，画面仍可接受。
+		var entity_count: int = bm._all_entities.size()
 		var bar_interval := HEALTH_BAR_UPDATE_INTERVAL
-		if bm._all_entities.size() > 220:
-			bar_interval *= 1.6
+		if entity_count > 320:
+			bar_interval = 0.14
+		elif entity_count > 220:
+			bar_interval = 0.10
+		elif entity_count > 140:
+			bar_interval = 0.07
 		health_bar_timer = bar_interval
 		_update_health_bars()
 	# 更新单位统计（每秒一次）
@@ -854,8 +859,15 @@ func _update_health_bars():
 	if refresh_style:
 		_last_health_scale = scale_factor
 	_health_text_tick += 1
-	# 位置/血条 20Hz 刷新，文字与阵营色 5Hz 刷新，避免每帧重建大量 Label 主题
-	var refresh_text := (_health_text_tick % 4 == 0)
+	# 位置/血条 20Hz 刷新，文字与阵营色 5Hz 刷新；后期实体多时文字再降一档，
+	# 避免成百上千个 Label 同时重排。
+	var bm_for_text = _get_bm()
+	var text_tick_interval: int = 4
+	if bm_for_text and bm_for_text._all_entities.size() > 220:
+		text_tick_interval = 8
+	elif bm_for_text and bm_for_text._all_entities.size() > 140:
+		text_tick_interval = 6
+	var refresh_text := (_health_text_tick % text_tick_interval == 0)
 	var sm = _get_sm()
 
 	# 移除失效实体

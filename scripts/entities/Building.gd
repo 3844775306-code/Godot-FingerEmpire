@@ -157,10 +157,11 @@ func _attack(target, delta):
 		bullet.target = target
 		bullet.source = self
 		bullet.damage_radius = damage_radius
-		bullet.global_position = global_position + Vector3(0, body_radius * 1.5, 0)
 		var bm = _get_bm()
 		if bm:
 			bm.add_child(bullet)
+			# 入树后再设全局坐标，避免 !is_inside_tree() 报错刷日志
+			bullet.global_position = global_position + Vector3(0, body_radius * 1.5, 0)
 	else:
 		target.take_damage(attack, self)
 	attack_timer = attack_speed
