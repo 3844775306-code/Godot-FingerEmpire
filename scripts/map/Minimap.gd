@@ -25,8 +25,15 @@ const ALERT_PULSE_PERIOD: float = 0.5
 var latest_alert_world_pos: Vector3 = Vector3.ZERO
 var has_latest_alert: bool = false
 
+# 当前视角框：记录上次的相机位置/朝向/视野，变化时重绘
+var _last_cam_pos: Vector2 = Vector2(999999.0, 999999.0)
+var _last_cam_yaw: float = 99999.0
+var _last_cam_size: float = -1.0
+
 func _ready():
 	custom_minimum_size = Vector2(MINIMAP_SIZE, MINIMAP_SIZE)
+	# 视角框旋转后可能超出小地图，裁掉超出部分，避免画到面板外面
+	clip_contents = true
 	mouse_filter = MOUSE_FILTER_STOP
 	camera = get_viewport().get_camera_3d()
 	set_process(true)
@@ -60,6 +67,18 @@ func _process(delta):
 			changed = true
 	if changed:
 		queue_redraw()
+	# 相机移动/旋转/缩放时刷新小地图上的视角框
+	if camera != null and is_instance_valid(camera):
+		var cam_pos := Vector2(camera.global_position.x, camera.global_position.z)
+		var cam_yaw: float = float(camera.get("yaw_deg")) if camera.get("yaw_deg") != null else 0.0
+		var cam_size: float = camera.size
+		if cam_pos.distance_to(_last_cam_pos) > 0.3 \
+				or absf(cam_yaw - _last_cam_yaw) > 0.3 \
+				or absf(cam_size - _last_cam_size) > 0.3:
+			_last_cam_pos = cam_pos
+			_last_cam_yaw = cam_yaw
+			_last_cam_size = cam_size
+			queue_redraw()
 
 func set_data(p_explored: Array, p_visible: Array, p_entities: Array, p_terrain_dirty: bool = true):
 	explored_grid = p_explored
@@ -231,6 +250,38 @@ func _draw():
 		var ring_color = Color(UITheme.VERMILION, alpha)
 		draw_circle(alert["pos"], radius, Color(UITheme.VERMILION, alpha * 0.25))
 		draw_arc(alert["pos"], radius, 0, TAU, 32, ring_color, 2.0)
+
+	# 当前视角框（画在最后，压在地形与单位点上面）
+	_draw_view_frame(ms, cell)
+
+# 在小地图上标出相机当前能看到的范围：一个随视角旋转的半透明框
+func _draw_view_frame(ms: float, cell: float) -> void:
+	if camera == null or not is_instance_valid(camera):
+		return
+	var vp_size := get_viewport_rect().size
+	if vp_size.y <= 0.0:
+		return
+	# 正交相机 size 是视野高度（世界单位），按视口宽高比换算出宽度
+	var half_h: float = camera.size * 0.5
+	var half_w: float = half_h * (vp_size.x / vp_size.y)
+	var center := Vector2(camera.global_position.x, camera.global_position.z)
+	var to_px := Vector2((center.x + ms * 0.5) * cell, (center.y + ms * 0.5) * cell)
+	var hw: float = half_w * cell
+	var hh: float = half_h * cell
+	var yaw: float = 0.0
+	var yaw_val = camera.get("yaw_deg")
+	if yaw_val != null:
+		yaw = deg_to_rad(float(yaw_val))
+	var corners := PackedVector2Array()
+	corners.append(to_px + Vector2(-hw, -hh).rotated(yaw))
+	corners.append(to_px + Vector2(hw, -hh).rotated(yaw))
+	corners.append(to_px + Vector2(hw, hh).rotated(yaw))
+	corners.append(to_px + Vector2(-hw, hh).rotated(yaw))
+	# 半透明填充 + 亮边，跟小地图本身的金色边框区分开
+	draw_colored_polygon(corners, Color(1.0, 1.0, 1.0, 0.10))
+	var outline := PackedVector2Array(corners)
+	outline.append(corners[0])
+	draw_polyline(outline, Color(1.0, 1.0, 1.0, 0.85), UITheme.BORDER_MED)
 
 func _gui_input(event):
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
