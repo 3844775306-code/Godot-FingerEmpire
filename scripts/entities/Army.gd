@@ -554,18 +554,29 @@ func _process_action(delta, bm):
 			var target_id: int = current_target.get_instance_id()
 			if target_id != _retarget_target_id:
 				_retarget_target_id = target_id
-				_retarget_timer = TARGET_RETARGET_INTERVAL
+				_retarget_timer = _retarget_interval(bm)
 			if h_dist <= attack_range:
-				_retarget_timer = TARGET_RETARGET_INTERVAL
+				_retarget_timer = _retarget_interval(bm)
 				_attack_tick(current_target, delta, bm)
 			else:
 				# 目标不在攻击范围：每秒检查一次是否有更近的敌人，避免一直追远目标
 				_retarget_timer -= delta
 				if _retarget_timer <= 0.0:
-					_retarget_timer = TARGET_RETARGET_INTERVAL
+					_retarget_timer = _retarget_interval(bm)
 					_try_retarget_closer(h_dist)
 				if current_target != null and is_instance_valid(current_target):
 					_movement.set_move_target(current_target.global_position, attack_range)
+
+# 当前目标不在射程内时，重选更近目标会做一次空间查询。后期单位多时
+# 把它从 1s 放宽到 2~3s，避免几百个单位持续做密集查询。
+func _retarget_interval(bm) -> float:
+	if bm != null:
+		var total: int = bm._all_entities.size()
+		if total > 450:
+			return 3.0
+		if total > 300:
+			return 2.0
+	return TARGET_RETARGET_INTERVAL
 
 # 当前目标不在攻击范围时，每秒最多切换一次：只在确实存在更近的敌人时改锁。
 # 驻扎单位只在驻扎防御圈内找目标，避免被视野边缘的敌人引走。
@@ -578,7 +589,10 @@ func _try_retarget_closer(current_dist: float) -> void:
 	if garrison_point != Vector3.ZERO:
 		best = _find_nearest_enemy_near(garrison_point, GARRISON_DEFEND_RADIUS)
 	else:
-		best = _find_nearest_enemy_in_vision()
+		# 只可能换到“更近”的目标，搜索半径不需要覆盖整个视野。
+		# 混战时把 15m 视野缩到当前目标距离附近，候选数量会少一个数量级。
+		var search_radius: float = minf(vision_range, current_dist + body_radius + 3.0)
+		best = _find_nearest_enemy_near(global_position, search_radius)
 	if best == null or not is_instance_valid(best) or best == current_target:
 		return
 	if not _can_attack_target(best):
@@ -591,7 +605,7 @@ func _try_retarget_closer(current_dist: float) -> void:
 		_set_order(UnitState.ATTACKING)
 		is_attack_moving = false
 		_retarget_target_id = best.get_instance_id()
-		_retarget_timer = TARGET_RETARGET_INTERVAL
+		_retarget_timer = _retarget_interval(_cached_bm)
 
 # 只有“正在回驻扎点”的移动才允许被驻扎防御逻辑接管；
 # 玩家/AI 的其他移动命令仍然优先，避免驻扎点把单位永久拉回去。
@@ -1890,6 +1904,10 @@ func _find_nearest_enemy_near(center: Vector3, radius: float):
 		if not _can_attack_target(entity): continue
 		var h_diff = Vector2(entity.global_position.x - center.x, entity.global_position.z - center.z)
 		var dist = h_diff.length() - body_radius - entity.body_radius
+		if dist <= attack_range:
+			# 射程内敌人已经是“最近”的可攻击目标，直接返回，避免在密集人群里
+			# 为一次重选目标遍历几十上百个候选。
+			return entity
 		if dist <= radius and dist < best_dist:
 			best_dist = dist
 			best_target = entity
