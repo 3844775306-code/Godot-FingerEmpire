@@ -61,11 +61,14 @@ func _process(delta):
 	if changed:
 		queue_redraw()
 
-func set_data(p_explored: Array, p_visible: Array, p_entities: Array):
+func set_data(p_explored: Array, p_visible: Array, p_entities: Array, p_terrain_dirty: bool = true):
 	explored_grid = p_explored
 	visible_grid = p_visible
 	entity_snapshots = p_entities
-	_tex_dirty = true
+	# 只有迷雾/探索范围变化时才重建小地图底图。单位点每 0.5s 更新一次，
+	# 若每次都给 _tex_dirty 置真，会在后期反复重画 100×100 格 ×16 像素的底图。
+	if p_terrain_dirty or _terrain_tex == null:
+		_tex_dirty = true
 	queue_redraw()
 
 func _rebuild_terrain_texture():

@@ -23,6 +23,9 @@ var terrain_image: Image
 var terrain_texture: ImageTexture
 var _base_image: Image = null          # 无雾底图（按格平铺的纯色地形）
 var _dark_image: Image = null          # “已探索但当前不可见”用的压暗版底图
+var _fog_prev_explored: Array = []     # 上一次已应用的探索格，用于只重画变化格
+var _fog_prev_visible: Array = []      # 上一次已应用的可见格
+var _fog_prev_size: int = -1
 var terrain_mesh_instance: MeshInstance3D
 var vertex_grid: Array = []           # 存储顶点高度，用于快速查询
 var height_scale: float = 2.0         # 高度缩放系数
@@ -1166,6 +1169,10 @@ func _get_detail_noise() -> FastNoiseLite:
 # 两张都在这里逐格画一次，之后 apply_fog 只做整块拷贝，不再重算
 func _build_terrain_images() -> void:
 	var size = _get_map_size()
+	# 底图重建后之前的迷雾差异缓存失效，下一次 apply_fog 必须全量重画
+	_fog_prev_explored.clear()
+	_fog_prev_visible.clear()
+	_fog_prev_size = -1
 	_base_image = Image.create(TEX_SIZE, TEX_SIZE, false, Image.FORMAT_RGBA8)
 	_dark_image = Image.create(TEX_SIZE, TEX_SIZE, false, Image.FORMAT_RGBA8)
 	for x in range(size):
@@ -2096,29 +2103,54 @@ func _create_chunked_collisions():
 	nav_region.bake_navigation_mesh()
 
 # ---------- 迷雾更新 ----------
-func apply_fog(explored: Array, visible: Array):
+func apply_fog(explored: Array, visible: Array) -> bool:
 	var size = _get_map_size()
-	if base_colors.is_empty() or terrain_grid.is_empty(): return
-	if explored.size() != size or visible.size() != size: return
-	if explored[0].size() != size or visible[0].size() != size: return
-	if _base_image == null or _dark_image == null: return
+	if base_colors.is_empty() or terrain_grid.is_empty(): return false
+	if explored.size() != size or visible.size() != size: return false
+	if explored[0].size() != size or visible[0].size() != size: return false
+	if _base_image == null or _dark_image == null or terrain_image == null or terrain_texture == null: return false
 
+	# 只重画探索/可见状态真正变化的格子。后期单位很多、视野每 0.5s
+	# 才变化一次，绝大多数格子状态不变；旧实现每次都把 100×100 格全部
+	# fill_rect/blit_rect 一遍，是后期主线程的固定开销。
+	var full := _fog_prev_size != size or _fog_prev_explored.is_empty() or _fog_prev_visible.is_empty()
+	if full:
+		_fog_prev_explored.clear()
+		_fog_prev_visible.clear()
+		for x in range(size):
+			_fog_prev_explored.append(explored[x].duplicate())
+			_fog_prev_visible.append(visible[x].duplicate())
+		_fog_prev_size = size
+
+	var changed := false
 	for x in range(size):
 		var x_start = int(floor(float(x) / size * TEX_SIZE))
 		var x_end = int(floor(float(x + 1) / size * TEX_SIZE))
+		var prev_explored_row: Array = _fog_prev_explored[x]
+		var prev_visible_row: Array = _fog_prev_visible[x]
 		for y in range(size):
+			var ex = explored[x][y]
+			var vis = visible[x][y]
+			if not full and prev_explored_row[y] == ex and prev_visible_row[y] == vis:
+				continue
 			var y_start = int(floor(float(y) / size * TEX_SIZE))
 			var y_end = int(floor(float(y + 1) / size * TEX_SIZE))
 			var rect := Rect2i(x_start, y_start, x_end - x_start, y_end - y_start)
-			if not explored[x][y]:
+			if not ex:
 				terrain_image.fill_rect(rect, Color(0.1, 0.1, 0.1, 1.0))
-			elif not visible[x][y]:
+			elif not vis:
 				# 整块拷贝预生成的压暗底图：比逐像素重算颜色快得多，同时保住草丛图案
 				terrain_image.blit_rect(_dark_image, rect, Vector2i(x_start, y_start))
 			else:
 				terrain_image.blit_rect(_base_image, rect, Vector2i(x_start, y_start))
+			prev_explored_row[y] = ex
+			prev_visible_row[y] = vis
+			changed = true
 
+	if not changed:
+		return false
 	terrain_texture.update(terrain_image)
+	return true
 
 # ---------- 工具函数 ----------
 

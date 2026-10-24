@@ -601,7 +601,8 @@ func _attack(target, delta):
 
 	# ½üÕ½·¶Î§ÉËº¦£¨³¤Ç¹±øµÈ£©
 	if damage_radius > 0 and attack_range <= 2.0:
-		var all_entities = get_tree().get_nodes_in_group("entities")
+		var bm_aoe = _get_bm()
+		var all_entities = bm_aoe.get_nearby_entities(global_position, damage_radius + 4.0) if bm_aoe else get_tree().get_nodes_in_group("entities")
 		for entity in all_entities:
 			if entity == self or not (entity is GameEntity) or entity.health <= 0:
 				continue
@@ -675,7 +676,9 @@ func _monk_heal(_target, delta):
 		return
 	var lowest = null
 	var lowest_pct: float = 2.0
-	for entity in get_tree().get_nodes_in_group("entities"):
+	var bm_heal = _get_bm()
+	var heal_candidates = bm_heal.get_nearby_entities(global_position, attack_range + 4.0) if bm_heal else get_tree().get_nodes_in_group("entities")
+	for entity in heal_candidates:
 		if not (entity is Army) or entity == self or entity.health <= 0: continue
 		if entity.team != team: continue
 		var dist = global_position.distance_to(entity.global_position)
@@ -851,7 +854,10 @@ func _return_to_deliver():
 func find_delivery_point() -> Building:
 	var best: Building = null
 	var best_dist = vision_range*10
-	for entity in get_tree().get_nodes_in_group("entities"):
+	# 农民每次回城交付都会调用；优先使用 battle 的 Building 缓存，避免全实体扫描
+	var bm = _get_bm()
+	var candidates = bm._buildings if bm else get_tree().get_nodes_in_group("entities")
+	for entity in candidates:
 		if entity is Building and entity.team == team and entity.health > 0:
 			if cargo.get("oil", 0) > 0:
 				if entity.entity_id == 23:   # ´¬Îë
@@ -920,7 +926,7 @@ func _find_enemy_in_range():
 			if entity.team == team: continue
 			if entity is Building and entity.team == team: continue
 		# Skip blacklisted (unreachable) targets
-		var bk = "%d,%d" % [int(entity.global_position.x), int(entity.global_position.z)]
+		var bk = Vector2i(int(entity.global_position.x), int(entity.global_position.z))
 		if _movement and _movement._blacklist.has(bk): continue
 		var h_diff = Vector2(entity.global_position.x - global_position.x, entity.global_position.z - global_position.z)
 		var dist = h_diff.length() - body_radius - entity.body_radius
@@ -1680,11 +1686,15 @@ func _is_unit_on_wall() -> bool:
 func _find_nearest_enemy_in_vision():
 	var best_dist = vision_range
 	var best_target = null
-	for entity in get_tree().get_nodes_in_group("entities"):
+	# 驻扎/守军单位空闲时每 0.3s 都会调用此函数。后期几十上百个守军若每个
+	# 都全量扫描 entities，会形成 O(n²) 的主线程热点；优先走空间索引。
+	var bm = _get_bm()
+	var candidates: Array = bm.get_nearby_enemies(global_position, vision_range, team, owner_peer_id) if bm else get_tree().get_nodes_in_group("entities")
+	for entity in candidates:
 		if entity == self or not is_instance_valid(entity) or entity.health <= 0: continue
+		if not (entity is GameEntity): continue
 		if entity is WorldResource: continue
 		if not _is_hostile_to(entity): continue
-		if not (entity is GameEntity): continue
 		if entity.get("_animal_type") != null and str(entity.get("_animal_type")) != "": continue  # 不自动攻击动物
 		var h_diff = Vector2(entity.global_position.x - global_position.x, entity.global_position.z - global_position.z)
 		var dist = h_diff.length() - body_radius - entity.body_radius

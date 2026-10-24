@@ -30,6 +30,7 @@ var income_rate: Dictionary = {}
 # 各资源采集人数（每帧刷新，移动端资源胶囊展开时读取）
 var gather_counts: Dictionary = {"gold": 0, "wood": 0, "stone": 0, "food": 0, "oil": 0}
 var minimap_timer: float = 0.0
+var _minimap_fog_version: int = -1
 
 var player_nation_label: Label
 var auto_attack_btn: Button
@@ -790,8 +791,11 @@ func _process(delta):
 					if map_node and map_node.has_method("get_base_colors"):
 						minimap.terrain_colors = map_node.get_base_colors()
 				var entities_info = []
-				for entity in bm.entities.get_children():
-					if entity is GameEntity and entity.health > 0:
+				# 用 battle 的存活实体缓存，避免每 0.5s 重新遍历 entities 子节点并做类型判断
+				if bm.has_method("_ensure_cache_fresh"):
+					bm._ensure_cache_fresh()
+				for entity in bm._all_entities:
+					if entity.health > 0:
 						entities_info.append({
 							"x": entity.global_position.x,
 							"z": entity.global_position.z,
@@ -801,7 +805,11 @@ func _process(delta):
 							"entity_id": entity.entity_id,
 							"owner_peer_id": entity.owner_peer_id
 						})
-				minimap.set_data(bm.explored_grid, bm.visible_grid, entities_info)
+				# 只有迷雾真正变化时才让小地图重建底图；单位点移动只重绘点
+				var fog_ver: int = int(bm.fog_version)
+				var terrain_dirty: bool = fog_ver != _minimap_fog_version
+				_minimap_fog_version = fog_ver
+				minimap.set_data(bm.explored_grid, bm.visible_grid, entities_info, terrain_dirty)
 
 	# 警报消息计时
 	if _alert_label and _alert_timer > 0:
@@ -813,7 +821,12 @@ func _process(delta):
 
 	health_bar_timer -= delta
 	if health_bar_timer <= 0:
-		health_bar_timer = HEALTH_BAR_UPDATE_INTERVAL
+		# 后期实体过多时把血条刷新降到约 12.5Hz；画面仍有连续感，但明显减少
+		# 大量 Label/Control 的投影与排版开销。
+		var bar_interval := HEALTH_BAR_UPDATE_INTERVAL
+		if bm._all_entities.size() > 220:
+			bar_interval *= 1.6
+		health_bar_timer = bar_interval
 		_update_health_bars()
 	# 更新单位统计（每秒一次）
 	if _unit_stats_timer <= 0:

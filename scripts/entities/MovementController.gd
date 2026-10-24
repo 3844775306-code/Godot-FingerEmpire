@@ -12,7 +12,9 @@ var astar_recalc_timer: float = 0.0
 const ASTAR_RECALC_INTERVAL: float = 2.0
 # 追击移动目标时目标位置每帧都在变；若每次变化都重算 A*（最多 1000 节点），
 # 大部队交战时每帧会跑数百次寻路。按单位错峰限频，保留路径跟随和最终接近。
-const ATTACK_PATH_COOLDOWN_MS: int = 500
+const ATTACK_PATH_COOLDOWN_MS: int = 700
+# 追击目标在小范围内移动时继续沿用现有路径，避免每 0.5~0.7s 为每个单位重跑一次 A*
+const ATTACK_TARGET_MOVE_TOLERANCE: float = 2.5
 var _last_attack_path_ms: int = -100000
 
 var _path_sphere: SphereMesh = null
@@ -50,6 +52,9 @@ func set_move_target(pos: Vector3, stop_range: float = 0.0):
 
 	var is_attack_move := stop_range > 0.0
 	if is_attack_move:
+		# 目标只挪动一点点时旧路径仍然可用，先不重算；等偏移超过容差或冷却到期再更新
+		if astar_path.size() > 0 and astar_target != Vector3.ZERO and astar_target.distance_to(pos) < ATTACK_TARGET_MOVE_TOLERANCE:
+			return
 		var now_ms := Time.get_ticks_msec()
 		# 首次追击按 unit id 分 16 个相位错峰，避免全军在同一帧集中跑 A*；
 		# 后续只加少量抖动，保证追击路径不会滞后太久。
@@ -329,7 +334,7 @@ static var _transport_frame: int = -1            # 运载船是移动的，水�
 static var _transport_team: int = -1
 
 func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Array:
-	var bm = _army.get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
+	var bm = _army._get_bm() as RTSBattleManager
 	if not bm: return []
 	var start = _army.global_position
 	var start_tile = bm.world_to_grid(start)

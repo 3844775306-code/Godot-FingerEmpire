@@ -15,6 +15,7 @@ enum LateTactic { NONE, HARASS, OVERWHELM, RAID, DEFEND }
 var phase: int = Phase.PRODUCTION
 var timer: float = 0.0
 var think_interval: float = 2.0  # overridden by difficulty in _ready
+var _think_ready: bool = false    # 难度对应的思考间隔只初始化一次
 var worker_allocate_timer: float = 0.0
 const WORKER_ALLOCATE_INTERVAL: float = 3.0
 var last_attack_time: float = -999.0
@@ -174,65 +175,72 @@ func _add_nation_special_unit():
 			wanted_units.append(uid)
 
 # ═══ Counting ═══
+# 统一走 battle 的实体缓存，避免每个统计函数都把 entities 子节点全扫一遍。
+func _ensure_battle_cache() -> void:
+	if battle and battle.has_method("_ensure_cache_fresh"):
+		battle._ensure_cache_fresh()
+
+func _cached_armies() -> Array:
+	_ensure_battle_cache()
+	return battle._armies
+
+func _cached_buildings() -> Array:
+	_ensure_battle_cache()
+	return battle._buildings
+
 func count_unit(id: int, include_queue: bool = true) -> int:
 	var cnt = 0
 	# Count existing units
-	for entity in battle.entities.get_children():
-		if entity is Army and entity.health > 0 and entity.entity_id == id:
+	for entity in _cached_armies():
+		if entity.entity_id == id:
 			if my_peer_id != -1 and entity.owner_peer_id != my_peer_id: continue
 			if my_peer_id == -1 and entity.team != my_team: continue
 			cnt += 1
 	# Count units in production queues（决策用；面板统计传 false，避免把队列当成已存在单位）
 	if include_queue:
-		for entity in battle.entities.get_children():
-			if entity is Building and entity.health > 0:
-				if my_peer_id != -1 and entity.owner_peer_id != my_peer_id: continue
-				if my_peer_id == -1 and entity.team != my_team: continue
-				for pid in entity.production_queue:
-					if pid == id: cnt += 1
+		for entity in _cached_buildings():
+			if my_peer_id != -1 and entity.owner_peer_id != my_peer_id: continue
+			if my_peer_id == -1 and entity.team != my_team: continue
+			for pid in entity.production_queue:
+				if pid == id: cnt += 1
 	return cnt
 
 func count_building(id: int) -> int:
 	var cnt = 0
-	for entity in battle.entities.get_children():
-		if entity is Building and entity.health > 0 and entity.entity_id == id:
+	for entity in _cached_buildings():
+		if entity.entity_id == id:
 			if my_peer_id != -1 and entity.owner_peer_id != my_peer_id: continue
 			if my_peer_id == -1 and entity.team != my_team: continue
 			cnt += 1
 	return cnt
 func count_military(peer: int) -> int:
 	var total = 0
-	for entity in battle.entities.get_children():
-		if not is_instance_valid(entity) or entity is GameEntity and entity.health <= 0: continue
-		if entity is Army:
-			if my_peer_id != -1 and entity.owner_peer_id != peer: continue
-			if my_peer_id == -1 and entity.team != peer: continue
-			if entity.entity_id != 10 and entity.entity_id != 14 and entity.entity_id not in [43,44,45,46,47,48,49,50,51]:
-				total += 1
+	for entity in _cached_armies():
+		if my_peer_id != -1 and entity.owner_peer_id != peer: continue
+		if my_peer_id == -1 and entity.team != peer: continue
+		if entity.entity_id != 10 and entity.entity_id != 14 and entity.entity_id not in [43,44,45,46,47,48,49,50,51]:
+			total += 1
 	# Count queued military units in production
-	for entity in battle.entities.get_children():
-		if entity is Building and entity.health > 0:
-			if my_peer_id != -1 and entity.owner_peer_id != peer: continue
-			if my_peer_id == -1 and entity.team != peer: continue
-			for pid in entity.production_queue:
-				if pid != 10 and pid != 14 and pid not in [43,44,45,46,47,48,49,50,51]:
-					total += 1
+	for entity in _cached_buildings():
+		if my_peer_id != -1 and entity.owner_peer_id != peer: continue
+		if my_peer_id == -1 and entity.team != peer: continue
+		for pid in entity.production_queue:
+			if pid != 10 and pid != 14 and pid not in [43,44,45,46,47,48,49,50,51]:
+				total += 1
 	return total
 
 func count_military_by_team(tm: int) -> int:
 	var total = 0
-	for entity in battle.entities.get_children():
-		if entity is Army and entity.health > 0:
-			if entity.team != tm: continue
-			if entity.entity_id != 10 and entity.entity_id != 14 and entity.entity_id not in [43,44,45,46,47,48,49,50,51]:
-				total += 1
+	for entity in _cached_armies():
+		if entity.team != tm: continue
+		if entity.entity_id != 10 and entity.entity_id != 14 and entity.entity_id not in [43,44,45,46,47,48,49,50,51]:
+			total += 1
 	# Count queued military units in production
-	for entity in battle.entities.get_children():
-		if entity is Building and entity.health > 0:
-			if entity.team != tm: continue
-			for pid in entity.production_queue:
-				if pid != 10 and pid != 14 and pid not in [43,44,45,46,47,48,49,50,51]:
-					total += 1
+	for entity in _cached_buildings():
+		if entity.team != tm: continue
+		for pid in entity.production_queue:
+			if pid != 10 and pid != 14 and pid not in [43,44,45,46,47,48,49,50,51]:
+				total += 1
 	return total
 # Check if any AI unit can see this entity
 func _is_visible_to_ai(target: GameEntity) -> bool:
@@ -263,6 +271,20 @@ func _refresh_visibility():
 			vision = float(battle.get_effective_vision(own))
 		sources.append([own.global_position, vision])
 	if sources.is_empty():
+		return
+	# 有空间索引时按视野源查询附近敌军并去重，避免“己方单位数 × 全图敌人数”的
+	# 双重循环；没有 battle 空间索引时保留原来的全量扫描兜底。
+	if battle.has_method("get_nearby_enemies"):
+		var seen: Dictionary = {}
+		for s in sources:
+			for e in battle.get_nearby_enemies(s[0], float(s[1]), my_team, my_peer_id):
+				if not (e is GameEntity) or e.health <= 0: continue
+				if entity_belongs_to_me(e): continue
+				if e is WorldResource: continue
+				var eid: int = e.get_instance_id()
+				if seen.has(eid): continue
+				seen[eid] = true
+				_visible_enemies.append(e)
 		return
 	for e in battle.entities.get_children():
 		if not (e is GameEntity): continue
@@ -641,8 +663,8 @@ func analyze_enemy_composition() -> Dictionary:
 
 # 检查是否有建筑能生产指定单位
 func _can_produce_unit(unit_id: int) -> bool:
-	for entity in battle.entities.get_children():
-		if entity is Building and entity.health > 0 and entity.build_timer <= 0:
+	for entity in _cached_buildings():
+		if entity.build_timer <= 0:
 			if not entity_belongs_to_me(entity): continue
 			for prod in entity.production_list:
 				if prod.unit_id == unit_id:
@@ -677,8 +699,11 @@ func _ready():
 	_water_crossing = AIWaterCrossingScript.new(self)
 
 func _process(delta):
-	# Set think interval based on difficulty (once)
-	if think_interval == 2.0:
+	# Set think interval based on difficulty (once) + 错开各 AI 的计时器。
+	# 多 AI 同时开局时，timer/worker/naval 都为 0，会在同一帧集中做全实体扫描和寻路，
+	# 造成明显的周期性卡顿；按 peer/instance id 相位错开可把峰值摊到不同帧。
+	if not _think_ready:
+		_think_ready = true
 		var diff = GameSettings.ai_difficulty
 		if battle is OnlineBattleManager and my_peer_id != -1:
 			diff = GameSettings.red_ai_difficulty if my_team == RTSConfig.Team.RED else GameSettings.blue_ai_difficulty
@@ -686,6 +711,11 @@ func _process(delta):
 		elif diff == GameSettings.AIDifficulty.NORMAL: think_interval = 1.75
 		elif diff == GameSettings.AIDifficulty.HARD: think_interval = 1.5
 		elif diff == GameSettings.AIDifficulty.HELL: think_interval = 1.0
+		var seed_id: int = my_peer_id if my_peer_id >= 0 else my_team
+		var phase: float = float((seed_id * 7 + get_instance_id() % 13) % 17) / 17.0
+		timer = think_interval * phase
+		worker_allocate_timer = WORKER_ALLOCATE_INTERVAL * phase
+		_naval_patrol_timer = NAVAL_PATROL_INTERVAL * phase
 	timer -= delta
 	_ai_income_timer -= delta
 	if _ai_res_snapshot.is_empty():
@@ -863,17 +893,17 @@ func decide(_delta):
 			phase = Phase.ASSAULT
 	if _water_crossing:
 		_water_crossing.tick(_delta)
-	if OS.is_debug_build() and Engine.get_process_frames() % 30 == 0:
+	if OS.is_debug_build() and (Engine.get_process_frames() + int(get_instance_id())) % 30 == 0:
 		update_debug_label()
 func get_team_castle(tm) -> Building:
-	for entity in battle.entities.get_children():
-		if entity is Building and entity.entity_id == 20 and entity.team == tm and entity.health > 0:
+	for entity in _cached_buildings():
+		if entity.entity_id == 20 and entity.team == tm:
 			return entity
 	return null
 
 func get_peer_castle(peer) -> Building:
-	for entity in battle.entities.get_children():
-		if entity is Building and entity.entity_id == 20:
+	for entity in _cached_buildings():
+		if entity.entity_id == 20:
 			if my_peer_id != -1 and entity.owner_peer_id == peer: return entity
 			if my_peer_id == -1 and entity.team == my_team: return entity
 	return null

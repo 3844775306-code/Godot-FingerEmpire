@@ -49,6 +49,7 @@ var current_build_menu: Control = null
 var explored_grid: Array = []
 var visible_grid: Array = []
 var fog_timer: float = 0.0
+var fog_version: int = 0             # 迷雾实际变化版本号，供小地图判断是否需要重建底图
 var map_modifiers: Dictionary = {}   # 当前地图的规则修正（视野/高地/浅滩等）
 
 # ==================== 游戏状态 ====================
@@ -67,6 +68,7 @@ var battle_stats = null          # 战斗统计器（累计 + 实时采样）
 var _team_castle_count: Dictionary = {}   # 单机2v2: 每队存活城堡数
 var game_time: float = 0.0
 var game_time_label: Label = null
+var _last_clock_secs: int = -1
 var gather_paused: bool = false
 var rally_mode: bool = false
 
@@ -99,7 +101,9 @@ var _cache_refresh_timer: float = 0.0
 const _SPATIAL_CELL_SIZE: float = 8.0
 var _spatial_cells: Dictionary = {}  # Vector2i -> Array[GameEntity]，随实体缓存重建
 # ==================== 墙体/梯子网格缓存（O(1) 查询，随实体缓存重建） ====================
-var _wall_cache_version: int = 0          # 每次实体缓存重建时递增，MovementController 据此判断墙集合是否失效
+var _wall_cache_version: int = 0          # 墙体/建筑布局实际变化时递增，MovementController 据此判断墙集合是否失效
+var _wall_layout_signature: int = 0       # 建筑/资源布局签名，避免实体缓存每 0.5s 刷新都让寻路墙缓存失效
+var _wall_signature_initialized: bool = false
 var _wall_entity_grid: Dictionary = {}    # Vector2i -> Building(城墙 id==27)，供 process_move 高度平滑 O(1) 查询
 var _ladder_entity_grid: Dictionary = {}  # Vector2i -> Building(梯子 id==8)，供 _has_adjacent_ladder O(8) 查询
 
@@ -113,6 +117,21 @@ var _diag_active_frame: int = 0
 var _diag_physics_heartbeat: int = 0
 var _fps_label: Label = null
 var _snap_rate_label: Label = null
+
+# ==================== 后期自动画质 ====================
+# 后期实体数量上来后，大量单位模型 + 实时阴影会把 GPU 压到 30~40 FPS。
+# 这里按真实 FPS 分档降低 3D 渲染分辨率和阴影，帧率恢复后再逐级还原。
+var _perf_quality_level: int = 0
+var _perf_sample_timer: float = 5.0
+var _perf_low_streak: int = 0
+var _perf_high_streak: int = 0
+var _perf_initialized: bool = false
+var _perf_base_scale: float = 1.0
+var _perf_light: DirectionalLight3D = null
+var _perf_light_shadow_original: bool = true
+var _perf_env: Environment = null
+var _perf_ssao_original: bool = false
+const PERF_LEVEL_SCALES: Array[float] = [1.0, 0.85, 0.72, 0.62]
 
 func _create_diag_label():
 	_fps_label = Label.new()
@@ -178,7 +197,18 @@ func _rebuild_entity_cache():
 			_wall_entity_grid[world_to_grid(b.global_position)] = b
 		elif b.entity_id == 8:
 			_ladder_entity_grid[world_to_grid(b.global_position)] = b
-	_wall_cache_version += 1
+	# 只有建筑/资源布局真的变化时才让寻路墙缓存失效。实体缓存本身每 0.5s
+	# 会因刷新而重建，若这里无条件 +1，所有单位每 0.5s 都会重新扫描全图建墙集合。
+	var layout_sig: int = 0
+	for e in _all_entities:
+		if e is Building:
+			layout_sig = hash(layout_sig + e.get_instance_id() * 31 + int(e.team) * 131)
+		elif e is WorldResource:
+			layout_sig = hash(layout_sig + e.get_instance_id() * 17)
+	if not _wall_signature_initialized or layout_sig != _wall_layout_signature:
+		_wall_layout_signature = layout_sig
+		_wall_signature_initialized = true
+		_wall_cache_version += 1
 	_entity_cache_dirty = false
 
 func mark_entity_cache_dirty():
@@ -2337,7 +2367,8 @@ func _update_fog_visibility():
 
 func _apply_fog():
 	if $Map and $Map.has_method("apply_fog"):
-		$Map.apply_fog(explored_grid, visible_grid)
+		if $Map.apply_fog(explored_grid, visible_grid):
+			fog_version += 1
 
 func _update_visibility():
 	if not entities: return
@@ -2652,9 +2683,13 @@ func _process(delta):
 	if diplomacy:
 		diplomacy.tick(game_time)
 	if game_time_label:
-		var mins = int(game_time / 60)
-		var secs = int(game_time) % 60
-		game_time_label.text = "%02d:%02d" % [mins, secs]
+		var secs_total := int(game_time)
+		# Label 文本每帧重设会触发 GUI 重新排版，秒数不变时不必更新
+		if secs_total != _last_clock_secs:
+			_last_clock_secs = secs_total
+			var mins = int(game_time / 60)
+			var secs = secs_total % 60
+			game_time_label.text = "%02d:%02d" % [mins, secs]
 
 	# ---- 诊断 FPS + 物理心跳 ----
 	if _fps_label and Engine.get_process_frames() % 10 == 0:
@@ -2673,10 +2708,10 @@ func _process(delta):
 			var dn = diff_names[clampi(GameSettings.ai_difficulty, 0, 3)]
 			var sr = get("_snap_sent_rate") if has_method("broadcast_snapshot") else 0
 			_snap_rate_label.text = "AI:%s  Snap:%d/s" % [dn, sr] if sr > 0 else "AI:%s" % dn
-			_fps_label.text = "FPS:%.0f | 实体:%d(A%d B%d) | 物理:%d | 步骤:%d" % [
+			_fps_label.text = "FPS:%.0f | 实体:%d(A%d B%d) | 物理:%d | 步骤:%d | 画质:%d" % [
 				Engine.get_frames_per_second(),
 				_all_entities.size(), _armies.size(), _buildings.size(),
-				phys_frames, _diag_step
+				phys_frames, _diag_step, _perf_quality_level
 			]
 		_diag_physics_heartbeat = phys_frames
 		_diag_step = (_diag_step + 1) % 1000
@@ -2748,6 +2783,97 @@ func _process(delta):
 	if _enemy_attack_cooldown <= 0:
 		_enemy_attack_cooldown = 5.0
 		_detect_enemy_near_base()
+
+	_tick_adaptive_quality(delta)
+
+# ==================== 后期自动画质 ====================
+func _tick_adaptive_quality(delta: float) -> void:
+	if game_over or DisplayServer.get_name() == "headless":
+		return
+	if not _perf_initialized:
+		_perf_initialized = true
+		if DisplayServer.get_name() == "headless":
+			return
+		var vp0 := get_viewport()
+		_perf_base_scale = vp0.scaling_3d_scale if vp0 else 1.0
+		_perf_light = _find_directional_light()
+		if _perf_light:
+			_perf_light_shadow_original = _perf_light.shadow_enabled
+		_perf_env = _find_world_environment()
+		if _perf_env:
+			_perf_ssao_original = _perf_env.ssao_enabled
+	# 光照/环境节点可能比战斗根节点稍晚就绪，缺失时在后续采样中再找一次
+	if _perf_light == null:
+		_perf_light = _find_directional_light()
+		if _perf_light:
+			_perf_light_shadow_original = _perf_light.shadow_enabled
+	if _perf_env == null:
+		_perf_env = _find_world_environment()
+		if _perf_env:
+			_perf_ssao_original = _perf_env.ssao_enabled
+	# 开局前 45 秒不采样，避开地图生成、加载和建筑一次性落地的波动
+	if game_time < 45.0:
+		return
+	_perf_sample_timer -= delta
+	if _perf_sample_timer > 0.0:
+		return
+	_perf_sample_timer = 2.0
+
+	var fps := Engine.get_frames_per_second()
+	if fps < 45.0:
+		_perf_low_streak += 1
+		_perf_high_streak = 0
+	elif fps > 56.0:
+		_perf_high_streak += 1
+		_perf_low_streak = 0
+	else:
+		_perf_low_streak = 0
+		_perf_high_streak = 0
+
+	# 连续 4 秒低于 45 才降档，避免交战时瞬时掉帧误触发；
+	# 连续 8 秒高于 56 才升档，避免画质来回跳。
+	if _perf_low_streak >= 2 and _perf_quality_level < PERF_LEVEL_SCALES.size() - 1:
+		_perf_quality_level += 1
+		_apply_perf_quality()
+	elif _perf_high_streak >= 4 and _perf_quality_level > 0:
+		_perf_quality_level -= 1
+		_apply_perf_quality()
+
+func _apply_perf_quality() -> void:
+	var vp := get_viewport()
+	if vp:
+		var scale_factor: float = PERF_LEVEL_SCALES[_perf_quality_level]
+		vp.scaling_3d_scale = clampf(_perf_base_scale * scale_factor, 0.5, 2.0)
+	if _perf_light and is_instance_valid(_perf_light):
+		# 第二档起关闭实时阴影；阴影是后期大量单位最主要的额外 GPU 开销之一
+		var want_shadow: bool = _perf_light_shadow_original and _perf_quality_level < 2
+		if _perf_light.shadow_enabled != want_shadow:
+			_perf_light.shadow_enabled = want_shadow
+	if _perf_env and is_instance_valid(_perf_env):
+		# 第一档就关闭 SSAO；全屏环境光遮蔽在几百个单位同屏时开销很高，关掉后画面差异很小
+		var want_ssao: bool = _perf_ssao_original and _perf_quality_level < 1
+		if _perf_env.ssao_enabled != want_ssao:
+			_perf_env.ssao_enabled = want_ssao
+
+func _find_world_environment() -> Environment:
+	var scene := get_tree().current_scene
+	if scene == null:
+		return null
+	var envs := scene.find_children("*", "WorldEnvironment", true, false)
+	for we in envs:
+		if we is WorldEnvironment and we.environment:
+			return we.environment
+	return null
+
+func _find_directional_light() -> DirectionalLight3D:
+	var scene := get_tree().current_scene
+	if scene == null:
+		return null
+	var lights := scene.find_children("*", "DirectionalLight3D", true, false)
+	for l in lights:
+		if l is DirectionalLight3D:
+			return l
+	return null
 
 # ==================== 工具函数 ====================
 func _ray_plane_intersection(ro, re, po, pn):
