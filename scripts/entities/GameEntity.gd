@@ -5,6 +5,7 @@ extends CharacterBody3D
 signal died
 
 const BuildingDeathEffect = preload("res://scripts/effects/BuildingDeathEffect.gd")
+const EntityDamageVisual = preload("res://scripts/effects/EntityDamageVisual.gd")
 
 var entity_id: int = 0
 var entity_type: int = 0        # 0=资源, 1=建筑, 2=军队
@@ -164,6 +165,19 @@ func _process(delta):
 		var bm = _get_bm()
 		if bm and bm.has_method("_update_entity_animation"):
 			bm._update_entity_animation(self)
+	# 血量变化需要同时反映到建筑残破/资源枯竭外观；低频刷新也能覆盖回血和升级。
+	if Engine.get_process_frames() % 30 == 0:
+		_refresh_damage_visual()
+
+# 只处理建筑和资源；军队的外观由模型动画负责。
+func _refresh_damage_visual() -> void:
+	if health <= 0.0 or max_health <= 0.0:
+		return
+	var ratio := clampf(health / max_health, 0.0, 1.0)
+	if self is Building:
+		EntityDamageVisual.update_building(self, ratio)
+	elif self is WorldResource:
+		EntityDamageVisual.update_resource(self, ratio)
 
 # 子类覆盖：运载船上的单位、城墙上的单位在保护物存活时免疫伤害。
 func is_immune_to_damage() -> bool:
@@ -258,6 +272,8 @@ func take_damage(amount: float, source = null):
 			bm.diplomacy.notify_military_attack(source.owner_peer_id, owner_peer_id)
 	if health <= 0:
 		die()
+	else:
+		_refresh_damage_visual()
 # 子类（Army）覆盖：是否播放沉水动画而不是毁坏模型/死亡动作
 func _should_sink_death() -> bool:
 	return false

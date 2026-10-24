@@ -3,6 +3,7 @@ extends Node3D
 const StatsScript = preload("res://scripts/core/BattleStats.gd")
 const StatsPanelScript = preload("res://scripts/ui/BattleStatsPanel.gd")
 const BuildingDeathEffect = preload("res://scripts/effects/BuildingDeathEffect.gd")
+const EntityDamageVisual = preload("res://scripts/effects/EntityDamageVisual.gd")
 enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ATTACK_SPEED, MELEE_ARMOR, SHIELD_ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH, GARRISONED, NATION, IN_ACTION_RANGE }
 enum EB { UPGRADE=0, MAX_UPGRADE, CAN_UPGRADE, BUILD_TIMER, MAX_BUILD, PROD_CURRENT, PROD_PROGRESS, PROD_QSIZE, UPGRADE_TIMER, MAX_UPGRADE_TIME, GARRISON_COUNT }
 # 与 RTSBattleManager.get_nation_name() 保持一致；客户端不跑服务端脚本，血条文字单独查表
@@ -682,6 +683,7 @@ func _update_single_entity(info):
 	node.rotation.y = info.get("rotation_y", 0.0)
 	node.visible = _should_entity_be_visible(info)
 	node.set_meta("snapshot_info", info)
+	_refresh_client_damage_visual(node, info)
 	# Client-side sound effects (detect state transitions, visible entities only)
 	var prev_info = node.get_meta("_prev_info") if node.has_meta("_prev_info") else {}
 	if not prev_info.is_empty() and _is_audible(node.global_position):
@@ -813,6 +815,18 @@ func _update_entity_animation(node: Node3D, info: Dictionary):
 		ap.speed_scale = spd
 		if ap.current_animation != anim:
 			ap.play(anim)
+
+func _refresh_client_damage_visual(node: Node3D, info: Dictionary) -> void:
+	var max_hp := float(info.get("max_health", 0.0))
+	var hp := float(info.get("health", 0.0))
+	if max_hp <= 0.0 or hp <= 0.0:
+		return
+	var ratio := clampf(hp / max_hp, 0.0, 1.0)
+	var entity_type := int(info.get("type", -1))
+	if entity_type == 1:
+		EntityDamageVisual.update_building(node, ratio)
+	elif entity_type == 0:
+		EntityDamageVisual.update_resource(node, ratio)
 
 func _apply_model_tint(node: Node, tint: Color):
 	for child in node.get_children():
@@ -948,6 +962,7 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 
 	var col_shape = CollisionShape3D.new()
 	var r = info["body_radius"]
+	entity.set_meta("_body_radius", float(r))
 	if info["type"] == 1:
 		var box = BoxShape3D.new()
 		box.size = Vector3(r*2, r*1.5, r*2)
