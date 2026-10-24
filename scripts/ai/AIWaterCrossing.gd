@@ -486,15 +486,17 @@ func _tick_transport(delta: float):
 	# 没有船坞就永远造不出运载船。优先保证己方登陆岸边有一座船坞，
 	# 而不是被动等待 AI 通用的“油田旁船坞”逻辑（很多地图近岸没有油田）。
 	_ensure_shore_shipyard()
-	# 必须凑够本次登陆波次要求的运载船和护航舰再出发。
-	# 波次规模由 _prepare_wave_targets() 在开始组织时按对局时间固定。
-	if _transports.size() < _wave_transport_target or _escorts.size() < _wave_escort_target:
-		if _transport_state != STATE_IDLE:
-			_abort_transport()
-			_prepare_wave_targets()
-		_ensure_transport_tech()
-		_ensure_transport_fleet()
-		_ensure_escort_ships()
+	# 只有“开始组织新波次”时才必须凑齐本次的全部运载船和护航舰。
+	# 舰队已经开始集结/出航后，个别船只战损不应让整波返航，
+	# 否则后期护航舰越多、损失一艘就越容易导致登陆部队被反复撤回。
+	if _transport_state == STATE_IDLE:
+		if _transports.size() < _wave_transport_target or _escorts.size() < _wave_escort_target:
+			_ensure_transport_tech()
+			_ensure_transport_fleet()
+			_ensure_escort_ships()
+			return
+	elif _transports.is_empty():
+		_abort_transport()
 		return
 	if _transport_state == STATE_IDLE:
 		_tick_fleet_idle(delta)
