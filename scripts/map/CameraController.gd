@@ -14,6 +14,12 @@ var edge_margin: int = 20   # 保留边缘滚动（可选）
 var drag_start: Vector2
 var is_dragging: bool = false
 
+# Ctrl + 中键拖拽旋转视角：绕拖动开始时屏幕中心的地面点水平旋转
+var is_rotating: bool = false
+var rotate_center: Vector3 = Vector3.ZERO
+var yaw_deg: float = 0.0
+const ROTATE_SENSITIVITY: float = 0.30   # 每像素对应的旋转角度（度）
+
 # 触摸拖拽相关
 var _touch_count: int = 0           # 当前触摸点数
 var touch_pan_active: bool = false  # 三指拖拽移动相机
@@ -47,6 +53,14 @@ func _input(event):
 	# ========== PC 鼠标操作 ==========
 	if event is InputEventMouseButton:
 		if event.button_index == MOUSE_BUTTON_MIDDLE:
+			# 按住 Ctrl 拖动中键 = 旋转视角；单独拖动中键仍是平移地图
+			if event.pressed and Input.is_key_pressed(KEY_CTRL):
+				is_rotating = true
+				is_dragging = false
+				rotate_center = _screen_center_ground()
+				drag_start = event.position
+				return
+			is_rotating = false
 			is_dragging = event.pressed
 			if event.pressed:
 				drag_start = event.position
@@ -54,6 +68,13 @@ func _input(event):
 			_apply_zoom_to(size - zoom_speed)
 		elif event.button_index == MOUSE_BUTTON_WHEEL_DOWN:
 			_apply_zoom_to(size + zoom_speed)
+
+	elif event is InputEventMouseMotion and is_rotating:
+		# Ctrl + 中键拖动：水平旋转，保持拖动开始时的地面焦点不动
+		var rdelta: float = event.position.x - drag_start.x
+		yaw_deg = fposmod(yaw_deg + rdelta * ROTATE_SENSITIVITY, 360.0)
+		drag_start = event.position
+		_rig_over_center(rotate_center)
 
 	elif event is InputEventMouseMotion and is_dragging:
 		# 鼠标中键拖拽移动相机
@@ -133,10 +154,9 @@ func _rig_over_center(center: Vector3):
 	var t = clamp((size - min_zoom) / max(1.0, max_zoom - min_zoom), 0.0, 1.0)
 	var pitch = deg_to_rad(lerpf(PITCH_NEAR_DEG, PITCH_FAR_DEG, t))
 	var height = lerpf(HEIGHT_AT_MIN, HEIGHT_AT_MAX, t)
-	# 水平朝向沿用当前相机相对焦点的方向（仅俯仰角与高度变化）
-	var to_center = center - global_position
-	var horiz = Vector3(to_center.x, 0.0, to_center.z)
-	var fwd = horiz.normalized() if horiz.length() > 0.01 else Vector3(0.0, 0.0, 1.0)
+	# 水平视线方向由 yaw 决定：0 度朝北看（相机在南侧），与原来的默认朝向一致
+	var yaw = deg_to_rad(yaw_deg)
+	var fwd = Vector3(-sin(yaw), 0.0, -cos(yaw))
 	var back = height / tan(pitch)  # 相机沿 fwd 反方向退后，使俯角与高度匹配
 	global_position = center - fwd * back + Vector3.UP * height
 	look_at(center, Vector3.UP)
@@ -181,6 +201,15 @@ func focus_on_ground(world_pos: Vector3) -> void:
 	dist = maxf(dist, 1.0)
 	global_position = target - fwd * dist
 	look_at(target, Vector3.UP)
+	# 跳转后相机朝向可能变了，同步 yaw，避免之后滚轮缩放把视角转回去
+	_sync_yaw_from_camera()
+
+# 用当前相机朝向反推 yaw，保证手动转向（定位跳转/退出跟随）后滚轮缩放不会跳回旧角度
+func _sync_yaw_from_camera() -> void:
+	var fwd = -global_transform.basis.z
+	if absf(fwd.x) < 0.0001 and absf(fwd.z) < 0.0001:
+		return
+	yaw_deg = rad_to_deg(atan2(-fwd.x, -fwd.z))
 
 # ═══ 跟随视角 ═══
 func is_following() -> bool:
@@ -217,6 +246,8 @@ func stop_follow():
 	size = _follow_saved.get("size", size)
 	projection = _follow_saved.get("projection", PROJECTION_ORTHOGONAL)
 	_follow_saved = {}
+	# 恢复原视角后同步 yaw，缩放时保持恢复出来的朝向
+	_sync_yaw_from_camera()
 	# 恢复被隐藏的单位模型；单位已死亡则保持隐藏（交给毁坏模型展示）
 	if not dead:
 		for n in _follow_hidden_nodes:
