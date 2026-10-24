@@ -30,7 +30,7 @@ static func randomize_nation_colors() -> void:
 	for i in range(mini(pool.size(), Nation.size())):
 		_nation_colors[i] = pool[i]
 
-# 联机客户端从服务器全量快照恢复同一套国家配色。
+# 联机客户端从服务器快照恢复同一套国家配色。
 static func set_nation_colors(colors: Dictionary) -> void:
 	_nation_colors.clear()
 	for key in colors:

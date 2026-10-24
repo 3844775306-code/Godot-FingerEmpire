@@ -322,6 +322,9 @@ func get_entity_config(entity_id: int) -> Dictionary:
 	return EntityDatabase.get_config(entity_id)
 
 func apply_snapshot(data: Dictionary):
+	# 快照总是携带本局随机国家配色；即使队伍尚未分配、快照暂不处理，也先同步配色。
+	if data.has("nation_colors"):
+		RTSConfig.set_nation_colors(data["nation_colors"])
 	var now = Time.get_ticks_msec()
 	var seq = data.get("seq", -1)
 	if player_team == -1:
@@ -363,9 +366,6 @@ func _safe_process_snapshot(data: Dictionary) -> bool:
 	return true
 
 func _process_snapshot(data: Dictionary):
-	# 全量快照会下发本局随机国家配色；必须先于实体创建/着色应用。
-	if data.has("nation_colors"):
-		RTSConfig.set_nation_colors(data["nation_colors"])
 	# 缓存人口
 	last_population = data.get("population", last_population)
 	# Sync game time from server
