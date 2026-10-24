@@ -81,6 +81,16 @@ func _invalidate_cache():
 	_cached_battle = null
 	_cached_map = null
 
+func _configure_steam_low_latency():
+	# SteamMultiplayerPeer 默认 no_delay/no_nagle 都是 false：小包会被 Steam
+	# Sockets 合并/延迟发送。指令是低频小包，默认配置下客户端点击后可能要等
+	# 一次批处理周期才能到服务器，表现为稳定的“约 2 秒才响应”。
+	# 这两个开关只影响发送时机，不改变可靠性/顺序，对本游戏的低频指令是安全的。
+	if peer is SteamMultiplayerPeer:
+		peer.no_delay = true
+		peer.no_nagle = true
+		print("[Steam] transport low-latency enabled: no_delay=", peer.no_delay, " no_nagle=", peer.no_nagle)
+
 func start_steam_server():
 	use_steam = true
 	max_players = get_max_players()
@@ -88,11 +98,13 @@ func start_steam_server():
 	print("[Steam] Starting P2P server, impl=", impl)
 	peer = SteamMultiplayerPeer.new()
 	print("[Steam] Host SteamMultiplayerPeer instance class: ", peer.get_class())
+	_configure_steam_low_latency()
 	var err = peer.create_host(0)
 	if err != OK:
 		print("[Steam] P2P create_host FAILED: err=", err)
 		emit_signal("connection_failed", "Steam server failed (err=%d): unable to create listen socket" % err)
 		return
+	_configure_steam_low_latency()
 	multiplayer.multiplayer_peer = peer
 	mode = Mode.SERVER
 	game_started = false
@@ -109,6 +121,7 @@ func _steam_connect_with_retry(host_id: int, attempt: int):
 	peer = SteamMultiplayerPeer.new()
 	# 检测实例类名
 	print("[Steam] SteamMultiplayerPeer instance class: ", peer.get_class())
+	_configure_steam_low_latency()
 	var err = peer.create_client(host_id, 0)
 	if err != OK:
 		if attempt < 8:
@@ -121,6 +134,7 @@ func _steam_connect_with_retry(host_id: int, attempt: int):
 		_print_steam_connection_diag(host_id, err)
 		emit_signal("connection_failed", "Steam P2P failed (err=%d): unable to reach host. Ensure both players are online and Steam relay is working." % err)
 		return
+	_configure_steam_low_latency()
 	multiplayer.multiplayer_peer = peer
 	mode = Mode.CLIENT
 	print("[Steam] P2P connected to host Steam ID: ", host_id)
