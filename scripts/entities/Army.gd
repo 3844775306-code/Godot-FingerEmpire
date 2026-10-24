@@ -2202,8 +2202,10 @@ func _process_cart(delta):
 			if not owner:
 				_cart_state = CartState.IDLE
 				return
-			var owner_forward = -Vector3(cos(owner.rotation.y), 0, -sin(owner.rotation.y))
-			var target_pos = owner.global_position + owner_forward * CART_FOLLOW_DIST
+			# Godot 单位前方是 -Z：rotation.y 后的前方向为 (-sin, 0, -cos)，
+			# 取反即正后方 (sin, 0, cos)。旧代码用的是 (-cos, 0, sin)，实际是左侧。
+			var back_dir := Vector3(sin(owner.rotation.y), 0, cos(owner.rotation.y))
+			var target_pos = owner.global_position + back_dir * CART_FOLLOW_DIST
 			target_pos.y = global_position.y
 			global_position = global_position.lerp(target_pos, min(delta * 3.0, 1.0))
 			rotation.y = owner.rotation.y 
