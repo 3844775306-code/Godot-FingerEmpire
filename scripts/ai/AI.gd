@@ -1536,10 +1536,23 @@ func _ai_garrison_officials():
 		if target: entity._garrison_target_id = target.get_instance_id(); entity.move_to(target.global_position)
 
 # ═══ Hunting ═══
+# 沙漠类地图食物资源几乎为零、全靠兽群：狩猎要更频繁、范围更大，并允许农民一起上
+func _is_hunting_heavy_map() -> bool:
+	if String(GameSettings.map_id) == "desert":
+		return true
+	# 其它把 food 资源权重压到 0 的自定义图，同样按「以狩猎为食」处理
+	var map = battle.get_node_or_null("Map")
+	if map and map.get("map_preset") is Dictionary:
+		var res: Dictionary = map.map_preset.get("resources", {})
+		if res.has("food") and float(res.get("food", 1.0)) <= 0.0:
+			return true
+	return false
+
 func _ai_hunt_animals(delta):
 	_hunt_timer -= delta
 	if _hunt_timer > 0: return
-	_hunt_timer = 120.0
+	var heavy: bool = _is_hunting_heavy_map()
+	_hunt_timer = 45.0 if heavy else 120.0
 
 	# Collect idle military units (not peasants, ships, merchants, officials)
 	var idle_land = []   # land-capable
@@ -1557,19 +1570,32 @@ func _ai_hunt_animals(delta):
 		if e.water_capable: idle_water.append(e)
 		else: idle_land.append(e)
 
+	# 沙漠图食物全靠狩猎：把空闲农民也编入猎手（农民对动物有 10 倍伤害）
+	if heavy:
+		for e in battle.entities.get_children():
+			if not (e is Army) or e.health <= 0: continue
+			if e.entity_id != 10: continue
+			if not entity_belongs_to_me(e): continue
+			if _is_held_by_garrison(e): continue
+			if e.current_order != "" or e.current_target != null: continue
+			idle_land.append(e)
+
 	if idle_land.is_empty() and idle_water.is_empty(): return
 
 	var castle = get_peer_castle(my_peer_id)
 	if not castle: return
 
-	# Find animals within 30 units
+	# Find animals within 30 units（沙漠图放宽到 60，兽群分布更散）
+	var search_r: float = 60.0 if heavy else 30.0
+	var swarm_limit: int = 6 if heavy else 3
+	var max_hunters: int = 10 if heavy else 5
 	var animals = []
 	for e in battle.entities.get_children():
 		if e is Army and e.health > 0:
 			var at = e.get("_animal_type")
 			if at != null and str(at) != "":
 				var d = castle.global_position.distance_to(e.global_position)
-				if d < 30.0:
+				if d < search_r:
 					animals.append({"entity": e, "dist": d, "is_fish": (at == "fish")})
 	if animals.is_empty(): return
 	animals.sort_custom(func(a, b): return a.dist < b.dist)
@@ -1580,15 +1606,15 @@ func _ai_hunt_animals(delta):
 		var existing = 0
 		for e in battle.entities.get_children():
 			if e is Army and entity_belongs_to_me(e) and e.current_target == ai.entity: existing += 1
-		if existing < 3: hunt_target = ai.entity; is_fish_target = ai.is_fish; break
+		if existing < swarm_limit: hunt_target = ai.entity; is_fish_target = ai.is_fish; break
 	if not hunt_target: return
 
-	# Select up to 5 hunters — strict water/land separation, no cross-terrain
+	# Select hunters — strict water/land separation, no cross-terrain
 	var hunters = []
 	var pool = idle_water if is_fish_target else idle_land
 	if pool.is_empty(): return  # no suitable units for this terrain
 	for u in pool:
-		if hunters.size() >= 5: break
+		if hunters.size() >= max_hunters: break
 		hunters.append(u)
 	if hunters.is_empty(): return
 
