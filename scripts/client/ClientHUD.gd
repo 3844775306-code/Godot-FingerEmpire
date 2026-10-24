@@ -3,45 +3,38 @@ extends Control
 
 var _mobile_hud = null    # 移动端界面装配器（仅触屏设备创建）
 
-var gold_label: Label
-var wood_label: Label
-var stone_label: Label
-var food_label: Label
-var oil_label: Label
-var pop_label: Label
-var res_bars: Dictionary = {}
-var pop_bar: ProgressBar
-var cli_res_name_lbls: Dictionary = {}
-var cli_gather_timer: float = 0.0
-var cli_income_timer: float = 0.0
-var cli_res_snapshot: Dictionary = {}
-var cli_res_income: Dictionary = {}
-var cli_income_rate: Dictionary = {}
-var gather_labels: Dictionary = {}
-var res_snapshot: Dictionary = {}
-var snapshot_timer: float = 0.0
-var res_income: Dictionary = {"gold":0,"wood":0,"stone":0,"food":0,"oil":0} 
+# 最近一次快照下发的经济数据（统计面板用；原左下角资源卡已移除）
+var _last_res: Dictionary = {}
+var _last_limits: Dictionary = {}
+var gather_counts: Dictionary = {}
+var income_rate: Dictionary = {}
 
 var attack_all_btn: Button
 var retreat_all_btn: Button
 var auto_attack_btn: Button
 var rally_btn: Button
 
-var nation_bonus_label: Label
-var player_nation_label: Label
-var enemy_nation_label: Label
-
 var player_nation: int = -1
 var enemy_nation: int = -1
 
-# ==================== 玩家单位统计面板 ====================
+# ==================== 玩家单位统计面板（布局对齐单机版 HUD） ====================
 var unit_stats_panel: Control = null
 var unit_stats_visible: bool = true
-var _stats_header_rtl: RichTextLabel
+var _stats_title: RichTextLabel
+var _stats_bonus: Label
+var _stats_mil_title: RichTextLabel
+var _stats_bld_title: RichTextLabel
+var _stats_eco_title: RichTextLabel
 var _stats_mil_rtl: RichTextLabel
 var _stats_bld_rtl: RichTextLabel
+var _stats_eco_rtl: RichTextLabel
 var _stats_pop_bar: ProgressBar
 var _stats_pop_label: Label
+var _stats_res_labels: Dictionary = {}
+var _stats_res_bars: Dictionary = {}
+var _stats_res_info: Dictionary = {}
+var _stats_castle_bar: HealthBarControl
+var _stats_castle_label: Label
 var _toggle_stats_btn: Button
 var _unit_stats_timer: float = 1.0
 
@@ -68,11 +61,36 @@ func _get_nation_name(nation: int) -> String:
 		_: return "未知"
 
 
+# 国家特色：标题用短描述，下面一行用完整描述（与单机版 HUD 一致）
+func _nation_trait_short(nation: int) -> String:
+	return NationBonuses.get_trait_short(nation)
+
+func _nation_trait_full(nation: int) -> String:
+	return NationBonuses.get_trait_full(nation)
+
+
 func set_nations(p_nation: int, e_nation: int):
 	player_nation = p_nation
 	enemy_nation = e_nation
-	player_nation_label.text = "👑 我方国家: %s" % _get_nation_name(p_nation)
-	enemy_nation_label.text = "⚔️ 敌方国家: %s" % _get_nation_name(e_nation)
+	# 国家名与特性直接显示在统计面板标题里（单机版同款布局，不再单独放国家面板）
+	if _stats_title and _stats_bonus:
+		_refresh_stats_nation()
+
+
+func _refresh_stats_nation() -> void:
+	if _stats_title == null or _stats_bonus == null:
+		return
+	var nation: int = player_nation
+	if nation < 0:
+		var renderer = get_tree().get_first_node_in_group("client_renderer")
+		if renderer:
+			nation = int(renderer.my_nation)
+	if nation < 0:
+		_stats_title.text = "[color=#5af]👑 未知[/color]"
+		_stats_bonus.text = ""
+		return
+	_stats_title.text = "[color=#5af]👑 %s[/color] · [color=#ffd34f]%s[/color]" % [_get_nation_name(nation), _nation_trait_short(nation)]
+	_stats_bonus.text = _nation_trait_full(nation)
 
 
 # ==================== 单位统计面板创建 ====================
@@ -80,11 +98,11 @@ func _create_stats_toggle_button():
 	_toggle_stats_btn = Button.new()
 	_toggle_stats_btn.name = "StatsToggleButton"
 	_toggle_stats_btn.text = "📊 统计"
-	_toggle_stats_btn.position = Vector2(10, 660)
+	_toggle_stats_btn.position = Vector2(620, 10)
 	_toggle_stats_btn.toggle_mode = true
 	_toggle_stats_btn.button_pressed = true
-	_toggle_stats_btn.custom_minimum_size = Vector2(200, 50)
-	UITheme.apply_muted_button(_toggle_stats_btn, UITheme.FONT_LG)
+	_toggle_stats_btn.custom_minimum_size = Vector2(140, 32)
+	UITheme.apply_muted_button(_toggle_stats_btn, UITheme.FONT_MD)
 	_toggle_stats_btn.pressed.connect(_on_toggle_stats_pressed)
 	add_child(_toggle_stats_btn)
 	UITheme.hover_scale(_toggle_stats_btn)
@@ -108,54 +126,131 @@ func _create_unit_stats_panel():
 	unit_stats_panel.name = "PlayerUnitStats"
 	unit_stats_panel.z_index = 100
 	unit_stats_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	unit_stats_panel.position = Vector2(1960, 950)
+	# 与单机版完全一致：左上角 600×560
+	unit_stats_panel.position = Vector2(10, 10)
+	unit_stats_panel.size = Vector2(600, 560)
 
-	# 背景（皇庭卡：羊皮纸底 + 金边 + 顶部金强调条）
+	# 与单机版一致的暗色圆角底板 + 金边
 	var bg = Panel.new()
 	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	bg.add_theme_stylebox_override("panel", UITheme.card_style(UITheme.GOLD))
+	var bg_style = StyleBoxFlat.new()
+	bg_style.bg_color = Color(UITheme.INK, UITheme.ALPHA_BG)
+	bg_style.corner_radius_top_left = 8
+	bg_style.corner_radius_top_right = 8
+	bg_style.corner_radius_bottom_left = 8
+	bg_style.corner_radius_bottom_right = 8
+	bg_style.border_width_left = 2
+	bg_style.border_width_right = 2
+	bg_style.border_width_top = 2
+	bg_style.border_width_bottom = 2
+	bg_style.border_color = Color(UITheme.GOLD, UITheme.ALPHA_BORDER)
+	bg.add_theme_stylebox_override("panel", bg_style)
 	unit_stats_panel.add_child(bg)
 
 	var vb = VBoxContainer.new()
-	vb.position = Vector2(10, 8)
-	vb.add_theme_constant_override("separation", 2)
+	vb.position = Vector2(12, 10)
+	vb.custom_minimum_size = Vector2(576, 0)
+	vb.add_theme_constant_override("separation", 4)
 	unit_stats_panel.add_child(vb)
 
-	# 标题
-	var title = _make_stats_rtl()
-	title.text = "[color=#C9A84C]👑 ◈ 我方军力统计[/color]"
-	title.add_theme_font_size_override("font_size", 20)
-	vb.add_child(title)
+	# 标题：国家名 + 国家特色
+	_stats_title = _make_stats_rtl()
+	_stats_title.add_theme_font_size_override("font_size", 24)
+	vb.add_child(_stats_title)
+
+	_stats_bonus = Label.new()
+	_stats_bonus.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_stats_bonus.custom_minimum_size = Vector2(576, 0)
+	_stats_bonus.add_theme_font_size_override("font_size", 14)
+	_stats_bonus.add_theme_color_override("font_color", Color(UITheme.PARCHMENT, 0.85))
+	vb.add_child(_stats_bonus)
 
 	# 人口
 	var pop_hbox = HBoxContainer.new()
+	pop_hbox.add_theme_constant_override("separation", 8)
 	_stats_pop_label = Label.new()
-	_stats_pop_label.add_theme_font_size_override("font_size", 15)
+	_stats_pop_label.add_theme_font_size_override("font_size", 16)
 	_stats_pop_label.add_theme_color_override("font_color", Color.WHITE)
 	_stats_pop_label.text = "👥 人口: 0/0"
 	pop_hbox.add_child(_stats_pop_label)
-
-	_stats_pop_bar = _make_stats_bar(UITheme.RES_POP)
-	_stats_pop_bar.custom_minimum_size = Vector2(200, 8)
+	_stats_pop_bar = _make_stats_bar(Color(0.25, 0.65, 1.0))
+	_stats_pop_bar.custom_minimum_size = Vector2(300, 8)
 	pop_hbox.add_child(_stats_pop_bar)
 	vb.add_child(pop_hbox)
 
-	# 军队
-	vb.add_child(_make_stats_section("⚔️ 军队"))
+	# 五项资源：图标 + 数值 + 细进度条（替代原左下角资源 HUD）
+	var res_grid = GridContainer.new()
+	res_grid.columns = 5
+	res_grid.add_theme_constant_override("h_separation", 6)
+	vb.add_child(res_grid)
+	var res_cfg = [
+		["gold", UITheme.RES_GOLD], ["wood", UITheme.RES_WOOD], ["stone", UITheme.RES_STONE],
+		["food", UITheme.RES_FOOD], ["oil", UITheme.RES_OIL],
+	]
+	for rc in res_cfg:
+		var key: String = rc[0]
+		var col: Color = rc[1]
+		var col_vb = VBoxContainer.new()
+		col_vb.custom_minimum_size = Vector2(108, 0)
+		var head = Label.new()
+		head.text = "%s %s" % [UITheme.RESOURCE_ICONS.get(key, "◆"), UITheme.RESOURCE_NAMES.get(key, key)]
+		head.add_theme_font_size_override("font_size", 13)
+		head.add_theme_color_override("font_color", col)
+		col_vb.add_child(head)
+		var val = Label.new()
+		val.add_theme_font_size_override("font_size", 16)
+		val.add_theme_color_override("font_color", Color.WHITE)
+		val.text = "0"
+		col_vb.add_child(val)
+		_stats_res_labels[key] = val
+		var rbar = _make_stats_bar(col)
+		rbar.custom_minimum_size = Vector2(100, 5)
+		col_vb.add_child(rbar)
+		_stats_res_bars[key] = rbar
+		var info = Label.new()
+		info.add_theme_font_size_override("font_size", 10)
+		info.add_theme_color_override("font_color", Color(UITheme.PARCHMENT, 0.7))
+		info.text = "0人 +0.0/s"
+		col_vb.add_child(info)
+		_stats_res_info[key] = info
+		res_grid.add_child(col_vb)
+
+	# 主城血量
+	var castle_hbox = HBoxContainer.new()
+	castle_hbox.add_theme_constant_override("separation", 8)
+	_stats_castle_label = Label.new()
+	_stats_castle_label.add_theme_font_size_override("font_size", 16)
+	_stats_castle_label.add_theme_color_override("font_color", Color(UITheme.PARCHMENT))
+	_stats_castle_label.text = "🏰 主城 0/0"
+	castle_hbox.add_child(_stats_castle_label)
+	_stats_castle_bar = HealthBarControl.new()
+	_stats_castle_bar.custom_minimum_size = Vector2(320, 12)
+	castle_hbox.add_child(_stats_castle_bar)
+	vb.add_child(castle_hbox)
+
+	# 经济（农民/采集船/商人/手推车/贸易车/运载船/官员）
+	_stats_eco_title = _make_stats_section("💰 经济")
+	vb.add_child(_stats_eco_title)
+	_stats_eco_rtl = _make_stats_rtl()
+	_stats_eco_rtl.add_theme_font_size_override("font_size", 14)
+	vb.add_child(_stats_eco_rtl)
+
+	# 军队（总数直接跟在分栏标题后）
+	_stats_mil_title = _make_stats_section("⚔️ 军队")
+	vb.add_child(_stats_mil_title)
 	_stats_mil_rtl = _make_stats_rtl()
 	_stats_mil_rtl.add_theme_font_size_override("font_size", 14)
 	vb.add_child(_stats_mil_rtl)
 
 	# 建筑
-	vb.add_child(_make_stats_section("🏰 建筑"))
+	_stats_bld_title = _make_stats_section("🏰 建筑")
+	vb.add_child(_stats_bld_title)
 	_stats_bld_rtl = _make_stats_rtl()
 	_stats_bld_rtl.add_theme_font_size_override("font_size", 14)
 	vb.add_child(_stats_bld_rtl)
 
-	# 添加到场景
 	add_child(unit_stats_panel)
-	unit_stats_panel.custom_minimum_size = Vector2(400, 0)
-	unit_stats_panel.size = Vector2(420, 380)
+	_refresh_stats_nation()
 
 func _make_stats_rtl() -> RichTextLabel:
 	var r = RichTextLabel.new()
@@ -188,11 +283,11 @@ func _make_stats_section(title: String) -> RichTextLabel:
 	var r = RichTextLabel.new()
 	r.bbcode_enabled = true
 	r.fit_content = true
-	r.text = "[color=#C9A84C]▸ %s[/color]" % title
+	r.text = "[color=#5af]▸ %s[/color]" % title
 	r.add_theme_font_size_override("font_size", 15)
 	return r
 
-# 更新单位统计（从 ClientRenderer 的 entity_nodes 读取）
+# 更新单位统计（从 ClientRenderer 的 entity_nodes + 最近一次快照资源读取；布局与单机版一致）
 func _update_unit_stats():
 	if not unit_stats_panel or not unit_stats_visible:
 		return
@@ -201,16 +296,31 @@ func _update_unit_stats():
 	if not renderer:
 		return
 
-	var my_peer_id = renderer.my_peer_id
-	var my_team = renderer.my_team if my_peer_id != -1 else renderer.player_team
+	var my_peer_id: int = renderer.my_peer_id
+	var my_team: int = renderer.my_team if my_peer_id != -1 else renderer.player_team
 	if my_team == -1:
 		return
 
-	# 更新人口
-	var pop = renderer.last_population if renderer.last_population else {"current": 0, "max": 0}
+	# 国家标题 / 国家特性
+	_refresh_stats_nation()
+
+	# 人口
+	var pop: Dictionary = renderer.last_population if renderer.last_population else {"current": 0, "max": 0}
 	if _stats_pop_label and _stats_pop_bar:
-		_stats_pop_label.text = "👥 人口: %d/%d" % [pop.get("current", 0), pop.get("max", 0)]
-		_stats_pop_bar.value = min(float(pop.get("current", 1)) / max(pop.get("max", 1), 1) * 100, 100)
+		_stats_pop_label.text = "👥 人口: %d/%d" % [int(pop.get("current", 0)), int(pop.get("max", 0))]
+		_stats_pop_bar.value = minf(float(pop.get("current", 1)) / maxf(float(pop.get("max", 1)), 1.0) * 100.0, 100.0)
+
+	# 五项资源：当前/上限 + 采集人数 + 增速（接管原左下角资源 HUD 的信息）
+	for key in ["gold", "wood", "stone", "food", "oil"]:
+		var lbl: Label = _stats_res_labels.get(key)
+		if lbl:
+			lbl.text = "%d/%d" % [int(_last_res.get(key, 0)), int(_last_limits.get(key, 500))]
+		var rb: ProgressBar = _stats_res_bars.get(key)
+		if rb:
+			rb.value = clampf(float(_last_res.get(key, 0)) / maxf(float(_last_limits.get(key, 500)), 1.0) * 100.0, 0.0, 100.0)
+		var info: Label = _stats_res_info.get(key)
+		if info:
+			info.text = "%d人 %+.1f/s" % [int(gather_counts.get(key, 0)), float(income_rate.get(key, 0.0))]
 
 	# 统计单位 - 从 entity_nodes 的 snapshot_info 中读取
 	var unit_names = {
@@ -227,7 +337,7 @@ func _update_unit_stats():
 	}
 	var building_names = {
 		7: "桥", 8: "梯子",
-		20: "城堡", 21: "兵营", 22: "仓库", 23: "船坞", 24: "攻城车间",
+		20: "主城", 21: "兵营", 22: "仓库", 23: "船坞", 24: "攻城车间",
 		25: "箭塔", 26: "炮塔", 27: "城墙", 28: "民居", 29: "重装武器厂",
 		41: "瞭望塔", 42: "书院", 52: "集市", 53: "城堡", 54: "修道院", 64: "炮台"
 	}
@@ -235,7 +345,8 @@ func _update_unit_stats():
 	var unit_counts = {}
 	var building_counts = {}
 	var building_levels = {}
-	var under_construction = 0
+	var under_construction := 0
+	var castle_info: Dictionary = {}
 
 	for id in renderer.entity_nodes.keys():
 		var node = renderer.entity_nodes[id]
@@ -244,100 +355,102 @@ func _update_unit_stats():
 		var info = node.get_meta("snapshot_info")
 		if not info: continue
 
-		# Check if entity belongs to this player
-		var belongs = false
+		# 只统计自己的实体（2v2/3v3 按 peer，1v1 按队伍）
+		var belongs := false
 		if my_peer_id != -1:
-			belongs = (info.get("owner_peer_id", -1) == my_peer_id)
+			belongs = (int(info.get("owner_peer_id", -1)) == my_peer_id)
 		else:
-			belongs = (info.get("team", -1) == my_team)
+			belongs = (int(info.get("team", -1)) == my_team)
 		if not belongs: continue
-		if info.get("health", 0) <= 0: continue
+		if int(info.get("health", 0)) <= 0: continue
 
-		var eid = info.get("entity_id", -1)
-		var etype = info.get("type", -1)
+		var eid: int = int(info.get("entity_id", -1))
+		var etype: int = int(info.get("type", -1))
 
 		if etype == 2:  # Army
 			unit_counts[eid] = unit_counts.get(eid, 0) + 1
 		elif etype == 1:  # Building
-			if info.get("build_timer", 0) > 0:
+			if int(info.get("build_timer", 0)) > 0:
 				under_construction += 1
 				continue
 			building_counts[eid] = building_counts.get(eid, 0) + 1
-			var lv = info.get("upgrade_level", info.get("level", 1))
+			var lv: int = int(info.get("upgrade_level", info.get("level", 1)))
 			if not building_levels.has(eid) or building_levels[eid] < lv:
 				building_levels[eid] = lv
+			if eid == 20 and castle_info.is_empty():
+				castle_info = info
+
+	# 主城血量（与单机版一致）
+	if _stats_castle_bar and _stats_castle_label:
+		if not castle_info.is_empty():
+			var chp: float = float(castle_info.get("health", 0.0))
+			var cmax: float = maxf(float(castle_info.get("max_health", chp)), 1.0)
+			var ccolor: Color = renderer.my_color
+			if ccolor == Color.WHITE:
+				ccolor = UITheme.SAPPHIRE if my_team == RTSConfig.Team.BLUE else UITheme.VERMILION
+			_stats_castle_bar.visible = true
+			_stats_castle_bar.update_bar(chp, cmax, my_team, ccolor)
+			_stats_castle_label.text = "🏰 主城 Lv.%d %d/%d" % [int(castle_info.get("upgrade_level", 1)), int(chp), int(cmax)]
+		else:
+			_stats_castle_bar.visible = false
+			_stats_castle_label.text = "🏰 主城 已失守"
 
 	# 军用 ID 与展示列表共用同一组，保证总数与明细一致
 	var military_ids = [11, 12, 13, 15, 16, 17, 18, 19, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 55, 56, 57, 58, 59, 65, 66]
-	var military_total = 0
+	var military_total := 0
 	for uid in military_ids:
-		military_total += unit_counts.get(uid, 0)
+		military_total += int(unit_counts.get(uid, 0))
+	var building_total := 0
+	for bid in building_counts:
+		building_total += int(building_counts[bid])
+	var under_txt := ""
+	if under_construction > 0:
+		under_txt = "    [color=#caa]🏗️ 在建 %d[/color]" % under_construction
+	if _stats_mil_title:
+		_stats_mil_title.text = "[color=#5af]▸ ⚔️ 军队 %d[/color]" % military_total
+	if _stats_bld_title:
+		_stats_bld_title.text = "[color=#5af]▸ 🏰 建筑 %d[/color]%s" % [building_total, under_txt]
 
-	var military_lines = []
+	# 经济单位（农民、采集船、商人、手推车、贸易车、运载船、官员）
+	var eco_ids = [10, 14, 5, 6, 9, 43, 44, 45, 51, 46, 47, 48, 49, 50]
+	var eco_total := 0
 	var eco_lines = []
-	# 经济单位
-	for uid in [10, 14, 5, 6, 9]:
-		var cnt = unit_counts.get(uid, 0)
+	for uid in eco_ids:
+		var cnt: int = int(unit_counts.get(uid, 0))
+		eco_total += cnt
 		if cnt > 0:
 			var name = unit_names.get(uid, str(uid))
 			eco_lines.append("[color=#8c8]%s %s[/color]:[color=white]%d[/color]" % [UITheme.entity_emoji(uid, 2), name, cnt])
+	if _stats_eco_title:
+		_stats_eco_title.text = "[color=#5af]▸ 💰 经济 %d[/color]" % eco_total
+	if _stats_eco_rtl:
+		_stats_eco_rtl.text = "[color=gray](无经济单位)[/color]" if eco_lines.is_empty() else " ".join(eco_lines)
+
 	# 战斗单位
+	var military_lines = []
 	for uid in military_ids:
-		var cnt = unit_counts.get(uid, 0)
+		var cnt: int = int(unit_counts.get(uid, 0))
 		if cnt > 0:
 			var name = unit_names.get(uid, str(uid))
 			military_lines.append("[color=#aaa]%s %s[/color]:[color=white]%d[/color]" % [UITheme.entity_emoji(uid, 2), name, cnt])
+	if _stats_mil_rtl:
+		_stats_mil_rtl.text = "[color=gray](无军队)[/color]" if military_lines.is_empty() else " ".join(military_lines)
 
-	# 商人
-	var merchant_lines = []
-	for uid in [43, 44, 45, 51]:
-		var cnt = unit_counts.get(uid, 0)
-		if cnt > 0:
-			var name = unit_names.get(uid, str(uid))
-			merchant_lines.append("[color=#ffa]%s %s[/color]:[color=white]%d[/color]" % [UITheme.entity_emoji(uid, 2), name, cnt])
-
-	# 添加官员（如果有）
-	var official_lines = []
-	for uid in [46, 47, 48, 49, 50]:
-		var cnt = unit_counts.get(uid, 0)
-		if cnt > 0:
-			var name = unit_names.get(uid, str(uid))
-			official_lines.append("[color=#f8a]%s %s[/color]:[color=white]%d[/color]" % [UITheme.entity_emoji(uid, 2), name, cnt])
-
-	if military_lines.is_empty() and official_lines.is_empty() and eco_lines.is_empty() and merchant_lines.is_empty():
-		_stats_mil_rtl.text = "[color=gray](无军队)[/color]"
-	else:
-		var text = ""
-		if not eco_lines.is_empty():
-			text = " ".join(eco_lines)
-		if not military_lines.is_empty():
-			if text != "": text += "\n"
-			text += "[color=#8cf]⚔️ 战斗: %d[/color] | " % military_total + " ".join(military_lines)
-		if not merchant_lines.is_empty():
-			if text != "": text += "\n"
-			text += "[color=#ffa]🛒 商人:[/color] " + " ".join(merchant_lines)
-		if not official_lines.is_empty():
-			if text != "": text += "\n"
-			text += "[color=#a8f]🎖️ 官员:[/color] " + " ".join(official_lines)
-		_stats_mil_rtl.text = text if text != "" else "[color=gray](无军队)[/color]"
-
-	# 构建建筑显示
+	# 建筑统计
 	var building_lines = []
 	var building_order = [7, 8, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 41, 42, 52, 53, 54, 64]
 	for bid in building_order:
-		var cnt = building_counts.get(bid, 0)
+		var cnt: int = int(building_counts.get(bid, 0))
 		if cnt > 0:
-			var lv = building_levels.get(bid, 1)
+			var lv: int = int(building_levels.get(bid, 1))
 			var name = building_names.get(bid, str(bid))
 			building_lines.append("[color=#888]%s【%d】%s[/color]:[color=white]%d[/color]" % [UITheme.entity_emoji(bid, 1), lv, name, cnt])
 
 	if under_construction > 0:
 		building_lines.append("[color=#caa]🏗️ 在建[/color]:[color=white]%d[/color]" % under_construction)
 
-	if building_lines.is_empty():
-		_stats_bld_rtl.text = "[color=gray](无建筑)[/color]"
-	else:
-		_stats_bld_rtl.text = " ".join(building_lines)
+	if _stats_bld_rtl:
+		_stats_bld_rtl.text = "[color=gray](无建筑)[/color]" if building_lines.is_empty() else " ".join(building_lines)
 
 
 func _get_client_input_node():
@@ -465,170 +578,51 @@ func _on_alert_gui_input(event: InputEvent) -> void:
 		accept_event()
 
 func _ready():
-	# 创建资源标签（皇庭筹码：图标 + 名称 + 数值 + 采集速率 + 进度条）
-	const RES_CFG = [
-		{name="黄金", key="gold", color=UITheme.RES_GOLD},
-		{name="木材", key="wood", color=UITheme.RES_WOOD},
-		{name="石头", key="stone", color=UITheme.RES_STONE},
-		{name="食物", key="food", color=UITheme.RES_FOOD},
-		{name="石油", key="oil", color=UITheme.RES_OIL},
-		{name="人口", key="pop", color=UITheme.RES_POP},
-	]
-	const ROW_H = 44; const ROW_W = 290
-	var _res_lbls = {}
+	# 与单机版一致：左上统计面板（含资源/人口/主城/经济/军队/建筑），原左下角资源 HUD 已移除
+	_create_unit_stats_panel()
+	_create_stats_toggle_button()
 
-	for i in range(RES_CFG.size()):
-		var cfg = RES_CFG[i]
-		var y = 1100 + i * (ROW_H + 5)
-		var col = cfg.color
-
-		# 筹码卡背景：暖黑半透明 + 资源色细边 + 顶部资源色强调条
-		var bg = Panel.new()
-		bg.position = Vector2(6, y); bg.size = Vector2(ROW_W, ROW_H)
-		var s := UITheme.panel_style(UITheme.RADIUS_MD, UITheme.BORDER_THIN, 0.78)
-		s.border_color = Color(col, 0.4)
-		s.border_width_top = 2
-		bg.add_theme_stylebox_override("panel", s)
-		add_child(bg)
-
-		# 名称行：图标 + 资源名（update_data 会补充采集人数/速率）
-		var nl = Label.new()
-		nl.position = Vector2(14, y + 4); nl.text = "%s %s" % [UITheme.RESOURCE_ICONS.get(cfg.key, ""), cfg.name]
-		nl.add_theme_font_size_override("font_size", UITheme.FONT_MD)
-		nl.add_theme_color_override("font_color", col)
-		nl.add_theme_color_override("font_outline_color", Color.BLACK)
-		nl.add_theme_constant_override("outline_size", 1)
-		add_child(nl)
-		cli_res_name_lbls[cfg.key] = nl  # Store for later update
-
-		# 数值行：当前/上限，右对齐
-		var vl = Label.new()
-		vl.position = Vector2(96, y + 4); vl.size = Vector2(ROW_W - 110, 22)
-		vl.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-		vl.add_theme_font_size_override("font_size", UITheme.FONT_LG)
-		vl.add_theme_color_override("font_color", UITheme.PARCHMENT)
-		vl.add_theme_color_override("font_outline_color", Color.BLACK)
-		vl.add_theme_constant_override("outline_size", 1)
-		add_child(vl)
-		_res_lbls[cfg.key] = vl
-
-		# 采集信息行：人数 + 速率（小字灰色）
-		var gl = Label.new()
-		gl.position = Vector2(14, y + 26)
-		gl.size = Vector2(ROW_W - 28, 14)
-		gl.add_theme_font_size_override("font_size", UITheme.FONT_XS)
-		gl.add_theme_color_override("font_color", UITheme.STONE)
-		add_child(gl)
-		gather_labels[cfg.key] = gl
-
-		# 资源进度条：亮色 fill + 暖黑底细边
-		var pbar = ProgressBar.new()
-		pbar.position = Vector2(14, y + ROW_H - 9)
-		pbar.size = Vector2(ROW_W - 28, 5)
-		pbar.max_value = 100; pbar.show_percentage = false
-		var fs := StyleBoxFlat.new(); fs.bg_color = col.lightened(0.1)
-		fs.corner_radius_top_left = 3; fs.corner_radius_top_right = 3
-		fs.corner_radius_bottom_left = 3; fs.corner_radius_bottom_right = 3
-		pbar.add_theme_stylebox_override("fill", fs)
-		var bs := StyleBoxFlat.new(); bs.bg_color = Color(0.06, 0.05, 0.04, 0.85)
-		bs.corner_radius_top_left = 3; bs.corner_radius_top_right = 3
-		bs.corner_radius_bottom_left = 3; bs.corner_radius_bottom_right = 3
-		bs.set_border_width_all(1); bs.border_color = Color(col, 0.25)
-		pbar.add_theme_stylebox_override("background", bs)
-		add_child(pbar)
-		match cfg.key:
-			"gold": res_bars["gold"] = pbar
-			"wood": res_bars["wood"] = pbar
-			"stone": res_bars["stone"] = pbar
-			"food": res_bars["food"] = pbar
-			"oil": res_bars["oil"] = pbar
-			"pop": pop_bar = pbar
-
-	gold_label = _res_lbls["gold"]
-	wood_label = _res_lbls["wood"]
-	stone_label = _res_lbls["stone"]
-	food_label = _res_lbls["food"]
-	oil_label = _res_lbls["oil"]
-	pop_label = _res_lbls["pop"]
-
-	# 国家及加成面板（皇庭卡：羊皮纸底 + 金边 + 顶部金强调条）
-	var nation_panel := Panel.new()
-	nation_panel.position = Vector2(6, 316); nation_panel.size = Vector2(430, 168)
-	nation_panel.add_theme_stylebox_override("panel", UITheme.card_style(UITheme.GOLD))
-	add_child(nation_panel)
-
-	player_nation_label = Label.new()
-	player_nation_label.position = Vector2(16, 8)
-	player_nation_label.add_theme_font_size_override("font_size", UITheme.FONT_XL)
-	player_nation_label.add_theme_color_override("font_color", UITheme.SAPPHIRE.lightened(0.15))
-	player_nation_label.add_theme_color_override("font_outline_color", Color.BLACK)
-	player_nation_label.add_theme_constant_override("outline_size", 1)
-	nation_panel.add_child(player_nation_label)
-
-	enemy_nation_label = Label.new()
-	enemy_nation_label.position = Vector2(16, 48)
-	enemy_nation_label.add_theme_font_size_override("font_size", UITheme.FONT_XL)
-	enemy_nation_label.add_theme_color_override("font_color", UITheme.VERMILION.lightened(0.1))
-	enemy_nation_label.add_theme_color_override("font_outline_color", Color.BLACK)
-	enemy_nation_label.add_theme_constant_override("outline_size", 1)
-	nation_panel.add_child(enemy_nation_label)
-
-	nation_bonus_label = Label.new()
-	nation_bonus_label.position = Vector2(16, 92)
-	nation_bonus_label.add_theme_font_size_override("font_size", UITheme.FONT_SM)
-	nation_bonus_label.add_theme_color_override("font_color", UITheme.PARCHMENT)
-	nation_bonus_label.add_theme_color_override("font_outline_color", Color.BLACK)
-	nation_bonus_label.add_theme_constant_override("outline_size", 1)
-	nation_bonus_label.text = "加成:\n" + NationBonuses.get_description(GameSettings.player_nation)
-	nation_panel.add_child(nation_bonus_label)
-
-	# 全军指令：选择 / 自动进攻 / 撤退
+	# 全军指令：位置对齐单机版（统计面板右侧两列）
 	attack_all_btn = Button.new()
 	attack_all_btn.text = "全选屏幕军队 (F1)"
-	attack_all_btn.position = Vector2(10, 506)
-	attack_all_btn.custom_minimum_size = Vector2(200, 44)
-	UITheme.apply_primary_button(attack_all_btn, UITheme.FONT_LG)
+	attack_all_btn.position = Vector2(620, 50)
+	attack_all_btn.custom_minimum_size = Vector2(210, 32)
+	UITheme.apply_primary_button(attack_all_btn, UITheme.FONT_MD)
 	attack_all_btn.pressed.connect(_on_select_screen_pressed)
 	add_child(attack_all_btn)
 
 	retreat_all_btn = Button.new()
 	retreat_all_btn.text = "全选所有军队 (Ctrl+F1)"
-	retreat_all_btn.position = Vector2(220, 506)
-	retreat_all_btn.custom_minimum_size = Vector2(200, 44)
-	UITheme.apply_primary_button(retreat_all_btn, UITheme.FONT_LG)
+	retreat_all_btn.position = Vector2(840, 50)
+	retreat_all_btn.custom_minimum_size = Vector2(210, 32)
+	UITheme.apply_primary_button(retreat_all_btn, UITheme.FONT_MD)
 	retreat_all_btn.pressed.connect(_on_select_all_pressed)
 	add_child(retreat_all_btn)
 
 	var b_auto = Button.new()
 	b_auto.text = "⚔️ 自动进攻：关 (F2)"
-	b_auto.position = Vector2(10, 560)
-	b_auto.custom_minimum_size = Vector2(200, 44)
-	UITheme.apply_danger_button(b_auto, UITheme.FONT_LG)
+	b_auto.position = Vector2(620, 92)
+	b_auto.custom_minimum_size = Vector2(210, 32)
+	UITheme.apply_danger_button(b_auto, UITheme.FONT_MD)
 	b_auto.pressed.connect(_on_attack_all_pressed)
 	add_child(b_auto)
 	auto_attack_btn = b_auto
 
 	var b_ret_screen = Button.new()
 	b_ret_screen.text = "屏幕军队撤退 (F3)"
-	b_ret_screen.position = Vector2(220, 560)
-	b_ret_screen.custom_minimum_size = Vector2(200, 44)
-	UITheme.apply_primary_button(b_ret_screen, UITheme.FONT_LG)
+	b_ret_screen.position = Vector2(840, 92)
+	b_ret_screen.custom_minimum_size = Vector2(210, 32)
+	UITheme.apply_primary_button(b_ret_screen, UITheme.FONT_MD)
 	b_ret_screen.pressed.connect(_on_retreat_screen_pressed)
 	add_child(b_ret_screen)
 
 	var b_ret_all = Button.new()
 	b_ret_all.text = "所有军队撤退 (Ctrl+F3)"
-	b_ret_all.position = Vector2(10, 614)
-	b_ret_all.custom_minimum_size = Vector2(200, 44)
-	UITheme.apply_primary_button(b_ret_all, UITheme.FONT_LG)
+	b_ret_all.position = Vector2(620, 134)
+	b_ret_all.custom_minimum_size = Vector2(210, 32)
+	UITheme.apply_primary_button(b_ret_all, UITheme.FONT_MD)
 	b_ret_all.pressed.connect(_on_retreat_all_pressed)
 	add_child(b_ret_all)
-
-	# 创建单位统计面板
-	_create_unit_stats_panel()
-
-	# 创建切换按钮
-	_create_stats_toggle_button()
 
 	# FPS + 游戏时间显示
 	_fps_label = Label.new()
@@ -677,34 +671,14 @@ func _on_auto_attack_changed(on: bool):
 		auto_attack_btn.text = "⚔️ 自动进攻：%s (F2)" % ("开" if on else "关")
 
 
-func update_data(resources: Dictionary, population: Dictionary, limits: Dictionary, gather_counts: Dictionary = {}, income_rate: Dictionary = {}):
-	gold_label.text = "%d/%d" % [resources.get("gold", 0), limits.get("gold", 0)]
-	wood_label.text = "%d/%d" % [resources.get("wood", 0), limits.get("wood", 0)]
-	stone_label.text = "%d/%d" % [resources.get("stone", 0), limits.get("stone", 0)]
-	food_label.text = "%d/%d" % [resources.get("food", 0), limits.get("food", 0)]
-	oil_label.text = "%d/%d" % [resources.get("oil", 0), limits.get("oil", 0)]
-	pop_label.text = "%d/%d" % [population.get("current", 0), population.get("max", 0)]
-
-	# 名称行保持固定「图标 + 资源名」，采集人数/速率显示在独立速率行
-	for rk in ["gold", "wood", "stone", "food", "oil"]:
-		var nl = cli_res_name_lbls.get(rk)
-		var gc = gather_counts.get(rk, 0)
-		var rate = income_rate.get(rk, 0.0)
-		if nl:
-			nl.text = "%s %s" % [UITheme.RESOURCE_ICONS.get(rk, "◆"), UITheme.RESOURCE_NAMES.get(rk, rk)]
-		var gl = gather_labels.get(rk)
-		if gl:
-			gl.text = "%d人  %+.1f/s" % [gc, rate]
-
-	if pop_bar:
-		pop_bar.value = min(float(population.get("current",1))/max(population.get("max",1),1)*100, 100)
-	for rk in ["gold","wood","stone","food","oil"]:
-		if res_bars.has(rk):
-			var rv = resources.get(rk, 0)
-			var rl = limits.get(rk, 500) if not limits.is_empty() else 500
-			res_bars[rk].value = min(float(rv)/max(rl,1)*100, 100)
+func update_data(resources: Dictionary, population: Dictionary, limits: Dictionary, p_gather_counts: Dictionary = {}, p_income_rate: Dictionary = {}):
+	# 左下角资源 HUD 已删除：数据缓存下来，统一由左上统计面板每秒刷新展示
+	_last_res = resources
+	_last_limits = limits
+	gather_counts = p_gather_counts
+	income_rate = p_income_rate
 	if _mobile_hud and is_instance_valid(_mobile_hud):
-		_mobile_hud.update_data(resources, population, limits, gather_counts, income_rate)
+		_mobile_hud.update_data(resources, population, limits, p_gather_counts, p_income_rate)
 
 
 var _fps_label: Label = null
