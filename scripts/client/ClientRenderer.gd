@@ -3,6 +3,7 @@ extends Node3D
 const StatsScript = preload("res://scripts/core/BattleStats.gd")
 const StatsPanelScript = preload("res://scripts/ui/BattleStatsPanel.gd")
 const BuildingDeathEffect = preload("res://scripts/effects/BuildingDeathEffect.gd")
+const BuildingConstructionVisual = preload("res://scripts/effects/BuildingConstructionVisual.gd")
 const TreeFallEffect = preload("res://scripts/effects/TreeFallEffect.gd")
 const EntityDamageVisual = preload("res://scripts/effects/EntityDamageVisual.gd")
 enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ATTACK_SPEED, MELEE_ARMOR, SHIELD_ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH, GARRISONED, NATION, IN_ACTION_RANGE }
@@ -406,6 +407,7 @@ func _process_snapshot(data: Dictionary):
 					# 建筑走程序化倒塌特效；节点立即移出 entity_nodes，但保留到动画结束再释放。
 					var effect_duration := 0.0
 					if int(info.get("type", -1)) == 1:
+						BuildingConstructionVisual.cancel(node)
 						effect_duration = BuildingDeathEffect.play(node, int(info.get("entity_id", -1)), float(info.get("body_radius", 0.5)))
 					elif int(info.get("type", -1)) == 0 and int(info.get("entity_id", -1)) == 1:
 						effect_duration = TreeFallEffect.play(node, float(info.get("body_radius", 0.5)))
@@ -686,6 +688,7 @@ func _update_single_entity(info):
 	node.rotation.y = info.get("rotation_y", 0.0)
 	node.visible = _should_entity_be_visible(info)
 	node.set_meta("snapshot_info", info)
+	_refresh_client_construction_visual(node, info)
 	_refresh_client_damage_visual(node, info)
 	# Client-side sound effects (detect state transitions, visible entities only)
 	var prev_info = node.get_meta("_prev_info") if node.has_meta("_prev_info") else {}
@@ -763,6 +766,8 @@ func _update_wall_orientation(wall_node: Node3D, info: Dictionary):
 					var cs = max(aabb.size.x, max(aabb.size.y, aabb.size.z))
 					if cs > 0.01: inst.scale = Vector3.ONE * (target_size / cs)
 					wall_node.add_child(inst)
+					wall_node.set_meta("_model_instance", inst)
+					BuildingConstructionVisual.rebind(wall_node)
 	
 	# Rotation — matches server exactly
 	if is_corner:
@@ -819,6 +824,17 @@ func _update_entity_animation(node: Node3D, info: Dictionary):
 		if ap.current_animation != anim:
 			ap.play(anim)
 
+func _refresh_client_construction_visual(node: Node3D, info: Dictionary) -> void:
+	if int(info.get("type", -1)) != 1:
+		return
+	var build_timer := float(info.get("build_timer", 0.0))
+	if build_timer > 0.0:
+		var max_build := maxf(float(info.get("max_build_time", 0.0)), 0.001)
+		var progress := clampf(1.0 - build_timer / max_build, 0.0, 1.0)
+		BuildingConstructionVisual.update(node, progress)
+	else:
+		BuildingConstructionVisual.finish(node)
+
 func _refresh_client_damage_visual(node: Node3D, info: Dictionary) -> void:
 	var max_hp := float(info.get("max_health", 0.0))
 	var hp := float(info.get("health", 0.0))
@@ -827,6 +843,9 @@ func _refresh_client_damage_visual(node: Node3D, info: Dictionary) -> void:
 	var ratio := clampf(hp / max_hp, 0.0, 1.0)
 	var entity_type := int(info.get("type", -1))
 	if entity_type == 1:
+		# 建造中由施工动画控制模型变换，完成后再显示受损外观。
+		if float(info.get("build_timer", 0.0)) > 0.0 or node.has_meta("_construction_visual"):
+			return
 		EntityDamageVisual.update_building(node, ratio)
 	elif entity_type == 0:
 		EntityDamageVisual.update_resource(node, ratio)
@@ -1022,6 +1041,7 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 			loaded_model.scale *= 1.5
 			loaded_model.scale *= 1.5
 		entity.add_child(loaded_model)
+		entity.set_meta("_model_instance", loaded_model)
 		_ensure_model_shadows(loaded_model)
 		# GLB 动画默认不循环；缓存 AnimationPlayer 并配置 idle/walk/attack 循环
 		var cached_ap := AnimationHelper.configure_loops(loaded_model)

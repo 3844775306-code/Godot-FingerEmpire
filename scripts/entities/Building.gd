@@ -46,6 +46,7 @@ func start_construction(time: float, data: Dictionary):
 	vision_range = 0
 	if building_data.has("produces") and building_data["produces"] is Array:
 		_sync_production_unlocks()
+	BuildingConstructionVisual.begin(self)
 func _process(delta):
 	super._process(delta)
 	# 城墙动态朝向 + 拐角模型切换
@@ -87,6 +88,8 @@ func _process(delta):
 
 	# 建造计时
 	if build_timer > 0.0:
+		var build_progress := clampf(1.0 - build_timer / maxf(max_build_time, 0.001), 0.0, 1.0)
+		BuildingConstructionVisual.update(self, build_progress)
 		build_timer -= delta
 		if Engine.get_process_frames() % 40 == 0: AudioManager.play_sfx("build_loop")
 		if build_timer <= 0.0:
@@ -206,10 +209,12 @@ func _reload_wall_model(bm, path):
 		var inst = s.instantiate()
 		if inst:
 			add_child(inst); set_meta("_model_instance", inst)
+			BuildingConstructionVisual.rebind(self)
 			var tint: Color = bm.get_entity_color(self) if bm.has_method("get_entity_color") else (Color(0.3, 0.6, 1.0) if team == RTSConfig.Team.BLUE else Color(1.0, 0.4, 0.4))
 			bm._apply_team_tint(self, tint)
 
 func _finish_construction():
+	BuildingConstructionVisual.finish(self)
 	build_timer = 0.0
 	AudioManager.play_sfx("build_done")
 	# Set base stats first

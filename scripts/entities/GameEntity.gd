@@ -177,6 +177,9 @@ func _refresh_damage_visual() -> void:
 		return
 	var ratio := clampf(health / max_health, 0.0, 1.0)
 	if self is Building:
+		# 建造中模型被施工动画压扁/缩放；完成复位后再启用受损外观，避免两套变换打架。
+		if float(get("build_timer")) > 0.0:
+			return
 		EntityDamageVisual.update_building(self, ratio)
 	elif self is WorldResource:
 		EntityDamageVisual.update_resource(self, ratio)
@@ -413,6 +416,8 @@ func die():
 	# 建筑统一走程序化倒塌：模型倾斜下沉、碎屑尘土，动画结束后再释放实体。
 	# 死亡状态、人口扣除和缓存失效已在上面立即完成，动画不会影响战斗判定。
 	if self is Building:
+		# 建造中被打爆时先收起脚手架并恢复模型，避免死亡特效从压扁状态开始。
+		BuildingConstructionVisual.cancel(self)
 		var model_ref: Node3D = null
 		if has_meta("_model_instance") and is_instance_valid(get_meta("_model_instance")):
 			model_ref = get_meta("_model_instance")
