@@ -750,38 +750,33 @@ func _get_model_aabb(node: Node) -> AABB:
 			result = result.merge(cr)
 	return result
 
-func _find_animation_player(n: Node) -> AnimationPlayer:
-	for ch in n.get_children():
-		if ch is AnimationPlayer:
-			return ch
-		var found = _find_animation_player(ch)
-		if found: return found
-	return null
-
 func _update_entity_animation(node: Node3D, info: Dictionary):
-	var ap = _find_animation_player(node)
+	var ap: AnimationPlayer = node.get_meta("_anim_player", null)
+	if not is_instance_valid(ap):
+		ap = AnimationHelper.find_player(node)
+		if ap != null:
+			node.set_meta("_anim_player", ap)
 	if not ap: return
 	var anim = ""
 	var ord = info.get("current_order", "")
-	var eid = info.get("entity_id", 0)
 	if info.get("health", 0) <= 0:
 		anim = "die"
-	elif ord == "attack":
+	elif ord in ["attack", "gather"]:
 		anim = "attack-melee-left"
-	elif ord == "gather":
-			anim = "attack-melee-left"
-	elif ord in ["move", "deliver"]:
+	elif ord in ["move", "deliver", "attack_move"]:
 		anim = "walk"
 	else:
 		anim = "idle"
 	if anim != "" and ap.has_animation(anim):
-		var spd = 1.0
-		var atk_spd = info.get("attack_speed", 1.0)
-		if atk_spd == null: atk_spd = 1.0
-		var mv_spd = info.get("speed", 2.0)
-		if mv_spd == null: mv_spd = 2.0
-		if anim == "attack-melee-left": spd = atk_spd
-		elif anim == "walk": spd = mv_spd * 0.6
+		var spd := 1.0
+		if anim == "attack-melee-left":
+			var atk_raw = info.get("attack_speed", 1.0)
+			var atk_spd := float(atk_raw) if atk_raw != null else 1.0
+			spd = AnimationHelper.attack_speed_scale(ap, anim, atk_spd)
+		elif anim == "walk":
+			var mv_raw = info.get("speed", 2.0)
+			var mv_spd := float(mv_raw) if mv_raw != null else 2.0
+			spd = clampf(mv_spd * 0.6, 0.2, 3.0)
 		ap.speed_scale = spd
 		if ap.current_animation != anim:
 			ap.play(anim)
@@ -910,6 +905,10 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 		if info.get("entity_id", 0) in [25, 26, 33]: loaded_model.scale *= 1.5
 		entity.add_child(loaded_model)
 		_ensure_model_shadows(loaded_model)
+		# GLB 动画默认不循环；缓存 AnimationPlayer 并配置 idle/walk/attack 循环
+		var cached_ap := AnimationHelper.configure_loops(loaded_model)
+		if cached_ap != null:
+			entity.set_meta("_anim_player", cached_ap)
 		# 队伍色着色
 		if info.get("type", -1) != 0:
 			var lt = Color(0.5 + entity_color.r * 0.5, 0.5 + entity_color.g * 0.5, 0.5 + entity_color.b * 0.5)

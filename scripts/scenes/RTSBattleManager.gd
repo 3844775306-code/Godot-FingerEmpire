@@ -1745,8 +1745,9 @@ func _apply_entity_model(entity: GameEntity) -> bool:
 		model_instance.rotation.y = deg_to_rad(180)
 	# 存储模型引用用于动画
 	entity.set_meta("_model_instance", model_instance)
+	# GLB 动画默认不循环；统一配置 idle/walk/attack 循环，避免播放一次后定格
+	var ap := AnimationHelper.configure_loops(model_instance)
 	if entity is Army:
-		var ap := model_instance.get_node_or_null("AnimationPlayer") as AnimationPlayer
 		entity.bind_animation_player(ap)
 	# 角色模型启用顶点颜色（编辑器预览依赖此特性）
 	if entity.entity_id in [10, 43, 44, 45, 46, 47, 48, 49, 50, 51]:
@@ -1836,23 +1837,24 @@ func _update_entity_animation(entity: GameEntity):
 	var ap = model.get_node_or_null("AnimationPlayer") as AnimationPlayer
 	if not ap: return
 	var anim = ""
-	var is_animal = entity.get("_animal_type") != "" and entity.get("_animal_type") != null
 	if entity.health <= 0:
 		anim = "die"
-	elif entity is Army and entity._order_is(entity.UnitState.ATTACKING):
+	elif entity is Army and entity._order_in([entity.UnitState.ATTACKING, entity.UnitState.GATHERING]):
 		anim = "attack-melee-left"
-	elif entity is Army and entity._order_in([entity.UnitState.MOVING, entity.UnitState.DELIVERING]):
+	elif entity is Army and entity._order_in([entity.UnitState.MOVING, entity.UnitState.DELIVERING, entity.UnitState.ATTACK_MOVING]):
 		anim = "walk"
 	else:
 		anim = "idle"
 	if anim != "" and ap.has_animation(anim):
-		var spd = 1.0
-		if anim == "attack-melee-left": spd = entity.attack_speed
-		elif anim == "walk": spd = entity.speed * 0.6
+		var spd := 1.0
+		if anim == "attack-melee-left":
+			# 攻击动作按攻击冷却循环；GATHERING 也复用攻击动作，让采集有挥动反馈
+			spd = AnimationHelper.attack_speed_scale(ap, anim, entity.attack_speed)
+		elif anim == "walk":
+			spd = clampf(entity.speed * 0.6, 0.2, 3.0)
 		ap.speed_scale = spd
 		if ap.current_animation != anim:
 			ap.play(anim)
-		
 
 func _enable_vertex_colors(node: Node):
 	for child in node.get_children():

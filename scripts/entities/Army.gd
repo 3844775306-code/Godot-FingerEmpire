@@ -302,7 +302,16 @@ func set_selected(selected: bool):
 	super.set_selected(selected)
 	if _movement: _movement.set_selected(selected)
 func _set_order(state: UnitState):
-	current_order = _STATE_NAMES.get(state, "")
+	var new_order: String = _STATE_NAMES.get(state, "")
+	if current_order == new_order:
+		return
+	current_order = new_order
+	# 主机端也即时切换动画，避免只靠每 30 帧轮询导致走/停/攻击动作延迟半秒
+	if not is_inside_tree():
+		return
+	var bm = _get_bm()
+	if bm and bm.has_method("_update_entity_animation"):
+		bm._update_entity_animation(self)
 func _order_is(state: UnitState) -> bool:
 	return current_order == _STATE_NAMES.get(state, "___")
 func _order_in(states: Array) -> bool:
