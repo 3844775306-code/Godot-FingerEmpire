@@ -126,6 +126,9 @@ var _wall_entity_grid: Dictionary = {}    # Vector2i -> Building(城墙 id==27)�
 var _ladder_entity_grid: Dictionary = {}  # Vector2i -> Building(梯子 id==8)，供 _has_adjacent_ladder O(8) 查询
 # 弹丸对象池：后期每秒几十上百发箭/炮弹，复用节点可避免反复 new + GLB instantiate + 物理形状创建
 var _bullet_pool: Dictionary = {}         # pool_key -> Array[Bullet]
+# 同模型同队伍的单位共享 tint / 顶点色材质，避免每个单位复制出独立材质，
+# 减少材质状态切换与显存占用。
+var _team_material_cache: Dictionary = {}
 
 func _bullet_pool_key(source, p_damage_radius: float, p_team: int) -> String:
 	var sid: int = -1
@@ -1784,17 +1787,27 @@ func _count_meshes(node: Node) -> int:
 	return c
 
 func _tint_recursive(node: Node, tint: Color):
+	var tint_key := tint.to_html()
 	for child in node.get_children():
 		if child is MeshInstance3D and child.mesh:
 			for si in child.mesh.get_surface_count():
 				var src = child.get_active_material(si)
 				
 				if src and "albedo_color" in src:
-					var dup = src.duplicate()
-					
+					var dup = _cached_override_material(src, "tint:" + tint_key)
 					dup.albedo_color = src.albedo_color.lerp(tint, 0.5)
 					child.set_surface_override_material(si, dup)
 		_tint_recursive(child, tint)
+
+# 同一原始材质 + 同一用途/颜色只复制一次。模型 GLB 的材质通常在同模型
+# 多个实例之间共享，因此同队伍同兵种能直接复用同一份 override 材质。
+func _cached_override_material(src: Material, suffix: String):
+	var key := "%d|%s" % [src.get_instance_id(), suffix]
+	var cached = _team_material_cache.get(key)
+	if cached == null:
+		cached = src.duplicate()
+		_team_material_cache[key] = cached
+	return cached
 
 func _update_entity_animation(entity: GameEntity):
 	if not entity.has_meta("_model_instance"): return
@@ -1826,7 +1839,7 @@ func _enable_vertex_colors(node: Node):
 			for si in child.mesh.get_surface_count():
 				var m = child.get_active_material(si)
 				if m and "vertex_color_use_as_albedo" in m:
-					var dup = m.duplicate()
+					var dup = _cached_override_material(m, "vertex_color")
 					dup.vertex_color_use_as_albedo = true
 					child.set_surface_override_material(si, dup)
 		_enable_vertex_colors(child)
