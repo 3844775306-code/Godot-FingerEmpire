@@ -18,6 +18,15 @@ var target_pos: Vector3 = Vector3.ZERO   # 固定目标点（非追踪模式）
 var _saved_dir: Vector3 = Vector3.ZERO
 var _pool_key: String = ""                # 对象池键；由 BattleManager 设置
 
+# 抛物线弹道：炮弹、投石车巨石等重弹走抛物线，箭矢保持直线飞行。
+# _arc_span 是发射时到目标的水平距离，用来把水平飞行进度映射成抛物线参数 t。
+var _arc_active: bool = false
+var _arc_start: Vector3 = Vector3.ZERO
+var _arc_span: float = 1.0
+var _arc_apex: float = 1.0
+var _prev_pos: Vector3 = Vector3.ZERO
+const BALLISTIC_HIT_RADIUS: float = 0.45
+
 # 弹丸模型缓存：后期每秒会生成几十到上百发子弹，不能每发都做
 # ResourceLoader.exists + load + GLB 实例化。PackedScene 只加载一次，之后只 instantiate。
 static var _scene_cache: Dictionary = {}
@@ -27,6 +36,18 @@ static func _cached_scene(path: String) -> PackedScene:
 	var ps: PackedScene = load(path) if ResourceLoader.exists(path) else null
 	_scene_cache[path] = ps
 	return ps
+
+# 只有炮弹/巨石这一类推重弹走抛物线；箭矢、弩矢仍保持直线。
+# 源实体 ID 和溅射半径都能识别重弹：炮塔/炮台没有伤害半径时也要靠 ID 兜底。
+func _is_ballistic_projectile() -> bool:
+	return damage_radius > 0.0 or source_entity_id in [16, 17, 26, 39, 59, 64]
+
+func _reset_ballistic_state() -> void:
+	_arc_active = false
+	_arc_start = Vector3.ZERO
+	_arc_span = 1.0
+	_arc_apex = 1.0
+	_prev_pos = Vector3.ZERO
 
 func _ready():
 	add_to_group("bullets")
@@ -102,6 +123,7 @@ func reset_for_reuse(new_source, p_damage_radius: float, p_team: int, p_key: Str
 	attack_type = 1
 	rotation = Vector3.ZERO
 	visible = true
+	_reset_ballistic_state()
 	if not is_in_group("bullets"):
 		add_to_group("bullets")
 	set_physics_process(true)
@@ -119,6 +141,7 @@ func recycle() -> void:
 	target_pos = Vector3.ZERO
 	_saved_dir = Vector3.ZERO
 	time_alive = 0.0
+	_reset_ballistic_state()
 	remove_from_group("bullets")
 	var bm = _get_bm()
 	if bm and bm.has_method("recycle_bullet"):
@@ -133,6 +156,34 @@ func _get_bm():
 		_cached_bm = get_tree().get_first_node_in_group("battle_manager")
 	return _cached_bm
 
+func _start_arc(goal: Vector3) -> void:
+	_arc_active = true
+	_arc_start = global_position
+	var flat_vec := Vector3(goal.x - _arc_start.x, 0.0, goal.z - _arc_start.z)
+	_arc_span = maxf(flat_vec.length(), 0.5)
+	# 巨石比炮弹抛得更高；限制顶点高度，避免远程弹道飞出画面。
+	var apex_ratio: float = 0.42 if source_entity_id in [17, 59] else 0.30
+	_arc_apex = clampf(_arc_span * apex_ratio, 0.9, 6.0)
+	_prev_pos = global_position
+
+# 水平方向匀速逼近目标，竖直方向按抛物线偏移。
+# 返回当前到目标的水平距离，供命中判定使用。
+func _step_ballistic(goal: Vector3, delta: float) -> float:
+	var flat_vec := Vector3(goal.x - global_position.x, 0.0, goal.z - global_position.z)
+	var flat_dist := flat_vec.length()
+	if flat_dist > 0.0001:
+		var step := minf(speed * delta, flat_dist)
+		global_position += flat_vec / flat_dist * step
+	var remaining := Vector3(goal.x - global_position.x, 0.0, goal.z - global_position.z).length()
+	var t := 1.0 - clampf(remaining / _arc_span, 0.0, 1.0)
+	global_position.y = _arc_start.y + (goal.y - _arc_start.y) * t + 4.0 * _arc_apex * t * (1.0 - t)
+	if _prev_pos != Vector3.ZERO:
+		var flight_dir := global_position - _prev_pos
+		if flight_dir.length_squared() > 0.000001:
+			_orient_to_dir(flight_dir)
+	_prev_pos = global_position
+	return remaining
+
 func _physics_process(delta):
 	if hit:
 		return
@@ -143,24 +194,38 @@ func _physics_process(delta):
 
 	# 固定目标点模式（投石车/巨型投石机）：飞向固定位置
 	if target_pos != Vector3.ZERO:
-		if _saved_dir == Vector3.ZERO:
-			_saved_dir = (target_pos - global_position).normalized()
-		global_position += _saved_dir * speed * delta
-		_orient_to_dir(_saved_dir)
-		# 到达目标点 → 对周围敌人造成AOE伤害
-		if global_position.distance_to(target_pos) < 0.5:
-			_on_hit_pos()
+		if _is_ballistic_projectile():
+			if not _arc_active:
+				_start_arc(target_pos)
+			if _step_ballistic(target_pos, delta) < BALLISTIC_HIT_RADIUS:
+				global_position = target_pos
+				_on_hit_pos()
+		else:
+			if _saved_dir == Vector3.ZERO:
+				_saved_dir = (target_pos - global_position).normalized()
+			global_position += _saved_dir * speed * delta
+			_orient_to_dir(_saved_dir)
+			# 到达目标点 → 对周围敌人造成AOE伤害
+			if global_position.distance_to(target_pos) < 0.5:
+				_on_hit_pos()
 		return
 	# 追踪模式：飞向目标单位。命中判定只看锁定目标本身：
 	# 后期几十上百发弹丸如果每帧都做一次空间查询，会扫描周围整片单位，
 	# 是战斗帧率最大的 CPU 热点；路径上的顺带命中改为由锁定目标承受。
 	elif target and is_instance_valid(target):
-		var dir = (target.global_position - global_position).normalized()
-		global_position += dir * speed * delta
-		_orient_to_dir(dir)
-		# 检查是否足够近（命中）
-		if global_position.distance_to(target.global_position) < 0.3:
-			_on_hit(target)
+		if _is_ballistic_projectile():
+			if not _arc_active:
+				_start_arc(target.global_position)
+			if _step_ballistic(target.global_position, delta) < BALLISTIC_HIT_RADIUS:
+				global_position = target.global_position
+				_on_hit(target)
+		else:
+			var dir = (target.global_position - global_position).normalized()
+			global_position += dir * speed * delta
+			_orient_to_dir(dir)
+			# 检查是否足够近（命中）
+			if global_position.distance_to(target.global_position) < 0.3:
+				_on_hit(target)
 	else:
 		recycle()
 

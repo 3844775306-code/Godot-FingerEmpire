@@ -408,8 +408,16 @@ func _is_deep_water_position(bm) -> bool:
 		return false
 	return true
 
+# 陆地动物（牛/猪/羊）掉进深水也要按落水处理；鱼本身是 water_capable，不算陆地动物。
+func _is_land_animal() -> bool:
+	return _animal_type != "" and _animal_type != "fish"
+
 func _tick_water_damage(delta: float) -> void:
-	if water_capable or _boarded_on != -1:
+	if _boarded_on != -1:
+		_water_damage_timer = WATER_DAMAGE_INTERVAL
+		return
+	# 陆地动物即使配置误标成 water_capable，也强制按落水受伤，保证动物不会在水里安然无恙。
+	if water_capable and not _is_land_animal():
 		_water_damage_timer = WATER_DAMAGE_INTERVAL
 		return
 	_water_damage_timer -= delta
@@ -430,7 +438,7 @@ func _should_sink_death() -> bool:
 	var bm = _get_bm()
 	if not _is_deep_water_position(bm):
 		return false
-	if not water_capable:
+	if not water_capable or _is_land_animal():
 		return true
 	return entity_id in [9, 13, 14, 39, 40]
 
