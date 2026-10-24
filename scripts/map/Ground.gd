@@ -2504,8 +2504,6 @@ func _add_water_box():
 			var mat = ShaderMaterial.new()
 			mat.shader = shader
 			mat.set_shader_parameter("fog_tex", terrain_texture)
-			# 迷雾取样用世界坐标换算，着色器需要知道地图边长
-			mat.set_shader_parameter("map_size", float(_get_map_size()))
 			# 船只位置数组必须先把长度对齐到着色器里的固定数组大小
 			var empty_boats := PackedVector3Array()
 			empty_boats.resize(BOAT_SHADER_SLOTS)
@@ -2646,8 +2644,7 @@ func _update_water_boats(delta: float) -> void:
 		spos.y = WATER_WORLD_Y
 		seen[sid] = true
 		arr[count] = spos
-		# z 分量存沉水标记：着色器据此在落水点溅起明显的水花与扩散波纹
-		dirs[count] = Vector3(0.0, 0.0, 1.0)
+		dirs[count] = Vector3.ZERO
 		count += 1
 	# 定期清掉已经消失的船的缓存，避免字典无限增长
 	_boat_prev_cleanup -= delta
