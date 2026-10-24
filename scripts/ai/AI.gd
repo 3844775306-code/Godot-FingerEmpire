@@ -325,7 +325,7 @@ func _ai_can_build(building_id: int) -> bool:
 			return cl >= 2
 		24, 29, 52:   # 攻城车间、重装武器厂、集市 → 城堡3级
 			return cl >= 3
-		53:   # 城堡→4级
+		53, 54:   # 城堡、修道院 → 主城4级
 			return cl >= 4
 		42:   # 书院→3级
 			return cl >= 3

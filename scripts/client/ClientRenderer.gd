@@ -255,9 +255,9 @@ func is_building_unlocked(building_id: int) -> bool:
 			return cl >= 2
 		24, 29, 52:
 			return cl >= 3
-		42, 54:
+		42:
 			return cl >= 3
-		53:
+		53, 54:
 			return cl >= 4
 	return true
 
