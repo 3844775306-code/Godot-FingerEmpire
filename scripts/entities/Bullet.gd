@@ -415,9 +415,17 @@ func _on_hit(entity: GameEntity):
 	# 箭矢：不立刻回收，插在目标身上保留 1.5 秒
 	if _is_arrow_bullet() and is_instance_valid(entity):
 		_stuck_to = entity
-		_stuck_offset = global_position - entity.global_position
-		# 同一目标被多支箭命中时错开位置，否则会全部叠在同一点上
-		_stuck_offset += Vector3(randf_range(-0.30, 0.30), randf_range(-0.10, 0.45), randf_range(-0.30, 0.30))
+		# 箭只能插在表面：按目标体型把附着点推到身体外缘，
+		# 不能直接用命中瞬间的位置（大单位会整支箭陷进去，小单位又会飘在外面）
+		var er: float = float(entity.body_radius)
+		var to_arrow: Vector3 = global_position - entity.global_position
+		to_arrow.y = 0.0
+		var hdir: Vector3 = to_arrow.normalized() if to_arrow.length() > 0.01 else Vector3.RIGHT
+		# 多支箭命中同一目标时绕竖直轴随机偏转，让箭散布在身体表面而不是叠在一处
+		hdir = hdir.rotated(Vector3.UP, randf_range(-0.7, 0.7))
+		# 竖直方向保留命中时的高度差，但限制在目标身体高度范围内（最高约 1.8 倍半径）
+		var rel_y: float = clampf(global_position.y - entity.global_position.y, -0.05, er * 1.8)
+		_stuck_offset = hdir * (er * 1.02) + Vector3(0.0, rel_y, 0.0)
 		_stuck_timer = ARROW_STICK_TIME
 		return
 	recycle()
