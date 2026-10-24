@@ -4,6 +4,9 @@ render_mode blend_mix, depth_draw_always, cull_disabled;
 uniform vec4 water_color : source_color = vec4(0.0, 0.75, 1.0, 0.50);
 uniform float time_speed : hint_range(0.1, 2.0) = 0.2;
 uniform sampler2D fog_tex : source_color;
+// 地图边长（世界单位）：水面网格的 UV 与地形迷雾纹理不是同一套映射，
+// 迷雾必须用世界坐标换算，否则压暗位置会整体错位
+uniform float map_size : hint_range(10.0, 400.0) = 100.0;
 
 // —— 水面镜面反射：屏幕空间近似（不需要额外相机/反射探针）——
 uniform sampler2D screen_tex : hint_screen_texture, filter_linear_mipmap;
@@ -53,6 +56,13 @@ void vertex() {
 		w += (ring * 0.05 + bow * 0.02) * wake_strength;
 		foam += (bow * 1.5 + max(0.0, ring) * 1.0) * wake_strength;
 		lift += bow;
+		// 沉水单位（boat_dirs[i].z > 0）：落水点溅起更剧烈的水花与扩散波纹
+		float sink = boat_dirs[i].z;
+		if (sink > 0.01) {
+			float sf = sin(r * 4.5 - TIME * 7.0) * exp(-r * 0.55);
+			w += (sf * 0.12 + bow * 0.06) * sink;
+			foam += (max(0.0, sf) * 2.2 + bow * 2.0) * sink;
+		}
 		// 尾流带：沿航行反方向拉长的泡沫条
 		vec2 bd = boat_dirs[i].xz;
 		if (dot(bd, bd) > 0.01) {
@@ -71,7 +81,9 @@ void vertex() {
 }
 
 void fragment() {
-	vec3 world_pos = (INV_VIEW_MATRIX * vec4(VERTEX, 1.0)).xyz;
+	// 世界坐标：fragment 里的 VERTEX 是模型空间坐标，必须经 MODEL_MATRIX 变换。
+	// 之前误用 INV_VIEW_MATRIX * VERTEX，位置完全错位，迷雾取样与法线扰动都跟着偏。
+	vec3 world_pos = (MODEL_MATRIX * vec4(VERTEX, 1.0)).xyz;
 
 	// 基础水色
 	vec2 uv_n = UV * 8.0 + vec2(TIME * time_speed * 0.3, TIME * time_speed * 0.25);
@@ -98,6 +110,12 @@ void fragment() {
 		float ring = cos(r * 3.2 - TIME * 4.5) * exp(-r * 0.5);
 		float bow = exp(-r * 0.7);
 		wn.xz += dir * (ring * 1.1 + bow * 0.6) * wake_strength;
+		// 沉水单位：法线也按同样的水花环扰动，水面才会明显翻涌
+		float sink = boat_dirs[i].z;
+		if (sink > 0.01) {
+			float sf = sin(r * 4.5 - TIME * 7.0) * exp(-r * 0.55);
+			wn.xz += dir * (sf * 1.8 + bow * 1.4) * sink;
+		}
 		// 尾流带也扰动法线，航行时后方能看到明显的水纹
 		vec2 bd = boat_dirs[i].xz;
 		if (dot(bd, bd) > 0.01) {
@@ -164,16 +182,18 @@ void fragment() {
 
 	// 战争迷雾：没有视野的水面同样要蒙上阴影。
 	// fog_tex 是地形的迷雾底图：未探索区几乎全黑(约0.1)，已探索未可见区是压暗底图，
-	// 可见区是正常亮度，用亮度阈值区分这两种压暗程度。
-	vec4 fog = texture(fog_tex, UV);
+	// 可见区是正常亮度。水面网格的 UV 和地形贴图不是同一套映射，必须用世界坐标取样。
+	vec2 fog_uv = vec2(world_pos.x / map_size + 0.5, world_pos.z / map_size + 0.5);
+	vec4 fog = texture(fog_tex, fog_uv);
 	float fl = dot(fog.rgb, vec3(0.333));
 	float fog_amt = clamp(1.0 - smoothstep(0.12, 0.40, fl), 0.0, 1.0);
-	// 未探索区压到接近全黑，已探索未可见区只压暗一半，避免整片海域糊成色块
-	col = mix(col, col * 0.06 + vec3(0.015, 0.02, 0.035), fog_amt * 0.96);
+	// 未探索区压到接近全黑，已探索未可见区只压暗一半；高光一起压，避免压暗后仍反光发亮
+	col = mix(col, col * 0.05 + vec3(0.012, 0.016, 0.028), fog_amt * 0.98);
+	spec *= (1.0 - fog_amt * 0.9);
 
 	ALBEDO = col + spec * vec3(1.0, 1.0, 1.0);
 	// 迷雾里提高水面不透明度，让阴影盖住水下的地形，不然会透出底下的黑色
-	ALPHA = clamp(mix(0.5, 0.74, f) + spec * 0.15 + v_boat_foam * 0.12 + fog_amt * 0.5, 0.0, 0.98);
+	ALPHA = clamp(mix(0.5, 0.74, f) + spec * 0.15 + v_boat_foam * 0.12 + fog_amt * 0.62, 0.0, 0.995);
 	METALLIC = 0.02;
 	ROUGHNESS = 0.25;
 	SPECULAR = spec + v_boat_lift * 0.12;
