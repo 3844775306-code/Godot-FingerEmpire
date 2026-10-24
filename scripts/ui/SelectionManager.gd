@@ -22,6 +22,9 @@ var _ref_cleanup_timer: float = 0.0
 # 框选/全选时 _add_to_selection 会被连续调用几十上百次；每次立刻重建
 # InfoPanel 会让“框选大部队”明显卡顿。合并到本帧结束只刷新一次。
 var _info_panel_refresh_pending: bool = false
+# 框选几百个单位时，只为前 N 个显示选择环；每个环都是一次额外 draw call，
+# 而大部队的实际操作路径预览本来就只画第一个单位。
+const MAX_SELECTION_RINGS: int = 64
 
 # 编队系统
 var control_groups: Dictionary = {}   # int → Array[GameEntity]
@@ -405,8 +408,18 @@ func _add_to_selection(entity):
 		_clear_selection()
 	if entity not in selected_entities:
 		selected_entities.append(entity)
-		entity.set_selected(true); if entity is Army and entity.has_method("show_waypoints"): entity.show_waypoints()
+		# 只给前 MAX_SELECTION_RINGS 个显示选择环，避免几百个单位各画一个环。
+		entity.set_selected(selected_entities.size() <= MAX_SELECTION_RINGS)
+		if entity is Army and entity.has_method("show_waypoints"): entity.show_waypoints()
 		_request_info_panel_refresh()
+
+# 直接改写 selected_entities 的旧路径（InfoPanel/联机同步/编队召回）不会走
+# _add_to_selection，这里统一按上限刷新环显示。
+func _refresh_selection_rings() -> void:
+	for i in range(selected_entities.size()):
+		var e = selected_entities[i]
+		if is_instance_valid(e):
+			e.set_selected(i < MAX_SELECTION_RINGS)
 
 func _remove_from_selection(entity):
 	if entity == null or not is_instance_valid(entity):
@@ -441,6 +454,7 @@ func _flush_info_panel_refresh() -> void:
 # ---------- 同步信息面板 ----------
 func _update_info_panel():
 	_sanitize_entity_refs()
+	_refresh_selection_rings()
 	var bm = get_tree().get_first_node_in_group("battle_manager")
 	if not bm:
 		return
