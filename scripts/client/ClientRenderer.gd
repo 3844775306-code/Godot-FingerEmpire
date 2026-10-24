@@ -36,8 +36,8 @@ var placement_preview: MeshInstance3D
 # ==================== 定时器 ====================
 var health_bar_timer: float = 0.0
 const HEALTH_BAR_INTERVAL: float = 0.05  # 20Hz，血条丝滑跟随
-# 头顶血条尺寸：原 60x10，宽度 ×0.5、高度 ×0.25
-const HP_BAR_SIZE: Vector2 = Vector2(30.0, 2.5)
+# 头顶血条尺寸：原 60x10，宽度 ×0.5、高度 ×0.25 后再把高度 ×2
+const HP_BAR_SIZE: Vector2 = Vector2(30.0, 5.0)
 
 # 客户端诊断
 var _diag_snap_age: float = 999.0
