@@ -271,8 +271,8 @@ func _input(event):
 				_handle_space()
 				get_viewport().set_input_as_handled(); return
 
-		# 命令卡网格热键（选中建筑时）
-		if client_selected_ids.size() == 1 and not ctrl and not shift:
+		# 命令卡网格热键（选中建筑时；队友建筑只读）
+		if client_selected_ids.size() == 1 and not ctrl and not shift and _is_own_id(client_selected_ids[0]):
 			var sel_info = _get_entity_info(client_selected_ids[0])
 			if sel_info.get("type") == 1:
 				# 优先用快照里已按等级解锁的 production_list，回退到配置里的完整 produces，
@@ -296,8 +296,8 @@ func _input(event):
 				if key in [KEY_Q,KEY_W,KEY_E,KEY_R,KEY_F,KEY_A,KEY_S,KEY_D]:
 					get_viewport().set_input_as_handled(); return
 
-		# 命令卡网格热键（选中军队时）
-		if not client_selected_ids.is_empty() and not ctrl and not shift:
+		# 命令卡网格热键（选中军队时；队友单位只读）
+		if not client_selected_ids.is_empty() and not ctrl and not shift and _selection_all_local():
 			var army_selected = false
 			for sid in client_selected_ids:
 				if _get_entity_info(sid).get("type") == 2:
@@ -317,6 +317,7 @@ func _input(event):
 
 		if key == KEY_DELETE:
 			for eid in client_selected_ids.duplicate():
+				if not _is_own_id(eid): continue
 				var info = _get_entity_info(eid)
 				if info.get("type") == 1 and info.get("entity_id") != 20:
 					NetworkManager.send_command.rpc_id(1, {"action": "demolish", "building_id": eid})
@@ -326,17 +327,18 @@ func _input(event):
 			get_viewport().set_input_as_handled()
 			return
 
-		# U键升级选中建筑
+		# U键升级选中建筑（队友建筑只读）
 		if key == KEY_U:
 			for eid in client_selected_ids.duplicate():
+				if not _is_own_id(eid): continue
 				var info = _get_entity_info(eid)
 				if info.get("type") == 1:
 					NetworkManager.send_command.rpc_id(1, {"action": "upgrade", "building_id": eid})
 			get_viewport().set_input_as_handled()
 			return
 
-		# 数字键 1-9：单选建筑 → 快速生产（照搬 SelectionManager）
-		if key >= KEY_1 and key <= KEY_9 and not ctrl and not shift:
+		# 数字键 1-9：单选建筑 → 快速生产（只对自己的建筑）
+		if key >= KEY_1 and key <= KEY_9 and not ctrl and not shift and client_selected_ids.size() == 1 and _is_own_id(client_selected_ids[0]):
 			if client_selected_ids.size() == 1:
 				var info = _get_entity_info(client_selected_ids[0])
 				if info.get("type") == 1:  # Building
@@ -359,19 +361,29 @@ func _input(event):
 		# 数字键 0-9：编队系统（照搬 SelectionManager._handle_number_key）
 		if key >= KEY_0 and key <= KEY_9:
 			var g = key - KEY_0
-			if ctrl and g == 0:
-				# Ctrl+0 → 清除编队
+			if ctrl:
+				# 编队只收己方单位：队友单位不能被编入并接受命令
+				var group_ids: Array = []
 				for sid in client_selected_ids:
-					for k in local_groups.keys():
-						local_groups[k].erase(sid)
-				NetworkManager.send_command.rpc_id(1, {"action": "set_group", "group": 0, "selected_ids": client_selected_ids.duplicate()})
-			elif ctrl:
-				# Ctrl+数字 → 设置编队
-				local_groups[g] = client_selected_ids.duplicate()
-				NetworkManager.send_command.rpc_id(1, {"action": "set_group", "group": g, "selected_ids": client_selected_ids.duplicate()})
-				var chud = _get_client_hud()
-				if chud and chud.has_method("show_alert_message"):
-					chud.show_alert_message("编队 %d 已设置 (%d 单位)" % [g, client_selected_ids.size()], Color(0.3, 0.7, 1.0))
+					if _is_own_id(sid): group_ids.append(sid)
+				if group_ids.is_empty():
+					if _selection_has_teammate():
+						_notify_teammate_readonly()
+					get_viewport().set_input_as_handled()
+					return
+				if g == 0:
+					# Ctrl+0 → 清除编队
+					for sid in group_ids:
+						for k in local_groups.keys():
+							local_groups[k].erase(sid)
+					NetworkManager.send_command.rpc_id(1, {"action": "set_group", "group": 0, "selected_ids": group_ids})
+				else:
+					# Ctrl+数字 → 设置编队
+					local_groups[g] = group_ids.duplicate()
+					NetworkManager.send_command.rpc_id(1, {"action": "set_group", "group": g, "selected_ids": group_ids})
+					var chud = _get_client_hud()
+					if chud and chud.has_method("show_alert_message"):
+						chud.show_alert_message("编队 %d 已设置 (%d 单位)" % [g, group_ids.size()], Color(0.3, 0.7, 1.0))
 			else:
 				# 数字 → 召回编队
 				var now = Time.get_ticks_msec() / 1000.0
@@ -396,8 +408,8 @@ func _input(event):
 		if _is_mobile_ui_point(event.position):
 			return
 		if event.pressed:
-			# Alt+左键 → 设置驻扎点
-			if Input.is_key_pressed(KEY_ALT) and not client_selected_ids.is_empty():
+			# Alt+左键 → 设置驻扎点（仅己方单位）
+			if Input.is_key_pressed(KEY_ALT) and not client_selected_ids.is_empty() and _selection_all_local():
 				var ground_pos = _get_ground_position(event.position)
 				if ground_pos != Vector3.ZERO:
 					NetworkManager.send_command.rpc_id(1, {
@@ -449,20 +461,16 @@ func _input(event):
 						get_viewport().set_input_as_handled()
 						return
 
-			# 点击己方实体 → 选中
+			# 点击己方/队友实体 → 选中（队友单位只可查看，不可指挥）
 			if clicked_id != -1:
 				var info = _get_entity_info(clicked_id)
 				if not info: return
 
-				# 2v2 权限：只能选自己的单位
-				if renderer.my_peer_id != -1:
-					if info.get("owner_peer_id", -1) != renderer.my_peer_id:
-						_send_left_click(event)  # 敌方 → 攻击命令
-						return
-				else:
-					if info.get("team", -1) != renderer.player_team:
-						_send_left_click(event)  # 敌方 → 攻击命令
-						return
+				var is_own := _is_own_id(clicked_id)
+				var is_ally := _is_teammate_id(clicked_id)
+				if not is_own and not is_ally:
+					_send_left_click(event)  # 敌方 → 攻击命令
+					return
 
 				if info["health"] <= 0: return
 
@@ -476,7 +484,10 @@ func _input(event):
 				last_clicked_id = clicked_id
 				last_click_time = now
 
-				# 单击：Shift追加，否则替换选择
+				# 单击：Shift追加，否则替换选择；己方与队友不混选，避免命令误发
+				if Input.is_key_pressed(KEY_SHIFT) and not client_selected_ids.is_empty():
+					if _selection_all_local() != is_own:
+						client_selected_ids.clear()
 				if clicked_id in client_selected_ids:
 					if Input.is_key_pressed(KEY_SHIFT):
 						client_selected_ids.erase(clicked_id)
@@ -503,7 +514,13 @@ func _input(event):
 					box_end = pos
 				else:
 					# 有选中单位 + 点击空地/敌方 → 攻击/移动命令
-					_send_left_click(event)
+					# 队友单位只可查看：取消选中，不发送任何命令
+					if _selection_has_teammate():
+						client_selected_ids.clear()
+						_update_selection_visuals()
+						emit_signal("selection_changed", [])
+					else:
+						_send_left_click(event)
 		else:
 			# 左键松开 → 处理框选
 			_on_left_release(event)
@@ -542,6 +559,7 @@ func _on_left_release(_event):
 		_update_selection_visuals()
 
 func _select_all_of_same_type(target_id: int, info: Dictionary):
+	var target_is_ally := _is_teammate_id(target_id)
 	client_selected_ids.clear()
 	var target_entity_id = info.get("entity_id", -1)
 	if target_entity_id == -1: return
@@ -549,8 +567,11 @@ func _select_all_of_same_type(target_id: int, info: Dictionary):
 		if not node.has_meta("snapshot_info"): continue
 		var ent_info = node.get_meta("snapshot_info")
 		if not ent_info: continue
-		if renderer.my_peer_id != -1 and ent_info.get("owner_peer_id", -1) != renderer.my_peer_id:
-			continue
+		if target_is_ally:
+			if int(ent_info.get("team", -1)) != renderer.player_team: continue
+			if int(ent_info.get("owner_peer_id", -1)) == renderer.my_peer_id: continue
+		else:
+			if not _is_own_id(ent_info["id"]): continue
 		if ent_info.get("entity_id") == target_entity_id and ent_info["health"] > 0:
 			client_selected_ids.append(ent_info["id"])
 	emit_signal("selection_changed", client_selected_ids.duplicate())
@@ -561,8 +582,8 @@ func _unhandled_input(event):
 	if not renderer: return
 	# 右键 → 命令/建造（照搬单机版：_unhandled_input 只处理右键）
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
-		# Alt+右键 → 清除驻扎点
-		if Input.is_key_pressed(KEY_CTRL) and not client_selected_ids.is_empty():
+		# Alt+右键 → 清除驻扎点（仅己方单位）
+		if Input.is_key_pressed(KEY_CTRL) and not client_selected_ids.is_empty() and _selection_all_local():
 			var hit_id = _get_entity_id_under_mouse(event.position)
 			if hit_id == -1:
 				NetworkManager.send_command.rpc_id(1, {"action": "clear_garrison", "selected_ids": client_selected_ids.duplicate()})
@@ -587,6 +608,10 @@ func _unhandled_input(event):
 # ---------- 命令发送 ----------
 func _send_left_click(event):
 	if not renderer: return
+	# 队友单位只可查看，不能被指挥（防御性拦截，正常选择流程不会走到这里）
+	if _selection_has_teammate():
+		_notify_teammate_readonly()
+		return
 	var cam = get_viewport().get_camera_3d()
 	if not cam: return
 	var from = cam.project_ray_origin(event.position)
@@ -658,6 +683,39 @@ func _get_entity_info(id: int) -> Dictionary:
 		if info and info["id"] == id:
 			return info
 	return {}
+
+# ==================== 归属判断（队友可查看、不可指挥） ====================
+
+func _is_own_id(id: int) -> bool:
+	var info = _get_entity_info(id)
+	if info.is_empty(): return false
+	if renderer.my_peer_id != -1:
+		return int(info.get("owner_peer_id", -1)) == renderer.my_peer_id
+	return int(info.get("team", -1)) == renderer.player_team
+
+# 队友：同队但 owner 不是本地玩家（2v2/3v3）
+func _is_teammate_id(id: int) -> bool:
+	var info = _get_entity_info(id)
+	if info.is_empty(): return false
+	if renderer.my_peer_id == -1: return false
+	if int(info.get("team", -1)) != renderer.player_team: return false
+	return int(info.get("owner_peer_id", -1)) != renderer.my_peer_id
+
+func _selection_all_local() -> bool:
+	if client_selected_ids.is_empty(): return false
+	for sid in client_selected_ids:
+		if not _is_own_id(sid): return false
+	return true
+
+func _selection_has_teammate() -> bool:
+	for sid in client_selected_ids:
+		if _is_teammate_id(sid): return true
+	return false
+
+func _notify_teammate_readonly():
+	var chud = _get_client_hud()
+	if chud and chud.has_method("show_alert_message"):
+		chud.show_alert_message("队友单位仅可查看，无法指挥", Color(1.0, 0.75, 0.2))
 
 func _get_ground_position(screen_pos: Vector2) -> Vector3:
 	var cam = get_viewport().get_camera_3d()
@@ -953,6 +1011,10 @@ func _toggle_patrol_mode():
 		chud.show_alert_message("巡逻模式: " + ("开启(点击设置巡逻点)" if _patrol_mode else "关闭"), Color(0.3, 1.0, 0.5) if _patrol_mode else Color(0.5,0.5,0.5))
 
 func _send_produce(bid: int, uid: int):
+	# 队友建筑只可查看，不能生产
+	if not _is_own_id(bid):
+		_notify_teammate_readonly()
+		return
 	NetworkManager.send_command.rpc_id(1, {"action":"produce","building_id":bid,"unit_id":uid,"ctrl_held":false,"shift_held":false})
 
 # Tab: 同类循环选择

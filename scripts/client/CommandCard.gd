@@ -111,22 +111,34 @@ func hide_all():
 	for btn in _buttons: btn.visible = false
 
 # ---- 发送命令 ----
+# 队友单位只可查看：命令卡理论上已隐藏，这里再做一层防御
+func _can_command(bid: int) -> bool:
+	var cr = get_tree().get_first_node_in_group("client_renderer")
+	if not cr: return false
+	var info = cr.get_entity_info(bid)
+	if info.is_empty(): return true
+	return cr.is_local_owned_info(info)
+
 func _send_produce(bid: int, uid: int):
+	if not _can_command(bid): return
 	var cr = get_tree().get_first_node_in_group("client_renderer")
 	if cr: NetworkManager.send_command.rpc_id(1, {"action":"produce","building_id":bid,"unit_id":uid,"ctrl_held":false,"shift_held":false})
 	else: _call_bm("produce_unit", [bid, uid])
 
 func _send_upgrade(bid: int):
+	if not _can_command(bid): return
 	var cr = get_tree().get_first_node_in_group("client_renderer")
 	if cr: NetworkManager.send_command.rpc_id(1, {"action":"upgrade","building_id":bid})
 	else: _call_bm("upgrade_building", [bid])
 
 func _send_demolish(bid: int):
+	if not _can_command(bid): return
 	var cr = get_tree().get_first_node_in_group("client_renderer")
 	if cr: NetworkManager.send_command.rpc_id(1, {"action":"demolish","building_id":bid})
 	else: _call_bm("demolish_building", [bid])
 
 func _send_ungarrison(bid: int):
+	if not _can_command(bid): return
 	var cr = get_tree().get_first_node_in_group("client_renderer")
 	if cr: NetworkManager.send_command.rpc_id(1, {"action":"ungarrison_soldiers","selected_ids":[bid]})
 	else: _call_bm("release_garrisoned", [bid])

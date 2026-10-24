@@ -1947,6 +1947,9 @@ func _handle_right_click(event):
 	_command_selected_units(event.position)
 
 func _set_garrison_for_selected(screen_pos: Vector2):
+	# 防御：队友单位只可查看，不允许设置驻扎点
+	if selection and selection.has_method("_selection_has_teammate") and selection._selection_has_teammate():
+		return
 	var pos = _get_ground_pos(screen_pos)
 	if pos == Vector3.ZERO: return
 	for u in selection.selected_entities:
@@ -1982,6 +1985,9 @@ func _get_entity_under_click(screen_pos: Vector2):
 	return null
 
 func _command_selected_units(screen_pos: Vector2):
+	# 防御：队友单位只可查看，任何路径都不能把命令发给队友
+	if selection and selection.has_method("_selection_has_teammate") and selection._selection_has_teammate():
+		return
 	var cam = get_viewport().get_camera_3d()
 	if not cam: return
 

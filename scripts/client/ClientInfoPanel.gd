@@ -87,6 +87,14 @@ func _make_rtl_label() -> RichTextLabel:
 func set_resources(res: Dictionary, lim: Dictionary, pop: Dictionary = {}):
 	resources = res; limits = lim; population = pop
 
+# 队友单位只读：同队但 owner 不是本地玩家时，只展示信息，不提供生产/升级/拆除入口
+func _is_local_owned_info(info: Dictionary) -> bool:
+	if info.is_empty(): return false
+	if not renderer: return false
+	if renderer.my_peer_id != -1:
+		return int(info.get("owner_peer_id", -1)) == renderer.my_peer_id
+	return int(info.get("team", -1)) == renderer.player_team
+
 func update_info(entity_id: int):
 	if not renderer: renderer = get_tree().get_first_node_in_group("client_renderer")
 	if not renderer: return
@@ -107,11 +115,14 @@ func update_info(entity_id: int):
 
 	var group_prefix = ""
 	# Client side: group display not available (needs server-side GameEntity ref)
+	var readonly := not _is_local_owned_info(info)
 	var nm = group_prefix + "%s %s  [color=%s]Lv.%d[/color]" % [
 		UITheme.entity_emoji(info.get("entity_id", -1), info.get("type", 2)),
 		info["name"], UITheme.hex_str(UITheme.GOLD), info.get("level", 1)]
 	if batch_count > 1:
 		nm += "  [color=%s][Ctrl + x%d][/color]" % [UITheme.hex_str(UITheme.ALERT_WARNING), batch_count]
+	if readonly:
+		nm += "  [color=%s]（队友 · 仅查看）[/color]" % UITheme.hex_str(UITheme.PARCHMENT)
 	name_rtl.text = nm
 
 	var pct = float(info["health"]) / max(float(info["max_health"]), 1.0)
@@ -145,10 +156,10 @@ func update_info(entity_id: int):
 		$VBox.remove_child(old_box)
 		old_box.queue_free()
 	if info["type"] == 1:
-		# 拆除按钮（城堡不可拆）
+		# 拆除按钮（城堡不可拆；队友建筑只读）
 		if demolish_btn:
-			demolish_btn.visible = (info.get("entity_id", 0) != 20)
-		if info.get("can_upgrade", false):
+			demolish_btn.visible = (info.get("entity_id", 0) != 20) and not readonly
+		if info.get("can_upgrade", false) and not readonly:
 
 			upgrade_btn.visible = true; upgrade_btn.text = "升级"
 			if upgrade_btn.pressed.is_connected(_on_upgrade_pressed):
@@ -192,7 +203,9 @@ func update_info(entity_id: int):
 						var have = resources.get(res, 0)
 						if have < need: ok = false
 						cs.append({"res": res, "need": need, "have": have})
-				btn.disabled = not ok
+				btn.disabled = (not ok) or readonly
+				if readonly:
+					btn.tooltip_text = "队友建筑仅可查看，无法下达生产命令"
 				var rtl = RichTextLabel.new(); rtl.bbcode_enabled = true; rtl.fit_content = true; rtl.autowrap_mode = TextServer.AUTOWRAP_OFF
 				rtl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 				rtl.anchor_left = 0; rtl.anchor_right = 1; rtl.anchor_top = 0; rtl.anchor_bottom = 1
@@ -216,6 +229,7 @@ func update_info(entity_id: int):
 
 func _on_upgrade_pressed():
 	if observed_entity_id == -1: return
+	if not _is_local_owned_info(renderer.get_entity_info(observed_entity_id)): return
 	var n = 5 if Input.is_key_pressed(KEY_SHIFT) else 1
 	# 升级已全局生效，只需升级当前建筑即可
 	for _i in range(n):
@@ -223,19 +237,19 @@ func _on_upgrade_pressed():
 
 func _on_produce_pressed(unit_id: int):
 	if observed_entity_id == -1: return
+	if not _is_local_owned_info(renderer.get_entity_info(observed_entity_id)): return
 	var n = 5 if Input.is_key_pressed(KEY_SHIFT) else 1
 	var info = renderer.get_entity_info(observed_entity_id)
 	if Input.is_key_pressed(KEY_CTRL):
 		# Ctrl: ALL player buildings of same type (match single-player behavior)
 		var target_eid = info.get("entity_id")
-		var my_peer = renderer.my_peer_id
 		var sent = false
 		for node in renderer.entity_nodes.values():
 			if not node.has_meta("snapshot_info"): continue
 			var si = node.get_meta("snapshot_info")
 			if not si: continue
 			if si.get("entity_id") == target_eid and si.get("health", 0) > 0:
-				if my_peer != -1 and si.get("owner_peer_id", -1) != my_peer: continue
+				if not _is_local_owned_info(si): continue
 				for _i in range(n):
 					NetworkManager.send_command.rpc_id(1, {"action": "produce", "building_id": si["id"], "unit_id": unit_id, "ctrl_held": true, "shift_held": Input.is_key_pressed(KEY_SHIFT)})
 				sent = true
@@ -374,6 +388,7 @@ func _input(event):
 
 func _on_demolish_pressed():
 	if observed_entity_id == -1: return
+	if not _is_local_owned_info(renderer.get_entity_info(observed_entity_id)): return
 	NetworkManager.send_command.rpc_id(1, {"action": "demolish", "building_id": observed_entity_id})
 	visible = false
 	observed_entity_id = -1

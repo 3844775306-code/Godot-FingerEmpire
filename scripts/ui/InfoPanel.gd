@@ -109,16 +109,26 @@ func _make_rtl_label() -> RichTextLabel:
 
 func _get_same_type_buildings(entity: Building) -> Array[Building]:
 	var result: Array[Building] = []
-	if Input.is_key_pressed(KEY_CTRL):
-		# Ctrl: ALL player buildings of same type
+	if Input.is_key_pressed(KEY_CTRL) and _is_local_owned_entity(entity):
+		# Ctrl: ALL player buildings of same type（只批量自己的建筑，队友建筑只读）
 		var bm = get_tree().get_first_node_in_group("battle_manager")
 		if bm and bm.has_node("Entities"):
 			for e in bm.get_node("Entities").get_children():
-				if e is Building and e.entity_id == entity.entity_id and e.team == entity.team:
+				if e is Building and e.entity_id == entity.entity_id and e.team == entity.team and _is_local_owned_entity(e):
 					result.append(e)
 	else:
 		result.append(entity)
 	return result
+
+# 队友单位只读：同队但不属于本地玩家时，只展示信息，不提供生产/升级/拆除入口
+func _is_local_owned_entity(entity) -> bool:
+	if entity == null or not is_instance_valid(entity):
+		return false
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if not bm: return false
+	if bm.has_method("is_local_player_owned"):
+		return bm.is_local_player_owned(entity.owner_peer_id, entity.team)
+	return entity.team == bm.get_host_team()
 
 func update_info(entity):
 	if entity == null or not is_instance_valid(entity) or entity.health <= 0:
@@ -143,8 +153,11 @@ func update_info(entity):
 	var nm = group_prefix + "%s  [color=%s]Lv.%d[/color]" % [
 		UITheme.entity_emoji(entity.entity_id, entity.entity_type),
 		UITheme.hex_str(UITheme.GOLD), entity.level]
+	var readonly := not _is_local_owned_entity(entity)
 	if batch_count > 1:
 		nm += "  [color=%s][Ctrl + x%d][/color]" % [UITheme.hex_str(UITheme.ALERT_WARNING), batch_count]
+	if readonly:
+		nm += "  [color=%s]（队友 · 仅查看）[/color]" % UITheme.hex_str(UITheme.PARCHMENT)
 	name_rtl.text = nm
 
 	var pct = float(entity.health) / max(float(entity.max_health), 1.0)
@@ -171,10 +184,10 @@ func update_info(entity):
 		$VBox.remove_child(old_box)
 		old_box.queue_free()
 	if entity is Building:
-		# 拆除按钮（城堡不可拆）
+		# 拆除按钮（城堡不可拆；队友建筑只读）
 		if demolish_btn:
-			demolish_btn.visible = (entity.entity_id != 20)
-		if entity.can_upgrade():
+			demolish_btn.visible = (entity.entity_id != 20) and not readonly
+		if entity.can_upgrade() and not readonly:
 			upgrade_btn.visible = true; upgrade_btn.text = "升级"
 			if upgrade_btn.pressed.is_connected(_on_upgrade_pressed):
 				upgrade_btn.pressed.disconnect(_on_upgrade_pressed)
@@ -232,7 +245,9 @@ func update_info(entity):
 					var have = _get_res().get(res, 0)
 					if have < need: ok = false
 					cs.append({"res": res, "need": need})
-				btn.disabled = not ok
+				btn.disabled = (not ok) or readonly
+				if readonly:
+					btn.tooltip_text = "队友建筑仅可查看，无法下达生产命令"
 				var rtl = RichTextLabel.new(); rtl.bbcode_enabled = true; rtl.fit_content = true; rtl.autowrap_mode = TextServer.AUTOWRAP_OFF
 				rtl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 				rtl.anchor_left = 0; rtl.anchor_right = 1; rtl.anchor_top = 0; rtl.anchor_bottom = 1
@@ -257,6 +272,7 @@ func update_info(entity):
 
 func _on_upgrade_pressed():
 	if not observed_entity or not is_instance_valid(observed_entity): return
+	if not _is_local_owned_entity(observed_entity): return
 	var n = 999 if Input.is_key_pressed(KEY_SHIFT) else 1
 	# 升级已全局生效，只需升级当前建筑即可
 	for _i in range(n):
@@ -264,9 +280,11 @@ func _on_upgrade_pressed():
 
 func _on_produce_pressed(unit_id: int):
 	if not observed_entity or not is_instance_valid(observed_entity): return
+	if not _is_local_owned_entity(observed_entity): return
 	var n = 5 if Input.is_key_pressed(KEY_SHIFT) else 1
 	var targets = _get_same_type_buildings(observed_entity) if Input.is_key_pressed(KEY_CTRL) else [observed_entity]
 	for b in targets:
+		if not _is_local_owned_entity(b): continue
 		for _i in range(n):
 			if not b.try_produce(unit_id): break
 
@@ -410,6 +428,8 @@ func _on_demolish_pressed():
 	if not observed_entity or not is_instance_valid(observed_entity):
 		return
 	if not (observed_entity is Building):
+		return
+	if not _is_local_owned_entity(observed_entity):
 		return
 	var bm = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
 	if bm:

@@ -144,6 +144,7 @@ func _ready():
 					panel.visible = false
 			var cc = $UI.get_node_or_null("CommandCard")
 			if cc: _update_command_card(cc, ids)
+			_refresh_waypoint_markers(ids)
 			)
 
 	# O键切换命令卡
@@ -261,7 +262,20 @@ func is_building_unlocked(building_id: int) -> bool:
 			return cl >= 4
 	return true
 
+# 归属判断：联机按 owner_peer_id，单机按队伍
+func is_local_owned_info(info: Dictionary) -> bool:
+	if info.is_empty(): return false
+	if my_peer_id != -1:
+		return int(info.get("owner_peer_id", -1)) == my_peer_id
+	return int(info.get("team", -1)) == player_team
+
 func _update_command_card(cc, ids: Array):
+	# 队友单位只可查看：不显示任何生产/升级/拆除/指挥按钮
+	if not ids.is_empty():
+		for sid in ids:
+			if not is_local_owned_info(get_entity_info(sid)):
+				cc.hide_all()
+				return
 	if ids.size() == 1:
 		var info = get_entity_info(ids[0])
 		if info.get("type") == 1:
@@ -1096,6 +1110,24 @@ func _process_fog_batch() -> bool:
 func _update_local_fog():
 	# 兼容旧接口：启动增量迷雾周期
 	_start_fog_cycle()
+# 选中变化时立即刷新路径球/航点：不等下一次快照，避免“选中后看不到 A* 路径球”
+func _refresh_waypoint_markers(ids: Array):
+	if not has_meta("_wp_markers"):
+		if ids.is_empty(): return
+		set_meta("_wp_markers", {})
+	var all_wp = get_meta("_wp_markers")
+	var keep := {}
+	for id in ids: keep[id] = true
+	for eid in all_wp.keys().duplicate():
+		if keep.has(eid): continue
+		for m in all_wp[eid]:
+			if is_instance_valid(m): m.queue_free()
+		all_wp.erase(eid)
+	for id in ids:
+		var node = entity_nodes.get(id)
+		if node and node.has_meta("snapshot_info"):
+			_update_waypoint_markers(node, node.get_meta("snapshot_info"))
+
 func _update_waypoint_markers(node: Node3D, info: Dictionary):
 	# Only show waypoints for selected entities
 	var inp = get_node_or_null("ClientInput")

@@ -140,8 +140,8 @@ func _input(event):
 				bm.enter_build_mode(build_id)
 				get_viewport().set_input_as_handled(); return
 
-		# 选中建筑 → 命令卡热键
-		if selected_entities.size() == 1 and not ctrl and not shift:
+		# 选中建筑 → 命令卡热键（队友建筑只读，不能生产/升级/拆除）
+		if selected_entities.size() == 1 and not ctrl and not shift and _is_local_owned(selected_entities[0]):
 			var e = selected_entities[0]
 			if is_instance_valid(e) and e is Building:
 				var produces = e.production_list
@@ -160,8 +160,8 @@ func _input(event):
 				if handled:
 					get_viewport().set_input_as_handled(); return
 
-		# 选中军队 → 命令卡热键
-		if not selected_entities.is_empty() and not ctrl and not shift:
+		# 选中军队 → 命令卡热键（只对己方单位生效）
+		if not selected_entities.is_empty() and not ctrl and not shift and _selection_all_local():
 			var army_selected = false
 			for e in selected_entities:
 				if is_instance_valid(e) and e is Army: army_selected = true; break
@@ -201,8 +201,8 @@ func _input(event):
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
 			_touch_start_pos = event.position
-			# Alt+左键 → 即时处理
-			if Input.is_key_pressed(KEY_ALT) and not selected_entities.is_empty():
+			# Alt+左键 → 即时处理（仅己方单位可设置驻扎点）
+			if Input.is_key_pressed(KEY_ALT) and not selected_entities.is_empty() and _selection_all_local():
 				if bm and bm.has_method("_set_garrison_for_selected"):
 					bm._set_garrison_for_selected(event.position)
 				return
@@ -225,12 +225,13 @@ func _input(event):
 							if bm.world_to_grid(e.global_position) == gg:
 								bypass = true; break
 				if bypass:
-					bm._command_selected_units(event.position)
+					if _selection_all_local():
+						bm._command_selected_units(event.position)
 					return
 			var now = Time.get_ticks_msec() / 1000.0
-			if clicked_entity and _is_local_owned(clicked_entity):
+			if clicked_entity and _can_inspect(clicked_entity):
 				# Official garrison: if selected is official and clicked is building, send garrison command
-				if clicked_entity is Building and Input.is_key_pressed(KEY_ALT):
+				if clicked_entity is Building and Input.is_key_pressed(KEY_ALT) and _is_local_owned(clicked_entity) and _selection_all_local():
 					for e in selected_entities:
 						if e is Army and e.entity_id >= 46 and e.entity_id <= 50:
 							e._garrison_target_id = clicked_entity.get_instance_id()
@@ -266,7 +267,11 @@ func _input(event):
 					box_end = pos
 				else:
 					# 有选中单位时点击敌方/空地 → 攻击/移动命令
-					bm._command_selected_units(event.position)
+					if _selection_has_teammate():
+						# 队友单位无法指挥：点击空地只取消选中
+						_clear_selection()
+					else:
+						bm._command_selected_units(event.position)
 		else:
 			_on_left_mouse_released(event)
 
@@ -301,15 +306,18 @@ func _on_left_mouse_released(event):
 func _select_all_of_same_type(target):
 	if target == null or not is_instance_valid(target):
 		return
+	var want_ally := _is_teammate_owned(target)
 	_clear_selection()
 	if target is Army:
 		for entity in get_tree().get_nodes_in_group("entities"):
-			if entity is Army and _is_local_owned(entity) and entity.display_name == target.display_name:
-				_add_to_selection(entity)
+			if entity is Army and entity.display_name == target.display_name:
+				if (want_ally and _is_teammate_owned(entity)) or (not want_ally and _is_local_owned(entity)):
+					_add_to_selection(entity)
 	elif target is Building:
 		for entity in get_tree().get_nodes_in_group("entities"):
-			if entity is Building and _is_local_owned(entity) and entity.display_name == target.display_name:
-				_add_to_selection(entity)
+			if entity is Building and entity.display_name == target.display_name:
+				if (want_ally and _is_teammate_owned(entity)) or (not want_ally and _is_local_owned(entity)):
+					_add_to_selection(entity)
 	elif target is WorldResource:
 		# 资源默认只选中自己
 		_add_to_selection(target)
@@ -349,12 +357,49 @@ func _is_local_owned(entity) -> bool:
 		return bm.is_local_player_owned(entity.owner_peer_id, entity.team)
 	return entity.team == bm.get_host_team()
 
+# 队友单位：同队但不属于本地玩家（2v2/3v3 的 AI/人类队友）。
+# 只允许查看信息与路径球，不允许下命令（生产/升级/拆除/移动等）。
+func _is_teammate_owned(entity) -> bool:
+	if entity == null or not is_instance_valid(entity):
+		return false
+	if not (entity is Army or entity is Building):
+		return false
+	if _is_local_owned(entity):
+		return false
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if not bm: return false
+	return entity.team == bm.get_host_team()
+
+# 可被选中查看的实体：自己的 + 队友的
+func _can_inspect(entity) -> bool:
+	return _is_local_owned(entity) or _is_teammate_owned(entity)
+
+func _selection_has_teammate() -> bool:
+	for e in selected_entities:
+		if _is_teammate_owned(e):
+			return true
+	return false
+
+func _selection_all_local() -> bool:
+	if selected_entities.is_empty():
+		return false
+	for e in selected_entities:
+		if not _is_local_owned(e):
+			return false
+	return true
+
 # ---------- 选择列表操作 ----------
 func _add_to_selection(entity):
 	if entity == null or not is_instance_valid(entity) or entity.health <= 0:
 		return
-	if not _is_local_owned(entity):
+	if not _can_inspect(entity):
 		return
+	# 不允许“自己的单位”和“队友单位”混选：否则右键/热键命令会误发给队友
+	var ally := _is_teammate_owned(entity)
+	if ally and not selected_entities.is_empty() and not _selection_has_teammate():
+		_clear_selection()
+	elif not ally and _selection_has_teammate():
+		_clear_selection()
 	if entity not in selected_entities:
 		selected_entities.append(entity)
 		entity.set_selected(true); if entity is Army and entity.has_method("show_waypoints"): entity.show_waypoints()
@@ -456,27 +501,27 @@ func _handle_number_key(num: int, ctrl: bool, shift: bool):
 				_recall_or_jump(0)
 		return
 
-		# 1) Ctrl+单选建筑 → 批量生产5个
-		if ctrl and selected_entities.size() == 1 and selected_entities[0] is Building:
-			var bld = selected_entities[0] as Building
-			if bld.production_list.size() >= num:
-				var prod = bld.production_list[num - 1]
-				for _i in range(5):
-					if not bld.try_produce(prod.unit_id): break
-			return
+	# 1) Ctrl+单选建筑 → 批量生产5个（队友建筑只读）
+	if ctrl and selected_entities.size() == 1 and selected_entities[0] is Building and _is_local_owned(selected_entities[0]):
+		var bld = selected_entities[0] as Building
+		if bld.production_list.size() >= num:
+			var prod = bld.production_list[num - 1]
+			for _i in range(5):
+				if not bld.try_produce(prod.unit_id): break
+		return
 
-		# 2) Ctrl+多选 → 设置编队
-		if ctrl and not selected_entities.is_empty():
-			_set_control_group(num)
-			return
+	# 2) Ctrl+多选 → 设置编队（编队只收己方单位）
+	if ctrl and not selected_entities.is_empty() and not _selection_has_teammate():
+		_set_control_group(num)
+		return
 
 	# 2) Shift+无选中 → 追加编队
 	if shift and selected_entities.is_empty():
 		_add_control_group(num)
 		return
 
-	# 3) 无Ctrl/Shift + 单选建筑 → 按数字生产
-	if not ctrl and not shift and selected_entities.size() == 1 and selected_entities[0] is Building:
+	# 3) 无Ctrl/Shift + 单选建筑 → 按数字生产（队友建筑只读）
+	if not ctrl and not shift and selected_entities.size() == 1 and selected_entities[0] is Building and _is_local_owned(selected_entities[0]):
 		var b = selected_entities[0] as Building
 		if b.production_list.size() >= num:
 			var prod = b.production_list[num - 1]
@@ -528,7 +573,7 @@ func _add_control_group(num: int):
 
 func _upgrade_selected():
 	for e in selected_entities:
-		if is_instance_valid(e) and e is Building and e.can_upgrade():
+		if is_instance_valid(e) and e is Building and _is_local_owned(e) and e.can_upgrade():
 			var bm = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
 			if bm: e.perform_upgrade(bm)
 

@@ -1190,7 +1190,7 @@ var _sticky_resend_until: Dictionary = {}    # entity_id -> 过期广播序号
 const STICKY_RESEND_TICKS: int = 25          # 完工后 ~2.5 秒内每次广播都重发
 # A* 路径字符串很长（20 个点的字典编码约 1.3KB/单位），而路径只在改道/走到下一个
 # 路点时变化。缓存每个单位上次下发的路径签名，未变化时发 null，客户端保留旧路径。
-var _snap_path_sig: Dictionary = {}          # entity_id -> 路径签名
+var _snap_path_sig: Dictionary = {}          # snapshot_key -> { entity_id -> 路径签名 }
 
 # ==================== 快照视野网格（复用，仅分配一次） ====================
 var _snap_vis_grid: PackedByteArray = []  # flat byte grid (contiguous memory, faster)
@@ -1514,17 +1514,17 @@ func build_snapshot_for_team(team: int) -> Dictionary:
 		if not is_instance_valid(entity): continue
 		if entity.health <= 0:
 			dead.append(entity.get_instance_id())
-			_snap_path_sig.erase(entity.get_instance_id())
+			_erase_path_sig(entity.get_instance_id())
 			continue
 		var id = entity.get_instance_id()
 		current_entities[id] = true
-		var force_resend = _track_transition_state(entity) or _path_changed(entity)
+		var force_resend = _track_transition_state(entity) or _path_changed(entity, snapshot_key)
 		if is_full:
-			delta.append(_serialize_entity_compact(entity))
+			delta.append(_serialize_entity_compact(entity, snapshot_key))
 		else:
 			var h = _compute_entity_hash(entity)
 			if _should_include_in_delta(snapshot_key, id, h, force_resend):
-				delta.append(_serialize_entity_compact(entity))
+				delta.append(_serialize_entity_compact(entity, snapshot_key))
 
 	# --- Enemy/neutral team entities: visibility grid check ---
 	var enemy_team = RTSConfig.Team.RED if team == RTSConfig.Team.BLUE else RTSConfig.Team.BLUE
@@ -1532,7 +1532,7 @@ func build_snapshot_for_team(team: int) -> Dictionary:
 		if not is_instance_valid(entity): continue
 		if entity.health <= 0:
 			dead.append(entity.get_instance_id())
-			_snap_path_sig.erase(entity.get_instance_id())
+			_erase_path_sig(entity.get_instance_id())
 			continue
 		var id = entity.get_instance_id()
 		current_entities[id] = true
@@ -1540,10 +1540,10 @@ func build_snapshot_for_team(team: int) -> Dictionary:
 		if _snap_vis_grid[g.x * _ms + g.y] == ver:
 			# 视野内也只发变化：静止单位靠每 25 次(~1s)强制重发兜底
 			var h_foe := _compute_entity_hash(entity)
-			var force_foe := _track_transition_state(entity) or _path_changed(entity)
+			var force_foe := _track_transition_state(entity) or _path_changed(entity, snapshot_key)
 			if not is_full and not _should_include_in_delta(snapshot_key, id, h_foe, force_foe):
 				continue
-			delta.append(_serialize_entity_compact(entity))
+			delta.append(_serialize_entity_compact(entity, snapshot_key))
 
 	# --- Neutral entities (from _entities_by_team[NEUTRAL]): only if visible or explored ---
 	# 静态资源不再每帧重发：400 个木点每次快照就多 60KB+，25Hz 下 3MB/s 足以把
@@ -1554,7 +1554,7 @@ func build_snapshot_for_team(team: int) -> Dictionary:
 		if not is_instance_valid(entity): continue
 		if entity.health <= 0:
 			dead.append(entity.get_instance_id())
-			_snap_path_sig.erase(entity.get_instance_id())
+			_erase_path_sig(entity.get_instance_id())
 			continue
 		var id = entity.get_instance_id()
 		var g = world_to_grid(entity.global_position)
@@ -1563,10 +1563,10 @@ func build_snapshot_for_team(team: int) -> Dictionary:
 		if in_vision:
 			current_entities[id] = true
 			var h_vis := _compute_entity_hash(entity)
-			var force_vis := _track_transition_state(entity) or _path_changed(entity)
+			var force_vis := _track_transition_state(entity) or _path_changed(entity, snapshot_key)
 			if not is_full and not _should_include_in_delta(snapshot_key, id, h_vis, force_vis):
 				continue
-			delta.append(_serialize_entity_compact(entity))
+			delta.append(_serialize_entity_compact(entity, snapshot_key))
 		elif entity is WorldResource:
 			if not team_explored_resources.has(team):
 				team_explored_resources[team] = {}
@@ -1580,9 +1580,9 @@ func build_snapshot_for_team(team: int) -> Dictionary:
 				team_explored_resources[team][id] = true
 				# 登记哈希，否则下一次广播会把它当"新实体"重复全量下发
 				_should_include_in_delta(snapshot_key, id, h_exp, false)
-				delta.append(_serialize_entity_compact(entity))
+				delta.append(_serialize_entity_compact(entity, snapshot_key))
 			elif _should_include_in_delta(snapshot_key, id, h_exp, false):
-				delta.append(_serialize_entity_compact(entity))
+				delta.append(_serialize_entity_compact(entity, snapshot_key))
 		else:
 			# 非资源类中立实体（桥等）：看不见也保活，避免被"消失检测"误判成阵亡
 			current_entities[id] = true
@@ -1625,7 +1625,7 @@ func _broadcast_1v1():
 		var _elapsed_p = (Time.get_ticks_usec() - _pt_build) / 1000.0
 		if _elapsed_p > 3.0: print("[Profile-Player] pid=%d %.1fms" % [pid, _elapsed_p])
 
-func _serialize_entity_compact(entity: GameEntity) -> Array:
+func _serialize_entity_compact(entity: GameEntity, snapshot_key: String) -> Array:
 	var a = []
 	a.resize(E.size())
 	a[E.ID] = entity.get_instance_id()
@@ -1653,7 +1653,7 @@ func _serialize_entity_compact(entity: GameEntity) -> Array:
 	a[E.ENTITY_ID] = entity.entity_id
 	a[E.WAYPOINTS] = _serialize_waypoints(entity)
 	a[E.ROT_Y] = entity.rotation.y
-	a[E.ASTAR_PATH] = _serialize_astar_path_delta(entity)
+	a[E.ASTAR_PATH] = _serialize_astar_path_delta(entity, snapshot_key)
 	# 进驻状态
 	var _is_garrisoned = false
 	if entity is Army and entity._soldier_garrison_building and entity._soldier_garrison_building.get_ref():
@@ -1796,24 +1796,37 @@ func _path_signature(entity: GameEntity) -> int:
 			sig = ((sig << 5) ^ (sig >> 27)) ^ (int(wp.x * 10.0) * 31 + int(wp.z * 10.0))
 	return sig
 
-# 路径变化时实体必须进本次增量，否则客户端路径标记会停在上一次
-func _path_changed(entity: GameEntity) -> bool:
-	return _path_signature(entity) != int(_snap_path_sig.get(entity.get_instance_id(), -1))
+# 路径签名按快照接收者隔离：1v1 每个 team、2v2/3v3 每个 player 各自维护，
+# 否则先构建的快照会“消费”掉路径变化，后面的玩家收到 null → 选中单位看不到 A* 路径球。
+func _path_sig_store(snapshot_key: String) -> Dictionary:
+	if not _snap_path_sig.has(snapshot_key):
+		_snap_path_sig[snapshot_key] = {}
+	return _snap_path_sig[snapshot_key]
 
-func _serialize_astar_path_delta(entity: GameEntity) -> Variant:
+# 路径变化时实体必须进本次增量，否则客户端路径标记会停在上一次
+func _path_changed(entity: GameEntity, snapshot_key: String) -> bool:
+	return _path_signature(entity) != int(_path_sig_store(snapshot_key).get(entity.get_instance_id(), -1))
+
+func _serialize_astar_path_delta(entity: GameEntity, snapshot_key: String) -> Variant:
 	var path: Array = []
 	if entity is Army and entity.get("_movement") != null and entity._movement:
 		path = entity._movement.astar_path
 	var sig := _path_signature(entity)
 	var id := entity.get_instance_id()
-	if int(_snap_path_sig.get(id, -1)) == sig:
+	var store := _path_sig_store(snapshot_key)
+	if int(store.get(id, -1)) == sig:
 		return null
-	_snap_path_sig[id] = sig
+	store[id] = sig
 	var result := []
 	for wp in path:
 		if wp is Vector3:
 			result.append([wp.x, wp.y, wp.z])
 	return result
+
+# 实体死亡时清掉所有接收者快照里的路径签名，避免 instance_id 复用时误判
+func _erase_path_sig(id: int):
+	for key in _snap_path_sig.keys():
+		_snap_path_sig[key].erase(id)
 
 func _serialize_castles() -> Dictionary:
 	var dict = {}
@@ -1877,17 +1890,17 @@ func build_snapshot_for_player(peer_id: int) -> Dictionary:
 		if not is_instance_valid(entity): continue
 		if entity.health <= 0:
 			dead.append(entity.get_instance_id())
-			_snap_path_sig.erase(entity.get_instance_id())
+			_erase_path_sig(entity.get_instance_id())
 			continue
 		var id = entity.get_instance_id()
 		current_all_ids[id] = true
 		# Same-team entities (own + teammate) all get delta compression
-		var force_resend = _track_transition_state(entity)
+		var force_resend = _track_transition_state(entity) or _path_changed(entity, snapshot_key)
 		if not is_full:
 			var h = _compute_entity_hash(entity)
 			if not _should_include_in_delta(snapshot_key, id, h, force_resend):
 				continue
-		delta.append(_serialize_entity_compact(entity))
+		delta.append(_serialize_entity_compact(entity, snapshot_key))
 	var _t_own = (Time.get_ticks_usec() - _t0) / 1000.0
 
 	# --- Enemy team entities: visibility grid check ---
@@ -1896,13 +1909,13 @@ func build_snapshot_for_player(peer_id: int) -> Dictionary:
 		if not is_instance_valid(entity): continue
 		if entity.health <= 0:
 			dead.append(entity.get_instance_id())
-			_snap_path_sig.erase(entity.get_instance_id())
+			_erase_path_sig(entity.get_instance_id())
 			continue
 		var id = entity.get_instance_id()
 		current_all_ids[id] = true
 		var g = world_to_grid(entity.global_position)
 		if _snap_vis_grid[g.x * _ms + g.y] == ver:
-			delta.append(_serialize_entity_compact(entity))
+			delta.append(_serialize_entity_compact(entity, snapshot_key))
 	var _t_enemy = (Time.get_ticks_usec() - _t0) / 1000.0
 
 	# --- Neutral entities: visible or explored ---
@@ -1911,22 +1924,22 @@ func build_snapshot_for_player(peer_id: int) -> Dictionary:
 		if not is_instance_valid(entity): continue
 		if entity.health <= 0:
 			dead.append(entity.get_instance_id())
-			_snap_path_sig.erase(entity.get_instance_id())
+			_erase_path_sig(entity.get_instance_id())
 			continue
 		var id = entity.get_instance_id()
 		current_all_ids[id] = true
 		var g = world_to_grid(entity.global_position)
 		var idx = g.x * _ms + g.y
 		if _snap_vis_grid[idx] == ver 			or (g.x > 0 and _snap_vis_grid[idx - _ms] == ver) 			or (g.x < _ms - 1 and _snap_vis_grid[idx + _ms] == ver) 			or (g.y > 0 and _snap_vis_grid[idx - 1] == ver) 			or (g.y < _ms - 1 and _snap_vis_grid[idx + 1] == ver):
-			delta.append(_serialize_entity_compact(entity))
+			delta.append(_serialize_entity_compact(entity, snapshot_key))
 		elif entity is WorldResource:
 			if not team_explored_resources.has(team):
 				team_explored_resources[team] = {}
 			if team_explored_resources[team].has(id):
-				delta.append(_serialize_entity_compact(entity))
+				delta.append(_serialize_entity_compact(entity, snapshot_key))
 			else:
 				team_explored_resources[team][id] = true
-				delta.append(_serialize_entity_compact(entity))
+				delta.append(_serialize_entity_compact(entity, snapshot_key))
 	var _t_neutral = (Time.get_ticks_usec() - _t0) / 1000.0
 
 	# --- Disappeared entities ---
