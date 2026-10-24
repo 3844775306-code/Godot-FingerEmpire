@@ -1108,6 +1108,8 @@ func _init_2v2_single():
 
 	_team_castle_count[player_team] = 2
 	_team_castle_count[enemy_team] = 2
+	# 玩家颜色随随机阵营走，避免红方玩家仍用默认蓝色模型/血条。
+	_player_colors[1] = RTSConfig.COLOR_POOL[player_team]
 	for info in setup:
 		var pid = info.peer_id
 		var team = info.team
@@ -1135,8 +1137,8 @@ func _init_2v2_single():
 		castle_cfg["team"] = team
 		castle_cfg["owner_peer_id"] = pid
 		var castle = spawn_entity(castle_cfg, team, castle_pos, 1)
-		castle.owner_peer_id = pid
 		if castle:
+			castle.owner_peer_id = pid
 			if info.is_human:
 				castle.died.connect(_on_2v2_castle_died.bind(team))
 			else:
