@@ -2034,6 +2034,9 @@ func _manage_shipyards():
 			if pos != Vector3.ZERO: build_building(23, pos)
 		return
 	for sy in shipyards:
+		# 渡水模块专门建在登陆岸边的船坞不能因为附近没油田被拆掉
+		if sy.has_meta("ai_transport_shipyard"):
+			continue
 		var has_oil = false
 		for res in battle.entities.get_children():
 			if res is WorldResource and res.resource_type == "oil" and res.health > 0 and sy.global_position.distance_to(res.global_position) < 15.0: has_oil = true; break

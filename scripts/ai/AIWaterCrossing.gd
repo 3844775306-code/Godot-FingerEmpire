@@ -44,6 +44,7 @@ var bridge_plan: Array = []
 
 var _plan_timer: float = 2.0
 var _bridge_fail_count: int = 0
+var _bridge_retry_at_ms: int = 0
 var own_shore_water: Vector3 = Vector3.ZERO
 var own_shore_land: Vector3 = Vector3.ZERO
 var enemy_shore_water: Vector3 = Vector3.ZERO
@@ -101,6 +102,13 @@ func _refresh_plan():
 		return
 	var enemy_set: Dictionary = _bfs_land(target, bridges)
 	var plan: Array = []
+	# 连续失败 3 次后暂时走运载船，但不要永久放弃搭桥：
+	# 敌人退走、资源恢复或桥位空出来后，AI 仍应重新尝试。
+	if _bridge_fail_count >= 3:
+		if Time.get_ticks_msec() >= _bridge_retry_at_ms:
+			_bridge_fail_count = 0
+		else:
+			plan = []
 	if _bridge_fail_count < 3:
 		plan = _find_bridge_plan(own_set, enemy_set, bridges, start, target)
 	if not plan.is_empty():
@@ -347,11 +355,12 @@ func _tick_bridge(_delta: float):
 	if battle.has_method("is_valid_bridge_position") and not battle.is_valid_bridge_position(pos):
 		# 这个桥位被单位/建筑挡住或地形已变，下一周期重新找
 		bridge_plan.clear()
-		_bridge_fail_count += 1
+		_register_bridge_failure()
 		_plan_timer = 1.0
 		return
 	if ai.build_building(BRIDGE_ID, pos):
 		_bridge_fail_count = 0
+		_bridge_retry_at_ms = 0
 		bridge_plan.pop_front()
 		if bridge_plan.is_empty():
 			_plan_timer = 0.0
@@ -359,8 +368,14 @@ func _tick_bridge(_delta: float):
 	else:
 		# 视野不足、附近有敌军或位置被占：放弃本段，下一周期重新找线
 		bridge_plan.clear()
-		_bridge_fail_count += 1
+		_register_bridge_failure()
 		_plan_timer = 1.0
+
+func _register_bridge_failure():
+	_bridge_fail_count += 1
+	if _bridge_fail_count >= 3:
+		# 45 秒后允许再次尝试，避免一次临时失败就让 AI 永远只会坐船
+		_bridge_retry_at_ms = Time.get_ticks_msec() + 45000
 
 func _recalculate_army_paths():
 	for e in battle.entities.get_children():
@@ -402,6 +417,9 @@ func _tick_transport(delta: float):
 		_abort_transport()
 		return
 	_refresh_fleet()
+	# 没有船坞就永远造不出运载船。优先保证己方登陆岸边有一座船坞，
+	# 而不是被动等待 AI 通用的“油田旁船坞”逻辑（很多地图近岸没有油田）。
+	_ensure_shore_shipyard()
 	# 必须凑够4艘运载船（32容量，至少运30兵）和至少2艘护航舰再出发
 	if _transports.size() < TRANSPORT_FLEET_SIZE or _escorts.size() < MIN_ESCORTS:
 		if _transport_state != STATE_IDLE:
@@ -794,6 +812,60 @@ func _find_land_near(pos: Vector3) -> Vector3:
 	return Vector3.ZERO
 
 # ═══════════════════════ 运载船前置科技 ═══════════════════════
+
+# 己方登陆岸边没有船坞时，直接在岸边找一块合法陆地建造。
+# AI 通用的 _manage_shipyards 只会在“临岸且 10 格内有油田”的位置建，
+# 岛屿/无油地图会因此永远凑不出运载船。
+func _ensure_shore_shipyard():
+	if own_shore_water == Vector3.ZERO or own_shore_land == Vector3.ZERO:
+		return
+	for e in battle.entities.get_children():
+		if e is Building and e.entity_id == SHIPYARD_ID and e.health > 0 and ai.entity_belongs_to_me(e):
+			if e.global_position.distance_to(own_shore_water) <= 40.0:
+				# 标记为渡水专用，避免 _manage_shipyards 因“附近无油田”把它拆掉
+				e.set_meta("ai_transport_shipyard", true)
+			return
+	if not ai.can_afford_building(SHIPYARD_ID):
+		return
+	var pos: Vector3 = _find_shore_shipyard_pos()
+	if pos == Vector3.ZERO:
+		return
+	if not ai.build_building(SHIPYARD_ID, pos):
+		return
+	for e in battle.entities.get_children():
+		if e is Building and e.entity_id == SHIPYARD_ID and e.health > 0 and ai.entity_belongs_to_me(e):
+			if e.global_position.distance_to(pos) <= 3.0:
+				e.set_meta("ai_transport_shipyard", true)
+
+func _find_shore_shipyard_pos() -> Vector3:
+	var base: Vector2i = battle.world_to_grid(own_shore_land)
+	for radius in range(1, 13):
+		for dx in range(-radius, radius + 1):
+			for dz in range(-radius, radius + 1):
+				if maxi(absi(dx), absi(dz)) != radius:
+					continue
+				var gx: int = base.x + dx
+				var gz: int = base.y + dz
+				if gx < 0 or gx >= RTSConfig.MAP_SIZE or gz < 0 or gz >= RTSConfig.MAP_SIZE:
+					continue
+				if battle.get_terrain_at_grid(gx, gz) != 0:
+					continue
+				var has_water: bool = false
+				for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+					var nx: int = gx + d.x
+					var nz: int = gz + d.y
+					if nx < 0 or nx >= RTSConfig.MAP_SIZE or nz < 0 or nz >= RTSConfig.MAP_SIZE:
+						continue
+					if battle.get_terrain_at_grid(nx, nz) == 2:
+						has_water = true
+						break
+				if not has_water:
+					continue
+				var pos: Vector3 = battle.grid_to_world(gx, gz)
+				if ai.has_method("_can_place_ai_building") and not ai._can_place_ai_building(SHIPYARD_ID, pos):
+					continue
+				return pos
+	return Vector3.ZERO
 
 func _ensure_transport_tech():
 	var sy = ai._find_own_building(SHIPYARD_ID)
