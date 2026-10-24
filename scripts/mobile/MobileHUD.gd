@@ -61,6 +61,8 @@ func _hide_desktop_controls() -> void:
 	_set_member_visible(hud, "_diplo_panel", false)
 	_set_member_visible(hud, "_diplo_toggle_btn", false)
 	_set_member_visible(hud, "auto_attack_btn", false)
+	# 全局指令底板（全选/撤退/上船等）在手机上由命令栏与手势替代
+	_set_member_visible(hud, "_cmd_panel", false)
 	# 桌面版 F1/F2/F3 指令按钮与统计切换按钮（关键字识别，避免改动 HUD 内部结构）
 	_hide_desktop_buttons(hud)
 

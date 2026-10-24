@@ -63,6 +63,8 @@ var _stats_collapse_btn: Button = null
 var _stats_capsule: Panel = null
 var _capsule_pop_label: Label = null
 var _capsule_res_labels: Dictionary = {}
+# 全局指令按钮底板（6 个按钮排两行）
+var _cmd_panel: Panel = null
 var _alert_label: Label = null
 var _alert_bg: Control = null
 var _alert_timer: float = 0.0
@@ -735,51 +737,126 @@ func _on_retreat_all_pressed():
 func _on_rally_pressed():
 	_on_select_all_pressed()
 
+# 全局指令按钮：统一尺寸，交给 GridContainer 排两行
+func _make_cmd_button(text: String, cb: Callable, danger: bool) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.custom_minimum_size = Vector2(210, 30)
+	if danger:
+		UITheme.apply_danger_button(b, UITheme.FONT_MD)
+	else:
+		UITheme.apply_primary_button(b, UITheme.FONT_MD)
+	b.pressed.connect(cb)
+	return b
+
+# 在目标点附近找一个陆地格：由近到远绕圈找，找不到（全是水）返回 Vector3.ZERO
+func _shore_point_near(bm, pos: Vector3) -> Vector3:
+	for r in [2.0, 3.0, 4.0, 6.0]:
+		for i in 8:
+			var ang: float = TAU * float(i) / 8.0
+			var p := pos + Vector3(cos(ang) * r, 0.0, sin(ang) * r)
+			if int(bm.get_terrain_at(p)) != 2:
+				return p
+	return Vector3.ZERO
+
+# 屏幕内军队上/下船：
+#   在运载船上、且船已靠岸（附近有陆地）的军队集体下船；
+#   在岸上、且靠近未满运载船的军队上船
+func _on_board_screen_pressed():
+	var bm = _get_bm()
+	if bm == null:
+		return
+	bm._ensure_cache_fresh()
+	var cam := get_viewport().get_camera_3d()
+	if cam == null:
+		return
+	var vp_rect := get_viewport().get_visible_rect()
+	var ships: Array = []
+	var armies: Array = []
+	for e in bm._armies:
+		if not is_instance_valid(e) or e.health <= 0:
+			continue
+		if not vp_rect.has_point(cam.unproject_position(e.global_position)):
+			continue
+		if int(e.entity_id) == 9:
+			ships.append(e)
+		else:
+			var boarded = e.get("_boarded_on")
+			if boarded == null or int(boarded) == -1:
+				armies.append(e)
+	if ships.is_empty():
+		show_alert_message("屏幕内没有运载船", ALERT_WARNING)
+		return
+	var unboarded_ships := 0
+	var boarded_units := 0
+	# 1) 船上的军队：船靠岸了就全体下船
+	for s in ships:
+		if int(s.get_boarded_count()) <= 0:
+			continue
+		var shore: Vector3 = _shore_point_near(bm, s.global_position)
+		if shore == Vector3.ZERO:
+			continue
+		s.unboard_at(shore)
+		unboarded_ships += 1
+	# 2) 岸上的军队：走到船边（4 格内）的直接上船
+	for a in armies:
+		if int(bm.get_terrain_at(a.global_position)) == 2:
+			continue
+		for s in ships:
+			if int(s.get_boarded_count()) >= 8:
+				continue
+			var dx: float = s.global_position.x - a.global_position.x
+			var dz: float = s.global_position.z - a.global_position.z
+			if Vector2(dx, dz).length() > 4.0:
+				continue
+			s.board_unit(a)
+			boarded_units += 1
+			break
+	var parts: Array = []
+	if unboarded_ships > 0:
+		parts.append("%d 艘船下船" % unboarded_ships)
+	if boarded_units > 0:
+		parts.append("%d 个单位上船" % boarded_units)
+	if parts.is_empty():
+		show_alert_message("屏幕内没有可上/下船的军队（船未靠岸或距离太远）", ALERT_WARNING)
+	else:
+		show_alert_message("🚢 " + "，".join(parts), ALERT_INFO)
+
 
 func _ready():
 	_create_unit_stats_panel()
 	_create_stats_toggle_button()
 
-	var b_select_screen = Button.new()
-	b_select_screen.text = "全选屏幕军队 (F1)"
-	b_select_screen.position = Vector2(620, 50)
-	b_select_screen.custom_minimum_size = Vector2(210, 32)
-	UITheme.apply_primary_button(b_select_screen, UITheme.FONT_MD)
-	b_select_screen.pressed.connect(_on_select_screen_pressed)
-	add_child(b_select_screen)
+	# 全局指令：6 个按钮排成两行，统一放在一块半透明底板里
+	_cmd_panel = Panel.new()
+	_cmd_panel.name = "GlobalCommandPanel"
+	_cmd_panel.position = Vector2(620, 46)
+	_cmd_panel.size = Vector2(662, 86)
+	_cmd_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var cmd_style := StyleBoxFlat.new()
+	cmd_style.bg_color = Color(0.0, 0.0, 0.0, 0.38)
+	cmd_style.set_corner_radius_all(6)
+	cmd_style.set_border_width_all(1)
+	cmd_style.border_color = Color(UITheme.GOLD, 0.25)
+	_cmd_panel.add_theme_stylebox_override("panel", cmd_style)
+	add_child(_cmd_panel)
 
-	var b_select_all = Button.new()
-	b_select_all.text = "全选所有军队 (Ctrl+F1)"
-	b_select_all.position = Vector2(840, 50)
-	b_select_all.custom_minimum_size = Vector2(210, 32)
-	UITheme.apply_primary_button(b_select_all, UITheme.FONT_MD)
-	b_select_all.pressed.connect(_on_select_all_pressed)
-	add_child(b_select_all)
+	var cmd_grid := GridContainer.new()
+	cmd_grid.columns = 3
+	cmd_grid.position = Vector2(8, 8)
+	cmd_grid.add_theme_constant_override("h_separation", 8)
+	cmd_grid.add_theme_constant_override("v_separation", 6)
+	cmd_grid.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_cmd_panel.add_child(cmd_grid)
 
-	var b_auto_attack = Button.new()
-	b_auto_attack.text = "⚔️ 自动进攻：关 (F2)"
-	b_auto_attack.position = Vector2(620, 92)
-	b_auto_attack.custom_minimum_size = Vector2(210, 32)
-	UITheme.apply_danger_button(b_auto_attack, UITheme.FONT_MD)
-	b_auto_attack.pressed.connect(_on_attack_all_pressed)
-	add_child(b_auto_attack)
-	auto_attack_btn = b_auto_attack
-
-	var b_retreat_screen = Button.new()
-	b_retreat_screen.text = "屏幕军队撤退 (F3)"
-	b_retreat_screen.position = Vector2(840, 92)
-	b_retreat_screen.custom_minimum_size = Vector2(210, 32)
-	UITheme.apply_primary_button(b_retreat_screen, UITheme.FONT_MD)
-	b_retreat_screen.pressed.connect(_on_retreat_screen_pressed)
-	add_child(b_retreat_screen)
-
-	var b_retreat_all = Button.new()
-	b_retreat_all.text = "所有军队撤退 (Ctrl+F3)"
-	b_retreat_all.position = Vector2(620, 134)
-	b_retreat_all.custom_minimum_size = Vector2(210, 32)
-	UITheme.apply_primary_button(b_retreat_all, UITheme.FONT_MD)
-	b_retreat_all.pressed.connect(_on_retreat_all_pressed)
-	add_child(b_retreat_all)
+	var b_select_screen = _make_cmd_button("全选屏幕军队 (F1)", _on_select_screen_pressed, false)
+	var b_select_all = _make_cmd_button("全选所有军队 (Ctrl+F1)", _on_select_all_pressed, false)
+	auto_attack_btn = _make_cmd_button("⚔️ 自动进攻：关 (F2)", _on_attack_all_pressed, true)
+	var b_retreat_screen = _make_cmd_button("屏幕军队撤退 (F3)", _on_retreat_screen_pressed, false)
+	var b_retreat_all = _make_cmd_button("所有军队撤退 (Ctrl+F3)", _on_retreat_all_pressed, false)
+	var b_board = _make_cmd_button("🚢 屏幕军队上/下船", _on_board_screen_pressed, false)
+	for b in [b_select_screen, b_select_all, auto_attack_btn, b_retreat_screen, b_retreat_all, b_board]:
+		cmd_grid.add_child(b)
 
 	set_process(true)
 
