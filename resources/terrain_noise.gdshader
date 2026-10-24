@@ -49,12 +49,14 @@ void fragment() {
 	float g0 = fbm(np2);
 	float gx = fbm(np2 + vec2(e2, 0.0));
 	float gz = fbm(np2 + vec2(0.0, e2));
-	// 粗层给大起伏、细层给细密颗粒，系数都调高，光影层次才接近水面
-	vec3 wn = normalize(vec3(
+	// 只把噪声的水平梯度叠加到原始地形法线上。
+	// 原始 NORMAL 来自网格顶点法线，带着山体坡度和朝向，是山地立体感的来源；
+	// 之前直接 NORMAL = 噪声法线 会把所有坡度抹平，山看着就塌了。
+	vec3 perturb_world = vec3(
 		(h0 - hx) * 12.0 + (g0 - gx) * 6.0,
-		1.0,
-		(h0 - hz) * 12.0 + (g0 - gz) * 6.0));
-	NORMAL = normalize((VIEW_MATRIX * vec4(wn, 0.0)).xyz);
+		0.0,
+		(h0 - hz) * 12.0 + (g0 - gz) * 6.0);
+	NORMAL = normalize(NORMAL + (VIEW_MATRIX * vec4(perturb_world, 0.0)).xyz * 0.35);
 	ROUGHNESS = 1.0;
 	METALLIC = 0.0;
 }
