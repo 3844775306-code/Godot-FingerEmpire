@@ -722,16 +722,34 @@ func _create_ring_for_entity(id):
 	if not node.has_meta("snapshot_info"): return
 	var info = node.get_meta("snapshot_info")
 	if not info: return
-	var radius = info.get("body_radius", 0.5)
+	var radius: float = info.get("body_radius", 0.5)
+	var kind: int = int(info.get("type", 0))   # 0=军队 1=建筑 2=资源
 	var ring = MeshInstance3D.new()
+	ring.name = "ClientSelectionRing"
 	ring.mesh = TorusMesh.new()
-	ring.mesh.inner_radius = radius + 0.15
-	ring.mesh.outer_radius = radius + 0.35
-	ring.position = Vector3(0, radius * 2.5 + 0.1, 0)
+	# 与单机版保持完全一致：军队/建筑/资源三种半径与贴地高度分别对齐
+	match kind:
+		1:
+			ring.mesh.inner_radius = radius + 0.2
+			ring.mesh.outer_radius = radius + 0.35
+			ring.position = Vector3(0, radius * 1.5 + 0.1, 0)
+		2:
+			ring.mesh.inner_radius = radius + 0.1
+			ring.mesh.outer_radius = radius + 0.2
+			ring.position = Vector3(0, 0.1, 0)
+		_:
+			ring.mesh.inner_radius = radius + 0.1
+			ring.mesh.outer_radius = radius + 0.15
+			ring.position = Vector3(0, radius * 2.5 + 0.1, 0)
 	ring.material_override = StandardMaterial3D.new()
-	# 己方绿色，敌方红色
-	var ring_team = info.get("team", -1)
-	if ring_team == RTSConfig.Team.BLUE:
+	# 单机版选中的都是自己的单位（绿色）；联机按"自己队伍"判断，队友也绿色，敌方红色
+	var ring_team: int = int(info.get("team", -1))
+	var own_team: int = -1
+	if renderer and renderer.get("player_team") != null:
+		own_team = int(renderer.player_team)
+	if own_team == -1:
+		ring.material_override.albedo_color = Color.GREEN
+	elif ring_team == own_team:
 		ring.material_override.albedo_color = Color.GREEN
 	else:
 		ring.material_override.albedo_color = Color.RED
