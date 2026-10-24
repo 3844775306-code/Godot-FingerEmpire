@@ -7,8 +7,8 @@ var _sm: Node = null
 var _mobile_hud = null    # 移动端界面装配器（仅触屏设备创建）
 
 var health_bar_timer = 0.0
-const HEALTH_BAR_UPDATE_INTERVAL: float = 0.5
-# 血条位置、血量与文字每 0.5 秒刷新一次，降低大量血条 Control 的布局/重绘开销
+const HEALTH_BAR_UPDATE_INTERVAL: float = 0.05
+# 血条基础 20Hz；实体多时分档降频，血量文字与血条使用同一刷新周期
 var _last_health_scale: float = -1.0
 var gold_label: Label
 var wood_label: Label
@@ -921,7 +921,17 @@ func _process(delta):
 
 	health_bar_timer -= delta
 	if health_bar_timer <= 0:
-		health_bar_timer = HEALTH_BAR_UPDATE_INTERVAL
+		# 后期实体越多，血条/文字 Control 的布局开销越大；分档降频，
+		# 220 个以内保持 20Hz，超过后降到约 10Hz / 7Hz，画面仍可接受。
+		var entity_count: int = bm._all_entities.size()
+		var bar_interval := HEALTH_BAR_UPDATE_INTERVAL
+		if entity_count > 320:
+			bar_interval = 0.14
+		elif entity_count > 220:
+			bar_interval = 0.10
+		elif entity_count > 140:
+			bar_interval = 0.07
+		health_bar_timer = bar_interval
 		_update_health_bars()
 	# 更新单位统计（每秒一次）
 	if _unit_stats_timer <= 0:
@@ -948,7 +958,7 @@ func _update_health_bars():
 	var refresh_style := absf(scale_factor - _last_health_scale) > 0.001
 	if refresh_style:
 		_last_health_scale = scale_factor
-	# 血条位置、血量文字与阵营色统一跟随 0.5 秒刷新；后期实体多时
+	# 血量文字与血条使用同一刷新周期，避免文字比血条慢一拍；后期实体多时
 	# 满血单位的文字仍会被下面的 text_budget 省掉，避免大量 Label 重排。
 	var bm_for_text = _get_bm()
 	var refresh_text := true
