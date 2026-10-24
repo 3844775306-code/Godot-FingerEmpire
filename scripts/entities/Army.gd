@@ -25,6 +25,9 @@ var _gather_approach_time: float = 0.0
 # 交付时朝仓库/主城移动的累计时长与失败次数：走不到就重算路径、换交付点
 var _deliver_approach_time: float = 0.0
 var _deliver_retry_count: int = 0
+# 交付时"距离是否在缩短"的检测（卡住时强制重算 A* 路径）
+var _deliver_check_timer: float = 0.0
+var _deliver_last_dist: float = -1.0
 
 # ¹¥»÷ÒÆ¶¯
 var is_attack_moving: bool = false
@@ -591,6 +594,17 @@ func _process_action(delta, bm):
 			last_resource_target = null
 		else:
 			_deliver_approach_time += delta
+			var cur_dist: float = h_diff.length()
+			# 每 1.5 秒检查一次：距离没有明显缩短就强制重算路径。
+			# 农民可能因为 A* 失败/建筑格被 blacklist/目标点仍停在旧值而原地不动，
+			# 此时 set_move_target 会被内部提前 return 掉，必须靠这里兜底。
+			_deliver_check_timer += delta
+			if _deliver_check_timer >= 1.5:
+				_deliver_check_timer = 0.0
+				var moved_enough: bool = _deliver_last_dist < 0.0 or absf(cur_dist - _deliver_last_dist) > 0.4
+				_deliver_last_dist = cur_dist
+				if not moved_enough and _movement:
+					_movement.recalculate()
 			if _deliver_approach_time > DELIVER_APPROACH_TIMEOUT:
 				_deliver_approach_time = 0.0
 				_deliver_retry_count += 1
@@ -1158,6 +1172,8 @@ func _return_to_deliver() -> bool:
 		current_target = target
 		_deliver_approach_time = 0.0
 		_deliver_retry_count = 0
+		_deliver_check_timer = 0.0
+		_deliver_last_dist = -1.0
 		_set_order(UnitState.DELIVERING)
 		return true
 	return false

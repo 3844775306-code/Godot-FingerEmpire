@@ -57,7 +57,12 @@ func set_selected(sel: bool):
 
 func set_move_target(pos: Vector3, stop_range: float = 0.0):
 	# Use Vector2i key for fast hashing (was string "%d,%d")
-	if astar_target.distance_to(pos)<0.5:return
+	if astar_target.distance_to(pos)<0.5:
+		# 终点基本相同：通常直接返回，避免每帧重复寻路；
+		# 但若当前路径为空且没有待处理寻路，说明上次寻路失败，必须允许重算，
+		# 否则单位会永久停在原地（农民交付时常见：目标已在主城，却一步也不走）
+		if astar_path.size() > 0 or _pending_path:
+			return
 	var key = Vector2i(int(pos.x), int(pos.z))
 	if _blacklist.has(key):
 		_pending_path = false
@@ -152,7 +157,8 @@ func recalculate():
 	_blacklist.clear()  # new building may open paths
 	_last_attack_path_ms = -100000  # 建筑变化后允许立即重算追击路径
 	# building recalc - cached paths cleared
-	if astar_target != Vector3.ZERO and _army.current_order == "move":
+	# 采集/交付/攻击移动也属于「有固定终点」的状态，卡住时必须能重算路径
+	if astar_target != Vector3.ZERO and _army.current_order in ["move", "deliver", "gather", "attack_move"]:
 		var key = Vector2i(int(astar_target.x), int(astar_target.z))
 		_path_cache.erase(key)
 		astar_path = _calculate_astar_path(astar_target)
