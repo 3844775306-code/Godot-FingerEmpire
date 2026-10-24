@@ -23,6 +23,10 @@ const MAX_TRANSPORT_TROOPS := TRANSPORT_FLEET_SIZE * TRANSPORT_CAPACITY
 const ESCORT_TARGET := 4
 const MIN_ESCORTS := 2
 const ESCORT_IDS := [13, 39, 40]
+const BOARD_DISTANCE := 2.6
+const PARK_DISTANCE := 2.8
+const UNLOAD_DISTANCE := 3.0
+const BOARD_WAIT_TIMEOUT := 35.0
 
 const MODE_NONE := 0
 const MODE_BRIDGE := 1
@@ -52,6 +56,7 @@ var _transport_units: Array = []
 var _transports: Array = []
 var _escorts: Array = []
 var _unit_ship: Dictionary = {}
+var _transport_slots: Array = []
 var _escort_advanced: bool = false
 
 func _init(owner):
@@ -140,6 +145,7 @@ func _abort_transport():
 			e.remove_meta("ai_escorting")
 	_transport_units.clear()
 	_unit_ship.clear()
+	_transport_slots.clear()
 	_transports.clear()
 	_escorts.clear()
 	_escort_advanced = false
@@ -416,7 +422,7 @@ func _tick_transport(delta: float):
 			for e in _escorts:
 				if is_instance_valid(e):
 					e.remove_meta("ai_escorting")
-			var home_slots := _fleet_slots(own_shore_water, _transports.size(), 2.5)
+			var home_slots := _shore_slots(own_shore_water, _transports.size(), 2.5)
 			for i in range(_transports.size()):
 				if is_instance_valid(_transports[i]):
 					_transports[i].move_to(home_slots[i])
@@ -424,17 +430,22 @@ func _tick_transport(delta: float):
 			_transport_timer = 0.0
 
 func _tick_fleet_idle(delta: float):
-	var slots := _fleet_slots(own_shore_water, _transports.size(), 2.5)
+	# 运载船要用“靠岸停泊点”，而不是随便一个水面点
+	var slots := _shore_slots(own_shore_water, _transports.size(), 2.5)
 	var all_close: bool = true
 	for i in range(_transports.size()):
 		var ship = _transports[i]
 		if not is_instance_valid(ship):
 			continue
-		if ship.global_position.distance_to(slots[i]) > 8.0:
+		if ship.global_position.distance_to(slots[i]) > PARK_DISTANCE or not _is_shore_water_point(ship.global_position):
 			ship.move_to(slots[i])
 			all_close = false
+		else:
+			# 到岸边后先停船，等陆军走到船边再上船
+			ship.stop_movement()
 	if not all_close:
 		return
+	_transport_slots = slots
 	# 护航舰也先回到出发海域，和运载船一起走，避免船队先冲出去、护航舰还在后面
 	var escort_slots := _fleet_slots(own_shore_water, _escorts.size(), 3.0)
 	var escorts_home: bool = true
@@ -464,7 +475,11 @@ func _tick_fleet_idle(delta: float):
 			continue
 		_unit_ship[u.get_instance_id()] = ship
 		u.set_meta("ai_transporting", true)
-		u.move_to(own_shore_land)
+		# 每艘船对应的陆军走到该船旁边的陆地，不能隔老远直接“传送”上船
+		var landing: Vector3 = _find_land_near(ship.global_position)
+		if landing == Vector3.ZERO:
+			landing = own_shore_land
+		u.move_to(landing)
 	_order_escorts_to(own_shore_water, 3.0)
 	_transport_state = STATE_GATHER
 	_transport_timer = 0.0
@@ -475,30 +490,54 @@ func _tick_fleet_gather(delta: float):
 	if _transport_units.is_empty():
 		_reset_transport_state()
 		return
-	var all_close: bool = true
-	for u in _transport_units:
-		var ship = _unit_ship.get(u.get_instance_id())
-		if is_instance_valid(ship) and u.global_position.distance_to(ship.global_position) > 8.0:
-			all_close = false
-			break
-	if not all_close and _transport_timer <= 30.0:
+	var slots: Array = _transport_slots
+	if slots.size() != _transports.size():
+		slots = _shore_slots(own_shore_water, _transports.size(), 2.5)
+	# 先确认所有运载船已经停在岸边；没停稳不能让人上船
+	var all_parked: bool = true
+	for i in range(_transports.size()):
+		var ship = _transports[i]
+		if not is_instance_valid(ship):
+			continue
+		if ship.global_position.distance_to(slots[i]) > PARK_DISTANCE or not _is_shore_water_point(ship.global_position):
+			ship.move_to(slots[i])
+			all_parked = false
+		else:
+			ship.stop_movement()
+	if not all_parked:
+		if _transport_timer > BOARD_WAIT_TIMEOUT:
+			_abort_transport()
 		return
-	var boarded: Array = []
+	# 只让真正走到船边的单位上船，距离远的继续等
+	var waiting: int = 0
 	for u in _transport_units:
 		if not is_instance_valid(u) or not (u is Army):
+			continue
+		if u.has_meta("_boarded_on"):
 			continue
 		var ship = _unit_ship.get(u.get_instance_id())
 		if not is_instance_valid(ship):
 			u.remove_meta("ai_transporting")
 			continue
 		if ship.get_boarded_count() >= TRANSPORT_CAPACITY:
-			u.remove_meta("ai_transporting")
+			waiting += 1
+			continue
+		if _flat_distance(u.global_position, ship.global_position) > BOARD_DISTANCE:
+			waiting += 1
 			continue
 		ship.board_unit(u)
-		boarded.append(u)
-	_transport_units = boarded
-	if boarded.size() < MIN_TRANSPORT_TROOPS:
-		# 有船沉了或单位没上齐，先回岸边重来，不把不足30人的部队送过去
+	var boarded_units: Array = []
+	var timed_out: bool = _transport_timer > BOARD_WAIT_TIMEOUT
+	for u in _transport_units:
+		if is_instance_valid(u) and u.has_meta("_boarded_on"):
+			boarded_units.append(u)
+		elif timed_out and is_instance_valid(u):
+			u.remove_meta("ai_transporting")
+	if waiting > 0 and not timed_out:
+		return
+	_transport_units = boarded_units
+	if _transport_units.size() < MIN_TRANSPORT_TROOPS:
+		# 没凑够30人上船，回岸边重来，不把不足30人的部队送过去
 		_abort_transport()
 		return
 	_transport_state = STATE_SAIL
@@ -508,28 +547,22 @@ func _tick_fleet_gather(delta: float):
 
 func _tick_fleet_sail(delta: float):
 	_transport_timer += delta
-	var slots := _fleet_slots(enemy_shore_water, _transports.size(), 2.5)
-	var all_near: bool = true
+	var slots := _shore_slots(enemy_shore_water, _transports.size(), 2.5)
+	var all_unloaded: bool = true
 	var any_ship: bool = false
 	for i in range(_transports.size()):
 		var ship = _transports[i]
 		if not is_instance_valid(ship):
 			continue
 		any_ship = true
-		if ship.global_position.distance_to(slots[i]) > 6.0:
-			all_near = false
-	if not any_ship:
-		_reset_transport_state()
-		return
-	if not _escort_advanced and _transport_timer > 8.0:
-		_escort_advanced = true
-		_order_escorts_to(enemy_shore_water, 3.0)
-	if not all_near and _transport_timer <= 90.0:
-		return
-	# 所有运载船一起靠岸放人
-	for ship in _transports:
-		if not is_instance_valid(ship) or ship.get_boarded_count() <= 0:
+		if ship.get_boarded_count() <= 0:
 			continue
+		# 必须真正靠到敌岸浅水/岸边才能下人，不能在海中间直接卸载
+		if ship.global_position.distance_to(slots[i]) > UNLOAD_DISTANCE or not _is_shore_water_point(ship.global_position):
+			ship.move_to(slots[i])
+			all_unloaded = false
+			continue
+		ship.stop_movement()
 		var land: Vector3 = _find_land_near(ship.global_position)
 		if land == Vector3.ZERO:
 			land = enemy_shore_land
@@ -537,6 +570,17 @@ func _tick_fleet_sail(delta: float):
 			land = own_shore_land
 		if land != Vector3.ZERO:
 			ship.unboard_at(land)
+		else:
+			all_unloaded = false
+	if not any_ship:
+		_reset_transport_state()
+		return
+	if not _escort_advanced and _transport_timer > 8.0:
+		_escort_advanced = true
+		_order_escorts_to(enemy_shore_water, 3.0)
+	# 没全部靠岸就继续等/继续开，不在深海放人
+	if not all_unloaded:
+		return
 	var enemy_castle = ai._get_attack_target_castle()
 	for u in _transport_units:
 		if is_instance_valid(u) and u is Army:
@@ -551,7 +595,7 @@ func _tick_fleet_sail(delta: float):
 	_transport_timer = 0.0
 
 func _order_fleet_sail():
-	var slots := _fleet_slots(enemy_shore_water, _transports.size(), 2.5)
+	var slots := _shore_slots(enemy_shore_water, _transports.size(), 2.5)
 	for i in range(_transports.size()):
 		if is_instance_valid(_transports[i]):
 			_transports[i].move_to(slots[i])
@@ -601,6 +645,66 @@ func _is_water_point(pos: Vector3) -> bool:
 	if g.x < 0 or g.x >= RTSConfig.MAP_SIZE or g.y < 0 or g.y >= RTSConfig.MAP_SIZE:
 		return false
 	return battle.get_terrain_at_grid(g.x, g.y) == 2
+
+func _flat_distance(a: Vector3, b: Vector3) -> float:
+	return Vector2(a.x - b.x, a.z - b.z).length()
+
+func _is_shore_water_point(pos: Vector3) -> bool:
+	if not _is_water_point(pos):
+		return false
+	var g: Vector2i = battle.world_to_grid(pos)
+	for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		var nx: int = g.x + d.x
+		var ny: int = g.y + d.y
+		if nx < 0 or nx >= RTSConfig.MAP_SIZE or ny < 0 or ny >= RTSConfig.MAP_SIZE:
+			continue
+		# 浅滩（overlay==3）陆军可以走，也算能靠岸
+		if battle.get_terrain_at_grid(nx, ny) != 2 or battle.get_overlay_at_grid(nx, ny) == 3:
+			return true
+	return false
+
+# 运载船必须停在“靠岸水面”，不能停在离岸很远的水里
+func _shore_slots(base: Vector3, count: int, spacing: float) -> Array:
+	if count <= 0:
+		return []
+	var generic := _fleet_slots(base, count, spacing)
+	var all_shore: bool = true
+	for p in generic:
+		if not _is_shore_water_point(p):
+			all_shore = false
+			break
+	if all_shore:
+		return generic
+	var center: Vector2i = battle.world_to_grid(base)
+	var radius: int = int(ceil(spacing * float(count))) + 8
+	var candidates: Array = []
+	for dx in range(-radius, radius + 1):
+		for dy in range(-radius, radius + 1):
+			var gx: int = center.x + dx
+			var gy: int = center.y + dy
+			if gx < 0 or gx >= RTSConfig.MAP_SIZE or gy < 0 or gy >= RTSConfig.MAP_SIZE:
+				continue
+			if not _is_shore_water_point(battle.grid_to_world(gx, gy)):
+				continue
+			var p: Vector3 = battle.grid_to_world(gx, gy)
+			candidates.append({"p": p, "d": p.distance_to(base)})
+	candidates.sort_custom(func(a, b): return float(a["d"]) < float(b["d"]))
+	var out: Array = []
+	for item in candidates:
+		if out.size() >= count:
+			break
+		var ok: bool = true
+		for p in out:
+			if p.distance_to(item["p"]) < spacing * 0.9:
+				ok = false
+				break
+		if ok:
+			out.append(item["p"])
+	if out.is_empty():
+		out.append(base)
+	while out.size() < count:
+		out.append(out[0])
+	return out
 
 func _reset_transport_state():
 	_abort_transport()
@@ -660,7 +764,7 @@ func _find_land_near(pos: Vector3) -> Vector3:
 				var gy: int = center.y + dy
 				if gx < 0 or gx >= RTSConfig.MAP_SIZE or gy < 0 or gy >= RTSConfig.MAP_SIZE:
 					continue
-				if battle.get_terrain_at_grid(gx, gy) != 2:
+				if battle.get_terrain_at_grid(gx, gy) != 2 or battle.get_overlay_at_grid(gx, gy) == 3:
 					return battle.grid_to_world(gx, gy)
 	return Vector3.ZERO
 

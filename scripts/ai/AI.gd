@@ -1702,7 +1702,7 @@ func execute_raid():
 		waypoint = enemy_pos + enemy_dir.rotated(Vector3.UP, deg_to_rad(-90*side)) * (flank + 12)
 	var raid_army = []
 	for e in battle.entities.get_children():
-		if e is Army and e.team == my_team and e.health > 0 and (int(e.entity_id) not in [5,6,10,14,43,44,45,46,47,48,49,50,51]) and entity_belongs_to_me(e):
+		if e is Army and e.team == my_team and e.health > 0 and (int(e.entity_id) not in [5,6,9,10,14,43,44,45,46,47,48,49,50,51]) and entity_belongs_to_me(e):
 			if e.has_meta("ai_home_guard") or e.has_meta("ai_resource_guard") or e.has_meta("ai_harass"):
 				continue
 			raid_army.append(e)
