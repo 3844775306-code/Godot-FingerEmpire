@@ -848,7 +848,7 @@ func _update_health_bars():
 		return
 
 	# 基准血条尺寸和字体（针对 2400x1400 适当增大）
-	var base_size = Vector2(100, 16)   # 原 60x10 → 100x16
+	var base_size = Vector2(50, 4)     # 原 100x16；血条宽 ×0.5、高 ×0.25
 	var base_font = 18                 # 原 12 → 18
 	var ref_ortho_size = 30.0
 	var scale_factor = 1.0
@@ -929,6 +929,8 @@ func _update_health_bars():
 
 		# 动态调整尺寸与字体（仅相机缩放变化或新建时）
 		if refresh_style or created:
+			# 最小尺寸跟随缩放，否则 Control 会被默认/旧的 custom_minimum_size 卡住
+			bar.custom_minimum_size = bar_size
 			bar.size = bar_size
 			label.add_theme_font_size_override("font_size", font_size)
 			if prod_bar:
@@ -1093,10 +1095,13 @@ func _hide_build_bar(entity):
 
 func _create_health_bar(entity):
 	var bar = HealthBarControl.new()
-	bar.size = Vector2(100, 16)
+	bar.size = Vector2(50, 4)
 	bar.visible = false
 	bar.z_index = -1
 	add_child(bar)
+	# add_child 会触发 HealthBarControl._ready 写入默认最小尺寸，需在其后覆盖，
+	# 否则 50x4 的血条会被 80x12 撑回去
+	bar.custom_minimum_size = Vector2(50, 4)
 
 	var label = Label.new()
 	label.add_theme_font_size_override("font_size", 18)

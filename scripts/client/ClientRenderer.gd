@@ -36,6 +36,8 @@ var placement_preview: MeshInstance3D
 # ==================== 定时器 ====================
 var health_bar_timer: float = 0.0
 const HEALTH_BAR_INTERVAL: float = 0.05  # 20Hz，血条丝滑跟随
+# 头顶血条尺寸：原 60x10，宽度 ×0.5、高度 ×0.25
+const HP_BAR_SIZE: Vector2 = Vector2(30.0, 2.5)
 
 # 客户端诊断
 var _diag_snap_age: float = 999.0
@@ -1496,7 +1498,7 @@ func _update_health_bars():
 				# 血条颜色与模型一致：按 owner_peer_id 取该玩家专属阵营色
 				bar.update_bar(hp, max_hp, team, _get_entity_color(info))
 				if viewport_rect.has_point(screen_pos):
-					bar.position = screen_pos - Vector2(30, 5) + Vector2(0, -22)
+					bar.position = screen_pos - Vector2(HP_BAR_SIZE.x * 0.5, HP_BAR_SIZE.y * 0.5) + Vector2(0, -22)
 				else: bar.visible = false
 			else:
 				if unit_bars.has(id) and unit_bars[id].bar: unit_bars[id].bar.visible = false
@@ -1526,7 +1528,7 @@ func _update_health_bars():
 			# 血条颜色与模型一致：按 owner_peer_id 取该玩家专属阵营色
 			bar.update_bar(hp, max_hp, team, _get_entity_color(info))
 			if viewport_rect.has_point(screen_pos):
-				bar.position = screen_pos - Vector2(30, 5)
+				bar.position = screen_pos - Vector2(HP_BAR_SIZE.x * 0.5, HP_BAR_SIZE.y * 0.5)
 				lab.position = bar.position + Vector2(0, -22)
 				lab.visible = show_unit_text
 				var _gpfx2 = _get_entity_group_prefix(info["id"])
@@ -1567,8 +1569,11 @@ func _get_or_create_health_bar(id) -> HealthBarControl:
 		unit_bars[id] = { "bar":null, "label":null, "prod_bar":null, "prod_label":null, "order_label":null }
 	if not unit_bars[id].bar:
 		var b = HealthBarControl.new()
-		b.custom_minimum_size = Vector2(60, 10)
+		b.size = HP_BAR_SIZE
 		add_child(b)
+		# add_child 会触发 HealthBarControl._ready 写入默认最小尺寸，需在其后覆盖
+		b.custom_minimum_size = HP_BAR_SIZE
+		b.size = HP_BAR_SIZE
 		unit_bars[id].bar = b
 	return unit_bars[id].bar
 
