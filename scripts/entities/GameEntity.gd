@@ -5,6 +5,7 @@ extends CharacterBody3D
 signal died
 
 const BuildingDeathEffect = preload("res://scripts/effects/BuildingDeathEffect.gd")
+const BuildingConstructionVisual = preload("res://scripts/effects/BuildingConstructionVisual.gd")
 const TreeFallEffect = preload("res://scripts/effects/TreeFallEffect.gd")
 const EntityDamageVisual = preload("res://scripts/effects/EntityDamageVisual.gd")
 
@@ -472,7 +473,31 @@ func die():
 			t.wait_time = ap.get_animation("die").length + 0.2
 			t.timeout.connect(queue_free); add_child(t); t.start()
 			return
-	queue_free()
+	# 既没有毁坏模型、模型也没有 die 动画：程序化倒地再释放，避免单位凭空消失
+	_play_generic_death()
+
+# 通用死亡动作：模型侧倒并下沉一点，动画结束后释放。
+# 建筑走倒塌特效、木材走倒树、船走沉水、动物走动物动画，都到不了这里；
+# 剩下的普通单位（步兵/弓手/炮兵等）以前是直接 queue_free，看着像凭空消失。
+func _play_generic_death() -> void:
+	collision_layer = 0
+	collision_mask = 0
+	var model: Node3D = null
+	if has_meta("_model_instance") and is_instance_valid(get_meta("_model_instance")):
+		model = get_meta("_model_instance")
+	if model == null:
+		# 没有 3D 模型（占位可视的实体）：直接移除
+		queue_free()
+		return
+	var dur: float = 0.8
+	var tween := create_tween()
+	tween.set_parallel(true)
+	# 绕侧向轴倒下 84 度，同时整体下沉 0.35 米
+	tween.tween_property(model, "rotation:z", model.rotation.z + deg_to_rad(84.0), dur * 0.6) \
+		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+	tween.tween_property(model, "position:y", model.position.y - 0.35, dur) \
+		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN)
+	tween.chain().tween_callback(queue_free)
 
 # 驻扎标记桩方法（子类覆盖）
 func _show_garrison_marker(): pass
