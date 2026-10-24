@@ -10,6 +10,8 @@ var astar_path: Array = []
 var astar_target: Vector3 = Vector3.ZERO
 # 攻击追击目标时 A* 完全无路的标记，供 Army 做“打不到目标就换目标/拆墙”的兜底
 var attack_path_failed: bool = false
+# 普通移动/攻击移动的目标本身无路可走；Army 据此取消命令，避免 MOVING/ATTACK_MOVING 状态一直播放走路动画
+var move_path_failed: bool = false
 var astar_recalc_timer: float = 0.0
 const ASTAR_RECALC_INTERVAL: float = 2.0
 # 追击移动目标时目标位置每帧都在变；若每次变化都重算 A*（最多 1000 节点），
@@ -72,14 +74,23 @@ func set_move_target(pos: Vector3, stop_range: float = 0.0):
 		# 终点基本相同：通常直接返回，避免每帧重复寻路；
 		# 但若当前路径为空且没有待处理寻路，说明上次寻路失败，必须允许重算，
 		# 否则单位会永久停在原地（农民交付时常见：目标已在主城，却一步也不走）
-		if astar_path.size() > 0 or _pending_path:
+		if astar_path.size() > 0:
+			move_path_failed = false
+			attack_path_failed = false
+			return
+		if _pending_path:
 			return
 	var key = Vector2i(int(pos.x), int(pos.z))
-	if _blacklist.has(key):
+	var is_attack_move := stop_range > 0.0
+	# 黑名单只用于普通移动；攻击追击要允许重新尝试墙后/建筑中心的目标，
+	# 否则目标站在曾经寻路失败过的格子上时，单位会连攻击路径都不再计算。
+	if not is_attack_move and _blacklist.has(key):
 		_pending_path = false
+		move_path_failed = true
 		return  # permanently blacklisted (cleared on building placement)
 
-	var is_attack_move := stop_range > 0.0
+	# 新一次寻路请求开始前先清掉旧的失败标记，避免上一目标失败导致移动命令被立即取消
+	move_path_failed = false
 	if is_attack_move:
 		# 目标只挪动一点点时旧路径仍然可用，先不重算；等偏移超过容差或冷却到期再更新
 		if astar_path.size() > 0 and astar_target != Vector3.ZERO and astar_target.distance_to(pos) < ATTACK_TARGET_MOVE_TOLERANCE:
@@ -138,14 +149,17 @@ func _apply_path(pos: Vector3, path: Array, stop_range: float) -> void:
 	var key = Vector2i(int(pos.x), int(pos.z))
 	if astar_path.size() > 0:
 		attack_path_failed = false
+		move_path_failed = false
 		if not is_attack_move:
 			_path_cache[key] = astar_path
 	elif is_attack_move:
 		# 追击目标寻路失败时不写永久黑名单；重置目标，让冷却后还能重试
 		attack_path_failed = true
+		move_path_failed = false
 		astar_target = Vector3.ZERO
 	else:
 		attack_path_failed = false
+		move_path_failed = true
 		_blacklist[key] = true
 	if _is_selected: _show_path()
 
@@ -170,6 +184,7 @@ func recalculate():
 	_path_cache.clear()  # new building may block cached paths
 	_blacklist.clear()  # new building may open paths
 	attack_path_failed = false
+	move_path_failed = false
 	_last_attack_path_ms = -100000  # 建筑变化后允许立即重算追击路径
 	# building recalc - cached paths cleared
 	# 采集/交付/攻击移动也属于「有固定终点」的状态，卡住时必须能重算路径
@@ -178,6 +193,7 @@ func recalculate():
 		_path_cache.erase(key)
 		astar_path = _calculate_astar_path(astar_target)
 		attack_path_failed = astar_path.is_empty()
+		move_path_failed = astar_path.is_empty()
 		_pending_path = false
 		if astar_path.size() > 0: _path_cache[key] = astar_path  # only cache valid paths
 		if _is_selected:
@@ -196,6 +212,8 @@ func stop():
 	astar_path.clear()
 	astar_target = Vector3.ZERO
 	attack_path_failed = false
+	move_path_failed = false
+	blocking_building = null
 	_pending_path = false
 	_stop_velocity()
 
@@ -203,7 +221,11 @@ func stop():
 # 后期几百个已经停下的单位仍会每 0.15~0.22 秒做一次碰撞近邻查询。
 func _stop_velocity() -> void:
 	if _army != null:
+		var had_velocity: bool = _army.velocity.length_squared() > 0.04
 		_army.velocity = Vector3.ZERO
+		# 从移动到停下的瞬间刷新一次动画，否则 MOVING/ATTACKING 状态可能继续播放走路动作
+		if had_velocity and _army.is_inside_tree():
+			_army._refresh_animation_now()
 
 # ==================== Main movement update ====================
 
@@ -601,7 +623,11 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 	var start_tile = bm.world_to_grid(start)
 	var end_tile = bm.world_to_grid(target_pos)
 
-	if start_tile == end_tile and stop_range <= 0: return []
+	if start_tile == end_tile and stop_range <= 0:
+		# 同格移动不能返回空路径：_apply_path 会把空路径当成“不可达”写进永久黑名单，
+		# 之后该格再也无法寻路。返回一个起点航点，让 process_move 走最终接近并正常到达。
+		var half_map: float = RTSConfig.MAP_SIZE / 2.0
+		return [Vector3(start_tile.x - half_map, 0.0, start_tile.y - half_map)]
 
 	# 静态墙集合按实体缓存版本号重建（建造/摧毁时才变化），运载船水域单独做帧级缓存
 	var frame = Engine.get_process_frames()
@@ -676,7 +702,10 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 
 		# Goal checks
 		if stop_range > 0:
-			if abs(cur_tile.x - end_tile.x) <= stop_range and abs(cur_tile.y - end_tile.y) <= stop_range:
+			# 用曼哈顿距离判断“已进入攻击距离”：切比雪夫距离会把 (5,5) 这种对角格
+			# 当成距离5，实际中心距离 7.07，远程单位会停在射程外，表现为锁敌后不攻击。
+			# 曼哈顿距离 <= stop_range 时，欧氏距离必然 <= stop_range，终点一定在射程内。
+			if _heuristic(cur_tile, end_tile) <= stop_range:
 				var path2 = _reconstruct_path(came_from, cur_tile)
 				if path2.size() > 1: path2.pop_front()
 				return path2

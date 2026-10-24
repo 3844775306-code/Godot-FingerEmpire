@@ -1855,14 +1855,15 @@ func _update_entity_animation(entity: GameEntity):
 		anim = "die"
 	elif entity is Army:
 		var army := entity as Army
+		var _moving_now: bool = army.velocity.length_squared() > 0.04
 		if army._order_is(army.UnitState.GATHERING):
-			# 采集途中播放走路；进入采集距离后才播放挥动
-			anim = "attack-melee-left" if _is_entity_in_action_range(army) else "walk"
+			# 采集途中播放走路；进入采集距离后才播放挥动；被挡住停住时不要原地踏步
+			anim = "attack-melee-left" if _is_entity_in_action_range(army) else ("walk" if _moving_now else "idle")
 		elif army._order_is(army.UnitState.ATTACKING) or army._order_is(army.UnitState.ATTACK_MOVING):
 			# 锁定目标但还在接近时仍然是走路动画，进入攻击距离后才挥击
-			anim = "attack-melee-left" if _is_entity_in_action_range(army) else "walk"
+			anim = "attack-melee-left" if _is_entity_in_action_range(army) else ("walk" if _moving_now else "idle")
 		elif army._order_in([army.UnitState.MOVING, army.UnitState.DELIVERING]):
-			anim = "walk"
+			anim = "walk" if _moving_now else "idle"
 		else:
 			anim = "idle"
 	else:
