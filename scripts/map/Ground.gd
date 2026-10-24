@@ -1211,6 +1211,14 @@ func _preset_team_anchors(k: int) -> Array:
 	if anchors.size() < 2 or k <= 1:
 		return anchors.duplicate()
 	var free_vals: Array = [0.33, 0.67] if k == 2 else [0.25, 0.5, 0.75]
+	# 可选 spread：把同侧基地收拢到中轴附近（如山海关这种只有一处关隘的地图），
+	# 避免 2V2/3V3 的基地被摊到地图两端后，部队要横穿半张图才能找到唯一通道
+	var spread := clampf(float(layout.get("spread", 0.0)), 0.0, 0.2)
+	if spread > 0.0:
+		if k == 2:
+			free_vals = [0.5 - spread, 0.5 + spread]
+		else:
+			free_vals = [0.5 - spread, 0.5, 0.5 + spread]
 	var out: Array = []
 	if String(layout.get("type", "mirror_x")) == "mirror_z":
 		for f in free_vals:
@@ -1437,9 +1445,10 @@ func _use_preset_layout() -> bool:
 # 按归一化锚点放置城堡：先压平地形与高度，再转世界坐标
 func _place_castles_from_anchors(layout: Dictionary) -> void:
 	var size := _get_map_size()
+	var type := String(layout.get("type", "mirror_x"))
 	var anchors: Array = layout.get("anchors", [])
-	# 三岛登陆：主城位置随生成的三座孤岛随机，不能写死，运行时按岛屿实际中心取锚点
-	if String(layout.get("type", "mirror_x")) == "siege":
+	# 三岛登陆/环形/四角等布局没有固定 anchors，1V1 的两人锚点需要按布局规则现算
+	if type == "siege" or type == "ring" or type == "corners":
 		anchors = _preset_team_anchors(1)
 	if anchors.size() < 2:
 		return
@@ -1776,6 +1785,10 @@ func _drop_unreachable_resources(size: int, castles: Array) -> void:
 				continue
 			var t: int = terrain_grid[n.x][n.y]
 			if t == 2 and get_overlay(n.x, n.y) != 3:
+				continue
+			# 与 A* 相同的陡坡规则：高差超过阈值即不可通行，避免资源被留在
+			# 陡峭山脊围出的孤岛口袋里（类型 BFS 会把山地当可走，检查不出来）
+			if absf(height_grid[n.x][n.y] - height_grid[cur.x][cur.y]) > CLIFF_THRESHOLD:
 				continue
 			reach[n] = true
 			q.append(n)
