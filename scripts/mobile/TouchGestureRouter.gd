@@ -36,6 +36,13 @@ var _bm: Node = null
 # 落在移动端面板上的那根手指：只负责翻译成鼠标事件，不参与手势
 var _ui_touch_index: int = -1
 var _ui_touch_down: bool = false
+var _ui_start_pos: Vector2 = Vector2.ZERO
+# 面板横向滑动收起（右下指令区向右滑出、左下信息面板向左滑出）
+var ui_slide_hit: Callable = Callable()
+var ui_slide_drag: Callable = Callable()
+var ui_slide_end: Callable = Callable()
+var _ui_slide_ctrl: Object = null
+const SLIDE_TRIGGER: float = 44.0   # 约 12dp，横向位移超过它才认定为滑动收起
 # 转发合成事件时置位，避免 router 自己再次收到合成事件造成递归
 var _forwarding: bool = false
 
@@ -121,6 +128,8 @@ func _handle_touch(event: InputEventScreenTouch) -> void:
 			# 引擎的触摸→鼠标模拟已被关掉，面板上的按钮/滚动容器需要我们自己补鼠标事件
 			_ui_touch_index = event.index
 			_ui_touch_down = true
+			_ui_start_pos = event.position
+			_ui_slide_ctrl = null
 			_emit_ui_button(event.position, true)
 			get_viewport().set_input_as_handled()
 			return
@@ -134,7 +143,16 @@ func _handle_touch(event: InputEventScreenTouch) -> void:
 		if event.index == _ui_touch_index:
 			_ui_touch_index = -1
 			_ui_touch_down = false
-			_emit_ui_button(event.position, false)
+			if _ui_slide_ctrl != null:
+				# 面板滑动结束：按在面板外松开，避免按钮误触
+				_forwarding = true
+				ui_slide_end.call(_ui_slide_ctrl)
+				_emit_ui_motion(Vector2(-200.0, -200.0), Vector2.ZERO)
+				_emit_ui_button(Vector2(-200.0, -200.0), false)
+				_forwarding = false
+				_ui_slide_ctrl = null
+			else:
+				_emit_ui_button(event.position, false)
 			get_viewport().set_input_as_handled()
 			return
 		if event.index != _touch_index:
@@ -144,13 +162,33 @@ func _handle_touch(event: InputEventScreenTouch) -> void:
 
 func _handle_drag(event: InputEventScreenDrag) -> void:
 	if event.index == _ui_touch_index:
-		# 面板上的拖动：鼠标拖动给按钮/滑块；ScrollContainer 只认触摸拖动与滚轮，
-		# 所以滚动由 UILayout.scroll_at 直接驱动命中的滚动容器。
-		if _ui_touch_down:
+		# 面板上的拖动：
+		#   横向（且起点落在可收起面板上）→ 面板跟着手指滑出屏幕；
+		#   纵向 → 内容滚动（ScrollContainer 只认触摸拖动与滚轮，由 UILayout.scroll_at 驱动）；
+		#   其余 → 照旧把鼠标拖动转发给按钮/滑块。
+		if not _ui_touch_down:
+			return
+		if _ui_slide_ctrl != null:
 			_forwarding = true
-			_emit_ui_motion(event.position, event.relative)
-			UILayout.scroll_at(get_tree().root, event.position, event.relative.y)
+			ui_slide_drag.call(_ui_slide_ctrl, event.relative.x)
 			_forwarding = false
+			return
+		var dx: float = event.position.x - _ui_start_pos.x
+		var dy: float = event.position.y - _ui_start_pos.y
+		if absf(dx) > absf(dy) and absf(dx) > SLIDE_TRIGGER and ui_slide_hit.is_valid():
+			var ctrl = ui_slide_hit.call(_ui_start_pos)
+			if ctrl != null:
+				_ui_slide_ctrl = ctrl
+				_forwarding = true
+				# 让已按下的按钮失焦，避免滑动被当成点击
+				_emit_ui_motion(Vector2(-200.0, -200.0), Vector2.ZERO)
+				ui_slide_drag.call(ctrl, dx)
+				_forwarding = false
+				return
+		_forwarding = true
+		_emit_ui_motion(event.position, event.relative)
+		UILayout.scroll_at(get_tree().root, event.position, event.relative.y)
+		_forwarding = false
 		return
 	if event.index != _touch_index:
 		return
