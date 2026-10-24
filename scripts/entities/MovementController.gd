@@ -18,6 +18,10 @@ const ATTACK_TARGET_MOVE_TOLERANCE: float = 2.5
 # 路径预览最多绘制多少个点，避免长路径为每个格子创建一个 MeshInstance3D。
 const MAX_PATH_PREVIEW_POINTS: int = 64
 var _last_attack_path_ms: int = -100000
+# A* 分帧预算用：当前请求被延后时暂存目标，下一帧继续尝试。
+var _pending_path: bool = false
+var _pending_target: Vector3 = Vector3.ZERO
+var _pending_stop_range: float = 0.0
 
 var _path_sphere: SphereMesh = null
 var _path_mat: StandardMaterial3D = null
@@ -56,6 +60,7 @@ func set_move_target(pos: Vector3, stop_range: float = 0.0):
 	if astar_target.distance_to(pos)<0.5:return
 	var key = Vector2i(int(pos.x), int(pos.z))
 	if _blacklist.has(key):
+		_pending_path = false
 		return  # permanently blacklisted (cleared on building placement)
 
 	var is_attack_move := stop_range > 0.0
@@ -82,9 +87,39 @@ func set_move_target(pos: Vector3, stop_range: float = 0.0):
 		#astar_path = _path_cache[key]
 		#if _is_selected: _show_path()
 		#return
-	# New target: calculate and cache
+	# New target: calculate and cache. A* 受每帧预算限制，超预算时暂存到下一帧，
+	# 避免全军同一帧各跑一次长路径导致操作卡顿。
+	if not _try_compute_path(pos, stop_range):
+		_pending_path = true
+		_pending_target = pos
+		_pending_stop_range = stop_range
+		if not is_attack_move:
+			# 普通移动命令先收起旧路径，避免短暂继续走向旧目标；追击保留旧路径。
+			# 同步更新 astar_target，防止 Army 的“已到达”判断拿旧目标误清命令。
+			astar_target = pos
+			astar_path.clear()
+			if _is_selected: _hide_path()
+		return
+	# 新目标已立即算完，清掉可能残留的旧 pending，避免下一帧把它重新算回来。
+	_pending_path = false
+
+func _try_compute_path(pos: Vector3, stop_range: float, bm: RTSBattleManager = null) -> bool:
+	if bm == null:
+		bm = _get_bm()
+	if bm != null and not bm.reserve_astar_request():
+		return false
+	var started_usec := Time.get_ticks_usec()
+	var path := _calculate_astar_path(pos, stop_range)
+	if bm != null:
+		bm.report_astar_cost(Time.get_ticks_usec() - started_usec)
+	_apply_path(pos, path, stop_range)
+	return true
+
+func _apply_path(pos: Vector3, path: Array, stop_range: float) -> void:
+	var is_attack_move := stop_range > 0.0
 	astar_target = pos
-	astar_path = _calculate_astar_path(pos, stop_range)
+	astar_path = path
+	var key = Vector2i(int(pos.x), int(pos.z))
 	if astar_path.size() > 0:
 		if not is_attack_move:
 			_path_cache[key] = astar_path
@@ -94,6 +129,22 @@ func set_move_target(pos: Vector3, stop_range: float = 0.0):
 	else:
 		_blacklist[key] = true
 	if _is_selected: _show_path()
+
+func _try_compute_pending_path(bm: RTSBattleManager) -> bool:
+	if not _pending_path:
+		return true
+	if not _try_compute_path(_pending_target, _pending_stop_range, bm):
+		return false
+	_pending_path = false
+	return true
+
+func cancel_pending_path() -> void:
+	_pending_path = false
+
+func _get_bm() -> RTSBattleManager:
+	if _army == null or not is_instance_valid(_army) or not _army.is_inside_tree():
+		return null
+	return _army.get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
 
 func recalculate():
 	
@@ -105,6 +156,7 @@ func recalculate():
 		var key = Vector2i(int(astar_target.x), int(astar_target.z))
 		_path_cache.erase(key)
 		astar_path = _calculate_astar_path(astar_target)
+		_pending_path = false
 		if astar_path.size() > 0: _path_cache[key] = astar_path  # only cache valid paths
 		if _is_selected:
 			_show_path()
@@ -121,6 +173,7 @@ func get_current_target() -> Vector3:
 func stop():
 	astar_path.clear()
 	astar_target = Vector3.ZERO
+	_pending_path = false
 	_stop_velocity()
 
 # 单位停止/进入攻击距离后必须把残留速度清零，否则 Army 的 simple_idle 永远不成立，
@@ -132,6 +185,14 @@ func _stop_velocity() -> void:
 # ==================== Main movement update ====================
 
 func process_move(delta, bm: RTSBattleManager):
+	# 之前因 A* 预算被延后的目标，继续在本帧尝试；仍未轮到则原地等待，
+	# 不能拿旧路径继续走，否则大部队下令后会先朝旧目标移动。
+	if _pending_path:
+		if not _army.is_attack_moving and not _army._order_is(_army.UnitState.MOVING):
+			_pending_path = false
+		elif not _try_compute_pending_path(bm):
+			_stop_velocity()
+			return
 	if not _army.can_move or _army.speed <= 0:
 		_stop_velocity()
 		return

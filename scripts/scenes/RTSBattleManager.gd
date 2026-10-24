@@ -114,7 +114,7 @@ var _building_cells: Dictionary = {}  # Vector2i -> Array[Building]，仅供碰�
 # 大部队同时下令时，几十/上百个单位会在同一帧各跑一次 A*。这里按帧限制
 # 请求数和耗时，超出的单位延后到后续帧重试；调用方 MovementController 会等待。
 const ASTAR_REQUESTS_PER_FRAME: int = 8
-const ASTAR_TIME_BUDGET_USEC: int = 3500
+const ASTAR_TIME_BUDGET_USEC: int = 6000
 var _astar_budget_frame: int = -1
 var _astar_budget_count: int = 0
 var _astar_budget_usec: int = 0

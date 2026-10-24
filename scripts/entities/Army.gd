@@ -1670,6 +1670,7 @@ func stop_movement():
 	current_target = null
 	_movement.astar_path.clear()
 	_movement.astar_target = Vector3.ZERO
+	_movement.cancel_pending_path()
 	is_attack_moving = false
 
 # Override die() for official cleanup

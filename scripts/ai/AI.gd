@@ -1223,8 +1223,12 @@ func _get_build_position(b_id: int) -> Vector3:
 
 # ═══ Worker allocation ═══
 var allocate_timers = 0
+# 同一轮农民分配里，资源点威胁只与资源点/敌人有关，与具体农民无关；
+# 之前每个农民都会对每个资源点做一次 get_nearby_enemies，后期是 O(农民×资源)。
+var _worker_threat_cache: Dictionary = {}
 
 func allocate_workers():
+	_worker_threat_cache.clear()
 	var workers = []
 	for entity in battle.entities.get_children():
 		if entity is Army and entity.health > 0 and entity.entity_id == 10 and entity_belongs_to_me(entity):
@@ -1354,26 +1358,29 @@ func find_best_resource_for_worker(worker: Army, priority_score: Dictionary) -> 
 			var type = entity.resource_type
 			if type in priority_score:
 				var score = priority_score[type] - worker.global_position.distance_to(entity.global_position) * 0.01
-				var threat_penalty: float = 0.0
-				var nearby: Array = []
-				if battle.has_method("get_nearby_enemies"):
-					nearby = battle.get_nearby_enemies(entity.global_position, WORKER_THREAT_RADIUS, worker.team, worker.owner_peer_id)
-				else:
-					nearby = battle.entities.get_children()
-				for e in nearby:
-					if not (e is Army) or e.health <= 0:
-						continue
-					if e.entity_id in [10, 14, 43, 44, 45]:
-						continue
-					if e.get("_animal_type") != null and str(e.get("_animal_type")) != "":
-						continue
-					if not _entity_is_enemy(e):
-						continue
-					var d: float = e.global_position.distance_to(entity.global_position)
-					if d < WORKER_THREAT_RADIUS:
-						# 距离越近惩罚越大，但上限只有 2.5，低于大多数资源权重，
-						# 保证农民仍会挑一个相对安全的矿点出门，而不是全留主城。
-						threat_penalty = maxf(threat_penalty, (1.0 - d / WORKER_THREAT_RADIUS) * WORKER_THREAT_MAX_PENALTY)
+				var threat_penalty: float = float(_worker_threat_cache.get(entity, -1.0))
+				if threat_penalty < 0.0:
+					threat_penalty = 0.0
+					var nearby: Array = []
+					if battle.has_method("get_nearby_enemies"):
+						nearby = battle.get_nearby_enemies(entity.global_position, WORKER_THREAT_RADIUS, worker.team, worker.owner_peer_id)
+					else:
+						nearby = battle.entities.get_children()
+					for e in nearby:
+						if not (e is Army) or e.health <= 0:
+							continue
+						if e.entity_id in [10, 14, 43, 44, 45]:
+							continue
+						if e.get("_animal_type") != null and str(e.get("_animal_type")) != "":
+							continue
+						if not _entity_is_enemy(e):
+							continue
+						var d: float = e.global_position.distance_to(entity.global_position)
+						if d < WORKER_THREAT_RADIUS:
+							# 距离越近惩罚越大，但上限只有 2.5，低于大多数资源权重，
+							# 保证农民仍会挑一个相对安全的矿点出门，而不是全留主城。
+							threat_penalty = maxf(threat_penalty, (1.0 - d / WORKER_THREAT_RADIUS) * WORKER_THREAT_MAX_PENALTY)
+					_worker_threat_cache[entity] = threat_penalty
 				score -= threat_penalty
 				if score > best_score: best_score = score; best = entity
 	return best
