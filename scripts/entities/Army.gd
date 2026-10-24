@@ -613,15 +613,24 @@ func _think(delta, bm):
 	# 驻扎防御：驻扎点附近有敌人时先清敌，不要立刻回驻扎点；
 	# 清空驻扎防御圈后再返回。追击目标跑出防御圈则放弃并回防。
 	if garrison_point != Vector3.ZERO:
+		var defend_radius: float = GARRISON_DEFEND_RADIUS
+		# AI 建筑被攻击时给附近驻扎部队下的临时反击命令，允许它们离开
+		# 原驻扎圈去追攻击者；15 秒后自动恢复普通驻扎逻辑。
+		if has_meta("ai_building_defense_until"):
+			var until: float = float(get_meta("ai_building_defense_until"))
+			if bm != null and float(bm.game_time) < until:
+				defend_radius = 45.0
+			else:
+				remove_meta("ai_building_defense_until")
 		if current_target != null and _order_is(UnitState.ATTACKING):
-			if current_target.global_position.distance_to(garrison_point) > GARRISON_DEFEND_RADIUS:
+			if current_target.global_position.distance_to(garrison_point) > defend_radius:
 				current_target = null
 				_set_order(UnitState.IDLE)
 				is_attack_moving = false
 				move_to(garrison_point)
 				return
 		if current_target == null and not is_attack_moving and (_order_is(UnitState.IDLE) or _is_returning_to_garrison()):
-			var enemy = _find_nearest_enemy_near(garrison_point, GARRISON_DEFEND_RADIUS)
+			var enemy = _find_nearest_enemy_near(garrison_point, defend_radius)
 			if enemy and is_instance_valid(enemy) and enemy.health > 0:
 				attack_target(enemy)
 			else:

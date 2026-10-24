@@ -1378,12 +1378,34 @@ func find_best_resource_for_worker(worker: Army, priority_score: Dictionary) -> 
 				if score > best_score: best_score = score; best = entity
 	return best
 
+# 已有驻扎点的部队不再被进攻/打猎/巡逻调用；建筑被攻击时的本地反击单位
+# 同样在短时间内保留目标，避免刚出门就被别的调度覆盖。
+func _is_local_defense_active(u) -> bool:
+	if u == null or not is_instance_valid(u) or not u.has_meta("ai_building_defense_until"):
+		return false
+	if float(battle.game_time) < float(u.get_meta("ai_building_defense_until")):
+		return true
+	u.remove_meta("ai_building_defense_until")
+	return false
+
+func _is_held_by_garrison(u) -> bool:
+	if u == null or not is_instance_valid(u):
+		return true
+	if u.garrison_point != Vector3.ZERO:
+		return true
+	return _is_local_defense_active(u)
+
 func attack_move(target_position: Vector3, max_units: int):
 	var sent = 0
 	for entity in battle.entities.get_children():
 		if sent >= max_units: break
 		if entity is Army and entity.health > 0 and int(entity.entity_id) not in [5,6,9,10,14,43,44,45,46,47,48,49,50,51] and entity_belongs_to_me(entity):
 			if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass") or entity.has_meta("ai_transporting") or entity.has_meta("ai_escorting"):
+				continue
+			# 已有驻扎点的部队不再被主攻调用（防守时由 AIDefense 单独调度）
+			if entity.garrison_point != Vector3.ZERO:
+				continue
+			if _is_local_defense_active(entity):
 				continue
 			var boarded = entity.get("_boarded_on")
 			if boarded != null and int(boarded) != -1:
@@ -1510,6 +1532,7 @@ func _ai_hunt_animals(delta):
 		if e.entity_id == 5 or e.entity_id == 6: continue  # handcarts / trade carts
 		if e.entity_id >= 43: continue  # merchants, officials, food merchant
 		if e.has_meta("ai_home_guard") or e.has_meta("ai_resource_guard") or e.has_meta("ai_harass"): continue
+		if _is_held_by_garrison(e): continue
 		if e.current_order != "" or e.current_target != null: continue  # only idle
 		if e.water_capable: idle_water.append(e)
 		else: idle_land.append(e)
@@ -1697,6 +1720,10 @@ func _pick_harass_squad(my_castle) -> Array:
 			continue
 		if e.has_meta("ai_home_guard") or e.has_meta("ai_resource_guard") or e.has_meta("ai_transporting") or e.has_meta("ai_escorting"):
 			continue
+		if e.garrison_point != Vector3.ZERO:
+			continue
+		if _is_local_defense_active(e):
+			continue
 		var boarded = e.get("_boarded_on")
 		if boarded != null and int(boarded) != -1:
 			continue
@@ -1728,7 +1755,7 @@ func execute_overwhelm():
 	if not enemy_castle:
 		current_tactic = LateTactic.NONE
 		return
-	_release_guards_for_main_attack()
+	# 不再为了主攻解除已有驻扎点的部队；常驻守军/玩家驻扎部队留在原地
 	var rally = enemy_castle.global_position + Vector3(0, 0, 5)
 	#if wall_positions.size() > 0: rally = wall_positions[wall_positions.size()/2] + Vector3(0, 0, 2)
 	var self_castle = get_peer_castle(my_peer_id)
@@ -1740,6 +1767,7 @@ func execute_overwhelm():
 		if entity is Army and entity_belongs_to_me(entity) and entity.health > 0:
 			if int(entity.entity_id) in [5,6,10,14,43,44,45,46,47,48,49,50,51]: continue
 			if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass"): continue
+			if _is_held_by_garrison(entity): continue
 			entity.attack_move_to(rally)
 	# 等待部队集结
 	await get_tree().create_timer(10.0).timeout
@@ -1750,6 +1778,7 @@ func execute_overwhelm():
 		if entity is Army and entity_belongs_to_me(entity) and entity.health > 0:
 			if int(entity.entity_id) in [5,6,10,14,43,44,45,46,47,48,49,50,51]: continue
 			if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass"): continue
+			if _is_held_by_garrison(entity): continue
 			if not enemy_castle or not is_instance_valid(enemy_castle): continue
 			entity.attack_move_to(enemy_castle.global_position)
 
@@ -1762,7 +1791,6 @@ func execute_raid():
 	if not enemy_castle or not is_instance_valid(enemy_castle):
 		current_tactic = LateTactic.NONE
 		return
-	_release_guards_for_main_attack()
 	var enemy_team: int = int(enemy_castle.team)
 	var enemy_pos = enemy_castle.global_position
 	var special_uid = RAID_UNIT
@@ -1783,6 +1811,8 @@ func execute_raid():
 	for e in battle.entities.get_children():
 		if e is Army and e.team == my_team and e.health > 0 and (int(e.entity_id) not in [5,6,9,10,14,43,44,45,46,47,48,49,50,51]) and entity_belongs_to_me(e):
 			if e.has_meta("ai_home_guard") or e.has_meta("ai_resource_guard") or e.has_meta("ai_harass"):
+				continue
+			if _is_held_by_garrison(e):
 				continue
 			raid_army.append(e)
 	if raid_army.is_empty(): return
@@ -2214,25 +2244,6 @@ func _process_line_3():
 			var hp2 = find_valid_build_position(castle.global_position, 28)
 			if hp2 != Vector3.ZERO: build_building(28, hp2)
 
-# 主攻前解除守军驻扎；否则带 garrison_point 的部队会被持续拉回主城
-func _release_guards_for_main_attack() -> void:
-	if _defense != null and _defense.has_method("release_guards_for_attack"):
-		_defense.release_guards_for_attack()
-	# 兜底清理可能没记入 _home_guard_ids 的残留驻扎标记
-	for entity in battle.entities.get_children():
-		if not (entity is Army) or entity.health <= 0 or not entity_belongs_to_me(entity):
-			continue
-		if int(entity.entity_id) in [5, 6, 10, 14, 43, 44, 45, 46, 47, 48, 49, 50, 51]:
-			continue
-		if entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass"):
-			continue
-		if entity.has_meta("ai_home_guard"):
-			entity.remove_meta("ai_home_guard")
-		if entity.garrison_point != Vector3.ZERO:
-			entity.garrison_point = Vector3.ZERO
-			if entity.has_method("_hide_garrison_marker"):
-				entity.call("_hide_garrison_marker")
-
 func _process_line_4():
 	# 威胁上升 / 防守姿态时不再把主力送出去；骚扰、突袭、全军压上时仍允许补发主攻
 	if _defense != null and int(_defense.threat_level) >= 2:
@@ -2246,7 +2257,6 @@ func _process_line_4():
 			return
 		var overwhem_target = _get_attack_target_castle()
 		if overwhem_target:
-			_release_guards_for_main_attack()
 			attack_move(overwhem_target.global_position, 30)
 		return
 	# 发育阶段保留原来的 ASSAULT 门槛，但兵力成型且开局时间已过就先发起主攻，
@@ -2258,7 +2268,6 @@ func _process_line_4():
 	if count_military(my_key) >= 12 and an_attack():
 		var target = _get_attack_target_castle()
 		if target:
-			_release_guards_for_main_attack()
 			attack_move(target.global_position, 30)
 
 func _process_line_5():
@@ -2339,6 +2348,7 @@ func _rally_land_army_to_castle():
 		# 已集合过的单位不再重复集合
 		if entity.has_meta("ai_rallied"): continue
 		if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass") or entity.has_meta("ai_transporting"): continue
+		if _is_held_by_garrison(entity): continue
 		# 已登船单位由 AIWaterCrossing 管理，不再被集结点重新下令
 		var boarded = entity.get("_boarded_on")
 		if boarded != null and int(boarded) != -1: continue
@@ -2363,6 +2373,7 @@ func _patrol_navy_around_water():
 		if entity.entity_id == 9: continue  # 运载船由渡水模块调度，不能当成巡逻舰
 		if entity.entity_id == 40: continue  # 爆破船应冲向敌舰/敌岸，不能拿去绕圈巡逻
 		if entity.has_meta("ai_transporting") or entity.has_meta("ai_escorting"): continue
+		if _is_held_by_garrison(entity): continue
 		if entity.current_order != "" or entity.current_target != null: continue
 		idle_naval.append(entity)
 	if idle_naval.is_empty(): return

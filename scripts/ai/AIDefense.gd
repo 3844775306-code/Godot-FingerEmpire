@@ -33,6 +33,11 @@ const WORKER_FLEE_TIME: float = 9.0
 const WORKER_FLEE_RADIUS: float = 8.0
 const WORKER_FLEE_DISTANCE: float = 6.0
 const FORCE_GUARD_TIME: float = 16.0
+# 常驻主城守军数量。低于防守状态时保持 5 人，避免主力出门后家里完全空虚。
+const HOME_GUARD_COUNT: int = 5
+# 友方建筑被攻击时，调动建筑周围这个半径内、没有任务的陆军反击
+const BUILDING_DEFENSE_RADIUS: float = 20.0
+const BUILDING_DEFENSE_HOLD: float = 15.0
 
 const SIEGE_IDS: Array = [16, 17, 18, 58, 59]
 const ECO_IDS: Array = [10, 14, 43, 44, 45, 51]
@@ -73,6 +78,9 @@ var _home_guard_ids: Dictionary = {}
 var _guard_timer: float = 0.0
 var _force_guard_until: float = -999.0
 
+# ── 建筑被攻击追踪 ──
+var _building_health: Dictionary = {}
+
 # ── 资源区状态 ──
 var resource_zones: Array = []        # [{"center","type","workers","nodes","enemy_count"}]
 var _resource_timer: float = 0.0
@@ -108,6 +116,9 @@ func tick(delta: float) -> void:
 	if _threat_timer <= 0.0:
 		_threat_timer = THREAT_INTERVAL
 		_evaluate_threat(castle)
+	# 先检测建筑掉血并给附近空闲部队下反击命令，再调度守军；
+	# 被本地防守标记的部队会在守军调度里跳过，避免刚出击就被拉回主城。
+	_detect_building_attacks()
 	_manage_defense(castle, delta)
 	_manage_home_guard(castle, delta)
 	_manage_resource_security(castle, delta)
@@ -738,6 +749,68 @@ func _manage_defense_upgrades(castle, delta: float) -> void:
 			return
 
 # ═══════════════════════════════════════════════════════════════
+# 建筑被攻击 → 周围空闲部队反击
+# ═══════════════════════════════════════════════════════════════
+
+func _detect_building_attacks() -> void:
+	var now: float = float(ai.battle.game_time)
+	var seen: Dictionary = {}
+	for e in ai.battle.entities.get_children():
+		if not (e is Building) or e.health <= 0:
+			continue
+		if int(e.team) == RTSConfig.Team.NEUTRAL:
+			continue
+		# 友方建筑包括自己的和同队玩家的建筑；敌方建筑不处理
+		if ai._entity_is_enemy(e):
+			continue
+		var uid: int = e.get_instance_id()
+		seen[uid] = true
+		var prev: float = float(_building_health.get(uid, -1.0))
+		_building_health[uid] = e.health
+		if prev < 0.0 or e.health >= prev - 0.5:
+			continue
+		var attacker = e.get("_last_damager")
+		# 远程弹丸/防御塔的 source 可能不是 Army，兜底找建筑周围最近的可战斗敌军
+		if not _is_combat_enemy(attacker):
+			attacker = _nearest_enemy_combat(e.global_position, BUILDING_DEFENSE_RADIUS)
+		if attacker == null:
+			continue
+		_send_building_defenders(e, attacker, now)
+	# 清理已消失建筑的旧血量，防止 instance_id 复用造成误判
+	for uid in _building_health.keys():
+		if not seen.has(uid):
+			_building_health.erase(uid)
+
+func _send_building_defenders(building, attacker, now: float) -> void:
+	if building == null or not is_instance_valid(building):
+		return
+	if attacker == null or not is_instance_valid(attacker) or attacker.health <= 0:
+		return
+	for u in _land_combat_units():
+		if not is_instance_valid(u) or u.health <= 0:
+			continue
+		if u.global_position.distance_to(building.global_position) > BUILDING_DEFENSE_RADIUS:
+			continue
+		# 只调动真正空闲的部队；已有目标、移动/攻击移动、排队命令的部队不打断
+		if u.current_target != null and is_instance_valid(u.current_target):
+			continue
+		if u.is_attack_moving or u.current_order != "" or not u.command_queue.is_empty():
+			continue
+		# 驻扎中的部队也可以回防“自己附近的建筑”，这是防守例外；
+		# 但给它一个短标记，防止同一帧后续守军调度把它重新拉回主城。
+		u.set_meta("ai_building_defense_until", now + BUILDING_DEFENSE_HOLD)
+		if u.has_method("attack_target"):
+			u.attack_target(attacker)
+		else:
+			u.current_target = attacker
+			u.current_order = "attack"
+
+func _is_local_building_defender(u, now: float) -> bool:
+	if u == null or not is_instance_valid(u):
+		return false
+	return u.has_meta("ai_building_defense_until") and now < float(u.get_meta("ai_building_defense_until"))
+
+# ═══════════════════════════════════════════════════════════════
 # 守军调度
 # ═══════════════════════════════════════════════════════════════
 
@@ -778,10 +851,9 @@ func _manage_home_guard(castle, delta: float) -> void:
 	else:
 		match threat_level:
 			0:
-				desired = 2 if now >= 150.0 else 1
-				desired = mini(desired, maxi(1, int(own.size() * 0.4)))
+				desired = mini(own.size(), HOME_GUARD_COUNT)
 			1:
-				desired = mini(own.size(), 4)
+				desired = mini(own.size(), HOME_GUARD_COUNT)
 			2:
 				desired = mini(own.size(), maxi(6, threat_enemy_count * 2 + 2))
 			_:
@@ -809,13 +881,19 @@ func _manage_home_guard(castle, delta: float) -> void:
 			break
 		if not is_instance_valid(u) or u.health <= 0:
 			continue
+		if _is_local_building_defender(u, now):
+			continue
+		# 非防守状态不再调动已有驻扎点的部队；自己的常驻守军已在 _home_guard_ids 中，
+		# 允许继续刷新集结点，不会因此被重复招募或丢失。
+		var uid: int = u.get_instance_id()
+		if not is_defending and u.garrison_point != Vector3.ZERO and not _home_guard_ids.has(uid):
+			continue
 		if is_defending and _skip_near_castle_active(u, castle):
 			# 家门口正在交战的部队保留当前目标；驻扎点已在前面统一解除
 			continue
 		# 已经在执行主攻的单位不能再被拉回主城驻扎；否则 attack_move 会被守军调度覆盖
 		if threat_level < 2 and (u.is_attack_moving or u.current_order == "attack_move"):
 			continue
-		var uid: int = u.get_instance_id()
 		var special: bool = u.has_meta("ai_resource_guard") or u.has_meta("ai_harass")
 		if special and threat_level < 3 and now >= _force_guard_until:
 			continue
@@ -852,7 +930,7 @@ func _assign_home_guard(castle, force: bool) -> void:
 		return
 	var is_defending: bool = _defense_mode_active()
 	var rally: Vector3 = _guard_rally(castle)
-	var desired: int = own.size() if force else mini(own.size(), maxi(4, threat_enemy_count * 2 + 2))
+	var desired: int = own.size() if force else mini(own.size(), maxi(HOME_GUARD_COUNT, threat_enemy_count * 2 + 2))
 	if is_defending:
 		var active_near: int = 0
 		for u in own:
@@ -870,6 +948,8 @@ func _assign_home_guard(castle, force: bool) -> void:
 		if assigned >= desired:
 			break
 		if not is_instance_valid(u) or u.health <= 0:
+			continue
+		if _is_local_building_defender(u, float(ai.battle.game_time)):
 			continue
 		if is_defending and _skip_near_castle_active(u, castle):
 			continue
