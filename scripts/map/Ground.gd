@@ -34,6 +34,8 @@ var vertex_grid: Array = []           # 存储顶点高度，用于快速查询
 var height_scale: float = 2.0         # 高度缩放系数
 # 水面材质（用于把船只位置推给着色器做涟漪/尾迹，以及按画质档调反射强度）
 var _water_mat: ShaderMaterial = null
+# 陆地地表材质（自定义着色器：微小起伏 + 法线扰动）
+var _terrain_mat: ShaderMaterial = null
 var _boat_update_timer: float = 0.0
 var _boat_prev: Dictionary = {}        # 船只 instance_id -> 上次采样位置（算航向）
 var _boat_prev_cleanup: float = 10.0
@@ -2389,11 +2391,20 @@ func _create_visual_and_texture():
 	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	# 陆地和水面一样做微小起伏：贴图交给自定义着色器，顶点做几厘米的缓坡位移，
+	# 法线同步扰动，地面在光照下就不再是一张平板贴图
+	var terrain_shader = load("res://resources/terrain_noise.gdshader")
+	if terrain_shader:
+		var tmat = ShaderMaterial.new()
+		tmat.shader = terrain_shader
+		tmat.set_shader_parameter("albedo_tex", terrain_texture)
+		_terrain_mat = tmat
+		mat = null
 
 	terrain_mesh_instance = MeshInstance3D.new()
 	terrain_mesh_instance.name = "TerrainPlane"
 	terrain_mesh_instance.mesh = mesh
-	terrain_mesh_instance.material_override = mat
+	terrain_mesh_instance.material_override = _terrain_mat if _terrain_mat != null else mat
 	add_child(terrain_mesh_instance)
 
 # ---------- 碰撞与导航 ----------
