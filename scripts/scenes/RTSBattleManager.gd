@@ -3297,15 +3297,15 @@ func _tick_animation_lod(delta: float) -> void:
 			if is_instance_valid(a):
 				a.set_animation_lod(false)
 		return
-	var cam_pos := cam.global_position
-	var distance_limit: float = 55.0 - float(_perf_quality_level) * 4.0
 	for a in _armies:
 		if not is_instance_valid(a) or a.health <= 0:
 			continue
 		var p: Vector3 = a.global_position + Vector3(0, 1.0, 0)
+		# 只停“屏幕外”单位。不能再用距离阈值：RTS 相机高度 10~95m，
+		# 默认/拉远视角下相机到屏幕中心单位往往已经超过 55m，按距离停会把
+		# 全屏可见单位的动画一起停掉，表现为后期所有单位定格。
 		var offscreen: bool = not cam.is_position_in_frustum(p)
-		var too_far: bool = cam_pos.distance_to(p) > distance_limit
-		a.set_animation_lod(offscreen or too_far)
+		a.set_animation_lod(offscreen)
 
 # 500 单位级战斗：每个物理 tick 的 Army 逻辑已经接近 16ms，再乘上帧末
 # 追赶的多个 physics tick 就会把帧时间推到几百毫秒。渲染保持 60FPS，
