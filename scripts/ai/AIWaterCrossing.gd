@@ -23,10 +23,10 @@ const MAX_TRANSPORT_TROOPS := TRANSPORT_FLEET_SIZE * TRANSPORT_CAPACITY
 const ESCORT_TARGET := 4
 const MIN_ESCORTS := 2
 const ESCORT_IDS := [13, 39, 40]
-const BOARD_DISTANCE := 2.6
-const PARK_DISTANCE := 2.8
-const UNLOAD_DISTANCE := 3.0
-const BOARD_WAIT_TIMEOUT := 35.0
+const BOARD_DISTANCE := 3.5
+const PARK_DISTANCE := 3.0
+const UNLOAD_DISTANCE := 3.5
+const BOARD_WAIT_TIMEOUT := 50.0
 
 const MODE_NONE := 0
 const MODE_BRIDGE := 1
@@ -81,8 +81,10 @@ func _refresh_plan():
 	# 搭桥过程中不要每个周期都重算，否则会把已经建了一半的桥段丢掉
 	if mode == MODE_BRIDGE and not bridge_plan.is_empty():
 		return
-	# 运载船舰队已经集结/出航时也不要重算两岸，避免把船队中途改道
-	if mode == MODE_TRANSPORT and _transport_state != STATE_IDLE:
+	# 运载船舰队已经集结/出航时也不要重算两岸，避免把船队中途改道。
+	# 还在等船/等兵（STATE_IDLE）时同样要冻结：如果每 6 秒重算一次，
+	# 岸点可能在几处候选之间来回跳，运载船永远开不到停泊点，也就不会上船。
+	if mode == MODE_TRANSPORT and _transport_shores_valid and (not _transports.is_empty() or _transport_state != STATE_IDLE):
 		return
 	var my_castle = ai.get_peer_castle(ai.my_peer_id)
 	var enemy_castle = ai._get_attack_target_castle()
@@ -464,15 +466,31 @@ func _tick_fleet_idle(delta: float):
 		return
 	_transport_units = units
 	_unit_ship.clear()
-	for i in range(units.size()):
-		var u = units[i]
+	# 按“离哪艘船最近 + 该船还有空位”分配，而不是按队列顺序硬塞。
+	# 4 艘船沿岸排开时，靠岸单位如果被分到另一端的船，很容易永远走不到
+	# 3.5 格登船距离内，最后超时放弃；就近分配能让每艘船都有人上。
+	var assigned_counts: Dictionary = {}
+	for u in units:
 		if not is_instance_valid(u) or not (u is Army):
 			continue
-		var ship_idx: int = int(floor(float(i) / float(TRANSPORT_CAPACITY)))
-		ship_idx = mini(ship_idx, _transports.size() - 1)
-		var ship = _transports[ship_idx]
+		var ship = null
+		var best_dist: float = INF
+		for candidate in _transports:
+			if not is_instance_valid(candidate):
+				continue
+			var cid: int = candidate.get_instance_id()
+			if candidate.get_boarded_count() >= TRANSPORT_CAPACITY:
+				continue
+			if int(assigned_counts.get(cid, 0)) >= TRANSPORT_CAPACITY:
+				continue
+			var d: float = _flat_distance(u.global_position, candidate.global_position)
+			if d < best_dist:
+				best_dist = d
+				ship = candidate
 		if not is_instance_valid(ship):
+			u.remove_meta("ai_transporting")
 			continue
+		assigned_counts[ship.get_instance_id()] = int(assigned_counts.get(ship.get_instance_id(), 0)) + 1
 		_unit_ship[u.get_instance_id()] = ship
 		u.set_meta("ai_transporting", true)
 		# 每艘船对应的陆军走到该船旁边的陆地，不能隔老远直接“传送”上船
@@ -493,21 +511,17 @@ func _tick_fleet_gather(delta: float):
 	var slots: Array = _transport_slots
 	if slots.size() != _transports.size():
 		slots = _shore_slots(own_shore_water, _transports.size(), 2.5)
-	# 先确认所有运载船已经停在岸边；没停稳不能让人上船
-	var all_parked: bool = true
+	# 各船各自靠岸即可，不再要求 4 艘同时停在泊位才允许上船。
+	# 只要某艘船已经靠岸，它附近的士兵就先上；其他船继续开，避免一艘船
+	# 被挤住/寻路慢导致整支舰队都停在岸边等人。
 	for i in range(_transports.size()):
 		var ship = _transports[i]
 		if not is_instance_valid(ship):
 			continue
 		if ship.global_position.distance_to(slots[i]) > PARK_DISTANCE or not _is_shore_water_point(ship.global_position):
 			ship.move_to(slots[i])
-			all_parked = false
 		else:
 			ship.stop_movement()
-	if not all_parked:
-		if _transport_timer > BOARD_WAIT_TIMEOUT:
-			_abort_transport()
-		return
 	# 只让真正走到船边的单位上船，距离远的继续等
 	var waiting: int = 0
 	for u in _transport_units:
@@ -523,17 +537,28 @@ func _tick_fleet_gather(delta: float):
 			waiting += 1
 			continue
 		if _flat_distance(u.global_position, ship.global_position) > BOARD_DISTANCE:
+			# 单位可能因为岸边拥挤/寻路失败停在半路；路径空时重新下令到船边，
+			# 不能只是干等到超时后整支舰队放弃。
+			if u._movement.astar_path.is_empty():
+				var landing: Vector3 = _find_land_near(ship.global_position)
+				if landing != Vector3.ZERO:
+					u.move_to(landing)
 			waiting += 1
 			continue
 		ship.board_unit(u)
 	var boarded_units: Array = []
-	var timed_out: bool = _transport_timer > BOARD_WAIT_TIMEOUT
+	var boarded_now: int = 0
 	for u in _transport_units:
 		if is_instance_valid(u) and u.has_meta("_boarded_on"):
 			boarded_units.append(u)
-		elif timed_out and is_instance_valid(u):
+			boarded_now += 1
+	# 已经够 30 人时不要为了等最后几个掉队的兵一直拖到 50 秒超时；
+	# 给落单单位一个短暂追赶窗口后直接出发。
+	var stop_waiting: bool = _transport_timer > BOARD_WAIT_TIMEOUT or (boarded_now >= MIN_TRANSPORT_TROOPS and _transport_timer > 8.0)
+	for u in _transport_units:
+		if is_instance_valid(u) and not u.has_meta("_boarded_on") and stop_waiting:
 			u.remove_meta("ai_transporting")
-	if waiting > 0 and not timed_out:
+	if waiting > 0 and not stop_waiting:
 		return
 	_transport_units = boarded_units
 	if _transport_units.size() < MIN_TRANSPORT_TROOPS:
@@ -805,7 +830,14 @@ func _ensure_transport_fleet():
 	if not ai._can_train_unit():
 		return
 	if ai.can_afford(TRANSPORT_ID):
-		sy.try_produce(TRANSPORT_ID)
+		if sy.try_produce(TRANSPORT_ID):
+			# 船坞平时会被战船/渔船排满；运载船如果排在十几艘船后面，
+			# AI 可能几分钟都凑不齐 4 艘。把运载船插到当前生产项之后，
+			# 保留正在建造的那一艘的计时，同时让运载船尽快下水。
+			var idx: int = sy.production_queue.rfind(TRANSPORT_ID)
+			if idx > 1:
+				sy.production_queue.remove_at(idx)
+				sy.production_queue.insert(1, TRANSPORT_ID)
 
 func _ensure_escort_ships():
 	var total: int = ai.count_unit(13) + ai.count_unit(39) + ai.count_unit(40)
