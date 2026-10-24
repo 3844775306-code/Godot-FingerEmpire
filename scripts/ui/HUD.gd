@@ -59,7 +59,6 @@ var _stats_castle_label: Label
 # 折叠态：面板收成一条「资源 + 人口」胶囊（电脑版默认折叠）
 var _stats_collapsed: bool = true
 var _stats_collapse_btn: Button = null
-var _settings_btn: Button = null
 var _stats_capsule: Panel = null
 var _capsule_pop_label: Label = null
 var _capsule_res_labels: Dictionary = {}
@@ -731,23 +730,7 @@ func _make_cmd_button(text: String, cb: Callable, danger: bool) -> Button:
 	b.pressed.connect(cb)
 	return b
 
-# 对局内设置入口：右上角小地图下方
-func _create_game_settings_button() -> void:
-	_settings_btn = Button.new()
-	_settings_btn.name = "GameSettingsButton"
-	_settings_btn.text = "⚙ 设置"
-	_settings_btn.anchor_left = 1.0
-	_settings_btn.anchor_right = 1.0
-	_settings_btn.anchor_top = 0.0
-	_settings_btn.anchor_bottom = 0.0
-	_settings_btn.offset_left = -200
-	_settings_btn.offset_right = -8
-	_settings_btn.offset_top = 208
-	_settings_btn.offset_bottom = 248
-	UITheme.apply_muted_button(_settings_btn, UITheme.FONT_MD)
-	_settings_btn.pressed.connect(_open_game_settings)
-	add_child(_settings_btn)
-
+# 对局内设置面板入口（按钮本身在全局指令底板第二排最后一个）
 func _open_game_settings() -> void:
 	if get_node_or_null("GameSettingsPanel"):
 		return
@@ -767,7 +750,7 @@ func _ready():
 
 	_create_unit_stats_panel()
 
-	# 全局指令：5 个按钮排成两行，统一放在一块半透明底板里
+	# 全局指令：6 个按钮正好排成两排（3×2），统一放在一块半透明底板里
 	_cmd_panel = Panel.new()
 	_cmd_panel.name = "GlobalCommandPanel"
 	_cmd_panel.position = Vector2(620, 10)
@@ -794,11 +777,9 @@ func _ready():
 	auto_attack_btn = _make_cmd_button("⚔️ 自动进攻：关 (F2)", _on_attack_all_pressed, true)
 	var b_retreat_screen = _make_cmd_button("屏幕军队撤退 (F3)", _on_retreat_screen_pressed, false)
 	var b_retreat_all = _make_cmd_button("所有军队撤退 (Ctrl+F3)", _on_retreat_all_pressed, false)
-	for b in [b_select_screen, b_select_all, auto_attack_btn, b_retreat_screen, b_retreat_all]:
+	var b_settings = _make_cmd_button("⚙ 设置", _open_game_settings, false)
+	for b in [b_select_screen, b_select_all, auto_attack_btn, b_retreat_screen, b_retreat_all, b_settings]:
 		cmd_grid.add_child(b)
-
-	# 对局内设置入口：右上角小地图下方（画质 / 音量 / 暂停 / 退出）
-	_create_game_settings_button()
 
 	set_process(true)
 

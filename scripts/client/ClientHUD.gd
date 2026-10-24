@@ -36,7 +36,6 @@ var _stats_res_info: Dictionary = {}
 var _stats_castle_bar: HealthBarControl
 var _stats_castle_label: Label
 var _cmd_panel: Panel = null
-var _settings_btn: Button = null
 var _unit_stats_timer: float = 1.0
 # 统计面板折叠态：展开是完整面板，折叠后只留一条「资源 + 人口」胶囊（与单机版一致，默认折叠）
 var _stats_collapsed: bool = true
@@ -673,10 +672,7 @@ func _ready():
 			stick.set_process_input(false)
 			stick.set_process_unhandled_input(false)
 
-	# 对局内设置入口：右上角小地图下方（画质 / 音量 / 退出；联机不提供暂停）
-	_create_game_settings_button()
-
-	# 全军指令：与单机版一致，5 个按钮统一放在半透明底板里（620,10）
+	# 全军指令：与单机版一致，6 个按钮正好排成两排（3×2），统一放在半透明底板里（620,10）
 	_cmd_panel = Panel.new()
 	_cmd_panel.name = "GlobalCommandPanel"
 	_cmd_panel.position = Vector2(620, 10)
@@ -703,7 +699,8 @@ func _ready():
 	auto_attack_btn = _make_cmd_button("⚔️ 自动进攻：关 (F2)", _on_attack_all_pressed, true)
 	var b_ret_screen = _make_cmd_button("屏幕军队撤退 (F3)", _on_retreat_screen_pressed, false)
 	var b_ret_all = _make_cmd_button("所有军队撤退 (Ctrl+F3)", _on_retreat_all_pressed, false)
-	for b in [attack_all_btn, retreat_all_btn, auto_attack_btn, b_ret_screen, b_ret_all]:
+	var b_settings = _make_cmd_button("⚙ 设置", _open_game_settings, false)
+	for b in [attack_all_btn, retreat_all_btn, auto_attack_btn, b_ret_screen, b_ret_all, b_settings]:
 		cmd_grid.add_child(b)
 
 	# 顶部中央偏右两行大字：第一行性能、第二行对局/网络信息（只保留这两条）
@@ -771,6 +768,7 @@ func _make_cmd_button(text: String, cb: Callable, danger: bool) -> Button:
 	b.pressed.connect(cb)
 	return b
 
+# 对局内设置面板（按钮本身在指令底板第二排最后一个；面板挂独立 CanvasLayer 才能全屏）
 func _open_game_settings() -> void:
 	if get_node_or_null("SettingsLayer/GameSettingsPanel"):
 		return
@@ -783,27 +781,6 @@ func _open_game_settings() -> void:
 		add_child(layer)
 	layer.add_child(panel)
 	panel.call("setup", true, true)
-
-# 对局内设置入口（联机版）：挂在独立 CanvasLayer 上，才能按视口做右上角锚点
-func _create_game_settings_button() -> void:
-	var layer := CanvasLayer.new()
-	layer.name = "SettingsLayer"
-	layer.layer = 95
-	add_child(layer)
-	_settings_btn = Button.new()
-	_settings_btn.name = "GameSettingsButton"
-	_settings_btn.text = "⚙ 设置"
-	_settings_btn.anchor_left = 1.0
-	_settings_btn.anchor_right = 1.0
-	_settings_btn.anchor_top = 0.0
-	_settings_btn.anchor_bottom = 0.0
-	_settings_btn.offset_left = -200
-	_settings_btn.offset_right = -8
-	_settings_btn.offset_top = 208
-	_settings_btn.offset_bottom = 248
-	UITheme.apply_muted_button(_settings_btn, UITheme.FONT_MD)
-	_settings_btn.pressed.connect(_open_game_settings)
-	layer.add_child(_settings_btn)
 
 func _connect_client_input():
 	var ci = _get_client_input_node()
