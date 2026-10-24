@@ -123,6 +123,9 @@ func _process(delta):
 		if current_target != null and not is_instance_valid(current_target):
 			current_target = null
 			_target_scan_timer = 0.0
+		if current_target is Army and current_target.is_immune_to_damage():
+			current_target = null
+			_target_scan_timer = 0.0
 		if current_target == null:
 			# 每帧 find_enemy 在后期几十座塔时会持续做空间查询；0.25 秒一次足够，
 			# 初始相位已在变量声明时随机打散。
@@ -151,6 +154,8 @@ func _find_enemy_in_range():
 			if entity.team == team: continue
 		# Buildings don't attack animals
 		if str(entity.get("_animal_type")) != "": continue
+		# 船/墙保护下的单位免疫，防御塔直接忽略，避免把炮弹浪费在无敌目标上
+		if entity.is_immune_to_damage(): continue
 		var dist = global_position.distance_to(entity.global_position) - body_radius - entity.body_radius
 		if dist <= attack_range and dist < best_dist:
 			best_dist = dist

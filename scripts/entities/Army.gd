@@ -451,6 +451,11 @@ func _physics_process(delta):
 	if _soldier_garrison_building and _soldier_garrison_building.get_ref() and is_instance_valid(_soldier_garrison_building.get_ref()):
 		return
 
+	# 城墙上的单位即使已停止移动，也要把高度平滑到墙顶；墙被毁后落回地面。
+	# 只有墙上的单位/AI 守墙单位才需要走这段，避免全军每帧取地图高度。
+	if has_meta("ai_wall_guard") or _is_unit_on_wall():
+		_update_wall_height(delta)
+
 	# 陆地单位落水持续伤害（上桥、进运载船、浅滩涉水不受伤）
 	_tick_water_damage(delta)
 	if health <= 0:
@@ -2504,6 +2509,9 @@ func _is_land_melee() -> bool:
 
 func _can_attack_target(target: GameEntity) -> bool:
 	if not is_instance_valid(target) or target.health <= 0: return false
+	# 在运载船/城墙保护下的单位不能直接攻击，必须先把船或城墙打掉
+	if target is Army and target.is_immune_to_damage():
+		return false
 	# 僧侣不参与任何攻击（包括手动指派的敌人目标）
 	if _is_healer():
 		return false
@@ -2542,12 +2550,36 @@ func _can_attack_target(target: GameEntity) -> bool:
 func _is_unit_on_wall() -> bool:
 	var bm = _get_bm()
 	if not bm: return false
-	var tg = bm.world_to_grid(global_position)
-	for e in bm.entities.get_children():
-		if e is Building and e.entity_id == 27 and e.health > 0 and e.team == team:
-			var wg = bm.world_to_grid(e.global_position)
-			if wg.x == tg.x and wg.y == tg.y: return true
-	return false
+	var wall = bm._wall_entity_grid.get(bm.world_to_grid(global_position))
+	if wall == null or not is_instance_valid(wall):
+		return false
+	return wall.health > 0 and wall.build_timer <= 0.0 and wall.team == team
+
+# 单位停在墙格上后不会再走 process_move 的高度平滑，这里补一帧级修正：
+# 墙在时抬到墙顶，墙被拆掉后落回地面。只处理已经离地/正在墙格的单位，正常地面单位直接返回。
+func _update_wall_height(delta: float) -> void:
+	var bm = _get_bm()
+	if bm == null or bm._wall_entity_grid.is_empty():
+		return
+	var map = bm.get_node_or_null("Map")
+	if map == null or not map.has_method("get_height_at"):
+		return
+	var ground_y: float = map.get_height_at(global_position)
+	var wall = bm._wall_entity_grid.get(bm.world_to_grid(global_position))
+	var on_wall: bool = wall != null and is_instance_valid(wall) and wall.health > 0 and wall.build_timer <= 0.0
+	var target_y: float = ground_y
+	if on_wall:
+		target_y = ground_y + 4.5
+	elif global_position.y <= ground_y + 0.8:
+		return
+	global_position.y = move_toward(global_position.y, target_y, 5.0 * delta)
+
+# 运载船上的单位随船免疫；城墙上的单位随墙免疫。保护物被摧毁后自动失效。
+func is_immune_to_damage() -> bool:
+	if _boarded_on != -1:
+		var transport = instance_from_id(_boarded_on)
+		return is_instance_valid(transport) and transport.health > 0
+	return _is_unit_on_wall()
 
 # ==================== Garrison System ====================
 func _find_nearest_enemy_in_vision():

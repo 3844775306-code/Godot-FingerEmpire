@@ -865,7 +865,7 @@ func _pick_units(max_count: int) -> Array:
 		var gb = e.get("_garrison_building")
 		if gb != null and gb.get_ref() != null:
 			continue
-		if e.has_meta("ai_home_guard") or e.has_meta("ai_resource_guard") or e.has_meta("ai_harass") or e.has_meta("ai_transporting"):
+		if e.has_meta("ai_home_guard") or e.has_meta("ai_resource_guard") or e.has_meta("ai_harass") or e.has_meta("ai_transporting") or e.has_meta("ai_wall_guard"):
 			continue
 		var dist: float = e.global_position.distance_to(own_shore_land)
 		candidates.append({"unit": e, "dist": dist})

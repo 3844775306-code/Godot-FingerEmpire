@@ -106,6 +106,11 @@ const AVOID_DEFENSE_RANGE: float = 22.0
 const RAID_UNIT: int = 15
 const WALL_COUNT: int = 12
 const WALL_SPACING: float = 1.3
+# 远程单位上墙：墙未破时免疫伤害，因此优先把闲置远程兵铺到墙格上；
+# 每格一个单位，赶路中的单位用 ai_wall_guard 预留墙格。
+const WALL_DEPLOY_INTERVAL: float = 6.0
+const WALL_DEPLOY_MAX_DISTANCE: float = 60.0
+var _wall_deploy_timer: float = 0.0
 const TOWER_SPACING: float = 3.0
 const DEFENSE_FRONT_DIST: float = 8.0
 const BUILD_ENEMY_ARMY_SAFE_RADIUS: float = 10.0
@@ -942,6 +947,10 @@ func decide(_delta):
 	if _defense == null:
 		_defense = AIDefenseScript.new(self)
 	_defense.tick(_delta)
+	_wall_deploy_timer -= _delta
+	if _wall_deploy_timer <= 0.0:
+		_wall_deploy_timer = WALL_DEPLOY_INTERVAL
+		_deploy_ranged_units_to_walls()
 	if Engine.get_process_frames() % 60 == 0:
 		var _w = count_unit(10)
 	# State dispatch
@@ -1432,7 +1441,7 @@ func attack_move(target_position: Vector3, max_units: int):
 	for entity in battle.entities.get_children():
 		if sent >= max_units: break
 		if entity is Army and entity.health > 0 and int(entity.entity_id) not in [5,6,9,10,14,43,44,45,46,47,48,49,50,51] and entity_belongs_to_me(entity):
-			if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass") or entity.has_meta("ai_transporting") or entity.has_meta("ai_escorting"):
+			if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass") or entity.has_meta("ai_transporting") or entity.has_meta("ai_escorting") or entity.has_meta("ai_wall_guard"):
 				continue
 			# 已有驻扎点的部队不再被主攻调用（防守时由 AIDefense 单独调度）
 			if entity.garrison_point != Vector3.ZERO:
@@ -1582,7 +1591,7 @@ func _ai_hunt_animals(delta):
 		if e.entity_id == 10 or e.entity_id == 14: continue  # peasants, gathering ships
 		if e.entity_id == 5 or e.entity_id == 6: continue  # handcarts / trade carts
 		if e.entity_id >= 43: continue  # merchants, officials, food merchant
-		if e.has_meta("ai_home_guard") or e.has_meta("ai_resource_guard") or e.has_meta("ai_harass"): continue
+		if e.has_meta("ai_home_guard") or e.has_meta("ai_resource_guard") or e.has_meta("ai_harass") or e.has_meta("ai_wall_guard"): continue
 		if _is_held_by_garrison(e): continue
 		if e.current_order != "" or e.current_target != null: continue  # only idle
 		if e.water_capable: idle_water.append(e)
@@ -1782,7 +1791,7 @@ func _pick_harass_squad(my_castle) -> Array:
 		var sgb = e.get("_soldier_garrison_building")
 		if sgb != null and sgb.get_ref() != null:
 			continue
-		if e.has_meta("ai_home_guard") or e.has_meta("ai_resource_guard") or e.has_meta("ai_transporting") or e.has_meta("ai_escorting"):
+		if e.has_meta("ai_home_guard") or e.has_meta("ai_resource_guard") or e.has_meta("ai_transporting") or e.has_meta("ai_escorting") or e.has_meta("ai_wall_guard"):
 			continue
 		if e.garrison_point != Vector3.ZERO:
 			continue
@@ -1830,7 +1839,7 @@ func execute_overwhelm():
 	for entity in battle.entities.get_children():
 		if entity is Army and entity_belongs_to_me(entity) and entity.health > 0:
 			if int(entity.entity_id) in [5,6,10,14,43,44,45,46,47,48,49,50,51]: continue
-			if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass"): continue
+			if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass") or entity.has_meta("ai_wall_guard"): continue
 			if _is_held_by_garrison(entity): continue
 			entity.attack_move_to(rally)
 	# 等待部队集结
@@ -1841,7 +1850,7 @@ func execute_overwhelm():
 	for entity in battle.entities.get_children():
 		if entity is Army and entity_belongs_to_me(entity) and entity.health > 0:
 			if int(entity.entity_id) in [5,6,10,14,43,44,45,46,47,48,49,50,51]: continue
-			if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass"): continue
+			if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass") or entity.has_meta("ai_wall_guard"): continue
 			if _is_held_by_garrison(entity): continue
 			if not enemy_castle or not is_instance_valid(enemy_castle): continue
 			entity.attack_move_to(enemy_castle.global_position)
@@ -1874,7 +1883,7 @@ func execute_raid():
 	var raid_army = []
 	for e in battle.entities.get_children():
 		if e is Army and e.team == my_team and e.health > 0 and (int(e.entity_id) not in [5,6,9,10,14,43,44,45,46,47,48,49,50,51]) and entity_belongs_to_me(e):
-			if e.has_meta("ai_home_guard") or e.has_meta("ai_resource_guard") or e.has_meta("ai_harass"):
+			if e.has_meta("ai_home_guard") or e.has_meta("ai_resource_guard") or e.has_meta("ai_harass") or e.has_meta("ai_wall_guard"):
 				continue
 			if _is_held_by_garrison(e):
 				continue
@@ -2441,7 +2450,7 @@ func _rally_land_army_to_castle():
 		if entity.water_capable: continue
 		# 已集合过的单位不再重复集合
 		if entity.has_meta("ai_rallied"): continue
-		if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass") or entity.has_meta("ai_transporting"): continue
+		if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass") or entity.has_meta("ai_transporting") or entity.has_meta("ai_wall_guard"): continue
 		if _is_held_by_garrison(entity): continue
 		# 已登船单位由 AIWaterCrossing 管理，不再被集结点重新下令
 		var boarded = entity.get("_boarded_on")
@@ -2450,6 +2459,132 @@ func _rally_land_army_to_castle():
 		if entity.current_order != "" or entity.current_target != null: continue
 		entity.set_meta("ai_rallied", true)
 		entity.attack_move_to(rally_point)
+
+# ═══ Wall Defense Deployment ═══
+# 把闲置远程单位送上前线城墙。城墙未破时单位免疫伤害，且站得高射界好；
+# 每个墙格只安排一个单位，移动中的单位保留 ai_wall_guard 元数据防止重复派人。
+func _is_valid_wall_slot(wall) -> bool:
+	return is_instance_valid(wall) and wall is Building and int(wall.entity_id) == 27 and wall.health > 0 and wall.build_timer <= 0.0
+
+func _is_ranged_wall_candidate(e) -> bool:
+	if not (e is Army) or e.health <= 0 or not entity_belongs_to_me(e):
+		return false
+	if e.water_capable or not bool(e.can_move):
+		return false
+	if float(e.attack_range) < 2.0 or int(e.target_type) <= 0:
+		return false
+	if int(e.entity_id) in [5, 6, 9, 10, 14, 17, 43, 44, 45, 46, 47, 48, 49, 50, 51, 55, 56, 57, 59]:
+		return false
+	var animal_type = e.get("_animal_type")
+	if animal_type != null and str(animal_type) != "":
+		return false
+	var boarded = e.get("_boarded_on")
+	if boarded != null and int(boarded) != -1:
+		return false
+	if e.has_meta("ai_wall_guard") or e.hold_position:
+		return false
+	if e.garrison_point != Vector3.ZERO:
+		return false
+	if e.current_target != null or e.current_order != "":
+		return false
+	var sgb = e.get("_soldier_garrison_building")
+	if sgb != null and sgb.get_ref() != null:
+		return false
+	if e._is_unit_on_wall():
+		return false
+	return true
+
+func _assign_wall_guard(unit, wall) -> void:
+	unit.set_meta("ai_wall_guard", wall.get_instance_id())
+	unit.hold_position = true
+	# 已经在墙上就不重复下令；否则走到墙格中心，MovementController 会自动把高度抬到墙顶。
+	if not unit._is_unit_on_wall():
+		_order_wall_move(unit, wall)
+
+func _order_wall_move(unit, wall) -> void:
+	# 城墙刚补建/刚完成时，单位可能曾把该墙格记为不可达；不清掉的话会永远站在原地。
+	if unit._movement:
+		unit._movement.clear_blacklist_at(wall.global_position)
+	unit.move_to(wall.global_position)
+
+func _release_wall_guard(unit) -> void:
+	if not is_instance_valid(unit):
+		return
+	unit.remove_meta("ai_wall_guard")
+	unit.hold_position = false
+	if unit.current_order == "move":
+		unit.stop_movement()
+
+func _deploy_ranged_units_to_walls() -> void:
+	if battle == null:
+		return
+	var armies: Array = _cached_armies()
+	var occupied: Dictionary = {}
+	var reserved: Dictionary = {}
+	for e in armies:
+		if not is_instance_valid(e) or e.health <= 0:
+			continue
+		var boarded = e.get("_boarded_on")
+		if boarded != null and int(boarded) != -1:
+			continue
+		var eg: Vector2i = battle.world_to_grid(e.global_position)
+		var wall_here = battle._wall_entity_grid.get(eg)
+		if wall_here != null and is_instance_valid(wall_here) and wall_here.health > 0:
+			occupied[eg] = true
+		if not e.has_meta("ai_wall_guard"):
+			continue
+		var wid: int = int(e.get_meta("ai_wall_guard"))
+		var wall = instance_from_id(wid)
+		if not _is_valid_wall_slot(wall):
+			_release_wall_guard(e)
+			continue
+		reserved[wid] = true
+		if e._is_unit_on_wall():
+			# 已经站上城墙：锁定站位，避免剩余路径让它在墙顶来回走。
+			e.hold_position = true
+			if e.current_order == "move":
+				e.stop_movement()
+		elif e.current_order == "":
+			# 中途被打断/寻路失败回到空闲时重新送上去；战斗中不强行拉走。
+			_order_wall_move(e, wall)
+	# 炮台等墙顶建筑也占用墙格，避免远程兵与炮台重叠
+	for b in _cached_buildings():
+		if is_instance_valid(b) and b.health > 0 and int(b.entity_id) == 64:
+			occupied[battle.world_to_grid(b.global_position)] = true
+	var walls: Array = []
+	for b in _cached_buildings():
+		if not _is_valid_wall_slot(b) or not entity_belongs_to_me(b):
+			continue
+		if reserved.has(b.get_instance_id()):
+			continue
+		if occupied.has(battle.world_to_grid(b.global_position)):
+			continue
+		walls.append(b)
+	if walls.is_empty():
+		return
+	var candidates: Array = []
+	for e in armies:
+		if not is_instance_valid(e) or e.health <= 0:
+			continue
+		if not _is_ranged_wall_candidate(e):
+			continue
+		if occupied.has(battle.world_to_grid(e.global_position)):
+			continue
+		candidates.append(e)
+	for wall in walls:
+		if candidates.is_empty():
+			break
+		var best = null
+		var best_d: float = WALL_DEPLOY_MAX_DISTANCE * WALL_DEPLOY_MAX_DISTANCE
+		for u in candidates:
+			var d: float = u.global_position.distance_squared_to(wall.global_position)
+			if d < best_d:
+				best_d = d
+				best = u
+		if best == null:
+			continue
+		_assign_wall_guard(best, wall)
+		candidates.erase(best)
 
 # ═══ Naval Patrol ═══
 func _patrol_navy_around_water():

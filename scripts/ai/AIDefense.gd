@@ -1027,6 +1027,9 @@ func _land_combat_units() -> Array:
 		# 正在登船/坐船渡水的单位由 AIWaterCrossing 管理，不能被守军调度拉回
 		if e.has_meta("ai_transporting"):
 			continue
+		# 固定在城墙上的远程单位由 AI 的守墙逻辑管理，不能再被守军调度拉走
+		if e.has_meta("ai_wall_guard"):
+			continue
 		var boarded = e.get("_boarded_on")
 		if boarded != null and int(boarded) != -1:
 			continue

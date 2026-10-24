@@ -179,6 +179,11 @@ func _get_bm() -> RTSBattleManager:
 		return null
 	return _army.get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
 
+# 清理某个目标点的“不可达”黑名单。AI 派单位上墙时，城墙可能刚补建完成，
+# 之前的寻路失败记录会让后续移动命令永远直接失败，必须按墙格清掉。
+func clear_blacklist_at(pos: Vector3) -> void:
+	_blacklist.erase(Vector2i(int(pos.x), int(pos.z)))
+
 func recalculate():
 	
 	_path_cache.clear()  # new building may block cached paths
@@ -241,7 +246,9 @@ func process_move(delta, bm: RTSBattleManager):
 	if not _army.can_move or _army.speed <= 0:
 		_stop_velocity()
 		return
-	if _army.hold_position and _army.target_type != 0:
+	if _army.hold_position and _army.target_type != 0 and not _army.has_meta("ai_wall_guard"):
+		# AI 派往城墙的远程单位需要能走到墙顶并完成高度抬升，因此 process_move
+		# 不因 hold_position 提前停下；抵达后由 Army 的目标逻辑保证不追出射程。
 		_stop_velocity()
 		return
 
