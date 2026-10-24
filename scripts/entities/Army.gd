@@ -85,8 +85,8 @@ const THINK_INTERVAL: float = 0.3
 const TARGET_RETARGET_INTERVAL: float = 1.0
 var _retarget_timer: float = TARGET_RETARGET_INTERVAL
 var _retarget_target_id: int = -1
-# 攻击移动时不必每帧全量搜敌；0.25s 一次足够跟随战场变化
-const ATTACK_MOVE_SEARCH_INTERVAL: float = 0.25
+# 攻击移动时不必每帧全量搜敌；0.4s 一次足够跟随战场变化
+const ATTACK_MOVE_SEARCH_INTERVAL: float = 0.4
 var _attack_move_search_timer: float = 0.0
 
 # 驻扎防御：驻扎点附近这个半径内的敌人优先清掉，再返回驻扎点
@@ -511,7 +511,12 @@ func _process_action(delta, bm):
 	# ¹¥»÷ÒÆ¶¯
 	if is_attack_moving:
 		_attack_move_search_timer -= delta
-		if current_target == null or not is_instance_valid(current_target) or _attack_move_search_timer <= 0.0:
+		# 目标死亡/被释放时立即清空并允许下一帧重选；无目标时也必须等
+		# 搜索间隔，不能每帧都做一次空间查询（后期大军攻击移动会形成热点）。
+		if current_target != null and not is_instance_valid(current_target):
+			current_target = null
+			_attack_move_search_timer = 0.0
+		if _attack_move_search_timer <= 0.0:
 			_attack_move_search_timer = ATTACK_MOVE_SEARCH_INTERVAL
 			_find_enemy_in_range()
 		if current_target and is_instance_valid(current_target):

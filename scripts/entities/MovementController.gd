@@ -15,6 +15,8 @@ const ASTAR_RECALC_INTERVAL: float = 2.0
 const ATTACK_PATH_COOLDOWN_MS: int = 700
 # 追击目标在小范围内移动时继续沿用现有路径，避免每 0.5~0.7s 为每个单位重跑一次 A*
 const ATTACK_TARGET_MOVE_TOLERANCE: float = 2.5
+# 路径预览最多绘制多少个点，避免长路径为每个格子创建一个 MeshInstance3D。
+const MAX_PATH_PREVIEW_POINTS: int = 64
 var _last_attack_path_ms: int = -100000
 
 var _path_sphere: SphereMesh = null
@@ -35,6 +37,10 @@ func _init(army: Army):
 	_army = army
 	# 错开各单位首次碰撞分离的帧，避免几百个单位在同一物理帧集中做近邻查询
 	collision_timer = randf_range(0.0, COLLISION_INTERVAL)
+	# 单位死亡/离场时清理挂在 battle_manager 下的路径球。不能用
+	# MovementController 的 PREDELETE 通知里再调方法，RefCounted 析构阶段方法表已不可用。
+	if army != null and not army.tree_exiting.is_connected(_hide_path):
+		army.tree_exiting.connect(_hide_path)
 
 # ==================== Public API ====================
 
@@ -115,13 +121,22 @@ func get_current_target() -> Vector3:
 func stop():
 	astar_path.clear()
 	astar_target = Vector3.ZERO
+	_stop_velocity()
+
+# 单位停止/进入攻击距离后必须把残留速度清零，否则 Army 的 simple_idle 永远不成立，
+# 后期几百个已经停下的单位仍会每 0.15~0.22 秒做一次碰撞近邻查询。
+func _stop_velocity() -> void:
+	if _army != null:
+		_army.velocity = Vector3.ZERO
 
 # ==================== Main movement update ====================
 
 func process_move(delta, bm: RTSBattleManager):
 	if not _army.can_move or _army.speed <= 0:
+		_stop_velocity()
 		return
 	if _army.hold_position and _army.target_type != 0:
+		_stop_velocity()
 		return
 
 	# Stop if at gather/attack range of target
@@ -133,12 +148,15 @@ func process_move(delta, bm: RTSBattleManager):
 			_army.global_position.z - _army.current_target.global_position.z)
 		var h_dist = h_diff.length() - _army.body_radius - target_radius
 		if _army.current_target is WorldResource and h_dist <= 0.5:
+			_stop_velocity()
 			return
 		elif _army.current_target is GameEntity and h_dist <= _army.attack_range:
+			_stop_velocity()
 			return
 
 	var target_pos = get_current_target()
 	if target_pos == Vector3.ZERO:
+		_stop_velocity()
 		return
 
 	# Follow A* path
@@ -146,6 +164,7 @@ func process_move(delta, bm: RTSBattleManager):
 	# No A* path = no movement, unless close to target (final approach)
 	if astar_path.size() == 0:
 		if astar_target.distance_squared_to(_army.global_position) > 3.0:
+			_stop_velocity()
 			return  # too far, no path → stay put
 		# Close enough: allow final approach to exact target
 
@@ -154,13 +173,18 @@ func process_move(delta, bm: RTSBattleManager):
 		var h_dist = Vector2(move_target.x - _army.global_position.x, move_target.z - _army.global_position.z)
 		if h_dist.length() < 0.5:
 			astar_path.pop_front()
-			if _is_selected: _show_path()
+			# 不要每经过一个航点就重建全部路径球：选中大部队时这一步会瞬间
+			# 创建/销毁数千个 MeshInstance3D。只在路径走完时收起预览，换目标时
+			# 由 set_move_target()/recalculate() 重新生成。
+			if astar_path.is_empty() and _is_selected:
+				_hide_path()
 			if astar_path.size() > 0:
 				move_target = astar_path[0]
 	# Build horizontal direction
 	var horizontal_target = Vector3(move_target.x, _army.global_position.y, move_target.z)
 	var move_dir = (horizontal_target - _army.global_position).normalized()
 	if move_dir.length() < 0.01:
+		_stop_velocity()
 		return
 
 	
@@ -279,12 +303,27 @@ func _show_path():
 	var bm = _army.get_tree().get_first_node_in_group("battle_manager")
 
 	if not bm: return
-	for wp in astar_path:
+	# 框选大部队时只为第一个选中单位绘制路径，避免几十/上百条路径同时生成。
+	if bm.selection != null and bm.selection.selected_entities.size() > 1:
+		if bm.selection.selected_entities[0] != _army:
+			return
+	# 单条长路径也不逐格创建，按固定上限抽样；尾点始终保留。
+	var points: Array = []
+	if astar_path.size() <= MAX_PATH_PREVIEW_POINTS:
+		points = astar_path
+	else:
+		var step: float = float(astar_path.size() - 1) / float(MAX_PATH_PREVIEW_POINTS - 1)
+		for i in range(MAX_PATH_PREVIEW_POINTS):
+			points.append(astar_path[int(round(float(i) * step))])
+	var last_wp: Vector3 = astar_path[astar_path.size() - 1]
+	for wp in points:
 		var m = MeshInstance3D.new()
 		m.mesh = _path_sphere
 		m.position = Vector3(wp.x, _path_height(wp, bm) + 0.3, wp.z)
+		# 路径点只是操作提示，不参与阴影投射，避免额外 shadow pass。
+		m.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		# Last waypoint is green
-		if wp == astar_path[astar_path.size() - 1]:
+		if wp == last_wp:
 			m.material_override = _path_mat_end
 		else:
 			m.material_override = _path_mat

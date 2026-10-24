@@ -1076,6 +1076,10 @@ func _update_health_bars():
 		var data = unit_bars.get(entity)
 		var created := false
 		if data == null:
+			# 满血陆军不创建任何血条/文字节点：后期同屏几百个单位时，这些节点
+			# 即使 visible=false 也要参与布局与场景树维护。受伤后再按需创建。
+			if entity is Army and entity.health >= entity.max_health:
+				continue
 			_create_health_bar(entity)
 			data = unit_bars[entity]
 			created = true

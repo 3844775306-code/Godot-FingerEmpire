@@ -16,6 +16,8 @@ var _garrison_marker: Node3D = null
 # 士兵/农民进驻系统
 var garrisoned_soldiers: Array = []      # Array of WeakRef — 进驻的单位
 var garrison_max: int = 0                # 进驻上限（城堡10/箭塔炮塔5/其他0）
+# 防御塔索敌：每帧扫描在后期几百实体时会形成稳定热点，改为错峰低频扫描。
+var _target_scan_timer: float = randf_range(0.0, 0.25)
 
 # Hell difficulty speed bonus
 
@@ -110,8 +112,16 @@ func _process(delta):
 	if attack > 0:
 		if current_target != null and not is_instance_valid(current_target):
 			current_target = null
+			_target_scan_timer = 0.0
 		if current_target == null:
-			_find_enemy_in_range()
+			# 每帧 find_enemy 在后期几十座塔时会持续做空间查询；0.25 秒一次足够，
+			# 初始相位已在变量声明时随机打散。
+			_target_scan_timer -= delta
+			if _target_scan_timer <= 0.0:
+				_target_scan_timer = 0.25
+				_find_enemy_in_range()
+		else:
+			_target_scan_timer = 0.0
 		if current_target != null:
 			var dist = global_position.distance_to(current_target.global_position) - body_radius - current_target.body_radius
 			if dist <= attack_range:
