@@ -33,6 +33,12 @@ var _is_selected: bool = false
 # Collision
 var collision_timer: float = 0.0
 const COLLISION_INTERVAL: float = 0.15
+# 攻城单位体积较大，A* 只避开建筑中心格时路径会贴着建筑边角；
+# 碰撞推挤会让大体型单位在两个建筑/墙角之间来回弹，表现为“被建筑卡住”。
+# 这里给大体型单位的寻路额外加上建筑周围的高成本格，让路径优先从外侧绕行。
+const LARGE_UNIT_RADIUS: float = 0.75
+const LARGE_UNIT_CLEARANCE_BODY: float = 1.0
+const LARGE_UNIT_CLEARANCE_COST: float = 30.0
 var _last_recalc_frame: int = -99  # prevent recalc spam
 var _path_cache: Dictionary = {}  # Vector2i(world_x, world_z) -> path_array, cleared on building placement
 var _blacklist: Dictionary = {}  # Vector2i -> true for unreachable targets
@@ -368,6 +374,29 @@ func _try_push_position(step: Vector3, bm: RTSBattleManager) -> bool:
 		return true
 	return false
 
+# 建筑推挤时朝径向推开；单位仍在前进时，沿建筑边缘加一个切向分量，
+# 让它顺着墙/建筑角滑过去，而不是被径向推力顶回去原地抖动。
+func _building_slide_dir(push_dir: Vector3, velocity: Vector3) -> Vector3:
+	var radial := Vector3(push_dir.x, 0.0, push_dir.z)
+	if radial.length_squared() < 0.000001:
+		return Vector3.ZERO
+	radial = radial.normalized()
+	var vel := Vector3(velocity.x, 0.0, velocity.z)
+	if vel.length_squared() < 0.0001:
+		return radial
+	# 只有正在朝建筑内部顶时才改走切向；沿墙滑动或正在离开时保持径向推开
+	if vel.normalized().dot(radial) >= -0.05:
+		return radial
+	var tangent := Vector3(-radial.z, 0.0, radial.x)
+	var side_dot := tangent.dot(vel)
+	if side_dot < -0.0001:
+		tangent = -tangent
+	elif absf(side_dot) <= 0.0001:
+		# 正面顶住建筑时固定往一侧滑，避免两侧来回切换导致抖动
+		if _army.get_instance_id() % 2 == 0:
+			tangent = -tangent
+	return (radial * 0.55 + tangent * 0.85).normalized()
+
 func _separate_from(entity: GameEntity, delta: float, bm: RTSBattleManager) -> void:
 	var dist = _army.global_position.distance_to(entity.global_position)
 	var min_dist = _army.body_radius + entity.body_radius
@@ -380,7 +409,12 @@ func _separate_from(entity: GameEntity, delta: float, bm: RTSBattleManager) -> v
 		var self_mass: float = _get_push_mass(_army)
 		var other_mass: float = 1.0e9 if entity is Building else _get_push_mass(entity)
 		var mass_ratio: float = other_mass / (self_mass + other_mass)
-		_try_push_position(push_dir * push_amount * mass_ratio, bm)
+		var push_step: Vector3 = push_dir
+		if entity is Building:
+			var slide_dir := _building_slide_dir(push_dir, _army.velocity)
+			if slide_dir != Vector3.ZERO:
+				push_step = slide_dir
+		_try_push_position(push_step * push_amount * mass_ratio, bm)
 	elif dist < 0.001:
 		# 完全重叠时用实例 id 生成固定方向，避免随机抖动让整堆单位
 		# 长时间留在同一点；不同单位方向不同，能更快散开。
@@ -497,11 +531,28 @@ static var _wall_set: Dictionary = {}    # Vector2i -> true
 static var _wall_ver: int = -1
 static var _wall_bm_id: int = -1
 static var _wall_team: int = -1  # friendly-wall passability is team-dependent
+static var _clearance_cost: Dictionary = {}  # Vector2i -> 大体型单位绕开建筑的高成本格
 static var _bridge_set: Dictionary = {}          # 桥所在格子
 static var _ladder_set: Dictionary = {}          # 梯子使该敌方城墙格可通行
 static var _transport_water: Dictionary = {}     # 运载船周围3格水域(陆军可通行)
 static var _transport_frame: int = -1            # 运载船是移动的，水域标记单独做帧级缓存
 static var _transport_team: int = -1
+
+# 把建筑周围需要体型余量的格子标记为高成本。只给大体型单位使用，
+# 路径仍可勉强通过这些格子（出生点被围住时能走出来），但会优先绕行。
+func _stamp_building_clearance(center: Vector2i, building_radius: float) -> void:
+	var clearance: float = LARGE_UNIT_CLEARANCE_BODY + building_radius + 0.3
+	var radius: int = maxi(1, ceili(clearance) - 1)
+	for dx in range(-radius, radius + 1):
+		for dy in range(-radius, radius + 1):
+			if dx == 0 and dy == 0: continue
+			if Vector2(float(dx), float(dy)).length() > float(radius) + 0.001: continue
+			var tile := Vector2i(center.x + dx, center.y + dy)
+			if tile.x < 0 or tile.x >= RTSConfig.MAP_SIZE or tile.y < 0 or tile.y >= RTSConfig.MAP_SIZE: continue
+			_clearance_cost[tile] = LARGE_UNIT_CLEARANCE_COST
+
+func _is_large_unit() -> bool:
+	return _army != null and _army.body_radius >= LARGE_UNIT_RADIUS
 
 func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Array:
 	var bm = _army._get_bm() as RTSBattleManager
@@ -517,6 +568,7 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 	var bm_id = bm.get_instance_id()
 	if _wall_bm_id != bm_id or _wall_ver != bm._wall_cache_version or _wall_team != _army.team:
 		_wall_set.clear()
+		_clearance_cost.clear()
 		_bridge_set.clear()
 		_ladder_set.clear()
 		for e in bm.entities.get_children():
@@ -539,6 +591,7 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 				continue
 			if e is Building and e.entity_id == 27 and e.team == _army.team: continue
 			_wall_set[eg] = true
+			_stamp_building_clearance(eg, e.body_radius)
 		_wall_bm_id = bm_id; _wall_ver = bm._wall_cache_version; _wall_team = _army.team
 	# 运载船会移动：水域标记做帧级缓存（同一帧多个单位寻路只算一次）
 	if _transport_frame != frame or _transport_team != _army.team:
@@ -634,20 +687,27 @@ func _get_terrain_cost(tile: Vector2i, bm: RTSBattleManager, wall_cache: Diction
 	# 普通建筑/资源阻挡
 	if wall_cache.has(tile): return 5.0
 	var terrain = bm.get_terrain_at_grid(tile.x, tile.y)
+	var cost: float
 	if _army.water_capable:
 		# 水军无法通过桥
-		return 999.0 if _bridge_set.has(tile) else (0.8 if terrain == 2 else 999.0)
-	# 浅滩：仍是水格，但陆军可以涉水通过；沼泽：陆地但泥泞难行（成本高于平原、低于山地）
-	var ov := bm.get_overlay_at_grid(tile.x, tile.y)
-	if ov == 3:
-		return 2.5
-	if ov == 2:
-		return 1.8
-	match terrain:
-		0: return 1.0
-		1: return 2.5
-		2: return 1.5 if _bridge_set.has(tile) or _transport_water.has(tile) else 999.0
-	return 999.0
+		cost = 999.0 if _bridge_set.has(tile) else (0.8 if terrain == 2 else 999.0)
+	else:
+		# 浅滩：仍是水格，但陆军可以涉水通过；沼泽：陆地但泥泞难行（成本高于平原、低于山地）
+		var ov := bm.get_overlay_at_grid(tile.x, tile.y)
+		if ov == 3:
+			cost = 2.5
+		elif ov == 2:
+			cost = 1.8
+		else:
+			match terrain:
+				0: cost = 1.0
+				1: cost = 2.5
+				2: cost = 1.5 if _bridge_set.has(tile) or _transport_water.has(tile) else 999.0
+				_: cost = 999.0
+	# 陆军大体型单位：建筑周围格子加高成本，优先从外侧绕行，避免贴边卡住
+	if not _army.water_capable and _is_large_unit():
+		cost = maxf(cost, _clearance_cost.get(tile, 0.0))
+	return cost
 
 func _get_tile_height(tile: Vector2i, bm: RTSBattleManager) -> float:
 	if bm and bm.has_method("get_height_at_grid"):
