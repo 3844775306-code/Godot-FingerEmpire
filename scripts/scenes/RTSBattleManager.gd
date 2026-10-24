@@ -202,6 +202,8 @@ var _diag_line_h: float = 34.0
 # 这里按真实 FPS 分档降低 3D 渲染分辨率，并缩短阴影距离/降低阴影分片；
 # 不再直接关闭实时阴影，否则单位会完全失去影子。
 var _perf_quality_level: int = 0
+# 玩家在对局设置里手动选过画质后置 true：自动画质让位，不再每秒覆盖
+var hand_quality_mode: bool = false
 var _perf_sample_timer: float = 5.0
 var _perf_low_streak: int = 0
 var _perf_high_streak: int = 0
@@ -3119,6 +3121,9 @@ func _process(delta):
 # ==================== 后期自动画质 ====================
 func _tick_adaptive_quality(delta: float) -> void:
 	if game_over or DisplayServer.get_name() == "headless":
+		return
+	# 玩家手动锁定画质后不再自动降档
+	if hand_quality_mode:
 		return
 	if not _perf_initialized:
 		_perf_initialized = true

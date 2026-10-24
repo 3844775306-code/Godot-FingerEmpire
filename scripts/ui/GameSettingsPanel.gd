@@ -1,0 +1,250 @@
+extends Control
+# 对局内设置面板：画质（固定档位，不允许自定义）、音量、暂停、退出
+# 单机与联机客户端共用；联机模式下"暂停"不可用（服务器权威，客户端暂停无意义）
+
+const PANEL_W: float = 470.0
+const PANEL_H: float = 440.0
+
+const QUALITY_NAMES: Array = ["流畅", "标准", "高清", "极致"]
+const QUALITY_DESC: Array = [
+	"3D 渲染 60% · 关闭阴影与 SSAO",
+	"3D 渲染 80% · 关闭阴影与 SSAO",
+	"3D 渲染 100% · 开启阴影（60m）",
+	"3D 渲染 100% · 阴影 120m + SSAO",
+]
+
+var _is_online: bool = false
+var _is_client: bool = false
+var _quality_level: int = 1
+var _quality_btns: Array = []
+var _pause_btn: Button = null
+var _hint_label: Label = null
+
+func setup(is_online: bool, is_client: bool) -> void:
+	_is_online = is_online
+	_is_client = is_client
+	_build()
+
+# ==================== 界面构建 ====================
+func _build() -> void:
+	name = "GameSettingsPanel"
+	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	mouse_filter = Control.MOUSE_FILTER_STOP
+	# 暂停时本面板仍要能被点击
+	process_mode = Node.PROCESS_MODE_ALWAYS
+	z_index = 200
+
+	var dim := ColorRect.new()
+	dim.color = Color(0, 0, 0, 0.62)
+	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	add_child(dim)
+
+	var panel := Panel.new()
+	panel.custom_minimum_size = Vector2(PANEL_W, PANEL_H)
+	panel.size = Vector2(PANEL_W, PANEL_H)
+	panel.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	panel.offset_left = -PANEL_W * 0.5
+	panel.offset_right = PANEL_W * 0.5
+	panel.offset_top = -PANEL_H * 0.5
+	panel.offset_bottom = PANEL_H * 0.5
+	var st := StyleBoxFlat.new()
+	st.bg_color = Color(UITheme.INK, 0.97)
+	st.set_corner_radius_all(10)
+	st.set_border_width_all(2)
+	st.border_color = Color(UITheme.GOLD, 0.55)
+	panel.add_theme_stylebox_override("panel", st)
+	add_child(panel)
+
+	var vb := VBoxContainer.new()
+	vb.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	vb.offset_left = 20
+	vb.offset_right = -20
+	vb.offset_top = 14
+	vb.offset_bottom = -14
+	vb.add_theme_constant_override("separation", 10)
+	panel.add_child(vb)
+
+	# 标题行
+	var title_row := HBoxContainer.new()
+	vb.add_child(title_row)
+	var ttl := UITheme.make_section_title("⚙ 设置", UITheme.GOLD, UITheme.FONT_LG)
+	ttl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title_row.add_child(ttl)
+	var close_btn := Button.new()
+	close_btn.text = "✕"
+	close_btn.custom_minimum_size = Vector2(40, 34)
+	UITheme.apply_muted_button(close_btn, UITheme.FONT_MD)
+	close_btn.pressed.connect(_on_close_pressed)
+	title_row.add_child(close_btn)
+
+	# 画质（固定档位）
+	vb.add_child(_make_label("🖼 画质（固定档位）", UITheme.GOLD))
+	var qty_row := HBoxContainer.new()
+	qty_row.add_theme_constant_override("separation", 8)
+	vb.add_child(qty_row)
+	for i in QUALITY_NAMES.size():
+		var b := Button.new()
+		b.text = QUALITY_NAMES[i]
+		b.toggle_mode = true
+		b.button_pressed = (i == _quality_level)
+		b.custom_minimum_size = Vector2(0, 36)
+		b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		UITheme.apply_primary_button(b, UITheme.FONT_MD)
+		b.pressed.connect(_on_quality_pressed.bind(i))
+		qty_row.add_child(b)
+		_quality_btns.append(b)
+	_hint_label = _make_label(QUALITY_DESC[_quality_level], UITheme.PARCHMENT, UITheme.FONT_SM)
+	vb.add_child(_hint_label)
+
+	# 音量
+	vb.add_child(_make_label("🔊 音量", UITheme.GOLD))
+	vb.add_child(_make_volume_row("总音量", 1.0, func(v: float): _set_master_volume(v)))
+	vb.add_child(_make_volume_row("音乐", AudioManager._music_volume, func(v: float): AudioManager.set_music_volume(v)))
+	vb.add_child(_make_volume_row("音效", AudioManager._sfx_volume, func(v: float): AudioManager.set_sfx_volume(v)))
+
+	# 底部：暂停 / 退出
+	var bottom := HBoxContainer.new()
+	bottom.add_theme_constant_override("separation", 10)
+	vb.add_child(bottom)
+	_pause_btn = Button.new()
+	_pause_btn.custom_minimum_size = Vector2(0, 42)
+	_pause_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UITheme.apply_primary_button(_pause_btn, UITheme.FONT_MD)
+	_pause_btn.pressed.connect(_on_pause_pressed)
+	bottom.add_child(_pause_btn)
+	if _is_online:
+		_pause_btn.disabled = true
+		_pause_btn.text = "⏸ 联机不可暂停"
+	else:
+		_refresh_pause_text()
+
+	var quit_btn := Button.new()
+	quit_btn.text = "🚪 退出对局"
+	quit_btn.custom_minimum_size = Vector2(0, 42)
+	quit_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UITheme.apply_danger_button(quit_btn, UITheme.FONT_MD)
+	quit_btn.pressed.connect(_on_quit_pressed)
+	bottom.add_child(quit_btn)
+
+# ==================== 画质 ====================
+func _on_quality_pressed(level: int) -> void:
+	_quality_level = level
+	for i in _quality_btns.size():
+		_quality_btns[i].button_pressed = (i == level)
+	_apply_quality(level)
+	if _hint_label:
+		_hint_label.text = QUALITY_DESC[level]
+
+func _apply_quality(level: int) -> void:
+	# 手动选过画质后关掉后期自动画质，否则每秒都会被改回去
+	var bm = _get_battle_manager()
+	if bm and "hand_quality_mode" in bm:
+		bm.set("hand_quality_mode", true)
+
+	var vp := get_viewport()
+	var scene := get_tree().current_scene
+	var light: DirectionalLight3D = null
+	var world_env: WorldEnvironment = null
+	if scene:
+		light = scene.get_node_or_null("DirectionalLight3D") as DirectionalLight3D
+		world_env = scene.get_node_or_null("WorldEnvironment") as WorldEnvironment
+	match level:
+		0:
+			if vp: vp.scaling_3d_scale = 0.6
+			if light: light.shadow_enabled = false
+			if world_env and world_env.environment: world_env.environment.ssao_enabled = false
+		1:
+			if vp: vp.scaling_3d_scale = 0.8
+			if light: light.shadow_enabled = false
+			if world_env and world_env.environment: world_env.environment.ssao_enabled = false
+		2:
+			if vp: vp.scaling_3d_scale = 1.0
+			if light:
+				light.shadow_enabled = true
+				light.directional_shadow_max_distance = 60.0
+			if world_env and world_env.environment: world_env.environment.ssao_enabled = false
+		_:
+			if vp: vp.scaling_3d_scale = 1.0
+			if light:
+				light.shadow_enabled = true
+				light.directional_shadow_max_distance = 120.0
+			if world_env and world_env.environment: world_env.environment.ssao_enabled = true
+
+# ==================== 音量 ====================
+func _set_master_volume(v: float) -> void:
+	var idx := AudioServer.get_bus_index("Master")
+	if idx >= 0:
+		AudioServer.set_bus_volume_db(idx, linear_to_db(clampf(v, 0.0001, 1.0)))
+
+func _make_volume_row(label_text: String, value: float, setter: Callable) -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	var lb := Label.new()
+	lb.text = label_text
+	lb.custom_minimum_size = Vector2(86, 0)
+	lb.add_theme_font_size_override("font_size", UITheme.FONT_MD)
+	lb.add_theme_color_override("font_color", UITheme.PARCHMENT)
+	row.add_child(lb)
+	var slider := HSlider.new()
+	slider.min_value = 0
+	slider.max_value = 100
+	slider.step = 1
+	slider.value = clampf(value, 0.0, 1.0) * 100.0
+	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	slider.custom_minimum_size = Vector2(0, 28)
+	row.add_child(slider)
+	var pct := Label.new()
+	pct.text = "%d%%" % int(slider.value)
+	pct.custom_minimum_size = Vector2(52, 0)
+	pct.add_theme_font_size_override("font_size", UITheme.FONT_MD)
+	pct.add_theme_color_override("font_color", UITheme.PARCHMENT)
+	row.add_child(pct)
+	slider.value_changed.connect(func(v: float):
+		pct.text = "%d%%" % int(v)
+		setter.call(clampf(v / 100.0, 0.0, 1.0)))
+	return row
+
+# ==================== 暂停 / 退出 ====================
+func _on_pause_pressed() -> void:
+	if _is_online:
+		return
+	var tree := get_tree()
+	tree.paused = not tree.paused
+	_refresh_pause_text()
+
+func _refresh_pause_text() -> void:
+	if _pause_btn == null:
+		return
+	_pause_btn.text = "▶ 继续游戏" if get_tree().paused else "⏸ 暂停游戏"
+
+func _on_close_pressed() -> void:
+	# 关闭面板时如果正暂停，顺手恢复游戏
+	if get_tree().paused:
+		get_tree().paused = false
+	queue_free()
+
+func _on_quit_pressed() -> void:
+	get_tree().paused = false
+	if _is_online:
+		# 联机：断开连接并回联机菜单
+		var nm = get_node_or_null("/root/NetworkManager")
+		if nm and nm.has_method("leave_game"):
+			nm.leave_game()
+		get_tree().change_scene_to_file("res://scenes/online_menu.tscn")
+	else:
+		get_tree().change_scene_to_file("res://scenes/main_menu.tscn")
+
+# ==================== 工具 ====================
+func _get_battle_manager() -> Node:
+	var bm := get_tree().get_first_node_in_group("battle_manager")
+	if bm == null:
+		bm = get_tree().get_first_node_in_group("online_battle_manager")
+	return bm
+
+func _make_label(text: String, color: Color, font_size: int = -1) -> Label:
+	var l := Label.new()
+	l.text = text
+	l.add_theme_font_size_override("font_size", font_size if font_size > 0 else UITheme.FONT_MD)
+	l.add_theme_color_override("font_color", color)
+	return l

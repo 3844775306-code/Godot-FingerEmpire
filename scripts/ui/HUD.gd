@@ -59,6 +59,7 @@ var _stats_castle_label: Label
 # 折叠态：面板收成一条「资源 + 人口」胶囊（电脑版默认折叠）
 var _stats_collapsed: bool = true
 var _stats_collapse_btn: Button = null
+var _settings_btn: Button = null
 var _stats_capsule: Panel = null
 var _capsule_pop_label: Label = null
 var _capsule_res_labels: Dictionary = {}
@@ -730,6 +731,30 @@ func _make_cmd_button(text: String, cb: Callable, danger: bool) -> Button:
 	b.pressed.connect(cb)
 	return b
 
+# 对局内设置入口：右上角小地图下方
+func _create_game_settings_button() -> void:
+	_settings_btn = Button.new()
+	_settings_btn.name = "GameSettingsButton"
+	_settings_btn.text = "⚙ 设置"
+	_settings_btn.anchor_left = 1.0
+	_settings_btn.anchor_right = 1.0
+	_settings_btn.anchor_top = 0.0
+	_settings_btn.anchor_bottom = 0.0
+	_settings_btn.offset_left = -200
+	_settings_btn.offset_right = -8
+	_settings_btn.offset_top = 208
+	_settings_btn.offset_bottom = 248
+	UITheme.apply_muted_button(_settings_btn, UITheme.FONT_MD)
+	_settings_btn.pressed.connect(_open_game_settings)
+	add_child(_settings_btn)
+
+func _open_game_settings() -> void:
+	if get_node_or_null("GameSettingsPanel"):
+		return
+	var panel: Control = preload("res://scripts/ui/GameSettingsPanel.gd").new()
+	add_child(panel)
+	panel.call("setup", false, false)
+
 func _ready():
 	# 电脑版左下角的虚拟摇杆用不上：隐藏并停掉它的输入处理，避免抢占鼠标
 	if not InputSource.use_mobile_ui():
@@ -771,6 +796,9 @@ func _ready():
 	var b_retreat_all = _make_cmd_button("所有军队撤退 (Ctrl+F3)", _on_retreat_all_pressed, false)
 	for b in [b_select_screen, b_select_all, auto_attack_btn, b_retreat_screen, b_retreat_all]:
 		cmd_grid.add_child(b)
+
+	# 对局内设置入口：右上角小地图下方（画质 / 音量 / 暂停 / 退出）
+	_create_game_settings_button()
 
 	set_process(true)
 

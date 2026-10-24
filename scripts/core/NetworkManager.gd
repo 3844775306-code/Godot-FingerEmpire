@@ -282,6 +282,16 @@ func _on_connected_to_server():
 func _on_server_disconnected():
 	print("[NetworkManager] ENet server disconnected")
 
+# 主动退出联机对局：断开连接、清掉模式，供对局内设置面板的"退出对局"调用
+func leave_game() -> void:
+	print("[NetworkManager] leave_game 主动退出联机")
+	if multiplayer.multiplayer_peer != null:
+		multiplayer.multiplayer_peer.close()
+		multiplayer.multiplayer_peer = null
+	mode = Mode.NONE
+	game_started = false
+	_scene_ready_peers.clear()
+
 func can_start_game() -> bool:
 	if not mode == Mode.SERVER:
 		return false
