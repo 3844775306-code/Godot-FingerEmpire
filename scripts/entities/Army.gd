@@ -338,6 +338,42 @@ func _order_in(states: Array) -> bool:
 	for s in states:
 		if _order_is(s): return true
 	return false
+
+# 目标是否已经失效：节点被释放或血量归零（死亡动画期间节点仍可能存在）。
+func _is_target_gone(target) -> bool:
+	if target == null:
+		return true
+	if not is_instance_valid(target):
+		return true
+	if target is Node and target.is_queued_for_deletion():
+		return true
+	if target is GameEntity and target.health <= 0:
+		return true
+	return false
+
+# 立即刷新动画，避免目标阵亡后仍停留在攻击动作。
+func _refresh_animation_now() -> void:
+	if not is_inside_tree():
+		return
+	var bm = _get_bm()
+	if bm and bm.has_method("_update_entity_animation"):
+		bm._update_entity_animation(self)
+
+# 清除已阵亡目标：普通攻击/采集回到待机，攻击移动则保留状态继续前进。
+func _clear_dead_target() -> bool:
+	if current_target == null or not _is_target_gone(current_target):
+		return false
+	var was_attack_moving: bool = is_attack_moving
+	current_target = null
+	_attack_move_search_timer = 0.0
+	if not was_attack_moving:
+		_set_order(UnitState.IDLE)
+		# 清掉朝尸体/已消失资源点计算的路径，避免继续滑过去
+		if _movement:
+			_movement.stop()
+	_refresh_animation_now()
+	return true
+
 func _physics_process(delta):
 	if health <= 0:
 		die_official_cleanup()
@@ -471,19 +507,17 @@ func _physics_process(delta):
 				_movement.collision_timer -= delta
 		return
 
-	# 目标有效性检查
-	# Ä¿±êÓÐÐ§ÐÔ¼ì²é
-		# Ä¿±êÓÐÐ§ÐÔ¼ì²é
-	if current_target != null and not is_instance_valid(current_target):
-		current_target = null
-		_set_order(UnitState.IDLE)
-		is_attack_moving = false
-		if _is_healer():       # 僧侣：目标没了就重新找伤兵
-			_find_wounded_ally()
-		elif target_type == 0:   # Å©ÃñÀà£¬Ñ°ÕÒÐÂ×ÊÔ´
-			_find_nearest_resource()
-		else:                  # Õ½¶·µ¥Î»£¬Á¢¿ÌËÑË÷µÐÈË
-			_find_enemy_in_range()
+	# 目标有效性检查：阵亡目标也要立即清空，不能等节点真正释放；
+	# 否则单位会继续朝尸体移动或保持攻击动作。
+	if _clear_dead_target():
+		# 攻击移动保留 is_attack_moving，由 _process_action 继续朝原目的地推进并搜索新敌人。
+		if not is_attack_moving:
+			if _is_healer():       # 僧侣：目标没了就重新找伤兵
+				_find_wounded_ally()
+			elif target_type == 0:   # 农民类，寻找新资源
+				_find_nearest_resource()
+			else:                  # 战斗单位，立即搜索敌人
+				_find_enemy_in_range()
 	if _order_in([UnitState.ATTACKING, UnitState.GATHERING]) :
 		if current_target == null:
 			_set_order(UnitState.IDLE)
@@ -884,8 +918,15 @@ func _face_attack_target(target) -> void:
 	look_at(global_position + to_target, Vector3.UP)
 
 func _attack(target, delta):
-	if target == null or not is_instance_valid(target) or target.health <= 0:
-		current_target = null
+	if _is_target_gone(target):
+		if current_target == target or current_target == null:
+			current_target = null
+			_attack_move_search_timer = 0.0
+			if not is_attack_moving:
+				_set_order(UnitState.IDLE)
+				if _movement:
+					_movement.stop()
+			_refresh_animation_now()
 		return
 
 	# 特殊攻击类型：僧侣治疗 / 长老百分比伤害 / 宗师降攻招降
@@ -1515,6 +1556,9 @@ func move_to(pos: Vector3):
 func attack_target(p_target):
 	if not _is_valid_command_target(p_target):
 		return
+	# 手动指定目标时也拒绝陆军近战攻击海军，避免单位一直追到岸边
+	if _is_land_melee() and p_target is Army and p_target.water_capable:
+		return
 	_queue_command({"type": "attack", "target": p_target})
 
 func gather_at(source):
@@ -2065,6 +2109,10 @@ func _is_monastery_unit() -> bool:
 func _is_healer() -> bool:
 	return entity_id == 55
 
+# 陆军近战：不能攻击水上的海军单位（远程陆军/海军自身不受此限制）
+func _is_land_melee() -> bool:
+	return not water_capable and attack_range <= 1.0
+
 func _can_attack_target(target: GameEntity) -> bool:
 	if not is_instance_valid(target) or target.health <= 0: return false
 	# 僧侣不参与任何攻击（包括手动指派的敌人目标）
@@ -2072,6 +2120,10 @@ func _can_attack_target(target: GameEntity) -> bool:
 		return false
 	# 修道院单位跳过攻击建筑
 	if _is_monastery_unit() and target is Building:
+		return false
+	# 陆军近战够不到水上的海军单位，自动索敌时直接跳过；
+	# 远程陆军和海军单位仍可正常攻击。
+	if _is_land_melee() and target is Army and target.water_capable:
 		return false
 	# 近战不能攻击城墙上的敌人（包括炮台）
 	if attack_range <= 1.0 and target is not Building:
