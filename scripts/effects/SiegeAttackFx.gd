@@ -13,6 +13,13 @@ const DUST_COLOR := Color(0.62, 0.54, 0.38, 0.45)
 const WOOD_COLOR := Color(0.46, 0.30, 0.16, 0.95)
 const WATER_COLOR := Color(0.68, 0.85, 0.92, 0.70)
 
+# 复用网格/材质：每次开火都 new 一套 SphereMesh + StandardMaterial3D 会造成
+# 明显的分配和材质切换开销，多台攻城器同时开火时尤其明显。
+static var _sphere_cache: Dictionary = {}
+static var _mat_cache: Dictionary = {}
+static var _torus_mesh: TorusMesh = null
+static var _ring_mat_cache: Dictionary = {}
+
 # 延迟到动作真正“出手”的瞬间再冒烟/起尘，避免蓄力阶段就喷火
 static func play(entity_id: int, model: Node3D, opts: Dictionary = {}) -> void:
 	if not _can_show(model):
@@ -165,7 +172,8 @@ static func _water(root: Node3D, pos: Vector3, radius: float, heavy: bool) -> vo
 static func _burst(root: Node3D, pos: Vector3, cfg: Dictionary) -> void:
 	var p := CPUParticles3D.new()
 	p.one_shot = true
-	p.amount = int(cfg.get("amount", 10))
+	# 粒子量压到原来的 80%：远看仍是烟团，但多台齐射时 CPU 模拟和绘制压力更低
+	p.amount = maxi(3, int(float(cfg.get("amount", 10)) * 0.8))
 	p.lifetime = float(cfg.get("lifetime", 0.6))
 	p.explosiveness = 1.0
 	p.direction = Vector3(cfg.get("direction", Vector3.UP))
@@ -179,21 +187,32 @@ static func _burst(root: Node3D, pos: Vector3, cfg: Dictionary) -> void:
 	p.emission_sphere_radius = float(cfg.get("radius", 0.15))
 	p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 
-	var mesh := SphereMesh.new()
-	mesh.radius = float(cfg.get("size", 0.12))
-	mesh.height = mesh.radius * 2.0
-	mesh.radial_segments = 6
-	mesh.rings = 3
 	var color: Color = cfg.get("color", Color.WHITE)
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.albedo_color = color
-	if cfg.has("emission"):
-		mat.emission_enabled = true
-		mat.emission = cfg.get("emission", Color.WHITE)
-		mat.emission_energy_multiplier = 2.0
-	mesh.material = mat
+	var has_emission: bool = cfg.has("emission")
+	var emission: Color = cfg.get("emission", Color.WHITE)
+	var mat_key := "%s|%s|%s" % [color.to_html(true), has_emission, emission.to_html(true)]
+	var mat: StandardMaterial3D = _mat_cache.get(mat_key)
+	if mat == null:
+		mat = StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.albedo_color = color
+		if has_emission:
+			mat.emission_enabled = true
+			mat.emission = emission
+			mat.emission_energy_multiplier = 2.0
+		_mat_cache[mat_key] = mat
+	var size_key := "%.2f" % float(cfg.get("size", 0.12))
+	var mesh_key := "%s|%s" % [size_key, mat_key]
+	var mesh: SphereMesh = _sphere_cache.get(mesh_key)
+	if mesh == null:
+		mesh = SphereMesh.new()
+		mesh.radius = float(cfg.get("size", 0.12))
+		mesh.height = mesh.radius * 2.0
+		mesh.radial_segments = 6
+		mesh.rings = 3
+		mesh.material = mat
+		_sphere_cache[mesh_key] = mesh
 	p.mesh = mesh
 	root.add_child(p)
 	p.global_position = pos
@@ -202,18 +221,23 @@ static func _burst(root: Node3D, pos: Vector3, cfg: Dictionary) -> void:
 
 static func _shockwave(root: Node3D, pos: Vector3, max_radius: float, color: Color, duration: float = 0.55) -> void:
 	var ring := MeshInstance3D.new()
-	var torus := TorusMesh.new()
-	torus.inner_radius = 0.78
-	torus.outer_radius = 1.0
-	torus.rings = 32
-	torus.ring_segments = 8
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.albedo_color = color
-	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	torus.material = mat
-	ring.mesh = torus
+	if _torus_mesh == null:
+		_torus_mesh = TorusMesh.new()
+		_torus_mesh.inner_radius = 0.78
+		_torus_mesh.outer_radius = 1.0
+		_torus_mesh.rings = 32
+		_torus_mesh.ring_segments = 8
+	var mat_key := color.to_html(true)
+	var mat: StandardMaterial3D = _ring_mat_cache.get(mat_key)
+	if mat == null:
+		mat = StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.albedo_color = color
+		mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+		_ring_mat_cache[mat_key] = mat
+	ring.mesh = _torus_mesh
+	ring.material_override = mat
 	ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	root.add_child(ring)
 	ring.global_position = pos
@@ -223,7 +247,8 @@ static func _shockwave(root: Node3D, pos: Vector3, max_radius: float, color: Col
 	tw.set_parallel(true)
 	tw.tween_property(ring, "scale", final_scale, duration) \
 		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	tw.tween_property(mat, "albedo_color", Color(color.r, color.g, color.b, 0.0), duration) \
+	# 用实例透明度淡出，避免修改共享材质
+	tw.tween_property(ring, "transparency", 1.0, duration) \
 		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 	tw.chain().tween_callback(func() -> void:
 		if is_instance_valid(ring):
@@ -247,7 +272,7 @@ static func _shake(model: Node3D, amp: float, duration: float) -> void:
 	var cam := model.get_viewport().get_camera_3d()
 	if cam == null or not cam.has_method("add_shake"):
 		return
-	if cam.global_position.distance_to(model.global_position) > 90.0:
+	if cam.global_position.distance_to(model.global_position) > 75.0:
 		return
 	cam.call("add_shake", amp, duration)
 
@@ -271,4 +296,4 @@ static func _can_show(model: Node3D) -> bool:
 	var cam := vp.get_camera_3d()
 	if cam == null:
 		return false
-	return cam.global_position.distance_to(model.global_position) <= 100.0
+	return cam.global_position.distance_to(model.global_position) <= 70.0
