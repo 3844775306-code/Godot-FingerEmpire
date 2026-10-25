@@ -851,9 +851,11 @@ func _eliminate_ai_player(owner: int) -> void:
 	if owner == player_owner_id:
 		return
 	var info = ai_players.get(owner, {})
-	var nation_name = get_nation_name(int(info.get("nation", -1)))
 	var color: Color = _player_colors.get(owner, Color(1.0, 0.6, 0.2))
-	_show_hud_alert("【AI】%s 的城堡被摧毁，残余部队已溃散" % nation_name, color)
+	# 被攻击型战报：前缀国家取被攻灭的那一方，国家名交给战况前缀显示，
+	# 消息正文里不再重复写一遍
+	var dead_team: int = int(info.get("team", -1))
+	_show_hud_alert("城堡被攻破，残余部队已溃散", color, dead_team, -1)
 	# 残余单位/建筑（health<=0 的正在播放死亡动画，交给各自 die() 自清理）
 	var to_free: Array = []
 	for e in entities.get_children():
@@ -893,13 +895,13 @@ func _on_2v2_castle_died(team: int, owner: int = -1):
 	game_over = true
 	AudioManager.play_music("defeat" if team == get_host_team() else "victory")
 	if team == get_host_team():
-		# 来源是发起进攻的敌方，只推给我方
-		_show_hud_alert("我方基地正遭受攻击！", Color(1.0, 0.2, 0.1), get_enemy_team(), get_host_team())
+		# 被攻击型战报：前缀国家取「被攻击的那一方」，而不是攻击方
+		_show_hud_alert("我方基地正遭受攻击！", Color(1.0, 0.2, 0.1), get_host_team(), get_host_team())
 		game_over_label.text = "你输了！"
 		game_over_label.add_theme_color_override("font_color", Color.RED)
 	else:
-		# 来源是我方（这是自己打下的战果）
-		_show_hud_alert("敌军基地已被摧毁！", Color(0.2, 1.0, 0.3), get_host_team(), get_host_team())
+		# 被攻击型战报：前缀国家取被摧毁的那一方
+		_show_hud_alert("敌军基地已被摧毁！", Color(0.2, 1.0, 0.3), get_enemy_team(), get_host_team())
 		game_over_label.text = "你赢了！"
 		game_over_label.add_theme_color_override("font_color", Color.GREEN)
 	_show_battle_stats()
@@ -911,13 +913,13 @@ func _on_castle_died(team: int):
 	AudioManager.play_music("defeat" if team == get_host_team() else "victory")
 
 	if team == get_host_team():
-		# 来源是发起进攻的敌方，只推给我方
-		_show_hud_alert("我方基地正遭受攻击！", Color(1.0, 0.2, 0.1), get_enemy_team(), get_host_team())
+		# 被攻击型战报：前缀国家取「被攻击的那一方」，而不是攻击方
+		_show_hud_alert("我方基地正遭受攻击！", Color(1.0, 0.2, 0.1), get_host_team(), get_host_team())
 		game_over_label.text = "你输了！"
 		game_over_label.add_theme_color_override("font_color", Color.RED)
 	else:
-		# 来源是我方（这是自己打下的战果）
-		_show_hud_alert("敌军基地已被摧毁！", Color(0.2, 1.0, 0.3), get_host_team(), get_host_team())
+		# 被攻击型战报：前缀国家取被摧毁的那一方
+		_show_hud_alert("敌军基地已被摧毁！", Color(0.2, 1.0, 0.3), get_enemy_team(), get_host_team())
 		game_over_label.text = "你赢了！"
 		game_over_label.add_theme_color_override("font_color", Color.GREEN)
 
@@ -3128,8 +3130,11 @@ func is_mobile_ui_point(pos: Vector2) -> bool:
 		return bool(mh.call("is_point_over_panel", pos))
 	return false
 
-# source_team：这条战况的发出方队伍，HUD 据此显示国家名并着色
-# （自己绿 / 同阵营友方蓝 / 敌方红）。无法判定来源时传 -1，只显示消息本体。
+# source_team：这条战况的「当事国」，HUD 据此显示国家名并着色
+# （自己绿 / 同阵营友方蓝 / 敌方红）。
+# 被攻击型战报一律取被攻击的那一方，而不是攻击方——战况读起来是
+# 「【被攻击国】某某被打了」，而不是「【攻击国】打了某某」。
+# 无法判定时传 -1，只显示消息本体。
 # target_team：联机模式下只推给哪个阵营；-1 表示广播给双方。单机忽略这个参数。
 func _show_hud_alert(msg: String, color: Color = Color(1.0, 0.2, 0.1), source_team: int = -1, target_team: int = -1):
 	if color == Color(1.0, 0.2, 0.1) or color == Color(1.0, 0.8, 0.1): AudioManager.play_sfx("alert")
@@ -3159,7 +3164,8 @@ func _detect_enemy_near_base():
 
 	if threat_detected and not _is_alert_on_cooldown("enemy_approach"):
 		var loc_str = "(%d,%d)" % [int(player_castle.global_position.x), int(player_castle.global_position.z)]
-		_show_hud_alert("敌军来袭！接近我方基地方向 %s" % loc_str, Color(1.0, 0.8, 0.1), get_enemy_team(), get_host_team())
+		# 被攻击型战报：前缀国家是被入侵的一方（我方）
+		_show_hud_alert("敌军来袭！接近我方基地方向 %s" % loc_str, Color(1.0, 0.8, 0.1), get_host_team(), get_host_team())
 		_set_alert_cooldown("enemy_approach", 5.0)
 
 # ==================== 废弃建筑：生成 / 占领 ====================
