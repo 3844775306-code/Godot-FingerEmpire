@@ -255,11 +255,12 @@ Server→client snapshots are delta-compressed arrays sent at ~10Hz. Compact for
 
 每完成一项任务（代码改动已提交 / 交付物已给出）时，必须发出提示，避免用户离开屏幕后无法判断进度：
 
-1. **执行提示脚本**（一次搞定提示音 + Windows 通知）：
+1. **执行提示脚本**（一次搞定提示音 + 屏幕右下角提示窗）：
    ```powershell
    powershell -NoProfile -ExecutionPolicy Bypass -File tools/notify_done.ps1 -Message "<本次改动的一句话摘要>"
    ```
-   脚本行为：两声上扬提示音 + 托盘气泡/通知中心弹窗（标题「FingerEmpire 任务完成」，正文为摘要），约 4 秒后自动退出。
+   脚本行为：两声上扬提示音 + 屏幕右下角置顶无边框小窗（标题「FingerEmpire 任务完成」+ 摘要，深色底、绿色顶条，3.5 秒后自动消失，点击可立即关闭）。
+   > 注意：Windows 11 已不再显示传统托盘气球通知（`NotifyIcon.ShowBalloonTip` 从 PowerShell 调用时常完全看不到），所以脚本改为自绘 WinForms 置顶窗口。
    > 该脚本必须保存为 **UTF-8 with BOM**，否则 PowerShell 按 ANSI 读取会让中文标题变乱码。
 2. **回复首行**输出醒目的 `✅ 任务完成`，紧跟一句本次改动摘要。
 3. 若有可交付文件（文档、截图、表格等），用 `present` 出示文件卡片。
