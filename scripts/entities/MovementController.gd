@@ -427,10 +427,10 @@ func process_move(delta, bm: RTSBattleManager):
 		if terr == 2 and _army.water_capable:
 			_army._play_sfx_if_visible("sail")
 
-	# Rotate toward movement direction
+	# 朝移动方向转身：按单位质量换算出的角速度平滑转过去，
+	# 重单位掉头慢、轻单位灵活。以前直接 look_at() 是瞬间对准，看不出体量差别。
 	if move_dir.length() > 0.01:
-		var look_target = _army.global_position + move_dir
-		_army.look_at(Vector3(look_target.x, _army.global_position.y, look_target.z), Vector3.UP)
+		_army.turn_toward_dir(move_dir, delta)
 
 	# Boundary clamp
 	var half_map = RTSConfig.MAP_SIZE / 2.0

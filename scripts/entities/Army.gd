@@ -2637,8 +2637,8 @@ func _attack_tick(target, delta, bm) -> void:
 				else:
 					_drop_current_attack_target()
 			return
-	# 站定攻击时每帧保持面向目标；目标绕后/移动后不能还朝旧方向挥击。
-	_face_attack_target(target)
+	# 站定攻击时每帧朝目标慢慢转；目标绕后/移动后不能还朝旧方向挥击。
+	_face_attack_target(target, delta)
 	var stride: int = 1
 	if bm:
 		var total: int = bm._all_entities.size()
@@ -2650,15 +2650,81 @@ func _attack_tick(target, delta, bm) -> void:
 		return
 	_attack(target, delta * stride)
 
+# ==================== 转身速度 ====================
+# 质量越大转得越慢。以前不管是农民还是巨型投石机，都用 look_at() 瞬间对准，
+# 战场上看不出任何体量差别，重器械像贴纸一样原地掉头。
+# 这里用 body_radius 近似质量，重型器械再乘一个额外系数；
+# 朝向没转到目标方向（允许 20° 偏差）之前不允许出手。
+const TURN_SPEED_BASE_DEG: float = 420.0     # 最轻单位的基准角速度
+const TURN_SPEED_MIN_DEG: float = 42.0       # 最重单位的下限
+const ATTACK_AIM_TOLERANCE_DEG: float = 20.0 # 允许的瞄准偏差
+
+# 重型单位的质量乘子（覆盖 body_radius 的估算）
+const TURN_MASS_BY_ID := {
+	9: 2.2,    # 运载船
+	13: 2.6,   # 战船
+	14: 1.5,   # 采集船
+	16: 3.2,   # 火炮
+	17: 4.0,   # 投石车
+	18: 4.2,   # 攻城车
+	39: 2.8,   # 炮艇
+	40: 1.3,   # 爆破船
+	59: 5.5,   # 巨型投石机
+}
+
+# 该单位每秒能转多少度
+func turn_speed_deg() -> float:
+	var mass: float = float(TURN_MASS_BY_ID.get(entity_id, body_radius * 2.0))
+	return clampf(TURN_SPEED_BASE_DEG / (1.0 + mass), TURN_SPEED_MIN_DEG, TURN_SPEED_BASE_DEG)
+
+# 当前朝向与给定方向的水平夹角（度）。Godot 单位前方是 -Z。
+func facing_error_deg(dir: Vector3) -> float:
+	var flat := Vector3(dir.x, 0.0, dir.z)
+	if flat.length_squared() < 0.000001:
+		return 0.0
+	var fwd := -global_transform.basis.z
+	fwd.y = 0.0
+	if fwd.length_squared() < 0.000001:
+		return 0.0
+	return rad_to_deg(fwd.normalized().angle_to(flat.normalized()))
+
+# 平滑转向目标方向，返回 true 表示已经对准（误差 < 0.5°）
+func turn_toward_dir(dir: Vector3, delta: float) -> bool:
+	var flat := Vector3(dir.x, 0.0, dir.z)
+	if flat.length_squared() < 0.000001:
+		return true
+	flat = flat.normalized()
+	var target_yaw: float = atan2(-flat.x, -flat.z)
+	var yaw: float = rotation.y
+	var diff: float = wrapf(target_yaw - yaw, -PI, PI)
+	if absf(diff) < 0.0087:   # 0.5°
+		return true
+	var step: float = deg_to_rad(turn_speed_deg() * delta)
+	if absf(diff) <= step:
+		rotation.y = yaw + diff
+		return true
+	rotation.y = yaw + signf(diff) * step
+	return false
+
+# 是否已经瞄准目标（角度偏差在容差内）
+func is_aimed_at(target) -> bool:
+	if target == null or not is_instance_valid(target):
+		return false
+	return facing_error_deg(target.global_position - global_position) <= ATTACK_AIM_TOLERANCE_DEG
+
 # 攻击时面向目标。只转水平方向，避免目标高低差导致单位俯仰。
-func _face_attack_target(target) -> void:
+# delta > 0 时按转身速度平滑转，否则瞬间对准（出生/传送等场合用）。
+func _face_attack_target(target, delta: float = 0.0) -> void:
 	if target == null or not is_instance_valid(target):
 		return
 	var to_target: Vector3 = target.global_position - global_position
 	to_target.y = 0.0
 	if to_target.length_squared() < 0.0001:
 		return
-	look_at(global_position + to_target, Vector3.UP)
+	if delta > 0.0:
+		turn_toward_dir(to_target, delta)
+	else:
+		look_at(global_position + to_target, Vector3.UP)
 
 func _attack(target, delta):
 	if _is_target_gone(target):
@@ -2678,6 +2744,12 @@ func _attack(target, delta):
 		if current_target == target:
 			current_target = null
 			_attack_move_search_timer = 0.0
+		return
+
+	# 没瞄准不能出手：转身要时间，重器械绕过来更慢。
+	# 转到位之前只保持朝向，不进入任何攻击分支（含僧侣/长老/宗师的特攻）。
+	if not is_aimed_at(target):
+		_face_attack_target(target, delta)
 		return
 
 	# 特殊攻击类型：僧侣治疗 / 长老百分比伤害 / 宗师降攻招降
