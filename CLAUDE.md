@@ -255,12 +255,13 @@ Server→client snapshots are delta-compressed arrays sent at ~10Hz. Compact for
 
 每完成一项任务（代码改动已提交 / 交付物已给出）时，必须发出提示，避免用户离开屏幕后无法判断进度：
 
-1. **播放提示音**（Windows）：
+1. **执行提示脚本**（一次搞定提示音 + Windows 通知）：
    ```powershell
-   [console]::beep(880,140); [console]::beep(1245,180)
+   powershell -NoProfile -ExecutionPolicy Bypass -File tools/notify_done.ps1 -Message "<本次改动的一句话摘要>"
    ```
-   两句上扬的双音，约 0.3 秒。
+   脚本行为：两声上扬提示音 + 托盘气泡/通知中心弹窗（标题「FingerEmpire 任务完成」，正文为摘要），约 4 秒后自动退出。
+   > 该脚本必须保存为 **UTF-8 with BOM**，否则 PowerShell 按 ANSI 读取会让中文标题变乱码。
 2. **回复首行**输出醒目的 `✅ 任务完成`，紧跟一句本次改动摘要。
 3. 若有可交付文件（文档、截图、表格等），用 `present` 出示文件卡片。
 
-> 备注：Git 的 `post-commit` hook 在本机沙箱环境下无法运行（sh 启动时报 `couldn't create signal pipe, Win32 error 5`，沙箱禁止命名管道），因此不依赖 hook，而是在完成任务时主动发提示。若换到非受限环境，可用 hook 自动化同样的提示音与通知。
+> 备注：Git 的 `post-commit` hook 在本机沙箱环境下无法运行（sh 启动时报 `couldn't create signal pipe, Win32 error 5`，沙箱禁止命名管道），因此不依赖 hook，而是在完成任务时主动调用提示脚本。若换到非受限环境，可在 hook 里调用同一个 `tools/notify_done.ps1` 实现全自动提示。
