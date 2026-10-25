@@ -15,6 +15,12 @@ const SHIPYARD_ID := 23
 const TRANSPORT_SHIPYARD_LEVEL := 3
 const MAX_BRIDGE_SPAN := 10
 const MAX_BRIDGES := 10
+# 资源岛短桥：只跨几格水面，专门让农民能去对岸砍树/挖矿。
+# 太宽的水面交给运载船，避免 AI 把桥修到海中央。
+const MAX_RESOURCE_BRIDGE_SPAN := 7
+const RESOURCE_BRIDGE_GOAL_RADIUS := 3
+# 一局最多为经济修几座资源桥：修太多会吃掉木材/石材，拖垮正常建设。
+const MAX_RESOURCE_BRIDGES := 3
 const PLAN_INTERVAL := 6.0
 const TRANSPORT_CAPACITY := 8
 # 跨岛登陆波次规模：基础4艘运载船（32容量）、30名陆军、4艘护航舰。
@@ -52,6 +58,7 @@ var ai = null
 var battle = null
 var mode: int = MODE_NONE
 var bridge_plan: Array = []
+var _resource_bridges_started: int = 0
 
 var _plan_timer: float = 2.0
 var _bridge_fail_count: int = 0
@@ -129,8 +136,11 @@ func _refresh_plan():
 	var bridges: Dictionary = _collect_bridges()
 	var own_set: Dictionary = _bfs_land(start, bridges)
 	if own_set.has(target):
-		# 陆军已经能走到敌方城堡（陆地或浅滩/桥），不需要渡水
+		# 陆军已经能走到敌方城堡（陆地或浅滩/桥），不需要为了进攻渡水；
+		# 但如果对岸还有农民够不着的资源，仍然可以修一条短桥把经济接过去。
 		_stop_all()
+		if _bridge_fail_count < 3 and _try_resource_bridge(own_set, bridges, start):
+			return
 		return
 	var enemy_set: Dictionary = _bfs_land(target, bridges)
 	var plan: Array = []
@@ -151,6 +161,11 @@ func _refresh_plan():
 		_transport_units.clear()
 		mode = MODE_BRIDGE
 		return
+	# 到敌方城堡的桥修不了时，先看能不能给农民搭一座短桥去对岸资源点；
+	# 运载船留给真正需要跨海的进攻，避免被一座小资源岛拖住。
+	if mode != MODE_TRANSPORT and _bridge_fail_count < 3:
+		if _try_resource_bridge(own_set, bridges, start):
+			return
 	bridge_plan.clear()
 	var shores: Dictionary = _find_transport_shores(own_set, enemy_set, bridges, enemy_shore_water)
 	if not shores.is_empty():
@@ -273,6 +288,124 @@ func _find_bridge_plan(own_set: Dictionary, enemy_set: Dictionary, bridges: Dict
 			var score: float = float(line.size()) * 8.0
 			score += Vector2(line[0]).distance_to(Vector2(own_grid)) * 1.5
 			score += _point_segment_distance(mid, Vector2(own_grid), Vector2(enemy_grid))
+			if score < best_score:
+				best_score = score
+				best_line = line
+	if best_line.is_empty():
+		return []
+	var out: Array = []
+	for t in best_line:
+		out.append(battle.grid_to_world(t.x, t.y))
+	return out
+
+# 给农民找一座“经济桥”：从己方岸边跨过一段窄水，落到对岸资源点附近。
+# 只找短桥，且只从临水岸边出发，避免每个周期扫全图内陆格。
+func _try_resource_bridge(own_set: Dictionary, bridges: Dictionary, own_grid: Vector2i) -> bool:
+	if _bridge_fail_count >= 3 or _resource_bridges_started >= MAX_RESOURCE_BRIDGES:
+		return false
+	var plan: Array = _find_resource_bridge_plan(own_set, bridges, own_grid)
+	if plan.is_empty():
+		return false
+	_resource_bridges_started += 1
+	bridge_plan = plan
+	_transport_state = STATE_IDLE
+	_transport_units.clear()
+	mode = MODE_BRIDGE
+	if OS.is_debug_build():
+		print("[AI] 为农民搭桥：%d 段，通往对岸资源" % plan.size())
+	return true
+
+func has_pending_bridge() -> bool:
+	return mode == MODE_BRIDGE and not bridge_plan.is_empty()
+
+# AI 已经规划好的桥段不受玩家“必须看得见才能建”的限制：
+# 这座桥是 AI 为了让自己农民够到对岸资源而主动规划的基础设施，
+# 第一段由 AI 直接开工；后续桥段仍按“邻接已有桥”的常规规则延伸。
+func is_planned_bridge_position(pos: Vector3) -> bool:
+	if bridge_plan.is_empty():
+		return false
+	return battle.world_to_grid(pos) == battle.world_to_grid(bridge_plan[0])
+
+func _find_resource_bridge_plan(own_set: Dictionary, bridges: Dictionary, own_grid: Vector2i) -> Array:
+	var resource_tiles: Dictionary = {}
+	for e in battle.entities.get_children():
+		if not (e is WorldResource) or e.health <= 0:
+			continue
+		var rt: Vector2i = battle.world_to_grid(e.global_position)
+		if rt.x < 0 or rt.y < 0 or rt.x >= RTSConfig.MAP_SIZE or rt.y >= RTSConfig.MAP_SIZE:
+			continue
+		if own_set.has(rt):
+			continue
+		if battle.get_terrain_at_grid(rt.x, rt.y) != 0:
+			continue
+		resource_tiles[rt] = String(e.resource_type)
+	if resource_tiles.is_empty():
+		return []
+
+	var dirs: Array = [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
+	var existing_bridges: int = ai.count_building(BRIDGE_ID)
+	var best_score: float = INF
+	var best_line: Array = []
+	for c in own_set.keys():
+		var cell: Vector2i = c
+		# 只从临水格出发：内陆格不可能直接修第一段桥
+		var near_water := false
+		for d in dirs:
+			var w: Vector2i = cell + d
+			if w.x < 0 or w.y < 0 or w.x >= RTSConfig.MAP_SIZE or w.y >= RTSConfig.MAP_SIZE:
+				continue
+			if battle.get_terrain_at_grid(w.x, w.y) == 2:
+				near_water = true
+				break
+		if not near_water:
+			continue
+		for d in dirs:
+			var line: Array = []
+			var n: Vector2i = cell + d
+			while n.x >= 0 and n.x < RTSConfig.MAP_SIZE and n.y >= 0 and n.y < RTSConfig.MAP_SIZE:
+				if battle.get_terrain_at_grid(n.x, n.y) != 2:
+					break
+				if bridges.has(n):
+					break
+				line.append(n)
+				if line.size() > MAX_RESOURCE_BRIDGE_SPAN:
+					break
+				n += d
+			if line.is_empty() or line.size() > MAX_RESOURCE_BRIDGE_SPAN:
+				continue
+			if existing_bridges + line.size() > MAX_BRIDGES:
+				continue
+			if n.x < 0 or n.y < 0 or n.x >= RTSConfig.MAP_SIZE or n.y >= RTSConfig.MAP_SIZE:
+				continue
+			# 桥头必须落在可走的平地上，不能把桥修到山壁/水里
+			if battle.get_terrain_at_grid(n.x, n.y) != 0:
+				continue
+			var goal_tile := Vector2i(-1, -1)
+			var goal_dist: float = INF
+			var goal_type := ""
+			for dx in range(-RESOURCE_BRIDGE_GOAL_RADIUS, RESOURCE_BRIDGE_GOAL_RADIUS + 1):
+				for dy in range(-RESOURCE_BRIDGE_GOAL_RADIUS, RESOURCE_BRIDGE_GOAL_RADIUS + 1):
+					var g: Vector2i = n + Vector2i(dx, dy)
+					if not resource_tiles.has(g):
+						continue
+					var dist: float = Vector2(n).distance_to(Vector2(g))
+					if dist < goal_dist:
+						goal_dist = dist
+						goal_tile = g
+						goal_type = String(resource_tiles[g])
+			if goal_tile.x < 0:
+				continue
+			var first_world: Vector3 = battle.grid_to_world(line[0].x, line[0].y)
+			if battle.has_method("is_valid_bridge_position") and not battle.is_valid_bridge_position(first_world):
+				continue
+			var weight: float = 1.0
+			if ai != null and ai.has_method("_get_phase_weights"):
+				weight = maxf(0.3, float(ai._get_phase_weights().get(goal_type, 1.0)))
+			# 桥越短越优先；资源越紧缺、离己方主城越近越优先
+			var score: float = float(line.size()) * 10.0
+			score += Vector2(line[0]).distance_to(Vector2(own_grid)) * 0.8
+			score += goal_dist * 3.0
+			score -= weight * 5.0
 			if score < best_score:
 				best_score = score
 				best_line = line
@@ -526,7 +659,7 @@ func _tick_bridge(_delta: float):
 			_plan_timer = 0.0
 			_recalculate_army_paths()
 	else:
-		# 视野不足、附近有敌军或位置被占：放弃本段，下一周期重新找线
+		# 附近有敌军或位置被占：放弃本段，下一周期重新找线
 		bridge_plan.clear()
 		_register_bridge_failure()
 		_plan_timer = 1.0
@@ -542,6 +675,10 @@ func _recalculate_army_paths():
 		if e is Army and e.health > 0 and ai.entity_belongs_to_me(e):
 			if e.has_method("recalculate_path"):
 				e.recalculate_path()
+	# 新桥会让对岸资源变得可达；立刻重分配一次农民，
+	# 否则他们可能还停在修桥前的旧目标/闲置状态里。
+	if ai != null and ai.has_method("allocate_workers"):
+		ai.allocate_workers()
 
 # ═══════════════════════ 运载船 ═══════════════════════
 

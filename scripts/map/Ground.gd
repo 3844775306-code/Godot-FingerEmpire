@@ -4,6 +4,9 @@ extends Node3D
 const MapPresets = preload("res://scripts/map/MapPresets.gd")
 
 const TEX_SIZE = 512
+# 地表碎石粒：纯贴图装饰，没有碰撞体，不参与寻路/建造判定。
+# 一千来个像素点就能让大片纯色草地不那么“塑料”，性能开销为零。
+const GRAVEL_CLUSTERS_PER_TILE: float = 0.10
 
 # 强制覆盖地图尺寸（0表示使用全局常量）
 var map_size_override: int = 0
@@ -1702,6 +1705,74 @@ func _build_terrain_images() -> void:
 						continue
 					_base_image.set_pixel(px, py, c)
 					_dark_image.set_pixel(px, py, d)
+	_scatter_gravel(size)
+
+# 在地形底图上撒一些碎石粒。全部画进贴图里，所以：
+# - 没有节点/碰撞体，不影响单位走路、寻路和建造；
+# - 会跟着地形一起被迷雾压暗，不会在未探索区域露馅。
+func _scatter_gravel(size: int) -> void:
+	if _base_image == null or _dark_image == null or size <= 0:
+		return
+	var rng := RandomNumberGenerator.new()
+	var seed_value: int = custom_seed
+	if seed_value == 0:
+		# 同一张地图的碎石分布保持一致；联机两端看到的也是同一套点缀。
+		seed_value = int(hash(String(map_preset.get("id", "classic")) + ":" + str(size)))
+	rng.seed = seed_value
+	var clusters: int = maxi(80, int(float(size * size) * GRAVEL_CLUSTERS_PER_TILE))
+	var cell_px: float = float(TEX_SIZE) / float(size)
+	for _i in range(clusters):
+		var gx: int = rng.randi_range(0, size - 1)
+		var gy: int = rng.randi_range(0, size - 1)
+		if terrain_grid.size() <= gx or terrain_grid[gx].size() <= gy:
+			continue
+		if terrain_grid[gx][gy] != 0:
+			continue
+		# 浅滩/沼泽上不撒石头，避免看起来像陆地
+		var ov: int = get_overlay(gx, gy)
+		if ov == 2 or ov == 3:
+			continue
+		var base_x: int = int(float(gx) * cell_px) + rng.randi_range(1, maxi(1, int(cell_px) - 2))
+		var base_y: int = int(float(gy) * cell_px) + rng.randi_range(1, maxi(1, int(cell_px) - 2))
+		var stones: int = rng.randi_range(1, 3)
+		for _s in range(stones):
+			var px: int = base_x + rng.randi_range(-2, 2)
+			var py: int = base_y + rng.randi_range(-2, 2)
+			_paint_gravel_pixel(px, py, rng)
+
+func _paint_gravel_pixel(px: int, py: int, rng: RandomNumberGenerator) -> void:
+	if px < 1 or py < 1 or px >= TEX_SIZE - 1 or py >= TEX_SIZE - 1:
+		return
+	var radius: int = rng.randi_range(1, 2)
+	var tone: float = rng.randf_range(0.30, 0.48)
+	var stone := Color(tone, tone * 0.96, tone * 0.88)
+	# 先在地面压一小块阴影，石头才有“落在草上”的重量感
+	_blend_gravel_pixel(_base_image, px + 1, py + 1, stone.darkened(0.55), 0.55)
+	_blend_gravel_pixel(_dark_image, px + 1, py + 1, stone.darkened(0.78), 0.55)
+	for dy in range(-radius, radius + 1):
+		for dx in range(-radius, radius + 1):
+			if dx * dx + dy * dy > radius * radius:
+				continue
+			# 右下角留暗边，左上角提亮，模拟一个很小的受光石块
+			var lit: float = clampf(0.82 + float(-dx - dy) * 0.07, 0.58, 1.12)
+			var c := stone
+			if lit >= 1.0:
+				c = stone.lightened(lit - 1.0)
+			else:
+				c = stone.darkened(1.0 - lit)
+			_blend_gravel_pixel(_base_image, px + dx, py + dy, c, 0.82)
+			_blend_gravel_pixel(_dark_image, px + dx, py + dy, c.darkened(0.7), 0.92)
+
+func _blend_gravel_pixel(img: Image, px: int, py: int, col: Color, alpha: float) -> void:
+	if img == null or px < 0 or py < 0 or px >= TEX_SIZE or py >= TEX_SIZE:
+		return
+	var old := img.get_pixel(px, py)
+	img.set_pixel(px, py, Color(
+		old.r + (col.r - old.r) * alpha,
+		old.g + (col.g - old.g) * alpha,
+		old.b + (col.b - old.b) * alpha,
+		1.0
+	))
 
 # ---------- 城堡选址 ----------
 # 特殊地图团队锚点：沿镜像轴把每方 2/3 个基地均匀排开
