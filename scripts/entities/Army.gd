@@ -58,6 +58,9 @@ const TARGET_VALIDATE_INTERVAL: float = 0.5
 var _attack_stall_time: float = 0.0
 var _attack_watch_target_id: int = -1
 var _target_validate_timer: float = 0.0
+# 五状态分支的地形高度平滑每 0.25 秒做一次，避免全军每帧取地图高度。
+var _combat_ground_timer: float = 0.0
+var _combat_ground_dt: float = 0.0
 var _unreachable_targets: Dictionary = {}  # instance_id -> expire msec
 
 # Shift Á¬ÐøÖ¸Áî¶ÓÁÐ
@@ -1263,11 +1266,18 @@ func _update_combat_ground_height(bm, delta: float) -> void:
 		return
 	if bm == null:
 		return
+	_combat_ground_dt += delta
+	_combat_ground_timer -= delta
+	if _combat_ground_timer > 0.0:
+		return
+	_combat_ground_timer = 0.25
 	var map = bm.get_node_or_null("Map")
 	if map == null or not map.has_method("get_height_at"):
 		return
+	var step_dt: float = _combat_ground_dt
+	_combat_ground_dt = 0.0
 	var target_height: float = map.get_height_at(global_position)
-	global_position.y = move_toward(global_position.y, target_height, 5.0 * delta)
+	global_position.y = move_toward(global_position.y, target_height, 5.0 * step_dt)
 
 func _process_combat_target_cleanup(delta, bm) -> void:
 	if current_target != null and (_is_target_gone(current_target) or not _is_target_team_valid(current_target)):
