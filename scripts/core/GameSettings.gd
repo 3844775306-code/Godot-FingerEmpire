@@ -33,6 +33,7 @@ var command_mode: int = CommandMode.CONTINUOUS  # 单次/连续命令模式（_r
 # 手机端专用开关：没有键盘修饰键，用命令栏里的开关代替
 var mobile_batch_produce: bool = false     # 批量生产：点生产按钮 = 电脑端 Ctrl+生产（同类型建筑一起产）
 var mobile_continuous_build: bool = false  # 连续建造：放置完不退出建造模式 = 电脑端 Shift 连续建造
+var mobile_gyro_rotate: bool = true        # 倾斜手机旋转视角：默认开启，晕动症玩家可关
 
 var post_game_data: Dictionary = {}  # {power_history, player_is_blue} for results screen
 

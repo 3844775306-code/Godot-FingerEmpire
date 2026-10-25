@@ -12,6 +12,7 @@ var hud: Node = null
 var router: TouchGestureRouter = null
 
 var _box_mode_btn: Button = null
+var _gyro_btn: Button = null
 var _auto_btn: Button = null
 var _batch_produce_btn: Button = null
 var _cont_build_btn: Button = null
@@ -22,7 +23,7 @@ func _ready() -> void:
 	_build()
 
 func _build() -> void:
-	UILayout.place_dp(self, "br", WIDTH_DP, 265.0)
+	UILayout.place_dp(self, "br", WIDTH_DP, 240.0)
 
 	_panel = Panel.new()
 	_panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -44,10 +45,20 @@ func _build() -> void:
 	vb.add_theme_constant_override("separation", int(UILayout.dp(GAP_DP)))
 	add_child(vb)
 
-	_box_mode_btn = _make_button("框选：关", UILayout.font_dp(12.0))
+	# 框选开关与陀螺仪开关并排
+	var row0 := _make_row()
+	_box_mode_btn = _make_button("框选：关", UILayout.font_dp(11.0))
 	_box_mode_btn.toggle_mode = true
 	_box_mode_btn.toggled.connect(_on_box_mode_toggled)
-	vb.add_child(_box_mode_btn)
+	row0.add_child(_box_mode_btn)
+
+	_gyro_btn = _make_button("倾斜转视角：开", UILayout.font_dp(11.0))
+	_gyro_btn.toggle_mode = true
+	_gyro_btn.button_pressed = GameSettings.mobile_gyro_rotate
+	_gyro_btn.toggled.connect(_on_gyro_toggled)
+	row0.add_child(_gyro_btn)
+	_sync_gyro_btn()
+	vb.add_child(row0)
 
 	var row1 := _make_row()
 	row1.add_child(_make_command_button("屏幕全选", UILayout.font_dp(12.0), "_on_select_screen_pressed"))
@@ -59,9 +70,13 @@ func _build() -> void:
 	row2.add_child(_make_command_button("全军撤退", UILayout.font_dp(12.0), "_on_retreat_all_pressed"))
 	vb.add_child(row2)
 
+	# 自动进攻与设置并排
 	var row3 := _make_row()
-	_auto_btn = _make_command_button("自动进攻：关", UILayout.font_dp(12.0), "_on_attack_all_pressed")
+	_auto_btn = _make_command_button("自动进攻：关", UILayout.font_dp(11.0), "_on_attack_all_pressed")
 	row3.add_child(_auto_btn)
+	var settings_btn = _make_button("⚙ 设置", UILayout.font_dp(11.0))
+	settings_btn.pressed.connect(_on_settings_pressed)
+	row3.add_child(settings_btn)
 	vb.add_child(row3)
 	sync_auto_attack()
 
@@ -76,18 +91,23 @@ func _build() -> void:
 	_cont_build_btn.toggled.connect(_on_cont_build_toggled)
 	row4.add_child(_cont_build_btn)
 	vb.add_child(row4)
-
-	# 设置按钮：手机上桌面端的 ⚙ 按钮已随顶栏隐藏，这里补一个入口
-	var row5 := _make_row()
-	var settings_btn = _make_button("⚙ 设置", UILayout.font_dp(12.0))
-	settings_btn.pressed.connect(_on_settings_pressed)
-	row5.add_child(settings_btn)
-	vb.add_child(row5)
 	set_process(true)
 
 func _on_settings_pressed() -> void:
 	if hud and hud.has_method("_open_game_settings"):
 		hud.call("_open_game_settings")
+
+# 陀螺仪开关：关掉后倾斜手机不再转视角，给容易晕的玩家一个退路
+func _on_gyro_toggled(pressed: bool) -> void:
+	GameSettings.mobile_gyro_rotate = pressed
+	_sync_gyro_btn()
+
+func _sync_gyro_btn() -> void:
+	if _gyro_btn == null:
+		return
+	var on: bool = GameSettings.mobile_gyro_rotate
+	_gyro_btn.text = "倾斜转视角：开" if on else "倾斜转视角：关"
+	_gyro_btn.add_theme_color_override("font_color", Color(0.55, 0.95, 0.55) if on else Color(0.9, 0.9, 0.9))
 
 func _make_row() -> HBoxContainer:
 	var row := HBoxContainer.new()

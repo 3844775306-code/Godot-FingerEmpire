@@ -133,6 +133,9 @@ var _gyro_was_tilting: bool = false
 func _process_gyro_rotate(delta: float) -> void:
 	if not InputSource.use_mobile_ui():
 		return
+	# 命令栏里的开关可以关掉，默认开启
+	if not GameSettings.mobile_gyro_rotate:
+		return
 	if _gyro_cam == null or not is_instance_valid(_gyro_cam):
 		_gyro_cam = get_viewport().get_camera_3d() as Camera3D
 	if _gyro_cam == null or not _gyro_cam.has_method("rotate_by"):
