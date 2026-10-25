@@ -1100,8 +1100,11 @@ func _attach_ground_patch(node: Node3D, info: Dictionary) -> void:
 		return
 	if node.get_node_or_null("GroundPatch") != null:
 		return
-	var r: float = float(info.get("body_radius", 1.0)) * RTSConfig.get_building_body_scale(int(info.get("entity_id", -1)))
-	var half: float = r + Building.GROUND_PATCH_MARGIN
+	# 快照里的 body_radius 已经是服务端放大后的有效半径，这里不能再乘建筑放大倍率；
+	# 但模型还会乘 ENTITY_MODEL_SCALE（主城/巨型投石机等特殊体型），土色要跟着一起放大
+	var eid: int = int(info.get("entity_id", -1))
+	var visual_radius: float = float(info.get("body_radius", 1.0)) * RTSConfig.get_model_scale(eid)
+	var half: float = visual_radius + Building.GROUND_PATCH_MARGIN
 	var decal := Decal.new()
 	decal.name = "GroundPatch"
 	decal.texture_albedo = Building._ground_patch_texture()

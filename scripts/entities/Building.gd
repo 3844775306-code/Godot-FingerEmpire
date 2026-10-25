@@ -217,6 +217,8 @@ func _reload_wall_model(bm, path):
 			if current_size > 0.01:
 				inst.scale = Vector3.ONE * (target_size / current_size * RTSConfig.get_model_scale(entity_id))
 			add_child(inst); set_meta("_model_instance", inst)
+			# 换模型后视觉尺寸可能变化，土色贴花跟着重算
+			_refresh_ground_patch_size()
 			BuildingConstructionVisual.rebind(self)
 			var tint: Color = bm.get_entity_color(self) if bm.has_method("get_entity_color") else (Color(0.3, 0.6, 1.0) if team == RTSConfig.Team.BLUE else Color(1.0, 0.4, 0.4))
 			bm._apply_team_tint(self, tint)
@@ -326,7 +328,7 @@ static func _ground_patch_texture() -> ImageTexture:
 func _spawn_ground_patch() -> void:
 	if _ground_patch != null and is_instance_valid(_ground_patch):
 		return
-	var half: float = body_radius + GROUND_PATCH_MARGIN
+	var half: float = _ground_patch_half_size()
 	var decal := Decal.new()
 	decal.name = "GroundPatch"
 	decal.texture_albedo = _ground_patch_texture()
@@ -339,6 +341,20 @@ func _spawn_ground_patch() -> void:
 	decal.position = Vector3.ZERO
 	add_child(decal)
 	_ground_patch = decal
+
+# 土色半宽：body_radius 只是碰撞半径，模型还会再乘 ENTITY_MODEL_SCALE
+# （巨型投石机、主城这类特殊体型）。用模型真实缩放后的水平尺寸算，
+# 大建筑的地面痕迹才会跟着一起变大，不会出现小土圈套大房子。
+func _ground_patch_half_size() -> float:
+	var visual_radius: float = body_radius * RTSConfig.get_model_scale(entity_id)
+	return visual_radius + GROUND_PATCH_MARGIN
+
+# 模型被替换（城墙换拐角、升级换外观）后重算贴花尺寸
+func _refresh_ground_patch_size() -> void:
+	if _ground_patch == null or not is_instance_valid(_ground_patch):
+		return
+	var half: float = _ground_patch_half_size()
+	_ground_patch.size = Vector3(half * 2.0, 12.0, half * 2.0)
 
 # 建筑死亡时调用：贴花脱离建筑挂在场景里继续淡出，
 # 直接挂在建筑上会跟着一起被 queue_free，看不到褪色过程。
