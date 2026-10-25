@@ -121,6 +121,11 @@ void fragment() {
 	_print_node.name = "Footprints"
 	_print_node.multimesh = _print_mm
 	_print_node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	# MultiMesh 在实例变换动态写入后，引擎侧计算出的 AABB 可能是零尺寸，
+	# 多相机/真实战斗场景下会被整体视锥剔除（水面涟漪用普通 MeshInstance，
+	# 有自己的正常 AABB，所以一直可见）。这里显式给一个覆盖全地图的本地包围盒，
+	# 384 个薄片本身开销很小，不需要靠自动 AABB 做精细裁剪。
+	_print_node.custom_aabb = AABB(Vector3(-300.0, -40.0, -300.0), Vector3(600.0, 80.0, 600.0))
 	add_child(_print_node)
 
 func _process(delta: float) -> void:
