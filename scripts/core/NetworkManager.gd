@@ -385,13 +385,13 @@ func notify_all_player_colors(colors: Dictionary):
 # 服务器 → 客户端警报：可靠通道直发。警报是一次性事件，
 # 塞进 unreliable 快照里一旦丢包就永久丢失，客户端会完全收不到播报
 # alert_id 用于让客户端对“RPC 已收到 + 快照兜底重发”的同一条警报去重。
-# source_team 是战况发出方的队伍，客户端拿它显示国家名并着色。
-signal client_alert_received(msg: String, color: Color, alert_id: int, source_team: int)
+# teams 是这条战况涉及的国家队伍列表，客户端据此显示多个国家名并逐一着色。
+signal client_alert_received(msg: String, color: Color, alert_id: int, teams: Array)
 
 @rpc("authority", "call_remote", "reliable")
-func _client_receive_alert(msg: String, color: Color, alert_id: int = 0, source_team: int = -1):
+func _client_receive_alert(msg: String, color: Color, alert_id: int = 0, teams: Array = []):
 	if mode == Mode.CLIENT:
-		client_alert_received.emit(msg, color, alert_id, source_team)
+		client_alert_received.emit(msg, color, alert_id, teams)
 
 @rpc("authority", "call_remote", "reliable")
 func _notify_team(team: int):

@@ -799,8 +799,9 @@ const ALERT_WARNING = UITheme.ALERT_WARNING   # 黄色 — 敌军来袭/资源�
 const ALERT_INFO = UITheme.ALERT_INFO      # 绿色 — 建造/训练/升级完成
 const ALERT_GROUP = UITheme.ALERT_GROUP     # 蓝色 — 编队反馈
 
-func show_alert_message(msg: String, color: Color = ALERT_DANGER, team: int = -1):
+func show_alert_message(msg: String, color: Color = ALERT_DANGER, teams = []):
 	var mobile := InputSource.use_mobile_ui()
+	var team_list: Array = _normalize_alert_teams(teams)
 	if _alert_stack == null:
 		# 战况栏改成竖排多行：每条战况独立一行，新消息加在末尾（最下面），
 		# 超过上限就从最上面挤掉。用 VBoxContainer 自动排版，增删行不用手算坐标。
@@ -850,7 +851,7 @@ func show_alert_message(msg: String, color: Color = ALERT_DANGER, team: int = -1
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_theme_color_override("font_outline_color", Color.BLACK)
 	row.add_theme_constant_override("outline_size", 3)
-	row.text = _alert_bbcode(msg, color, team)
+	row.text = _alert_bbcode(msg, color, team_list)
 	holder.add_child(row)
 	_alert_stack.add_child(holder)
 	_alert_rows.append({"rtl": row, "holder": holder, "life": ALERT_LIFE})
@@ -863,13 +864,34 @@ func show_alert_message(msg: String, color: Color = ALERT_DANGER, team: int = -1
 	_refresh_alert_weights()
 	set_process(true)
 
-# 消息前加「【国家】」前缀：自己绿、友方蓝、其余红。
-# 国家名比正文略暗一档，避免抢走对内容的注意力。
-func _alert_bbcode(msg: String, color: Color, team: int) -> String:
+# 兼容两种写法：单个队伍（int）或队伍数组。负数表示未知来源，直接丢弃。
+func _normalize_alert_teams(raw) -> Array:
+	var out: Array = []
+	if raw is int:
+		if int(raw) >= 0:
+			out.append(int(raw))
+		return out
+	if raw is Array:
+		for t in raw:
+			if int(t) >= 0 and not out.has(int(t)):
+				out.append(int(t))
+	return out
+
+# 消息前加国家前缀。一条战报可能同时涉及多个国家（例如「A 攻打 B」），
+# 全部按同一规则着色：自己绿、同阵营友方蓝、敌方红，国家之间用箭头连接。
+func _alert_bbcode(msg: String, color: Color, teams: Array) -> String:
 	var out := ""
-	var nation := _alert_nation_name(team)
-	if not nation.is_empty():
-		out += "[color=#%s]【%s】[/color]" % [_alert_team_color(team).to_html(false), nation]
+	var parts: Array = []
+	for t in teams:
+		var team: int = int(t)
+		var nation := _alert_nation_name(team)
+		if nation.is_empty():
+			continue
+		parts.append("[color=#%s]【%s】[/color]" % [_alert_team_color(team).to_html(false), nation])
+	if not parts.is_empty():
+		# 箭头单独用浅灰，避免跟着前后国家的颜色走
+		out += "[color=#BBBBBB]→[/color]".join(parts)
+		out += " "
 	# 正文里的方括号必须转义，否则会被当成 BBCode 标签吞掉
 	out += "[color=#%s]%s[/color]" % [color.to_html(false), msg.replace("[", "[lb]")]
 	return out
@@ -885,18 +907,22 @@ func _alert_nation_name(team: int) -> String:
 		return ""
 	return String(ALERT_NATION_NAMES[n])
 
+# 本地玩家所在队伍（单机与联机房主都是 host team）
+func get_my_team() -> int:
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if bm != null and bm.has_method("get_host_team"):
+		return int(bm.get_host_team())
+	return -1
+
 # 自己 → 绿；同阵营友方 → 蓝；敌方与中立 → 红
 func _alert_team_color(team: int) -> Color:
 	if team < 0:
 		return Color(1.0, 1.0, 1.0, 0.0)
 	var bm = get_tree().get_first_node_in_group("battle_manager")
-	var me: int = -1
+	var me: int = get_my_team()
 	var enemy: int = -1
-	if bm != null:
-		if bm.has_method("get_host_team"):
-			me = int(bm.get_host_team())
-		if bm.has_method("get_enemy_team"):
-			enemy = int(bm.get_enemy_team())
+	if bm != null and bm.has_method("get_enemy_team"):
+		enemy = int(bm.get_enemy_team())
 	if team == me:
 		return Color(0.35, 1.0, 0.45)
 	if enemy != -1 and team != enemy:
@@ -1709,7 +1735,7 @@ func _diplo_accept(proposer: int):
 	var d: DiplomacyManager = bm.diplomacy
 	var player: int = bm.player_owner_id
 	if d.accept_alliance(player, proposer):
-		show_alert_message("✅ 已与 %s 结盟" % d.get_display_name(proposer), ALERT_INFO)
+		show_alert_message("✅ 已与 %s 结盟" % d.get_display_name(proposer), ALERT_INFO, [get_my_team(), d.get_team_of(proposer)])
 	else:
 		var reason: String = d.alliance_block_reason(player, proposer)
 		show_alert_message(reason if reason != "" else "结盟失败", ALERT_WARNING)
@@ -1720,7 +1746,7 @@ func _diplo_decline(proposer: int):
 		return
 	var d: DiplomacyManager = bm.diplomacy
 	d.decline_alliance(bm.player_owner_id, proposer)
-	show_alert_message("已拒绝 %s 的结盟提议" % d.get_display_name(proposer), ALERT_WARNING)
+	show_alert_message("已拒绝 %s 的结盟提议" % d.get_display_name(proposer), ALERT_WARNING, [get_my_team(), d.get_team_of(proposer)])
 
 func _diplo_propose_to(owner: int):
 	var bm := _get_bm() as RTSBattleManager
@@ -1729,7 +1755,7 @@ func _diplo_propose_to(owner: int):
 	var d: DiplomacyManager = bm.diplomacy
 	var player: int = bm.player_owner_id
 	if d.propose_alliance(player, owner):
-		show_alert_message("已向 %s 发出结盟提议" % d.get_display_name(owner), ALERT_INFO)
+		show_alert_message("已向 %s 发出结盟提议" % d.get_display_name(owner), ALERT_INFO, [get_my_team(), d.get_team_of(owner)])
 	else:
 		var reason: String = d.alliance_block_reason(player, owner)
 		show_alert_message(reason if reason != "" else "提议失败", ALERT_WARNING)
@@ -1744,7 +1770,7 @@ func _diplo_cancel_proposal():
 	if target == -1:
 		return
 	d.cancel_proposal(player)
-	show_alert_message("已撤回对 %s 的结盟提议" % d.get_display_name(target), ALERT_WARNING)
+	show_alert_message("已撤回对 %s 的结盟提议" % d.get_display_name(target), ALERT_WARNING, [get_my_team(), d.get_team_of(target)])
 
 func _diplo_send_tribute(res_type: String):
 	var bm := _get_bm() as RTSBattleManager
@@ -1757,7 +1783,7 @@ func _diplo_send_tribute(res_type: String):
 		return
 	if d.deliver_tribute(player, ally, res_type):
 		var rname: String = str(UITheme.RESOURCE_NAMES.get(res_type, res_type))
-		show_alert_message("已向 %s 进贡 %d %s" % [d.get_display_name(ally), DiplomacyManager.TRIBUTE_DELIVERY, rname], ALERT_INFO)
+		show_alert_message("已向 %s 进贡 %d %s" % [d.get_display_name(ally), DiplomacyManager.TRIBUTE_DELIVERY, rname], ALERT_INFO, [get_my_team(), d.get_team_of(ally)])
 	else:
 		show_alert_message("进贡失败：资源不足或对方仓库已满", ALERT_WARNING)
 
@@ -1769,6 +1795,6 @@ func _diplo_rupture():
 	var player: int = bm.player_owner_id
 	var ally: int = d.get_ally(player)
 	if d.rupture_alliance(player):
-		show_alert_message("💥 你已与 %s 决裂，双方永久无法再结盟" % d.get_display_name(ally), ALERT_WARNING)
+		show_alert_message("💥 你已与 %s 决裂，双方永久无法再结盟" % d.get_display_name(ally), ALERT_WARNING, [get_my_team(), d.get_team_of(ally)])
 	else:
 		show_alert_message("当前没有盟约可决裂", ALERT_WARNING)

@@ -855,7 +855,7 @@ func _eliminate_ai_player(owner: int) -> void:
 	# 被攻击型战报：前缀国家取被攻灭的那一方，国家名交给战况前缀显示，
 	# 消息正文里不再重复写一遍
 	var dead_team: int = int(info.get("team", -1))
-	_show_hud_alert("城堡被攻破，残余部队已溃散", color, dead_team, -1)
+	_show_hud_alert("城堡被攻破，残余部队已溃散", color, [dead_team], -1)
 	# 残余单位/建筑（health<=0 的正在播放死亡动画，交给各自 die() 自清理）
 	var to_free: Array = []
 	for e in entities.get_children():
@@ -895,13 +895,13 @@ func _on_2v2_castle_died(team: int, owner: int = -1):
 	game_over = true
 	AudioManager.play_music("defeat" if team == get_host_team() else "victory")
 	if team == get_host_team():
-		# 被攻击型战报：前缀国家取「被攻击的那一方」，而不是攻击方
-		_show_hud_alert("我方基地正遭受攻击！", Color(1.0, 0.2, 0.1), get_host_team(), get_host_team())
+		# 攻守双方都带上：攻击方在前、被攻击方在后
+		_show_hud_alert("我方基地正遭受攻击！", Color(1.0, 0.2, 0.1), [get_enemy_team(), get_host_team()], get_host_team())
 		game_over_label.text = "你输了！"
 		game_over_label.add_theme_color_override("font_color", Color.RED)
 	else:
-		# 被攻击型战报：前缀国家取被摧毁的那一方
-		_show_hud_alert("敌军基地已被摧毁！", Color(0.2, 1.0, 0.3), get_enemy_team(), get_host_team())
+		# 攻守双方都带上：我方为攻击方，敌方为被摧毁方
+		_show_hud_alert("敌军基地已被摧毁！", Color(0.2, 1.0, 0.3), [get_host_team(), get_enemy_team()], get_host_team())
 		game_over_label.text = "你赢了！"
 		game_over_label.add_theme_color_override("font_color", Color.GREEN)
 	_show_battle_stats()
@@ -913,13 +913,13 @@ func _on_castle_died(team: int):
 	AudioManager.play_music("defeat" if team == get_host_team() else "victory")
 
 	if team == get_host_team():
-		# 被攻击型战报：前缀国家取「被攻击的那一方」，而不是攻击方
-		_show_hud_alert("我方基地正遭受攻击！", Color(1.0, 0.2, 0.1), get_host_team(), get_host_team())
+		# 攻守双方都带上：攻击方在前、被攻击方在后
+		_show_hud_alert("我方基地正遭受攻击！", Color(1.0, 0.2, 0.1), [get_enemy_team(), get_host_team()], get_host_team())
 		game_over_label.text = "你输了！"
 		game_over_label.add_theme_color_override("font_color", Color.RED)
 	else:
-		# 被攻击型战报：前缀国家取被摧毁的那一方
-		_show_hud_alert("敌军基地已被摧毁！", Color(0.2, 1.0, 0.3), get_enemy_team(), get_host_team())
+		# 攻守双方都带上：我方为攻击方，敌方为被摧毁方
+		_show_hud_alert("敌军基地已被摧毁！", Color(0.2, 1.0, 0.3), [get_host_team(), get_enemy_team()], get_host_team())
 		game_over_label.text = "你赢了！"
 		game_over_label.add_theme_color_override("font_color", Color.GREEN)
 
@@ -3136,12 +3136,25 @@ func is_mobile_ui_point(pos: Vector2) -> bool:
 # 「【被攻击国】某某被打了」，而不是「【攻击国】打了某某」。
 # 无法判定时传 -1，只显示消息本体。
 # target_team：联机模式下只推给哪个阵营；-1 表示广播给双方。单机忽略这个参数。
-func _show_hud_alert(msg: String, color: Color = Color(1.0, 0.2, 0.1), source_team: int = -1, target_team: int = -1):
+func _show_hud_alert(msg: String, color: Color = Color(1.0, 0.2, 0.1), source_teams = -1, target_team: int = -1):
 	if color == Color(1.0, 0.2, 0.1) or color == Color(1.0, 0.8, 0.1): AudioManager.play_sfx("alert")
 	if has_node("UI"):
 		var hud = $UI
 		if hud and hud.has_method("show_alert_message"):
-			hud.show_alert_message(msg, color, source_team)
+			hud.show_alert_message(msg, color, source_teams)
+
+# 队伍列表归一化：支持单个 int 与 Array，负数（未知来源）丢弃
+func _alert_team_list(raw) -> Array:
+	var out: Array = []
+	if raw is int:
+		if int(raw) >= 0:
+			out.append(int(raw))
+		return out
+	if raw is Array:
+		for t in raw:
+			if int(t) >= 0 and not out.has(int(t)):
+				out.append(int(t))
+	return out
 
 func _is_alert_on_cooldown(key: String, duration: float = 5.0) -> bool:
 	return _alert_cooldowns.has(key) and _alert_cooldowns[key] > 0
@@ -3164,8 +3177,8 @@ func _detect_enemy_near_base():
 
 	if threat_detected and not _is_alert_on_cooldown("enemy_approach"):
 		var loc_str = "(%d,%d)" % [int(player_castle.global_position.x), int(player_castle.global_position.z)]
-		# 被攻击型战报：前缀国家是被入侵的一方（我方）
-		_show_hud_alert("敌军来袭！接近我方基地方向 %s" % loc_str, Color(1.0, 0.8, 0.1), get_host_team(), get_host_team())
+		# 攻守双方都带上：敌军为攻击方，我方为被入侵方
+		_show_hud_alert("敌军来袭！接近我方基地方向 %s" % loc_str, Color(1.0, 0.8, 0.1), [get_enemy_team(), get_host_team()], get_host_team())
 		_set_alert_cooldown("enemy_approach", 5.0)
 
 # ==================== 废弃建筑：生成 / 占领 ====================
@@ -3329,7 +3342,7 @@ func _capture_abandoned_site(site: Building, army: Army) -> void:
 	var loot: Dictionary = _abandoned_loot_for(site.entity_id)
 	_grant_capture_loot(army, loot)
 	_show_hud_alert("【废弃建筑】我方占领了%s%s" % [_abandoned_label(site.entity_id), _loot_text(loot)],
-		Color(0.95, 0.85, 0.35), team, team)
+		Color(0.95, 0.85, 0.35), [team], team)
 	print("[废弃建筑] team=%d owner=%d 占领 %s" % [team, owner_id, _abandoned_label(site.entity_id)])
 
 # 战利品按队伍/玩家入账：自建模式走 owner 资源，单机 1v1 走队伍资源

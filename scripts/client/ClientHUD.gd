@@ -603,8 +603,9 @@ func _on_retreat_all_pressed():
 const ALERT_MAX_ROWS: int = 3
 const ALERT_LIFE: float = 3.4
 
-func show_alert_message(msg: String, color: Color = ALERT_DANGER, team: int = -1):
+func show_alert_message(msg: String, color: Color = ALERT_DANGER, teams = []):
 	var mobile := InputSource.use_mobile_ui()
+	var team_list: Array = _normalize_alert_teams(teams)
 	if _alert_stack == null:
 		_alert_stack = VBoxContainer.new()
 		_alert_stack.name = "AlertStack"
@@ -649,7 +650,7 @@ func show_alert_message(msg: String, color: Color = ALERT_DANGER, team: int = -1
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_theme_color_override("font_outline_color", Color.BLACK)
 	row.add_theme_constant_override("outline_size", 3)
-	row.text = _alert_bbcode(msg, color, team)
+	row.text = _alert_bbcode(msg, color, team_list)
 	holder.add_child(row)
 	_alert_stack.add_child(holder)
 	_alert_rows.append({"rtl": row, "holder": holder, "life": ALERT_LIFE})
@@ -660,12 +661,33 @@ func show_alert_message(msg: String, color: Color = ALERT_DANGER, team: int = -1
 			old_holder.queue_free()
 	_refresh_alert_weights()
 
-# 消息前加「【国家】」前缀：自己绿、同阵营友方蓝、其余红
-func _alert_bbcode(msg: String, color: Color, team: int) -> String:
+# 兼容单个队伍（int）与队伍数组两种写法；负数表示未知，直接丢弃
+func _normalize_alert_teams(raw) -> Array:
+	var out: Array = []
+	if raw is int:
+		if int(raw) >= 0:
+			out.append(int(raw))
+		return out
+	if raw is Array:
+		for t in raw:
+			if int(t) >= 0 and not out.has(int(t)):
+				out.append(int(t))
+	return out
+
+# 消息前加国家前缀。一条战报可能同时涉及多个国家（例如「A 攻打 B」），
+# 全部按同一规则着色：自己绿、同阵营友方蓝、敌方红，国家之间用箭头连接。
+func _alert_bbcode(msg: String, color: Color, teams: Array) -> String:
 	var out := ""
-	var nation_name := _alert_nation_of_team(team)
-	if not nation_name.is_empty():
-		out += "[color=#%s]【%s】[/color]" % [_alert_team_color(team).to_html(false), nation_name]
+	var parts: Array = []
+	for t in teams:
+		var team: int = int(t)
+		var nation_name := _alert_nation_of_team(team)
+		if nation_name.is_empty():
+			continue
+		parts.append("[color=#%s]【%s】[/color]" % [_alert_team_color(team).to_html(false), nation_name])
+	if not parts.is_empty():
+		out += "[color=#BBBBBB]→[/color]".join(parts)
+		out += " "
 	out += "[color=#%s]%s[/color]" % [color.to_html(false), msg.replace("[", "[lb]")]
 	return out
 
@@ -827,12 +849,12 @@ func _ready():
 			NetworkManager.client_alert_received.connect(_on_server_alert)
 
 # 收到服务器警报：直接走本地播报条
-func _on_server_alert(msg: String, color: Color, alert_id: int = 0, source_team: int = -1) -> void:
-	show_server_alert(msg, color, alert_id, source_team)
+func _on_server_alert(msg: String, color: Color, alert_id: int = 0, teams = []) -> void:
+	show_server_alert(msg, color, alert_id, teams)
 
 # 服务器警报统一入口：RPC 与快照兜底都会调用，按 id 去重；
 # 危险/警告级警报补一次客户端本地音效（服务器端 AudioManager 不会在客户端播放）。
-func show_server_alert(msg: String, color: Color, alert_id: int = 0, source_team: int = -1) -> void:
+func show_server_alert(msg: String, color: Color, alert_id: int = 0, teams = []) -> void:
 	if alert_id > 0:
 		if _seen_server_alert_ids.has(alert_id):
 			return
@@ -841,7 +863,7 @@ func show_server_alert(msg: String, color: Color, alert_id: int = 0, source_team
 		_seen_server_alert_ids[alert_id] = true
 	if color == ALERT_DANGER or color == ALERT_WARNING:
 		AudioManager.play_sfx("alert")
-	show_alert_message(msg, color, source_team)
+	show_alert_message(msg, color, teams)
 
 func _make_cmd_button(text: String, cb: Callable, danger: bool) -> Button:
 	var b := Button.new()
