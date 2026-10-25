@@ -27,6 +27,10 @@ var _pending_path: bool = false
 var _pending_target: Vector3 = Vector3.ZERO
 var _pending_stop_range: float = 0.0
 var _pending_since_ms: int = 0
+# A* 节点预算耗尽时不要直接返回空路径：先沿着“离目标最近的可达格”推进，
+# 到达该段末端后由 Army 重新寻路。否则大部队攻击移动会停在原地。
+var path_partial: bool = false
+var _last_path_partial: bool = false
 # 大量单位同时追击时 A* 预算可能连续多帧排不到某个单位。
 # 等待超过这个时间就按“无路”处理，交给 Army 的换目标/拆墙兜底，不能让单位永远站着。
 const PENDING_PATH_TIMEOUT_MS: int = 2000
@@ -95,6 +99,7 @@ func set_move_target(pos: Vector3, stop_range: float = 0.0):
 		if Time.get_ticks_msec() < blacklist_until:
 			_pending_path = false
 			move_path_failed = true
+			path_partial = false
 			return
 		_blacklist.erase(key)
 
@@ -137,6 +142,7 @@ func set_move_target(pos: Vector3, stop_range: float = 0.0):
 			# 同步更新 astar_target，防止 Army 的“已到达”判断拿旧目标误清命令。
 			astar_target = pos
 			astar_path.clear()
+			path_partial = false
 			if _is_selected: _hide_path()
 		return
 	# 新目标已立即算完，清掉可能残留的旧 pending，避免下一帧把它重新算回来。
@@ -159,6 +165,7 @@ func _apply_path(pos: Vector3, path: Array, stop_range: float) -> void:
 	var is_attack_move := stop_range > 0.0
 	astar_target = pos
 	astar_path = path
+	path_partial = _last_path_partial
 	var key = Vector2i(int(pos.x), int(pos.z))
 	if astar_path.size() > 0:
 		attack_path_failed = false
@@ -212,6 +219,7 @@ func recalculate():
 		var key = Vector2i(int(astar_target.x), int(astar_target.z))
 		_path_cache.erase(key)
 		astar_path = _calculate_astar_path(astar_target)
+		path_partial = _last_path_partial
 		attack_path_failed = astar_path.is_empty()
 		move_path_failed = astar_path.is_empty()
 		_pending_path = false
@@ -234,6 +242,7 @@ func stop():
 	astar_target = Vector3.ZERO
 	attack_path_failed = false
 	move_path_failed = false
+	path_partial = false
 	blocking_building = null
 	_pending_path = false
 	_pending_since_ms = 0
@@ -656,6 +665,7 @@ func _stamp_building_clearance(center: Vector2i, building_radius: float) -> void
 			_clearance_cost[tile] = LARGE_UNIT_CLEARANCE_COST
 
 func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Array:
+	_last_path_partial = false
 	var bm = _army._get_bm() as RTSBattleManager
 	if not bm: return []
 	var start = _army.global_position
@@ -732,12 +742,18 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 	max_nodes = clampi(2000 + tile_span * 80, 2000, 12000)
 	var nodes_explored := 0
 	var from_height := _get_tile_height(start_tile, bm)
+	var best_partial_tile: Vector2i = start_tile
+	var best_partial_h: float = _heuristic(start_tile, end_tile)
 
 	while not open_list.is_empty() and nodes_explored < max_nodes:
 		var current_entry = open_list.pop()
 		if current_entry.is_empty(): break
 		var cur_tile: Vector2i = current_entry.tile
 		nodes_explored += 1
+		var cur_h: float = _heuristic(cur_tile, end_tile)
+		if cur_h < best_partial_h:
+			best_partial_h = cur_h
+			best_partial_tile = cur_tile
 
 		# Goal checks
 		if stop_range > 0:
@@ -784,6 +800,15 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 					g_score[neighbor] = tentative_g
 					open_list.push(neighbor, tentative_g + _heuristic(neighbor, end_tile) * 1.2)
 
+	# 节点预算耗尽（而不是终点真的不可达）时，返回走到离目标最近的可达格的路径，
+	# 让单位先推进一段；Army 会在该段走完后从新位置继续寻路。
+	if best_partial_tile != start_tile:
+		var partial := _reconstruct_path(came_from, best_partial_tile)
+		if partial.size() > 1:
+			partial.pop_front()
+		if partial.size() > 0:
+			_last_path_partial = true
+			return partial
 	return []
 
 func _heuristic(a: Vector2i, b: Vector2i) -> float:

@@ -134,6 +134,7 @@ var _wall_cache_version: int = 0          # 墙体/建筑布局实际变化时�
 var _wall_layout_signature: int = 0       # 建筑/资源布局签名，避免实体缓存每 0.5s 刷新都让寻路墙缓存失效
 var _wall_signature_initialized: bool = false
 var _wall_entity_grid: Dictionary = {}    # Vector2i -> Building(城墙 id==27)，供 process_move 高度平滑 O(1) 查询
+var _wall_top_entity_grid: Dictionary = {} # Vector2i -> Building(城墙/墙顶炮台)，近战锁敌时 O(1) 判断目标是否在墙顶
 var _ladder_entity_grid: Dictionary = {}  # Vector2i -> Building(梯子 id==8)，供 _has_adjacent_ladder O(8) 查询
 var _bridge_entity_grid: Dictionary = {}  # Vector2i -> Building(桥 id==7)，供落水判定 O(1) 查询
 # 弹丸对象池：后期每秒几十上百发箭/炮弹，复用节点可避免反复 new + GLB instantiate + 物理形状创建
@@ -355,6 +356,7 @@ func _rebuild_entity_cache():
 		_building_cells[bkey].append(b)
 	# 同步构建墙体/梯子网格（MovementController 寻路与高度平滑的 O(1)/O(8) 缓存）
 	_wall_entity_grid.clear()
+	_wall_top_entity_grid.clear()
 	_ladder_entity_grid.clear()
 	_bridge_entity_grid.clear()
 	for b in _buildings:
@@ -362,6 +364,9 @@ func _rebuild_entity_cache():
 			continue
 		if b.entity_id == 27:
 			_wall_entity_grid[world_to_grid(b.global_position)] = b
+			_wall_top_entity_grid[world_to_grid(b.global_position)] = b
+		elif b.entity_id == 64:
+			_wall_top_entity_grid[world_to_grid(b.global_position)] = b
 		elif b.entity_id == 8:
 			_ladder_entity_grid[world_to_grid(b.global_position)] = b
 		elif b.entity_id == 7:

@@ -132,6 +132,9 @@ var _retarget_target_id: int = -1
 # 攻击移动时不必每帧全量搜敌；0.4s 一次足够跟随战场变化
 const ATTACK_MOVE_SEARCH_INTERVAL: float = 0.4
 var _attack_move_search_timer: float = 0.0
+# 部分路径走到尽头/寻路暂时失败后，间隔一小段时间从新位置继续向原目的地寻路，
+# 否则大部队攻击移动时 A* 节点预算一超限就整队停在原地。
+var _combat_repath_timer: float = 0.0
 
 # 驻扎防御：驻扎点附近这个半径内的敌人优先清掉，再返回驻扎点
 const GARRISON_DEFEND_RADIUS: float = 10.0
@@ -541,6 +544,7 @@ func cancel_combat_orders() -> void:
 	is_attack_moving = false
 	attack_move_target = Vector3.ZERO
 	_attack_move_search_timer = 0.0
+	_combat_repath_timer = 0.0
 	_set_combat_state(CombatState.IDLE)
 	_target_lost_since_ms = 0
 	if _movement:
@@ -613,8 +617,11 @@ func _start_combat_march(pos: Vector3) -> void:
 	_target_lost_since_ms = 0
 	is_attack_moving = false
 	attack_move_target = Vector3.ZERO
+	_combat_repath_timer = 0.5
 	_set_combat_state(CombatState.MARCH)
 	if _movement:
+		_movement.move_path_failed = false
+		_movement.clear_blacklist_at(pos)
 		_movement.set_move_target(pos)
 
 func _start_combat_advance(pos: Vector3) -> void:
@@ -628,8 +635,12 @@ func _start_combat_advance(pos: Vector3) -> void:
 	is_attack_moving = true
 	attack_move_target = pos
 	_attack_move_search_timer = 0.0
+	_combat_repath_timer = 0.5
 	_set_combat_state(CombatState.ADVANCE)
 	if _movement:
+		_movement.move_path_failed = false
+		_movement.attack_path_failed = false
+		_movement.clear_blacklist_at(pos)
 		_movement.set_move_target(pos)
 
 func _finish_combat_move() -> void:
@@ -654,8 +665,11 @@ func _resume_advance() -> void:
 	current_target = null
 	is_attack_moving = true
 	attack_move_target = combat_destination
+	_combat_repath_timer = 0.5
 	_set_combat_state(CombatState.ADVANCE)
 	if _movement:
+		_movement.move_path_failed = false
+		_movement.clear_blacklist_at(combat_destination)
 		_movement.set_move_target(combat_destination)
 
 func _return_to_garrison() -> void:
@@ -1350,21 +1364,30 @@ func _process_combat_action(delta, bm) -> void:
 		_set_combat_target(current_target)
 	match combat_state:
 		CombatState.MARCH:
-			_process_combat_march()
+			_process_combat_march(delta)
 		CombatState.ADVANCE:
 			_process_combat_advance(delta, bm)
 		CombatState.PURSUE, CombatState.ATTACK:
 			_process_combat_attack(delta, bm)
 
-func _process_combat_march() -> void:
+func _process_combat_march(delta: float) -> void:
 	if combat_destination == Vector3.ZERO:
 		_set_combat_state(CombatState.IDLE)
 		return
 	if _movement.move_path_failed:
-		_finish_combat_move()
+		# 攻击移动/普通行军的目的地可能暂时被建筑、墙或 A* 节点预算挡住。
+		# 以前这里直接结束命令，表现为大部队走了两步就全部站住；现在保留任务并重试。
+		_movement.move_path_failed = false
+		_movement.clear_blacklist_at(combat_destination)
+		_combat_repath_timer -= delta
+		if _combat_repath_timer <= 0.0:
+			_combat_repath_timer = 0.75
+			_movement.set_move_target(combat_destination)
 		return
 	if global_position.distance_to(combat_destination) <= body_radius + 0.6:
 		_finish_combat_move()
+		return
+	if _retry_partial_combat_path(combat_destination, delta):
 		return
 	if _movement.astar_target.distance_to(combat_destination) > 0.5:
 		_movement.set_move_target(combat_destination)
@@ -1381,13 +1404,22 @@ func _process_combat_advance(delta, bm) -> void:
 			_set_combat_target(fallback, true)
 			_movement.set_move_target(fallback.global_position, attack_range)
 			return
-		_finish_combat_move()
+		# 没有可拆的挡路建筑时不要直接放弃原目的地；清掉失败标记后隔一会儿重试。
+		# 跨越长距离或绕城墙时 A* 节点预算可能暂时不足，保留任务才能继续推进。
+		_movement.move_path_failed = false
+		_movement.clear_blacklist_at(combat_destination)
+		_combat_repath_timer -= delta
+		if _combat_repath_timer <= 0.0:
+			_combat_repath_timer = 0.75
+			_movement.set_move_target(combat_destination)
 		return
 	var arrived: bool = global_position.distance_to(combat_destination) <= body_radius + 0.6
 	if arrived:
 		# 推进到达目的地：先回待命，然后立刻继续一般目标检查。
 		_finish_combat_move()
 	else:
+		if _retry_partial_combat_path(combat_destination, delta):
+			return
 		if _movement.astar_target.distance_to(combat_destination) > 0.5:
 			_movement.set_move_target(combat_destination)
 		_attack_move_search_timer -= delta
@@ -1399,6 +1431,20 @@ func _process_combat_advance(delta, bm) -> void:
 		_set_combat_target(enemy, not arrived)
 		_process_combat_attack(delta, bm)
 
+# 节点预算耗尽时 MovementController 会返回“走到离目标最近的可达格”的部分路径。
+# 该段走完后从新位置继续向原目的地重算，避免大部队停在半路。
+func _retry_partial_combat_path(destination: Vector3, delta: float, stop_range: float = 0.0) -> bool:
+	if _movement == null or not _movement.path_partial or not _movement.astar_path.is_empty():
+		return false
+	_combat_repath_timer -= delta
+	if _combat_repath_timer > 0.0:
+		return true
+	_combat_repath_timer = 0.5
+	_movement.path_partial = false
+	_movement.clear_blacklist_at(destination)
+	_movement.set_move_target(destination, stop_range)
+	return true
+
 func _process_combat_attack(delta, bm) -> void:
 	if current_target == null or not is_instance_valid(current_target):
 		_on_combat_target_lost()
@@ -1409,6 +1455,15 @@ func _process_combat_attack(delta, bm) -> void:
 		_attack_stall_time = 0.0
 		if _movement:
 			_movement.attack_path_failed = false
+		# 混战里已经锁着一个肉盾时，也要定期比较射程内是否有更高效的目标；
+		# 只在非攻城单位之间做，避免攻城车放弃建筑。
+		if not _prefers_buildings():
+			_retarget_timer -= delta
+			if _retarget_timer <= 0.0:
+				_retarget_timer = maxf(_retarget_interval(bm), 1.0)
+				_try_retarget_in_range_priority()
+				if current_target == null or not is_instance_valid(current_target):
+					return
 		_attack_tick(current_target, delta, bm)
 		return
 	if hold_position:
@@ -1430,6 +1485,8 @@ func _process_combat_attack(delta, bm) -> void:
 		if current_target == null or not is_instance_valid(current_target):
 			_on_combat_target_lost()
 			return
+	if _retry_partial_combat_path(current_target.global_position, delta, attack_range):
+		return
 	_check_attack_approach(delta, bm, false)
 	if current_target == null or not is_instance_valid(current_target):
 		return
@@ -1448,15 +1505,18 @@ func _process_wall_guard_action(delta, bm) -> void:
 	_target_lost_since_ms = 0
 	_set_combat_state(CombatState.IDLE)
 
-# 在视野/射程内选目标：同优先级下选最近；攻城单位优先建筑，其他单位优先敌军。
+# 在视野/射程内选目标：攻城单位优先建筑；非攻城单位在射程内优先
+# “攻击力 / 当前血量”最高的敌军，避免混战时一直集火高血量肉盾。
+# 射程内先做小范围查询，只有没有可打目标时才回退到视野范围，兼顾锁敌质量和性能。
 func _find_combat_enemy(radius: float, attack_only: bool) -> GameEntity:
 	var bm = _get_bm()
-	var candidates: Array = bm.get_nearby_enemies(global_position, radius, team, owner_peer_id) if bm \
-		else get_tree().get_nodes_in_group("entities")
-	var best: GameEntity = null
-	var best_score: float = INF
 	var self_prefers_buildings: bool = _prefers_buildings()
-	for entity in candidates:
+	var close_radius: float = minf(radius, attack_range + body_radius + 6.0)
+	var close_candidates: Array = bm.get_nearby_enemies(global_position, close_radius, team, owner_peer_id) \
+		if bm else get_tree().get_nodes_in_group("entities")
+	var best_in_range: GameEntity = null
+	var best_in_range_score: float = -INF
+	for entity in close_candidates:
 		if entity == self or not is_instance_valid(entity) or entity.health <= 0:
 			continue
 		if entity is WorldResource:
@@ -1466,24 +1526,76 @@ func _find_combat_enemy(radius: float, attack_only: bool) -> GameEntity:
 		if not _is_target_attackable_now(entity) or _is_target_marked_unreachable(entity):
 			continue
 		var dist: float = _combat_edge_distance(entity)
-		if dist > radius:
+		if dist > attack_range:
 			continue
-		if attack_only and dist > attack_range:
-			continue
-		# 只要射程内已经出现符合本单位类型偏好的目标，就立即锁定返回。
-		# 混战时几十个单位若每个都把附近所有候选扫完再比较“最近”，会形成明显的卡顿；
-		# 射程内先到先打与旧逻辑一致，远处再按距离/类型优先级细选。
-		if dist <= attack_range and (entity is Building) == self_prefers_buildings:
-			return entity
-		var score: float = dist
+		var score: float
 		if entity is Building:
-			score += 0.0 if self_prefers_buildings else 4.0
+			# 非攻城单位只有在射程内没有敌军时才拆建筑。
+			score = (1.0 - dist * 0.01) if self_prefers_buildings else (-1000.0 - dist)
 		else:
-			score += 4.0 if self_prefers_buildings else 0.0
-		if score < best_score:
-			best_score = score
+			# 攻城单位优先建筑；普通单位按攻击力/当前血量的效率排序，
+			# 同效率时近距离优先。
+			score = (-1000.0 - dist) if self_prefers_buildings \
+				else (_target_attack_health_ratio(entity) * 1000.0 - dist * 0.01)
+		if score > best_in_range_score:
+			best_in_range_score = score
+			best_in_range = entity
+	if best_in_range != null:
+		return best_in_range
+	if attack_only:
+		return null
+
+	# 射程内没有目标：按原来的距离/类型优先级在视野里选追击对象。
+	var candidates: Array = bm.get_nearby_enemies(global_position, radius, team, owner_peer_id) if bm \
+		else get_tree().get_nodes_in_group("entities")
+	var best: GameEntity = null
+	var best_score: float = INF
+	for entity in candidates:
+		if entity == self or not is_instance_valid(entity) or entity.health <= 0:
+			continue
+		if entity is WorldResource:
+			continue
+		if entity.get("_animal_type") != null and str(entity.get("_animal_type")) != "":
+			continue
+		if not _is_target_attackable_now(entity) or _is_target_marked_unreachable(entity):
+			continue
+		var far_dist: float = _combat_edge_distance(entity)
+		if far_dist > radius:
+			continue
+		if attack_only and far_dist > attack_range:
+			continue
+		var far_score: float = far_dist
+		if entity is Building:
+			far_score += 0.0 if self_prefers_buildings else 4.0
+		else:
+			far_score += 4.0 if self_prefers_buildings else 0.0
+		if far_score < best_score:
+			best_score = far_score
 			best = entity
 	return best
+
+# 目标威胁效率：攻击力除以当前血量。残血的高攻单位会被优先集火。
+func _target_attack_health_ratio(target) -> float:
+	if target == null or not is_instance_valid(target):
+		return 0.0
+	var atk: float = float(target.get("attack")) if target.get("attack") != null else 0.0
+	var hp: float = float(target.health)
+	if hp <= 0.0:
+		return 0.0
+	return atk / hp
+
+# 已经进入射程后低频检查一次：如果附近有攻击/血量效率更高的敌军，就换目标。
+# 只换敌军不换建筑；攻城单位不调用。
+func _try_retarget_in_range_priority() -> void:
+	if current_target == null or not is_instance_valid(current_target):
+		return
+	var candidate: GameEntity = _find_combat_enemy(attack_range, true)
+	if candidate == null or candidate == current_target or not (candidate is Army):
+		return
+	if current_target is Army:
+		if _target_attack_health_ratio(candidate) <= _target_attack_health_ratio(current_target) + 0.0001:
+			return
+	_set_combat_target(candidate)
 
 func _prefers_buildings() -> bool:
 	return int(target_type) == 1 or entity_id in [16, 17, 59]
@@ -3109,6 +3221,7 @@ func stop_movement():
 	_attack_watch_target_id = -1
 	_attack_stall_time = 0.0
 	_target_validate_timer = 0.0
+	_combat_repath_timer = 0.0
 	if _movement:
 		_movement.stop()
 	is_attack_moving = false
@@ -3314,18 +3427,15 @@ func _can_attack_target(target: GameEntity) -> bool:
 	# 远程陆军和海军单位仍可正常攻击。
 	if _is_land_melee() and target is Army and target.water_capable:
 		return false
-	# 近战不能攻击城墙上的敌人（包括炮台）
+	# 近战不能攻击城墙上的敌人（包括墙顶炮台）。
+	# 用战斗管理器的墙顶网格 O(1) 判断；旧实现每次候选都遍历全场建筑，
+	# 混战锁敌时会形成明显的 CPU 峰值。
 	if attack_range <= 1.0 and target is not Building:
 		var bm = _get_bm()
 		if bm:
-			var tg = bm.world_to_grid(target.global_position)
-			for e in bm.entities.get_children():
-				if e is Building and e.entity_id == 27 and e.health > 0:
-					var wg = bm.world_to_grid(e.global_position)
-					if wg.x == tg.x and wg.y == tg.y: return false
-				if e is Building and e.entity_id == 64 and e.health > 0:
-					var wg = bm.world_to_grid(e.global_position)
-					if wg.x == tg.x and wg.y == tg.y: return false
+			var wall_top = bm._wall_top_entity_grid.get(bm.world_to_grid(target.global_position))
+			if wall_top != null and is_instance_valid(wall_top) and wall_top.health > 0:
+				return false
 	# 不在城墙上的单位不能攻击梯子
 	if target is Building and target.entity_id == 8:
 		var on_wall = _is_unit_on_wall()
