@@ -15,7 +15,7 @@ const QUALITY_DESC: Array = [
 
 var _is_online: bool = false
 var _is_client: bool = false
-var _quality_level: int = 3
+var _quality_level: int = 2
 var _quality_btns: Array = []
 var _pause_btn: Button = null
 var _hint_label: Label = null
@@ -141,6 +141,11 @@ func _apply_quality(level: int) -> void:
 	var bm = _get_battle_manager()
 	if bm and "hand_quality_mode" in bm:
 		bm.set("hand_quality_mode", true)
+
+	# 帧率上限跟着画质档一起改：只降分辨率不降帧率的话，GPU 照样满负荷跑，
+	# 省不下来电。这一项对续航的影响比缩放分辨率更直接。
+	if GameManager.has_method("set_quality_fps"):
+		GameManager.set_quality_fps(level)
 
 	var vp := get_viewport()
 	var scene := get_tree().current_scene
