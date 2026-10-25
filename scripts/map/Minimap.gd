@@ -156,7 +156,11 @@ func _draw():
 	# yaw 增大表示视角向右转，2D 正值也是顺时针，所以这里用正号跟住。
 	var yaw_rad: float = deg_to_rad(_last_cam_yaw) if _last_cam_yaw < 9999.0 else 0.0
 	var pivot := Vector2(size.x, size.y) * 0.5
-	draw_set_transform(pivot, yaw_rad, Vector2(sc, sc))
+	# draw_set_transform 是「先缩放旋转、再平移」，所以平移量必须扣掉旋转后的内容中心。
+	# 直接用 pivot 会让地图中心偏离框中心，转起来像绕着框的左上角打转。
+	var content_center := Vector2(MINIMAP_SIZE, MINIMAP_SIZE) * 0.5
+	var offset := pivot - (content_center * sc).rotated(yaw_rad)
+	draw_set_transform(offset, yaw_rad, Vector2(sc, sc))
 
 	if _terrain_tex:
 		draw_texture(_terrain_tex, Vector2.ZERO)
@@ -292,17 +296,16 @@ func _gui_input(event):
 		var w = maxf(size.x, 1.0)
 		var h = maxf(size.y, 1.0)
 		if local.x >= 0 and local.x <= w and local.y >= 0 and local.y <= h:
-			var u: float = local.x / w - 0.5
-			var v: float = local.y / h - 0.5
-			# 小地图是旋转显示的：点击位置要逆旋转回地图坐标系，
-			# 否则转过视角之后点哪里都会跳到错误的位置
+			# 小地图是「以框中心为轴」旋转显示的：点击位置先减去框中心、逆旋转，
+			# 再按内部基准尺寸归一化，才能得到真正对应的地图坐标。
+			var sc: float = w / float(MINIMAP_SIZE)
+			if sc <= 0.001:
+				sc = 1.0
 			var yaw_rad: float = deg_to_rad(_last_cam_yaw) if _last_cam_yaw < 9999.0 else 0.0
-			var ca: float = cos(-yaw_rad)
-			var sa: float = sin(-yaw_rad)
-			var ru: float = u * ca - v * sa
-			var rv: float = u * sa + v * ca
-			var world_x = ru * RTSConfig.MAP_SIZE
-			var world_z = rv * RTSConfig.MAP_SIZE
+			var pivot := Vector2(w, h) * 0.5
+			var rel: Vector2 = (local - pivot).rotated(-yaw_rad) / (float(MINIMAP_SIZE) * sc)
+			var world_x = rel.x * RTSConfig.MAP_SIZE
+			var world_z = rel.y * RTSConfig.MAP_SIZE
 			if camera:
 				if camera.has_method("focus_on_ground"):
 					camera.focus_on_ground(Vector3(world_x, 0, world_z))
