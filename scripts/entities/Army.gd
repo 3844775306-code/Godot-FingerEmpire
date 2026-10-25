@@ -155,6 +155,10 @@ var _combat_repath_timer: float = 0.0
 # 超过后必须结束攻击移动，否则会永久停在“攻击移动且无路径”的状态。
 const ADVANCE_PATH_FAIL_TIMEOUT: float = 4.0
 var _advance_path_fail_time: float = 0.0
+# 普通行军目的地持续无路时的累计时间。与攻击移动不同，行军没有“拆挡路建筑”
+# 之类的兜底，若目标真被墙/建筑封死会无限重试并一直显示为移动状态。
+const MARCH_PATH_FAIL_TIMEOUT: float = 6.0
+var _march_path_fail_since_ms: int = 0
 # 寻路失败后正在等待下一次重试。此时 astar_path 为空、astar_target 仍是原目的地，
 # 不能把它误判成“已经走到最近可达点”。
 var _advance_path_recovering: bool = false
@@ -753,6 +757,9 @@ func _clear_stale_defense_anchor() -> void:
 func _start_combat_march(pos: Vector3) -> void:
 	_defense_return_position = Vector3.ZERO
 	remove_meta("ai_building_defense_until")
+	# 行军是显式移动命令，必须解除原地坚守；否则 path 明明存在，
+	# process_move 会在 hold_position 检查处每帧把速度清零，表现为“行军中但不走”。
+	hold_position = false
 	current_target = null
 	combat_destination = pos
 	combat_resume_destination = Vector3.ZERO
@@ -761,6 +768,7 @@ func _start_combat_march(pos: Vector3) -> void:
 	is_attack_moving = false
 	attack_move_target = Vector3.ZERO
 	_combat_repath_timer = 0.5
+	_march_path_fail_since_ms = 0
 	_set_combat_state(CombatState.MARCH)
 	if _movement:
 		_movement.move_path_failed = false
@@ -799,6 +807,7 @@ func _finish_combat_move() -> void:
 	attack_move_target = Vector3.ZERO
 	_advance_path_fail_time = 0.0
 	_advance_path_recovering = false
+	_march_path_fail_since_ms = 0
 	if _movement:
 		_movement.stop()
 	if _current_move_queued and _visual_waypoints.size() > 0:
@@ -1429,8 +1438,12 @@ func _check_attack_approach(delta: float, bm: RTSBattleManager, preserve_attack_
 		# 换目标后旧目标的寻路失败标记不能沿用，否则会提前触发新目标的兜底
 		_movement.attack_path_failed = false
 	if _movement._pending_path:
+		_attack_stall_time = 0.0
 		return
-	if not _movement.attack_path_failed:
+	# 有路径时正常推进；没有路径（包括 A* 因建筑 footprint 把终点改到外沿、
+	# 路径已经走完但目标仍不在射程内）也要累计卡住时间，否则会永久保持
+	# PURSUE/ATTACK 状态、没有路径也不换目标。部分路径由 _retry_partial 继续重算。
+	if not _movement.astar_path.is_empty() or _movement.path_partial:
 		_attack_stall_time = 0.0
 		return
 	_attack_stall_time += delta
@@ -1634,6 +1647,15 @@ func _process_combat_march(delta: float) -> void:
 	if _movement.move_path_failed:
 		# 攻击移动/普通行军的目的地可能暂时被建筑、墙或 A* 节点预算挡住。
 		# 以前这里直接结束命令，表现为大部队走了两步就全部站住；现在保留任务并重试。
+		# 但目的地真被封死时必须设上限，否则会永久保持行军状态、一步不走。
+		# 用时间戳而不是累计 delta：失败标记只出现一帧，之后要等 0.75 秒重试。
+		var now_ms: int = Time.get_ticks_msec()
+		if _march_path_fail_since_ms == 0:
+			_march_path_fail_since_ms = now_ms
+		elif now_ms - _march_path_fail_since_ms >= int(MARCH_PATH_FAIL_TIMEOUT * 1000.0):
+			_march_path_fail_since_ms = 0
+			_finish_combat_move()
+			return
 		_movement.move_path_failed = false
 		_movement.clear_blacklist_at(combat_destination)
 		_combat_repath_timer -= delta
@@ -1641,7 +1663,21 @@ func _process_combat_march(delta: float) -> void:
 			_combat_repath_timer = 0.75
 			_movement.set_move_target(combat_destination)
 		return
+	if not _movement.astar_path.is_empty():
+		_march_path_fail_since_ms = 0
 	if global_position.distance_to(combat_destination) <= body_radius + 0.6:
+		_finish_combat_move()
+		return
+	# A* 目标格落在放大后的建筑 footprint 内时，寻路终点会被改到建筑外沿；
+	# 路径走完后 astar_target 仍是原目的地，但 astar_path 已空。以前这里只检查
+	# 与 combat_destination 的 3D 距离，单位会一直保持“行军中”却没有路径、原地不动。
+	# 部分路径（节点预算耗尽）还要继续重算，不能在这里提前结束。
+	var path_exhausted: bool = not _movement.move_path_failed \
+			and not _movement.path_partial \
+			and _movement.astar_path.is_empty() \
+			and not _movement._pending_path \
+			and _movement.astar_target.distance_to(combat_destination) <= 0.5
+	if path_exhausted:
 		_finish_combat_move()
 		return
 	if _retry_partial_combat_path(combat_destination, delta):

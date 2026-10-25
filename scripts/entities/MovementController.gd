@@ -144,10 +144,13 @@ func set_move_target(pos: Vector3, stop_range: float = 0.0):
 	_pending_path = false
 	_pending_since_ms = 0
 
-func _try_compute_path(pos: Vector3, stop_range: float, bm: RTSBattleManager = null) -> bool:
+func _try_compute_path(pos: Vector3, stop_range: float, bm: RTSBattleManager = null,
+		is_retry: bool = false) -> bool:
 	if bm == null:
 		bm = _get_bm()
-	if bm != null and not bm.reserve_astar_request():
+	# 已经排队等过的请求走 retry 配额。若新请求可以吃满全部名额，场景树里排在
+	# 后面的单位会被前面不断产生的新请求长期挤掉，表现为“有移动命令但一直没路径”。
+	if bm != null and not bm.reserve_astar_request(is_retry):
 		return false
 	var started_usec := Time.get_ticks_usec()
 	var path := _calculate_astar_path(pos, stop_range)
@@ -181,7 +184,7 @@ func _apply_path(pos: Vector3, path: Array, stop_range: float) -> void:
 func _try_compute_pending_path(bm: RTSBattleManager) -> bool:
 	if not _pending_path:
 		return true
-	if not _try_compute_path(_pending_target, _pending_stop_range, bm):
+	if not _try_compute_path(_pending_target, _pending_stop_range, bm, true):
 		return false
 	_pending_path = false
 	_pending_since_ms = 0
