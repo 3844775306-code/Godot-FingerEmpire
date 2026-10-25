@@ -431,7 +431,8 @@ func _remove_from_selection(entity):
 func select_all_military():
 	_clear_selection()
 	for entity in get_tree().get_nodes_in_group("entities"):
-		if entity is Army and _is_local_owned(entity) and entity.health > 0 and entity.entity_id not in [5,6,9,10,14,43,44,45,51,46,47,48,49,50]:
+		# 运载船属于军队选择范围（ID 9 不再排除），其余经济单位仍排除。
+		if entity is Army and _is_local_owned(entity) and entity.health > 0 and entity.entity_id not in [5,6,10,14,43,44,45,51,46,47,48,49,50]:
 			_add_to_selection(entity)
 func _clear_selection():
 	for e in selected_entities:

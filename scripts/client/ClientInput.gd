@@ -72,8 +72,8 @@ func _select_military(screen_only: bool):
 		var info = node.get_meta("snapshot_info")
 		if not info: continue
 		if info["type"] != 2 or info["health"] <= 0: continue
-		# 经济单位不计入军队
-		if info["entity_id"] in [10, 14, 5, 6, 9, 43, 44, 45, 51, 46, 47, 48, 49, 50]: continue
+		# 经济单位不计入军队；运载船是唯一例外：全选军队时一并选中，方便直接上船/护航。
+		if info["entity_id"] in [10, 14, 5, 6, 43, 44, 45, 51, 46, 47, 48, 49, 50]: continue
 		if renderer.my_peer_id != -1 and info.get("owner_peer_id", -1) != renderer.my_peer_id:
 			continue
 		if renderer.my_peer_id == -1 and info["team"] != renderer.player_team:

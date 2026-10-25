@@ -648,7 +648,8 @@ func _on_jump_to_alert():
 
 
 # 本地玩家的战斗单位（排除农民/采集船/商人/推车/官员等经济单位）
-func _get_local_military_units(screen_only: bool) -> Array:
+# 运载船默认包含在“全选军队”里；撤退时单独排除，避免船被派到陆地上的主城。
+func _get_local_military_units(screen_only: bool, include_transport: bool = true) -> Array:
 	var units: Array = []
 	var bm = _get_bm()
 	if not bm: return units
@@ -657,7 +658,8 @@ func _get_local_military_units(screen_only: bool) -> Array:
 	for e in bm.entities.get_children():
 		if not (e is Army) or e.health <= 0: continue
 		if not bm.is_local_player_owned(e.owner_peer_id, e.team): continue
-		if e.entity_id in [10, 14, 5, 6, 9, 43, 44, 45, 51, 46, 47, 48, 49, 50]: continue
+		if e.entity_id in [10, 14, 5, 6, 43, 44, 45, 51, 46, 47, 48, 49, 50]: continue
+		if not include_transport and e.entity_id == 9: continue
 		if screen_only:
 			if cam == null: continue
 			if cam.projection != Camera3D.PROJECTION_ORTHOGONAL and cam.is_position_behind(e.global_position): continue
@@ -710,10 +712,10 @@ func _retreat_units(units: Array):
 		u.move_to(dest)
 
 func _on_retreat_screen_pressed():
-	_retreat_units(_get_local_military_units(true))
+	_retreat_units(_get_local_military_units(true, false))
 
 func _on_retreat_all_pressed():
-	_retreat_units(_get_local_military_units(false))
+	_retreat_units(_get_local_military_units(false, false))
 
 func _on_rally_pressed():
 	_on_select_all_pressed()
