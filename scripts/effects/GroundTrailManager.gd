@@ -28,8 +28,9 @@ var _fade_accum: float = 0.0
 
 var _dust_pool: Array[CPUParticles3D] = []
 var _dust_next: int = 0
-var _dust_mesh: SphereMesh
+var _dust_mesh: QuadMesh
 var _dust_mat: StandardMaterial3D
+var _dust_tex: ImageTexture
 var _dust_ramp: Gradient
 
 var _ripple_pool: Array[MeshInstance3D] = []
@@ -191,19 +192,23 @@ func _print_color_for(terrain: int, overlay: int, vehicle: bool) -> Color:
 
 # ── 脚步扬尘 ──
 # 不再让每个单位常驻一个粒子发射器；用 10 个一次性粒子节点轮转。
+# 尘粒改用带柔边噪声的 billboard 小面片：之前的低面数球体在 RTS 远景下
+# 会呈现为一颗颗边缘生硬、颜色均匀的圆点，看起来像纸屑而不是尘土。
 func _build_dust() -> void:
-	_dust_mesh = SphereMesh.new()
-	_dust_mesh.radius = 0.11
-	_dust_mesh.height = 0.22
-	_dust_mesh.radial_segments = 6
-	_dust_mesh.rings = 3
+	_dust_tex = _make_dust_texture()
+	_dust_mesh = QuadMesh.new()
+	_dust_mesh.size = Vector2(0.18, 0.18)
 	_dust_mat = StandardMaterial3D.new()
 	_dust_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_dust_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	# CPUParticles3D 的 p.color / color_ramp 是通过顶点色传给网格的；
 	# StandardMaterial3D 默认不读取顶点色，颜色会被忽略成白色，必须显式打开。
 	_dust_mat.vertex_color_use_as_albedo = true
+	_dust_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	_dust_mat.billboard_keep_scale = true
+	_dust_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	_dust_mat.albedo_color = Color.WHITE
+	_dust_mat.albedo_texture = _dust_tex
 	_dust_mesh.material = _dust_mat
 	_dust_ramp = Gradient.new()
 	# 这里的 alpha 只负责粒子生命周期内的淡出，真正的浓度由 p.color 控制。
@@ -214,19 +219,21 @@ func _build_dust() -> void:
 		var p := CPUParticles3D.new()
 		p.one_shot = true
 		p.emitting = false
-		p.amount = 6
-		p.lifetime = 0.6
+		p.amount = 14
+		p.lifetime = 0.65
 		p.explosiveness = 1.0
 		p.local_coords = false
 		p.direction = Vector3.UP
-		p.spread = 70.0
-		p.initial_velocity_min = 0.12
-		p.initial_velocity_max = 0.48
-		p.gravity = Vector3(0.0, 0.10, 0.0)
-		p.scale_amount_min = 1.0
-		p.scale_amount_max = 1.5
+		p.spread = 82.0
+		p.initial_velocity_min = 0.06
+		p.initial_velocity_max = 0.30
+		p.gravity = Vector3(0.0, 0.06, 0.0)
+		p.scale_amount_min = 0.55
+		p.scale_amount_max = 1.20
+		p.angle_min = 0.0
+		p.angle_max = 360.0
 		p.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
-		p.emission_sphere_radius = 0.35
+		p.emission_sphere_radius = 0.30
 		p.color_ramp = _dust_ramp
 		p.mesh = _dust_mesh
 		p.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -234,18 +241,47 @@ func _build_dust() -> void:
 		add_child(p)
 		_dust_pool.append(p)
 
+func _make_dust_texture() -> ImageTexture:
+	var tex_size := 64
+	var img := Image.create(tex_size, tex_size, false, Image.FORMAT_RGBA8)
+	var noise := FastNoiseLite.new()
+	noise.seed = 7411
+	noise.frequency = 0.11
+	for y in tex_size:
+		for x in tex_size:
+			var dx := (float(x) + 0.5) / float(tex_size) * 2.0 - 1.0
+			var dy := (float(y) + 0.5) / float(tex_size) * 2.0 - 1.0
+			var d := sqrt(dx * dx + dy * dy)
+			var falloff := clampf(1.0 - d, 0.0, 1.0)
+			falloff = smoothstep(0.0, 1.0, falloff)
+			var n := noise.get_noise_2d(float(x), float(y)) * 0.5 + 0.5
+			var alpha := clampf(falloff * (0.42 + n * 0.66), 0.0, 1.0)
+			img.set_pixel(x, y, Color(1.0, 1.0, 1.0, alpha))
+	img.generate_mipmaps()
+	return ImageTexture.create_from_image(img)
+
 func _spawn_dust(pos: Vector3, color: Color, amount: int, lifetime: float, strength: float) -> void:
 	if _dust_pool.is_empty():
 		return
 	var p := _dust_pool[_dust_next]
 	_dust_next = (_dust_next + 1) % _dust_pool.size()
 	p.global_position = pos + Vector3(0.0, 0.07, 0.0)
-	p.amount = maxi(2, amount)
+	p.amount = maxi(4, amount)
 	p.lifetime = lifetime
-	p.color = color
+	# 每一团尘土做轻微亮度/色温/透明度扰动，避免整片扬尘颜色完全一致。
+	var tint_r := randf_range(0.94, 1.05)
+	var tint_g := randf_range(0.95, 1.03)
+	var tint_b := randf_range(0.93, 1.04)
+	var alpha_jitter := randf_range(0.82, 1.12)
+	p.color = Color(
+		clampf(color.r * tint_r, 0.0, 1.0),
+		clampf(color.g * tint_g, 0.0, 1.0),
+		clampf(color.b * tint_b, 0.0, 1.0),
+		clampf(color.a * alpha_jitter, 0.0, 1.0)
+	)
 	p.initial_velocity_min = 0.10 * strength
 	p.initial_velocity_max = 0.40 * strength
-	p.scale_amount_max = 1.3 + strength * 0.4
+	p.scale_amount_max = 1.05 + strength * 0.30
 	p.restart()
 	p.emitting = true
 
@@ -303,36 +339,36 @@ func emit_step(pos: Vector3, dir: Vector3, vehicle: bool, terrain: int, overlay:
 	if water:
 		if _within_camera(pos, DUST_DISTANCE):
 			_spawn_ripple(pos, 1.1 if vehicle else 0.62)
-			_spawn_dust(pos, Color(0.62, 0.78, 0.82, 0.32), 6, 0.52, 0.55)
+			_spawn_dust(pos, Color(0.62, 0.73, 0.76, 0.26), 9, 0.56, 0.55)
 		return
 	if not _within_camera(pos, PRINT_DISTANCE):
 		return
 	_add_print(pos, dir, vehicle, terrain, overlay, side)
 	if not _within_camera(pos, DUST_DISTANCE):
 		return
-	var color := Color(0.62, 0.55, 0.42, 0.38)
-	var amount := 7
-	var lifetime := 0.58
+	var color := Color(0.58, 0.55, 0.49, 0.28)
+	var amount := 14
+	var lifetime := 0.62
 	var strength := 0.9
 	if vehicle:
-		color = Color(0.58, 0.49, 0.35, 0.46)
-		amount = 12
-		lifetime = 0.80
+		color = Color(0.54, 0.51, 0.45, 0.33)
+		amount = 20
+		lifetime = 0.88
 		strength = 1.35
 	elif terrain == 1:
-		color = Color(0.48, 0.46, 0.42, 0.26)
-		amount = 5
-		lifetime = 0.46
+		color = Color(0.56, 0.55, 0.52, 0.22)
+		amount = 9
+		lifetime = 0.50
 		strength = 0.7
 	elif overlay == 2:
-		color = Color(0.34, 0.29, 0.21, 0.42)
-		amount = 7
-		lifetime = 0.54
+		color = Color(0.36, 0.34, 0.28, 0.30)
+		amount = 11
+		lifetime = 0.58
 		strength = 0.8
 	elif overlay == 1:
-		color = Color(0.45, 0.43, 0.30, 0.32)
-		amount = 5
-		lifetime = 0.52
+		color = Color(0.44, 0.43, 0.37, 0.24)
+		amount = 9
+		lifetime = 0.55
 		strength = 0.75
 	_spawn_dust(pos, color, amount, lifetime, strength)
 
