@@ -616,7 +616,8 @@ func show_alert_message(msg: String, color: Color = ALERT_DANGER, teams = [], al
 		_alert_stack.add_theme_constant_override("separation", 2 if mobile else 4)
 		if mobile:
 			var w: float = UILayout.dp(310.0)
-			var top_y: float = UILayout.dp(114.0)
+			# 顶部两条信息已挪到右上角，警报可以整体上移到资源胶囊下方
+			var top_y: float = UILayout.dp(52.0)
 			_alert_stack.anchor_left = 0.5; _alert_stack.anchor_right = 0.5
 			_alert_stack.anchor_top = 0.0; _alert_stack.anchor_bottom = 0.0
 			_alert_stack.offset_left = -w * 0.5; _alert_stack.offset_right = w * 0.5
@@ -831,15 +832,17 @@ func _ready():
 	for b in [attack_all_btn, retreat_all_btn, auto_attack_btn, b_ret_screen, b_ret_all, b_settings]:
 		cmd_grid.add_child(b)
 
-	# 顶部中央偏右两行大字：第一行性能、第二行对局/网络信息（只保留这两条）
-	# 桌面端偏右（0.675）避开左侧全局指令按钮与右上小地图；手机端顶部没按钮，保持居中
+	# 顶部两行大字：第一行性能、第二行对局/网络信息（只保留这两条）
+	# 桌面端偏右（0.675）避开左侧全局指令按钮与右上小地图；
+	# 手机端移到顶部右侧，与左上资源胶囊处在同一条高度带（y 从 6dp 起）。
 	var mobile := InputSource.use_mobile_ui()
-	var center_anchor: float = 0.5 if mobile else 0.675
+	var center_anchor: float = 1.0 if mobile else 0.675
+	_top_is_right = mobile
 	var f1: int = UILayout.font_dp(12.0) if mobile else 24
 	var f2: int = UILayout.font_dp(11.0) if mobile else 22
-	var y1: float = UILayout.dp(76.0) if mobile else 6.0
+	var y1: float = 6.0
 	var line_h: float = UILayout.dp(18.0) if mobile else 34.0
-	var half_w: float = UILayout.dp(336.0) if mobile else 560.0
+	var half_w: float = UILayout.dp(104.0) if mobile else 560.0
 	_top_top_y = y1
 	_top_line_h = line_h
 	var diag := CanvasLayer.new()
@@ -962,6 +965,8 @@ var _ping_rtt: int = 0
 var _top_bg: Panel = null
 var _top_top_y: float = 6.0
 var _top_line_h: float = 34.0
+# 手机端顶部信息面板贴在右上角（与资源胶囊同一条高度带），桌面端仍是居中偏右
+var _top_is_right: bool = false
 
 # 半透明底板按两行文字的实际宽度自适应
 func _update_top_bg() -> void:
@@ -975,8 +980,13 @@ func _update_top_bg() -> void:
 	var w: float = text_w + pad_x * 2.0
 	var h: float = _top_line_h * 2.0 + pad_y * 2.0
 	var bg_top: float = maxf(_top_top_y - pad_y, 0.0)
-	_top_bg.offset_left = -w * 0.5
-	_top_bg.offset_right = w * 0.5
+	if _top_is_right:
+		var m: float = UILayout.dp(6.0)
+		_top_bg.offset_left = -w - m
+		_top_bg.offset_right = -m
+	else:
+		_top_bg.offset_left = -w * 0.5
+		_top_bg.offset_right = w * 0.5
 	_top_bg.offset_top = bg_top
 	_top_bg.offset_bottom = bg_top + h
 
@@ -991,8 +1001,14 @@ func _make_top_label(parent: CanvasLayer, node_name: String, top_y: float, line_
 	lb.anchor_right = center_anchor
 	lb.anchor_top = 0.0
 	lb.anchor_bottom = 0.0
-	lb.offset_left = -half_w
-	lb.offset_right = half_w
+	if _top_is_right:
+		# 右锚时 offset 从右边界往回算，右边留一点安全边距
+		var m: float = UILayout.dp(8.0)
+		lb.offset_left = -half_w * 2.0 - m
+		lb.offset_right = -m
+	else:
+		lb.offset_left = -half_w
+		lb.offset_right = half_w
 	lb.offset_top = top_y
 	lb.offset_bottom = top_y + line_h
 	lb.add_theme_font_size_override("font_size", font_size)

@@ -117,60 +117,38 @@ func _create_components() -> void:
 	build_overlay.cancelled.connect(_on_build_cancel)
 
 	_hide_ai_debug_panels()
-	# 相机会晚一帧才进入视口，旋转按钮延后创建
-	call_deferred("_create_camera_buttons")
+	# 视角旋转改为倾斜手机（陀螺仪/重力感应），不再放 ↺/↻ 按钮
+	set_process(true)
 
-# 手机端补两个明确的视角旋转按钮。
-# 双指扭转虽然是主手势，但新手很难自己发现；小地图正下方放 ↺ / ↻，
-# 点一次转 22°，连点即可快速绕场。
-const CAMERA_ROT_STEP: float = 22.0
-var _cam_buttons: Array = []
+# 倾斜手机旋转视角（替代原来的 ↺/↻ 按钮）。
+# 用重力感应的横向分量判断左右倾斜，留一段死区避免手抖导致镜头乱转。
+# 桌面端没有传感器，get_accelerometer 返回零向量，这里会直接返回。
+const GYRO_DEADZONE: float = 1.6      # 死区（m/s²）
+const GYRO_ROTATE_SPEED: float = 90.0 # 倾斜满量程时每秒转多少度
+const GYRO_MAX_TILT: float = 6.5      # 超过这个倾斜量按满速处理
 
-func _create_camera_buttons() -> void:
-	var cam := get_viewport().get_camera_3d()
-	if cam == null or not cam.has_method("rotate_by"):
+var _gyro_cam: Camera3D = null
+var _gyro_was_tilting: bool = false
+
+func _process_gyro_rotate(delta: float) -> void:
+	if not InputSource.use_mobile_ui():
 		return
-	var row := HBoxContainer.new()
-	row.name = "CameraRotateRow"
-	row.add_theme_constant_override("separation", int(UILayout.dp(10.0)))
-	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	add_child(row)
-	for spec in [[-1.0, "↺"], [1.0, "↻"]]:
-		var dir: float = float(spec[0])
-		var btn := Button.new()
-		btn.text = String(spec[1])
-		btn.focus_mode = Control.FOCUS_NONE
-		btn.custom_minimum_size = Vector2(UILayout.dp(46.0), UILayout.dp(46.0))
-		btn.add_theme_font_size_override("font_size", UILayout.font_dp(20.0))
-		var sb := StyleBoxFlat.new()
-		sb.bg_color = Color(0.07, 0.09, 0.14, 0.74)
-		sb.set_corner_radius_all(int(UILayout.dp(23.0)))
-		sb.border_width_left = 2
-		sb.border_width_right = 2
-		sb.border_width_top = 2
-		sb.border_width_bottom = 2
-		sb.border_color = Color(0.45, 0.72, 1.0, 0.5)
-		btn.add_theme_stylebox_override("normal", sb)
-		btn.add_theme_stylebox_override("hover", sb)
-		btn.add_theme_stylebox_override("pressed", sb)
-		btn.add_theme_color_override("font_color", Color(0.85, 0.93, 1.0))
-		btn.add_theme_color_override("font_pressed_color", Color(1, 1, 1))
-		btn.pressed.connect(_on_camera_rotate.bind(dir, cam))
-		row.add_child(btn)
-		_cam_buttons.append(btn)
-	# 右上角小地图下方（小地图 77dp 见方 + 顶部留白）
-	row.anchor_left = 1.0
-	row.anchor_right = 1.0
-	row.anchor_top = 0.0
-	row.anchor_bottom = 0.0
-	row.offset_left = -UILayout.dp(112.0)
-	row.offset_right = -UILayout.dp(10.0)
-	row.offset_top = UILayout.dp(90.0)
-	row.offset_bottom = UILayout.dp(136.0)
-
-func _on_camera_rotate(dir: float, cam: Camera3D) -> void:
-	if is_instance_valid(cam) and cam.has_method("rotate_by"):
-		cam.call("rotate_by", CAMERA_ROT_STEP * dir)
+	if _gyro_cam == null or not is_instance_valid(_gyro_cam):
+		_gyro_cam = get_viewport().get_camera_3d() as Camera3D
+	if _gyro_cam == null or not _gyro_cam.has_method("rotate_by"):
+		return
+	var accel: Vector3 = Input.get_accelerometer()
+	if accel == Vector3.ZERO:
+		return
+	# 横屏时 x 轴对应手机的左右倾斜；超过死区才转，且速度随倾斜量递增
+	var tilt: float = accel.x
+	if absf(tilt) < GYRO_DEADZONE:
+		if _gyro_was_tilting:
+			_gyro_was_tilting = false
+		return
+	_gyro_was_tilting = true
+	var drive: float = clampf((absf(tilt) - GYRO_DEADZONE) / (GYRO_MAX_TILT - GYRO_DEADZONE), 0.0, 1.0)
+	_gyro_cam.call("rotate_by", signf(tilt) * drive * GYRO_ROTATE_SPEED * delta)
 
 # AI 决策面板在移动端改为并入全屏统计大屏，战场上不再常驻显示
 func _hide_ai_debug_panels() -> void:
@@ -196,7 +174,8 @@ func _relayout_shared_nodes() -> void:
 
 	var info := _find_ui_node("InfoPanel")
 	if info is Control:
-		UILayout.place_dp(info, "bl", 260.0, 200.0)
+		# 宽度收到原来的 70%，整体再往左下挪一点，给战场腾出中间区域
+		UILayout.place_dp(info, "bl", 182.0, 200.0, 20.0)
 		info.mouse_filter = Control.MOUSE_FILTER_STOP
 		_scale_shared_fonts(info)
 
@@ -222,7 +201,7 @@ func _setup_slides() -> void:
 	if command_bar and is_instance_valid(command_bar):
 		_add_slide(command_bar, 1.0, "◀", 190.0)
 	if info is Control:
-		_add_slide(info, -1.0, "▶", 260.0)
+		_add_slide(info, -1.0, "▶", 182.0)
 
 func _add_slide(ctrl: Control, dir: float, handle_text: String, fallback_w_dp: float) -> void:
 	var h := Button.new()
@@ -332,13 +311,19 @@ func _get_bm() -> Node:
 		_bm = get_tree().get_first_node_in_group("battle_manager")
 	return _bm
 
-# 手机端把桌面小地图缩到 77dp（0.7 倍）并挪到右上角。
+# 手机端小地图放大到原来的 2 倍（77 → 154dp），挪到右上角。
 # 必须清掉 Minimap 内部写死的 custom_minimum_size=400，否则控件会被撑回原尺寸、
-# 直接铺出屏幕外。
+# 直接铺出屏幕外。顶部那条留给资源胶囊与顶部信息面板，所以整体下移 52dp。
+const MINIMAP_DP: float = 154.0
+const MINIMAP_TOP_GAP_DP: float = 52.0
+
 func _apply_minimap_layout(minimap: Control) -> void:
 	minimap.custom_minimum_size = Vector2.ZERO
-	minimap.size = Vector2(UILayout.dp(77.0), UILayout.dp(77.0))
-	UILayout.place_dp(minimap, "tr", 77.0, 77.0)
+	minimap.size = Vector2(UILayout.dp(MINIMAP_DP), UILayout.dp(MINIMAP_DP))
+	UILayout.place_dp(minimap, "tr", MINIMAP_DP, MINIMAP_DP, 6.0)
+	var gap: float = UILayout.dp(MINIMAP_TOP_GAP_DP)
+	minimap.offset_top += gap
+	minimap.offset_bottom += gap
 	minimap.mouse_filter = Control.MOUSE_FILTER_STOP
 	_minimap_sized = true
 
@@ -411,6 +396,8 @@ func _point_over_build_menu(pos: Vector2) -> bool:
 	return false
 
 func _process(delta: float) -> void:
+	# 倾斜手机旋转视角（替代已移除的 ↺/↻ 按钮）
+	_process_gyro_rotate(delta)
 	# 居中建造状态每帧同步：预览/勾叉按钮与手势路由必须同时生效
 	_sync_build_overlay()
 	# AI 面板由 AI 自己创建/重建，定期扫一遍确保移动端始终隐藏

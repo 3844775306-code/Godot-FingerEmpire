@@ -13,6 +13,8 @@ const RES_KEYS: Array = ["gold", "wood", "stone", "food", "oil"]
 const ROW_H_DP: float = 42.0
 const EXPANDED_H_DP: float = 72.0
 const WIDTH_DP: float = 344.0
+# 资源胶囊往左上角再贴一点，把右侧让给顶部信息面板
+const MARGIN_DP: float = 6.0
 
 var expanded: bool = false
 
@@ -31,7 +33,7 @@ func _ready() -> void:
 	_build()
 
 func _build() -> void:
-	UILayout.place_dp(self, "tl", WIDTH_DP, ROW_H_DP)
+	UILayout.place_dp(self, "tl", WIDTH_DP, ROW_H_DP, MARGIN_DP)
 	_res_colors = {
 		"gold": UITheme.RES_GOLD,
 		"wood": UITheme.RES_WOOD,
@@ -144,7 +146,7 @@ func _gui_input(event: InputEvent) -> void:
 func _toggle_expanded() -> void:
 	expanded = not expanded
 	_detail_row.visible = expanded
-	UILayout.place_dp(self, "tl", WIDTH_DP, EXPANDED_H_DP if expanded else ROW_H_DP)
+	UILayout.place_dp(self, "tl", WIDTH_DP, EXPANDED_H_DP if expanded else ROW_H_DP, MARGIN_DP)
 
 func apply_data(resources: Dictionary, population: Dictionary, limits: Dictionary = {}) -> void:
 	for key in RES_KEYS:

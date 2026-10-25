@@ -4,7 +4,7 @@ extends Control
 # 右下角指令区：框选模式开关 + 五个全局指令（与电脑端按钮一一对应）。
 # 所有动作都转发给桌面 HUD 的既有函数，不新增任何玩法逻辑。
 
-const WIDTH_DP: float = 190.0
+const WIDTH_DP: float = 152.0        # 原 190dp 的 80%，给战场多让出一点空间
 const BTN_H_DP: float = 40.0
 const GAP_DP: float = 5.0
 
@@ -22,7 +22,7 @@ func _ready() -> void:
 	_build()
 
 func _build() -> void:
-	UILayout.place_dp(self, "br", WIDTH_DP, 220.0)
+	UILayout.place_dp(self, "br", WIDTH_DP, 265.0)
 
 	_panel = Panel.new()
 	_panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -76,7 +76,18 @@ func _build() -> void:
 	_cont_build_btn.toggled.connect(_on_cont_build_toggled)
 	row4.add_child(_cont_build_btn)
 	vb.add_child(row4)
+
+	# 设置按钮：手机上桌面端的 ⚙ 按钮已随顶栏隐藏，这里补一个入口
+	var row5 := _make_row()
+	var settings_btn = _make_button("⚙ 设置", UILayout.font_dp(12.0))
+	settings_btn.pressed.connect(_on_settings_pressed)
+	row5.add_child(settings_btn)
+	vb.add_child(row5)
 	set_process(true)
+
+func _on_settings_pressed() -> void:
+	if hud and hud.has_method("_open_game_settings"):
+		hud.call("_open_game_settings")
 
 func _make_row() -> HBoxContainer:
 	var row := HBoxContainer.new()
