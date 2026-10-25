@@ -47,18 +47,70 @@ var _mp_shift_held: bool = false
 var _bullet_cache: Array = []       # cached bullet list, refreshed once per snap
 
 # ==================== 警报系统（服务器→客户端） ====================
-# 警报是一次性事件：走可靠 RPC 直发给该阵营的每个玩家，
-# 若塞进 unreliable 快照，一旦那一帧快照丢包客户端就永远收不到
+# 警报是一次性事件：主通道是可靠 RPC 直发给该阵营的每个玩家；
+# 同时把最近几秒的警报塞进快照做兜底——快照虽然走 unreliable，但会连续重发多帧，
+# 只要 RPC 路径出问题（例如组队模式没建 player_teams）客户端仍能看到播报。
+const ALERT_SNAPSHOT_TTL_MS: int = 3000
+var _recent_alerts: Dictionary = {}   # team -> Array[{id,msg,color,until}]
+var _alert_seq: int = 0
+
+# 兼容 1v1（只填 player_teams）和 2v2/3v3（只填 player_info）两套队伍表。
+func _alert_team_of_peer(pid: int) -> int:
+	if player_info.has(pid):
+		return int(player_info[pid].get("team", -1))
+	if player_teams.has(pid):
+		return int(player_teams[pid])
+	return -1
+
+func _record_recent_alert(target_team: int, msg: String, color: Color) -> int:
+	_alert_seq += 1
+	var alert_id: int = _alert_seq
+	var now: int = Time.get_ticks_msec()
+	var arr: Array = _recent_alerts.get(target_team, [])
+	for i in range(arr.size() - 1, -1, -1):
+		if int(arr[i].get("until", 0)) < now:
+			arr.remove_at(i)
+	arr.append({"id": alert_id, "msg": msg, "color": color, "until": now + ALERT_SNAPSHOT_TTL_MS})
+	_recent_alerts[target_team] = arr
+	return alert_id
+
+func _alerts_for_team(team: int) -> Array:
+	var out: Array = []
+	var now: int = Time.get_ticks_msec()
+	for alert in _recent_alerts.get(team, []):
+		if int(alert.get("until", 0)) >= now:
+			out.append({"id": int(alert["id"]), "msg": alert["msg"], "color": alert["color"]})
+	return out
+
+# 该 peer 是否是真实在线客户端：跳过房主自己、AI 占位 peer、未连接 peer。
+# 组队模式里 player_teams 是空的（队伍信息只在 player_info），所以这里两份表都查。
+func _is_alert_client(pid: int, peers: PackedInt32Array) -> bool:
+	if int(pid) == 1 or not peers.has(int(pid)):
+		return false
+	return not is_ai_peer(int(pid))
+
 func _queue_client_alert(target_key, msg: String, color: Color = Color(1.0, 0.2, 0.1)):
+	var target_team: int = int(target_key)
+	var alert_id: int = _record_recent_alert(target_team, msg, color)
 	if multiplayer.multiplayer_peer == null:
 		return
 	var peers: PackedInt32Array = multiplayer.get_peers()
-	for pid in player_teams.keys():
-		if int(player_teams[pid]) != int(target_key):
+	var sent: Dictionary = {}
+	for pid in player_info.keys():
+		if not _is_alert_client(int(pid), peers) or sent.has(int(pid)):
 			continue
-		# 只发给真实连接的客户端：AI 座位占着 peer_id 但没连接，rpc_id 会报无效目标
-		if int(pid) != 1 and peers.has(int(pid)):
-			NetworkManager._client_receive_alert.rpc_id(int(pid), msg, color)
+		if _alert_team_of_peer(int(pid)) != target_team:
+			continue
+		sent[int(pid)] = true
+		NetworkManager._client_receive_alert.rpc_id(int(pid), msg, color, alert_id)
+	# 1v1 的客户端只登记在 player_teams 里，player_info 只有房主；补扫一遍。
+	for pid in player_teams.keys():
+		if not _is_alert_client(int(pid), peers) or sent.has(int(pid)):
+			continue
+		if _alert_team_of_peer(int(pid)) != target_team:
+			continue
+		sent[int(pid)] = true
+		NetworkManager._client_receive_alert.rpc_id(int(pid), msg, color, alert_id)
 
 # Override: queue alerts for clients in online mode
 func _show_hud_alert(msg: String, color: Color = Color(1.0, 0.2, 0.1), _target_team: int = -1):
@@ -1627,6 +1679,8 @@ func build_snapshot_for_team(team: int) -> Dictionary:
 		r["gather_counts"] = team_gather_counts.get(team, {"gold":0, "wood":0, "stone":0, "food":0, "oil":0})
 		r["income_rate"] = team_income_rates.get(team, {"gold":0.0, "wood":0.0, "stone":0.0, "food":0.0, "oil":0.0})
 	r["nation_colors"] = RTSConfig.get_nation_colors()
+	# 警报兜底：连续多帧携带最近警报，客户端按 id 去重；RPC 主通道丢包也能补上。
+	r["alerts"] = _alerts_for_team(team)
 	return r
 
 func _broadcast_1v1():
@@ -1995,6 +2049,8 @@ func build_snapshot_for_player(peer_id: int) -> Dictionary:
 		result["player_info"] = player_info
 	result["nation_colors"] = RTSConfig.get_nation_colors()
 	result["player_castles"] = _serialize_castles()
+	# 警报兜底：组队模式 RPC 的 peer→team 映射历史上不可靠，快照多帧重发保证送达。
+	result["alerts"] = _alerts_for_team(team)
 
 	# Granular profiling: only print when total > 2.5ms
 	var _t_total = (Time.get_ticks_usec() - _t0) / 1000.0

@@ -513,7 +513,10 @@ func _process_snapshot(data: Dictionary):
 		if alerts is Array and alerts.size() > 0:
 			var hud = get_node_or_null("UI/HUD")
 			for alert in alerts:
-				if hud and hud.has_method("show_alert_message"):
+				if not (alert is Dictionary): continue
+				if hud and hud.has_method("show_server_alert"):
+					hud.show_server_alert(alert["msg"], alert.get("color", Color(1.0, 0.2, 0.1)), int(alert.get("id", 0)))
+				elif hud and hud.has_method("show_alert_message"):
 					hud.show_alert_message(alert["msg"], alert.get("color", Color(1.0, 0.2, 0.1)))
 
 	if data.has("bullets"):

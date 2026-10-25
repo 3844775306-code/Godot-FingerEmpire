@@ -54,6 +54,8 @@ const ALERT_GROUP = UITheme.ALERT_GROUP
 var _alert_label: Label = null
 var _alert_bg: Panel = null
 var _alert_timer: float = 0.0
+# 同一条服务器警报可能同时走可靠 RPC 和快照兜底，按 alert_id 去重，避免重复播报。
+var _seen_server_alert_ids: Dictionary = {}
 
 
 func _get_nation_name(nation: int) -> String:
@@ -756,7 +758,20 @@ func _ready():
 			NetworkManager.client_alert_received.connect(_on_server_alert)
 
 # 收到服务器警报：直接走本地播报条
-func _on_server_alert(msg: String, color: Color) -> void:
+func _on_server_alert(msg: String, color: Color, alert_id: int = 0) -> void:
+	show_server_alert(msg, color, alert_id)
+
+# 服务器警报统一入口：RPC 与快照兜底都会调用，按 id 去重；
+# 危险/警告级警报补一次客户端本地音效（服务器端 AudioManager 不会在客户端播放）。
+func show_server_alert(msg: String, color: Color, alert_id: int = 0) -> void:
+	if alert_id > 0:
+		if _seen_server_alert_ids.has(alert_id):
+			return
+		if _seen_server_alert_ids.size() > 512:
+			_seen_server_alert_ids.clear()
+		_seen_server_alert_ids[alert_id] = true
+	if color == ALERT_DANGER or color == ALERT_WARNING:
+		AudioManager.play_sfx("alert")
 	show_alert_message(msg, color)
 
 func _make_cmd_button(text: String, cb: Callable, danger: bool) -> Button:
