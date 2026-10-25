@@ -899,22 +899,26 @@ func _update_entity_animation(node: Node3D, info: Dictionary):
 	# 直接 return，否则客户端完全看不到开火动作。
 	var anim = ""
 	var ord = info.get("current_order", "")
+	var entity_id := int(info.get("entity_id", -1))
 	if info.get("health", 0) <= 0:
 		anim = "die"
 	elif ord in ["attack", "attack_move", "gather"]:
 		# 锁定目标后还要先走到攻击/采集距离；服务端在快照里标记是否已进入距离。
 		# 追击途中播放走路，进入距离后才播放攻击/采集动作。
 		var in_range := int(info.get("in_action_range", 0)) == 1
-		anim = "attack-melee-left" if in_range else "walk"
+		if in_range:
+			# 采集是挥动，出手姿势按兵种取（法术/射击单位不能用近战左勾拳）
+			anim = "attack-melee-left" if ord == "gather" else AnimationHelper.attack_anim_for(entity_id)
+		else:
+			anim = "walk"
 	elif ord in ["move", "deliver"]:
 		anim = "walk"
 	else:
 		anim = "idle"
-	var entity_id := int(info.get("entity_id", -1))
 	if ap != null:
 		if anim != "" and ap.has_animation(anim):
 			var spd := 1.0
-			if anim == "attack-melee-left":
+			if anim != "walk" and anim != "idle" and anim != "die":
 				var atk_raw = info.get("attack_speed", 1.0)
 				var atk_spd := float(atk_raw) if atk_raw != null else 1.0
 				spd = AnimationHelper.attack_speed_scale(ap, anim, atk_spd)
@@ -1153,6 +1157,34 @@ func _attach_ground_patch(node: Node3D, info: Dictionary) -> void:
 	decal.lower_fade = 1.2
 	node.add_child(decal)
 
+# 资源脚下的软边地皮：与服务端 WorldResource 使用同一套纹理/配色/尺寸算法，
+# 让树、石头、农田、油井和地面之间有一圈自然的过渡，而不是模型直接切在地表上。
+func _attach_resource_ground_patch(node: Node3D, info: Dictionary) -> void:
+	if node == null or not is_instance_valid(node):
+		return
+	if int(info.get("type", -1)) != 0:
+		return
+	if node.get_node_or_null("GroundPatch") != null:
+		return
+	var eid: int = int(info.get("entity_id", -1))
+	var model: Node3D = null
+	if node.has_meta("_model_instance"):
+		var mi = node.get_meta("_model_instance")
+		if mi is Node3D and is_instance_valid(mi):
+			model = mi
+	var half: float = WorldResource.ground_patch_half_size(float(info.get("body_radius", 0.6)), model)
+	var decal := Decal.new()
+	decal.name = "GroundPatch"
+	decal.texture_albedo = WorldResource.ground_patch_texture()
+	decal.modulate = WorldResource.ground_patch_color(WorldResource.resource_type_for_id(eid))
+	decal.albedo_mix = 0.72
+	decal.cull_mask = 1
+	decal.size = Vector3(half * 2.0, 2.6, half * 2.0)
+	decal.position = Vector3(0, -0.85, 0)
+	decal.upper_fade = 0.45
+	decal.lower_fade = 0.8
+	node.add_child(decal)
+
 # 建筑倒塌时把土色贴花摘下来独立淡出，让地面痕迹比建筑多留一会儿
 func _fade_ground_patch_of(node: Node3D) -> void:
 	if node == null or not is_instance_valid(node):
@@ -1335,6 +1367,9 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 	# 否则只有服务端/单机看得到，联机玩家仍然分不清。
 	if OfficialMarker.is_official(eid):
 		entity.add_child(OfficialMarker.create(float(info.get("body_radius", 0.4))))
+	# 僧侣/长老/宗师同理：双层法阵 + 头顶职业符号，客户端与服务端共用 CasterMarker
+	if CasterMarker.is_caster(eid):
+		entity.add_child(CasterMarker.create(eid, float(info.get("body_radius", 0.4))))
 
 	# 存储 owner_peer_id 元数据，供后续使用
 	entity.set_meta("owner_peer_id", owner_id)

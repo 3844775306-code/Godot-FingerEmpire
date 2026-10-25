@@ -14,6 +14,9 @@ const CASTER_IDS := [55, 56, 57]
 
 const META_RUNNING := "_caster_atk_running"
 
+# 法球从施法姿态的中段跃出（interact-right 全长 0.67s）
+const CAST_MOTE_DELAY: float = 0.26
+
 # 每个兵种的法术色：僧侣金、长老紫、宗师赤金
 const CASTER_COLOR := {
 	55: Color(1.0, 0.86, 0.38),
@@ -34,39 +37,15 @@ static func play(entity_id: int, model: Node3D, opts: Dictionary = {}) -> bool:
 		return false
 	model.set_meta(META_RUNNING, true)
 
-	var base_pos: Vector3 = model.position
-	var base_rot: Vector3 = model.rotation
-	var tw := model.create_tween()
-
-	# 蓄力：身体上抬、后仰，法球在身前凝聚
-	tw.set_parallel(true)
-	tw.tween_property(model, "position", base_pos + Vector3(0.0, 0.16, 0.14), 0.34) \
-		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	tw.tween_property(model, "rotation:x", base_rot.x + 0.30, 0.34) \
-		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-
-	# 释放：向前送出、低头前压
-	tw.chain().set_parallel(true)
-	tw.tween_property(model, "position", base_pos + Vector3(0.0, 0.02, -0.24), 0.16) \
-		.set_trans(Tween.TRANS_EXPO).set_ease(Tween.EASE_IN)
-	tw.tween_property(model, "rotation:x", base_rot.x - 0.42, 0.16) \
-		.set_trans(Tween.TRANS_EXPO).set_ease(Tween.EASE_IN)
-
-	# 回正
-	tw.chain().set_parallel(true)
-	tw.tween_property(model, "position", base_pos, 0.44) \
-		.set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
-	tw.tween_property(model, "rotation:x", base_rot.x, 0.44) \
-		.set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
-
-	# 出手瞬间才放法球：太早会和蓄力姿态脱节
+	# 身体动作交给 AnimationPlayer 的兵种专属姿势（僧侣 interact-right、
+	# 长老 holding-both-shoot、宗师 attack-melee-right）。这里只负责法术特效：
+	# 以前用 tween 改 model.position 把整个人抬起前送，既让脚离地像在飘，
+	# 又和骨骼动画争同一个 transform，所以现在完全不碰模型变换。
 	var tree := model.get_tree()
 	if tree != null:
-		var timer := tree.create_timer(0.34)
+		var timer := tree.create_timer(CAST_MOTE_DELAY)
 		timer.timeout.connect(func() -> void: _fire_mote(entity_id, model, opts))
-
-	var finish := tree.create_timer(1.0) if tree != null else null
-	if finish != null:
+		var finish := tree.create_timer(0.7)
 		finish.timeout.connect(func() -> void:
 			if _valid(model):
 				model.set_meta(META_RUNNING, false))
@@ -106,6 +85,8 @@ static func _fire_mote(entity_id: int, model: Node3D, opts: Dictionary) -> void:
 	mote.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	root.add_child(mote)
 	mote.global_position = origin
+	# 拖尾：单颗小球像弹丸，加上一层逐渐淡出的光晕才有法术感
+	_attach_mote_trail(mote, color)
 
 	var end_pos: Vector3 = origin + fwd * range_m + Vector3.UP * 0.15
 	var tw := mote.create_tween()
@@ -119,6 +100,40 @@ static func _fire_mote(entity_id: int, model: Node3D, opts: Dictionary) -> void:
 			mote.queue_free())
 
 # 命中处的扩散光点：数量少、寿命短，几十个单位同时开火也不会堆出成百上千个粒子
+# 法球拖尾：粒子留在世界坐标里，法球飞过去后留下一道逐渐淡掉的光带。
+# 数量压得很低（每颗法球 10 个粒子），几十个单位同时施法也不会堆爆。
+static func _attach_mote_trail(mote: MeshInstance3D, color: Color) -> void:
+	var trail := CPUParticles3D.new()
+	trail.name = "MoteTrail"
+	trail.amount = 10
+	trail.lifetime = 0.3
+	trail.local_coords = false
+	trail.emitting = true
+	trail.spread = 180.0
+	trail.initial_velocity_min = 0.0
+	trail.initial_velocity_max = 0.2
+	trail.gravity = Vector3.ZERO
+	trail.scale_amount_min = 0.35
+	trail.scale_amount_max = 0.75
+	trail.visibility_aabb = AABB(Vector3(-3, -3, -3), Vector3(6, 6, 6))
+	var quad := QuadMesh.new()
+	quad.size = Vector2(0.16, 0.16)
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = color
+	mat.emission_enabled = true
+	mat.emission = color
+	mat.emission_energy_multiplier = 2.8
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	quad.material = mat
+	trail.mesh = quad
+	var ramp := Gradient.new()
+	ramp.set_color(0, Color(1, 1, 1, 0.9))
+	ramp.set_color(1, Color(1, 1, 1, 0))
+	trail.color_ramp = ramp
+	mote.add_child(trail)
+
 static func _spawn_burst(root: Node3D, pos: Vector3, color: Color) -> void:
 	var p := CPUParticles3D.new()
 	p.one_shot = true

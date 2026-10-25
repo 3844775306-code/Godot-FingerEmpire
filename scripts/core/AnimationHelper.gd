@@ -4,7 +4,28 @@ extends RefCounted
 # 项目里的 GLB 动画导入后 loop_mode 都是 LOOP_NONE；如果只调用 play()，
 # idle/walk/attack 播放一遍就会停在最后一帧。这里统一给循环型动作打开循环。
 # die 保持一次性，不能循环。
-const LOOPED_ANIMATIONS := ["idle", "walk", "attack-melee-left"]
+const LOOPED_ANIMATIONS := [
+	"idle", "walk", "attack-melee-left", "attack-melee-right",
+	"holding-left-shoot", "holding-right-shoot", "holding-both-shoot",
+	"interact-left", "interact-right",
+]
+
+# 人物系兵种的出手动作。以前所有人物统一播 attack-melee-left（左勾拳），
+# 僧侣/长老/宗师这类法术单位和弓箭手挥拳完全不像。character 模型自带 32 个
+# 动作，这里按兵种挑对应的姿态；表里没有的仍回落到近战挥击。
+const ATTACK_ANIM_BY_ID := {
+	55: "interact-right",       # 僧侣：单手上抬抚出，像在引导法术
+	56: "holding-both-shoot",   # 长老：双手前送
+	57: "attack-melee-right",   # 宗师：右掌直击（与农民左勾拳区分开）
+	12: "holding-left-shoot",   # 弓箭手：拉弓
+	31: "holding-left-shoot",   # 长弓兵
+	37: "holding-left-shoot",   # 重装弓箭手
+	33: "holding-both-shoot",   # 诸葛连弩：双手连射
+	58: "holding-both-shoot",   # 连弩
+}
+
+static func attack_anim_for(entity_id: int) -> String:
+	return String(ATTACK_ANIM_BY_ID.get(entity_id, "attack-melee-left"))
 
 static func find_player(root: Node) -> AnimationPlayer:
 	if root == null:

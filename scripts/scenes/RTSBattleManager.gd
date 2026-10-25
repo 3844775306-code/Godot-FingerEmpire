@@ -2118,8 +2118,9 @@ func _update_entity_animation(entity: GameEntity):
 			# 采集途中播放走路；进入采集距离后才播放挥动；被挡住停住时不要原地踏步
 			anim = "attack-melee-left" if _is_entity_in_action_range(army) else ("walk" if _moving_now else "idle")
 		elif army._order_is(army.UnitState.ATTACKING) or army._order_is(army.UnitState.ATTACK_MOVING):
-			# 锁定目标但还在接近时仍然是走路动画，进入攻击距离后才挥击
-			anim = "attack-melee-left" if _is_entity_in_action_range(army) else ("walk" if _moving_now else "idle")
+			# 锁定目标但还在接近时仍然是走路动画，进入攻击距离后才出手。
+			# 出手姿势按兵种取，法术/射击单位不能用近战左勾拳。
+			anim = AnimationHelper.attack_anim_for(army.entity_id) if _is_entity_in_action_range(army) else ("walk" if _moving_now else "idle")
 		elif army._order_in([army.UnitState.MOVING, army.UnitState.DELIVERING]):
 			anim = "walk" if _moving_now else "idle"
 		else:
@@ -2131,8 +2132,8 @@ func _update_entity_animation(entity: GameEntity):
 	var force_proc: bool = entity is Army and entity.entity_id in PROC_ATTACK_IDS
 	if ap != null and anim != "" and ap.has_animation(anim) and not (force_proc and anim == "attack-melee-left"):
 		var spd := 1.0
-		if anim == "attack-melee-left":
-			# 攻击动作按攻击冷却循环；GATHERING 也复用攻击动作，让采集有挥动反馈
+		if anim != "walk" and anim != "idle" and anim != "die":
+			# 出手动作按攻击冷却循环；GATHERING 也复用攻击动作，让采集有挥动反馈
 			spd = AnimationHelper.attack_speed_scale(ap, anim, entity.attack_speed)
 		elif anim == "walk":
 			var actual_speed: float = entity.speed
