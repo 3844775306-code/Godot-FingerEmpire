@@ -4,6 +4,20 @@ extends GameEntity
 enum UnitState { IDLE, MOVING, ATTACKING, GATHERING, DELIVERING, ATTACK_MOVING }
 const _STATE_NAMES = {UnitState.IDLE: "", UnitState.MOVING: "move", UnitState.ATTACKING: "attack", UnitState.GATHERING: "gather", UnitState.DELIVERING: "deliver", UnitState.ATTACK_MOVING: "attack_move"}
 
+# 军事单位的五状态战斗模型。UnitState 继续负责采集/交付/进驻等非战斗任务，
+# current_order 仍保留旧字符串用于联机快照和客户端动画兼容。
+enum CombatState { IDLE, MARCH, ADVANCE, PURSUE, ATTACK }
+var combat_state: int = CombatState.IDLE
+var combat_destination: Vector3 = Vector3.ZERO
+var combat_resume_destination: Vector3 = Vector3.ZERO
+var combat_resume_advance: bool = false
+# 追击目标的丢失宽限：目标跑出视野后允许再追一段时间，避免边界抖动立刻放弃。
+const TARGET_LOST_RANGE_MULT: float = 1.5
+const TARGET_LOST_GRACE_MS: int = 3000
+var _target_lost_since_ms: int = 0
+# 建筑被攻击后的临时回防位；目标消失/超时后回到这里，而不是留在远处。
+var _defense_return_position: Vector3 = Vector3.ZERO
+
 # ÒÆ¶¯ÊôÐÔ
 var original_speed: float = 0.0
 var loop_index:int = 0
@@ -452,6 +466,225 @@ func _order_in(states: Array) -> bool:
 		if _order_is(s): return true
 	return false
 
+# ==================== 五状态战斗模型 ====================
+# 只有真正的军事单位走这套逻辑；农民、商队、官员、僧侣、动物和运输单位
+# 继续使用 UnitState 原有的任务逻辑。
+func _uses_combat_state() -> bool:
+	if not _is_military():
+		return false
+	if _is_healer():
+		return false
+	if _animal_type != "":
+		return false
+	if entity_id in [5, 6, 9, 40, 43, 44, 45, 51]:
+		return false
+	return true
+
+func _get_bm():
+	if not _cached_bm:
+		_cached_bm = get_tree().get_first_node_in_group("battle_manager")
+	return _cached_bm
+
+func _set_combat_state(state: int) -> void:
+	combat_state = state
+	match state:
+		CombatState.IDLE:
+			_set_order(UnitState.IDLE)
+		CombatState.MARCH:
+			_set_order(UnitState.MOVING)
+		CombatState.ADVANCE:
+			_set_order(UnitState.ATTACK_MOVING)
+		CombatState.PURSUE, CombatState.ATTACK:
+			_set_order(UnitState.ATTACKING)
+
+func _clear_combat_destination() -> void:
+	combat_destination = Vector3.ZERO
+	combat_resume_destination = Vector3.ZERO
+	combat_resume_advance = false
+
+# 给场景/网络层清理命令用；不要直接改 current_order 后留下旧战斗状态。
+func cancel_combat_orders() -> void:
+	if not _uses_combat_state():
+		return
+	current_target = null
+	_clear_combat_destination()
+	_defense_return_position = Vector3.ZERO
+	remove_meta("ai_building_defense_until")
+	combat_state = CombatState.IDLE
+	_target_lost_since_ms = 0
+	if _movement:
+		_movement.stop()
+
+func set_combat_advance_enabled(enabled: bool) -> void:
+	if not _uses_combat_state():
+		is_attack_moving = enabled
+		return
+	is_attack_moving = enabled
+	if not enabled:
+		if combat_state == CombatState.ADVANCE:
+			_set_combat_state(CombatState.IDLE)
+	elif combat_destination != Vector3.ZERO:
+		_set_combat_state(CombatState.ADVANCE)
+
+func _combat_edge_distance(target) -> float:
+	if target == null or not is_instance_valid(target):
+		return INF
+	var h_diff := Vector2(target.global_position.x - global_position.x,
+		target.global_position.z - global_position.z)
+	var target_radius: float = 0.0
+	if target is GameEntity:
+		target_radius = target.body_radius
+	return h_diff.length() - body_radius - target_radius
+
+func _set_combat_target(target, from_advance: bool = false) -> void:
+	if target == null or not is_instance_valid(target):
+		return
+	current_target = target
+	if from_advance and combat_destination != Vector3.ZERO:
+		combat_resume_destination = combat_destination
+		combat_resume_advance = true
+	elif combat_state != CombatState.PURSUE and combat_state != CombatState.ATTACK:
+		combat_resume_destination = Vector3.ZERO
+		combat_resume_advance = false
+	_target_lost_since_ms = 0
+	is_attack_moving = false
+	_retarget_target_id = target.get_instance_id()
+	_retarget_timer = _retarget_interval(_cached_bm)
+	_attack_watch_target_id = target.get_instance_id()
+	_attack_stall_time = 0.0
+	_set_combat_state(CombatState.ATTACK if _combat_edge_distance(target) <= attack_range else CombatState.PURSUE)
+
+func _combat_leash_radius() -> float:
+	if garrison_point == Vector3.ZERO:
+		return 0.0
+	if has_meta("ai_building_defense_until"):
+		var bm = _get_bm()
+		if bm != null and float(bm.game_time) < float(get_meta("ai_building_defense_until")):
+			return 45.0
+		remove_meta("ai_building_defense_until")
+	return GARRISON_DEFEND_RADIUS
+
+func _clear_stale_defense_anchor() -> void:
+	if not has_meta("ai_building_defense_until"):
+		_defense_return_position = Vector3.ZERO
+
+func _start_combat_march(pos: Vector3) -> void:
+	_clear_stale_defense_anchor()
+	current_target = null
+	combat_destination = pos
+	combat_resume_destination = Vector3.ZERO
+	combat_resume_advance = false
+	_target_lost_since_ms = 0
+	is_attack_moving = false
+	attack_move_target = Vector3.ZERO
+	_set_combat_state(CombatState.MARCH)
+	if _movement:
+		_movement.set_move_target(pos)
+
+func _start_combat_advance(pos: Vector3) -> void:
+	_clear_stale_defense_anchor()
+	current_target = null
+	combat_destination = pos
+	combat_resume_destination = Vector3.ZERO
+	combat_resume_advance = false
+	_target_lost_since_ms = 0
+	is_attack_moving = true
+	attack_move_target = pos
+	_attack_move_search_timer = 0.0
+	_set_combat_state(CombatState.ADVANCE)
+	if _movement:
+		_movement.set_move_target(pos)
+
+func _finish_combat_move() -> void:
+	_clear_combat_destination()
+	_set_combat_state(CombatState.IDLE)
+	current_target = null
+	if _movement:
+		_movement.stop()
+	if _current_move_queued and _visual_waypoints.size() > 0:
+		_visual_waypoints.pop_front()
+		_current_move_queued = false
+
+func _resume_advance() -> void:
+	if combat_resume_destination == Vector3.ZERO:
+		_set_combat_state(CombatState.IDLE)
+		return
+	combat_destination = combat_resume_destination
+	combat_resume_destination = Vector3.ZERO
+	combat_resume_advance = false
+	current_target = null
+	is_attack_moving = true
+	attack_move_target = combat_destination
+	_set_combat_state(CombatState.ADVANCE)
+	if _movement:
+		_movement.set_move_target(combat_destination)
+
+func _return_to_garrison() -> void:
+	_defense_return_position = Vector3.ZERO
+	remove_meta("ai_building_defense_until")
+	if garrison_point == Vector3.ZERO:
+		_set_combat_state(CombatState.IDLE)
+		return
+	if global_position.distance_to(garrison_point) <= 2.0:
+		_set_combat_state(CombatState.IDLE)
+		if _movement:
+			_movement.stop()
+		return
+	_start_combat_march(garrison_point)
+
+func _on_combat_target_lost() -> void:
+	current_target = null
+	_target_lost_since_ms = 0
+	_attack_watch_target_id = -1
+	_attack_stall_time = 0.0
+	_retarget_target_id = -1
+	if _movement:
+		_movement.stop()
+	if has_meta("ai_wall_guard") and _is_unit_on_wall():
+		_set_combat_state(CombatState.IDLE)
+		return
+	if combat_resume_advance and combat_resume_destination != Vector3.ZERO:
+		_resume_advance()
+		return
+	if garrison_point != Vector3.ZERO:
+		_return_to_garrison()
+		return
+	if _defense_return_position != Vector3.ZERO:
+		var back := _defense_return_position
+		_defense_return_position = Vector3.ZERO
+		remove_meta("ai_building_defense_until")
+		_start_combat_march(back)
+		return
+	_set_combat_state(CombatState.IDLE)
+
+# 墙上的守军只做一件事：攻击射程内目标，绝不移动。
+func _is_effective_wall_guard() -> bool:
+	if not has_meta("ai_wall_guard"):
+		return false
+	var wall = instance_from_id(int(get_meta("ai_wall_guard")))
+	if wall == null or not is_instance_valid(wall) or not (wall is Building):
+		return false
+	if int(wall.entity_id) != 27 or wall.health <= 0 or wall.build_timer > 0.0:
+		return false
+	return _is_unit_on_wall()
+
+# 城墙被拆后立即清除墙顶角色，不能等 AI 下一轮守墙检查。
+func _release_invalid_wall_guard() -> bool:
+	if not has_meta("ai_wall_guard"):
+		return false
+	var wall = instance_from_id(int(get_meta("ai_wall_guard")))
+	if wall != null and is_instance_valid(wall) and wall is Building \
+			and int(wall.entity_id) == 27 and wall.health > 0 and wall.build_timer <= 0.0:
+		return false
+	remove_meta("ai_wall_guard")
+	remove_meta("ai_wall_guard_slot")
+	hold_position = false
+	if current_order == "move" and _movement:
+		_movement.stop()
+	current_target = null
+	_set_combat_state(CombatState.IDLE)
+	return true
+
 # 目标是否已经失效：节点被释放或血量归零（死亡动画期间节点仍可能存在）。
 func _is_target_gone(target) -> bool:
 	if target == null:
@@ -679,6 +912,11 @@ func _physics_process(delta):
 				_movement.collision_timer -= delta
 		return
 
+	# 军事单位走五状态战斗模型；农夫/商队/官员等继续走下面的旧逻辑。
+	if _uses_combat_state():
+		_process_combat_frame(delta, bm)
+		return
+
 	# 目标有效性检查：阵亡目标也要立即清空，不能等节点真正释放；
 	# 否则单位会继续朝尸体移动或保持攻击动作。
 	if _clear_dead_target():
@@ -830,6 +1068,9 @@ func _is_blocking_building_ahead(blocker: Building, dest: Vector3) -> bool:
 
 # 目标换阵营/上墙/上船/不再可攻击时立即放弃，避免长老/宗师把已招降的友军继续当目标。
 func _drop_current_attack_target() -> void:
+	if _uses_combat_state():
+		_on_combat_target_lost()
+		return
 	current_target = null
 	_target_validate_timer = 0.0
 	_attack_watch_target_id = -1
@@ -869,6 +1110,35 @@ func _find_attack_fallback_building(bm: RTSBattleManager) -> Building:
 	return best
 
 func _handle_unreachable_attack_target(bm: RTSBattleManager, preserve_attack_move: bool = false) -> void:
+	if _uses_combat_state():
+		if hold_position:
+			current_target = null
+			_attack_watch_target_id = -1
+			_attack_stall_time = 0.0
+			_set_combat_state(CombatState.IDLE)
+			if _movement:
+				_movement.stop()
+			return
+		var old_target = current_target
+		if old_target != null and is_instance_valid(old_target):
+			_mark_target_unreachable(old_target)
+		var combat_fallback: Building = _find_attack_fallback_building(bm)
+		if combat_fallback != null and is_instance_valid(combat_fallback) \
+				and _can_attack_target(combat_fallback):
+			_set_combat_target(combat_fallback, preserve_attack_move)
+			_movement.set_move_target(combat_fallback.global_position, attack_range)
+			return
+		current_target = null
+		_attack_watch_target_id = -1
+		_attack_stall_time = 0.0
+		if preserve_attack_move and combat_destination != Vector3.ZERO:
+			is_attack_moving = true
+			attack_move_target = combat_destination
+			_set_combat_state(CombatState.ADVANCE)
+			_movement.set_move_target(combat_destination)
+			return
+		_on_combat_target_lost()
+		return
 	if hold_position:
 		current_target = null
 		_attack_watch_target_id = -1
@@ -927,6 +1197,215 @@ func _check_attack_approach(delta: float, bm: RTSBattleManager, preserve_attack_
 		return
 	_attack_stall_time = 0.0
 	_handle_unreachable_attack_target(bm, preserve_attack_move)
+
+# ==================== 五状态单位 AI ====================
+# 军事单位的每帧入口。旧的 _process_action 继续只服务农民/商队/官员等非战斗单位。
+func _process_combat_frame(delta, bm) -> void:
+	_release_invalid_wall_guard()
+	_process_combat_target_cleanup(bm)
+	_process_combat_action(delta, bm)
+	var stationary_in_range := false
+	if combat_state == CombatState.ATTACK and current_target != null \
+			and is_instance_valid(current_target) and current_target is GameEntity:
+		stationary_in_range = _combat_edge_distance(current_target) <= attack_range
+	if stationary_in_range:
+		_movement.cancel_pending_path()
+		_movement.astar_path.clear()
+		_movement.astar_target = Vector3.ZERO
+		_movement.attack_path_failed = false
+		_movement.move_path_failed = false
+		_movement.blocking_building = null
+		_attack_stall_time = 0.0
+		_movement._hide_path()
+		var had_velocity: bool = velocity.length_squared() > 0.04
+		velocity = Vector3.ZERO
+		if had_velocity:
+			_refresh_animation_now()
+	else:
+		_movement.process_move(delta, bm)
+	var moving_collision: bool = (
+		is_attack_moving
+		or _movement.astar_target != Vector3.ZERO or _movement.astar_path.size() > 0
+		or velocity.length_squared() > 0.04
+	)
+	if moving_collision and _movement.collision_timer > _movement.COLLISION_INTERVAL:
+		_movement.collision_timer = _movement.COLLISION_INTERVAL
+	_movement.collision_timer -= delta
+	if _movement.collision_timer <= 0.0:
+		var collision_interval: float = _movement.COLLISION_INTERVAL
+		if moving_collision:
+			if bm and bm._all_entities.size() > 300:
+				collision_interval *= 1.5
+		else:
+			collision_interval = 0.35
+		_movement.collision_timer = collision_interval
+		_movement.apply_collision(delta)
+	_tick_think(delta, bm)
+
+func _process_combat_target_cleanup(bm) -> void:
+	if current_target != null and (_is_target_gone(current_target) or not _is_target_team_valid(current_target)):
+		_on_combat_target_lost()
+		return
+	if current_target == null and (combat_state == CombatState.PURSUE or combat_state == CombatState.ATTACK):
+		_on_combat_target_lost()
+		return
+	if current_target != null and is_instance_valid(current_target):
+		var leash: float = _combat_leash_radius()
+		if leash > 0.0 and garrison_point != Vector3.ZERO \
+				and current_target.global_position.distance_to(garrison_point) > leash:
+			_on_combat_target_lost()
+			return
+		if _combat_edge_distance(current_target) > vision_range * TARGET_LOST_RANGE_MULT:
+			# 驻扎/建筑回防有各自的锚点 leash 和 15 秒时限，不能再用普通视野
+			# 丢失条件把远处的防守目标误判为丢失。
+			if garrison_point != Vector3.ZERO or _defense_return_position != Vector3.ZERO:
+				_target_lost_since_ms = 0
+				return
+			if _target_lost_since_ms == 0:
+				_target_lost_since_ms = Time.get_ticks_msec()
+			elif Time.get_ticks_msec() - _target_lost_since_ms >= TARGET_LOST_GRACE_MS:
+				_on_combat_target_lost()
+		else:
+			_target_lost_since_ms = 0
+
+func _process_combat_action(delta, bm) -> void:
+	if _is_effective_wall_guard():
+		_process_wall_guard_action(delta, bm)
+		return
+	if current_target != null and is_instance_valid(current_target) and combat_state == CombatState.IDLE:
+		_set_combat_target(current_target)
+	match combat_state:
+		CombatState.MARCH:
+			_process_combat_march()
+		CombatState.ADVANCE:
+			_process_combat_advance(delta, bm)
+		CombatState.PURSUE, CombatState.ATTACK:
+			_process_combat_attack(delta, bm)
+
+func _process_combat_march() -> void:
+	if combat_destination == Vector3.ZERO:
+		_set_combat_state(CombatState.IDLE)
+		return
+	if _movement.move_path_failed:
+		_finish_combat_move()
+		return
+	if global_position.distance_to(combat_destination) <= body_radius + 0.6:
+		_finish_combat_move()
+		return
+	if _movement.astar_target.distance_to(combat_destination) > 0.5:
+		_movement.set_move_target(combat_destination)
+
+func _process_combat_advance(delta, bm) -> void:
+	if combat_destination == Vector3.ZERO:
+		_set_combat_state(CombatState.IDLE)
+		return
+	if _movement.move_path_failed:
+		var fallback: Building = _find_attack_fallback_building(bm)
+		if fallback != null and is_instance_valid(fallback) and _can_attack_target(fallback):
+			_set_combat_target(fallback, true)
+			_movement.set_move_target(fallback.global_position, attack_range)
+			return
+		_finish_combat_move()
+		return
+	var arrived: bool = global_position.distance_to(combat_destination) <= body_radius + 0.6
+	if arrived:
+		# 推进到达目的地：先回待命，然后立刻继续一般目标检查。
+		_finish_combat_move()
+	else:
+		if _movement.astar_target.distance_to(combat_destination) > 0.5:
+			_movement.set_move_target(combat_destination)
+		_attack_move_search_timer -= delta
+		if _attack_move_search_timer > 0.0:
+			return
+	_attack_move_search_timer = ATTACK_MOVE_SEARCH_INTERVAL
+	var enemy = _find_combat_enemy(vision_range, false)
+	if enemy != null:
+		_set_combat_target(enemy, not arrived)
+		_process_combat_attack(delta, bm)
+
+func _process_combat_attack(delta, bm) -> void:
+	if current_target == null or not is_instance_valid(current_target):
+		_on_combat_target_lost()
+		return
+	var dist: float = _combat_edge_distance(current_target)
+	if dist <= attack_range:
+		_set_combat_state(CombatState.ATTACK)
+		_attack_stall_time = 0.0
+		if _movement:
+			_movement.attack_path_failed = false
+		_attack_tick(current_target, delta, bm)
+		return
+	if hold_position:
+		_on_combat_target_lost()
+		return
+	_set_combat_state(CombatState.PURSUE)
+	var blocker: Building = _movement.blocking_building
+	if blocker != null and is_instance_valid(blocker) and blocker != current_target \
+			and blocker.health > 0 and _can_attack_target(blocker) \
+			and global_position.distance_to(blocker.global_position) <= body_radius + blocker.body_radius + 1.0:
+		_mark_target_unreachable(current_target)
+		_set_combat_target(blocker)
+		_movement.set_move_target(blocker.global_position, attack_range)
+		return
+	_retarget_timer -= delta
+	if _retarget_timer <= 0.0:
+		_retarget_timer = _retarget_interval(bm)
+		_try_retarget_closer(dist)
+		if current_target == null or not is_instance_valid(current_target):
+			_on_combat_target_lost()
+			return
+	_check_attack_approach(delta, bm, false)
+	if current_target == null or not is_instance_valid(current_target):
+		return
+	_movement.set_move_target(current_target.global_position, attack_range)
+
+func _process_wall_guard_action(delta, bm) -> void:
+	if _movement and (_movement.astar_path.size() > 0 or _movement.astar_target != Vector3.ZERO):
+		_movement.stop()
+	# 选目标交给 _think_wall_guard 节流；这里只负责打射程内目标，绝不追击。
+	if current_target != null and is_instance_valid(current_target) \
+			and _combat_edge_distance(current_target) <= attack_range:
+		_set_combat_state(CombatState.ATTACK)
+		_attack_tick(current_target, delta, bm)
+		return
+	current_target = null
+	_target_lost_since_ms = 0
+	_set_combat_state(CombatState.IDLE)
+
+# 在视野/射程内选目标：同优先级下选最近；攻城单位优先建筑，其他单位优先敌军。
+func _find_combat_enemy(radius: float, attack_only: bool) -> GameEntity:
+	var bm = _get_bm()
+	var candidates: Array = bm.get_nearby_enemies(global_position, radius, team, owner_peer_id) if bm \
+		else get_tree().get_nodes_in_group("entities")
+	var best: GameEntity = null
+	var best_score: float = INF
+	var self_prefers_buildings: bool = _prefers_buildings()
+	for entity in candidates:
+		if entity == self or not is_instance_valid(entity) or entity.health <= 0:
+			continue
+		if entity is WorldResource:
+			continue
+		if entity.get("_animal_type") != null and str(entity.get("_animal_type")) != "":
+			continue
+		if not _is_target_attackable_now(entity) or _is_target_marked_unreachable(entity):
+			continue
+		var dist: float = _combat_edge_distance(entity)
+		if dist > radius:
+			continue
+		if attack_only and dist > attack_range:
+			continue
+		var score: float = dist
+		if entity is Building:
+			score += 0.0 if self_prefers_buildings else 4.0
+		else:
+			score += 4.0 if self_prefers_buildings else 0.0
+		if score < best_score:
+			best_score = score
+			best = entity
+	return best
+
+func _prefers_buildings() -> bool:
+	return int(target_type) == 1 or entity_id in [16, 17, 59]
 
 # ----------------- ÐÐÎª´¦Àí -----------------
 func _process_action(delta, bm):
@@ -1248,10 +1727,15 @@ func _try_retarget_closer(current_dist: float) -> void:
 		return
 	if _is_target_marked_unreachable(best):
 		return
+	if _uses_combat_state() and _prefers_buildings() and current_target is Building and not (best is Building):
+		return
 	var h_diff = Vector2(best.global_position.x - global_position.x,
 						best.global_position.z - global_position.z)
 	var best_dist = h_diff.length() - body_radius - best.body_radius
 	if best_dist + 0.05 < current_dist:
+		if _uses_combat_state():
+			_set_combat_target(best)
+			return
 		current_target = best
 		_set_order(UnitState.ATTACKING)
 		is_attack_moving = false
@@ -1270,7 +1754,111 @@ func _is_returning_to_garrison() -> bool:
 
 # ----------------- ¾ö²ß£¨½ÚÁ÷£© -----------------
 
+# 军事单位的高层决策：墙顶特例 > 回防/驻扎锚点 > 命令队列 > 待命索敌。
+func _think_combat(delta, bm) -> void:
+	_release_invalid_wall_guard()
+	if current_target != null and (_is_target_gone(current_target) or not _is_target_team_valid(current_target)):
+		_on_combat_target_lost()
+	# 队列里可能还有已被摧毁的目标；整队清掉，避免循环命令反复撞失效目标。
+	for cmd in command_queue:
+		if cmd.has("target") and not _is_valid_command_target(cmd["target"]):
+			_clear_command_queue()
+			break
+	# 建筑临时回防超时：即使攻击者还活着也放弃追击，回原锚点。
+	if _defense_return_position != Vector3.ZERO and has_meta("ai_building_defense_until") \
+			and bm != null and float(bm.game_time) >= float(get_meta("ai_building_defense_until")):
+		remove_meta("ai_building_defense_until")
+		if current_target != null:
+			_on_combat_target_lost()
+			return
+	# 墙顶守军：只打射程内，不追、不巡逻。
+	if _is_effective_wall_guard():
+		_think_wall_guard(bm)
+		return
+	# 驻扎/守军：只在锚点防御圈内接敌，跑出圈就回防。
+	if garrison_point != Vector3.ZERO:
+		_think_garrison(bm)
+		return
+	# 非驻扎单位的目标丢失后，已由 _on_combat_target_lost 处理续接/回防。
+	if current_target == null and (combat_state == CombatState.PURSUE or combat_state == CombatState.ATTACK):
+		_on_combat_target_lost()
+	# 外部（AI/场景）清空目标时也要把临时回防单位送回原锚点。
+	if current_target == null and _defense_return_position != Vector3.ZERO:
+		_on_combat_target_lost()
+		return
+	# 待命时才执行排队命令，避免走到一半被下一条命令打断。
+	if current_target == null and combat_state == CombatState.IDLE and command_queue.size() > 0:
+		_think_combat_next_command()
+		return
+	# 待命时自动索敌；行军/推进/追击各自在 _process_combat_action 中处理。
+	if current_target == null and combat_state == CombatState.IDLE:
+		_find_enemy_in_range()
+
+func _think_wall_guard(bm) -> void:
+	if current_target != null and is_instance_valid(current_target) \
+			and _combat_edge_distance(current_target) <= attack_range:
+		return
+	var enemy = _find_combat_enemy(attack_range, true)
+	if enemy != null:
+		_set_combat_target(enemy)
+		_set_combat_state(CombatState.ATTACK)
+		return
+	current_target = null
+	_target_lost_since_ms = 0
+	if _movement:
+		_movement.stop()
+	if combat_state != CombatState.IDLE:
+		_set_combat_state(CombatState.IDLE)
+
+func _think_garrison(bm) -> void:
+	var defend_radius: float = GARRISON_DEFEND_RADIUS
+	# AI 建筑被攻击时的临时反击允许离开原驻扎圈，超时后由上面统一收回。
+	if has_meta("ai_building_defense_until"):
+		if bm != null and float(bm.game_time) < float(get_meta("ai_building_defense_until")):
+			defend_radius = 45.0
+		else:
+			remove_meta("ai_building_defense_until")
+	if current_target != null:
+		if is_instance_valid(current_target) \
+				and current_target.global_position.distance_to(garrison_point) > defend_radius:
+			_on_combat_target_lost()
+		return
+	var enemy = _find_nearest_enemy_near(garrison_point, defend_radius)
+	if enemy != null and is_instance_valid(enemy) and enemy.health > 0:
+		_set_combat_target(enemy)
+		return
+	var gdist: float = global_position.distance_to(garrison_point)
+	if gdist > 2.0:
+		if not _is_returning_to_garrison():
+			_start_combat_march(garrison_point)
+		return
+	if combat_state != CombatState.IDLE:
+		_set_combat_state(CombatState.IDLE)
+		if _movement:
+			_movement.stop()
+
+func _think_combat_next_command() -> void:
+	var next_cmd = command_queue[0]
+	var is_loop: bool = next_cmd.get("is_loop", false)
+	if not is_loop:
+		_execute_command(next_cmd)
+		_current_move_queued = true
+		command_queue.pop_front()
+		if waypoint_markers.size() > 0:
+			var m = waypoint_markers.pop_front()
+			if is_instance_valid(m):
+				m.queue_free()
+	else:
+		next_cmd = command_queue[loop_index]
+		_execute_command(next_cmd)
+		loop_index += 1
+		if loop_index >= command_queue.size() or not command_queue[loop_index].get("is_loop", false):
+			loop_index = 0
+
 func _think(delta, bm):
+	if _uses_combat_state():
+		_think_combat(delta, bm)
+		return
 	if current_target != null and not is_instance_valid(current_target):
 		current_target = null
 		_set_order(UnitState.IDLE)
@@ -1611,6 +2199,10 @@ func convert_to_team(new_team: int, new_owner: int) -> void:
 	current_target = null
 	attack_move_target = Vector3.ZERO
 	is_attack_moving = false
+	if _uses_combat_state():
+		_clear_combat_destination()
+		combat_state = CombatState.IDLE
+		_defense_return_position = Vector3.ZERO
 	garrison_point = Vector3.ZERO
 	_garrison_target_id = -1
 	delivery_target = null
@@ -1823,45 +2415,16 @@ func _find_wounded_ally() -> void:
 		_movement.set_move_target(best.global_position, attack_range)
 
 func _find_enemy_in_range():
-	# 僧侣不索敌：它的目标是受伤的友军（由 _find_wounded_ally 处理）
-	if _is_healer(): return
-	if entity_id in [46, 47, 48, 50]: return
-	var best_dist = vision_range * 1.2
-	var best_target: GameEntity = null
-	var bm = _get_bm()
-	var enemies: Array = []
-	if bm:
-		enemies = bm.get_nearby_enemies(global_position, vision_range, team, owner_peer_id)
-	else:
-		enemies = get_tree().get_nodes_in_group("entities")
-	for entity in enemies:
-		if entity == self or not is_instance_valid(entity) or entity.health <= 0: continue
-		if entity is WorldResource: continue
-		if entity.get("_animal_type") != null and str(entity.get("_animal_type")) != "": continue
-		# 攻击类型过滤
-		if not _can_attack_target(entity): continue
-		if _is_target_marked_unreachable(entity): continue
-		if not bm:  # fallback: filter by team
-			if entity.team == team: continue
-			if entity is Building and entity.team == team: continue
-		var h_diff = Vector2(entity.global_position.x - global_position.x, entity.global_position.z - global_position.z)
-		var dist = h_diff.length() - body_radius - entity.body_radius
-		# 只要发现射程内敌人就立即锁定，不必在几百个候选里继续找“最近”的。
-		# 大规模混战时这会显著缩短每个单位的目标搜索循环。
-		if dist <= attack_range:
-			current_target = entity
-			_set_order(UnitState.ATTACKING)
-			is_attack_moving = false
-			return
-		if hold_position:
-			continue
-		if dist <= vision_range and dist < best_dist:
-			best_dist = dist
-			best_target = entity
-	if best_target:
-		current_target = best_target
-		_set_order(UnitState.ATTACKING)
-		is_attack_moving = false
+	# 僧侣/官员不索敌，继续由各自的任务 AI 处理。
+	if _is_healer() or entity_id in [46, 47, 48, 50]:
+		return
+	var target = _find_combat_enemy(vision_range, false)
+	if target == null:
+		return
+	# 驻守姿态只锁定射程内的敌人，绝不为了追人离开岗位。
+	if hold_position and _combat_edge_distance(target) > attack_range:
+		return
+	_set_combat_target(target, combat_state == CombatState.ADVANCE and combat_destination != Vector3.ZERO)
 func _should_queue() -> bool:
 	if _force_queue_next:
 		_force_queue_next = false
@@ -1909,6 +2472,9 @@ func _execute_command(cmd: Dictionary):
 	
 	match cmd["type"]:
 		"move":
+			if _uses_combat_state():
+				_start_combat_march(cmd["pos"])
+				return
 			current_target = null
 			attack_move_target = Vector3.ZERO
 			_set_order(UnitState.MOVING)
@@ -1920,6 +2486,13 @@ func _execute_command(cmd: Dictionary):
 				return
 			# 命令入队到执行之间目标可能已被招降/上墙/上船，执行时再校验一次
 			if not _is_target_attackable_now(attack_cmd_target):
+				return
+			if _uses_combat_state():
+				_clear_stale_defense_anchor()
+				_clear_combat_destination()
+				attack_move_target = Vector3.ZERO
+				_set_combat_target(attack_cmd_target)
+				_movement.set_move_target(attack_cmd_target.global_position, attack_range)
 				return
 			current_target = attack_cmd_target
 			attack_move_target = Vector3.ZERO
@@ -1936,6 +2509,9 @@ func _execute_command(cmd: Dictionary):
 			is_attack_moving = false
 			_movement.set_move_target(gather_cmd_target.global_position)
 		"attack_move":
+			if _uses_combat_state():
+				_start_combat_advance(cmd["pos"])
+				return
 			attack_move_target = cmd["pos"]
 			current_target = null
 			is_attack_moving = true
@@ -2046,6 +2622,11 @@ func _clear_waypoint_markers():
 	waypoint_markers.clear()
 	_waypoint_loop_start = -1
 	current_target = null
+	if _uses_combat_state():
+		_clear_combat_destination()
+		combat_state = CombatState.IDLE
+		is_attack_moving = false
+		attack_move_target = Vector3.ZERO
 	_set_order(UnitState.IDLE)
 
 func move_to(pos: Vector3):
@@ -2450,6 +3031,12 @@ func stop_movement():
 	if _movement:
 		_movement.stop()
 	is_attack_moving = false
+	if _uses_combat_state():
+		_clear_combat_destination()
+		_defense_return_position = Vector3.ZERO
+		remove_meta("ai_building_defense_until")
+		_target_lost_since_ms = 0
+		combat_state = CombatState.IDLE
 	# 停止的语义是清空当前行动和后续排队命令。只清路径的话，
 	# 下一次 _think 会立刻执行队列里的下一条命令，表现为“点了停止又自己走”。
 	_clear_command_queue()
