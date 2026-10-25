@@ -246,6 +246,51 @@ func _ready():
 	_create_visual()
 	_add_selection_ring()
 	_add_collision_shape()
+	_add_caster_aura()
+
+# ==================== 僧侣/长老/宗师：脚下法术光环 ====================
+# 这三个兵种和农民、官员共用「随机人物模型」，光看模型分不清谁是谁。
+# 给它们套一圈与法术同色的自发光光环：一是朝下投影永远可见，二是会缓慢旋转脉动，
+# 一眼就能从人群里认出来。农民没有光环，对比自然拉开。
+const CASTER_AURA_IDS := [55, 56, 57]
+var _caster_aura: MeshInstance3D = null
+var _caster_aura_time: float = 0.0
+
+func _add_caster_aura() -> void:
+	if entity_id not in CASTER_AURA_IDS:
+		return
+	var color: Color = CasterAttackAnim.color_for(entity_id)
+	var ring := MeshInstance3D.new()
+	ring.name = "CasterAura"
+	var torus := TorusMesh.new()
+	torus.inner_radius = body_radius * 1.25
+	torus.outer_radius = body_radius * 1.75
+	torus.rings = 32
+	torus.ring_segments = 6
+	ring.mesh = torus
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = Color(color, 0.55)
+	mat.emission_enabled = true
+	mat.emission = color
+	mat.emission_energy_multiplier = 1.6
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	ring.material_override = mat
+	ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	# 贴在脚踝高度：太高会穿过身体，太低会陷进地面
+	ring.position = Vector3(0.0, 0.12, 0.0)
+	add_child(ring)
+	_caster_aura = ring
+
+func _update_caster_aura(delta: float) -> void:
+	if _caster_aura == null or not is_instance_valid(_caster_aura):
+		return
+	_caster_aura_time += delta
+	# 缓慢自转 + 呼吸式缩放：静止的法阵像贴纸，动起来才有“在维持法术”的感觉
+	_caster_aura.rotation.y = _caster_aura_time * 0.9
+	var pulse: float = 1.0 + sin(_caster_aura_time * 2.2) * 0.06
+	_caster_aura.scale = Vector3(pulse, 1.0, pulse)
 
 # 走路扬尘与地面痕迹：不再给每个单位各挂一个粒子发射器，也不在场景里
 # 创建 14 个独立脚印节点；统一交给 GroundTrailManager 的共享池处理。
@@ -274,9 +319,11 @@ func _update_walk_dust(delta: float) -> void:
 		_trail_step_accum = 0.0
 		_visual_speed = move_toward(_visual_speed, 0.0, delta * 8.0)
 		_update_siege_walk(delta)
+		_update_caster_aura(delta)
 		return
 	_visual_speed = lerpf(_visual_speed, moved / maxf(delta, 0.001), clampf(delta * 10.0, 0.0, 1.0))
 	_update_siege_walk(delta)
+	_update_caster_aura(delta)
 
 	var vehicle: bool = entity_id in [5, 6, 16, 17, 18, 59]
 	var stride: float = 0.95 if vehicle else 0.52
@@ -363,7 +410,8 @@ func _play_step_sfx(terrain: int, overlay: int, vehicle: bool) -> void:
 # ----------------- ÊÓ¾õÓëÅö×² -----------------
 func _create_visual():
 	for child in get_children():
-		if child is MeshInstance3D and child.name != "SelectionRing":
+		# 选择环和法术光环不是身体网格，重建外观时不能删掉
+		if child is MeshInstance3D and child.name != "SelectionRing" and child.name != "CasterAura":
 			child.queue_free()
 	var mesh = MeshInstance3D.new()
 	var capsule = CapsuleMesh.new()

@@ -139,9 +139,28 @@ static func _random_character() -> String:
 	var c = CHARACTERS[randi() % CHARACTERS.size()]
 	return "res://models/characters/%s.glb" % c
 
+# 人物类按职业分池。原来农民、商人、官员、僧侣/长老/宗师这 13 个 ID 全部从同一套
+# 12 个模型里随机挑，农民和宗师完全可能长得一模一样，战场上根本分不出谁是谁。
+# 现在拆成四组互不重叠的池子：跨职业绝不会撞脸，同类内部仍随机保留一点变化。
+static func _character_pool_for(entity_id: int) -> Array:
+	if entity_id == 10:
+		# 农民：朴素装束
+		return ["character-male-a", "character-female-a", "character-male-b", "character-female-b"]
+	if entity_id in [43, 44, 45, 51]:
+		# 商人
+		return ["character-male-c", "character-female-c"]
+	if entity_id in [46, 47, 48, 49, 50]:
+		# 官员
+		return ["character-male-d", "character-female-d", "character-male-e", "character-female-e"]
+	if entity_id in [55, 56, 57]:
+		# 僧侣/长老/宗师：除模型外还有脚下法阵光环，颜色各不相同
+		return ["character-male-f", "character-female-f"]
+	return []
+
 static func get_entity_model(entity_id: int, level: int = 1) -> String:
-	if entity_id in [10, 43, 44, 45, 46, 47, 48, 49, 50, 51, 55, 56, 57]:
-		return _random_character()
+	var pool := _character_pool_for(entity_id)
+	if not pool.is_empty():
+		return "res://models/characters/%s.glb" % pool[randi() % pool.size()]
 	if entity_id == 1:
 		return "res://models/town/tree-high-round.glb" if level >= 5 else ("res://models/town/tree-high.glb" if level >= 3 else "res://models/town/tree.glb")
 	if entity_id == 0:
