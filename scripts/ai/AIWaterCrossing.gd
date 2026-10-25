@@ -30,9 +30,9 @@ const TROOP_GROWTH_PER_STEP := 8
 # 兵力不足时等待集结的宽限时间；超时后只要基础30兵仍会出发，避免永远不登陆
 const TROOP_GATHER_GRACE := 20.0
 const ESCORT_IDS := [13, 39, 40]
-const BOARD_DISTANCE := 3.5
+const BOARD_DISTANCE := 7.0
 const PARK_DISTANCE := 3.0
-const UNLOAD_DISTANCE := 3.5
+const UNLOAD_DISTANCE := 7.0
 const BOARD_WAIT_TIMEOUT := 50.0
 
 const MODE_NONE := 0
@@ -997,7 +997,9 @@ func _pick_units(max_count: int) -> Array:
 
 func _find_land_near(pos: Vector3) -> Vector3:
 	var center: Vector2i = battle.world_to_grid(pos)
-	for radius in range(0, 8):
+	# 搜索半径放大到 11 格：原来的 8 格在宽阔水域里常常找不到岸，
+	# 单位就被一直留在船里下不来。
+	for radius in range(0, 11):
 		for dx in range(-radius, radius + 1):
 			for dy in range(-radius, radius + 1):
 				if maxi(absi(dx), absi(dy)) != radius:
@@ -1006,8 +1008,13 @@ func _find_land_near(pos: Vector3) -> Vector3:
 				var gy: int = center.y + dy
 				if gx < 0 or gx >= RTSConfig.MAP_SIZE or gy < 0 or gy >= RTSConfig.MAP_SIZE:
 					continue
-				if battle.get_terrain_at_grid(gx, gy) != 2 or battle.get_overlay_at_grid(gx, gy) == 3:
-					return battle.grid_to_world(gx, gy)
+				# 山（terrain==1）不可通行，不能当登陆点；浅滩（overlay==3）陆军能走，算合格
+				var terrain: int = int(battle.get_terrain_at_grid(gx, gy))
+				if terrain < 0 or terrain == 1:
+					continue
+				if terrain == 2 and int(battle.get_overlay_at_grid(gx, gy)) != 3:
+					continue
+				return battle.grid_to_world(gx, gy)
 	return Vector3.ZERO
 
 # ═══════════════════════ 运载船前置科技 ═══════════════════════

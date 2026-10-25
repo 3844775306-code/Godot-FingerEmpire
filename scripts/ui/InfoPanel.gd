@@ -8,7 +8,7 @@ var _vb: VBoxContainer = null
 var _panel_scroll: ScrollContainer = null
 
 # ==================== 运载船：上/下船 ====================
-const BOARD_RANGE: float = 2.5  # 只有船周围 2.5 米内的陆地单位才能上船
+const BOARD_RANGE: float = 5.0  # 只有船周围 5 米内的陆地单位才能上船
 
 var _board_box: VBoxContainer = null
 var _board_label: RichTextLabel = null
@@ -532,12 +532,20 @@ func _ship_shore_point(ship) -> Vector3:
 	if bm == null:
 		return Vector3.ZERO
 	var base: Vector3 = ship.global_position
-	for r in [1.2, 2.0, 3.0, 4.5, 6.0]:
-		for i in 12:
-			var ang: float = TAU * float(i) / 12.0
+	# 原来只排除了水面（terrain != 2 就当岸边），结果山壁也被当成可以下船的地面。
+	# 这里连山地一起排除；浅滩（overlay==3）陆军能走，算合格落点。
+	for r in [1.5, 2.5, 3.5, 5.0, 6.5, 8.0]:
+		for i in 16:
+			var ang: float = TAU * float(i) / 16.0
 			var p := base + Vector3(cos(ang) * float(r), 0.0, sin(ang) * float(r))
-			if int(bm.get_terrain_at(p)) != 2:
-				return p
+			var terrain: int = int(bm.get_terrain_at(p))
+			if terrain < 0 or terrain == 1:
+				continue
+			if terrain == 2:
+				var g: Vector2i = bm.world_to_grid(p)
+				if int(bm.get_overlay_at_grid(g.x, g.y)) != 3:
+					continue
+			return p
 	return Vector3.ZERO
 
 func _update_board_ui(ship) -> void:

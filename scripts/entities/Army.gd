@@ -151,6 +151,13 @@ var _attack_move_search_timer: float = 0.0
 # 部分路径走到尽头/寻路暂时失败后，间隔一小段时间从新位置继续向原目的地寻路，
 # 否则大部队攻击移动时 A* 节点预算一超限就整队停在原地。
 var _combat_repath_timer: float = 0.0
+# 攻击移动目的地持续无路可走的累计时间。A* 预算/建筑临时挡路给几秒重试；
+# 超过后必须结束攻击移动，否则会永久停在“攻击移动且无路径”的状态。
+const ADVANCE_PATH_FAIL_TIMEOUT: float = 4.0
+var _advance_path_fail_time: float = 0.0
+# 寻路失败后正在等待下一次重试。此时 astar_path 为空、astar_target 仍是原目的地，
+# 不能把它误判成“已经走到最近可达点”。
+var _advance_path_recovering: bool = false
 
 # 驻扎防御：驻扎点附近这个半径内的敌人优先清掉，再返回驻扎点
 const GARRISON_DEFEND_RADIUS: float = 10.0
@@ -619,6 +626,8 @@ func cancel_combat_orders() -> void:
 	attack_move_target = Vector3.ZERO
 	_attack_move_search_timer = 0.0
 	_combat_repath_timer = 0.0
+	_advance_path_fail_time = 0.0
+	_advance_path_recovering = false
 	_set_combat_state(CombatState.IDLE)
 	_target_lost_since_ms = 0
 	if _movement:
@@ -626,17 +635,28 @@ func cancel_combat_orders() -> void:
 
 func set_combat_advance_enabled(enabled: bool) -> void:
 	if not _uses_combat_state():
-		is_attack_moving = enabled
+		# 非战斗单位同样不能在没有攻击移动目的地时留下 ATTACK_MOVING 状态。
+		is_attack_moving = enabled and attack_move_target != Vector3.ZERO
 		return
-	is_attack_moving = enabled
-	if not enabled:
-		if combat_state == CombatState.ADVANCE:
-			_clear_combat_destination()
-			if _movement:
-				_movement.stop()
-			_set_combat_state(CombatState.IDLE)
-	elif combat_destination != Vector3.ZERO:
+	if enabled:
+		# 没有攻击移动目的地时不能只把 is_attack_moving 置 true：
+		# 这时 _process_combat_advance 不会接管，单位会永久停在“攻击移动但无路径”。
+		if combat_destination == Vector3.ZERO:
+			is_attack_moving = false
+			return
+		is_attack_moving = true
+		_advance_path_fail_time = 0.0
+		_advance_path_recovering = false
 		_set_combat_state(CombatState.ADVANCE)
+		return
+	is_attack_moving = false
+	if combat_state == CombatState.ADVANCE:
+		_clear_combat_destination()
+		if _movement:
+			_movement.stop()
+		_set_combat_state(CombatState.IDLE)
+	_advance_path_fail_time = 0.0
+	_advance_path_recovering = false
 
 func _combat_edge_distance(target) -> float:
 	if target == null or not is_instance_valid(target):
@@ -718,6 +738,8 @@ func _start_combat_advance(pos: Vector3) -> void:
 	attack_move_target = pos
 	_attack_move_search_timer = 0.0
 	_combat_repath_timer = 0.5
+	_advance_path_fail_time = 0.0
+	_advance_path_recovering = false
 	_set_combat_state(CombatState.ADVANCE)
 	if _movement:
 		_movement.move_path_failed = false
@@ -731,6 +753,8 @@ func _finish_combat_move() -> void:
 	current_target = null
 	is_attack_moving = false
 	attack_move_target = Vector3.ZERO
+	_advance_path_fail_time = 0.0
+	_advance_path_recovering = false
 	if _movement:
 		_movement.stop()
 	if _current_move_queued and _visual_waypoints.size() > 0:
@@ -748,9 +772,12 @@ func _resume_advance() -> void:
 	is_attack_moving = true
 	attack_move_target = combat_destination
 	_combat_repath_timer = 0.5
+	_advance_path_fail_time = 0.0
+	_advance_path_recovering = false
 	_set_combat_state(CombatState.ADVANCE)
 	if _movement:
 		_movement.move_path_failed = false
+		_movement.attack_path_failed = false
 		_movement.clear_blacklist_at(combat_destination)
 		_movement.set_move_target(combat_destination)
 
@@ -1299,6 +1326,8 @@ func _handle_unreachable_attack_target(bm: RTSBattleManager, preserve_attack_mov
 		if preserve_attack_move and combat_destination != Vector3.ZERO:
 			is_attack_moving = true
 			attack_move_target = combat_destination
+			_advance_path_fail_time = 0.0
+			_advance_path_recovering = false
 			_set_combat_state(CombatState.ADVANCE)
 			_movement.set_move_target(combat_destination)
 			return
@@ -1507,6 +1536,8 @@ func _process_combat_advance(delta, bm) -> void:
 	if combat_destination == Vector3.ZERO:
 		is_attack_moving = false
 		attack_move_target = Vector3.ZERO
+		_advance_path_fail_time = 0.0
+		_advance_path_recovering = false
 		_set_combat_state(CombatState.IDLE)
 		return
 	if _movement.move_path_failed:
@@ -1516,14 +1547,53 @@ func _process_combat_advance(delta, bm) -> void:
 			_movement.set_move_target(fallback.global_position, attack_range)
 			return
 		# 没有可拆的挡路建筑时不要直接放弃原目的地；清掉失败标记后隔一会儿重试。
-		# 跨越长距离或绕城墙时 A* 节点预算可能暂时不足，保留任务才能继续推进。
+		# 但目的地可能真的被墙/水/建筑彻底封死，必须给重试设上限，
+		# 否则单位会永久停在“攻击移动且无路径”的状态。
+		_advance_path_recovering = true
+		_advance_path_fail_time += delta
+		if _advance_path_fail_time >= ADVANCE_PATH_FAIL_TIMEOUT:
+			_finish_combat_move()
+			return
 		_movement.move_path_failed = false
 		_movement.clear_blacklist_at(combat_destination)
 		_combat_repath_timer -= delta
 		if _combat_repath_timer <= 0.0:
 			_combat_repath_timer = 0.75
 			_movement.set_move_target(combat_destination)
+			if not _movement.astar_path.is_empty():
+				_advance_path_recovering = false
 		return
+	# 兜底目标用攻击路径（stop_range>0）寻路失败时只会置 attack_path_failed，
+	# 状态却仍停在 ADVANCE。这里清掉标记并回退到原攻击移动目的地，
+	# 否则会一直保持攻击移动、无路径。
+	if _movement.attack_path_failed:
+		_movement.attack_path_failed = false
+		_advance_path_recovering = true
+		_advance_path_fail_time += delta
+		if _advance_path_fail_time >= ADVANCE_PATH_FAIL_TIMEOUT:
+			_finish_combat_move()
+			return
+		_combat_repath_timer -= delta
+		if _combat_repath_timer <= 0.0:
+			_combat_repath_timer = 0.75
+			_movement.set_move_target(combat_destination)
+			if not _movement.astar_path.is_empty():
+				_advance_path_recovering = false
+		return
+	# 失败标记被清掉后，下一帧 astar_path 仍为空；继续按重试计时器等待，
+	# 不能直接判定成路径已走完。
+	if _advance_path_recovering:
+		if not _movement.astar_path.is_empty() or _movement._pending_path:
+			_advance_path_recovering = false
+		else:
+			_combat_repath_timer -= delta
+			if _combat_repath_timer <= 0.0:
+				_combat_repath_timer = 0.75
+				_movement.set_move_target(combat_destination)
+				if not _movement.astar_path.is_empty():
+					_advance_path_recovering = false
+			return
+	_advance_path_fail_time = 0.0
 	var arrived: bool = global_position.distance_to(combat_destination) <= body_radius + 0.6
 	if arrived:
 		# 推进到达目的地：先回待命，然后立刻继续一般目标检查。
@@ -1531,11 +1601,22 @@ func _process_combat_advance(delta, bm) -> void:
 	else:
 		if _retry_partial_combat_path(combat_destination, delta):
 			return
-		if _movement.astar_target.distance_to(combat_destination) > 0.5:
-			_movement.set_move_target(combat_destination)
-		_attack_move_search_timer -= delta
-		if _attack_move_search_timer > 0.0:
-			return
+		# A* 终点可能被调整到建筑外沿（目的地本身在建筑 footprint 内），
+		# 路径走完后 astar_target 仍是原目的地、astar_path 却已空。以前这里
+		# 只看 astar_target 的距离，单位会保持攻击移动、无路径、原地不动。
+		# 失败重试期间（_advance_path_fail_time > 0）不能误判成“已走到终点”。
+		var path_exhausted: bool = not _advance_path_recovering \
+				and _movement.astar_path.is_empty() \
+				and not _movement._pending_path \
+				and _movement.astar_target.distance_to(combat_destination) <= 0.5
+		if path_exhausted:
+			_finish_combat_move()
+		else:
+			if _movement.astar_target.distance_to(combat_destination) > 0.5:
+				_movement.set_move_target(combat_destination)
+			_attack_move_search_timer -= delta
+			if _attack_move_search_timer > 0.0:
+				return
 	_attack_move_search_timer = ATTACK_MOVE_SEARCH_INTERVAL
 	var enemy = _find_combat_enemy(vision_range, false)
 	if enemy != null:
@@ -1906,6 +1987,15 @@ func _process_action(delta, bm):
 					_set_order(UnitState.ATTACK_MOVING)
 					_movement.set_move_target(fallback.global_position, attack_range)
 					return
+				is_attack_moving = false
+				attack_move_target = Vector3.ZERO
+				_set_order(UnitState.IDLE)
+				_movement.stop()
+				return
+			# 非战斗单位攻击移动也可能把终点设在建筑内部：A* 只到外沿，
+			# 路径耗尽时按到达最近点处理，避免 ATTACK_MOVING 状态永久挂着。
+			if _movement.astar_path.is_empty() and not _movement._pending_path \
+					and _movement.astar_target.distance_to(attack_move_target) <= 0.5:
 				is_attack_moving = false
 				attack_move_target = Vector3.ZERO
 				_set_order(UnitState.IDLE)
@@ -2932,6 +3022,8 @@ func _execute_command(cmd: Dictionary):
 			attack_move_target = cmd["pos"]
 			current_target = null
 			is_attack_moving = true
+			_advance_path_fail_time = 0.0
+			_advance_path_recovering = false
 			_set_order(UnitState.ATTACK_MOVING)
 			_movement.set_move_target(cmd["pos"])
 
@@ -3448,6 +3540,8 @@ func stop_movement():
 	_attack_stall_time = 0.0
 	_target_validate_timer = 0.0
 	_combat_repath_timer = 0.0
+	_advance_path_fail_time = 0.0
+	_advance_path_recovering = false
 	if _movement:
 		_movement.stop()
 	is_attack_moving = false
@@ -3974,8 +4068,51 @@ func _process_demolition(delta):
 			_movement.process_move(delta, bm)
 	elif is_attack_moving and attack_move_target != Vector3.ZERO:
 		if global_position.distance_to(attack_move_target) < 1.0:
-			is_attack_moving = false; attack_move_target = Vector3.ZERO
+			is_attack_moving = false
+			attack_move_target = Vector3.ZERO
 		else:
+			# 爆破船攻击移动同样不能停在“无路径但仍在攻击移动”的状态。
+			if _movement.move_path_failed:
+				_advance_path_recovering = true
+				_advance_path_fail_time += delta
+				if _advance_path_fail_time >= ADVANCE_PATH_FAIL_TIMEOUT:
+					_advance_path_fail_time = 0.0
+					_advance_path_recovering = false
+					is_attack_moving = false
+					attack_move_target = Vector3.ZERO
+					_set_order(UnitState.IDLE)
+					_movement.stop()
+					return
+				_movement.move_path_failed = false
+				_movement.clear_blacklist_at(attack_move_target)
+				_combat_repath_timer -= delta
+				if _combat_repath_timer <= 0.0:
+					_combat_repath_timer = 0.75
+					_movement.set_move_target(attack_move_target)
+					if not _movement.astar_path.is_empty():
+						_advance_path_recovering = false
+				_movement.process_move(delta, bm)
+				return
+			if _advance_path_recovering:
+				if not _movement.astar_path.is_empty() or _movement._pending_path:
+					_advance_path_recovering = false
+				else:
+					_combat_repath_timer -= delta
+					if _combat_repath_timer <= 0.0:
+						_combat_repath_timer = 0.75
+						_movement.set_move_target(attack_move_target)
+						if not _movement.astar_path.is_empty():
+							_advance_path_recovering = false
+					_movement.process_move(delta, bm)
+					return
+			_advance_path_fail_time = 0.0
+			if _movement.astar_path.is_empty() and not _movement._pending_path \
+					and _movement.astar_target.distance_to(attack_move_target) <= 0.5:
+				is_attack_moving = false
+				attack_move_target = Vector3.ZERO
+				_set_order(UnitState.IDLE)
+				_movement.stop()
+				return
 			_movement.set_move_target(attack_move_target)
 			_movement.process_move(delta, bm)
 	elif _order_is(UnitState.MOVING):
@@ -4038,6 +4175,8 @@ func _spawn_demolition_blast():
 
 # ==================== Transport Ship ====================
 const BOARD_CAPACITY: int = 8  # 运载船最大载员
+# 下船时在岸边散开的半径：人多时沿圆周分开站，避免全部叠在一点
+const UNBOARD_SPREAD: float = 2.5
 
 func get_board_capacity() -> int:
 	return BOARD_CAPACITY
@@ -4066,14 +4205,58 @@ func board_unit(unit):
 	if unit is Army: unit._boarded_on = get_instance_id()
 
 func unboard_at(pos: Vector3):
+	var total: int = _boarded_units.size()
+	var idx: int = 0
 	for u in _boarded_units:
 		if is_instance_valid(u):
-			u.global_position = pos + Vector3(randf_range(-2,2), 0, randf_range(-2,2))
+			u.global_position = _safe_unboard_pos(pos, idx, total)
 			u.visible = true
 			u.collision_layer = 1
 			u.remove_meta("_boarded_on")
 			if u is Army: u._boarded_on = -1
+		idx += 1
 	_boarded_units.clear()
+
+# 把某个点吸附到能站人的地面上，顺带按地形重算高度。
+# 平原可以；浅滩（overlay==3）陆军也能走；水面和山地（terrain==1）都不行。
+# 不能站人时返回 Vector3.ZERO。
+func _land_snap(p: Vector3) -> Vector3:
+	var battle = get_tree().get_first_node_in_group("battle_manager")
+	if battle == null:
+		return p
+	var g: Vector2i = battle.world_to_grid(p)
+	if g.x < 0 or g.y < 0 or g.x >= RTSConfig.MAP_SIZE or g.y >= RTSConfig.MAP_SIZE:
+		return Vector3.ZERO
+	var terrain: int = int(battle.get_terrain_at_grid(g.x, g.y))
+	if terrain < 0 or terrain == 1:
+		return Vector3.ZERO
+	if terrain == 2 and int(battle.get_overlay_at_grid(g.x, g.y)) != 3:
+		return Vector3.ZERO
+	# 按格子中心换算世界坐标：船停在水面上，直接沿用它的 y 会让单位悬空或陷进地里
+	return battle.grid_to_world(g.x, g.y)
+
+# 下船落点必须落在能站人的地面上。
+# 原来是在给定点 ±2 米里纯随机，经常把单位甩进水里或者山壁上；
+# 现在人多时先按角度在岸边散开，逐个校验，不通过再环形搜索最近的可行陆地。
+func _safe_unboard_pos(base: Vector3, idx: int, total: int) -> Vector3:
+	if total > 0:
+		var ang: float = TAU * float(idx) / float(total)
+		var ring: float = UNBOARD_SPREAD * (0.45 if idx % 2 == 0 else 0.85)
+		var spot: Vector3 = base + Vector3(cos(ang) * ring, 0.0, sin(ang) * ring)
+		var snapped: Vector3 = _land_snap(spot)
+		if snapped != Vector3.ZERO:
+			return snapped
+	var base_snap: Vector3 = _land_snap(base)
+	if base_snap != Vector3.ZERO:
+		return base_snap
+	for radius in [1.5, 3.0, 4.5, 6.0, 8.0, 10.0]:
+		for k in range(16):
+			var a: float = TAU * float(k) / 16.0
+			var q: Vector3 = base + Vector3(cos(a) * float(radius), 0.0, sin(a) * float(radius))
+			var found: Vector3 = _land_snap(q)
+			if found != Vector3.ZERO:
+				return found
+	return base
 
 func get_boarded_count() -> int:
 	return _boarded_units.size()
