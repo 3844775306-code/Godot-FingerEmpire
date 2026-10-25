@@ -286,13 +286,15 @@ func _setup_prints() -> void:
 	pmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	pmat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	# 比之前更暗更实：太淡的深色贴花在草地上几乎看不见
-	pmat.albedo_color = Color(0.18, 0.16, 0.12, 0.62) if vehicle else Color(0.22, 0.19, 0.14, 0.52)
+	pmat.albedo_color = Color(0.14, 0.11, 0.07, 0.62) if vehicle else Color(0.18, 0.14, 0.09, 0.52)
 	for i in 14:
 		var mi := MeshInstance3D.new()
 		mi.name = "GroundPrint"
 		var quad := PlaneMesh.new()
-		# PlaneMesh 默认平躺在 XZ 平面，正好贴地
-		quad.size = Vector2(0.85, 1.50) if vehicle else Vector2(0.36, 0.55)
+		# PlaneMesh 默认平躺在 XZ 平面，正好贴地。
+		# 尺寸要按相机视角反过来给：RTS 相机拉远到 size 40 时，
+		# 半米见方的贴花只有 5 像素，几乎看不见，所以这里放大到接近单位体积。
+		quad.size = Vector2(1.70, 3.00) if vehicle else Vector2(0.75, 1.10)
 		quad.material = pmat
 		mi.mesh = quad
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -309,7 +311,7 @@ func _update_prints(delta: float, move_dir: Vector3) -> void:
 	_print_timer -= delta
 	if _print_timer > 0.0:
 		return
-	_print_timer = 0.22
+	_print_timer = 0.13
 	var mi: MeshInstance3D = _prints[_print_idx]
 	if not is_instance_valid(mi):
 		return
