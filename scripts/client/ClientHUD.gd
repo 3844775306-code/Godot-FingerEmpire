@@ -603,9 +603,12 @@ func _on_retreat_all_pressed():
 const ALERT_MAX_ROWS: int = 3
 const ALERT_LIFE: float = 3.4
 
-func show_alert_message(msg: String, color: Color = ALERT_DANGER, teams = []):
+func show_alert_message(msg: String, color: Color = ALERT_DANGER, teams = [], alert_kind: int = 0, is_castle: bool = false):
 	var mobile := InputSource.use_mobile_ui()
 	var team_list: Array = _normalize_alert_teams(teams)
+	# 按设置过滤掉不关心的战报（主要是队友的建造/升级/生产）
+	if _alert_is_filtered(team_list, alert_kind, is_castle):
+		return
 	if _alert_stack == null:
 		_alert_stack = VBoxContainer.new()
 		_alert_stack.name = "AlertStack"
@@ -673,6 +676,29 @@ func _normalize_alert_teams(raw) -> Array:
 			if int(t) >= 0 and not out.has(int(t)):
 				out.append(int(t))
 	return out
+
+# 战报筛选：队友国家的建造/升级/生产默认不接收，主城升级例外。
+func _alert_is_filtered(teams: Array, alert_kind: int, is_castle: bool) -> bool:
+	if alert_kind != GameSettings.AlertKind.BUILD \
+		and alert_kind != GameSettings.AlertKind.UPGRADE \
+		and alert_kind != GameSettings.AlertKind.PRODUCE:
+		return false
+	if teams.is_empty():
+		return false
+	var sender: int = int(teams[0])
+	var me: int = _alert_my_team()
+	if sender < 0 or sender == me:
+		return false
+	if alert_kind == GameSettings.AlertKind.UPGRADE and is_castle:
+		return false
+	match alert_kind:
+		GameSettings.AlertKind.BUILD:
+			return not GameSettings.alert_friendly_build
+		GameSettings.AlertKind.UPGRADE:
+			return not GameSettings.alert_friendly_upgrade
+		GameSettings.AlertKind.PRODUCE:
+			return not GameSettings.alert_friendly_produce
+	return false
 
 # 消息前加国家前缀。一条战报可能同时涉及多个国家（例如「A 攻打 B」），
 # 全部按同一规则着色：自己绿、同阵营友方蓝、敌方红，国家之间用箭头连接。
@@ -849,12 +875,12 @@ func _ready():
 			NetworkManager.client_alert_received.connect(_on_server_alert)
 
 # 收到服务器警报：直接走本地播报条
-func _on_server_alert(msg: String, color: Color, alert_id: int = 0, teams = []) -> void:
-	show_server_alert(msg, color, alert_id, teams)
+func _on_server_alert(msg: String, color: Color, alert_id: int = 0, teams = [], alert_kind: int = 0, is_castle: bool = false) -> void:
+	show_server_alert(msg, color, alert_id, teams, alert_kind, is_castle)
 
 # 服务器警报统一入口：RPC 与快照兜底都会调用，按 id 去重；
 # 危险/警告级警报补一次客户端本地音效（服务器端 AudioManager 不会在客户端播放）。
-func show_server_alert(msg: String, color: Color, alert_id: int = 0, teams = []) -> void:
+func show_server_alert(msg: String, color: Color, alert_id: int = 0, teams = [], alert_kind: int = 0, is_castle: bool = false) -> void:
 	if alert_id > 0:
 		if _seen_server_alert_ids.has(alert_id):
 			return
@@ -863,7 +889,7 @@ func show_server_alert(msg: String, color: Color, alert_id: int = 0, teams = [])
 		_seen_server_alert_ids[alert_id] = true
 	if color == ALERT_DANGER or color == ALERT_WARNING:
 		AudioManager.play_sfx("alert")
-	show_alert_message(msg, color, teams)
+	show_alert_message(msg, color, teams, alert_kind, is_castle)
 
 func _make_cmd_button(text: String, cb: Callable, danger: bool) -> Button:
 	var b := Button.new()

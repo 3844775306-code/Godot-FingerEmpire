@@ -799,9 +799,12 @@ const ALERT_WARNING = UITheme.ALERT_WARNING   # 黄色 — 敌军来袭/资源�
 const ALERT_INFO = UITheme.ALERT_INFO      # 绿色 — 建造/训练/升级完成
 const ALERT_GROUP = UITheme.ALERT_GROUP     # 蓝色 — 编队反馈
 
-func show_alert_message(msg: String, color: Color = ALERT_DANGER, teams = []):
+func show_alert_message(msg: String, color: Color = ALERT_DANGER, teams = [], alert_kind: int = 0, is_castle: bool = false):
 	var mobile := InputSource.use_mobile_ui()
 	var team_list: Array = _normalize_alert_teams(teams)
+	# 按设置过滤掉不关心的战报（主要是队友的建造/升级/生产）
+	if _alert_is_filtered(team_list, alert_kind, is_castle):
+		return
 	if _alert_stack == null:
 		# 战况栏改成竖排多行：每条战况独立一行，新消息加在末尾（最下面），
 		# 超过上限就从最上面挤掉。用 VBoxContainer 自动排版，增删行不用手算坐标。
@@ -876,6 +879,32 @@ func _normalize_alert_teams(raw) -> Array:
 			if int(t) >= 0 and not out.has(int(t)):
 				out.append(int(t))
 	return out
+
+# 战报筛选：队友国家的建造/升级/生产默认不接收，主城升级例外。
+# 其他类型（战斗、外交、经济）与自己直接相关，始终接收。
+func _alert_is_filtered(teams: Array, alert_kind: int, is_castle: bool) -> bool:
+	if alert_kind != GameSettings.AlertKind.BUILD \
+		and alert_kind != GameSettings.AlertKind.UPGRADE \
+		and alert_kind != GameSettings.AlertKind.PRODUCE:
+		return false
+	if teams.is_empty():
+		return false
+	var sender: int = int(teams[0])
+	var me: int = get_my_team()
+	# 自己国家的战报，以及无法判定归属的消息，一律保留
+	if sender < 0 or sender == me:
+		return false
+	# 队友主城升级是重要节点（意味着对方整体实力跃升），不跟着一起过滤
+	if alert_kind == GameSettings.AlertKind.UPGRADE and is_castle:
+		return false
+	match alert_kind:
+		GameSettings.AlertKind.BUILD:
+			return not GameSettings.alert_friendly_build
+		GameSettings.AlertKind.UPGRADE:
+			return not GameSettings.alert_friendly_upgrade
+		GameSettings.AlertKind.PRODUCE:
+			return not GameSettings.alert_friendly_produce
+	return false
 
 # 消息前加国家前缀。一条战报可能同时涉及多个国家（例如「A 攻打 B」），
 # 全部按同一规则着色：自己绿、同阵营友方蓝、敌方红，国家之间用箭头连接。

@@ -386,12 +386,13 @@ func notify_all_player_colors(colors: Dictionary):
 # 塞进 unreliable 快照里一旦丢包就永久丢失，客户端会完全收不到播报
 # alert_id 用于让客户端对“RPC 已收到 + 快照兜底重发”的同一条警报去重。
 # teams 是这条战况涉及的国家队伍列表，客户端据此显示多个国家名并逐一着色。
-signal client_alert_received(msg: String, color: Color, alert_id: int, teams: Array)
+# alert_kind / is_castle 用于客户端的战报接收筛选（队友建造/升级/生产默认不显示）。
+signal client_alert_received(msg: String, color: Color, alert_id: int, teams: Array, alert_kind: int, is_castle: bool)
 
 @rpc("authority", "call_remote", "reliable")
-func _client_receive_alert(msg: String, color: Color, alert_id: int = 0, teams: Array = []):
+func _client_receive_alert(msg: String, color: Color, alert_id: int = 0, teams: Array = [], alert_kind: int = 0, is_castle: bool = false):
 	if mode == Mode.CLIENT:
-		client_alert_received.emit(msg, color, alert_id, teams)
+		client_alert_received.emit(msg, color, alert_id, teams, alert_kind, is_castle)
 
 @rpc("authority", "call_remote", "reliable")
 func _notify_team(team: int):

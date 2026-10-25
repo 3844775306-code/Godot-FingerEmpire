@@ -263,7 +263,7 @@ func _finish_construction():
 			if groups.size() > 0:
 				group_str = " [T%d]" % groups[0]
 		var loc_str = "(%d,%d)" % [int(global_position.x), int(global_position.z)]
-		bm._show_hud_alert("建造完成: %s%s %s" % [display_name, group_str, loc_str], Color(0.2, 1.0, 0.3), [team], team)
+		bm._show_hud_alert("建造完成: %s%s %s" % [display_name, group_str, loc_str], Color(0.2, 1.0, 0.3), [team], team, GameSettings.AlertKind.BUILD)
 	# 城堡建成立刻解锁民族兵种
 	if entity_id == 53 and bm and bm.has_method("get_team_nation"):
 		var nation = bm.get_team_nation(team)
@@ -524,7 +524,8 @@ func _finish_upgrade():
 			if groups.size() > 0:
 				group_str = " [T%d]" % groups[0]
 		var loc_str = "(%d,%d)" % [int(global_position.x), int(global_position.z)]
-		bm._show_hud_alert("升级完成: %s%s %s" % [display_name, group_str, loc_str], Color(0.2, 1.0, 0.3), [team], team)
+		# 主城（entity_id 20）升级是重要节点，标记出来让它不受队友筛选影响
+		bm._show_hud_alert("升级完成: %s%s %s" % [display_name, group_str, loc_str], Color(0.2, 1.0, 0.3), [team], team, GameSettings.AlertKind.UPGRADE, entity_id == 20)
 
 func get_prod_cooldown(unit_id: int) -> float:
 	var spd3 = 1.0

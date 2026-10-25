@@ -126,6 +126,10 @@ var _building_cells: Dictionary = {}  # Vector2i -> Array[Building]，仅供碰�
 # 请求数和耗时，超出的单位延后到后续帧重试；调用方 MovementController 会等待。
 const ASTAR_REQUESTS_PER_FRAME: int = 8
 const ASTAR_TIME_BUDGET_USEC: int = 6000
+# 给“已经因为预算不足排队过”的请求预留配额。新请求最多用 5 个名额/4ms，
+# 剩余名额留给 pending 重试，避免大量新移动命令永远压在场景树后段的单位前面。
+const ASTAR_RETRY_RESERVE_REQUESTS: int = 3
+const ASTAR_RETRY_RESERVE_USEC: int = 2000
 var _astar_budget_frame: int = -1
 var _astar_budget_count: int = 0
 var _astar_budget_usec: int = 0
@@ -185,13 +189,19 @@ func recycle_bullet(b: Bullet) -> void:
 	_bullet_pool[key] = bucket
 
 # 预扣一次 A* 请求的配额。返回 false 时调用方应把目标记为 pending，下一帧再试。
-func reserve_astar_request() -> bool:
+# is_retry 为 true 表示这是已经排队过的 pending 请求，可使用预留配额。
+func reserve_astar_request(is_retry: bool = false) -> bool:
 	var frame: int = Engine.get_process_frames()
 	if frame != _astar_budget_frame:
 		_astar_budget_frame = frame
 		_astar_budget_count = 0
 		_astar_budget_usec = 0
-	if _astar_budget_count >= ASTAR_REQUESTS_PER_FRAME or _astar_budget_usec >= ASTAR_TIME_BUDGET_USEC:
+	var max_count: int = ASTAR_REQUESTS_PER_FRAME
+	var max_usec: int = ASTAR_TIME_BUDGET_USEC
+	if not is_retry:
+		max_count -= ASTAR_RETRY_RESERVE_REQUESTS
+		max_usec -= ASTAR_RETRY_RESERVE_USEC
+	if _astar_budget_count >= max_count or _astar_budget_usec >= max_usec:
 		return false
 	_astar_budget_count += 1
 	return true
@@ -3136,12 +3146,12 @@ func is_mobile_ui_point(pos: Vector2) -> bool:
 # 「【被攻击国】某某被打了」，而不是「【攻击国】打了某某」。
 # 无法判定时传 -1，只显示消息本体。
 # target_team：联机模式下只推给哪个阵营；-1 表示广播给双方。单机忽略这个参数。
-func _show_hud_alert(msg: String, color: Color = Color(1.0, 0.2, 0.1), source_teams = -1, target_team: int = -1):
+func _show_hud_alert(msg: String, color: Color = Color(1.0, 0.2, 0.1), source_teams = -1, target_team: int = -1, alert_kind: int = 0, is_castle: bool = false):
 	if color == Color(1.0, 0.2, 0.1) or color == Color(1.0, 0.8, 0.1): AudioManager.play_sfx("alert")
 	if has_node("UI"):
 		var hud = $UI
 		if hud and hud.has_method("show_alert_message"):
-			hud.show_alert_message(msg, color, source_teams)
+			hud.show_alert_message(msg, color, source_teams, alert_kind, is_castle)
 
 # 队伍列表归一化：支持单个 int 与 Array，负数（未知来源）丢弃
 func _alert_team_list(raw) -> Array:

@@ -36,6 +36,17 @@ var mobile_continuous_build: bool = false  # 连续建造：放置完不退出�
 
 var post_game_data: Dictionary = {}  # {power_history, player_is_blue} for results screen
 
+# ==================== 战报接收筛选 ====================
+# 战报类型。只有建造 / 升级 / 生产三类需要按国家过滤，
+# 战斗、外交、经济这类与自己直接相关的消息始终接收。
+enum AlertKind { COMBAT = 0, BUILD = 1, UPGRADE = 2, PRODUCE = 3, DIPLOMACY = 4, ECONOMY = 5, MISC = 6 }
+
+# 默认不接收队友国家的建造 / 升级 / 生产战报（队友主城升级例外，始终接收）。
+# 队友的这些动静与自己关系不大，全收会把战况栏刷满自己关心的战斗消息。
+var alert_friendly_build: bool = false
+var alert_friendly_upgrade: bool = false
+var alert_friendly_produce: bool = false
+
 func _ready() -> void:
 	# 调试构建支持命令行指定地图与模式：godot ... -- --map=ford --mode=2v2（导出包不生效）
 	if OS.is_debug_build():

@@ -3,7 +3,7 @@ extends Control
 # 单机与联机客户端共用；联机模式下"暂停"不可用（服务器权威，客户端暂停无意义）
 
 const PANEL_W: float = 470.0
-const PANEL_H: float = 440.0
+const PANEL_H: float = 580.0
 
 const QUALITY_NAMES: Array = ["流畅", "标准", "高清", "极致"]
 const QUALITY_DESC: Array = [
@@ -102,6 +102,15 @@ func _build() -> void:
 	vb.add_child(_make_volume_row("总音量", 1.0, func(v: float): _set_master_volume(v)))
 	vb.add_child(_make_volume_row("音乐", AudioManager._music_volume, func(v: float): AudioManager.set_music_volume(v)))
 	vb.add_child(_make_volume_row("音效", AudioManager._sfx_volume, func(v: float): AudioManager.set_sfx_volume(v)))
+
+	# 战报筛选：队友国家的建造/升级/生产默认不接收，避免刷掉自己关心的战斗消息
+	vb.add_child(_make_label("📢 战报筛选（队友国家）", UITheme.GOLD))
+	vb.add_child(_make_check_row("建造完成", GameSettings.alert_friendly_build,
+		func(on: bool): GameSettings.alert_friendly_build = on))
+	vb.add_child(_make_check_row("升级完成（主城升级始终显示）", GameSettings.alert_friendly_upgrade,
+		func(on: bool): GameSettings.alert_friendly_upgrade = on))
+	vb.add_child(_make_check_row("训练完成", GameSettings.alert_friendly_produce,
+		func(on: bool): GameSettings.alert_friendly_produce = on))
 
 	# 底部：暂停 / 退出
 	var bottom := HBoxContainer.new()
@@ -253,3 +262,15 @@ func _make_label(text: String, color: Color, font_size: int = -1) -> Label:
 	l.add_theme_font_size_override("font_size", font_size if font_size > 0 else UITheme.FONT_MD)
 	l.add_theme_color_override("font_color", color)
 	return l
+
+# 战报筛选用的复选框：改完立即生效（HUD 每次播报都会重新读 GameSettings）
+func _make_check_row(label_text: String, initial: bool, setter: Callable) -> CheckBox:
+	var cb := CheckBox.new()
+	cb.text = label_text
+	cb.button_pressed = initial
+	cb.add_theme_font_size_override("font_size", UITheme.FONT_MD)
+	cb.add_theme_color_override("font_color", UITheme.PARCHMENT)
+	cb.add_theme_color_override("font_pressed_color", UITheme.GOLD)
+	cb.add_theme_color_override("font_hover_color", UITheme.GOLD)
+	cb.toggled.connect(func(on: bool): setter.call(on))
+	return cb
