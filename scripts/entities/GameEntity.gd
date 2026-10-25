@@ -626,7 +626,7 @@ func _find_nearest_spawn_tile(center: Vector3, want_water: bool, margin: float) 
 				if want_water:
 					if terrain != 2:
 						continue
-				elif terrain == 2 or terrain < 0:
+				elif _is_spawn_blocked_terrain(terrain):
 					continue
 				var world_pos := Vector3(tile.x - half, 0.0, tile.y - half)
 				return _clamp_spawn_to_map(world_pos, margin)
@@ -645,33 +645,58 @@ func _find_nearest_spawn_tile(center: Vector3, want_water: bool, margin: float) 
 					if want_water:
 						if terrain != 2:
 							continue
-					elif terrain == 2 or terrain < 0:
+					elif _is_spawn_blocked_terrain(terrain):
 						continue
 					var world_pos := Vector3(tile.x - half, 0.0, tile.y - half)
 					return _clamp_spawn_to_map(world_pos, margin)
 	return Vector3.ZERO
 
-# Find spawn position on LAND (terrain != water)
+# 出生点地形判定：山（1）是纯装饰的高地形，陆军站不上去也走不下来；
+# 水（2）只有水军能待。原来只挡了水，训练出来的部队会直接刷在山上。
+func _is_spawn_blocked_terrain(terrain: int) -> bool:
+	return terrain < 0 or terrain == 1 or terrain == 2
+
+# 建筑自身的净空半径。建筑模型按 2 倍缩放，实际轮廓比配置里的 body_radius
+# 大一倍多，只按 body_radius 算会让单位生成在建筑模型内部。
+func _spawn_self_clearance() -> float:
+	if entity_type == 1:
+		return maxf(2.6, body_radius * 2.4)
+	return maxf(0.8, body_radius)
+
+# 出生点是否压到已有实体（含自己这栋建筑）：按双方体积半径算间距，
+# 而不是原来写死的 1.5 米，也不会把自己排除在检查之外。
+func _spawn_pos_blocked(pos: Vector3) -> bool:
+	for entity in get_tree().get_nodes_in_group("entities"):
+		if not is_instance_valid(entity):
+			continue
+		if not (entity is GameEntity) or entity.health <= 0:
+			continue
+		var other_r: float = float(entity.body_radius)
+		if entity.entity_type == 1:
+			other_r = maxf(2.6, other_r * 2.4)
+		var need: float = maxf(0.8, body_radius) + other_r + 0.3
+		if Vector2(pos.x - entity.global_position.x, pos.z - entity.global_position.z).length() < need:
+			return true
+	return false
+
+# Find spawn position on LAND (terrain must be walkable, never mountain or water)
 func _find_land_spawn_pos(margin: float = 1.2) -> Vector3:
 	var bm = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
 	var attempts = 0
 	var max_attempts = 30
+	# 起始距离要盖过建筑自身的视觉半径 + 单位自身半径，否则单位会生成在建筑模型里
+	var min_dist: float = _spawn_self_clearance() + maxf(0.8, body_radius) + 0.4
 	while attempts < max_attempts:
 		var angle = randf_range(0, TAU)
-		var dist = randf_range(2.0, 4.0)
+		var dist = randf_range(min_dist, min_dist + 2.0)
 		var test_pos = _clamp_spawn_to_map(global_position + Vector3(cos(angle) * dist, 0, sin(angle) * dist), margin)
-		# Check terrain: must be passable for land units
-		if bm and bm.get_terrain_at(test_pos) == 2:  # water
+		# 地形：山和水都不能用来出生
+		if bm and _is_spawn_blocked_terrain(bm.get_terrain_at(test_pos)):
 			attempts += 1; continue
-		# Check no entity overlap
-		var conflict = false
-		for entity in get_tree().get_nodes_in_group("entities"):
-			if entity == self or not is_instance_valid(entity): continue
-			if entity is GameEntity and entity.health > 0:
-				if test_pos.distance_to(entity.global_position) < 1.5:
-					conflict = true; break
-		if not conflict: return test_pos
-		attempts += 1
+		# 和已有实体（含自己这栋建筑）保持体积间距
+		if _spawn_pos_blocked(test_pos):
+			attempts += 1; continue
+		return test_pos
 	return _find_nearest_spawn_tile(global_position, false, margin)
 func _find_outside_spawn_pos() -> Vector3:
 	var best_pos = Vector3.ZERO
