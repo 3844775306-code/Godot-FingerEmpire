@@ -111,7 +111,7 @@ static func _ram(model: Node3D) -> float:
 static func _cannon(model: Node3D) -> float:
 	var pos: Vector3 = model.position
 	_seq(model, model, "position", [
-		{"v": pos + Vector3(0.0, 0.12, 0.30), "t": 0.12, "tr": Tween.TRANS_EXPO},
+		{"v": pos + Vector3(0.0, 0.07, 0.17), "t": 0.12, "tr": Tween.TRANS_EXPO},
 		{"v": pos, "t": 0.62, "tr": Tween.TRANS_BOUNCE},
 	])
 	_entity_pitch(model, [
@@ -121,7 +121,7 @@ static func _cannon(model: Node3D) -> float:
 	for wheel in _find_prefix(model, "Group"):
 		var r: Vector3 = wheel.rotation
 		_seq(model, wheel, "rotation", [
-			{"v": r + Vector3(0.14, 0.0, 0.0), "t": 0.12, "tr": Tween.TRANS_QUAD},
+			{"v": r + Vector3(0.06, 0.0, 0.0), "t": 0.12, "tr": Tween.TRANS_QUAD},
 			{"v": r, "t": 0.55, "tr": Tween.TRANS_ELASTIC},
 		])
 	return 0.78
@@ -183,7 +183,7 @@ static func _warship(model: Node3D, heavy: bool, side: float) -> float:
 	var rz: float = model.rotation.z
 	var roll: float = 0.09 if heavy else 0.06
 	var sink: float = 0.14 if heavy else 0.08
-	var push: float = 0.24 if heavy else 0.15
+	var push: float = 0.12 if heavy else 0.07
 	var total: float = 1.18 if heavy else 0.98
 	_seq(model, model, "rotation:z", [
 		{"v": rz + side * roll, "t": 0.18, "tr": Tween.TRANS_QUAD},
