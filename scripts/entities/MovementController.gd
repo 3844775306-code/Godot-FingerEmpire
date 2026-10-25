@@ -26,6 +26,10 @@ var _last_attack_path_ms: int = -100000
 var _pending_path: bool = false
 var _pending_target: Vector3 = Vector3.ZERO
 var _pending_stop_range: float = 0.0
+var _pending_since_ms: int = 0
+# 大量单位同时追击时 A* 预算可能连续多帧排不到某个单位。
+# 等待超过这个时间就按“无路”处理，交给 Army 的换目标/拆墙兜底，不能让单位永远站着。
+const PENDING_PATH_TIMEOUT_MS: int = 2000
 
 var _path_sphere: SphereMesh = null
 var _path_mat: StandardMaterial3D = null
@@ -117,6 +121,9 @@ func set_move_target(pos: Vector3, stop_range: float = 0.0):
 	# New target: calculate and cache. A* 受每帧预算限制，超预算时暂存到下一帧，
 	# 避免全军同一帧各跑一次长路径导致操作卡顿。
 	if not _try_compute_path(pos, stop_range):
+		var was_pending: bool = _pending_path
+		if not was_pending or _pending_target.distance_to(pos) > 2.0:
+			_pending_since_ms = Time.get_ticks_msec()
 		_pending_path = true
 		_pending_target = pos
 		_pending_stop_range = stop_range
@@ -129,6 +136,7 @@ func set_move_target(pos: Vector3, stop_range: float = 0.0):
 		return
 	# 新目标已立即算完，清掉可能残留的旧 pending，避免下一帧把它重新算回来。
 	_pending_path = false
+	_pending_since_ms = 0
 
 func _try_compute_path(pos: Vector3, stop_range: float, bm: RTSBattleManager = null) -> bool:
 	if bm == null:
@@ -169,10 +177,12 @@ func _try_compute_pending_path(bm: RTSBattleManager) -> bool:
 	if not _try_compute_path(_pending_target, _pending_stop_range, bm):
 		return false
 	_pending_path = false
+	_pending_since_ms = 0
 	return true
 
 func cancel_pending_path() -> void:
 	_pending_path = false
+	_pending_since_ms = 0
 
 func _get_bm() -> RTSBattleManager:
 	if _army == null or not is_instance_valid(_army) or not _army.is_inside_tree():
@@ -200,6 +210,7 @@ func recalculate():
 		attack_path_failed = astar_path.is_empty()
 		move_path_failed = astar_path.is_empty()
 		_pending_path = false
+		_pending_since_ms = 0
 		if astar_path.size() > 0: _path_cache[key] = astar_path  # only cache valid paths
 		if _is_selected:
 			_show_path()
@@ -220,6 +231,7 @@ func stop():
 	move_path_failed = false
 	blocking_building = null
 	_pending_path = false
+	_pending_since_ms = 0
 	_stop_velocity()
 
 # 单位停止/进入攻击距离后必须把残留速度清零，否则 Army 的 simple_idle 永远不成立，
@@ -235,14 +247,34 @@ func _stop_velocity() -> void:
 # ==================== Main movement update ====================
 
 func process_move(delta, bm: RTSBattleManager):
-	# 之前因 A* 预算被延后的目标，继续在本帧尝试；仍未轮到则原地等待，
+	# 之前因 A* 预算被延后的目标，继续在本帧尝试；普通移动仍未轮到则原地等待，
 	# 不能拿旧路径继续走，否则大部队下令后会先朝旧目标移动。
+	# 攻击追目标时旧路径通常仍指向同一目标，可以边沿旧路径推进边等新路径。
 	if _pending_path:
-		if not _army.is_attack_moving and not _army._order_is(_army.UnitState.MOVING):
+		var attack_order: bool = _army.is_attack_moving or _army._order_is(_army.UnitState.ATTACKING)
+		if not _army.is_attack_moving and not _army._order_is(_army.UnitState.MOVING) \
+				and not _army._order_is(_army.UnitState.ATTACKING):
+			# 只有真正不需要寻路的命令才丢弃待处理请求；攻击索敌必须保留，
+			# 否则 A* 预算连续几帧排不到时会表现为“锁着目标却一步不走”。
 			_pending_path = false
+			_pending_since_ms = 0
 		elif not _try_compute_pending_path(bm):
-			_stop_velocity()
-			return
+			if Time.get_ticks_msec() - _pending_since_ms >= PENDING_PATH_TIMEOUT_MS:
+				# 连续等待超时：按寻路失败处理，让 Army 换目标/拆挡路建筑，避免永久站桩。
+				_pending_path = false
+				_pending_since_ms = 0
+				if attack_order:
+					attack_path_failed = true
+					move_path_failed = false
+					astar_target = Vector3.ZERO
+				else:
+					attack_path_failed = false
+					move_path_failed = true
+			# 攻击移动即使新路径还没算完，也可以先沿现有路径继续推进；
+			# 普通攻击/普通移动没有可用新路径时先停住，等下一帧重试。
+			if not (_army.is_attack_moving and astar_path.size() > 0):
+				_stop_velocity()
+				return
 	if not _army.can_move or _army.speed <= 0:
 		_stop_velocity()
 		return
