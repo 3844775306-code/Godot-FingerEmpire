@@ -22,6 +22,8 @@ const ATTACK_TARGET_MOVE_TOLERANCE: float = 2.5
 # 路径预览最多绘制多少个点，避免长路径为每个格子创建一个 MeshInstance3D。
 const MAX_PATH_PREVIEW_POINTS: int = 64
 var _last_attack_path_ms: int = -100000
+# 缓坡速度平滑：避免在坡道入口/出口瞬间跳速，也避免同一格来回抖动。
+var _slope_speed_mult: float = 1.0
 # A* 分帧预算用：当前请求被延后时暂存目标，下一帧继续尝试。
 var _pending_path: bool = false
 var _pending_target: Vector3 = Vector3.ZERO
@@ -48,6 +50,17 @@ var collision_timer: float = 0.0
 # 单位实际会顶在墙上原地踏步；Army 用它改打这面挡路的墙。
 var blocking_building: Building = null
 const COLLISION_INTERVAL: float = 0.15
+# 山地缓坡：overlay=4 是坡面，overlay=5 是山顶台地；普通山地仍然是悬崖。
+# 坡面基础成本高于平原，上坡再额外加价，避免部队为了抄近路随意翻山。
+const SLOPE_BASE_COST: float = 1.35
+const PLATEAU_BASE_COST: float = 1.1
+const SLOPE_UP_COST_PER_M: float = 0.35
+const SLOPE_DOWN_COST_PER_M: float = 0.10
+# 实际移动速度：上坡减速、下坡加速；倍率独立于寻路成本。
+const SLOPE_UP_SPEED_PER_M: float = 0.35
+const SLOPE_DOWN_SPEED_PER_M: float = 0.25
+const SLOPE_MIN_SPEED_MULT: float = 0.55
+const SLOPE_MAX_SPEED_MULT: float = 1.25
 var _last_recalc_frame: int = -99  # prevent recalc spam
 var _path_cache: Dictionary = {}  # Vector2i(world_x, world_z) -> path_array, cleared on building placement
 var _blacklist: Dictionary = {}  # Vector2i -> 过期时间戳，暂时跳过不可达目标
@@ -252,6 +265,7 @@ func _stop_velocity() -> void:
 	if _army != null:
 		var had_velocity: bool = _army.velocity.length_squared() > 0.04
 		_army.velocity = Vector3.ZERO
+		_slope_speed_mult = 1.0
 		# 从移动到停下的瞬间刷新一次动画，否则 MOVING/ATTACKING 状态可能继续播放走路动作
 		if had_velocity and _army.is_inside_tree():
 			_army._refresh_animation_now()
@@ -356,7 +370,12 @@ func process_move(delta, bm: RTSBattleManager):
 				#next_pos = _army.global_position + alt * _army.speed * 0.016
 				#if bm.get_terrain_at(next_pos) == 1: return
 			#move_dir = alt
-	_army.velocity = Vector3(move_dir.x, 0, move_dir.z) * _army.speed
+	# 缓坡：上坡慢、下坡快。只改本帧速度，不永久修改 _army.speed，
+	# 避免影响攻击、追击和停走逻辑；平滑过渡避免坡口来回跳速。
+	var slope_mult: float = _get_slope_speed_multiplier(bm, _army.global_position, move_target)
+	_slope_speed_mult = lerpf(_slope_speed_mult, slope_mult, clampf(delta * 8.0, 0.0, 1.0))
+	var effective_speed: float = _army.speed * _slope_speed_mult
+	_army.velocity = Vector3(move_dir.x, 0, move_dir.z) * effective_speed
 	_army.move_and_slide()
 	# 陆地单位的脚步音由 Army._play_step_sfx 按实际落脚点触发；
 	# 这里只保留船只的持续航行音，避免和脚步音重复。
@@ -389,6 +408,27 @@ func process_move(delta, bm: RTSBattleManager):
 				elif _has_adjacent_ladder(bm, gpos2, _army.team):
 					target_height += RTSBattleManager.WALL_TOP_HEIGHT  # laddered enemy wall
 			_army.global_position.y = move_toward(_army.global_position.y, target_height, 5.0 * delta)
+
+# 根据坡面高度差计算实际移速倍率。只识别缓坡/台地，平原、沼泽、浅滩保持原逻辑。
+func _get_slope_speed_multiplier(bm: RTSBattleManager, from_pos: Vector3, to_pos: Vector3) -> float:
+	if bm == null:
+		return 1.0
+	var from_tile: Vector2i = bm.world_to_grid(from_pos)
+	var to_tile: Vector2i = bm.world_to_grid(to_pos)
+	if not _is_highland_tile(from_tile, bm) and not _is_highland_tile(to_tile, bm):
+		return 1.0
+	var map = bm.get_node_or_null("Map")
+	if map == null or not map.has_method("get_height_at"):
+		return 1.0
+	var dh: float = float(map.get_height_at(to_pos)) - float(map.get_height_at(from_pos))
+	if absf(dh) < 0.02:
+		return 1.0
+	var mult := 1.0
+	if dh > 0.0:
+		mult = 1.0 - dh * SLOPE_UP_SPEED_PER_M
+	else:
+		mult = 1.0 + absf(dh) * SLOPE_DOWN_SPEED_PER_M
+	return clampf(mult, SLOPE_MIN_SPEED_MULT, SLOPE_MAX_SPEED_MULT)
 
 # ==================== Collision separation ====================
 
@@ -794,6 +834,7 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 		closed_set[cur_tile] = true
 		var cur_g = g_score.get(cur_tile, 9999.0)
 		from_height = _get_tile_height(cur_tile, bm)
+		var cur_highland: bool = _is_highland_tile(cur_tile, bm)
 
 		# 8-neighbor expansion — merged terrain+wall+slope check
 		for dx in range(-1, 2):
@@ -815,6 +856,14 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 				if neighbor != goal_tile and wall_cache.has(neighbor) and not _ladder_set.has(neighbor): continue
 
 				var step_cost = terrain_cost * (1.414 if (dx != 0 and dy != 0) else 1.0)
+				# 缓坡方向成本：上坡更贵，下坡不额外加价（下坡的“快”由实际移速体现）。
+				# 只在缓坡/台地边上应用，避免改变现有平原、沼泽和浅滩的寻路结果。
+				if cur_highland or _is_highland_tile(neighbor, bm):
+					var dh: float = neighbor_h - from_height
+					if dh > 0.0:
+						step_cost *= 1.0 + minf(dh * SLOPE_UP_COST_PER_M, 0.8)
+					elif dh < 0.0:
+						step_cost *= maxf(1.0, 1.0 + dh * SLOPE_DOWN_COST_PER_M)
 				var tentative_g = cur_g + step_cost
 
 				if tentative_g < g_score.get(neighbor, 9999.0):
@@ -842,24 +891,36 @@ func _get_terrain_cost(tile: Vector2i, bm: RTSBattleManager, wall_cache: Diction
 	# 普通建筑/资源阻挡
 	if wall_cache.has(tile): return 5.0
 	var terrain = bm.get_terrain_at_grid(tile.x, tile.y)
+	var ov := bm.get_overlay_at_grid(tile.x, tile.y)
 	var cost: float
 	if _army.water_capable:
 		# 水军无法通过桥
 		cost = 999.0 if _bridge_set.has(tile) else (0.8 if terrain == 2 else 999.0)
 	else:
-		# 浅滩：仍是水格，但陆军可以涉水通过；沼泽：陆地但泥泞难行（成本高于平原、低于山地）
-		var ov := bm.get_overlay_at_grid(tile.x, tile.y)
-		if ov == 3:
+		# 石头山：只有缓坡(4)和山顶台地(5)可走；普通山壁仍是悬崖。
+		# 浅滩(3)和沼泽(2)保持原有通行成本。
+		if ov == 4:
+			cost = SLOPE_BASE_COST
+		elif ov == 5:
+			cost = PLATEAU_BASE_COST
+		elif ov == 3:
 			cost = 2.5
 		elif ov == 2:
 			cost = 1.8
 		else:
 			match terrain:
 				0: cost = 1.0
-				1: cost = 2.5
+				1: cost = 999.0
 				2: cost = 1.5 if _bridge_set.has(tile) or _transport_water.has(tile) else 999.0
 				_: cost = 999.0
 	return cost
+
+# 缓坡/山顶台地标记。只有在这类格子上才应用上下坡的方向成本与速度。
+func _is_highland_tile(tile: Vector2i, bm: RTSBattleManager) -> bool:
+	if bm == null:
+		return false
+	var ov: int = bm.get_overlay_at_grid(tile.x, tile.y)
+	return ov == 4 or ov == 5
 
 func _get_tile_height(tile: Vector2i, bm: RTSBattleManager) -> float:
 	if bm and bm.has_method("get_height_at_grid"):

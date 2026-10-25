@@ -2795,6 +2795,11 @@ func _is_valid_build_position(pos: Vector3) -> bool:
 			if e.global_position.distance_to(pos) < 10.0:
 				return false
 	var t = get_terrain_at(pos)
+	# 缓坡/山顶台地只作为行军与视野地形，第一版不允许在上面盖建筑，避免高地塔楼失衡。
+	var bg := world_to_grid(pos)
+	var bov := get_overlay_at_grid(bg.x, bg.y)
+	if bov == 4 or bov == 5:
+		return false
 	# 桥：只能在水上建造
 	if selected_building_id == 7:
 		return is_valid_bridge_position(pos)

@@ -15,7 +15,7 @@ func _get_map_size() -> int:
 # 地形数据 0=平原, 1=山地, 2=水域
 var terrain_grid: Array = []
 var height_grid: Array = []            # per-tile height values
-# 覆盖层 0=无, 1=森林, 2=沼泽(预留), 3=浅滩。只影响移速/视野/观感，不改变地形类型判定
+# 覆盖层 0=无, 1=森林, 2=沼泽, 3=浅滩, 4=缓坡, 5=山顶台地。只影响移速/视野/观感与 A* 通行，不改变地形类型判定
 var overlay_grid: Array = []
 const CLIFF_THRESHOLD: float = 3.0     # 与 MovementController 的 A* 陡坡阈值一致：高差 > 此值视为不可翻越
 # 人工山墙（迷宫/台地/环形山/峡谷）的墙高：必须比相邻地面高出 CLIFF_THRESHOLD 以上，
@@ -272,6 +272,8 @@ func _generate_with_stages(size: int, stages: Array) -> void:
 				_op_canyon(size, params)
 			"terrace":
 				_op_terrace(size, params)
+			"mountain_slopes":
+				_op_mountain_slopes(size, params)
 			"crater":
 				_op_crater(size, params)
 			"coast":
@@ -1008,6 +1010,57 @@ func _op_terrace(size: int, params: Dictionary) -> void:
 		_pass_centers.append(Vector2i(int(float(g) * float(size)), int(low_top * float(size))))
 	_pass_centers.append(Vector2i(size / 2, size / 2))
 
+# 太行八陉：一条横向山脊横贯全图，山脊顶部是可站立的高地台地，
+# 但普通山壁仍是悬崖；只有若干条缓坡（overlay=4）能从山脚走上台地。
+# 台地（overlay=5）本身可走，作为高地视野与侧翼通道；山顶不放资源。
+# 山脚与台地之间的高差必须平滑，A* 才会把这些格子当成可通行的缓坡。
+func _op_mountain_slopes(size: int, params: Dictionary) -> void:
+	var ridge_half := maxi(4, int(round(float(params.get("ridge_half_frac", 0.085)) * float(size))))
+	var ramp_len := maxi(6, int(round(float(params.get("ramp_len_frac", 0.11)) * float(size))))
+	var slope_half := maxi(1, int(round(float(params.get("slope_half_frac", 0.022)) * float(size))))
+	var plateau_h := float(params.get("plateau_height", 5.0))
+	var centers: Array = params.get("centers", [0.25, 0.5, 0.75])
+	var seed_val := custom_seed if custom_seed != 0 else randi()
+	var noise := FastNoiseLite.new()
+	noise.seed = seed_val + 8309
+	noise.frequency = 0.06
+	noise.fractal_octaves = 2
+	var cy := int(round(float(size) * 0.5))
+	var ridge_top := maxi(1, cy - ridge_half)
+	var ridge_bottom := mini(size - 2, cy + ridge_half)
+
+	# 山脊顶部整片抬升为可站立的台地。普通山壁在台地外沿，
+	# 高度差超过 CLIFF_THRESHOLD，A* 不会从山脚直接翻上来。
+	for x in range(size):
+		for y in range(ridge_top, ridge_bottom + 1):
+			terrain_grid[x][y] = 1
+			height_grid[x][y] = plateau_h + noise.get_noise_2d(x, y) * 0.12
+			overlay_grid[x][y] = 5
+
+	# 缓坡：从山脚（平地高度）平滑抬升到台地边缘，坡面本身标记为 overlay=4。
+	# 南北两侧各生成一条，保证 1v1 双方都能从自己的半场上山。
+	for c in centers:
+		var cx := clampi(int(round(float(c) * float(size))), slope_half + 1, size - slope_half - 2)
+		for dx in range(-slope_half, slope_half + 1):
+			var x := cx + dx
+			for side in [-1, 1]:
+				var edge_y: int = ridge_top if side < 0 else ridge_bottom
+				var foot_y: int = edge_y + side * ramp_len
+				var y_min: int = mini(edge_y, foot_y)
+				var y_max: int = maxi(edge_y, foot_y)
+				var foot_h: float = float(height_grid[x][clampi(foot_y, 1, size - 2)])
+				for y in range(y_min, y_max + 1):
+					var t := 1.0 - absf(float(y) - float(edge_y)) / float(ramp_len)
+					t = clampf(t, 0.0, 1.0)
+					t = smoothstep(0.0, 1.0, t)
+					terrain_grid[x][y] = 1
+					height_grid[x][y] = lerpf(foot_h, plateau_h, t)
+					overlay_grid[x][y] = 4
+		# 记录坡道入口，供资源/预览等需要"争议点"的逻辑使用
+		_pass_centers.append(Vector2i(cx, ridge_top - ramp_len))
+		_pass_centers.append(Vector2i(cx, ridge_bottom + ramp_len))
+	_pass_centers.append(Vector2i(size / 2, cy))
+
 # 环形山：地图中心一圈环形山壁，四个方向各开一处山口；山心是聚金洼地，
 # 全图金矿只落在四处山口与山心，逼双方为"进坑"还是"守口"做选择
 func _op_crater(size: int, params: Dictionary) -> void:
@@ -1353,6 +1406,16 @@ func _terrain_color_for(terrain_type: int, h: float, gx: int, gy: int, overlay: 
 		elif hv > 0.94:
 			sand = Color(0.38, 0.52, 0.50)     # 偶发水色
 		color = color.lerp(sand, 0.82)
+	elif overlay == 4:
+		# 缓坡：踩实的土石路面，比山体更亮，远看能辨认上山通道
+		var sh := float(absi(hash(Vector2i(gx, gy))) % 1000) / 1000.0
+		var path_color := Color(0.56, 0.48, 0.33).lerp(Color(0.70, 0.62, 0.44), sh)
+		color = color.lerp(path_color, 0.62)
+	elif overlay == 5:
+		# 山顶台地：高山草甸/碎石混合，和陡峭山壁拉开层次
+		var ph := float(absi(hash(Vector2i(gx, gy))) % 1000) / 1000.0
+		var top_color := Color(0.44, 0.46, 0.30).lerp(Color(0.58, 0.55, 0.38), ph)
+		color = color.lerp(top_color, 0.48)
 	# 高频细节噪声：明暗微扰打散整片纯色，远看是自然纹理而不是塑料色块
 	var d := _get_detail_noise().get_noise_2d(float(gx), float(gy))
 	if d > 0.0:

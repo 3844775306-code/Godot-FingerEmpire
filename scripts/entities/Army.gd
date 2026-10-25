@@ -1096,6 +1096,12 @@ func _physics_process(delta):
 				_cached_speed_mod = float(bm.map_modifiers.get("marsh_speed", 0.6))
 			elif not water_capable and here_overlay == 1:
 				_cached_speed_mod = 0.9
+			elif not water_capable and here_overlay == 4:
+				# 缓坡本身的基础速度；具体上下坡倍率由 MovementController 按高差叠加
+				_cached_speed_mod = 0.9
+			elif not water_capable and here_overlay == 5:
+				# 山顶台地可正常展开，但仍比平原略慢
+				_cached_speed_mod = 0.95
 			elif _cached_terrain == 1:
 				_cached_speed_mod = 0.5
 			else:
