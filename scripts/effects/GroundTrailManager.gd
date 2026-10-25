@@ -154,8 +154,10 @@ func _add_print(pos: Vector3, dir: Vector3, vehicle: bool, terrain: int, overlay
 	var right := Vector3(-flat.z, 0.0, flat.x)
 	var lateral: float = 0.0 if vehicle else 0.11 * float(side)
 	var yaw: float = atan2(flat.x, flat.z) + randf_range(-0.15, 0.15)
-	var width: float = 1.55 if vehicle else 0.72
-	var length: float = 2.60 if vehicle else 1.05
+	# 默认 RTS 相机离地约 50 米，脚印在屏幕上只有几十像素；沿用旧版尺寸，
+	# 避免共享池化后视觉上比原来的贴痕小一圈。
+	var width: float = 1.70 if vehicle else 0.75
+	var length: float = 3.00 if vehicle else 1.10
 	var jitter: float = randf_range(0.86, 1.14)
 	var basis := Basis(Vector3.UP, yaw) * Basis.from_scale(Vector3(width * jitter, 1.0, length * jitter))
 	var i := _print_next
@@ -168,18 +170,18 @@ func _add_print(pos: Vector3, dir: Vector3, vehicle: bool, terrain: int, overlay
 	set_process(true)
 
 func _print_color_for(terrain: int, overlay: int, vehicle: bool) -> Color:
-	var color := Color(0.24, 0.18, 0.11, 0.42)
+	var color := Color(0.24, 0.18, 0.11, 0.55)
 	if vehicle:
-		color = Color(0.27, 0.20, 0.13, 0.52)
+		color = Color(0.27, 0.20, 0.13, 0.62)
 	if terrain == 1:
 		# 山地/石地：更像压痕而不是泥印
-		color = Color(0.32, 0.30, 0.27, 0.30)
+		color = Color(0.32, 0.30, 0.27, 0.36)
 	elif overlay == 1:
 		# 森林地表：腐殖土更深
-		color = Color(0.20, 0.18, 0.12, 0.40)
+		color = Color(0.20, 0.18, 0.12, 0.52)
 	elif overlay == 2:
 		# 沼泽：湿泥，深且窄
-		color = Color(0.16, 0.14, 0.10, 0.52)
+		color = Color(0.16, 0.14, 0.10, 0.60)
 	return color
 
 # ── 脚步扬尘 ──
