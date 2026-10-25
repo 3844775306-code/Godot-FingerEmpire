@@ -832,6 +832,12 @@ func _send_building_defenders(building, attacker, now: float) -> void:
 			continue
 		if _is_local_building_defender(u, now):
 			continue
+		# 攻击者可能在船上/墙上，近战或不会对空的兵种去了也打不到，
+		# 不要把名额和回防标记浪费在无法攻击的目标上。
+		if u.has_method("_can_attack_target") and not u._can_attack_target(attacker):
+			continue
+		if u.has_method("_is_target_attackable_now") and not u._is_target_attackable_now(attacker):
+			continue
 		candidates.append(u)
 	# 距离最近的先响应，并限制单座建筑抽兵数量；主城威胁可多派一些。
 	candidates.sort_custom(func(a, b):
@@ -842,8 +848,12 @@ func _send_building_defenders(building, attacker, now: float) -> void:
 		if sent >= max_responders:
 			break
 		# 非驻扎单位的原锚点=接到命令时的位置；目标死亡/超时后回这里，
-		# 避免建筑防守部队被一路带到地图另一头。
-		if u.garrison_point == Vector3.ZERO and u._defense_return_position == Vector3.ZERO:
+		# 避免建筑防守部队被一路带到地图另一头。上一次回防的 meta 已过期时
+		# 要刷新锚点，否则会把它送回上一座建筑附近。
+		var prev_defense_until: float = -1.0
+		if u.has_meta("ai_building_defense_until"):
+			prev_defense_until = float(u.get_meta("ai_building_defense_until"))
+		if u._defense_return_position == Vector3.ZERO or prev_defense_until <= now:
 			u._defense_return_position = u.global_position
 		# 驻扎中的部队也可以回防“自己附近的建筑”，这是防守例外；
 		# 但给它一个短标记，防止同一帧后续守军调度把它重新拉回主城。
