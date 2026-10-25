@@ -2197,6 +2197,14 @@ func _2v2_recall_group(_peer_id: int, data: Dictionary):
 func get_gather_paused(team: int) -> bool:
 	return team_gather_paused.get(team, false)
 
+# Army 用这个接口查询采集暂停状态：
+# 1v1 的 team_gather_paused 按阵营（0/1）记录，2v2/3v3 的 _2v2_stop_gather
+# 按 owner_peer_id 记录；不能一律拿 team 去查，否则 peer_id 1 会和红/蓝阵营键冲突。
+func get_gather_paused_for(owner: int, team: int) -> bool:
+	if game_mode == NetworkManager.GameMode.ONEvONE or owner == -1:
+		return bool(team_gather_paused.get(team, false))
+	return bool(team_gather_paused.get(owner, false))
+
 # Override: 联机模式跳过每帧O(n^2)可见性检查（服务端不需要渲染）
 func _update_visibility():
 	super._update_visibility()    # 调用父类迷雾遮罩逻辑，隐藏视野外单位

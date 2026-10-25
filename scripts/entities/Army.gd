@@ -37,12 +37,17 @@ var _water_damage_timer: float = WATER_DAMAGE_INTERVAL
 var cargo: Dictionary = {"gold": 0, "wood": 0, "stone": 0, "food": 0, "oil": 0}
 var max_cargo: int = 50
 var gatherable_resources: Array = []             
-# 自动搜索资源点的半径（默认与视野一致，农民在 setup 里取视野的一半）
+# 自动搜索资源点的半径（默认与视野一致；半视野会漏掉基地附近的保底农田/金矿）
 var gather_search_range: float = 0.0
 var delivery_target: Building = null
 var last_resource_target: WorldResource = null   
-# 采集时朝资源点移动的累计时长：走不到就放弃重找，避免永久假采集
+# 采集时朝资源点移动的“无进展”累计时长：距离持续缩短就清零，避免长距离赶路被误判
 var _gather_approach_time: float = 0.0
+# 只用“距离是否缩短”判断是否卡住：长距离赶路不能因为总时长超过 8 秒就被放弃
+var _gather_last_dist: float = -1.0
+var _gather_progress_timer: float = 0.0
+# 附近确实没有可采资源时的重搜节流，避免大量空闲农民每帧扫描
+var _gather_search_retry_ms: int = 0
 # 交付时朝仓库/主城移动的累计时长与失败次数：走不到就重算路径、换交付点
 var _deliver_approach_time: float = 0.0
 var _deliver_retry_count: int = 0
@@ -199,8 +204,9 @@ func setup(config: Dictionary):
 		target_type = 0
 	else:
 		target_type = 1
-	# 农民自动找资源点的半径：取视野的一半，采集距离更短、更贴近身边
-	gather_search_range = vision_range * 0.5
+	# 农民自动找资源点的半径：先用整段视野，保证基地附近的保底资源能被发现；
+	# 附近采空后 _find_nearest_resource 还会再扩大一档搜索。
+	gather_search_range = float(vision_range)
 	if entity_id == 14:
 		gather_search_range = maxf(gather_search_range, BOAT_GATHER_SEARCH_RANGE)
 	_animal_type = config.get("animal_type", "")
@@ -232,8 +238,8 @@ func _apply_nation_bonus():
 		attack_range *= mults["attack_range"]
 	if mults.has("vision_range"):
 		vision_range *= int(mults["vision_range"])
-		# 国家加成改视野后，采集搜索半径同步取新视野的一半
-		gather_search_range = vision_range * 0.5
+		# 国家加成改视野后，采集搜索半径同步取新视野
+		gather_search_range = float(vision_range)
 		if entity_id == 14:
 			gather_search_range = maxf(gather_search_range, BOAT_GATHER_SEARCH_RANGE)
 	  # ²»Ö÷¶¯×·»÷£¬Ö»¹¥»÷½øÈëÉä³ÌµÄµÐÈË
@@ -1699,7 +1705,8 @@ func _process_action(delta, bm):
 			_deliver_approach_time = 0.0
 			_deliver_retry_count = 0
 			_set_order(UnitState.IDLE)
-			if is_instance_valid(last_resource_target) and last_resource_target.health > 0:
+			if is_instance_valid(last_resource_target) and last_resource_target.health > 0 \
+					and not _is_target_marked_unreachable(last_resource_target):
 				gather_at(last_resource_target)
 			elif target_type == 0 and not _is_gather_paused():
 				_find_nearest_resource()
@@ -1715,7 +1722,13 @@ func _process_action(delta, bm):
 				_deliver_check_timer = 0.0
 				var moved_enough: bool = _deliver_last_dist < 0.0 or absf(cur_dist - _deliver_last_dist) > 0.4
 				_deliver_last_dist = cur_dist
-				if not moved_enough and _movement:
+				if moved_enough:
+					# 长距离回城也会超过 DELIVER_APPROACH_TIMEOUT，只要距离仍在
+					# 稳定缩短就说明没卡住，必须重置累计时间，否则农民会在半路
+					# 被判定“走不到”而放弃，表现为载着货物发呆。
+					_deliver_approach_time = 0.0
+					_deliver_retry_count = 0
+				elif _movement:
 					_movement.recalculate()
 			if _deliver_approach_time > DELIVER_APPROACH_TIMEOUT:
 				_deliver_approach_time = 0.0
@@ -1730,6 +1743,8 @@ func _process_action(delta, bm):
 				elif _movement:
 					# 主城周围被建筑/单位围住时 A* 会算不出完整路径，强制重算一次
 					_movement.recalculate()
+					_deliver_last_dist = -1.0
+					_deliver_check_timer = 0.0
 			else:
 				# 目标点取建筑外缘（走到城堡中心会导致路径不可达而原地卡住）
 				var arrive: float = delivery_target.body_radius + body_radius + 0.5
@@ -1878,15 +1893,35 @@ func _process_action(delta, bm):
 		if current_target is WorldResource:
 			if h_dist <= 0.5:
 				_gather_approach_time = 0.0
+				_gather_last_dist = -1.0
+				_gather_progress_timer = 0.0
 				_gather(current_target, delta)
 			else:
-				# 超过 GATHER_APPROACH_TIMEOUT 秒还没走到资源点（地形阻挡/被单位挤住/不可达）：
-				# 放弃并重找，否则农民会一直停在原地显示「采集」却收获不到任何资源
-				_gather_approach_time += delta
-				if _gather_approach_time > GATHER_APPROACH_TIMEOUT:
+				# 用“距离有没有缩短”而不是“总走了多久”判断卡住：远距离资源点
+				# 正常赶路可能超过 8 秒，旧的累计计时会在半路把目标丢掉，
+				# 农民随后重新选同一个点，看起来就是原地发呆。
+				_gather_progress_timer += delta
+				if _gather_progress_timer >= 1.0:
+					var gather_moved: bool = _gather_last_dist < 0.0 or h_dist < _gather_last_dist - 0.2
+					if gather_moved:
+						_gather_approach_time = 0.0
+					else:
+						_gather_approach_time += _gather_progress_timer
+					_gather_last_dist = h_dist
+					_gather_progress_timer = 0.0
+				# A* 明确失败（目标点被黑名单/完全不可达）或长时间没有接近：
+				# 把这个资源点记成暂时不可达，换下一个，避免反复锁回同一个点。
+				# 已经很靠近资源时先不走这条：寻路失败但允许最后一段直走，
+				# 否则会站在资源边缘却判定不可达。
+				if _gather_approach_time > GATHER_APPROACH_TIMEOUT \
+						or (_movement.move_path_failed and h_dist > 2.0):
+					_mark_target_unreachable(current_target)
 					_gather_approach_time = 0.0
+					_gather_last_dist = -1.0
+					_gather_progress_timer = 0.0
 					current_target = null
 					_set_order(UnitState.IDLE)
+					_movement.stop()
 					return
 				_movement.set_move_target(current_target.global_position)
 		elif _order_is(UnitState.GATHERING):
@@ -2595,7 +2630,9 @@ func _return_to_deliver() -> bool:
 # ----------------- Ñ°ÕÒ½»¸¶µã -----------------
 func find_delivery_point() -> Building:
 	var best: Building = null
-	var best_dist = vision_range*10
+	# 不再限制 120 米：大图上资源点离主城很远时，旧上限会让满载农民
+	# 找不到交付点而原地发呆。这里始终返回最近的合法主城/仓库。
+	var best_dist: float = INF
 	# 农民每次回城交付都会调用；优先使用 battle 的 Building 缓存，避免全实体扫描
 	var bm = _get_bm()
 	var candidates = bm._buildings if bm else get_tree().get_nodes_in_group("entities")
@@ -2617,11 +2654,23 @@ func find_delivery_point() -> Building:
 
 # ----------------- Ñ°µÐ / Ñ°×ÊÔ´ -----------------
 func _find_nearest_resource():
-	var search_r: float = gather_search_range if gather_search_range > 0.0 else vision_range
+	var search_r: float = gather_search_range if gather_search_range > 0.0 else float(vision_range)
 	var bm = _get_bm()
 	if bm:
-		var best = bm.get_nearest_resource(global_position, search_r, gatherable_resources)
-		if best: gather_at(best)
+		# 附近没有资源时不要每 0.3 秒反复扫一遍大范围；短暂节流即可。
+		var now_ms: int = Time.get_ticks_msec()
+		if now_ms < _gather_search_retry_ms:
+			return
+		var best = _pick_gather_resource(bm, search_r)
+		if best == null:
+			# 身边一圈采空或都被判定不可达时，再向外扩一档，避免农民
+			# 因为半视野/整段视野内暂时没有资源就永久待在原地。
+			var wider: float = maxf(search_r * 2.5, 30.0)
+			best = _pick_gather_resource(bm, wider)
+		if best:
+			gather_at(best)
+		else:
+			_gather_search_retry_ms = now_ms + 800
 		return
 	# 回退：如果没有 battle_manager，使用全量扫描
 	var best_dist = search_r
@@ -2630,9 +2679,38 @@ func _find_nearest_resource():
 		if entity is WorldResource and entity.health > 0:
 			if gatherable_resources.size() > 0 and not entity.resource_type in gatherable_resources:
 				continue
+			if _is_target_marked_unreachable(entity):
+				continue
 			var dist = global_position.distance_to(entity.global_position) - body_radius - entity.body_radius
 			if dist < best_dist: best_dist = dist; best_target = entity
 	if best_target: gather_at(best_target)
+
+# 在指定半径内挑一个“可采且没有被标记为不可达”的最近资源。
+# 先走 battle_manager 的快速最近查询；最近的恰好不可达时，再扫描附近候选，
+# 避免每次都锁回同一个隔着水/墙的资源点反复超时。
+func _pick_gather_resource(bm, radius: float) -> WorldResource:
+	var nearest = bm.get_nearest_resource(global_position, radius, gatherable_resources)
+	if nearest != null and not _is_target_marked_unreachable(nearest):
+		return nearest
+	# get_nearest_resource 只返回一个点，最近的恰好不可达时无法换目标。
+	# 这里直接遍历 battle 的资源缓存（数量远小于单位），筛出范围内可达的次近点。
+	var best: WorldResource = null
+	var best_dist: float = INF
+	var radius_sq: float = radius * radius
+	for entity in bm._resources:
+		if not is_instance_valid(entity) or not (entity is WorldResource) or entity.health <= 0:
+			continue
+		if gatherable_resources.size() > 0 and not entity.resource_type in gatherable_resources:
+			continue
+		if _is_target_marked_unreachable(entity):
+			continue
+		var dist: float = global_position.distance_squared_to(entity.global_position)
+		if dist > radius_sq:
+			continue
+		if dist < best_dist:
+			best_dist = dist
+			best = entity
+	return best
 
 # Unified entity search: finds nearest entity matching filter within range
 func _find_nearest_entity(search_range: float, filter_func: Callable, use_cache: bool = true) -> GameEntity:
@@ -2769,6 +2847,9 @@ func _execute_command(cmd: Dictionary):
 				return
 			current_target = gather_cmd_target
 			_gather_approach_time = 0.0
+			_gather_last_dist = -1.0
+			_gather_progress_timer = 0.0
+			_gather_search_retry_ms = 0
 			_set_order(UnitState.GATHERING)
 			is_attack_moving = false
 			_movement.set_move_target(gather_cmd_target.global_position)
@@ -3352,7 +3433,10 @@ func die_official_cleanup():
 func _is_gather_paused() -> bool:
 	var bm = get_tree().get_first_node_in_group("battle_manager")
 	if not bm: return false
-	# Áª»ú°æÌá¹©ÁË get_gather_paused(team) ·½·¨
+	# 联机 1v1 按阵营记录暂停状态；2v2/3v3 按 owner_peer_id 记录。
+	# 两者键空间是 0/1 与 peer_id，直接拿 team 查会在 2v2 里误读别的玩家状态。
+	if bm.has_method("get_gather_paused_for"):
+		return bm.get_gather_paused_for(owner_peer_id, team)
 	if bm.has_method("get_gather_paused"):
 		return bm.get_gather_paused(team)
 	# µ¥»ú°æ¿ÉÄÜÊÇ²¼¶ûÖµ
