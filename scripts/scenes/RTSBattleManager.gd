@@ -1,6 +1,10 @@
 class_name RTSBattleManager
 extends Node3D
 const BattleStatsScript = preload("res://scripts/core/BattleStats.gd")
+# 强制走程序化攻击动作的兵种：模型即使自带 attack 动画幅度也太小，看不出来
+const PROC_ATTACK_IDS = [18, 16, 17, 13, 39]
+# 开火时需要在炮口喷烟尘火光的兵种（攻城车、火炮、投石车、战船、炮艇，以及塔类）
+const MUZZLE_ATTACK_IDS = [18, 16, 17, 13, 39, 25, 26, 64]
 const BattleStatsPanelScript = preload("res://scripts/ui/BattleStatsPanel.gd")
 const MapPresets = preload("res://scripts/map/MapPresets.gd")
 var previous_emulate_mouse: bool
@@ -1870,7 +1874,10 @@ func _update_entity_animation(entity: GameEntity):
 			anim = "idle"
 	else:
 		anim = "idle"
-	if anim != "" and ap.has_animation(anim):
+	# 这些兵种即使模型自带 attack 动画也偏弱（挥动幅度很小），
+	# 统一强制走程序化动作，保证攻城/远程单位开火时一眼能看出来
+	var force_proc: bool = entity is Army and entity.entity_id in PROC_ATTACK_IDS
+	if anim != "" and ap.has_animation(anim) and not (force_proc and anim == "attack-melee-left"):
 		var spd := 1.0
 		if anim == "attack-melee-left":
 			# 攻击动作按攻击冷却循环；GATHERING 也复用攻击动作，让采集有挥动反馈
@@ -1906,6 +1913,13 @@ func _is_entity_in_action_range(entity: Army) -> bool:
 # 18 攻城车：整台车撞门；35 长枪兵：长距离直刺；17 投石车：后仰甩臂抛石；
 # 16 火炮：开火后坐抬跳；58 连弩：高频小幅连射抖动；其余单位用通用刺击。
 func _play_entity_attack_anim(entity: Army, model: Node3D) -> void:
+	# 开火瞬间在炮口位置喷一小团亮色烟尘：车身位移在远景里容易看漏，
+	# 这个一闪而过的火光才是最容易被眼睛捕捉到的信号。0.5 秒节流避免重复刷。
+	if entity.entity_id in MUZZLE_ATTACK_IDS:
+		var now: float = Time.get_ticks_msec() * 0.001
+		if now - float(entity.get_meta("_muzzle_last", 0.0)) > 0.5:
+			entity.set_meta("_muzzle_last", now)
+			_spawn_muzzle_effect(entity)
 	match entity.entity_id:
 		18:
 			_procedural_ram_attack(model)
@@ -1923,6 +1937,49 @@ func _play_entity_attack_anim(entity: Army, model: Node3D) -> void:
 			_procedural_gunboat_fire(model)
 		_:
 			_procedural_attack(model)
+
+# 攻城/远程单位开火时炮口的短暂烟尘火光
+func _spawn_muzzle_effect(entity: Army) -> void:
+	var root := get_tree().current_scene as Node3D
+	if root == null or not is_instance_valid(entity):
+		return
+	# 沿单位正前方偏移出炮口位置（模型 -Z 为前方）
+	var fwd: Vector3 = -entity.global_transform.basis.z
+	fwd.y = 0.0
+	if fwd.length() < 0.01:
+		fwd = Vector3.FORWARD
+	var muzzle: Vector3 = entity.global_position + fwd.normalized() * (entity.body_radius + 1.3) + Vector3.UP * 0.9
+	var p := CPUParticles3D.new()
+	p.one_shot = true
+	p.amount = 10
+	p.lifetime = 0.5
+	p.explosiveness = 1.0
+	p.direction = Vector3.UP
+	p.spread = 70.0
+	p.initial_velocity_min = 1.0
+	p.initial_velocity_max = 2.8
+	p.gravity = Vector3(0.0, -3.0, 0.0)
+	p.scale_amount_min = 1.0
+	p.scale_amount_max = 1.5
+	var mesh := SphereMesh.new()
+	mesh.radius = 0.16
+	mesh.height = 0.32
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color = Color(1.0, 0.86, 0.52, 0.9)
+	mat.emission_enabled = true
+	mat.emission = Color(1.0, 0.72, 0.32)
+	mat.emission_energy_multiplier = 2.2
+	mesh.material = mat
+	p.mesh = mesh
+	p.position = muzzle
+	root.add_child(p)
+	# 延迟一帧发射，避免同帧 transform 未同步时从原点喷出
+	p.set_deferred("emitting", true)
+	get_tree().create_timer(1.2).timeout.connect(func():
+		if is_instance_valid(p):
+			p.queue_free())
 
 # 长枪兵：枪身长，刺出距离比普通单位远，动作更直、更"戳"
 func _procedural_pike_thrust(model: Node3D) -> void:
