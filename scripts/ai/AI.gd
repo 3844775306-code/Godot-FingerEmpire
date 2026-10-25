@@ -1034,7 +1034,10 @@ func decide(_delta):
 			phase = Phase.ASSAULT
 	if _water_crossing:
 		_water_crossing.tick(_delta)
-	if OS.is_debug_build() and (Engine.get_process_frames() + int(get_instance_id())) % 30 == 0:
+	# 收起时只保留标题，没必要频繁全量统计；展开后提高刷新频率，
+	# 避免点开面板后要等半秒以上才看到第一屏数据。
+	var panel_refresh_interval: int = 30 if _panel_collapsed else 10
+	if OS.is_debug_build() and (Engine.get_process_frames() + int(get_instance_id())) % panel_refresh_interval == 0:
 		update_debug_label()
 func get_team_castle(tm) -> Building:
 	for entity in _cached_buildings():
@@ -3266,8 +3269,16 @@ func set_panel_collapsed(collapsed: bool, relayout: bool = true):
 	debug_panel.size = Vector2(PANEL_WIDTH, h)
 	if not collapsed:
 		debug_panel.set_meta("expanded_at", Time.get_ticks_msec())
+		# 展开的瞬间就补一次数据。之前面板内容只在每 30 帧的定时刷新里更新，
+		# 点开后要等下一次 tick 才能看到第一屏统计，低帧率时尤其像“卡住”。
+		call_deferred("_refresh_debug_panel_now")
 	if relayout and battle and is_instance_valid(battle) and battle.has_method("layout_ai_debug_panels"):
 		battle.layout_ai_debug_panels()
+
+# 展开后的首帧刷新：延迟到布局完成再填数据，避免在按钮回调里做整实体扫描。
+func _refresh_debug_panel_now() -> void:
+	if debug_panel and not _panel_collapsed:
+		update_debug_label()
 
 func _make_rtl() -> RichTextLabel:
 	var r = RichTextLabel.new(); r.bbcode_enabled = true; r.fit_content = true; r.clip_contents = true
