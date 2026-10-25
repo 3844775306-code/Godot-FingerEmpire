@@ -14,6 +14,8 @@ var team_building_levels: Dictionary = {}  # team -> {building_id: level}
 var build_touch_active: bool = false   # 是否正在拖拽建造
 var build_drag_started: bool = false   # 是否已开始拖拽（手指按下后）
 var mobile_keep_build_mode: bool = false  # 移动端连造：放置完成后不退出建造模式
+var mobile_centered_build: bool = false   # 移动端居中建造：预览固定屏幕中央，滑动地图调整位置
+var _mobile_preview_timer: float = 0.0
 # ==================== 人口 ====================
 var player_pop: int = 0
 var player_max_pop: int = 50
@@ -1948,16 +1950,16 @@ func _procedural_catapult_throw(model: Node3D) -> void:
 		return
 	var base_pos: Vector3 = model.position
 	var base_rx: float = model.rotation.x
-	var dur: float = 1.3
+	var dur: float = 1.5
 	var tw := model.create_tween()
 	# 后仰蓄力（车体后倾、略微后移）
-	tw.tween_property(model, "rotation:x", base_rx + 0.55, dur * 0.35) \
+	tw.tween_property(model, "rotation:x", base_rx + 0.85, dur * 0.35) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-	tw.parallel().tween_property(model, "position", base_pos + Vector3(0.0, 0.0, 0.4), dur * 0.35)
+	tw.parallel().tween_property(model, "position", base_pos + Vector3(0.0, 0.0, 0.7), dur * 0.35)
 	# 前甩（甩臂瞬间）
-	tw.tween_property(model, "rotation:x", base_rx - 0.85, dur * 0.2) \
+	tw.tween_property(model, "rotation:x", base_rx - 1.3, dur * 0.2) \
 		.set_trans(Tween.TRANS_EXPO).set_ease(Tween.EASE_IN)
-	tw.parallel().tween_property(model, "position", base_pos + Vector3(0.0, 0.0, -0.5), dur * 0.2)
+	tw.parallel().tween_property(model, "position", base_pos + Vector3(0.0, 0.0, -0.85), dur * 0.2)
 	# 缓慢复位
 	tw.tween_property(model, "rotation:x", base_rx, dur * 0.45) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
@@ -1971,10 +1973,10 @@ func _procedural_cannon_recoil(model: Node3D) -> void:
 	if not _begin_proc_anim(model):
 		return
 	var base_pos: Vector3 = model.position
-	var dur: float = 0.65
+	var dur: float = 0.8
 	var tw := model.create_tween()
 	# 后坐 + 抬跳
-	tw.tween_property(model, "position", base_pos + Vector3(0.0, 0.25, 0.8), dur * 0.18) \
+	tw.tween_property(model, "position", base_pos + Vector3(0.0, 0.45, 1.5), dur * 0.18) \
 		.set_trans(Tween.TRANS_EXPO).set_ease(Tween.EASE_OUT)
 	# 落回原位（轻微弹跳）
 	tw.tween_property(model, "position", base_pos, dur * 0.82) \
@@ -2004,12 +2006,12 @@ func _procedural_warship_fire(model: Node3D) -> void:
 		return
 	var base_pos: Vector3 = model.position
 	var base_rz: float = model.rotation.z
-	var dur: float = 0.55
+	var dur: float = 0.7
 	var tw := model.create_tween()
 	# 后坐 + 微下沉 + 侧倾
-	tw.tween_property(model, "position", base_pos + Vector3(0.0, -0.12, 0.35), dur * 0.3) \
+	tw.tween_property(model, "position", base_pos + Vector3(0.0, -0.22, 0.7), dur * 0.3) \
 		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	tw.parallel().tween_property(model, "rotation:z", base_rz - 0.10, dur * 0.3) \
+	tw.parallel().tween_property(model, "rotation:z", base_rz - 0.2, dur * 0.3) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 	# 回浮归位
 	tw.tween_property(model, "position", base_pos, dur * 0.7) \
@@ -2026,12 +2028,12 @@ func _procedural_gunboat_fire(model: Node3D) -> void:
 		return
 	var base_pos: Vector3 = model.position
 	var base_rz: float = model.rotation.z
-	var dur: float = 0.8
+	var dur: float = 1
 	var tw := model.create_tween()
 	# 后坐 + 明显下沉 + 侧倾
-	tw.tween_property(model, "position", base_pos + Vector3(0.0, -0.3, 0.7), dur * 0.22) \
+	tw.tween_property(model, "position", base_pos + Vector3(0.0, -0.5, 1.3), dur * 0.22) \
 		.set_trans(Tween.TRANS_EXPO).set_ease(Tween.EASE_OUT)
-	tw.parallel().tween_property(model, "rotation:z", base_rz - 0.2, dur * 0.22) \
+	tw.parallel().tween_property(model, "rotation:z", base_rz - 0.38, dur * 0.22) \
 		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	# 浮回原位（带一点弹跳，像船被涌起的浪顶回来）
 	tw.tween_property(model, "position", base_pos, dur * 0.78) \
@@ -2088,15 +2090,15 @@ func _procedural_ram_attack(model: Node3D) -> void:
 	model.set_meta("_proc_ram_running", true)
 	var base_pos: Vector3 = model.position
 	var base_rx: float = model.rotation.x
-	var dur: float = 0.85
+	var dur: float = 1
 	var tw := model.create_tween()
 	# 1) 后拉蓄力
-	tw.tween_property(model, "position", base_pos + Vector3(0.0, 0.0, 0.45), dur * 0.2) \
+	tw.tween_property(model, "position", base_pos + Vector3(0.0, 0.0, 0.8), dur * 0.2) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
 	# 2) 猛地前撞（位移 0.5 米，镜头下能明显看出整台车往前顶）
-	tw.tween_property(model, "position", base_pos + Vector3(0.0, 0.0, -1.4), dur * 0.22) \
+	tw.tween_property(model, "position", base_pos + Vector3(0.0, 0.0, -2.4), dur * 0.22) \
 		.set_trans(Tween.TRANS_EXPO).set_ease(Tween.EASE_IN)
-	tw.parallel().tween_property(model, "rotation:x", base_rx - 0.35, dur * 0.22) \
+	tw.parallel().tween_property(model, "rotation:x", base_rx - 0.5, dur * 0.22) \
 		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	# 3) 弹性回弹归位
 	tw.tween_property(model, "position", base_pos, dur * 0.53) \
@@ -2178,11 +2180,11 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 			var animin: float = _model_local_min_y(ani)
 			if absf(animin) > 0.005:
 				ani.position.y -= animin
-	# 建筑整体放大为原来的 2 倍（瞭望塔 41、城墙 27、炮台 64、桥 7、梯子 8 除外：
+	# 建筑整体放大为原来的 2 倍（瞭望塔 41、城墙 27、炮台 64、桥 7、梯子 8、箭塔 25、炮塔 26 除外：
 	# 它们与地形/城墙拼接尺寸绑定，放大后会出现缝隙、接不上岸或悬空）：
 	# 模型、碰撞体、body_radius 必须一起放大，只放大模型会让单位走进建筑内部，
 	# 放置校验、AOE 判定也仍按旧尺寸计算。
-	if entity is Building and entity.entity_id not in [41, 27, 64, 7, 8]:
+	if entity is Building and entity.entity_id not in [41, 27, 64, 7, 8, 25, 26]:
 		entity.body_radius *= 2.0
 		if entity.has_method("_update_collision_shape"):
 			entity.call("_update_collision_shape")
@@ -2312,6 +2314,10 @@ func _input(event):
 				return
 
 	if build_mode:
+		# 手机端居中建造：单指滑动交给 TouchGestureRouter 平移地图，
+		# 世界点击不再直接放置，确认/取消只走预览下方的勾叉按钮。
+		if mobile_centered_build:
+			return
 		# 移动端触摸建造逻辑
 		if event is InputEventScreenTouch:
 			if event.pressed:
@@ -2831,6 +2837,7 @@ func _place_building():
 func _exit_build_mode():
 	build_mode = false
 	mobile_keep_build_mode = false
+	mobile_centered_build = false
 	build_touch_active = false
 	build_drag_started = false
 	selected_building_id = -1
@@ -2840,6 +2847,31 @@ func _exit_build_mode():
 	if current_build_menu:
 		current_build_menu.queue_free()
 		current_build_menu = null
+
+func _mobile_screen_center() -> Vector2:
+	return get_viewport().get_visible_rect().size * 0.5
+
+# 手机端勾选：在当前屏幕中央尝试建造。连续建造开时保持建造模式，
+# 关闭时由 _place_building() 原有的退出逻辑结束建造。
+func confirm_mobile_build() -> void:
+	if not build_mode or not mobile_centered_build or not build_preview:
+		return
+	_update_build_preview_from_screen(_mobile_screen_center())
+	if not build_preview.visible:
+		return
+	var pos = build_preview.global_position
+	if not is_position_in_player_vision(pos) or not _is_valid_build_position(pos):
+		return
+	# 以当前开关为准，避免进入建造模式后用户又切换连续建造
+	mobile_keep_build_mode = GameSettings.mobile_continuous_build
+	_place_building()
+	if build_mode and mobile_centered_build:
+		_update_build_preview_from_screen(_mobile_screen_center())
+
+# 手机端叉号：无条件退出建造模式
+func cancel_mobile_build() -> void:
+	if build_mode:
+		_exit_build_mode()
 
 func _show_build_menu(world_pos: Vector3):
 	if current_build_menu: current_build_menu.queue_free()
@@ -2912,6 +2944,14 @@ func _on_building_selected_for_build(building_id: int):
 	if building_id in [22, 27, 28]: build_preview.rotation.y = deg_to_rad(90)
 	_tint_preview(build_preview, Color(0, 1, 0))
 	add_child(build_preview)
+
+	# 手机端：选中即把预览放到屏幕中央，之后单指滑动地图调整落点
+	if InputSource.use_mobile_ui():
+		mobile_centered_build = true
+		_pending_left_click = false
+		build_touch_active = false
+		build_drag_started = false
+		_update_build_preview_from_screen(_mobile_screen_center())
 
 # ==================== 战争迷雾 ====================
 func _init_fog_grid():
@@ -3291,6 +3331,12 @@ func _loot_text(loot: Dictionary) -> String:
 # ==================== 每帧更新 ====================
 var _limit_update_timer: float = 0.0
 func _process(delta):
+	# 手机端居中建造：地图被单指平移后，预览始终落在新的屏幕中心
+	if build_mode and mobile_centered_build and build_preview:
+		_mobile_preview_timer -= delta
+		if _mobile_preview_timer <= 0.0:
+			_mobile_preview_timer = 0.05
+			_update_build_preview_from_screen(_mobile_screen_center())
 	# 延迟左键处理：建造模式下直接放置建筑
 	if _pending_left_click:
 		_left_click_timer -= delta

@@ -42,6 +42,7 @@ var last_population: Dictionary = {"current": 0, "max": 0}
 var placement_mode: bool = false
 var placement_building_id: int = -1
 var placement_preview: MeshInstance3D
+var mobile_centered_placement: bool = false  # 手机端：预览固定屏幕中央，滑动地图调整位置
 
 # ==================== 定时器 ====================
 var health_bar_timer: float = 0.0
@@ -184,6 +185,7 @@ func _ready():
 func start_build_placement(bid: int):
 	placement_mode = true
 	placement_building_id = bid
+	mobile_centered_placement = InputSource.use_mobile_ui()
 	var cfg = EntityDatabase.get_config(bid)
 	if cfg.is_empty(): return
 	for c in placement_preview.get_children():
@@ -210,6 +212,10 @@ func start_build_placement(bid: int):
 	if bid == 18: placement_preview.rotation.y = deg_to_rad(-90)
 	_tint_preview(placement_preview, Color(0, 1, 0))
 	placement_preview.visible = true
+	if mobile_centered_placement:
+		var inp = get_node_or_null("ClientInput")
+		if inp and inp.has_method("update_centered_placement_preview"):
+			inp.call("update_centered_placement_preview")
 
 			
 
@@ -1042,8 +1048,8 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 			loaded_model.scale *= 1.5
 		entity.add_child(loaded_model)
 		entity.set_meta("_model_instance", loaded_model)
-		# 建筑整体放大 2 倍（瞭望塔 41、城墙 27、炮台 64、桥 7、梯子 8 除外），与服务端保持视觉一致
-		if int(info.get("type", -1)) == 1 and int(info.get("entity_id", 0)) not in [41, 27, 64, 7, 8]:
+		# 建筑整体放大 2 倍（瞭望塔 41、城墙 27、炮台 64、桥 7、梯子 8、箭塔 25、炮塔 26 除外），与服务端保持视觉一致
+		if int(info.get("type", -1)) == 1 and int(info.get("entity_id", 0)) not in [41, 27, 64, 7, 8, 25, 26]:
 			loaded_model.scale *= 2.0
 			if aabb.size.y > 0.01:
 				loaded_model.position.y -= aabb.position.y * 2.0
