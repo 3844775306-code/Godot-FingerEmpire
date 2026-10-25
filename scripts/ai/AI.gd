@@ -107,10 +107,17 @@ const RAID_UNIT: int = 15
 const WALL_COUNT: int = 12
 const WALL_SPACING: float = 1.3
 # 远程单位上墙：墙未破时免疫伤害，因此优先把闲置远程兵铺到墙格上；
-# 每格一个单位，赶路中的单位用 ai_wall_guard 预留墙格。
+# 每面城墙独立选择“墙顶炮台”或“远程驻军”，赶路中的单位用 ai_wall_guard 预留墙格。
 const WALL_DEPLOY_INTERVAL: float = 6.0
 const WALL_DEPLOY_MAX_DISTANCE: float = 60.0
+const WALL_CANNON_ID: int = 64
+const WALL_GUARD_MODE_META: String = "ai_wall_guard_mode"
+const WALL_GUARD_TARGET_META: String = "ai_wall_guard_target"
+const WALL_GUARD_SMALL_META: String = "ai_wall_guard_small"
+const WALL_GUARD_SLOT_META: String = "ai_wall_guard_slot"
+const WALL_GUARD_SMALL_BODY: float = 0.5
 var _wall_deploy_timer: float = 0.0
+var defense_wall_axis: Vector3 = Vector3.RIGHT
 const TOWER_SPACING: float = 3.0
 const DEFENSE_FRONT_DIST: float = 8.0
 const BUILD_ENEMY_ARMY_SAFE_RADIUS: float = 10.0
@@ -359,7 +366,7 @@ func _ai_can_build(building_id: int) -> bool:
 	var castle = get_peer_castle(my_peer_id)
 	if castle: cl = castle.upgrade_level
 	match building_id:
-		23, 25, 26:  # 船坞、箭塔、炮塔 → 城堡2级
+		23, 25, 26, 64:  # 船坞、箭塔、炮塔、墙顶炮台 → 城堡2级
 			return cl >= 2
 		24, 29, 52:   # 攻城车间、重装武器厂、集市 → 城堡3级
 			return cl >= 3
@@ -624,9 +631,24 @@ func _can_place_ai_building(building_id: int, pos: Vector3) -> bool:
 	var cfg = EntityDatabase.get_config(building_id)
 	if not cfg: return false
 	var radius = maxf(0.5, float(cfg.get("body_radius", 1.0)))
+	# 炮台墙顶专用：必须落在己方完整城墙上；它与所依附的城墙允许重叠。
+	var wall_only: bool = building_id == WALL_CANNON_ID
+	if wall_only:
+		var on_own_wall := false
+		for e in battle.entities.get_children():
+			if e is Building and e.entity_id == 27 and e.health > 0 and e.build_timer <= 0.0 \
+					and entity_belongs_to_me(e):
+				if e.global_position.distance_to(pos) < e.body_radius + 0.2:
+					on_own_wall = true
+					break
+		if not on_own_wall:
+			return false
 	# 与所有存活建筑/资源点做实际体积相交检测；单位可以移动，不在这里卡建造
 	for e in battle.entities.get_children():
 		if not (e is Building or e is WorldResource) or e.health <= 0: continue
+		# 炮台本来就该压在墙顶上，不能把所依附的城墙当成重叠障碍。
+		if wall_only and e is Building and e.entity_id == 27 and entity_belongs_to_me(e):
+			continue
 		var other_radius = maxf(0.3, float(e.body_radius))
 		var min_dist = radius + other_radius + 0.15
 		# 城墙本来就是首尾相接的连续墙段，允许墙与墙贴紧；墙和其他建筑仍按体积避让
@@ -641,8 +663,11 @@ func build_building(building_id: int, pos: Vector3, facing: Vector3 = Vector3.ZE
 	if not cfg: return false
 	# Check castle level requirement (matches RTSBattleManager.is_building_unlocked)
 	if not _ai_can_build(building_id): return false
-	# 城墙允许建 WALL_COUNT 面（防线需求），民居最多 HOUSE_TARGET_MAX 座，其余建筑上限 10
+	# 城墙允许建 WALL_COUNT 面（防线需求），民居最多 HOUSE_TARGET_MAX 座，
+	# 墙顶炮台最多 WALL_COUNT 座；其余建筑上限 10
 	var _cap = WALL_COUNT if building_id == 27 else (target_house_count if building_id == 28 else 10)
+	if building_id == WALL_CANNON_ID:
+		_cap = WALL_COUNT
 	if count_building(building_id) >= _cap: return false
 	# 周围 10 单位内不能有敌方作战军队；否则直接放弃本次建造，不扣资源
 	if _enemy_army_within(pos):
@@ -1943,6 +1968,7 @@ func build_defense_line():
 	var front_center = castle.global_position + enemy_dir.normalized() * DEFENSE_FRONT_DIST
 	wall_positions.clear(); tower_positions.clear()
 	var right_dir = enemy_dir.cross(Vector3.UP).normalized()
+	defense_wall_axis = right_dir
 	var tower_front = front_center - enemy_dir * 1.8
 	for i in range(4):
 		var offset = (i - 1.5) * TOWER_SPACING
@@ -2021,6 +2047,7 @@ func _plan_defense_line() -> bool:
 	var front_center = castle.global_position + enemy_dir * DEFENSE_FRONT_DIST
 	var right_dir = enemy_dir.cross(Vector3.UP).normalized()
 	wall_positions.clear(); tower_positions.clear(); _defense_queue.clear()
+	defense_wall_axis = right_dir
 	var tower_front = front_center - enemy_dir * 1.8
 	for i in range(4):
 		var offset = (i - 1.5) * TOWER_SPACING
@@ -2483,7 +2510,8 @@ func _rally_land_army_to_castle():
 
 # ═══ Wall Defense Deployment ═══
 # 把闲置远程单位送上前线城墙。城墙未破时单位免疫伤害，且站得高射界好；
-# 每个墙格只安排一个单位，移动中的单位保留 ai_wall_guard 元数据防止重复派人。
+# 每面墙独立决定炮台/驻军，小型远程单位可派 2~3 个，移动中的单位保留
+# ai_wall_guard 元数据防止重复派人。
 func _is_valid_wall_slot(wall) -> bool:
 	return is_instance_valid(wall) and wall is Building and int(wall.entity_id) == 27 and wall.health > 0 and wall.build_timer <= 0.0
 
@@ -2515,23 +2543,58 @@ func _is_ranged_wall_candidate(e) -> bool:
 		return false
 	return true
 
-func _assign_wall_guard(unit, wall) -> void:
+func _assign_wall_guard(unit, wall, slot: int = 0, count: int = 1) -> void:
 	unit.set_meta("ai_wall_guard", wall.get_instance_id())
+	unit.set_meta(WALL_GUARD_SLOT_META, slot)
 	unit.hold_position = true
-	# 已经在墙上就不重复下令；否则走到墙格中心，MovementController 会自动把高度抬到墙顶。
-	if not unit._is_unit_on_wall():
-		_order_wall_move(unit, wall)
+	# 同一个墙格可能安排 2~3 个小型远程兵，用槽位错开站位；
+	# MovementController 会在进入墙格后自动把高度抬到墙顶。
+	_order_wall_move(unit, wall, slot, count)
 
-func _order_wall_move(unit, wall) -> void:
+func _order_wall_move(unit, wall, slot: int = 0, count: int = 1) -> void:
+	var target_pos: Vector3 = _wall_guard_slot_position(wall, slot, count)
 	# 城墙刚补建/刚完成时，单位可能曾把该墙格记为不可达；不清掉的话会永远站在原地。
 	if unit._movement:
-		unit._movement.clear_blacklist_at(wall.global_position)
-	unit.move_to(wall.global_position)
+		unit._movement.clear_blacklist_at(target_pos)
+	unit.move_to(target_pos)
+
+func _wall_guard_slot_position(wall, slot: int, count: int) -> Vector3:
+	var offsets: Array = [0.0]
+	if count == 2:
+		offsets = [-0.35, 0.35]
+	elif count >= 3:
+		offsets = [-0.35, 0.0, 0.35]
+	var idx: int = clampi(slot, 0, offsets.size() - 1)
+	var axis: Vector3 = defense_wall_axis
+	if axis.length_squared() < 0.01:
+		axis = _wall_guard_neighbor_axis(wall)
+	# 用城墙所在格中心作为站位基准，而不是建筑节点中心：
+	# 偏移一旦超过半格，world_to_grid 会落到相邻格，单位就失去墙顶免疫。
+	var g: Vector2i = battle.world_to_grid(wall.global_position)
+	var base: Vector3 = battle.grid_to_world(g.x, g.y)
+	base.y = wall.global_position.y
+	return base + axis.normalized() * float(offsets[idx])
+
+# 防线方向由 _plan_defense_line 记录；若旧城墙没有记录，就用最近同阵营城墙推断墙线方向。
+func _wall_guard_neighbor_axis(wall) -> Vector3:
+	var best: Building = null
+	var best_d: float = 4.0
+	for b in _cached_buildings():
+		if b == wall or not _is_valid_wall_slot(b) or not entity_belongs_to_me(b):
+			continue
+		var d: float = wall.global_position.distance_to(b.global_position)
+		if d > 0.05 and d < best_d:
+			best_d = d
+			best = b
+	if best != null:
+		return (best.global_position - wall.global_position).normalized()
+	return Vector3.RIGHT
 
 func _release_wall_guard(unit) -> void:
 	if not is_instance_valid(unit):
 		return
 	unit.remove_meta("ai_wall_guard")
+	unit.remove_meta(WALL_GUARD_SLOT_META)
 	unit.hold_position = false
 	if unit.current_order == "move":
 		unit.stop_movement()
@@ -2541,7 +2604,8 @@ func _deploy_ranged_units_to_walls() -> void:
 		return
 	var armies: Array = _cached_armies()
 	var occupied: Dictionary = {}
-	var reserved: Dictionary = {}
+	var guard_count: Dictionary = {}
+	var used_slots: Dictionary = {}
 	for e in armies:
 		if not is_instance_valid(e) or e.health <= 0:
 			continue
@@ -2559,7 +2623,11 @@ func _deploy_ranged_units_to_walls() -> void:
 		if not _is_valid_wall_slot(wall):
 			_release_wall_guard(e)
 			continue
-		reserved[wid] = true
+		guard_count[wid] = int(guard_count.get(wid, 0)) + 1
+		var slot: int = int(e.get_meta(WALL_GUARD_SLOT_META, 0))
+		if not used_slots.has(wid):
+			used_slots[wid] = {}
+		used_slots[wid][slot] = true
 		if e._is_unit_on_wall():
 			# 已经站上城墙：锁定站位，避免剩余路径让它在墙顶来回走。
 			e.hold_position = true
@@ -2567,20 +2635,15 @@ func _deploy_ranged_units_to_walls() -> void:
 				e.stop_movement()
 		elif e.current_order == "":
 			# 中途被打断/寻路失败回到空闲时重新送上去；战斗中不强行拉走。
-			_order_wall_move(e, wall)
+			_order_wall_move(e, wall, slot, int(e.get_meta(WALL_GUARD_TARGET_META, 1)))
 	# 炮台等墙顶建筑也占用墙格，避免远程兵与炮台重叠
 	for b in _cached_buildings():
-		if is_instance_valid(b) and b.health > 0 and int(b.entity_id) == 64:
+		if is_instance_valid(b) and b.health > 0 and int(b.entity_id) == WALL_CANNON_ID:
 			occupied[battle.world_to_grid(b.global_position)] = true
 	var walls: Array = []
 	for b in _cached_buildings():
-		if not _is_valid_wall_slot(b) or not entity_belongs_to_me(b):
-			continue
-		if reserved.has(b.get_instance_id()):
-			continue
-		if occupied.has(battle.world_to_grid(b.global_position)):
-			continue
-		walls.append(b)
+		if _is_valid_wall_slot(b) and entity_belongs_to_me(b):
+			walls.append(b)
 	if walls.is_empty():
 		return
 	var candidates: Array = []
@@ -2592,20 +2655,114 @@ func _deploy_ranged_units_to_walls() -> void:
 		if occupied.has(battle.world_to_grid(e.global_position)):
 			continue
 		candidates.append(e)
+	# 每面城墙独立抽一次：50% 建炮台，50% 派远程单位驻守。
+	# 抽签结果和驻守目标数记在城墙节点上，城墙存活期间不会每次检查都改主意。
 	for wall in walls:
-		if candidates.is_empty():
-			break
-		var best = null
-		var best_d: float = WALL_DEPLOY_MAX_DISTANCE * WALL_DEPLOY_MAX_DISTANCE
-		for u in candidates:
-			var d: float = u.global_position.distance_squared_to(wall.global_position)
-			if d < best_d:
-				best_d = d
-				best = u
-		if best == null:
+		var wid: int = wall.get_instance_id()
+		var wall_grid: Vector2i = battle.world_to_grid(wall.global_position)
+		var have: int = int(guard_count.get(wid, 0))
+		var mode: String = str(wall.get_meta(WALL_GUARD_MODE_META, ""))
+		# 炮台可能已存在但元数据丢失（例如重载/旧逻辑），先按炮台墙处理。
+		if _wall_has_cannon(wall):
+			wall.set_meta(WALL_GUARD_MODE_META, "cannon")
+			occupied[wall_grid] = true
 			continue
-		_assign_wall_guard(best, wall)
-		candidates.erase(best)
+		# 已有其他单位站在墙格上且不是本逻辑派出的守军时，保留原状态，不硬塞炮台。
+		if have <= 0 and occupied.has(wall_grid):
+			continue
+		if have > 0 and mode != "ranged":
+			mode = "ranged"
+			wall.set_meta(WALL_GUARD_MODE_META, mode)
+		if mode == "":
+			mode = "cannon" if randf() < 0.5 else "ranged"
+			wall.set_meta(WALL_GUARD_MODE_META, mode)
+		if mode == "cannon":
+			if have > 0:
+				# 老存档/旧逻辑已经在墙上放了兵，就不再硬塞炮台，避免重叠。
+				wall.set_meta(WALL_GUARD_MODE_META, "ranged")
+			elif _try_build_wall_cannon(wall):
+				occupied[wall_grid] = true
+			continue
+		var target: int = int(wall.get_meta(WALL_GUARD_TARGET_META, 0))
+		var want_small: bool = bool(wall.get_meta(WALL_GUARD_SMALL_META, false))
+		if target <= 0:
+			var first = _pick_random_wall_candidate(candidates, wall, -1)
+			if first == null:
+				continue
+			want_small = _is_small_wall_guard(first)
+			target = randi_range(2, 3) if want_small else 1
+			wall.set_meta(WALL_GUARD_TARGET_META, target)
+			wall.set_meta(WALL_GUARD_SMALL_META, want_small)
+			var first_slot: int = _find_free_wall_slot(used_slots.get(wid, {}), target)
+			if first_slot >= 0:
+				_assign_wall_guard(first, wall, first_slot, target)
+				candidates.erase(first)
+				if not used_slots.has(wid):
+					used_slots[wid] = {}
+				used_slots[wid][first_slot] = true
+				have += 1
+		if have >= target:
+			continue
+		var want_flag: int = 1 if want_small else 0
+		while have < target:
+			var pick = _pick_random_wall_candidate(candidates, wall, want_flag)
+			if pick == null and want_flag != -1:
+				# 同类兵不够时允许用其他远程单位补位，避免城墙一直空着。
+				pick = _pick_random_wall_candidate(candidates, wall, -1)
+			if pick == null:
+				break
+			var slot: int = _find_free_wall_slot(used_slots.get(wid, {}), target)
+			if slot < 0:
+				break
+			_assign_wall_guard(pick, wall, slot, target)
+			candidates.erase(pick)
+			if not used_slots.has(wid):
+				used_slots[wid] = {}
+			used_slots[wid][slot] = true
+			have += 1
+
+func _is_small_wall_guard(unit) -> bool:
+	return float(unit.body_radius) <= WALL_GUARD_SMALL_BODY
+
+func _find_free_wall_slot(used: Dictionary, count: int) -> int:
+	for i in range(count):
+		if not used.has(i):
+			return i
+	return -1
+
+# 从候选里随机挑一个；want_small: -1=不限，1=小型远程，0=大型远程。
+func _pick_random_wall_candidate(candidates: Array, wall, want_small: int):
+	var pool: Array = []
+	var max_d2: float = WALL_DEPLOY_MAX_DISTANCE * WALL_DEPLOY_MAX_DISTANCE
+	for u in candidates:
+		if not is_instance_valid(u) or u.health <= 0:
+			continue
+		if u.global_position.distance_squared_to(wall.global_position) > max_d2:
+			continue
+		var small: bool = _is_small_wall_guard(u)
+		if want_small == 1 and not small:
+			continue
+		if want_small == 0 and small:
+			continue
+		pool.append(u)
+	if pool.is_empty():
+		return null
+	return pool.pick_random()
+
+func _wall_has_cannon(wall) -> bool:
+	for b in _cached_buildings():
+		if b is Building and b.health > 0 and int(b.entity_id) == WALL_CANNON_ID \
+				and entity_belongs_to_me(b):
+			if b.global_position.distance_to(wall.global_position) < 0.9:
+				return true
+	return false
+
+func _try_build_wall_cannon(wall) -> bool:
+	if _wall_has_cannon(wall):
+		return true
+	if not _ai_can_build(WALL_CANNON_ID) or not can_afford_building(WALL_CANNON_ID):
+		return false
+	return build_building(WALL_CANNON_ID, wall.global_position)
 
 # ═══ Naval Patrol ═══
 func _patrol_navy_around_water():
