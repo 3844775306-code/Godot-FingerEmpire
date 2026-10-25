@@ -27,6 +27,10 @@ var wanted_units: Array = [11,12,15,16,17,18,35,36,37,38,39,40,13,43,44,45,46,47
 var target_army_count: int = 7
 # 贸易车只跟随这四种商人；AI 生产贸易车时数量必须小于商人数量，避免刷出一堆闲置车
 const TRADE_CART_ID: int = 6
+# 官员/商人由各自的生产逻辑管理（官员一栋建筑只能一个），
+# 不能像战斗单位一样按 target_army_count 反复补。否则书院升级后
+# AI 会把大量官员当普通兵排队生产，最终一堆官员没有建筑可进驻。
+const SUPPORT_UNIT_IDS: Array = [43, 44, 45, 46, 47, 48, 49, 50, 51]
 const MERCHANT_UNIT_IDS: Array = [43, 44, 45, 51]
 # 民居数量上限：第 X 分钟至少 X 座（X 最多 8），提前一分钟开工保证到点时已建成
 const HOUSE_TARGET_MAX: int = 8
@@ -1631,19 +1635,71 @@ func _ai_expand_territory():
 
 # ═══ Officials ═══
 func _ai_garrison_officials():
-	if count_building(42) == 0: return
+	# 书院被拆后不要停止管理已有官员：他们仍然可以进驻剩余建筑，
+	# 只是享受不到书院等级加成。原来看 count_building(42)==0 就直接返回，
+	# 会留下一批永远站在野外的官员。
 	for entity in battle.entities.get_children():
 		if not (entity is Army and entity.entity_id >= 46 and entity.entity_id <= 50 and entity.health > 0): continue
 		if not entity_belongs_to_me(entity): continue
+		if Time.get_ticks_msec() < int(entity.get_meta("_official_retry_after", 0)): continue
 		var gb = entity.get("_garrison_building")
-		if gb and gb.get_ref(): continue
-		if entity.get("_garrison_target_id") != -1: continue
+		if gb and gb.get_ref():
+			# 之前因为缺少对应建筑而临时退回主城的官员，一旦 AI 补回仓库/塔/
+			# 生产建筑，就重新改派到真正能发挥作用的建筑，不能一直留在主城。
+			if entity.entity_id in [46, 47, 48] and not _official_building_is_preferred(entity.entity_id, gb.get_ref()):
+				# 已经在前往另一栋建筑的路上时不要重复改派，尤其 48 的目标是
+				# 随机选的，否则每轮 think 都可能换目标，官员永远走不到。
+				if int(entity.get("_garrison_target_id")) != -1:
+					continue
+				var preferred := _find_preferred_official_building_s(entity.entity_id)
+				if preferred != null:
+					entity.command_garrison(preferred)
+			continue
+		if entity.get("_garrison_target_id") != -1:
+			# 目标建筑中途被拆/开始重建时，及时清掉目标，下一轮重新选空位
+			var target_id := int(entity.get("_garrison_target_id"))
+			var existing_target: Building = null
+			for b in battle.entities.get_children():
+				if b is Building and b.get_instance_id() == target_id:
+					existing_target = b
+					break
+			if existing_target == null or existing_target.health <= 0 or existing_target.build_timer > 0:
+				entity._garrison_target_id = -1
+				entity._set_order(Army.UnitState.IDLE)
+				entity._movement.stop()
+			elif entity._movement.move_path_failed:
+				# 目标建筑还在，但路径失败（被墙/水隔断等）：清掉目标并短暂退避，
+				# 否则 _garrison_target_id 会一直非 -1，AI 永远不会重新选址。
+				entity._garrison_target_id = -1
+				entity._set_order(Army.UnitState.IDLE)
+				entity._movement.stop()
+				entity.set_meta("_official_retry_after", Time.get_ticks_msec() + 3000)
+			continue
+		# 统帅(49)不占建筑，只需要待在城堡/主力附近提供光环；
+		# 原逻辑没有 49 的分支，AI 造出来后会永远闲置。
+		if entity.entity_id == 49:
+			if entity._order_is(Army.UnitState.MOVING):
+				continue
+			var commander_hold_until := int(entity.get_meta("_ai_commander_hold_until", 0))
+			if Time.get_ticks_msec() < commander_hold_until:
+				continue
+			var station := _find_commander_station_s()
+			if station:
+				entity.command_garrison(station)
+				# 统帅不占建筑，到达后 _garrison_target_id 仍是 -1；
+				# 加一个冷却，避免 AI 每轮 think 都重新下发移动命令。
+				entity.set_meta("_ai_commander_hold_until", Time.get_ticks_msec() + 15000)
+			continue
 		var target: Building = null
 		match entity.entity_id:
 			46: target = _find_vacant_warehouse_s()
 			47: target = _find_vacant_tower_s()
 			48: target = _find_random_prod_or_def_s()
 			50: target = _find_most_officiated_s()
+		if target == null:
+			# 暂时没有对应类型的空建筑（例如仓库/塔被拆光）时，先退回主城，
+			# 至少不要站在野外闲置；等 AI 补回对应建筑后会再改派。
+			target = _find_commander_station_s()
 		if target: entity.command_garrison(target)
 
 # ═══ Hunting ═══
@@ -2351,10 +2407,49 @@ func _find_vacant_warehouse_s() -> Building:
 
 func _find_vacant_tower_s() -> Building:
 	for e in battle.entities.get_children():
-		if e is Building and e.entity_id in [25,26] and e.team == my_team and e.health > 0:
+		if e is Building and e.entity_id in [25,26] and e.team == my_team and e.health > 0 and e.build_timer <= 0:
 			if not _official_slot_claimed(e, 47):
 				return e
 	return null
+
+# 统帅不占建筑，优先去自己的主城；没有主城时退而找任意已建成建筑。
+func _find_commander_station_s() -> Building:
+	var fallback: Building = null
+	for e in battle.entities.get_children():
+		if not (e is Building and e.team == my_team and e.health > 0 and e.build_timer <= 0):
+			continue
+		if e.entity_id == 20:
+			return e
+		if fallback == null:
+			fallback = e
+	return fallback
+
+func _find_preferred_official_building_s(official_id: int) -> Building:
+	match official_id:
+		46: return _find_vacant_warehouse_s()
+		47: return _find_vacant_tower_s()
+		48: return _find_random_prod_or_def_s()
+	return null
+
+func _official_building_is_preferred(official_id: int, building: Building) -> bool:
+	if building == null or not is_instance_valid(building):
+		return false
+	match official_id:
+		46: return building.entity_id == 22
+		47: return building.entity_id in [25, 26]
+		48: return building.entity_id in [21, 23, 24, 29, 25, 26]
+	return true
+
+# 训练官员前先确认有可进驻的空位，避免书院升级后一次性造出
+# 一批“没有对应建筑可去”的官员，只能站在基地里发呆。
+func _official_has_slot(official_id: int) -> bool:
+	match official_id:
+		46: return _find_vacant_warehouse_s() != null
+		47: return _find_vacant_tower_s() != null
+		48: return _find_random_prod_or_def_s() != null
+		49: return true  # 统帅不占建筑，只要还有己方建筑就能提供光环
+		50: return _find_most_officiated_s() != null
+	return false
 
 func _find_random_prod_or_def_s() -> Building:
 	var cand = []
@@ -2447,7 +2542,13 @@ func _try_produce_merchants_or_officials() -> bool:
 		var alv = _get_academy_lv()
 		for i in range(alv):
 			var oid = [46, 47, 48, 49, 50][i]
-			if count_unit(oid) < 1 and can_afford(oid) and _can_train_unit():
+			if count_unit(oid) >= 1:
+				continue
+			if not _official_has_slot(oid):
+				# 没有仓库/塔/生产建筑的对应空位时先不造，等 AI 建出空位再补，
+				# 避免官员出生后就长期闲置。
+				continue
+			if can_afford(oid) and _can_train_unit():
 				if produce_unit(oid): return true
 	return false
 
@@ -2473,6 +2574,8 @@ func _process_line_military():
 	var priority = get_counter_priority()
 	
 	for u_id in priority:
+		if u_id in SUPPORT_UNIT_IDS:
+			continue
 		if u_id == TRADE_CART_ID and count_unit(TRADE_CART_ID) >= _count_merchants():
 			continue
 		if count_unit(u_id) < target_army_count and can_afford(u_id) and _can_train_unit():
