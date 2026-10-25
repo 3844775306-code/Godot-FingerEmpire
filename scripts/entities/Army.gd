@@ -285,8 +285,21 @@ func _setup_prints() -> void:
 	pmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	pmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	pmat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	# 比之前更暗更实：太淡的深色贴花在草地上几乎看不见
-	pmat.albedo_color = Color(0.14, 0.11, 0.07, 0.62) if vehicle else Color(0.18, 0.14, 0.09, 0.52)
+	# 硬边矩形看起来像贴纸，用径向渐变做柔边：中心实、边缘透明，
+	# 再配合非等比拉伸就是一枚椭圆脚印/一段压痕。
+	var shape_grad := Gradient.new()
+	shape_grad.set_color(0, Color(1.0, 1.0, 1.0, 1.0))
+	shape_grad.set_color(1, Color(1.0, 1.0, 1.0, 0.0))
+	var shape_tex := GradientTexture2D.new()
+	shape_tex.gradient = shape_grad
+	shape_tex.fill = GradientTexture2D.FILL_RADIAL
+	shape_tex.fill_from = Vector2(0.5, 0.5)
+	shape_tex.fill_to = Vector2(1.0, 0.5)
+	shape_tex.width = 96
+	shape_tex.height = 96
+	pmat.albedo_texture = shape_tex
+	# 土壤色而不是纯黑，压在草地上才像被踩实的土
+	pmat.albedo_color = Color(0.30, 0.22, 0.14, 0.62) if vehicle else Color(0.34, 0.26, 0.17, 0.50)
 	for i in 14:
 		var mi := MeshInstance3D.new()
 		mi.name = "GroundPrint"
@@ -317,9 +330,12 @@ func _update_prints(delta: float, move_dir: Vector3) -> void:
 		return
 	_print_idx = (_print_idx + 1) % _prints.size()
 	# 抬到地面上方 4 厘米，避免与地形共面产生 z-fighting 而闪烁不可见
-	mi.global_position = Vector3(global_position.x, global_position.y + 0.04, global_position.z)
+	mi.global_position = Vector3(global_position.x, global_position.y + 0.06, global_position.z)
 	if move_dir.length_squared() > 0.0001:
-		mi.rotation.y = atan2(move_dir.x, move_dir.z)
+		# 加一点随机偏转和缩放：完全等距等大的痕迹会像规则网格，很不自然
+		mi.rotation.y = atan2(move_dir.x, move_dir.z) + randf_range(-0.28, 0.28)
+	var jitter: float = randf_range(0.82, 1.18)
+	mi.scale = Vector3(jitter, 1.0, jitter)
 	mi.visible = true
 
 func _exit_tree() -> void:
