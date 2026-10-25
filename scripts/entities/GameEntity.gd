@@ -270,7 +270,9 @@ func take_damage(amount: float, source = null):
 						msg = "%s正遭受攻击 %s%s" % [display_name, loc_str, group_str]
 					else:
 						msg = "我方%s正遭受攻击 %s%s" % [display_name, loc_str, group_str]
-					bm._show_hud_alert(msg, Color(1.0, 0.2, 0.1), team)
+					# 攻守双方都带上：攻击方在前、被攻击方在后
+					var atk_team: int = int(source.team) if source and is_instance_valid(source) else -1
+					bm._show_hud_alert(msg, Color(1.0, 0.2, 0.1), [atk_team, team], team)
 					bm._set_alert_cooldown(cooldown_key, 3.0)
 	# 乱斗 FFA 军事伤害背叛上报：军队对当前仍结盟的盟友造成军事伤害 → 揭发背叛。
 	# notify_military_attack 内部会再校验 is_ally；非盟/同国/中立伤害均不产生副作用。
@@ -582,7 +584,7 @@ func _spawn_produced_unit():
 				if groups.size() > 0:
 					group_str = " [T%d]" % groups[0]
 			var loc_str = "(%d,%d)" % [int(global_position.x), int(global_position.z)]
-			bm._show_hud_alert("训练完成: %s%s %s" % [unit_name, group_str, loc_str], Color(0.2, 1.0, 0.3), team)
+			bm._show_hud_alert("训练完成: %s%s %s" % [unit_name, group_str, loc_str], Color(0.2, 1.0, 0.3), [team], team)
 	# 继承建筑的驻扎点
 	if self is Building and self.garrison_point != Vector3.ZERO:
 		if entity is Army and entity.has_method("_is_military") and entity._is_military():

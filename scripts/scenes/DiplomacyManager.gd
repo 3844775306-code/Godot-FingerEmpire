@@ -152,7 +152,7 @@ func propose_alliance(from_owner: int, to_owner: int) -> bool:
 	_pending_proposals[from_owner] = to_owner
 	# 面向玩家的新提议弹一次横幅，玩家不盯面板也能第一时间看到
 	if battle and to_owner == battle.player_owner_id and prev != to_owner:
-		_alert("%s 向你提议结盟（请在右侧外交部处理）" % get_display_name(from_owner), Color(0.3, 0.9, 1.0))
+		_alert("向你提议结盟（请在右侧外交部处理）", Color(0.3, 0.9, 1.0), [get_team_of(from_owner)])
 	return true
 
 # 返回曾向 owner 发起提议、尚待 owner 接受的国家
@@ -195,7 +195,7 @@ func _create_alliance(a: int, b: int, now: float) -> void:
 		"expires_at": now + ALLIANCE_BASE_SECONDS,
 		"total_tribute": 0,
 	}
-	_alert("%s 与 %s 结为盟友" % [get_display_name(a), get_display_name(b)], Color(0.3, 0.9, 1.0))
+	_alert("两国结为盟友", Color(0.3, 0.9, 1.0), [get_team_of(a), get_team_of(b)])
 
 # ==================== 进贡 ====================
 # 发送方扣除 TRIBUTE_DELIVERY，接收方入账；累计 1000 延长联盟 30 秒（上限 5 分钟）
@@ -234,9 +234,8 @@ func _report_tribute(a: int, b: int, amount: int) -> void:
 	)
 	if desired > al["expires_at"]:
 		al["expires_at"] = desired
-		_alert("%s → %s 进贡使联盟延长至 %.0f 秒" % [
-			get_display_name(a), get_display_name(b), al["expires_at"] - al["start_time"]
-		], Color(0.3, 0.9, 0.6))
+		_alert("进贡使联盟延长至 %.0f 秒" % [al["expires_at"] - al["start_time"]],
+			Color(0.3, 0.9, 0.6), [get_team_of(a), get_team_of(b)])
 
 # ==================== 决裂 / 背叛 ====================
 # 公开退出联盟：from_owner 主动决裂，该对永久禁止再结盟
@@ -247,7 +246,7 @@ func rupture_alliance(from_owner: int) -> bool:
 	var al = alliances[key]
 	var other = al["a"] if al["a"] != from_owner else al["b"]
 	_break_alliance(key, true)
-	_alert("%s 与 %s 决裂！" % [get_display_name(from_owner), get_display_name(other)], Color(1.0, 0.7, 0.2))
+	_alert("联盟决裂！", Color(1.0, 0.7, 0.2), [get_team_of(from_owner), get_team_of(other)])
 	return true
 
 # 背叛：秘密解除联盟，仅当背叛方军队对盟友造成军事伤害时才揭发。
@@ -260,9 +259,8 @@ func betray_alliance(betray_owner: int) -> bool:
 	var other = al["a"] if al["a"] != betray_owner else al["b"]
 	betrayers[betray_owner] = true
 	_break_alliance(key, true)
-	_alert("%s 背叛了 %s！两国彻底决裂，%s 永远无法再结盟！" % [
-		get_display_name(betray_owner), get_display_name(other), get_display_name(betray_owner)
-	], Color(1.0, 0.3, 0.2))
+	_alert("背叛盟约！两国彻底决裂，永远无法再结盟！", Color(1.0, 0.3, 0.2),
+		[get_team_of(betray_owner), get_team_of(other)])
 	return true
 
 # 军队对另一国造成军事伤害时的上报入口：若双方正结盟，则视为背叛揭发
@@ -274,7 +272,7 @@ func notify_military_attack(attacker_owner: int, victim_owner: int) -> void:
 # 联盟到期自然解除（不加黑名单；到期后可再次正常结盟）
 func _expire_alliance(key: String) -> void:
 	var al = alliances[key]
-	_alert("%s 与 %s 的联盟到期结束" % [get_display_name(al["a"]), get_display_name(al["b"])], Color(0.7, 0.7, 0.7))
+	_alert("联盟到期结束", Color(0.7, 0.7, 0.7), [get_team_of(al["a"]), get_team_of(al["b"])])
 	alliances.erase(key)
 
 # 内部：拆解联盟。加黑名单则永久禁止该对再结盟
@@ -299,9 +297,8 @@ func tick(game_time: float) -> void:
 		var key := _pair_key(alive[0], alive[1])
 		if alliances.has(key):
 			_break_alliance(key, true)
-			_alert("%s 与 %s 是最后两个国家，联盟被强制解除！" % [
-				get_display_name(alive[0]), get_display_name(alive[1])
-			], Color(1.0, 0.7, 0.2))
+			_alert("最后两国联盟被强制解除！", Color(1.0, 0.7, 0.2),
+				[get_team_of(alive[0]), get_team_of(alive[1])])
 
 # ==================== 淘汰与胜者 ====================
 # 城堡被摧毁 → 该国淘汰。返回剩余存活国家（可能为空）。
@@ -322,7 +319,7 @@ func notify_castle_died(owner: int) -> Array:
 		var al = alliances[key]
 		var other = al["a"] if al["a"] != owner else al["b"]
 		_break_alliance(key, false)
-		_alert("%s 被消灭（%s 退出战场）" % [get_display_name(owner), get_display_name(owner)], Color(0.9, 0.4, 0.3))
+		_alert("被消灭，退出战场", Color(0.9, 0.4, 0.3), [get_team_of(owner)])
 	return get_alive_owners()
 
 # ==================== 工具 ====================
@@ -339,12 +336,12 @@ func _pair_key(a: int, b: int) -> String:
 	return "%d|%d" % [lo, hi]
 
 # 玩家视角的轻量提示（AI 间事件也尽量转发，便于后期调试/日志）
-func _alert(msg: String, color: Color) -> void:
+# teams 是这条事件涉及的国家队伍，HUD 会把它们作为彩色前缀列出来
+func _alert(msg: String, color: Color, teams: Array = []) -> void:
 	if not battle:
 		return
-	var player_ally := -1
 	if battle.has_method("_show_hud_alert"):
-		battle._show_hud_alert(msg, color)
+		battle._show_hud_alert(msg, color, teams)
 
 func nation_display_name(nation: int) -> String:
 	match nation:
