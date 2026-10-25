@@ -224,41 +224,42 @@ func _ready():
 # 走路扬尘：陆军（含牲畜）在地面前进时脚下冒起尘土，停下来就消失。
 # 用挂载式粒子而不是每次生成节点，避免几百个单位走位时反复创建销毁。
 var _walk_dust: CPUParticles3D = null
+var _walk_dust_last_pos: Vector3 = Vector3.ZERO
 
 func _setup_walk_dust() -> void:
 	if _walk_dust != null:
 		return
 	var p := CPUParticles3D.new()
-	# 数量不宜多：单个单位 7 颗粒子，围观全屏时才是可接受的开销
-	p.amount = 7
-	p.lifetime = 0.75
+	# 数量与体积给足：单位在地图上本来就小，远景下太细的尘土完全看不见
+	p.amount = 14
+	p.lifetime = 0.95
 	p.emitting = false
 	p.local_coords = false
 	p.direction = Vector3.UP
-	p.spread = 45.0
-	p.initial_velocity_min = 0.2
-	p.initial_velocity_max = 0.9
+	p.spread = 55.0
+	p.initial_velocity_min = 0.25
+	p.initial_velocity_max = 1.1
 	# 尘土先往上飘一点再散开，重力取很小的正值
-	p.gravity = Vector3(0.0, 0.5, 0.0)
+	p.gravity = Vector3(0.0, 0.45, 0.0)
 	p.scale_amount_min = 1.0
-	p.scale_amount_max = 1.7
+	p.scale_amount_max = 1.9
 	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
-	p.emission_sphere_radius = 0.32
+	p.emission_sphere_radius = 0.45
 	var mesh := SphereMesh.new()
-	mesh.radius = 0.15
-	mesh.height = 0.30
+	mesh.radius = 0.24
+	mesh.height = 0.48
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	# 偏灰的土色，略微透明，不会盖住单位本身
-	mat.albedo_color = Color(0.76, 0.73, 0.66, 0.55)
+	mat.albedo_color = Color(0.80, 0.77, 0.70, 0.78)
 	mesh.material = mat
 	p.mesh = mesh
 	var grad := Gradient.new()
-	grad.set_color(0, Color(1.0, 1.0, 1.0, 0.55))
+	grad.set_color(0, Color(1.0, 1.0, 1.0, 0.8))
 	grad.set_color(1, Color(1.0, 1.0, 1.0, 0.0))
 	p.color_ramp = grad
-	p.position = Vector3(0.0, 0.08, 0.0)
+	p.position = Vector3(0.0, 0.10, 0.0)
 	add_child(p)
 	_walk_dust = p
 
@@ -268,7 +269,16 @@ func _update_walk_dust() -> void:
 		return
 	if _animal_type == "fish":
 		return
-	var moving: bool = velocity.length() > 0.6 and is_on_floor()
+	# 用实际位置变化来判断是否在走：单位移动是直接写 global_position 的，
+	# velocity 常常是零，is_on_floor() 也永远是 false，拿它们判断会一直不发射。
+	var moved: float = 0.0
+	if _walk_dust_last_pos != Vector3.ZERO:
+		moved = Vector2(
+			global_position.x - _walk_dust_last_pos.x,
+			global_position.z - _walk_dust_last_pos.z
+		).length()
+	_walk_dust_last_pos = global_position
+	var moving: bool = moved > 0.012
 	if not moving:
 		if _walk_dust != null:
 			_walk_dust.emitting = false
