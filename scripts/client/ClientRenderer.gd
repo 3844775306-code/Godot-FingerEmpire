@@ -188,6 +188,8 @@ func start_build_placement(bid: int):
 	mobile_centered_placement = InputSource.use_mobile_ui()
 	var cfg = EntityDatabase.get_config(bid)
 	if cfg.is_empty(): return
+	# 与 RTSBattleManager 的实际生成保持一致：大部分建筑的 body_radius 会再乘 2
+	var effective_radius: float = float(cfg.get("body_radius", 1.0)) * RTSConfig.get_building_body_scale(bid)
 	for c in placement_preview.get_children():
 		c.queue_free()
 	var model_path = RTSConfig.get_entity_model(bid)
@@ -202,9 +204,9 @@ func start_build_placement(bid: int):
 			placement_preview.add_child(inst)
 	if placement_preview.get_child_count() == 0:
 		var box = BoxMesh.new()
-		box.size = Vector3(cfg.body_radius*2, cfg.body_radius*1.5, cfg.body_radius*2)
+		box.size = Vector3(effective_radius * 2.0, effective_radius * 1.5, effective_radius * 2.0)
 		placement_preview.mesh = box
-	var target_size = cfg.body_radius * 2.0 * RTSConfig.get_model_scale(bid)
+	var target_size = effective_radius * 2.0 * RTSConfig.get_model_scale(bid)
 	var aabb = _get_model_aabb(placement_preview)
 	var current_size = max(aabb.size.x, max(aabb.size.y, aabb.size.z))
 	if current_size > 0.01: placement_preview.scale = Vector3.ONE * (target_size / current_size)

@@ -2172,22 +2172,25 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 			var animin: float = _model_local_min_y(ani)
 			if absf(animin) > 0.005:
 				ani.position.y -= animin
-	# 建筑整体放大为原来的 2 倍（瞭望塔 41、城墙 27、炮台 64、桥 7、梯子 8、箭塔 25、炮塔 26 除外：
+	# 建筑整体放大（瞭望塔 41、城墙 27、炮台 64、桥 7、梯子 8、箭塔 25、炮塔 26 除外：
 	# 它们与地形/城墙拼接尺寸绑定，放大后会出现缝隙、接不上岸或悬空）：
 	# 模型、碰撞体、body_radius 必须一起放大，只放大模型会让单位走进建筑内部，
 	# 放置校验、AOE 判定也仍按旧尺寸计算。
-	if entity is Building and entity.entity_id not in [41, 27, 64, 7, 8, 25, 26]:
-		entity.body_radius *= 2.0
-		if entity.has_method("_update_collision_shape"):
-			entity.call("_update_collision_shape")
-		if entity.has_meta("_model_instance"):
-			var bmi = entity.get_meta("_model_instance")
-			if is_instance_valid(bmi):
-				bmi.scale *= 2.0
-				# 放大后按包围盒重新贴地，避免模型原点不在底部时陷进地面
-				var bmin: float = _model_local_min_y(bmi)
-				if absf(bmin) > 0.005:
-					bmi.position.y -= bmin
+	# 倍率统一放在 RTSConfig，建造预览也使用同一系数，避免预览与实际尺寸不一致。
+	if entity is Building:
+		var body_scale: float = RTSConfig.get_building_body_scale(entity.entity_id)
+		if body_scale != 1.0:
+			entity.body_radius *= body_scale
+			if entity.has_method("_update_collision_shape"):
+				entity.call("_update_collision_shape")
+			if entity.has_meta("_model_instance"):
+				var bmi = entity.get_meta("_model_instance")
+				if is_instance_valid(bmi):
+					bmi.scale *= body_scale
+					# 放大后按包围盒重新贴地，避免模型原点不在底部时陷进地面
+					var bmin: float = _model_local_min_y(bmi)
+					if absf(bmin) > 0.005:
+						bmi.position.y -= bmin
 	# 资源需要 setup 后再重建 visual
 	if entity.entity_type == 0 and not model_loaded and entity.has_method("_create_visual"):
 		entity._create_visual()
@@ -2928,6 +2931,8 @@ func _on_building_selected_for_build(building_id: int):
 	mobile_keep_build_mode = GameSettings.mobile_continuous_build
 	var cfg = EntityDatabase.get_config(building_id)
 	if not cfg: return
+	# 预览必须使用和实际生成相同的有效半径：大部分建筑实际 body_radius 会再乘 2
+	var effective_radius: float = float(cfg.get("body_radius", 1.0)) * RTSConfig.get_building_body_scale(building_id)
 
 	# 加载建筑3D模型作为预览
 	var model_path = RTSConfig.get_entity_model(building_id)
@@ -2940,9 +2945,9 @@ func _on_building_selected_for_build(building_id: int):
 	if not build_preview:
 		build_preview = MeshInstance3D.new()
 		build_preview.mesh = BoxMesh.new()
-		build_preview.mesh.size = Vector3(cfg.body_radius*2, cfg.body_radius*1.5, cfg.body_radius*2)
+		build_preview.mesh.size = Vector3(effective_radius * 2.0, effective_radius * 1.5, effective_radius * 2.0)
 	# 缩放预览模型匹配实际大小
-	var target_size = cfg.body_radius * 2.0 * RTSConfig.get_model_scale(building_id)
+	var target_size = effective_radius * 2.0 * RTSConfig.get_model_scale(building_id)
 	var aabb = _get_model_aabb(build_preview)
 	var current_size = max(aabb.size.x, max(aabb.size.y, aabb.size.z))
 	if current_size > 0.01: build_preview.scale = Vector3.ONE * (target_size / current_size)

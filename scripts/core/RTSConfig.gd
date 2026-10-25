@@ -174,6 +174,16 @@ const ENTITY_MODEL_SCALE := {
 static func get_model_scale(entity_id: int) -> float:
 	return float(ENTITY_MODEL_SCALE.get(entity_id, 1.0))
 
+# 建筑生成时的整体半径倍率。这些建筑与地形/城墙拼接尺寸绑定，不能放大：
+# 瞭望塔、城墙、炮台、桥、梯子、箭塔、炮塔。
+const BUILDING_BODY_SCALE := 2.0
+const BUILDING_BODY_SCALE_EXCLUDED := [41, 27, 64, 7, 8, 25, 26]
+
+static func get_building_body_scale(entity_id: int) -> float:
+	if entity_id in BUILDING_BODY_SCALE_EXCLUDED:
+		return 1.0
+	return BUILDING_BODY_SCALE
+
 const DEMOLISHED_MODELS = {
 	17: "res://models/castle/siege-catapult-demolished.glb",
 	18: "res://models/castle/siege-ram-demolished.glb",
