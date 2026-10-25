@@ -5,6 +5,11 @@ const BattleStatsScript = preload("res://scripts/core/BattleStats.gd")
 const PROC_ATTACK_IDS = [18, 16, 17, 59, 13, 39]
 # 开火时需要在炮口喷烟尘火光的建筑/炮台（攻城器械由 SiegeAttackFx 单独处理）
 const MUZZLE_ATTACK_IDS = [25, 26, 64]
+# 城墙模型 wall.glb 的包围盒高度：底面在局部 y=0、顶面在 1.31。
+# 炮台要精确坐在这层顶面上，模型一改这个数就得跟着改。
+const WALL_TOP_HEIGHT: float = 1.31
+# 放置炮台时向最近城墙吸附的水平半径（米）
+const WALL_CANNON_SNAP: float = 6.0
 const BattleStatsPanelScript = preload("res://scripts/ui/BattleStatsPanel.gd")
 const MapPresets = preload("res://scripts/map/MapPresets.gd")
 var previous_emulate_mouse: bool
@@ -1757,9 +1762,10 @@ func _apply_entity_model(entity: GameEntity) -> bool:
 		# 巨型投石机：模型默认朝向与单位前方垂直，顺时针旋转 90° 校正
 		model_instance.rotation.y = deg_to_rad(-90)
 	elif entity.entity_id == 64:
-		# 炮台：顺时针旋转 90°，并按模型高度下移 30%，贴合城墙
+		# 炮台：顺时针旋转 90° 对齐城墙朝向。
+		# 模型底面本来就在局部 y=0，实体高度由 spawn_entity 精确对齐到墙顶，
+		# 这里不能再往下塞，否则会陷进墙体里。
 		model_instance.rotation.y = deg_to_rad(-90)
-		model_instance.position.y -= aabb.size.y * scale_factor * 0.3
 	# character 与步兵模型默认朝向相反，统一绕 Y 轴旋转 180° 掉头
 	if RTSConfig.model_needs_flip(model_path):
 		model_instance.rotation.y = deg_to_rad(180)
@@ -2078,6 +2084,20 @@ func _enable_vertex_colors(node: Node):
 					child.set_surface_override_material(si, dup)
 		_enable_vertex_colors(child)
 
+# 距给定点最近的同队城墙的顶面世界高度；附近没有城墙时返回一个很负的哨兵值。
+# 城墙模型底面在局部 y=0，所以顶面 = 实体 y + WALL_TOP_HEIGHT。
+func get_wall_top_y_near(pos: Vector3, team: int) -> float:
+	var best: float = -1e20
+	var best_d: float = WALL_CANNON_SNAP
+	for e in entities.get_children():
+		if not (e is Building) or e.entity_id != 27 or e.team != team or e.health <= 0:
+			continue
+		var d: float = Vector2(e.global_position.x - pos.x, e.global_position.z - pos.z).length()
+		if d <= best_d:
+			best_d = d
+			best = e.global_position.y + WALL_TOP_HEIGHT
+	return best
+
 # 计算模型自身坐标系里的最低点：动物模型的原点常不在脚底，
 # 用它把模型最低点对齐到实体原点（实体原点就是地面高度）。
 func _model_local_min_y(model: Node3D) -> float:
@@ -2162,10 +2182,23 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 	if entity.entity_id in [22, 27, 28]: entity.rotation.y = deg_to_rad(90)
 	mark_entity_cache_dirty()
 
-	# 地面高度修正（炮台跳过——需保留城墙上的高度偏移）
+	# 地面高度修正（炮台跳过——高度由城墙顶面决定）
 	if $Map and entity.entity_id != 64:
 		var h = $Map.get_height_at(pos)
 		entity.global_position.y = h
+
+	# 炮台必须坐在城墙顶上：按最近同队城墙的顶面高度对齐实体 y。
+	# 玩家手动放置和 AI 的 build_building(64, wall_pos) 都走这里，保证两边一致。
+	if entity.entity_id == 64:
+		var wall_top: float = get_wall_top_y_near(entity.global_position, team)
+		if wall_top > -1e19:
+			entity.global_position.y = wall_top
+			# 朝向与城墙保持一致，炮口才会横在墙面上而不是斜插过去
+			for e in entities.get_children():
+				if e is Building and e.entity_id == 27 and e.team == team and e.health > 0:
+					if Vector2(e.global_position.x - entity.global_position.x, e.global_position.z - entity.global_position.z).length() < WALL_CANNON_SNAP:
+						entity.rotation.y = e.rotation.y
+						break
 
 
 	# 人口管理（单机多AI按 owner 增加，1v1 沿用团队级）
@@ -2394,7 +2427,7 @@ func _update_build_preview_from_screen(screen_pos: Vector2):
 					if hdist2 < (e.body_radius + 1.0):
 						pos.x = e.global_position.x
 						pos.z = e.global_position.z
-						pos.y = e.global_position.y + 4.0
+						pos.y = e.global_position.y + WALL_TOP_HEIGHT
 						build_preview.rotation.y = e.rotation.y
 						break
 		build_preview.global_position = pos
@@ -2624,7 +2657,7 @@ func _update_build_preview(screen_pos: Vector2):
 					if hd2 < (e.body_radius + 1.0):
 						pos.x = e.global_position.x
 						pos.z = e.global_position.z
-						pos.y = e.global_position.y + 4.0
+						pos.y = e.global_position.y + WALL_TOP_HEIGHT
 						build_preview.rotation.y = e.rotation.y
 						break
 		build_preview.global_position = pos
@@ -3791,12 +3824,17 @@ func clear_orders_for_selected():
 			e.current_target = null
 			e.current_order = ""
 			e._clear_command_queue()
+			if e.has_method("cancel_combat_orders"):
+				e.cancel_combat_orders()
 			if e.has_method("_ungarrison_official"): e._ungarrison_official()
 
 func toggle_attack_move_for_selected():
 	for e in selection.selected_entities:
 		if is_instance_valid(e) and e is Army:
-			e.is_attack_moving = not e.is_attack_moving
+			if e.has_method("set_combat_advance_enabled"):
+				e.set_combat_advance_enabled(not e.is_attack_moving)
+			else:
+				e.is_attack_moving = not e.is_attack_moving
 
 func garrison_nearest_for_selected():
 	_ensure_cache_fresh()
