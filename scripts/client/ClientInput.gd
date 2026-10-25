@@ -785,6 +785,24 @@ func _update_selection_visuals():
 	for id in client_selected_ids:
 		_create_ring_for_entity(id)
 
+# 建筑模型的实际水平半径，选择环贴着模型轮廓走。
+# 快照里的 body_radius 按模型「最大边」算，高瘦的塔类建筑水平方向更窄，
+# 直接用会让环大出一圈。返回 0 表示不可用，调用方退回 body_radius。
+func _model_horizontal_radius(node: Node3D, fallback: float) -> float:
+	if node == null or not is_instance_valid(node) or renderer == null:
+		return 0.0
+	if not node.has_meta("_model_instance"):
+		return 0.0
+	var model = node.get_meta("_model_instance")
+	if model == null or not is_instance_valid(model) or not (model is Node3D):
+		return 0.0
+	var inst: Node3D = model
+	if absf(inst.scale.x) < 0.001 or not renderer.has_method("_get_model_aabb"):
+		return 0.0
+	var aabb: AABB = renderer._get_model_aabb(inst)
+	var horiz: float = maxf(aabb.size.x, aabb.size.z) * absf(inst.scale.x) * 0.5
+	return horiz if horiz > 0.05 else 0.0
+
 func _create_ring_for_entity(id):
 	var node = renderer.entity_nodes.get(id)
 	if not node: return
@@ -793,15 +811,21 @@ func _create_ring_for_entity(id):
 	if not info: return
 	var radius: float = info.get("body_radius", 0.5)
 	var kind: int = int(info.get("type", 0))   # 0=军队 1=建筑 2=资源
+	# 建筑用模型实际水平半径：快照里的 body_radius 是按模型「最大边」算的，
+	# 高瘦的塔类建筑水平方向明显更窄，直接用会让选择环大出一圈。
+	if kind == 1:
+		var horiz: float = _model_horizontal_radius(node, radius)
+		if horiz > 0.0:
+			radius = horiz
 	var ring = MeshInstance3D.new()
 	ring.name = "ClientSelectionRing"
 	ring.mesh = TorusMesh.new()
 	# 与单机版保持完全一致：军队/建筑/资源三种半径与贴地高度分别对齐
 	match kind:
 		1:
-			ring.mesh.inner_radius = radius + 0.2
-			ring.mesh.outer_radius = radius + 0.35
-			ring.position = Vector3(0, radius * 1.5 + 0.1, 0)
+			ring.mesh.inner_radius = radius + 0.12
+			ring.mesh.outer_radius = radius + 0.22
+			ring.position = Vector3(0, radius * 1.2 + 0.1, 0)
 		2:
 			ring.mesh.inner_radius = radius + 0.1
 			ring.mesh.outer_radius = radius + 0.2

@@ -1092,6 +1092,23 @@ func _is_bridge_at_client(pos: Vector3) -> bool:
 			return true
 	return false
 
+# 建筑模型的实际水平半径（客户端）。
+# 快照里的 body_radius 是按模型「最大边」算的，高瘦建筑水平方向明显更窄，
+# 土色贴花和选择环都该用这里的值，否则会大出一圈。
+# 返回 0 表示拿不到模型尺寸，调用方退回 body_radius。
+func _model_horizontal_radius(node: Node3D, fallback: float) -> float:
+	if node == null or not is_instance_valid(node):
+		return 0.0
+	var model = node.get_meta("_model_instance", null) if node.has_meta("_model_instance") else null
+	if model == null or not is_instance_valid(model) or not (model is Node3D):
+		return 0.0
+	var inst: Node3D = model
+	if absf(inst.scale.x) < 0.001:
+		return 0.0
+	var aabb: AABB = _get_model_aabb(inst)
+	var horiz: float = maxf(aabb.size.x, aabb.size.z) * absf(inst.scale.x) * 0.5
+	return horiz if horiz > 0.05 else 0.0
+
 # 建筑脚下的土色贴花：与服务端 Building 保持一致的尺寸与配色，纹理直接复用同一个静态资源
 func _attach_ground_patch(node: Node3D, info: Dictionary) -> void:
 	if node == null or not is_instance_valid(node):
@@ -1107,17 +1124,9 @@ func _attach_ground_patch(node: Node3D, info: Dictionary) -> void:
 	# 尺寸优先按模型实际水平尺寸算（与服务端同一套判据）：body_radius 是按
 	# 模型「最大边」缩放的，高瘦的塔类建筑水平方向比它窄，直接用会偏大。
 	var visual_radius: float = float(info.get("body_radius", 1.0)) * RTSConfig.get_model_scale(eid)
-	var model := node.get_node_or_null("Model") if node.has_node("Model") else null
-	if model == null:
-		for child in node.get_children():
-			if child is Node3D and child.get_meta("entity_model", false):
-				model = child
-				break
-	if model is Node3D and model.scale.x > 0.001:
-		var aabb: AABB = _get_model_aabb(model)
-		var horiz: float = maxf(aabb.size.x, aabb.size.z) * absf(model.scale.x) * 0.5
-		if horiz > 0.05:
-			visual_radius = horiz
+	var horiz: float = _model_horizontal_radius(node, visual_radius)
+	if horiz > 0.0:
+		visual_radius = horiz
 	var half: float = visual_radius + Building.GROUND_PATCH_MARGIN
 
 	var decal := Decal.new()

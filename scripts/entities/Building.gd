@@ -355,10 +355,10 @@ func _spawn_ground_patch() -> void:
 	add_child(decal)
 	_ground_patch = decal
 
-# 土色半宽：优先用模型实际的水平包围盒，拿不到再退回 body_radius。
+# 模型实际的水平半径，土色与选择环共用同一判据。
 # body_radius 是把模型「最大边」缩放到 2 倍半径算出来的，高瘦的塔类建筑
-# 水平方向其实比它窄不少，直接用 body_radius 会让土色明显偏大。
-func _ground_patch_half_size() -> float:
+# 水平方向比它窄不少，直接拿它当半径会让土色和选择环都明显偏大。
+func _model_horizontal_radius() -> float:
 	var r: float = body_radius * RTSConfig.get_model_scale(entity_id)
 	var inst = get_meta("_model_instance", null) if has_meta("_model_instance") else null
 	if inst != null and is_instance_valid(inst) and inst is Node3D:
@@ -368,7 +368,11 @@ func _ground_patch_half_size() -> float:
 			var horiz: float = maxf(aabb.size.x, aabb.size.z) * absf(inst.scale.x) * 0.5
 			if horiz > 0.05:
 				r = horiz
-	return r + GROUND_PATCH_MARGIN
+	return r
+
+# 土色半宽：模型水平半径 + 一小圈外扩
+func _ground_patch_half_size() -> float:
+	return _model_horizontal_radius() + GROUND_PATCH_MARGIN
 
 # 模型被替换（城墙换拐角、升级换外观）后重算土色尺寸
 func _refresh_ground_patch_size() -> void:
@@ -413,17 +417,17 @@ func _apply_nation_start_bonus():
 # ====================== 修复：建筑选择环 水平贴地 ======================
 func _add_selection_ring():
 	if not has_node("SelectionRing"):
-		# 环径与高度都按模型放大后的尺寸算，否则大建筑的选择环会陷在模型里
-		var visual_r: float = body_radius * RTSConfig.get_model_scale(entity_id)
+		# 环形贴着模型轮廓走：用模型实际水平半径，而不是 body_radius（按最大边算，偏大）
+		var visual_r: float = _model_horizontal_radius()
 		var ring = MeshInstance3D.new()
 		ring.name = "SelectionRing"
 		var torus = TorusMesh.new()
-		torus.inner_radius = visual_r + 0.2
-		torus.outer_radius = visual_r + 0.35
+		torus.inner_radius = visual_r + 0.12
+		torus.outer_radius = visual_r + 0.22
 		ring.mesh = torus
 
 		# 水平圆环 + 贴地面
-		ring.position.y = visual_r * 1.5 + 0.1
+		ring.position.y = visual_r * 1.2 + 0.1
 		#ring.rotation.x = deg_to_rad(90)
 
 		var mat = StandardMaterial3D.new()
