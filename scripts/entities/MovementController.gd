@@ -42,6 +42,11 @@ const PENDING_PATH_TIMEOUT_MS: int = 2000
 # 但目标仍很远，隔一段时间主动补一次请求，避免单位永久停在“移动中但无路径”。
 const NO_PATH_REISSUE_INTERVAL_MS: int = 1200
 var _next_no_path_reissue_ms: int = 0
+# 直走判定失败后短时间内不要每个物理帧重复采样整条长路径；
+# 缓存只缓存“不能直走”，能直走时直接返回路径，不需要缓存。
+const DIRECT_CHECK_CACHE_MS: int = 250
+var _direct_check_result: bool = true
+var _direct_check_ms: int = 0
 
 var _path_sphere: SphereMesh = null
 var _path_mat: StandardMaterial3D = null
@@ -123,6 +128,11 @@ func set_move_target(pos: Vector3, stop_range: float = 0.0):
 		# 后续只加少量抖动，保证追击路径不会滞后太久。
 		var phase_ms := int(_army.get_instance_id() % 16) * 30
 		var cooldown_ms := ATTACK_PATH_COOLDOWN_MS + int(_army.get_instance_id() % 5) * 15
+		# 队列已经排长时，追击路径降频到约 2 秒一次；路径为空时下面的
+		# 冷却分支会放行补发请求，不会让单位因为降频而永久站着。
+		var bm_pressure = _get_bm()
+		if bm_pressure != null and bm_pressure.get_astar_pending_estimate() >= 30:
+			cooldown_ms = int(cooldown_ms * 1.8)
 		if _last_attack_path_ms < 0:
 			_last_attack_path_ms = now_ms - cooldown_ms + phase_ms
 		if now_ms - _last_attack_path_ms < cooldown_ms:
@@ -167,6 +177,22 @@ func _try_compute_path(pos: Vector3, stop_range: float, bm: RTSBattleManager = n
 		is_retry: bool = false) -> bool:
 	if bm == null:
 		bm = _get_bm()
+	# 开阔地直走不消耗 A* 预算：这是后期队列增长的主要来源。
+	# 必须放在 reserve 之前，否则“直走”虽然不跑 A*，仍会占掉其他单位的寻路名额。
+	if bm != null:
+		var now_ms := Time.get_ticks_msec()
+		# 只在同一目标近期判定为“不能直走”时跳过采样，避免待处理请求
+		# 每一帧都把整条长路径重新扫一遍；A* 失败/排队仍会正常处理。
+		var cached_blocked: bool = not _direct_check_result \
+			and now_ms - _direct_check_ms < DIRECT_CHECK_CACHE_MS
+		if not cached_blocked:
+			var direct_path := _try_direct_path(bm, pos, stop_range)
+			_direct_check_result = not direct_path.is_empty()
+			_direct_check_ms = now_ms
+			if not direct_path.is_empty():
+				_last_path_partial = false
+				_apply_path(pos, direct_path, stop_range)
+				return true
 	# 已经排队等过的请求走 retry 配额。若新请求可以吃满全部名额，场景树里排在
 	# 后面的单位会被前面不断产生的新请求长期挤掉，表现为“有移动命令但一直没路径”。
 	if bm != null and not bm.reserve_astar_request(is_retry):
@@ -750,6 +776,7 @@ class MinHeap extends RefCounted:
 # wall set is rebuilt only when the battle manager's entity cache version bumps
 # (NOT per frame, NOT per target — `end_tile` no longer invalidates it; the A*
 # loop already skips wall checks for the goal tile).
+# 当前生效的缓存（由 _ensure_static_caches 按当前单位队伍切换）。
 static var _wall_set: Dictionary = {}    # Vector2i -> true
 # 仅建筑按半径扩展出来的格子。目标格落在这里时需要改走到建筑外沿，
 # 否则目标被自己/建筑外圈围住，A* 永远进不了中心格。
@@ -759,9 +786,131 @@ static var _wall_bm_id: int = -1
 static var _wall_team: int = -1  # friendly-wall passability is team-dependent
 static var _bridge_set: Dictionary = {}          # 桥所在格子
 static var _ladder_set: Dictionary = {}          # 梯子使该敌方城墙格可通行
+# 每个队伍一份静态障碍缓存。以前只有一份、按 _wall_team 判断，
+# 双方单位交替寻路时会在同一帧反复全图重建墙缓存，A* 时间被大量浪费。
+static var _team_static: Dictionary = {}  # team -> {wall, footprint, bridge, ladder}
 static var _transport_water: Dictionary = {}     # 运载船周围3格水域(陆军可通行)
-static var _transport_frame: int = -1            # 运载船是移动的，水域标记单独做帧级缓存
+static var _transport_frame: int = -1
 static var _transport_team: int = -1
+# 每个队伍、每一帧的运载船水域缓存；避免双方交替时反复扫描运载船。
+static var _team_transport: Dictionary = {}  # team -> {frame, water}
+
+# 静态障碍缓存：建筑/资源/墙/桥/梯子只在布局变化时重建；
+# 运载船周围可通行水域因为船会移动，按帧缓存。
+# 直走判定和 A* 共用这份缓存，避免为了判断“能不能直走”再扫一遍全图实体。
+func _ensure_static_caches(bm: RTSBattleManager) -> void:
+	var frame = Engine.get_process_frames()
+	var bm_id = bm.get_instance_id()
+	# 建筑布局变化或切换战场时，整份缓存作废；否则只切换当前队伍的那一份。
+	if _wall_bm_id != bm_id or _wall_ver != bm._wall_cache_version:
+		_team_static.clear()
+		_team_transport.clear()
+		_wall_bm_id = bm_id
+		_wall_ver = bm._wall_cache_version
+	var team: int = _army.team
+	var pack = _team_static.get(team)
+	if pack == null:
+		_wall_set = {}
+		_footprint_set = {}
+		_bridge_set = {}
+		_ladder_set = {}
+		for e in bm.entities.get_children():
+			if not (e is GameEntity) or e.health <= 0: continue
+			if not (e is Building or e is WorldResource): continue
+			var eg = bm.world_to_grid(e.global_position)
+			# 桥不阻挡通行，单独记录
+			if e is Building and e.entity_id == 7:
+				_bridge_set[eg] = true
+				continue
+			# 梯子不阻挡通行，且使其相邻敌方城墙可通行
+			if e is Building and e.entity_id == 8:
+				for dx in range(-1, 2):
+					for dy in range(-1, 2):
+						if dx == 0 and dy == 0: continue
+						var wall_b = bm._wall_entity_grid.get(Vector2i(eg.x + dx, eg.y + dy))
+						if wall_b and wall_b.team != team:
+							_ladder_set[Vector2i(eg.x + dx, eg.y + dy)] = true
+				continue
+			if e is Building and e.entity_id == 27:
+				if e.team == team: continue
+				_wall_set[eg] = true
+			elif e is Building:
+				_add_blocked_footprint(eg, e.body_radius)
+			else:
+				_wall_set[eg] = true
+		pack = {
+			"wall": _wall_set,
+			"footprint": _footprint_set,
+			"bridge": _bridge_set,
+			"ladder": _ladder_set,
+		}
+		_team_static[team] = pack
+	else:
+		_wall_set = pack["wall"]
+		_footprint_set = pack["footprint"]
+		_bridge_set = pack["bridge"]
+		_ladder_set = pack["ladder"]
+	_wall_team = team
+	var transport_pack = _team_transport.get(team)
+	if transport_pack == null or int(transport_pack.get("frame", -1)) != frame:
+		var water := {}
+		for e in bm.entities.get_children():
+			if e is Army and e.entity_id == 9 and e.health > 0 and e.team == team:
+				var tg = bm.world_to_grid(e.global_position)
+				for rdx in range(-3, 4):
+					for rdy in range(-3, 4):
+						var tx = tg.x + rdx; var ty = tg.y + rdy
+						if tx >= 0 and tx < RTSConfig.MAP_SIZE and ty >= 0 and ty < RTSConfig.MAP_SIZE:
+							if bm.get_terrain_at_grid(tx, ty) == 2:
+								water[Vector2i(tx, ty)] = true
+		transport_pack = {"frame": frame, "water": water}
+		_team_transport[team] = transport_pack
+	_transport_water = transport_pack["water"]
+	_transport_frame = frame
+	_transport_team = team
+
+# 直线可达时直接返回目标点，不跑 A*。
+# 后期大规模交战时绝大多数单位都在开阔地追击，真正需要绕墙/绕水的只是少数；
+# 如果每个单位都跑 A*，固定预算很快被填满，后面的请求只能无限排队。
+func _try_direct_path(bm: RTSBattleManager, target_pos: Vector3, stop_range: float) -> Array:
+	_ensure_static_caches(bm)
+	var start_pos := _army.global_position
+	var start_tile: Vector2i = bm.world_to_grid(start_pos)
+	var goal_tile: Vector2i = bm.world_to_grid(target_pos)
+	var path_goal_pos := target_pos
+	# 建筑中心格在 footprint 内：直接走到中心会卡进建筑。
+	# 改成走向建筑外沿最近的可走格，最后一段交给 process_move 的最终接近/攻击距离判定。
+	if _footprint_set.has(goal_tile):
+		var approach_tile := _find_approach_tile(goal_tile, bm, _wall_set)
+		if approach_tile == goal_tile:
+			return []
+		goal_tile = approach_tile
+		var half_map: float = RTSConfig.MAP_SIZE / 2.0
+		path_goal_pos = Vector3(goal_tile.x - half_map, 0.0, goal_tile.y - half_map)
+	var dist := start_pos.distance_to(path_goal_pos)
+	if dist < 0.05:
+		return [path_goal_pos]
+	if start_tile == goal_tile:
+		return [path_goal_pos]
+	# 0.4 米采样，足以命中一格宽的墙/建筑外沿；比 A* 展开几千节点便宜得多。
+	var samples: int = maxi(2, int(ceil(dist / 0.4)))
+	var prev_tile := start_tile
+	for i in range(1, samples + 1):
+		var t := float(i) / float(samples)
+		var sample_pos := start_pos.lerp(path_goal_pos, t)
+		var tile: Vector2i = bm.world_to_grid(sample_pos)
+		if tile == prev_tile:
+			continue
+		if _is_cliff_between_tiles(bm, prev_tile, tile):
+			return []
+		# 终点格允许是墙/资源中心（近战会在攻击距离停下）；中间格必须可通行。
+		if tile != goal_tile:
+			if _wall_set.has(tile) and not _ladder_set.has(tile):
+				return []
+		if _get_terrain_cost(tile, bm, _wall_set) >= 999.0:
+			return []
+		prev_tile = tile
+	return [path_goal_pos]
 
 func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Array:
 	_last_path_partial = false
@@ -778,58 +927,7 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 		var half_map: float = RTSConfig.MAP_SIZE / 2.0
 		return [Vector3(start_tile.x - half_map, 0.0, start_tile.y - half_map)]
 
-	# 静态墙集合按实体缓存版本号重建（建造/摧毁时才变化），运载船水域单独做帧级缓存
-	var frame = Engine.get_process_frames()
-	var bm_id = bm.get_instance_id()
-	if _wall_bm_id != bm_id or _wall_ver != bm._wall_cache_version or _wall_team != _army.team:
-		_wall_set.clear()
-		_footprint_set.clear()
-		_bridge_set.clear()
-		_ladder_set.clear()
-		for e in bm.entities.get_children():
-			if not (e is GameEntity) or e.health <= 0: continue
-			if not (e is Building or e is WorldResource): continue
-			var eg = bm.world_to_grid(e.global_position)
-			# 桥不阻挡通行，单独记录
-			if e is Building and e.entity_id == 7:
-				_bridge_set[eg] = true
-				continue
-			# 梯子不阻挡通行，且使其相邻敌方城墙可通行
-			if e is Building and e.entity_id == 8:
-				# 标记梯子相邻的敌方城墙格为可通行（O(8) 查墙体网格，替代 O(8×n) 全量扫描）
-				for dx in range(-1, 2):
-					for dy in range(-1, 2):
-						if dx == 0 and dy == 0: continue
-						var wall_b = bm._wall_entity_grid.get(Vector2i(eg.x + dx, eg.y + dy))
-						if wall_b and wall_b.team != _army.team:
-							_ladder_set[Vector2i(eg.x + dx, eg.y + dy)] = true
-				continue
-			if e is Building and e.entity_id == 27:
-				if e.team == _army.team: continue
-				# 城墙按中心格阻挡：墙体本身是逐格拼接的，按半径扩大会把墙两侧
-				# 的通道和梯子落点一起堵死。
-				_wall_set[eg] = true
-			elif e is Building:
-				# 普通建筑按实际碰撞半径占用周围格子，避免放大后的建筑
-				# 只有中心一格不可走、A* 路径却从建筑外壳里穿过去。
-				_add_blocked_footprint(eg, e.body_radius)
-			else:
-				# 资源没有放大，保持中心一格，采集目标点仍然可达。
-				_wall_set[eg] = true
-		_wall_bm_id = bm_id; _wall_ver = bm._wall_cache_version; _wall_team = _army.team
-	# 运载船会移动：水域标记做帧级缓存（同一帧多个单位寻路只算一次）
-	if _transport_frame != frame or _transport_team != _army.team:
-		_transport_water.clear()
-		for e in bm.entities.get_children():
-			if e is Army and e.entity_id == 9 and e.health > 0 and e.team == _army.team:
-				var tg = bm.world_to_grid(e.global_position)
-				for rdx in range(-3, 4):
-					for rdy in range(-3, 4):
-						var tx = tg.x + rdx; var ty = tg.y + rdy
-						if tx >= 0 and tx < RTSConfig.MAP_SIZE and ty >= 0 and ty < RTSConfig.MAP_SIZE:
-							if bm.get_terrain_at_grid(tx, ty) == 2:
-								_transport_water[Vector2i(tx, ty)] = true
-		_transport_frame = frame; _transport_team = _army.team
+	_ensure_static_caches(bm)
 	var wall_cache = _wall_set
 
 	# 目标点落在放大建筑内部时，A* 不能直接走进中心格：建筑外围一圈都是障碍，

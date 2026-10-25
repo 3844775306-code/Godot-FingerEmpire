@@ -139,9 +139,17 @@ const ASTAR_TIME_BUDGET_USEC: int = 24000
 # 剩余 16 个名额/8ms 留给 pending 重试，避免新移动命令长期压住已排队单位。
 const ASTAR_RETRY_RESERVE_REQUESTS: int = 16
 const ASTAR_RETRY_RESERVE_USEC: int = 8000
+# 排队单位超过这个数量时进入“泄洪”模式：新请求少放行，把预算让给
+# 已经排队的单位；否则不断到来的新移动命令会把队尾永远压在后面。
+const ASTAR_BACKLOG_PRESSURE: int = 30
 var _astar_budget_frame: int = -1
 var _astar_budget_count: int = 0
 var _astar_budget_usec: int = 0
+# 顶部诊断/预算共用的排队估计值，由 get_moving_no_path_stats() 定期刷新。
+var _astar_pending_estimate: int = 0
+
+func get_astar_pending_estimate() -> int:
+	return _astar_pending_estimate
 # A* 统计：调用次数按 1 秒窗口滚动，峰值/累计供结算面板使用。
 # 实际调用包含建筑变化后 recalculate() 的直算，所以可能略高于分配次数。
 var _astar_calls_window: int = 0
@@ -219,6 +227,11 @@ func reserve_astar_request(is_retry: bool = false) -> bool:
 	if not is_retry:
 		max_count -= ASTAR_RETRY_RESERVE_REQUESTS
 		max_usec -= ASTAR_RETRY_RESERVE_USEC
+		# 队列已经很长时，进一步压缩新请求配额（16 个/8ms），
+		# 让原本预留给 pending 重试的配额真正用于清空队尾。
+		if _astar_pending_estimate >= ASTAR_BACKLOG_PRESSURE:
+			max_count = ASTAR_REQUESTS_PER_FRAME - ASTAR_RETRY_RESERVE_REQUESTS * 2
+			max_usec = ASTAR_TIME_BUDGET_USEC - ASTAR_RETRY_RESERVE_USEC * 2
 	if _astar_budget_count >= max_count or _astar_budget_usec >= max_usec:
 		return false
 	_astar_budget_count += 1
@@ -267,7 +280,8 @@ func get_moving_no_path_stats() -> Dictionary:
 	_ensure_cache_fresh()
 	var stats := {
 		"total": 0,
-		"pending": 0,
+		"pending": 0,       # 无路径且正在排队的单位（顶部“移动无路径”明细）
+		"pending_total": 0, # 所有正在等 A* 的单位（包括仍有旧路径的追击单位）
 		"move_failed": 0,
 		"attack_failed": 0,
 		"partial": 0,
@@ -276,10 +290,14 @@ func get_moving_no_path_stats() -> Dictionary:
 	for army in _armies:
 		if not is_instance_valid(army) or army.health <= 0:
 			continue
+		var mover = army._movement
+		if mover != null and mover._pending_path:
+			# 追击单位可能还保留着旧路径边追边等，这种也要算进真实排队量，
+			# 否则只看“无路径”会低估 A* 压力。
+			stats["pending_total"] += 1
 		if not army.needs_move_without_path():
 			continue
 		stats["total"] += 1
-		var mover = army._movement
 		if mover == null:
 			continue
 		if mover._pending_path:
@@ -293,6 +311,7 @@ func get_moving_no_path_stats() -> Dictionary:
 		else:
 			# 没有路径、没有排队、也没有失败/部分路径标记：状态兜底没有接上
 			stats["stalled"] += 1
+	_astar_pending_estimate = int(stats["pending_total"])
 	return stats
 
 # ==================== 诊断工具 ====================
@@ -3678,7 +3697,7 @@ func _process(delta):
 			_fps_label.text = "FPS:%.0f | 画质:%d | 实体:%d(A%d B%d) | 移动无路径:%d(排队:%d,卡:%d)" % [
 				Engine.get_frames_per_second(), _perf_quality_level,
 				_all_entities.size(), _armies.size(), _buildings.size(),
-				int(np_stats.get("total", 0)), int(np_stats.get("pending", 0)),
+				int(np_stats.get("total", 0)), int(np_stats.get("pending_total", 0)),
 				int(np_stats.get("stalled", 0))
 			]
 		if _snap_rate_label:
