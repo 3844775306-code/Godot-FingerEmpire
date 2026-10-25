@@ -83,29 +83,32 @@ static func _finish(model: Node3D) -> void:
 
 # ---------- 各兵种动作 ----------
 
-# 攻城车：整车后拉后猛撞，撞木相对车体再向前多顶一截
+# 攻城车：车体只做轻微前后缓冲，主要动感交给撞木前冲。
 static func _ram(model: Node3D) -> float:
 	var pos: Vector3 = model.position
+	# 车体原来有 0.28 后拉 + 0.70 前冲，整车在屏幕上的位移比撞木还抢眼；
+	# 现在车体几乎钉在原地，只留一点后坐/回弹，让撞木成为动作主体。
 	_seq(model, model, "position", [
-		{"v": pos + Vector3(0.0, 0.0, 0.28), "t": 0.16, "tr": Tween.TRANS_SINE},
-		{"v": pos + Vector3(0.0, 0.01, -0.70), "t": 0.22, "tr": Tween.TRANS_EXPO, "e": Tween.EASE_IN},
+		{"v": pos + Vector3(0.0, 0.0, 0.10), "t": 0.16, "tr": Tween.TRANS_SINE},
+		{"v": pos + Vector3(0.0, 0.0, -0.24), "t": 0.22, "tr": Tween.TRANS_EXPO, "e": Tween.EASE_IN},
 		{"v": pos, "t": 0.56, "tr": Tween.TRANS_ELASTIC},
 	])
 	_entity_pitch(model, [
-		{"a": -0.08, "t": 0.38, "tr": Tween.TRANS_QUAD},
+		{"a": -0.03, "t": 0.38, "tr": Tween.TRANS_QUAD},
 		{"a": 0.0, "t": 0.56, "tr": Tween.TRANS_ELASTIC},
 	])
 	var ram := _find(model, "ram")
 	if ram != null:
 		var p: Vector3 = ram.position
-		# 模型绕 Y 旋转 90°，局部 +X 对应实体正前方
-		# 撞木顶出的距离给足：远景下整车位移不明显，槌头单独前冲才是"撞"的读感
+		# 模型绕 Y 旋转 90°，局部 +X 对应实体正前方。
+		# 撞木本身长度约 2.1 米，后拉 0.30、前顶 1.05 仍在车体范围内，
+		# 远景下槌头前冲的幅度明显大于车体移动，才能真正读成“撞城”。
 		_seq(model, ram, "position", [
-			{"v": p + Vector3(-0.16, 0.0, 0.0), "t": 0.16, "tr": Tween.TRANS_SINE},
-			{"v": p + Vector3(0.58, 0.0, 0.0), "t": 0.22, "tr": Tween.TRANS_EXPO, "e": Tween.EASE_IN},
+			{"v": p + Vector3(-0.30, 0.0, 0.0), "t": 0.16, "tr": Tween.TRANS_SINE},
+			{"v": p + Vector3(1.05, 0.0, 0.0), "t": 0.22, "tr": Tween.TRANS_EXPO, "e": Tween.EASE_IN},
 			{"v": p, "t": 0.56, "tr": Tween.TRANS_ELASTIC},
 		])
-	_wheels(model, 0.14)
+	_wheels(model, 0.06)
 	return 0.96
 
 # 火炮：整炮后坐并上跳，两侧轮轴被后坐力带得急停回摆
