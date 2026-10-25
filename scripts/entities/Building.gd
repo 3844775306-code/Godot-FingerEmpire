@@ -102,6 +102,11 @@ func _process(delta):
 			_finish_upgrade()
 			AudioManager.play_sfx("upgrade_done")
 
+	# 修理计时 + 附近敌人扫描（扫描每 0.5 秒一次，避免每次快照都做空间查询）
+	_tick_repair_scan(delta)
+	if repair_timer > 0.0:
+		_tick_repair(delta)
+
 	# 生产计时
 	if production_queue.size() > 0:
 		#var bm = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
@@ -550,6 +555,8 @@ func _get_upgrade_castle() -> Building:
 func can_upgrade() -> bool:
 	if build_timer > 0: return false
 	if upgrade_timer > 0: return false
+	# 修理中不开新工程：两套计时同时跑会让进度条和脚手架状态互相打架
+	if repair_timer > 0: return false
 	if upgrade_level >= max_upgrade_level: return false
 	# 同一国家/玩家的一种建筑同时只能有一个升级工程。
 	# 本作升级是全局生效的（升级完成后同类型建筑一起提升），
@@ -654,6 +661,154 @@ func get_prod_cooldown(unit_id: int) -> float:
 		if prod.unit_id == unit_id:
 			return prod.cooldown / spd3
 	return 1.0
+
+# ==================== 修理 ====================
+# 规则：残破建筑可以在「附近 10 米内没有敌人」时修理（主城除外）。
+# 花钱 = 已损生命百分比 × 原价，耗时 = 已损生命百分比 × 建造时间（建造时间沿用 start_construction 的公式）。
+# 修理过程复用建造那套脚手架/扬尘/进度表现，服务端与联机客户端共用 BuildingConstructionVisual。
+const REPAIR_BLOCK_RADIUS: float = 10.0        # 这个半径内有敌方部队就不能修
+const REPAIR_SCAN_INTERVAL: float = 0.5        # 附近敌人扫描频率（秒）
+const BUILD_TIME_PER_HP: float = 75.0          # 与 start_construction 一致：满血建造耗时 = max_health / 75
+
+var repair_timer: float = 0.0                  # >0 表示正在修理
+var max_repair_time: float = 0.0
+var _repair_from_health: int = 0
+var _repair_to_health: int = 0
+var _repair_enemy_near: bool = false
+var _repair_scan_timer: float = randf_range(0.0, REPAIR_SCAN_INTERVAL)
+
+func is_under_repair() -> bool:
+	return repair_timer > 0.0
+
+func _repair_forbidden() -> bool:
+	# 主城（20）和主城系（53）关系整局胜负，不允许修理
+	return entity_id in [20, 53]
+
+func _model_health_max() -> int:
+	# 建筑本身的血量上限（升级会提高它），不是配置里的初始值
+	return maxi(int(max_health), 1)
+
+# 已损生命百分比：0 = 满血，1 = 空血
+func repair_damage_ratio() -> float:
+	return clampf(1.0 - float(health) / float(_model_health_max()), 0.0, 1.0)
+
+func _repair_base_cost() -> Dictionary:
+	var cfg: Dictionary = building_data if not building_data.is_empty() else EntityDatabase.get_config(entity_id)
+	var cost = cfg.get("cost", {})
+	return cost if cost is Dictionary else {}
+
+# 修理费 = 已损生命百分比 × 原价（向上取整，避免残血修理免费）
+func repair_cost() -> Dictionary:
+	var ratio := repair_damage_ratio()
+	var out := {}
+	if ratio <= 0.0:
+		return out
+	var base := _repair_base_cost()
+	for k in base:
+		var v: int = int(ceil(float(base[k]) * ratio))
+		if v > 0:
+			out[k] = v
+	return out
+
+# 满血建造耗时：与 start_construction 的 max_build_time 同源
+func _repair_full_build_time() -> float:
+	var cfg: Dictionary = building_data if not building_data.is_empty() else EntityDatabase.get_config(entity_id)
+	var hp: float = float(cfg.get("max_health", _model_health_max()))
+	return maxf(hp / BUILD_TIME_PER_HP, 0.1)
+
+# 修理耗时 = 已损生命百分比 × 建造时间（快进/地狱难度与建造同倍率加速）
+func repair_time_total() -> float:
+	var spd := 1.0
+	if GameSettings.fast_mode: spd = 2.0
+	if _owner_is_ai() and GameSettings.ai_difficulty >= GameSettings.AIDifficulty.HELL: spd *= 1.2
+	return maxf(repair_damage_ratio() * _repair_full_build_time() / spd, 0.1)
+
+func _has_enemy_near_repair() -> bool:
+	var bm = _get_bm()
+	if bm == null or not bm.has_method("get_nearby_enemies"):
+		return false
+	var radius := REPAIR_BLOCK_RADIUS + body_radius
+	var found = bm.get_nearby_enemies(global_position, radius, team, owner_peer_id)
+	if found == null:
+		return false
+	for e in found:
+		# 只把敌方「部队」算作威胁：敌方建筑在 10 米内是正常前线，不该阻止修墙
+		if is_instance_valid(e) and e is Army and e.health > 0:
+			return true
+	return false
+
+func _tick_repair_scan(delta: float) -> void:
+	_repair_scan_timer -= delta
+	if _repair_scan_timer > 0.0:
+		return
+	_repair_scan_timer = REPAIR_SCAN_INTERVAL
+	_repair_enemy_near = _has_enemy_near_repair()
+
+func can_repair() -> bool:
+	if _repair_forbidden():
+		return false
+	if health <= 0:
+		return false
+	# 建造中/升级中/已经在修：都不允许再开一个工程
+	if build_timer > 0.0 or upgrade_timer > 0.0 or repair_timer > 0.0:
+		return false
+	if health >= _model_health_max():
+		return false
+	return not _repair_enemy_near
+
+# 扣除修理费并开始修理计时。联机时只在服务端调用（客户端 UI 只做同样的置灰提示）。
+func perform_repair(bm) -> bool:
+	if not can_repair():
+		return false
+	if bm == null:
+		return false
+	var cost := repair_cost()
+	if not cost.is_empty():
+		var paid := false
+		if owner_peer_id != -1 and bm.has_method("deduct_player_resources"):
+			paid = bm.deduct_player_resources(owner_peer_id, cost)
+		elif bm.has_method("deduct_resources_for"):
+			paid = bm.deduct_resources_for(owner_peer_id if owner_peer_id != -1 else team, cost)
+		if not paid:
+			return false
+	_repair_from_health = health
+	_repair_to_health = _model_health_max()
+	max_repair_time = repair_time_total()
+	repair_timer = max_repair_time
+	# 建造那套脚手架 + 扬尘，但模型保持完整（repair=true 时不缩模型）
+	BuildingConstructionVisual.begin(self, null, true)
+	return true
+
+func _tick_repair(delta: float) -> void:
+	if health <= 0:
+		# 修理途中被拆掉：清掉施工外观
+		BuildingConstructionVisual.cancel(self)
+		repair_timer = 0.0
+		max_repair_time = 0.0
+		return
+	repair_timer -= delta
+	var total := maxf(max_repair_time, 0.001)
+	var progress := clampf(1.0 - repair_timer / total, 0.0, 1.0)
+	BuildingConstructionVisual.update(self, progress)
+	# 血量随进度回升：中途被打断也保留了已经修好的部分
+	var target := int(round(lerpf(float(_repair_from_health), float(_repair_to_health), progress)))
+	if target > health:
+		health = mini(target, _model_health_max())
+	if Engine.get_process_frames() % 40 == 0:
+		AudioManager.play_sfx("build_loop")
+	if repair_timer <= 0.0:
+		_finish_repair()
+
+func _finish_repair() -> void:
+	repair_timer = 0.0
+	max_repair_time = 0.0
+	health = clampi(maxi(health, _repair_to_health), 1, _model_health_max())
+	BuildingConstructionVisual.finish(self)
+	AudioManager.play_sfx("upgrade_done")
+	var bm = _get_bm()
+	if bm and bm.has_method("_show_hud_alert") and bm.is_human_owned(owner_peer_id, team):
+		var loc_str := "(%d,%d)" % [int(global_position.x), int(global_position.z)]
+		bm._show_hud_alert("修理完成: %s %s" % [display_name, loc_str], Color(0.35, 0.95, 0.45), [team], team, GameSettings.AlertKind.UPGRADE, false)
 
 	
 	
@@ -771,6 +926,11 @@ func die():
 		return
 	# 先释放所有进驻单位，再执行死亡逻辑
 	release_all_garrisoned()
+	# 修理中被打掉：清掉施工脚手架，别让残骸挂着木头架子
+	if repair_timer > 0.0:
+		repair_timer = 0.0
+		max_repair_time = 0.0
+		BuildingConstructionVisual.cancel(self)
 	# 脚下的土色脱离建筑独立淡出，不会跟着模型一起瞬间消失
 	_fade_ground_patch()
 	super.die()

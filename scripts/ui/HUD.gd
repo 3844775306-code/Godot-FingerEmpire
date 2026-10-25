@@ -1133,6 +1133,10 @@ func _update_health_bars():
 				unit_bars[e].upgrade_bar.queue_free()
 			if unit_bars[e].has("upgrade_label") and unit_bars[e].upgrade_label:
 				unit_bars[e].upgrade_label.queue_free()
+			if unit_bars[e].has("repair_bar") and unit_bars[e].repair_bar:
+				unit_bars[e].repair_bar.queue_free()
+			if unit_bars[e].has("repair_label") and unit_bars[e].repair_label:
+				unit_bars[e].repair_label.queue_free()
 			unit_bars.erase(e)
 
 	# 遍历所有实体
@@ -1186,6 +1190,7 @@ func _update_health_bars():
 
 		var refresh_text_now := refresh_text or created
 		_hide_build_bar(entity)
+		_hide_repair_bar(entity)
 		bar.position = screen_pos - bar_size / 2
 
 		# 建造进度
@@ -1222,6 +1227,38 @@ func _update_health_bars():
 				up_data2.upgrade_bar.visible = false
 			if up_data2.has("upgrade_label") and up_data2.upgrade_label:
 				up_data2.upgrade_label.visible = false
+
+		# 修理进度：残破建筑被修理时在血条正上方画一条翠绿进度条（与建造条同款样式）
+		if entity is Building and entity.has_method("is_under_repair") and entity.is_under_repair():
+			var rdata = unit_bars[entity]
+			var repair_bar: ProgressBar = rdata.get("repair_bar")
+			var repair_label: Label = rdata.get("repair_label")
+			if not repair_bar:
+				repair_bar = ProgressBar.new()
+				UITheme.style_progress_bar(repair_bar, UITheme.REPAIR_PROGRESS, 8.0)
+				add_child(repair_bar); repair_bar.z_index = -1
+				rdata["repair_bar"] = repair_bar
+			if not repair_label:
+				repair_label = Label.new()
+				repair_label.add_theme_color_override("font_color", Color.WHITE)
+				repair_label.add_theme_color_override("font_outline_color", Color.BLACK)
+				repair_label.add_theme_constant_override("outline_size", 1)
+				add_child(repair_label); repair_label.z_index = -1
+				rdata["repair_label"] = repair_label
+			var repair_total := maxf(entity.max_repair_time, 0.001)
+			var repair_pct := clampf(1.0 - entity.repair_timer / repair_total, 0.0, 1.0)
+			repair_bar.custom_minimum_size = Vector2(bar_size.x, 8 * scale_factor)
+			repair_bar.size = Vector2(bar_size.x, 8 * scale_factor)
+			repair_bar.visible = true
+			repair_bar.value = repair_pct
+			repair_bar.position = bar.position + Vector2(0, -bar_size.y - 4)
+			repair_label.add_theme_font_size_override("font_size", font_size)
+			repair_label.visible = show_unit_text
+			if refresh_text_now:
+				repair_label.text = "修理中 %d%%" % int(repair_pct * 100.0)
+			repair_label.position = repair_bar.position + Vector2(0, -22)
+		else:
+			_hide_repair_bar(entity)
 
 		if entity is Building and entity.has_method("is_under_construction") and entity.is_under_construction():
 			var bdata = unit_bars[entity]
@@ -1335,12 +1372,22 @@ func _hide_entity_health_bars(entity):
 	if d.has("upgrade_label") and d.upgrade_label:
 		d.upgrade_label.visible = false
 	_hide_build_bar(entity)
+	_hide_repair_bar(entity)
 
 func _hide_build_bar(entity):
 	if entity in unit_bars:
 		var d = unit_bars[entity]
 		if d.has("build_bar") and d.build_bar:
 			d.build_bar.visible = false
+
+# 修理条与修理文字一起隐藏（与建造条同一套数据缓存）
+func _hide_repair_bar(entity):
+	if entity in unit_bars:
+		var d = unit_bars[entity]
+		if d.has("repair_bar") and d.repair_bar:
+			d.repair_bar.visible = false
+		if d.has("repair_label") and d.repair_label:
+			d.repair_label.visible = false
 
 func _create_health_bar(entity):
 	var bar = HealthBarControl.new()

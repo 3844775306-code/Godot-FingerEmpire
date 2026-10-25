@@ -4351,6 +4351,30 @@ func produce_unit(building: Building, unit_id: int):
 func upgrade_building(b: Building):
 	if b.has_method("start_upgrade"): b.start_upgrade()
 
+# 修理残破建筑（单机/主机路径）。规则与扣费都在 Building 内实现，
+# 这里只做入口，联机时同名逻辑走 OnlineBattleManager 的 repair 命令。
+func repair_building(b: Building) -> bool:
+	if b == null or not is_instance_valid(b) or not (b is Building):
+		return false
+	if not b.has_method("perform_repair"):
+		return false
+	return bool(b.perform_repair(self))
+
+# 给 UI 用：能不能修（含资源是否够），不动状态
+func can_repair_building(b: Building) -> bool:
+	if b == null or not is_instance_valid(b) or not (b is Building):
+		return false
+	if not b.has_method("can_repair") or not b.can_repair():
+		return false
+	var cost: Dictionary = b.repair_cost() if b.has_method("repair_cost") else {}
+	if cost.is_empty():
+		return true
+	var res: Dictionary = get_resources_for(b.owner_peer_id) if b.owner_peer_id != -1 else get_team_resources(b.team)
+	for k in cost:
+		if int(res.get(k, 0)) < int(cost[k]):
+			return false
+	return true
+
 
 
 func release_garrisoned(b: Building):

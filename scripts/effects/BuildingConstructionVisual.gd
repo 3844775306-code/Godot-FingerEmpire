@@ -11,15 +11,34 @@ const SCAFFOLD_FADE_START := 0.78
 static var _dust_texture: Texture2D = null
 
 # 建造开始：记录模型原始变换并铺好脚手架/地基。
-static func begin(host: Node3D, model_override: Node3D = null) -> void:
+# repair = true 时进入「修理」外观：脚手架和扬尘照旧，但模型保持完整大小
+# （修理不是重盖，把楼缩成地基会很难看），进度条走完后脚手架淡出。
+static func begin(host: Node3D, model_override: Node3D = null, repair: bool = false) -> void:
 	if not _can_update(host):
 		return
 	var state = _get_state(host)
 	if state is Dictionary:
 		if is_instance_valid(state.get("model")):
+			# 已有施工状态：只更新修理标记，避免打断正在进行的建造动画
+			state["repair"] = repair
 			return
 		_destroy_state(host, state, false)
-	_init_state(host, model_override)
+	_init_state(host, model_override, repair)
+
+# 当前是否挂着施工外观（建造或修理）
+static func is_active(host: Node3D) -> bool:
+	if not is_instance_valid(host):
+		return false
+	return host.has_meta(STATE_META)
+
+# 当前施工外观是否为修理模式
+static func is_repairing(host: Node3D) -> bool:
+	if not is_instance_valid(host):
+		return false
+	var state = _get_state(host)
+	if not (state is Dictionary):
+		return false
+	return bool(state.get("repair", false))
 
 # progress 为 0~1 的建造进度。
 static func update(host: Node3D, progress: float, model_override: Node3D = null) -> void:
@@ -73,7 +92,7 @@ static func rebind(host: Node3D) -> void:
 		return
 	_destroy_state(host, state, false)
 
-static func _init_state(host: Node3D, model_override: Node3D) -> void:
+static func _init_state(host: Node3D, model_override: Node3D, repair: bool = false) -> void:
 	var model := _find_model(host, model_override)
 	if model == null:
 		return
@@ -93,6 +112,7 @@ static func _init_state(host: Node3D, model_override: Node3D) -> void:
 		"scaffold": scaffold,
 		"dust": dust,
 		"progress": 0.0,
+		"repair": repair,
 	}
 	host.set_meta(STATE_META, state)
 	_apply_model(state, 0.0)
@@ -102,6 +122,9 @@ static func _init_state(host: Node3D, model_override: Node3D) -> void:
 static func _apply_model(state: Dictionary, progress: float) -> void:
 	var model = state.get("model")
 	if not is_instance_valid(model):
+		return
+	# 修理模式：模型保持原样（只是修补），不要像新建那样从地基长出来
+	if bool(state.get("repair", false)):
 		return
 	var base_scale: Vector3 = state.get("base_scale", Vector3.ONE)
 	var base_position: Vector3 = state.get("base_position", Vector3.ZERO)

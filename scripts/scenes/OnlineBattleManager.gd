@@ -6,8 +6,8 @@ var game_mode: int = NetworkManager.GameMode.ONEvONE
 
 # Compact entity array indices (no string keys = faster + smaller)
 enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ATTACK_SPEED, MELEE_ARMOR, SHIELD_ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH, GARRISONED, NATION, IN_ACTION_RANGE, ATTACK_SEQ }
-enum EB { UPGRADE=0, MAX_UPGRADE, CAN_UPGRADE, BUILD_TIMER, MAX_BUILD, PROD_CURRENT, PROD_PROGRESS, PROD_QSIZE, UPGRADE_TIMER, MAX_UPGRADE_TIME, GARRISON_COUNT }
-const SNAP_VERSION = 7  # 7 = added ATTACK_SEQ (per-attack animation pulse)
+enum EB { UPGRADE=0, MAX_UPGRADE, CAN_UPGRADE, BUILD_TIMER, MAX_BUILD, PROD_CURRENT, PROD_PROGRESS, PROD_QSIZE, UPGRADE_TIMER, MAX_UPGRADE_TIME, GARRISON_COUNT, REPAIR_TIMER, MAX_REPAIR, CAN_REPAIR }
+const SNAP_VERSION = 8  # 8 = added EB.REPAIR_TIMER/MAX_REPAIR/CAN_REPAIR (building repair)
 
 # 1v1 专用
 var player_teams: Dictionary = {}         # peer_id -> team
@@ -824,6 +824,7 @@ func _process_1v1_command(peer_id: int, data: Dictionary):
 		"clear_garrison": _clear_garrison_for_team(team, data)
 		"ungarrison_soldiers": _ungarrison_soldiers_1v1(team, data)
 		"toggle_auto_attack": _1v1_set_auto_attack(team, bool(data.get("enabled", false)))
+		"repair": _1v1_repair(team, data)
 
 func _process_2v2_command(peer_id: int, data: Dictionary):
 	if not player_info.has(peer_id) or not player_info[peer_id].alive: return
@@ -844,6 +845,7 @@ func _process_2v2_command(peer_id: int, data: Dictionary):
 		"clear_garrison": _2v2_clear_garrison(peer_id, data)
 		"ungarrison_soldiers": _ungarrison_soldiers_2v2(peer_id, data)
 		"toggle_auto_attack": _2v2_set_auto_attack(peer_id, bool(data.get("enabled", false)))
+		"repair": _2v2_repair(peer_id, data)
 
 # ---------- 1v1 命令实现 ----------
 func _1v1_right_click(team: int, data: Dictionary):
@@ -924,6 +926,16 @@ func _1v1_upgrade(team: int, data: Dictionary):
 		if entity is Building and entity.team == team and entity.get_instance_id() == building_id:
 			for _i in range(n):
 				if not entity.can_upgrade() or not entity.perform_upgrade(self): break
+			break
+
+func _1v1_repair(team: int, data: Dictionary):
+	var building_id = data["building_id"]
+	var n = 999 if data.get("shift_held", false) else 1
+	# 修理是按单座建筑走的，shift 可以一次给附近几座受损建筑排上（每座各自扣费）
+	for entity in entities.get_children():
+		if entity is Building and entity.team == team and entity.get_instance_id() == building_id:
+			for _i in range(n):
+				if not entity.can_repair() or not entity.perform_repair(self): break
 			break
 
 func _1v1_produce(team: int, data: Dictionary):
@@ -1024,6 +1036,13 @@ func _2v2_build(peer_id: int, data: Dictionary):
 			increase_player_population(peer_id, 1)
 		update_player_limits(peer_id)
 		update_player_population(peer_id)
+
+func _2v2_repair(peer_id: int, data: Dictionary):
+	var building_id = data["building_id"]
+	for entity in entities.get_children():
+		if entity is Building and entity.get_instance_id() == building_id and entity.owner_peer_id == peer_id:
+			entity.perform_repair(self)
+			break
 
 func _2v2_upgrade(peer_id: int, data: Dictionary):
 	var building_id = data["building_id"]
@@ -1791,6 +1810,10 @@ func _serialize_entity_compact(entity: GameEntity, snapshot_key: String) -> Arra
 		ba[EB.UPGRADE_TIMER] = entity.upgrade_timer
 		ba[EB.MAX_UPGRADE_TIME] = entity.max_upgrade_time
 		ba[EB.GARRISON_COUNT] = entity.get_garrison_count()
+		# 修理状态：客户端据此画修理进度条 + 施工外观
+		ba[EB.REPAIR_TIMER] = entity.repair_timer
+		ba[EB.MAX_REPAIR] = entity.max_repair_time
+		ba[EB.CAN_REPAIR] = 1 if entity.can_repair() else 0
 		a.append(ba)
 	else:
 		a.append([])
@@ -1875,6 +1898,15 @@ func _serialize_entity(entity: GameEntity) -> Dictionary:
 			data["production_current_unit"] = -1
 			data["production_progress"] = 0.0
 			data["production_queue_size"] = 0
+
+		# 修理进度
+		if entity.repair_timer > 0:
+			data["repair_timer"] = entity.repair_timer
+			data["max_repair_time"] = entity.max_repair_time
+		else:
+			data["repair_timer"] = 0
+			data["max_repair_time"] = 0
+		data["can_repair"] = 1 if entity.can_repair() else 0
 
 	return data
 

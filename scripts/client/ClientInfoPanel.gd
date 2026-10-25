@@ -95,6 +95,59 @@ func _is_local_owned_info(info: Dictionary) -> bool:
 		return int(info.get("owner_peer_id", -1)) == renderer.my_peer_id
 	return int(info.get("team", -1)) == renderer.player_team
 
+# ==================== 修理信息 ====================
+# 已损比例：优先用快照里的权威值 repair_damage_ratio，老快照按 HP 现算
+func _repair_damage_ratio(info: Dictionary) -> float:
+	if info.has("repair_damage_ratio"):
+		return clampf(float(info["repair_damage_ratio"]), 0.0, 1.0)
+	var mhp := maxf(float(info.get("max_health", 1)), 1.0)
+	return clampf(1.0 - float(info.get("health", 0)) / mhp, 0.0, 1.0)
+
+# 修理费：优先读快照里的权威值 repair_cost（ClientRenderer 已按服务端同公式算好），
+# 老快照缺字段时按「已损比例 × 原价，向上取整」本地兜底
+func _repair_cost_from_info(info: Dictionary, ratio: float) -> Dictionary:
+	var direct = info.get("repair_cost", {})
+	if direct is Dictionary and not direct.is_empty():
+		return direct
+	var out := {}
+	var cfg = EntityDatabase.get_config(int(info.get("entity_id", -1)))
+	var base = cfg.get("cost", {})
+	if base is Dictionary:
+		for k in base:
+			var v := int(ceil(float(base[k]) * ratio))
+			if v > 0:
+				out[k] = v
+	return out
+
+# 拼装修理文案：修理中进度 / 已损百分比 / 修理费（主城不可修，不显示）
+func _repair_status_str(info: Dictionary) -> String:
+	if int(info.get("entity_id", 0)) in [20, 53]:
+		return ""
+	if float(info.get("build_timer", 0.0)) > 0.0:
+		return ""
+	var ratio := _repair_damage_ratio(info)
+	var rt := float(info.get("repair_timer", 0.0))
+	var mrt := float(info.get("max_repair_time", 0.0))
+	if rt > 0.0 and mrt > 0.0:
+		var pct := clampf(1.0 - rt / mrt, 0.0, 1.0)
+		return "\n🔧 [color=%s]修理中[/color]:  %.0f%%   已损: %.0f%%" % [UITheme.hex_str(UITheme.REPAIR_PROGRESS), 100.0 * pct, 100.0 * ratio]
+	if ratio <= 0.001:
+		return ""
+	var cost := _repair_cost_from_info(info, ratio)
+	var cost_txt := ""
+	for res in ["wood", "stone", "gold", "oil"]:
+		if int(cost.get(res, 0)) > 0:
+			var need := int(cost[res])
+			var have := int(resources.get(res, 0))
+			var cc := "white" if have >= need else "red"
+			cost_txt += "%s[color=%s]%d[/color] " % [UITheme.RESOURCE_ICONS.get(res, ""), cc, need]
+	var out := "\n🔧 [color=%s]已损[/color]:  %.0f%%" % [UITheme.hex_str(UITheme.ALERT_WARNING), 100.0 * ratio]
+	if not cost_txt.strip_edges().is_empty():
+		out += "   修理费: %s" % cost_txt.strip_edges()
+	if not bool(int(info.get("can_repair", 0))):
+		out += "  [color=%s]（暂不可修）[/color]" % UITheme.hex_str(UITheme.VERMILION)
+	return out
+
 func update_info(entity_id: int):
 	if not renderer: renderer = get_tree().get_first_node_in_group("client_renderer")
 	if not renderer: return
@@ -142,6 +195,9 @@ func update_info(entity_id: int):
 	var mut = info.get("max_upgrade_time", 0.0)
 	if ut > 0 and mut > 0:
 		bt_str += "\n⬆️ [color=purple]升级中[/color]:  %.0f%%" % (100.0 * (1.0 - ut / mut))
+	# 修理状态只在建筑上展示（已损 / 修理中进度 / 修理费）
+	if int(info.get("type", -1)) == 1:
+		bt_str += _repair_status_str(info)
 	var t = "❤️ [color=%s]HP[/color]:  [color=white]%d / %d[/color]%s\n" % [hc, info["health"], info["max_health"], bt_str]
 	t += "⚔️ [color=%s]ATK[/color]:  [color=white]%d[/color]" % [UITheme.hex_str(UITheme.GOLD), info["attack"]]
 	if info.get("melee_armor", 0) > 0 or info.get("shield_armor", 0) > 0:

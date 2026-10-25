@@ -7,7 +7,7 @@ const BuildingConstructionVisual = preload("res://scripts/effects/BuildingConstr
 const TreeFallEffect = preload("res://scripts/effects/TreeFallEffect.gd")
 const EntityDamageVisual = preload("res://scripts/effects/EntityDamageVisual.gd")
 enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ATTACK_SPEED, MELEE_ARMOR, SHIELD_ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH, GARRISONED, NATION, IN_ACTION_RANGE, ATTACK_SEQ }
-enum EB { UPGRADE=0, MAX_UPGRADE, CAN_UPGRADE, BUILD_TIMER, MAX_BUILD, PROD_CURRENT, PROD_PROGRESS, PROD_QSIZE, UPGRADE_TIMER, MAX_UPGRADE_TIME, GARRISON_COUNT }
+enum EB { UPGRADE=0, MAX_UPGRADE, CAN_UPGRADE, BUILD_TIMER, MAX_BUILD, PROD_CURRENT, PROD_PROGRESS, PROD_QSIZE, UPGRADE_TIMER, MAX_UPGRADE_TIME, GARRISON_COUNT, REPAIR_TIMER, MAX_REPAIR, CAN_REPAIR }
 # 与 RTSBattleManager.get_nation_name() 保持一致；客户端不跑服务端脚本，血条文字单独查表
 const NATION_LABELS := ["维京", "英格兰", "法兰西", "中国", "匈牙利", "日本", "拜占庭"]
 var last_applied_seq = -1
@@ -593,6 +593,18 @@ func _rebuild_building_info(d: Dictionary):
 	else:
 		d["get_upgrade_cost"] = {}
 	d["castle_level_required"] = cfg.get("castle_level_required", 0)
+	# 客户端算修理费：和服务端 Building.repair_cost() 同一套公式（已损% × 原价，向上取整）
+	var max_hp := float(d.get("max_health", 0.0))
+	var cur_hp := float(d.get("health", 0.0))
+	var dmg := clampf(1.0 - cur_hp / max_hp, 0.0, 1.0) if max_hp > 0.0 else 0.0
+	var rcost := {}
+	if dmg > 0.0:
+		for res in cfg.get("cost", {}):
+			var v := int(ceil(float(cfg["cost"][res]) * dmg))
+			if v > 0:
+				rcost[res] = v
+	d["repair_cost"] = rcost
+	d["repair_damage_ratio"] = dmg
 	var produces = cfg.get("produces", [])
 	if not produces:
 		d["production_list"] = []
@@ -669,6 +681,10 @@ func _update_single_entity(info):
 				info["upgrade_timer"] = ba[EB.UPGRADE_TIMER]
 				info["max_upgrade_time"] = ba[EB.MAX_UPGRADE_TIME]
 				info["garrisoned_soldier_count"] = ba[EB.GARRISON_COUNT] if ba.size() > EB.GARRISON_COUNT else 0
+				# 修理状态（老版本快照没有这几格，缺省当 0）
+				info["repair_timer"] = ba[EB.REPAIR_TIMER] if ba.size() > EB.REPAIR_TIMER else 0.0
+				info["max_repair_time"] = ba[EB.MAX_REPAIR] if ba.size() > EB.MAX_REPAIR else 0.0
+				info["can_repair"] = ba[EB.CAN_REPAIR] if ba.size() > EB.CAN_REPAIR else 0
 		_rebuild_building_info(info)
 	if not info.has("id") or not info.has("x") or not info.has("z"):
 		return
@@ -984,8 +1000,17 @@ func _refresh_client_construction_visual(node: Node3D, info: Dictionary) -> void
 		var max_build := maxf(float(info.get("max_build_time", 0.0)), 0.001)
 		var progress := clampf(1.0 - build_timer / max_build, 0.0, 1.0)
 		BuildingConstructionVisual.update(node, progress)
-	else:
-		BuildingConstructionVisual.finish(node)
+		return
+	# 修理中：同样用脚手架 + 扬尘那套施工外观，但模型保持完整（repair 模式）
+	var repair_timer := float(info.get("repair_timer", 0.0))
+	if repair_timer > 0.0:
+		var max_repair := maxf(float(info.get("max_repair_time", 0.0)), 0.001)
+		var rprogress := clampf(1.0 - repair_timer / max_repair, 0.0, 1.0)
+		if not BuildingConstructionVisual.is_repairing(node):
+			BuildingConstructionVisual.begin(node, null, true)
+		BuildingConstructionVisual.update(node, rprogress)
+		return
+	BuildingConstructionVisual.finish(node)
 
 func _refresh_client_damage_visual(node: Node3D, info: Dictionary) -> void:
 	var max_hp := float(info.get("max_health", 0.0))
@@ -996,7 +1021,11 @@ func _refresh_client_damage_visual(node: Node3D, info: Dictionary) -> void:
 	var entity_type := int(info.get("type", -1))
 	if entity_type == 1:
 		# 建造中由施工动画控制模型变换，完成后再显示受损外观。
-		if float(info.get("build_timer", 0.0)) > 0.0 or node.has_meta("_construction_visual"):
+		# 修理用的是同一套施工外观，但修理时模型保持完整，受损/修补外观要照常跟着血量走，
+		# 否则联机端修完会突然从残破「跳」成完好。
+		if float(info.get("build_timer", 0.0)) > 0.0:
+			return
+		if node.has_meta("_construction_visual") and not BuildingConstructionVisual.is_repairing(node):
 			return
 		EntityDamageVisual.update_building(node, ratio)
 	elif entity_type == 0:
@@ -1027,6 +1056,8 @@ func _apply_model_tint(node: Node, tint: Color):
 const SHIP_ANIM_IDS := [13, 14, 39, 40]
 # 石油资源（EntityDatabase id 4），模型是 water-rocks，靠冒黑烟才认得出来
 const OIL_RESOURCE_ID := 4
+# 修理进度条颜色：和建造条（琥珀）同样的形状与位置，用绿一点的颜色区分「修补」和「新建」
+const REPAIR_BAR_COLOR: Color = Color(0.36, 0.86, 0.52)
 
 # 在船模型下面挂一个 ShipSailAnimator（与服务端同一套实现，纯视觉）
 func _attach_ship_sail_animator(model_instance: Node3D) -> void:
@@ -1933,6 +1964,33 @@ func _update_health_bars():
 		else:
 			_hide_upgrade_bars(id)
 
+		# 修理中（联机）：位置压在升级条下方，样式与建造条一致
+		if type == 1 and float(info.get("repair_timer", 0.0)) > 0.0:
+			if Engine.get_process_frames() % 40 == 0:
+				AudioManager.play_sfx_3d("build_loop", node.global_position, _get_cam_pos())
+			var rbar = _get_or_create_repair_bar(id)
+			var rlab = _get_or_create_repair_label(id)
+			var rt := maxf(float(info.get("max_repair_time", 0.0)), 0.001)
+			var rp := clampf(1.0 - float(info["repair_timer"]) / rt, 0.0, 1.0)
+			rbar.visible = true; rlab.visible = show_unit_text
+			rbar.value = rp
+			var nm3 = info["name"]
+			var _gpfx4 = _get_entity_group_prefix(info["id"])
+			rlab.text = _gpfx4 + "%s (修理中 %d%%)" % [nm3, int(rp * 100.0)]
+			var _lbc4 = _get_entity_label_color(info)
+			rlab.add_theme_color_override("font_color", _lbc4)
+			_apply_label_nation_outline(rlab, info)
+			var rwp = node.global_position + Vector3.UP * (info["body_radius"]*2 + 0.5)
+			var rsp = cam.unproject_position(rwp)
+			if viewport_rect.has_point(rsp):
+				rbar.position = rsp - Vector2(30, 4) + Vector2(0, 18)
+				rlab.position = rbar.position + Vector2(0, -22)
+				rlab.visible = show_unit_text
+			else:
+				rbar.visible = false; rlab.visible = false
+		else:
+			_hide_repair_bars(id)
+
 		if type == 1 and info.get("production_current_unit", -1) != -1 and info.get("production_current_unit") != null:
 			var pbar = _get_or_create_prod_bar(id)
 			var plab = _get_or_create_prod_label(id)
@@ -2009,6 +2067,8 @@ func _hide_unit_bars(id):
 		if bd.get("build_bar"): bd.build_bar.visible = false
 		if bd.get("upgrade_bar"): bd.upgrade_bar.visible = false
 		if bd.get("upgrade_label"): bd.upgrade_label.visible = false
+		if bd.get("repair_bar"): bd.repair_bar.visible = false
+		if bd.get("repair_label"): bd.repair_label.visible = false
 
 # ==================== 血条控件创建 ====================
 func _get_or_create_health_bar(id) -> HealthBarControl:
@@ -2113,6 +2173,37 @@ func _hide_upgrade_bars(id):
 		if unit_bars[id].has("upgrade_label") and unit_bars[id].upgrade_label:
 			unit_bars[id].upgrade_label.visible = false
 
+# ==================== 修理进度条（联机） ====================
+# 单机的修理条画在 scripts/ui/HUD.gd；联机没有真实 Building 对象，只能靠快照的
+# repair_timer / max_repair_time 在这里画，位置与建造条一致。
+func _get_or_create_repair_bar(id) -> ProgressBar:
+	if not unit_bars.has(id):
+		unit_bars[id] = { "bar":null, "label":null, "prod_bar":null, "prod_label":null, "order_label":null }
+	if not unit_bars[id].has("repair_bar") or not unit_bars[id].repair_bar:
+		var p = ProgressBar.new()
+		UITheme.style_progress_bar(p, REPAIR_BAR_COLOR, 8.0)
+		add_child(p)
+		unit_bars[id].repair_bar = p
+	return unit_bars[id].repair_bar
+
+func _get_or_create_repair_label(id) -> Label:
+	if not unit_bars.has(id):
+		unit_bars[id] = { "bar":null, "label":null, "prod_bar":null, "prod_label":null, "order_label":null }
+	if not unit_bars[id].has("repair_label") or not unit_bars[id].repair_label:
+		var l = Label.new()
+		l.add_theme_font_size_override("font_size", 12)
+		l.add_theme_color_override("font_color", REPAIR_BAR_COLOR)
+		add_child(l)
+		unit_bars[id].repair_label = l
+	return unit_bars[id].repair_label
+
+func _hide_repair_bars(id) -> void:
+	if unit_bars.has(id):
+		if unit_bars[id].has("repair_bar") and unit_bars[id].repair_bar:
+			unit_bars[id].repair_bar.visible = false
+		if unit_bars[id].has("repair_label") and unit_bars[id].repair_label:
+			unit_bars[id].repair_label.visible = false
+
 func _hide_prod_bars(id):
 	if unit_bars.has(id):
 		if unit_bars[id].prod_bar: unit_bars[id].prod_bar.visible = false
@@ -2128,6 +2219,8 @@ func _remove_all_bars(id):
 		if data.get("build_bar"): data.build_bar.queue_free()
 		if data.get("upgrade_bar"): data.upgrade_bar.queue_free()
 		if data.get("upgrade_label"): data.upgrade_label.queue_free()
+		if data.get("repair_bar"): data.repair_bar.queue_free()
+		if data.get("repair_label"): data.repair_label.queue_free()
 		if data.order_label: data.order_label.queue_free()
 		unit_bars.erase(id)
 

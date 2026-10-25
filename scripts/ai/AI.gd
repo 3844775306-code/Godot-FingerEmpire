@@ -133,6 +133,36 @@ var _land_rally_timer: float = 0.0
 const NAVAL_PATROL_INTERVAL: float = 15.0
 var _naval_patrol_timer: float = 0.0
 
+# ── 建筑修理（AI 也会修残破建筑）──
+# 修理机制本身在 Building 内实现：按已损比例扣费 + 计时 + 附近 10 米无敌军才能修，主城(20/53)不可修。
+# AI 侧只负责「什么时候修、先修哪座、别把造兵的钱花光」这层决策：
+#   · 每 REPAIR_SCAN_INTERVAL 扫一次自己的建筑，不每帧遍历；
+#   · 同时最多 REPAIR_MAX_CONCURRENT 座、每轮最多新开 REPAIR_MAX_START_PER_SCAN 座；
+#   · 付款后每种资源仍要 >= 储备阈值（见 _repair_reserve），避免经济被修理拖死；
+#   · 排序按建筑重要度 × 受损程度，出兵/防守建筑优先，民居最后。
+const REPAIR_SCAN_INTERVAL: float = 2.5        # AI 扫描可修建筑的间隔（秒）
+const REPAIR_MAX_CONCURRENT: int = 2           # 同时进行中的修理工程上限
+const REPAIR_MAX_START_PER_SCAN: int = 1       # 每轮扫描最多新开工数量
+const REPAIR_EARLY_GAME_SECONDS: float = 60.0  # 开局这段时间不修（先把农民与经济铺开）
+const REPAIR_MIN_DAMAGE: float = 0.10          # 已损低于该比例不值得修
+# 建筑重要度权重：出兵/防守建筑优先，民居最后（主城不在表内，can_repair() 已排除）
+const REPAIR_WEIGHT = {
+	21: 1.35,  # 兵营
+	24: 1.30,  # 攻城车间
+	29: 1.35,  # 重装武器厂
+	25: 1.20,  # 箭塔
+	26: 1.20,  # 炮塔
+	64: 1.15,  # 墙顶炮台
+	27: 1.10,  # 城墙
+	42: 1.00,  # 书院
+	54: 1.00,  # 修道院
+	52: 0.95,  # 集市
+	23: 0.95,  # 船坞
+	22: 0.90,  # 仓库
+	28: 0.75,  # 民居
+}
+var _repair_scan_timer: float = 0.0
+
 # ═══ Resource wrappers ═══
 func _get_resources() -> Dictionary:
 	if my_peer_id != -1:
@@ -684,11 +714,28 @@ func _can_place_ai_building(building_id: int, pos: Vector3) -> bool:
 			return false
 	return true
 
+func _bridge_wood_reserve() -> int:
+	if _water_crossing == null or not _water_crossing.has_pending_bridge():
+		return 0
+	var bridge_cfg = EntityDatabase.get_config(7)
+	if not bridge_cfg:
+		return 0
+	return int(bridge_cfg.get("cost", {}).get("wood", 0))
+
 func build_building(building_id: int, pos: Vector3, facing: Vector3 = Vector3.ZERO) -> bool:
 	var cfg = EntityDatabase.get_config(building_id)
 	if not cfg: return false
 	# Check castle level requirement (matches RTSBattleManager.is_building_unlocked)
 	if not _ai_can_build(building_id): return false
+	# 已经规划好一座桥时，先给桥留住木材：农民修桥需要 50 木，
+	# 如果 AI 同时把木材花在仓库/民房上，桥会永远差最后几块木头。
+	if building_id != 7:
+		var bridge_wood: int = _bridge_wood_reserve()
+		if bridge_wood > 0:
+			var own_wood: int = int(_get_resources().get("wood", 0))
+			var want_wood: int = int(cfg.get("cost", {}).get("wood", 0))
+			if own_wood - want_wood < bridge_wood:
+				return false
 	# 城墙允许建 WALL_COUNT 面（防线需求），民居最多 HOUSE_TARGET_MAX 座，
 	# 墙顶炮台最多 WALL_COUNT 座；其余建筑上限 10
 	var _cap = WALL_COUNT if building_id == 27 else (target_house_count if building_id == 28 else 10)
@@ -714,7 +761,10 @@ func build_building(building_id: int, pos: Vector3, facing: Vector3 = Vector3.ZE
 					bridge_visible = true
 					break
 		if not bridge_visible:
-			return false
+			# AI 已经规划好的经济桥：允许直接开工第一段，
+			# 后续桥段仍靠“紧邻已有桥”规则延伸。
+			if _water_crossing == null or not _water_crossing.is_planned_bridge_position(bridge_world_pos):
+				return false
 	elif building_id != 23:
 		var world_pos = Vector3(pos.x, 0, pos.z)
 		var visible = false
@@ -755,6 +805,89 @@ func upgrade_building(building_id: int):
 			# 不能只看第一个（第一个满级后会导致后面同类建筑永远不升级）
 			if not entity.can_upgrade(): continue
 			if entity.perform_upgrade(battle): return
+
+# ═══ 建筑修理（AI 决策）═══
+# 只处理「自己的、非主城、受损且附近没有敌方部队」的建筑：
+# Building.can_repair() 已经排除了主城/满血/建造中/升级中/已在修理/10 米内有敌军的情况，
+# 这里只再叠加资源余量与并发限制，然后直接 perform_repair()（扣费在 Building 内完成）。
+func _tick_building_repair() -> void:
+	if battle == null:
+		return
+	# 开局先铺经济；这段时间 AI 的建筑本来就很少被打
+	if battle.game_time < REPAIR_EARLY_GAME_SECONDS:
+		return
+	var repairing: int = 0
+	var candidates: Array = []
+	for entity in _cached_buildings():
+		if not is_instance_valid(entity) or not (entity is Building) or entity.health <= 0:
+			continue
+		if not entity_belongs_to_me(entity):
+			continue
+		if entity.is_under_repair():
+			repairing += 1
+			continue
+		if not entity.can_repair():
+			continue
+		if float(entity.repair_damage_ratio()) < REPAIR_MIN_DAMAGE:
+			continue
+		candidates.append(entity)
+	# 已经修满上限时不再开工：修理会占住建筑本身（期间不能升级），不宜全基地同时施工
+	if candidates.is_empty() or repairing >= REPAIR_MAX_CONCURRENT:
+		return
+	# 同权重时更残破的先修
+	candidates.sort_custom(func(a, b): return _repair_score(a) > _repair_score(b))
+	var started: int = 0
+	for b in candidates:
+		if repairing + started >= REPAIR_MAX_CONCURRENT:
+			break
+		if started >= REPAIR_MAX_START_PER_SCAN:
+			break
+		var cost: Dictionary = b.repair_cost()
+		if not _repair_has_spare_resources(cost):
+			continue
+		# 双保险：BattleManager 按 owner/team 取资源判断，口径与 AI 自己的查询保持一致
+		if battle.has_method("can_repair_building") and not battle.can_repair_building(b):
+			continue
+		if b.perform_repair(battle):
+			started += 1
+
+# 单座建筑优先级 = 重要度 × (0.4 + 0.6 × 已损比例)
+# 权重决定「同类里更该修的」，已损比例保证残血建筑不会被小修拖后。
+func _repair_score(b: Building) -> float:
+	var w: float = float(REPAIR_WEIGHT.get(int(b.entity_id), 1.0))
+	return w * (0.4 + 0.6 * float(b.repair_damage_ratio()))
+
+# 修理费储备门槛：不同阶段给造兵/升级留的钱不一样。
+# 防守时进一步放宽 —— 前线建筑塌了会直接丢防线，这时修比攒钱重要。
+func _repair_reserve() -> Dictionary:
+	var reserve := {"gold": 120, "wood": 150, "stone": 90, "food": 80, "oil": 60}
+	match phase:
+		Phase.PRODUCTION:
+			reserve = {"gold": 220, "wood": 260, "stone": 160, "food": 120, "oil": 100}
+		Phase.ASSAULT:
+			reserve = {"gold": 90, "wood": 110, "stone": 70, "food": 60, "oil": 40}
+	if _is_defending():
+		# 防守优先级提高：储备压到六成，但仍保留最低补兵钱
+		for k in reserve:
+			reserve[k] = int(round(float(reserve[k]) * 0.6))
+	return reserve
+
+# 付款后每种资源仍不低于储备，才算「有余量修」
+func _repair_has_spare_resources(cost: Dictionary) -> bool:
+	var res: Dictionary = _get_resources()
+	var reserve: Dictionary = _repair_reserve()
+	for k in cost:
+		var need: int = int(cost[k])
+		if need <= 0:
+			continue
+		if int(res.get(k, 0)) - need < int(reserve.get(k, 0)):
+			return false
+	# 正在攒巨型投石机 / 重装武器厂科技时修理也要让路，沿用现有预留逻辑
+	if _trebuchet_reserve_active() and not _can_pay_with_trebuchet_reserve(cost):
+		return false
+	if _heavy_siege_tech_reserve_active() and not _can_pay_with_reserve(cost, _heavy_siege_tech_reserve_cost()):
+		return false
+	return true
 
 # ═══ Counter matrix ═══
 const COUNTER_MATRIX = {
@@ -837,6 +970,8 @@ func _process(delta):
 		timer = think_interval * phase
 		worker_allocate_timer = WORKER_ALLOCATE_INTERVAL * phase
 		_naval_patrol_timer = NAVAL_PATROL_INTERVAL * phase
+		# 修理扫描同样按相位错开，避免多个 AI 在同一帧一起扫全建筑
+		_repair_scan_timer = REPAIR_SCAN_INTERVAL * phase
 	timer -= delta
 	_ai_income_timer -= delta
 	if _ai_res_snapshot.is_empty():
@@ -876,6 +1011,12 @@ func _process(delta):
 		_naval_patrol_timer = NAVAL_PATROL_INTERVAL
 		if phase >= Phase.DEVELOPMENT:
 			_patrol_navy_around_water()
+	# 修理节奏独立于难度思考间隔（固定 2.5s）：建筑受损/修好之后最多 2.5s 内响应，
+	# 且不挤在 decide() 那一帧里再做一次全建筑扫描。
+	_repair_scan_timer -= delta
+	if _repair_scan_timer <= 0.0:
+		_repair_scan_timer = REPAIR_SCAN_INTERVAL
+		_tick_building_repair()
 	# 部队积累判定放到 decide() 的 AI 思考节流里，避免每帧全实体扫描
 
 # ═══ Decide ═══
@@ -3064,11 +3205,14 @@ func update_debug_label():
 	var own_build_levels: Dictionary = {}
 	var gather_counts_by_res: Dictionary = {}
 	var hunt_count: int = 0
+	var repair_active: int = 0
 	for entity in battle.entities.get_children():
 		if not (entity is GameEntity) or entity.health <= 0:
 			continue
 		if not entity_belongs_to_me(entity):
 			continue
+		if entity is Building and entity.is_under_repair():
+			repair_active += 1
 		if entity is Army:
 			var uid := int(entity.entity_id)
 			own_unit_counts[uid] = int(own_unit_counts.get(uid, 0)) + 1
@@ -3154,6 +3298,8 @@ func update_debug_label():
 	if _hunt_target and is_instance_valid(_hunt_target):
 		hunt_info += " [color=#f88]目标:%s 猎人:%d/5[/color]" % [_hunt_target.get("_animal_type"), hunt_count]
 	else: hunt_info += " [color=gray](待命)[/color]"
+	if repair_active > 0:
+		hunt_info += " [color=#7fd]🔧 修理中:%d/%d[/color]" % [repair_active, REPAIR_MAX_CONCURRENT]
 	_bld_rtl.text = hunt_info + "\n" + _bld_rtl.text
 
 var debug_panel: Control = null
