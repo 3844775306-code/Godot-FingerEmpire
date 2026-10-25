@@ -964,7 +964,9 @@ func _manage_home_guard(castle, delta: float) -> void:
 		if has_active_task and threat_level < 3 and not _home_guard_ids.has(uid):
 			continue
 		# 城墙优先保留远程兵；已经在守军名单里的单位不受影响。
-		if not _home_guard_ids.has(uid) and _reserve_ranged_for_wall(u, walls_exist):
+		# 紧急回防（_force_guard_until）期间不再保留，所有能回的单位都要回主城。
+		if not _home_guard_ids.has(uid) and threat_level < 2 and now >= _force_guard_until \
+				and _reserve_ranged_for_wall(u, walls_exist):
 			continue
 		# 已经在执行主攻的单位不能再被拉回主城驻扎；否则 attack_move 会被守军调度覆盖
 		if threat_level < 2 and (u.is_attack_moving or u.current_order == "attack_move"):
@@ -1029,7 +1031,8 @@ func _quick_fill_home_guard(castle, delta: float) -> void:
 			continue
 		if _is_local_building_defender(u, float(ai.battle.game_time)):
 			continue
-		if _reserve_ranged_for_wall(u, walls_exist):
+		if _reserve_ranged_for_wall(u, walls_exist) \
+				and float(ai.battle.game_time) >= _force_guard_until:
 			continue
 		_assign_guard(u, rally)
 

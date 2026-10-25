@@ -684,7 +684,8 @@ func _release_invalid_wall_guard() -> bool:
 		return false
 	var wall = instance_from_id(int(get_meta("ai_wall_guard")))
 	if wall != null and is_instance_valid(wall) and wall is Building \
-			and int(wall.entity_id) == 27 and wall.health > 0 and wall.build_timer <= 0.0:
+			and int(wall.entity_id) == 27 and wall.health > 0 and wall.build_timer <= 0.0 \
+			and wall.team == team:
 		return false
 	remove_meta("ai_wall_guard")
 	remove_meta("ai_wall_guard_slot")
@@ -1123,6 +1124,8 @@ func _handle_unreachable_attack_target(bm: RTSBattleManager, preserve_attack_mov
 			current_target = null
 			_attack_watch_target_id = -1
 			_attack_stall_time = 0.0
+			is_attack_moving = false
+			attack_move_target = Vector3.ZERO
 			_set_combat_state(CombatState.IDLE)
 			if _movement:
 				_movement.stop()
