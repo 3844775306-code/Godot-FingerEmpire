@@ -20,6 +20,7 @@ const PRESETS := {
 		"chips": ["标准地形"],
 		"recommended": "全部模式",
 	},
+	# 隘口高度必须低于统一坡度阈值，否则新规则会把隘口入口本身判成悬崖。
 	"ridge": {
 		"id": "ridge",
 		"name": "白垩山脊",
@@ -28,7 +29,7 @@ const PRESETS := {
 		"stages": [
 			["noise_base", {"freq": 0.028, "octaves": 4}],
 			["ridge", {"axis": "x", "center": 0.5, "width": 26.0, "strength": 0.62}],
-			["passes", {"count": 3, "width": 4, "height": 1.6, "centers": [0.2, 0.5, 0.8]}],
+			["passes", {"count": 3, "width": 4, "height": 0.8, "centers": [0.2, 0.5, 0.8]}],
 		],
 		"castle_layout": {"type": "mirror_z", "anchors": [[0.72, 0.82], [0.72, 0.18]], "flat_radius": 5},
 		"palette": {},
@@ -463,7 +464,7 @@ const PRESETS := {
 			["noise_base", {"freq": 0.03, "octaves": 4, "mountain_threshold": 0.45, "water_threshold": -1.2}],
 			["ridge", {"axis": "x", "center": 0.30, "width": 18.0, "strength": 0.55}],
 			["ridge", {"axis": "x", "center": 0.70, "width": 18.0, "strength": 0.55}],
-			["passes", {"count": 2, "width": 4, "height": 1.3, "centers": [0.35, 0.65]}],
+			["passes", {"count": 2, "width": 4, "height": 0.8, "centers": [0.35, 0.65]}],
 		],
 		"castle_layout": {"type": "mirror_z", "anchors": [[0.5, 0.12], [0.5, 0.88]], "flat_radius": 5},
 		"palette": {
@@ -514,7 +515,7 @@ const PRESETS := {
 		"stages": [
 			["noise_base", {"freq": 0.03, "octaves": 4, "mountain_threshold": 0.36, "water_threshold": -1.2}],
 			["ridge", {"axis": "x", "center": 0.5, "width": 24.0, "strength": 0.8}],
-			["passes", {"count": 1, "width": 4, "height": 1.2, "centers": [0.5]}],
+			["passes", {"count": 1, "width": 4, "height": 0.8, "centers": [0.5]}],
 			["forest", {"coverage": 0.22, "freq": 0.055, "clearing": 0.5}],
 		],
 		"castle_layout": {"type": "mirror_z", "anchors": [[0.5, 0.16], [0.5, 0.84]], "spread": 0.08, "flat_radius": 5},

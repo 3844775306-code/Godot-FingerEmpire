@@ -361,7 +361,8 @@ func _op_ridge(size: int, params: Dictionary) -> void:
 func _op_passes(size: int, params: Dictionary) -> void:
 	var count := maxi(1, int(params.get("count", 3)))
 	var width := maxi(1, int(params.get("width", 4)))
-	var flat_h := float(params.get("height", 0.35))
+	# 隘口本身也必须是可走的缓坡；超过统一坡度阈值的“隘口”会被新规则判成悬崖。
+	var flat_h := clampf(float(params.get("height", 0.35)), 0.0, RTSConfig.MAX_WALK_SLOPE * 0.6)
 	var centers: Array = params.get("centers", [])
 	var half_w := int(width / 2.0)
 	for i in range(count):
