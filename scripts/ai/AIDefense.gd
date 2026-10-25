@@ -46,6 +46,9 @@ const CASTLE_DEFENSE_RADIUS: float = 35.0
 const BUILDING_DEFENSE_MAX: int = 5
 const CASTLE_DEFENSE_MAX: int = 8
 const BUILDING_DEFENSE_HOLD: float = 15.0
+# 建筑掉血检测原来每帧遍历全部实体；后期几百单位 × 多个 AI 会形成固定开销，
+# 0.5 秒一次足够发现“正在被打”，响应延迟仍在可接受范围。
+const BUILDING_ALERT_INTERVAL: float = 0.5
 const CASTLE_ID: int = 20
 const MILITARY_BUILDING_IDS: Array = [21, 22, 23, 24, 25, 26, 27, 41, 64]
 
@@ -87,6 +90,7 @@ var _upgrade_timer: float = 4.0
 var _home_guard_ids: Dictionary = {}
 var _guard_timer: float = 0.0
 var _guard_refill_timer: float = 0.0
+var _building_alert_timer: float = 0.0
 var _force_guard_until: float = -999.0
 
 # ── 建筑被攻击追踪 ──
@@ -129,7 +133,11 @@ func tick(delta: float) -> void:
 		_evaluate_threat(castle)
 	# 先检测建筑掉血并给附近空闲部队下反击命令，再调度守军；
 	# 被本地防守标记的部队会在守军调度里跳过，避免刚出击就被拉回主城。
-	_detect_building_attacks()
+	# 检测本身要遍历全部实体，不能每帧跑；0.5 秒一次已经足够及时。
+	_building_alert_timer -= delta
+	if _building_alert_timer <= 0.0:
+		_building_alert_timer = BUILDING_ALERT_INTERVAL
+		_detect_building_attacks()
 	_manage_defense(castle, delta)
 	_manage_home_guard(castle, delta)
 	_quick_fill_home_guard(castle, delta)

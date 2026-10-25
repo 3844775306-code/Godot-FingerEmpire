@@ -61,6 +61,9 @@ var _target_validate_timer: float = 0.0
 # 五状态分支的地形高度平滑每 0.25 秒做一次，避免全军每帧取地图高度。
 var _combat_ground_timer: float = 0.0
 var _combat_ground_dt: float = 0.0
+# 墙顶高度只需要照顾“正在墙上”的单位；每帧全场做一次网格查询会拖慢数百单位。
+var _wall_height_timer: float = 0.0
+var _wall_height_on_wall: bool = false
 var _unreachable_targets: Dictionary = {}  # instance_id -> expire msec
 
 # Shift Á¬ÐøÖ¸Áî¶ÓÁÐ
@@ -795,9 +798,8 @@ func _physics_process(delta):
 		return
 
 	# 城墙上的单位即使已停止移动，也要把高度平滑到墙顶；墙被毁后落回地面。
-	# 只有墙上的单位/AI 守墙单位才需要走这段，避免全军每帧取地图高度。
-	if has_meta("ai_wall_guard") or _is_unit_on_wall():
-		_update_wall_height(delta)
+	# 只对墙上的单位/AI 守墙单位做这件事，普通单位每帧查城墙网格会拖慢全军。
+	_tick_wall_height(delta)
 
 	# 陆地单位落水持续伤害（上桥、进运载船、浅滩涉水不受伤）
 	_tick_water_damage(delta)
@@ -1267,7 +1269,7 @@ func _process_combat_frame(delta, bm) -> void:
 # 五状态分支提前接管了 _think，原 _think 末尾的地形高度平滑不会执行；
 # 这里补回来，避免停在山坡上的部队悬空/陷地。墙上的单位交给 _update_wall_height。
 func _update_combat_ground_height(bm, delta: float) -> void:
-	if has_meta("ai_wall_guard") or _is_unit_on_wall():
+	if has_meta("ai_wall_guard"):
 		return
 	if bm == null:
 		return
@@ -1276,6 +1278,9 @@ func _update_combat_ground_height(bm, delta: float) -> void:
 	if _combat_ground_timer > 0.0:
 		return
 	_combat_ground_timer = 0.25
+	# 墙格查询只在低频结算时做；逐帧先判断墙会让全军每帧多一次网格查询。
+	if _is_unit_on_wall():
+		return
 	var map = bm.get_node_or_null("Map")
 	if map == null or not map.has_method("get_height_at"):
 		return
@@ -3311,7 +3316,8 @@ func _can_attack_target(target: GameEntity) -> bool:
 
 func _is_unit_on_wall() -> bool:
 	var bm = _get_bm()
-	if not bm: return false
+	if not bm or bm._wall_entity_grid.is_empty():
+		return false
 	var wall = bm._wall_entity_grid.get(bm.world_to_grid(global_position))
 	if wall == null or not is_instance_valid(wall):
 		return false
@@ -3320,6 +3326,19 @@ func _is_unit_on_wall() -> bool:
 # 城墙模型 wall.glb 的顶面高度：模型底面在局部 y=0、顶面在 1.31 米。
 # 与 RTSBattleManager.WALL_TOP_HEIGHT 必须保持一致，两处改了要同步。
 const WALL_TOP_HEIGHT: float = 1.31
+
+# 墙顶高度只需要照顾“正在墙上”的单位。普通地面单位每 0.5 秒确认一次即可，
+# 不能每帧对全场单位做 world_to_grid + 字典查询；已经确认在墙上的单位才逐帧平滑。
+func _tick_wall_height(delta: float) -> void:
+	if has_meta("ai_wall_guard"):
+		_update_wall_height(delta)
+		return
+	_wall_height_timer -= delta
+	if _wall_height_timer <= 0.0:
+		_wall_height_timer = 0.5
+		_wall_height_on_wall = _is_unit_on_wall()
+	if _wall_height_on_wall:
+		_update_wall_height(delta)
 
 # 单位停在墙格上后不会再走 process_move 的高度平滑，这里补一帧级修正：
 # 墙在时抬到墙顶，墙被拆掉后落回地面。只处理已经离地/正在墙格的单位，正常地面单位直接返回。
