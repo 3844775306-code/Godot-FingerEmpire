@@ -221,6 +221,64 @@ func _ready():
 	_add_selection_ring()
 	_add_collision_shape()
 
+# 走路扬尘：陆军（含牲畜）在地面前进时脚下冒起尘土，停下来就消失。
+# 用挂载式粒子而不是每次生成节点，避免几百个单位走位时反复创建销毁。
+var _walk_dust: CPUParticles3D = null
+
+func _setup_walk_dust() -> void:
+	if _walk_dust != null:
+		return
+	var p := CPUParticles3D.new()
+	# 数量不宜多：单个单位 7 颗粒子，围观全屏时才是可接受的开销
+	p.amount = 7
+	p.lifetime = 0.75
+	p.emitting = false
+	p.local_coords = false
+	p.direction = Vector3.UP
+	p.spread = 45.0
+	p.initial_velocity_min = 0.2
+	p.initial_velocity_max = 0.9
+	# 尘土先往上飘一点再散开，重力取很小的正值
+	p.gravity = Vector3(0.0, 0.5, 0.0)
+	p.scale_amount_min = 1.0
+	p.scale_amount_max = 1.7
+	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+	p.emission_sphere_radius = 0.32
+	var mesh := SphereMesh.new()
+	mesh.radius = 0.15
+	mesh.height = 0.30
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	# 偏灰的土色，略微透明，不会盖住单位本身
+	mat.albedo_color = Color(0.76, 0.73, 0.66, 0.55)
+	mesh.material = mat
+	p.mesh = mesh
+	var grad := Gradient.new()
+	grad.set_color(0, Color(1.0, 1.0, 1.0, 0.55))
+	grad.set_color(1, Color(1.0, 1.0, 1.0, 0.0))
+	p.color_ramp = grad
+	p.position = Vector3(0.0, 0.08, 0.0)
+	add_child(p)
+	_walk_dust = p
+
+func _update_walk_dust() -> void:
+	# 船只在水中前进不该有扬尘；鱼也排除
+	if entity_id in [9, 13, 14, 39, 40]:
+		return
+	if _animal_type == "fish":
+		return
+	var moving: bool = velocity.length() > 0.6 and is_on_floor()
+	if not moving:
+		if _walk_dust != null:
+			_walk_dust.emitting = false
+		return
+	# 懒创建：只有真正走起来才建粒子节点，待命单位不占开销
+	if _walk_dust == null:
+		_setup_walk_dust()
+	if _walk_dust != null:
+		_walk_dust.emitting = true
+
 # ----------------- ÊÓ¾õÓëÅö×² -----------------
 func _create_visual():
 	for child in get_children():
@@ -460,6 +518,9 @@ func _physics_process(delta):
 	_tick_water_damage(delta)
 	if health <= 0:
 		return
+
+	# 走动时脚下扬尘，停下自动熄灭（内部已排除船只与鱼）
+	_update_walk_dust()
 
 	# 爆破船/运载船/手推车/贸易车 特殊行为
 	if entity_id == 40:
