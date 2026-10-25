@@ -10,8 +10,9 @@ extends RefCounted
 # 渲染上统一用 unshaded + blend_mix + depth_draw_never：不写深度、不投影，
 # 和地面是「叠加一层颜色」而不是「糊一块贴片」，边缘再用横向 softstep 化开。
 
-# 抬离地面一点点，避免和地形深度打架（0.05 米以下会开始闪烁）
-const SURFACE_LIFT: float = 0.06
+# 抬离地面一点点：地形是三角形面片，带子贴着面片画会有深度打架（闪烁），
+# 配合着色器里 6 厘米的朝相机推移，这里只要很小的抬升就够，不会看出浮空。
+const SURFACE_LIFT: float = 0.10
 # 带子抬高时额外做的法线偏移上限，纯平地用不到，陡坡上能减少穿插
 const MAX_SEGMENT_LEN: float = 1.2
 
@@ -46,11 +47,50 @@ static func height_fn_for(bm) -> Callable:
 	var map = null
 	if bm.has_method("get_map_node"):
 		map = bm.get_map_node()
-	elif bm.has_node("Map"):
+	if map == null and bm.has_node("Map"):
 		map = bm.get_node("Map")
-	if map != null and map.has_method("get_height_at"):
+	# 传进来的对象本身可能就是地形节点（测试/探针里常见）
+	if map == null and bm.get("vertex_grid") != null:
+		map = bm
+	if map == null:
+		return func(p: Vector3) -> float: return p.y
+	# 地形网格的高度表：Ground 里叫 vertex_grid（每个网格顶点的高度）。
+	# 优先用它做「和渲染网格完全一致」的插值，原因见 _sample_terrain_grid() 的注释。
+	var grid = map.get("vertex_grid")
+	if grid is Array and grid.size() > 1 and (grid[0] as Array).size() > 1:
+		var n: int = grid.size() - 1
+		var map_size: float = float(n)
+		if map.has_method("_get_map_size"):
+			map_size = float(map._get_map_size())
+		return func(p: Vector3) -> float:
+			return _sample_terrain_grid(grid, n, map_size, p.x, p.z)
+	if map.has_method("get_height_at"):
 		return func(p: Vector3) -> float: return float(map.get_height_at(p))
 	return func(p: Vector3) -> float: return p.y
+
+# 按地形网格的三角剖分做精确插值，保证采样值 == 屏幕上看到的地面高度。
+#
+# 这里不能用 Ground.get_height_at()：它返回的是「所在格子左下角顶点的高度」（最近邻），
+# 而地面网格是两个三角形线性插值出来的。起伏地形上两者能差半米到一米，
+# 贴着地面的细线一进坡就整段沉到地面以下——玩家看到的就是「线被地面挡住了」。
+# Ground._create_visual_and_texture() 的剖分是 (i00,i10,i01) 与 (i10,i11,i01)，
+# 对角线把格子分成 u+v<=1 和 u+v>1 两个三角形，这里照抄同样的插值。
+static func _sample_terrain_grid(grid: Array, n: int, map_size: float, wx: float, wz: float) -> float:
+	var fx: float = (wx / map_size + 0.5) * float(n)
+	var fz: float = (wz / map_size + 0.5) * float(n)
+	var x: int = clampi(int(floor(fx)), 0, n - 1)
+	var z: int = clampi(int(floor(fz)), 0, n - 1)
+	var u: float = clampf(fx - float(x), 0.0, 1.0)
+	var v: float = clampf(fz - float(z), 0.0, 1.0)
+	var row_a: Array = grid[x]
+	var row_b: Array = grid[x + 1]
+	var h00: float = float(row_a[z])
+	var h10: float = float(row_b[z])
+	var h01: float = float(row_a[z + 1])
+	var h11: float = float(row_b[z + 1])
+	if u + v <= 1.0:
+		return h00 + u * (h10 - h00) + v * (h01 - h00)
+	return h11 + (1.0 - u) * (h01 - h11) + (1.0 - v) * (h10 - h11)
 
 static func shader() -> Shader:
 	if _shader != null:
@@ -58,7 +98,7 @@ static func shader() -> Shader:
 	var s := Shader.new()
 	s.code = """
 shader_type spatial;
-render_mode unshaded, blend_mix, cull_disabled, depth_draw_never, shadows_disabled;
+render_mode unshaded, blend_mix, cull_disabled, depth_draw_never, shadows_disabled, world_vertex_coords;
 
 uniform vec4 tint : source_color = vec4(1.0);
 uniform float soft_edge = 0.42;   // 横向软边比例：0 = 硬边，越大越像雾化
@@ -66,11 +106,20 @@ uniform float dash_scale = 0.0;   // 0 = 实线（范围圈）；>0 = 每米虚�
 uniform float dash_flow = 0.0;    // 虚线滚动偏移，做出「往前流动」的方向感
 uniform float grain = 0.20;       // 表面斑驳，避免出现一条塑料感很强的纯色线
 uniform float head_fade = 0.0;    // 起点淡出（路径带从单位脚下慢慢显出来）
+uniform float depth_push = 0.06;  // 朝相机方向再推一点点，防止被地面深度吃掉
 
 float hash21(vec2 p) {
 	p = fract(p * vec2(123.34, 456.21));
 	p += dot(p, p + 45.32);
 	return fract(p.x * p.y);
+}
+
+void vertex() {
+	// 带子只比地面高几厘米：远处深度缓冲精度不足、或者地形三角面与我们采样的高度
+	// 有毫米级差异时，整段线会被判成「在地面以下」而直接消失（玩家看到的就是被地面挡住）。
+	// world_vertex_coords 模式下 VERTEX 就是世界坐标，这里把每个顶点朝相机方向推 6 厘米，
+	// 相当于给出一条稳定的深度余量，投影位置变化几乎看不出来。
+	VERTEX += normalize(CAMERA_POSITION_WORLD - VERTEX) * depth_push;
 }
 
 void fragment() {
