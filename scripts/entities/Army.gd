@@ -716,7 +716,7 @@ func _combat_edge_distance(target) -> float:
 # 远程单位仰射的落差上限（米）。站在低处往高处打，落差超过这个值就打不到。
 # 投石车(17)与巨型投石机(59)靠抛物线抛射，不受这个限制；近战要贴身才能打，
 # 位置本身就贴在一起了，也不需要限制。
-const HIGH_GROUND_MAX_RISE: float = 5.0
+const HIGH_GROUND_MAX_RISE: float = 2.5
 
 # 是否被高度差挡住：低处打高处且落差过大。
 # 近战平射/抛射没有仰角可言，命中判定只在贴脸时发生，因此不做限制。
