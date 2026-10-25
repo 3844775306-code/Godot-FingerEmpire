@@ -108,7 +108,7 @@ const WALL_COUNT: int = 12
 const WALL_SPACING: float = 1.3
 # 远程单位上墙：墙未破时免疫伤害，因此优先把闲置远程兵铺到墙格上；
 # 每面城墙独立选择“墙顶炮台”或“远程驻军”，赶路中的单位用 ai_wall_guard 预留墙格。
-const WALL_DEPLOY_INTERVAL: float = 30.0
+const WALL_DEPLOY_INTERVAL: float = 10.0
 const WALL_DEPLOY_MAX_DISTANCE: float = 60.0
 const WALL_CANNON_ID: int = 64
 const WALL_GUARD_MODE_META: String = "ai_wall_guard_mode"
@@ -1012,6 +1012,14 @@ func decide(_delta):
 	_defense.tick(_delta)
 	if Engine.get_process_frames() % 60 == 0:
 		var _w = count_unit(10)
+	# 守墙调度必须先于本帧的集结/主攻：新生产的远程兵在出生后的第一个
+	# AI 决策帧仍是空闲状态，若先执行 _state_* 里的 _rally_land_army_to_castle
+	# 或 attack_move，它们会被立刻拉去集结点/前线，之后一直是 MOVING/攻击移动，
+	# _is_ranged_wall_candidate 永远不满足，城墙也就永远等不到远程守军。
+	_wall_deploy_timer -= _delta
+	if _wall_deploy_timer <= 0.0:
+		_wall_deploy_timer = WALL_DEPLOY_INTERVAL
+		_deploy_ranged_units_to_walls()
 	# State dispatch
 	match phase:
 		Phase.PRODUCTION: _state_production(_delta)
@@ -1024,12 +1032,6 @@ func decide(_delta):
 		var army_count = count_field_military(my_peer_id if my_peer_id != -1 else my_team)
 		if army_count >= 30:
 			phase = Phase.ASSAULT
-	# 先让 _state_* 里的集结逻辑拿到刚生产的空闲部队，再补守墙；
-	# 否则新远程兵会先被城墙吸走，永远进不了野战军集结。
-	_wall_deploy_timer -= _delta
-	if _wall_deploy_timer <= 0.0:
-		_wall_deploy_timer = WALL_DEPLOY_INTERVAL
-		_deploy_ranged_units_to_walls()
 	if _water_crossing:
 		_water_crossing.tick(_delta)
 	if OS.is_debug_build() and (Engine.get_process_frames() + int(get_instance_id())) % 30 == 0:
