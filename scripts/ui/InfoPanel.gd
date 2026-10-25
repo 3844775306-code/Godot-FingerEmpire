@@ -165,26 +165,82 @@ func _target_display_name(target) -> String:
 		nm = str(cfg.get("name", "目标"))
 	return nm
 
-# 单位任务：驻守 / 攻击目标 / 反击，其余显示移动、采集、空闲。
-# 反击包括：驻扎圈内自动应战、AI 建筑被攻击后的临时支援、被同一个敌人攻击后的还击。
+# 单位任务：军事单位按五状态战斗模型显示，其余单位仍按 UnitState 旧任务显示。
+# 五状态不能只看 current_order：攻击移动锁到敌人后 current_order 会变成 attack，
+# 但 combat_resume_advance 仍表示“打完后继续推进”，必须显示成攻击移动。
 func _army_task_text(a: Army) -> String:
+	if a.has_method("_uses_combat_state") and a._uses_combat_state():
+		return _combat_army_task_text(a)
+	return _legacy_army_task_text(a)
+
+# 五状态任务：守墙 > 攻击移动交战 > 驻守 > 反击 > 追击/攻击 > 行军。
+# 守墙和驻守是长期任务，优先于当前锁定的目标，避免任务栏只显示“攻击”而看不出职责。
+func _combat_army_task_text(a: Army) -> String:
 	var target = a.current_target
 	# 采集/交付的目标是资源点，不是作战目标；只把军队/建筑当作攻击目标显示
-	var has_target: bool = target != null and is_instance_valid(target) and target.health > 0 and (target is Army or target is Building)
+	var has_target: bool = target != null and is_instance_valid(target) \
+		and target.health > 0 and (target is Army or target is Building)
+	if a.has_meta("ai_wall_guard"):
+		var on_wall: bool = a.has_method("_is_effective_wall_guard") and a._is_effective_wall_guard()
+		if has_target:
+			return "🏰 守墙 · 迎敌 · %s" % _target_display_name(target)
+		if a.combat_state == Army.CombatState.MARCH or not on_wall:
+			return "🏰 守墙 · 前往城墙"
+		return "🏰 守墙"
+	# 攻击移动途中锁到目标时，is_attack_moving 会被清掉，但续接标记还在。
+	if a.combat_resume_advance and a.combat_resume_destination != Vector3.ZERO:
+		if has_target:
+			var verb: String = "追击" if a.combat_state == Army.CombatState.PURSUE else "交战"
+			return "🎯 攻击移动 · %s · %s" % [verb, _target_display_name(target)]
+		return "🎯 攻击移动"
+	if a.garrison_point != Vector3.ZERO:
+		if has_target:
+			return "🏰 驻守 · 迎敌 · %s" % _target_display_name(target)
+		if a.combat_state == Army.CombatState.MARCH:
+			return "🏰 驻守 · 返回驻扎点"
+		return "🏰 驻守"
+	if has_target and _army_is_countering(a, has_target):
+		return "🛡 反击 · %s" % _target_display_name(target)
+	if has_target:
+		if a.combat_state == Army.CombatState.PURSUE:
+			return "🏃 追击 · %s" % _target_display_name(target)
+		return "⚔ 攻击 · %s" % _target_display_name(target)
+	if a.combat_state == Army.CombatState.ADVANCE or a.is_attack_moving \
+			or a.current_order == "attack_move":
+		return "🎯 攻击移动"
+	if a.combat_state == Army.CombatState.MARCH:
+		return "👣 行军"
+	if not a.command_queue.is_empty():
+		return "📋 待执行指令 %d" % a.command_queue.size()
+	if a.hold_position:
+		return "✋ 原地坚守"
+	return "空闲"
+
+# 反击判定：建筑临时回防、驻扎圈自动迎敌、被同一敌人攻击后的还击。
+func _army_is_countering(a: Army, has_target: bool) -> bool:
+	if not has_target:
+		return false
+	var target = a.current_target
 	var now: float = float(battle.game_time) if battle != null else 0.0
-	var counter: bool = false
 	if a.has_meta("ai_building_defense_until") and now < float(a.get_meta("ai_building_defense_until")):
-		counter = true
-	if has_target and a.garrison_point != Vector3.ZERO:
+		return true
+	if a.garrison_point != Vector3.ZERO:
 		var defend_radius: float = 10.0
 		if a.has_meta("ai_building_defense_until"):
 			defend_radius = 45.0
 		if target.global_position.distance_to(a.garrison_point) <= defend_radius:
-			counter = true
+			return true
 	var last_damager = a.get("_last_damager")
-	if has_target and last_damager != null and is_instance_valid(last_damager) and last_damager == target:
-		counter = true
-	if counter:
+	if last_damager != null and is_instance_valid(last_damager) and last_damager == target:
+		return true
+	return false
+
+# 非五状态单位（农民/商队/官员/僧侣/运输等）沿用原来的任务说明。
+func _legacy_army_task_text(a: Army) -> String:
+	var target = a.current_target
+	# 采集/交付的目标是资源点，不是作战目标；只把军队/建筑当作攻击目标显示
+	var has_target: bool = target != null and is_instance_valid(target) and target.health > 0 and (target is Army or target is Building)
+	if has_target and _army_is_countering(a, has_target):
 		return "🛡 反击 · %s" % _target_display_name(target)
 	if has_target:
 		return "⚔ 攻击目标 · %s" % _target_display_name(target)
