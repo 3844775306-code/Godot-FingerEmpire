@@ -728,21 +728,35 @@ func _combat_edge_distance(target) -> float:
 		target_radius = target.body_radius
 	return h_diff.length() - body_radius - target_radius
 
-# 远程单位仰射的落差上限（米）。站在低处往高处打，落差超过这个值就打不到。
-# 投石车(17)与巨型投石机(59)靠抛物线抛射，不受这个限制；近战要贴身才能打，
-# 位置本身就贴在一起了，也不需要限制。
+# 仰射的落差上限（米）。站在低处往高处打，落差超过这个值就打不到。
+# 投石车(17)与巨型投石机(59)靠抛物线抛射，不受这个限制。
+# 近战同样受限，但门槛更严（0.6 米）：贴脸时位置本该在同一级台阶上，
+# 站着低处隔一道坎挥刀不应该生效。
 const HIGH_GROUND_MAX_RISE: float = 1.0
+const MELEE_HIGH_GROUND_MAX_RISE: float = 0.6
+
+# 目标的高度基准：建筑按「地基高度」算，其它实体按自身位置。
+# 炮台坐在城墙顶上、桥架在水面上，它们原点的 y 并不是脚下地面；
+# 不这样处理的话，站在平地上打城墙上的炮台会被误判成仰攻而打不到。
+func _target_height_base(target) -> float:
+	if target is Building:
+		var bm = _get_bm()
+		if bm != null:
+			var map = bm.get_node_or_null("Map")
+			if map != null and map.has_method("get_height_at"):
+				return map.get_height_at(target.global_position)
+	return target.global_position.y
 
 # 是否被高度差挡住：低处打高处且落差过大。
-# 近战平射/抛射没有仰角可言，命中判定只在贴脸时发生，因此不做限制。
+# 近战用更严的 0.6 米门槛，其余单位用 1 米。
 func _blocked_by_high_ground(target) -> bool:
 	if target == null or not is_instance_valid(target):
 		return false
 	if entity_id == 17 or entity_id == 59:
 		return false
-	if attack_range <= 2.0 and damage_radius <= 0.0:
-		return false
-	return (target.global_position.y - global_position.y) > HIGH_GROUND_MAX_RISE
+	var is_melee: bool = attack_range <= 2.0 and damage_radius <= 0.0
+	var limit: float = MELEE_HIGH_GROUND_MAX_RISE if is_melee else HIGH_GROUND_MAX_RISE
+	return (_target_height_base(target) - global_position.y) > limit
 
 func _set_combat_target(target, from_advance: bool = false) -> void:
 	if target == null or not is_instance_valid(target):
