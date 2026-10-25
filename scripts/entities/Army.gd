@@ -260,10 +260,71 @@ func _setup_walk_dust() -> void:
 	grad.set_color(1, Color(1.0, 1.0, 1.0, 0.0))
 	p.color_ramp = grad
 	p.position = Vector3(0.0, 0.10, 0.0)
+	# 显式给足包围盒，否则粒子飞出默认范围会被视锥剔除，看起来就像"完全没发射"
+	p.visibility_aabb = AABB(Vector3(-3.0, -3.0, -3.0), Vector3(6.0, 6.0, 6.0))
 	add_child(p)
 	_walk_dust = p
 
-func _update_walk_dust() -> void:
+# ── 脚印 / 车辙 ──
+# 粒子一闪就消失，远不如留在地面上的痕迹有存在感。
+# 每个单位循环使用 10 个贴地面片，挂在场景根下（不能挂在单位下，否则会跟着人走）。
+var _prints: Array[MeshInstance3D] = []
+var _print_idx: int = 0
+var _print_timer: float = 0.0
+
+func _setup_prints() -> void:
+	if not _prints.is_empty():
+		return
+	var root := get_tree().current_scene as Node3D
+	if root == null:
+		return
+	# 车轮留下的是一整条宽车辙，步兵是窄脚印
+	var vehicle: bool = entity_id in [5, 6, 16, 17, 18, 59]
+	var pmat := StandardMaterial3D.new()
+	pmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	pmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	pmat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	pmat.albedo_color = Color(0.24, 0.22, 0.19, 0.50) if vehicle else Color(0.28, 0.25, 0.20, 0.40)
+	for i in 10:
+		var mi := MeshInstance3D.new()
+		mi.name = "GroundPrint"
+		var quad := PlaneMesh.new()
+		# PlaneMesh 默认平躺在 XZ 平面，正好贴地
+		quad.size = Vector2(0.62, 1.10) if vehicle else Vector2(0.24, 0.34)
+		quad.material = pmat
+		mi.mesh = quad
+		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		mi.visible = false
+		root.add_child(mi)
+		_prints.append(mi)
+
+func _update_prints(delta: float, move_dir: Vector3) -> void:
+	if _prints.is_empty():
+		_setup_prints()
+		if _prints.is_empty():
+			return
+	# 每 0.2 米左右留一个脚印，按移动距离而不是时间，速度快也不会变成虚线
+	_print_timer -= delta
+	if _print_timer > 0.0:
+		return
+	_print_timer = 0.22
+	var mi: MeshInstance3D = _prints[_print_idx]
+	if not is_instance_valid(mi):
+		return
+	_print_idx = (_print_idx + 1) % _prints.size()
+	mi.global_position = Vector3(global_position.x, global_position.y + 0.015, global_position.z)
+	if move_dir.length_squared() > 0.0001:
+		mi.rotation.y = atan2(move_dir.x, move_dir.z)
+	mi.visible = true
+
+func _exit_tree() -> void:
+	# 单位被销毁时把它留在场景根下的脚印一起清掉
+	for mi in _prints:
+		if is_instance_valid(mi):
+			mi.queue_free()
+	_prints.clear()
+
+func _update_walk_dust(delta: float) -> void:
 	# 船只在水中前进不该有扬尘；鱼也排除
 	if entity_id in [9, 13, 14, 39, 40]:
 		return
@@ -271,12 +332,11 @@ func _update_walk_dust() -> void:
 		return
 	# 用实际位置变化来判断是否在走：单位移动是直接写 global_position 的，
 	# velocity 常常是零，is_on_floor() 也永远是 false，拿它们判断会一直不发射。
+	var delta_pos := Vector3.ZERO
 	var moved: float = 0.0
 	if _walk_dust_last_pos != Vector3.ZERO:
-		moved = Vector2(
-			global_position.x - _walk_dust_last_pos.x,
-			global_position.z - _walk_dust_last_pos.z
-		).length()
+		delta_pos = global_position - _walk_dust_last_pos
+		moved = Vector2(delta_pos.x, delta_pos.z).length()
 	_walk_dust_last_pos = global_position
 	var moving: bool = moved > 0.012
 	if not moving:
@@ -288,6 +348,7 @@ func _update_walk_dust() -> void:
 		_setup_walk_dust()
 	if _walk_dust != null:
 		_walk_dust.emitting = true
+	_update_prints(delta, delta_pos)
 
 # ----------------- ÊÓ¾õÓëÅö×² -----------------
 func _create_visual():
@@ -529,8 +590,8 @@ func _physics_process(delta):
 	if health <= 0:
 		return
 
-	# 走动时脚下扬尘，停下自动熄灭（内部已排除船只与鱼）
-	_update_walk_dust()
+	# 走动时脚下扬尘、地面留脚印/车辙，停下自动消失（内部已排除船只与鱼）
+	_update_walk_dust(delta)
 
 	# 爆破船/运载船/手推车/贸易车 特殊行为
 	if entity_id == 40:
