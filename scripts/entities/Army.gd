@@ -2697,7 +2697,8 @@ func _attack(target, delta):
 			bullet.source = self
 			bullet.damage_radius = damage_radius
 
-			# 投石车(17) / 巨型投石机(59)：子弹飞向固定位置，不追踪目标
+			# 投石车(17) / 巨型投石机(59)：子弹飞向固定位置，不每帧追踪；
+			# 但仍记录原目标，命中时让原目标吃 100% 直击、周围只吃 30% 溅射。
 			if entity_id == 17 or entity_id == 59:
 				var tpos = target.global_position
 				# 巨型投石机50%概率打偏
@@ -2705,6 +2706,7 @@ func _attack(target, delta):
 					var miss_offset = Vector3(randf_range(-attack_range, attack_range), 0, randf_range(-attack_range, attack_range))
 					tpos += miss_offset
 				bullet.target_pos = tpos
+				bullet.target = target
 			else:
 				bullet.target = target
 

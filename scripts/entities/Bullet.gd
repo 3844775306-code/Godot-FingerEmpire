@@ -32,11 +32,10 @@ const ARROW_STICK_TIME: float = 1.5
 var _stuck_to: Node3D = null          # 命中后箭矢附着的目标
 var _stuck_offset: Vector3 = Vector3.ZERO  # 命中瞬间相对目标的偏移，跟着目标一起动
 var _stuck_timer: float = 0.0
-# 石头类弹丸（投石车 17、巨型投石机 59）统一使用同一条距离衰减：
-# 落点中心 100% 伤害，向外线性衰减，到达 damage_radius 边缘时为 0。
+# 石头类弹丸（投石车 17、巨型投石机 59）的命中特效需要区分巨石与普通炮弹。
 const STONE_SOURCE_IDS: Array[int] = [17, 59]
-const STONE_CENTER_MULT: float = 1.0
-const STONE_EDGE_MULT: float = 0.0
+# 炮弹/巨石类溅射伤害：锁定目标承受 100%，溅射范围内其它目标只承受 30%。
+const SPLASH_DAMAGE_MULT: float = 0.3
 
 # 弹丸模型缓存：后期每秒会生成几十到上百发子弹，不能每发都做
 # ResourceLoader.exists + load + GLB 实例化。PackedScene 只加载一次，之后只 instantiate。
@@ -68,16 +67,10 @@ func _reset_ballistic_state() -> void:
 func _is_arrow_bullet() -> bool:
 	return source_entity_id in [12, 13, 25, 31, 33, 37, 58]
 
-# 石头类弹丸按落点距离统一衰减；其它弹丸保持原样。
-func _damage_multiplier(dist: float) -> float:
-	if source_entity_id not in STONE_SOURCE_IDS:
-		return 1.0
-	var t: float = clampf(dist / maxf(damage_radius, 0.01), 0.0, 1.0)
-	return lerpf(STONE_CENTER_MULT, STONE_EDGE_MULT, t)
-
-# AOE 伤害入口：边缘倍率为 0 时直接跳过，避免 0 伤害仍触发受击/仇恨逻辑。
-func _deal_aoe_damage(entity: GameEntity, src: GameEntity, dist: float) -> void:
-	var mult := _damage_multiplier(dist)
+# 炮弹/巨石类 AOE 伤害入口：锁定目标受 100%，其它被溅射目标受 30%。
+# 普通箭矢 damage_radius=0，仍由命中目标承受 100%，不会进入溅射分支。
+func _deal_aoe_damage(entity: GameEntity, src: GameEntity, is_primary: bool = false) -> void:
+	var mult: float = 1.0 if is_primary else SPLASH_DAMAGE_MULT
 	if mult <= 0.0:
 		return
 	entity.take_damage(damage * mult, src)
@@ -471,7 +464,7 @@ func _physics_process(delta):
 				_saved_dir = (target_pos - global_position).normalized()
 			global_position += _saved_dir * speed * delta
 			_orient_to_dir(_saved_dir)
-			# 到达目标点 → 对周围敌人造成AOE伤害
+			# 到达目标点 → 原目标 100% 直击，周围敌人 30% 溅射
 			if global_position.distance_to(target_pos) < 0.5:
 				_on_hit_pos()
 		return
@@ -505,7 +498,8 @@ func _on_hit(entity: GameEntity):
 
 	# 确保 source 有效，无效则不传
 	var src = source if is_instance_valid(source) else null
-	_deal_aoe_damage(entity, src, 0.0)
+	# 直接命中的锁定目标承受 100% 伤害；周围其它敌人只吃 30% 溅射。
+	_deal_aoe_damage(entity, src, true)
 
 	if damage_radius > 0:
 		_spawn_impact_effect(global_position, source_entity_id in STONE_SOURCE_IDS)
@@ -516,14 +510,14 @@ func _on_hit(entity: GameEntity):
 				if e == entity or e == src: continue
 				var d: float = e.global_position.distance_to(global_position)
 				if d <= damage_radius:
-					_deal_aoe_damage(e, src, d)
+					_deal_aoe_damage(e, src, false)
 		else:
 			for e in get_tree().get_nodes_in_group("entities"):
 				if e == entity or e == src: continue
 				if e is GameEntity and e.team != team:
 					var d: float = e.global_position.distance_to(global_position)
 					if d <= damage_radius:
-						_deal_aoe_damage(e, src, d)
+						_deal_aoe_damage(e, src, false)
 
 	if attack_type == 2: entity.shock(0.5)
 	elif attack_type == 3: entity.freeze(3.0)
@@ -551,7 +545,7 @@ func _orient_to_dir(dir: Vector3):
 	var up = Vector3.UP if absf(dir.y) < 0.99 * dir.length() else Vector3.FORWARD
 	look_at(global_position + dir, up)
 
-# 固定目标点命中：对落点周围所有敌人造成AOE伤害
+# 固定目标点命中：原目标在落点范围内时受 100%，其它敌人只受 30% 溅射。
 func _on_hit_pos():
 	if hit: return
 	hit = true
@@ -563,6 +557,13 @@ func _on_hit_pos():
 		_spawn_impact_effect(global_position, source_entity_id in STONE_SOURCE_IDS)
 
 	if damage_radius > 0:
+		# 固定落点模式（投石车/巨型投石机）没有每帧追踪，但发射时仍记录原目标：
+		# 落点范围内如果原目标还在，它吃 100%，周围其它敌人只吃 30% 溅射。
+		var primary: GameEntity = null
+		if target != null and is_instance_valid(target) and target.health > 0 \
+				and target.global_position.distance_to(global_position) <= damage_radius:
+			primary = target
+		var primary_hit: bool = false
 		var bm = _get_bm()
 		if bm:
 			var nearby = bm.get_nearby_enemies(global_position, damage_radius, team, owner_peer_id)
@@ -570,12 +571,22 @@ func _on_hit_pos():
 				if e == src: continue
 				var d: float = e.global_position.distance_to(global_position)
 				if d <= damage_radius:
-					_deal_aoe_damage(e, src, d)
+					var is_primary: bool = e == primary
+					if is_primary:
+						primary_hit = true
+					_deal_aoe_damage(e, src, is_primary)
 		else:
 			for e in get_tree().get_nodes_in_group("entities"):
 				if e == src: continue
 				if e is GameEntity and e.team != team:
 					var d: float = e.global_position.distance_to(global_position)
 					if d <= damage_radius:
-						_deal_aoe_damage(e, src, d)
+						var is_primary: bool = e == primary
+						if is_primary:
+							primary_hit = true
+						_deal_aoe_damage(e, src, is_primary)
+		# 原目标可能被空间查询按已倒地的目标过滤掉；只要它仍在落点范围内，
+		# 仍要补一次 100% 直击伤害，不能只吃默认溅射。
+		if primary != null and not primary_hit:
+			_deal_aoe_damage(primary, src, true)
 	recycle()
