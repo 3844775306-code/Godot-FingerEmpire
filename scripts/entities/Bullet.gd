@@ -77,27 +77,32 @@ func _damage_multiplier(dist: float) -> float:
 # 炮弹与巨石的命中特效：一次性尘土/碎屑爆发，节点播完自行销毁
 func _spawn_impact_effect(pos: Vector3, big: bool) -> void:
 	var bm = _get_bm()
-	var parent: Node = bm if bm != null else get_tree().current_scene
+	var parent: Node3D = bm as Node3D
+	if parent == null:
+		parent = get_tree().current_scene as Node3D
 	if parent == null:
 		return
+	# 统一用 position 而不是 global_position：父节点（战斗管理器 / 场景根）就在原点，
+	# 局部坐标即世界坐标；而在 add_child 的同一帧设置 global_position 会依赖父级的
+	# transform 缓存，粒子常常全在原点（地图正中央）发射。
 	# ── 1) 碎屑粒子：往外炸开的亮色颗粒 ──
 	var p := CPUParticles3D.new()
 	p.one_shot = true
 	p.amount = 18 if big else 12
-	p.lifetime = 0.75
+	p.lifetime = 0.7
 	p.explosiveness = 1.0
 	p.direction = Vector3.UP
 	p.spread = 180.0
-	p.initial_velocity_min = 3.0
-	p.initial_velocity_max = 8.0 if big else 5.5
+	p.initial_velocity_min = 2.5
+	p.initial_velocity_max = 6.5 if big else 4.5
 	p.gravity = Vector3(0.0, -14.0, 0.0)
 	p.scale_amount_min = 1.0
-	p.scale_amount_max = 2.0 if big else 1.5
+	p.scale_amount_max = 1.7 if big else 1.3
 	var mesh := SphereMesh.new()
 	# 注意：scale_amount 是相对网格尺寸的倍率，不是绝对大小。
 	# 之前网格半径只有 0.13，再乘 0.18 的倍率实际直径才 5 厘米，几乎看不见。
-	mesh.radius = 0.30 if big else 0.22
-	mesh.height = 0.60 if big else 0.44
+	mesh.radius = 0.17 if big else 0.13
+	mesh.height = 0.34 if big else 0.26
 	var mat := StandardMaterial3D.new()
 	if big:
 		# 石头：白色碎屑，带一点自发光，阴影里也能看清
@@ -114,7 +119,7 @@ func _spawn_impact_effect(pos: Vector3, big: bool) -> void:
 	mesh.material = mat
 	p.mesh = mesh
 	parent.add_child(p)
-	p.global_position = pos
+	p.position = pos
 	p.emitting = true
 	get_tree().create_timer(1.4).timeout.connect(func():
 		if is_instance_valid(p):
@@ -123,8 +128,8 @@ func _spawn_impact_effect(pos: Vector3, big: bool) -> void:
 	# ── 2) 闪光球：命中瞬间炸亮一下再迅速缩掉，是最直观的"打中了"反馈 ──
 	var flash := MeshInstance3D.new()
 	var fmesh := SphereMesh.new()
-	fmesh.radius = 0.45 if big else 0.28
-	fmesh.height = 0.9 if big else 0.56
+	fmesh.radius = 0.32 if big else 0.22
+	fmesh.height = 0.64 if big else 0.44
 	var fmat := StandardMaterial3D.new()
 	fmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	fmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -136,7 +141,7 @@ func _spawn_impact_effect(pos: Vector3, big: bool) -> void:
 	flash.mesh = fmesh
 	flash.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(flash)
-	flash.global_position = pos
+	flash.position = pos
 	var ftw := flash.create_tween()
 	ftw.set_parallel(true)
 	ftw.tween_property(flash, "scale", Vector3(2.2, 2.2, 2.2), 0.22) \
@@ -149,8 +154,8 @@ func _spawn_impact_effect(pos: Vector3, big: bool) -> void:
 	# ── 3) 地面冲击环：贴着地面向外扩散的一圈亮边 ──
 	var ring := MeshInstance3D.new()
 	var rmesh := TorusMesh.new()
-	rmesh.inner_radius = 0.35
-	rmesh.outer_radius = 0.5
+	rmesh.inner_radius = 0.30
+	rmesh.outer_radius = 0.45
 	var rmat := StandardMaterial3D.new()
 	rmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	rmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -164,7 +169,7 @@ func _spawn_impact_effect(pos: Vector3, big: bool) -> void:
 	# 否则冲击环会立起来变成竖直的一圈。
 	ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	parent.add_child(ring)
-	ring.global_position = Vector3(pos.x, pos.y + 0.08, pos.z)
+	ring.position = Vector3(pos.x, pos.y + 0.06, pos.z)
 	var rtw := ring.create_tween()
 	rtw.set_parallel(true)
 	rtw.tween_property(ring, "scale", Vector3(3.2 if big else 2.2, 1.0, 3.2 if big else 2.2), 0.4) \
@@ -180,7 +185,7 @@ func _spawn_impact_effect(pos: Vector3, big: bool) -> void:
 	light.light_energy = 6.0 if big else 3.5
 	light.omni_range = 6.0 if big else 4.0
 	parent.add_child(light)
-	light.global_position = pos + Vector3.UP * 0.6
+	light.position = pos + Vector3.UP * 0.5
 	var ltw := light.create_tween()
 	ltw.tween_property(light, "light_energy", 0.0, 0.3)
 	ltw.chain().tween_callback(func():
