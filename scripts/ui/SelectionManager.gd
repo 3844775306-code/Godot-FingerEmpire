@@ -329,6 +329,11 @@ func _select_all_of_same_type(target):
 		_add_to_selection(target)
 
 # ---------- 射线检测 ----------
+# 屏幕空间兜底半径（像素）：单位碰撞球只覆盖脚底，靠射线找单位本来就吃力
+const PICK_FALLBACK_PX: float = 26.0
+# 建筑视觉体积远大于单位，允许更大的兜底半径
+const PICK_FALLBACK_BUILDING_PX: float = 58.0
+
 func _get_entity_under_mouse(screen_pos: Vector2) -> GameEntity:
 	var cam = get_viewport().get_camera_3d()
 	if not cam:
@@ -343,7 +348,41 @@ func _get_entity_under_mouse(screen_pos: Vector2) -> GameEntity:
 	var result = space_state.intersect_ray(query)
 	if result and result.collider is GameEntity:
 		return result.collider
-	return null
+	# 射线没打中实体：单位的物理球很小又贴在脚底，相机一俯就完全打不到身体，
+	# 点半天选不中或者在建筑边上反复选错。这里退化成逐帧投影的屏幕空间最近判定，
+	# 投影像素是当帧算出来的，所以天然跟得上视角旋转和俯仰变化。
+	return _nearest_entity_on_screen(cam, screen_pos)
+
+# 找屏幕上离点击点最近的实体。单位和建筑用不同阈值，避免建筑把旁边的单位挤掉。
+func _nearest_entity_on_screen(cam: Camera3D, screen_pos: Vector2) -> GameEntity:
+	var best: GameEntity = null
+	var best_px: float = INF
+	for entity in get_tree().get_nodes_in_group("entities"):
+		if not (entity is GameEntity) or entity.health <= 0:
+			continue
+		if not _can_inspect(entity):
+			continue
+		# 用模型中部做锚点：脚底投影在俯角小时会明显偏后，点身体会选不中
+		var anchor: Vector3 = entity.global_position + Vector3.UP * _pick_anchor_height(entity)
+		if cam.is_position_behind(anchor):
+			continue
+		var limit: float = PICK_FALLBACK_PX
+		if entity is Building:
+			limit = PICK_FALLBACK_BUILDING_PX
+		var d: float = cam.unproject_position(anchor).distance_to(screen_pos)
+		if d > limit:
+			continue
+		# 同等距离下单位优先：建筑判定块本来就大，不该抢走单位
+		if entity is Army:
+			d *= 0.75
+		if d < best_px:
+			best_px = d
+			best = entity
+	return best
+
+# 锚点取模型腰部：用脚底投影在俯角小时会明显偏后，点身体中部反而选不中
+func _pick_anchor_height(entity) -> float:
+	return entity.body_radius * 1.2
 
 func _get_ground_pos(screen_pos: Vector2) -> Vector3:
 	var cam = get_viewport().get_camera_3d()

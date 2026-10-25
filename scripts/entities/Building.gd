@@ -327,8 +327,12 @@ func _add_collision_shape():
 	if not has_node("CollisionShape3D"):
 		var col = CollisionShape3D.new()
 		var shape = BoxShape3D.new()
-		shape.size = Vector3(body_radius*2, body_radius*1.5, body_radius*2)
+		# 原来是一个 body_radius*2 见方、以脚底为中心的扁盒子：水平铺得比建筑底座宽，
+		# 竖直却只到腰高、一半还埋在地下。结果是点建筑旁边的空地会误选建筑，
+		# 点建筑上部又打不中。这里收窄水平、加高竖直，并把盒子抬到底面贴地。
+		shape.size = Vector3(body_radius * 1.4, body_radius * 2.2, body_radius * 1.4)
 		col.shape = shape
+		col.position.y = body_radius * 1.1
 		col.name = "CollisionShape3D"
 		add_child(col)
 
