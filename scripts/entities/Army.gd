@@ -1450,6 +1450,11 @@ func _find_combat_enemy(radius: float, attack_only: bool) -> GameEntity:
 			continue
 		if attack_only and dist > attack_range:
 			continue
+		# 只要射程内已经出现符合本单位类型偏好的目标，就立即锁定返回。
+		# 混战时几十个单位若每个都把附近所有候选扫完再比较“最近”，会形成明显的卡顿；
+		# 射程内先到先打与旧逻辑一致，远处再按距离/类型优先级细选。
+		if dist <= attack_range and (entity is Building) == self_prefers_buildings:
+			return entity
 		var score: float = dist
 		if entity is Building:
 			score += 0.0 if self_prefers_buildings else 4.0
