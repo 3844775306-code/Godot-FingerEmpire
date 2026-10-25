@@ -1924,11 +1924,11 @@ func _process_wall_guard_action(delta, bm) -> void:
 	_target_lost_since_ms = 0
 	_set_combat_state(CombatState.IDLE)
 
-# 在视野/射程内选目标：非攻城单位优先选择“攻击力 / 当前血量”最高的敌军，
-# 不再只替换射程内目标；只要敌军在视野内，远处的高威胁输出单位也会优先锁定。
-# 同效率时近距离优先；攻城单位仍保持“优先建筑”的旧规则。
+# 在视野/射程内选目标：AI 优先选择“攻击力 / 当前血量”最高的敌军，
+# 同效率时近距离优先，攻城单位仍建筑优先；玩家军队只按距离选最近的敌人。
 func _find_combat_enemy(radius: float, attack_only: bool) -> GameEntity:
 	var bm = _get_bm()
+	var ai_controlled: bool = _is_ai_controlled(bm)
 	var self_prefers_buildings: bool = _prefers_buildings()
 	var candidates: Array = bm.get_nearby_enemies(global_position, radius, team, owner_peer_id) if bm \
 		else get_tree().get_nodes_in_group("entities")
@@ -1951,11 +1951,22 @@ func _find_combat_enemy(radius: float, attack_only: bool) -> GameEntity:
 		# 低处打高处落差过大：射不到，别选成目标
 		if _blocked_by_high_ground(entity):
 			continue
-		var score: float = _combat_target_score(entity, dist, self_prefers_buildings)
+		# AI 按攻击/血量效率；玩家军队保持按距离，越近越先打。
+		var score: float = _combat_target_score(entity, dist, self_prefers_buildings) \
+			if ai_controlled else -dist
 		if score > best_score:
 			best_score = score
 			best = entity
 	return best
+
+# 该单位是否由 AI 控制：AI 锁敌按“攻击力 / 当前血量”效率优先，
+# 玩家军队仍按距离优先。联机随机 peer_id 不能按数值猜 AI，统一交给战斗管理器判定。
+func _is_ai_controlled(bm: RTSBattleManager = null) -> bool:
+	if bm == null:
+		bm = _get_bm()
+	if bm != null and bm.has_method("is_human_owned"):
+		return not bool(bm.call("is_human_owned", owner_peer_id, team))
+	return owner_peer_id >= 1000
 
 # 目标威胁效率：攻击力除以当前血量。残血的高攻单位会被优先集火。
 func _target_attack_health_ratio(target) -> float:
@@ -1975,13 +1986,20 @@ func _combat_target_score(target, dist: float, self_prefers_buildings: bool) -> 
 	return (-1000.0 - dist * 0.01) if self_prefers_buildings \
 		else (_target_attack_health_ratio(target) * 1000.0 - dist * 0.01)
 
-# 已经进入射程后低频检查一次：如果附近有攻击/血量效率更高的敌军，就换目标。
-# 只换敌军不换建筑；攻城单位不调用。
+# 已经进入射程后低频检查一次：AI 换攻击/血量效率更高的敌军；
+# 玩家军队只换射程内更近的敌军。攻城单位不调用。
 func _try_retarget_in_range_priority() -> void:
 	if current_target == null or not is_instance_valid(current_target):
 		return
 	var candidate: GameEntity = _find_combat_enemy(attack_range, true)
 	if candidate == null or candidate == current_target or not (candidate is Army):
+		return
+	if not _is_ai_controlled():
+		# 玩家军队保持距离优先：新目标必须比当前目标更近。
+		var candidate_dist: float = _combat_edge_distance(candidate)
+		var current_dist: float = _combat_edge_distance(current_target)
+		if candidate_dist + 0.05 < current_dist:
+			_set_combat_target(candidate)
 		return
 	if current_target is Army:
 		if _target_attack_health_ratio(candidate) <= _target_attack_health_ratio(current_target) + 0.0001:
@@ -2334,9 +2352,8 @@ func _retarget_interval(bm) -> float:
 	return TARGET_RETARGET_INTERVAL
 
 # 当前目标不在攻击范围时，低频比较视野内目标：
-# 优先改锁“攻击力 / 当前血量”更高的敌军，效率相同才按距离取近的；
-# 这样不会为了一个更近的肉盾放弃远处的高威胁输出单位。
-# 驻扎单位仍只在驻扎防御圈内按最近目标处理，避免被视野边缘的敌人引走。
+# AI 优先改锁“攻击力 / 当前血量”更高的敌军，效率相同才按距离取近的；
+# 玩家军队保持距离优先，只改锁更近的敌人。
 func _try_retarget_closer(current_dist: float) -> void:
 	# 僧侣的目标是友方伤兵，不能被「换更高效率敌人」逻辑替换
 	if _is_healer():
@@ -2362,7 +2379,11 @@ func _try_retarget_closer(current_dist: float) -> void:
 	var h_diff = Vector2(best.global_position.x - global_position.x,
 						best.global_position.z - global_position.z)
 	var best_dist = h_diff.length() - body_radius - best.body_radius
-	if current_target is Army and best is Army:
+	if not _is_ai_controlled():
+		# 玩家军队只看距离：新目标必须比当前目标更近才改锁。
+		if best_dist + 0.05 >= current_dist:
+			return
+	elif current_target is Army and best is Army:
 		var cur_ratio: float = _target_attack_health_ratio(current_target)
 		var best_ratio: float = _target_attack_health_ratio(best)
 		if best_ratio + 0.0001 < cur_ratio:
@@ -2371,7 +2392,7 @@ func _try_retarget_closer(current_dist: float) -> void:
 		if absf(best_ratio - cur_ratio) <= 0.0001 and best_dist + 0.05 >= current_dist:
 			return
 	elif current_target is Building and best is Army:
-		# 普通单位正在追建筑时，只要视野内出现敌军就改锁敌军（攻城单位已在上方排除）。
+		# AI 普通单位正在追建筑时，只要视野内出现敌军就改锁敌军（攻城单位已在上方排除）。
 		pass
 	else:
 		# 建筑/混合目标保留原来“更近才换”的规则。
@@ -4308,8 +4329,7 @@ func _find_nearest_enemy_in_vision():
 
 # 以任意位置为中心找敌人；驻扎单位用驻扎点做中心，
 # 这样即使敌人不在本单位视野内，只要靠近驻扎点也会被发现并清掉。
-# prefer_efficiency=true 时与野战索敌一致，按攻击力/当前血量优先，同效率才取近的；
-# false 保持原来的最近目标逻辑，供不参与锁敌的调用方使用。
+# prefer_efficiency=true 时只有 AI 按攻击力/当前血量优先；玩家军队仍取最近的。
 func _find_nearest_enemy_near(center: Vector3, radius: float, prefer_efficiency: bool = false):
 	var best_dist: float = radius
 	var best_score: float = -INF
@@ -4318,6 +4338,7 @@ func _find_nearest_enemy_near(center: Vector3, radius: float, prefer_efficiency:
 	# 驻扎/守军单位空闲时每 0.3s 都会调用此函数。后期几十上百个守军若每个
 	# 都全量扫描 entities，会形成 O(n²) 的主线程热点；优先走空间索引。
 	var bm = _get_bm()
+	var use_efficiency: bool = prefer_efficiency and _is_ai_controlled(bm)
 	var candidates: Array = bm.get_nearby_enemies(center, radius, team, owner_peer_id) if bm else get_tree().get_nodes_in_group("entities")
 	for entity in candidates:
 		if entity == self or not is_instance_valid(entity) or entity.health <= 0: continue
@@ -4331,7 +4352,7 @@ func _find_nearest_enemy_near(center: Vector3, radius: float, prefer_efficiency:
 		var dist = h_diff.length() - body_radius - entity.body_radius
 		if dist > radius:
 			continue
-		if prefer_efficiency:
+		if use_efficiency:
 			var score: float = _combat_target_score(entity, dist, self_prefers_buildings)
 			if score > best_score:
 				best_score = score
