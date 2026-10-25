@@ -2635,6 +2635,11 @@ func _is_ranged_wall_candidate(e) -> bool:
 		return false
 	if e.has_meta("ai_wall_guard") or e.hold_position:
 		return false
+	# 正在执行资源守卫/骚扰/运输/护航/建筑回防的单位有专属角色，不能被守墙调度截走。
+	if e.has_meta("ai_resource_guard") or e.has_meta("ai_harass") \
+			or e.has_meta("ai_transporting") or e.has_meta("ai_escorting") \
+			or e.has_meta("ai_building_defense_until"):
+		return false
 	if e.garrison_point != Vector3.ZERO:
 		return false
 	if e.current_target != null or e.current_order != "":
