@@ -271,11 +271,14 @@ func _draw():
 	# 当前视角框（画在最后，压在地形与单位点上面）
 	_draw_view_frame(ms, cell)
 
-	# 复位变换后再画边框：边框要正对屏幕，不跟着地图一起转
-	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
-	# 双层边框：内层暖黑细边 + 外层金粗边（镶金宝镜徽章感）
+	# 边框也在变换内绘制：和地图一起缩放、一起旋转，
+	# 整块小地图像一个会转的罗盘。放在变换外面的话，转过视角后
+	# 框还是正方的 400 基准尺寸，会把 77dp 的控件整个撑满并露出框外。
 	draw_rect(Rect2(Vector2(2, 2), Vector2(MINIMAP_SIZE - 4, MINIMAP_SIZE - 4)), Color(UITheme.INK, 0.4), false, UITheme.BORDER_MED)
 	draw_rect(Rect2(Vector2.ZERO, Vector2(MINIMAP_SIZE, MINIMAP_SIZE)), Color(UITheme.GOLD, UITheme.ALPHA_BG), false, UITheme.BORDER_THICK)
+
+	# 复位变换，避免影响同一帧后续可能追加的绘制
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
 
 # 在小地图上标出屏幕中心对应的地面位置：一个白色十字准星
 func _draw_view_frame(ms: float, cell: float) -> void:
