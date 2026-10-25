@@ -300,15 +300,23 @@ func _ready():
 # 建筑压住的那块地面泛出土色，范围比实际占地略大一圈，
 # 让建筑看起来是「坐」在土地上而不是浮在草皮上。
 # 建筑被摧毁后土色在几秒内慢慢褪去，留下一点被翻动过的痕迹再消失。
+#
+# 不用 Decal：本项目的地形网格上 Decal 投射不稳定，实测看不见。
+# 改用和脚印（GroundTrailManager）同一套做法——一张柔边贴图贴在贴地薄片上，
+# 这套渲染路径是确认可见的。
 const GROUND_PATCH_MARGIN: float = 1.6      # 比占地外扩多少米
 const GROUND_PATCH_FADE_TIME: float = 3.5   # 摧毁后淡出耗时（秒）
-const GROUND_PATCH_COLOR: Color = Color(0.42, 0.31, 0.19, 0.85)
+const GROUND_PATCH_COLOR: Color = Color(0.42, 0.31, 0.19, 1.0)
+const GROUND_PATCH_ALPHA: float = 0.85      # 正常状态的最高不透明度
+const GROUND_PATCH_LIFT: float = 0.06       # 贴地薄片抬高，避免与地面 z-fighting
 
 static var _ground_patch_tex: ImageTexture = null
+static var _ground_patch_shader: Shader = null
 
-var _ground_patch: Decal = null
+var _ground_patch: MeshInstance3D = null
+var _ground_patch_mat: ShaderMaterial = null
 
-# 程序生成一张柔边方形贴图当贴花底图：中间实、四边渐隐，
+# 程序生成一张柔边方形贴图：中间实、四边渐隐，
 # 这样土色边缘不会出现生硬的方框。全项目共用一张，用完缓存。
 static func _ground_patch_texture() -> ImageTexture:
 	if _ground_patch_tex != null:
@@ -326,6 +334,27 @@ static func _ground_patch_texture() -> ImageTexture:
 	_ground_patch_tex = ImageTexture.create_from_image(img)
 	return _ground_patch_tex
 
+static func _ground_patch_material_shader() -> Shader:
+	if _ground_patch_shader != null:
+		return _ground_patch_shader
+	var sh := Shader.new()
+	sh.code = """
+shader_type spatial;
+render_mode unshaded, blend_mix, cull_disabled, depth_draw_never, shadows_disabled;
+
+uniform sampler2D patch_texture : source_color, filter_linear;
+uniform vec3 tint : source_color = vec3(0.42, 0.31, 0.19);
+uniform float base_alpha = 0.85;
+
+void fragment() {
+	vec4 tex = texture(patch_texture, UV);
+	ALBEDO = tint;
+	ALPHA = base_alpha * tex.a;
+}
+"""
+	_ground_patch_shader = sh
+	return _ground_patch_shader
+
 func _spawn_ground_patch() -> void:
 	if _ground_patch != null and is_instance_valid(_ground_patch):
 		return
@@ -334,18 +363,23 @@ func _spawn_ground_patch() -> void:
 	if entity_id in RTSConfig.BUILDING_BODY_SCALE_EXCLUDED:
 		return
 	var half: float = _ground_patch_half_size()
-	var decal := Decal.new()
-	decal.name = "GroundPatch"
-	decal.texture_albedo = _ground_patch_texture()
-	# size.y 是垂直投射深度，给足高度以覆盖脚下的坡度起伏
-	decal.size = Vector3(half * 2.0, 12.0, half * 2.0)
-	decal.modulate = GROUND_PATCH_COLOR
-	decal.albedo_mix = 1.0
-	decal.upper_fade = 1.2
-	decal.lower_fade = 1.2
-	decal.position = Vector3.ZERO
-	add_child(decal)
-	_ground_patch = decal
+	var quad := PlaneMesh.new()
+	quad.size = Vector2(half * 2.0, half * 2.0)
+	var mat := ShaderMaterial.new()
+	mat.shader = _ground_patch_material_shader()
+	mat.set_shader_parameter("patch_texture", _ground_patch_texture())
+	mat.set_shader_parameter("tint", Vector3(GROUND_PATCH_COLOR.r, GROUND_PATCH_COLOR.g, GROUND_PATCH_COLOR.b))
+	mat.set_shader_parameter("base_alpha", GROUND_PATCH_ALPHA)
+	quad.material = mat
+
+	var mi := MeshInstance3D.new()
+	mi.name = "GroundPatch"
+	mi.mesh = quad
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.position = Vector3(0.0, GROUND_PATCH_LIFT, 0.0)
+	add_child(mi)
+	_ground_patch = mi
+	_ground_patch_mat = mat
 
 # 土色半宽：body_radius 只是碰撞半径，模型还会再乘 ENTITY_MODEL_SCALE
 # （巨型投石机、主城这类特殊体型）。用模型真实缩放后的水平尺寸算，
@@ -354,27 +388,35 @@ func _ground_patch_half_size() -> float:
 	var visual_radius: float = body_radius * RTSConfig.get_model_scale(entity_id)
 	return visual_radius + GROUND_PATCH_MARGIN
 
-# 模型被替换（城墙换拐角、升级换外观）后重算贴花尺寸
+# 模型被替换（城墙换拐角、升级换外观）后重算土色尺寸
 func _refresh_ground_patch_size() -> void:
 	if _ground_patch == null or not is_instance_valid(_ground_patch):
 		return
 	var half: float = _ground_patch_half_size()
-	_ground_patch.size = Vector3(half * 2.0, 12.0, half * 2.0)
+	var quad := _ground_patch.mesh as PlaneMesh
+	if quad != null:
+		quad.size = Vector2(half * 2.0, half * 2.0)
 
-# 建筑死亡时调用：贴花脱离建筑挂在场景里继续淡出，
+# 建筑死亡时调用：土色薄片脱离建筑挂在场景里继续淡出，
 # 直接挂在建筑上会跟着一起被 queue_free，看不到褪色过程。
 func _fade_ground_patch() -> void:
 	if _ground_patch == null or not is_instance_valid(_ground_patch):
 		_ground_patch = null
+		_ground_patch_mat = null
 		return
-	var decal := _ground_patch
+	var mi := _ground_patch
+	var mat := _ground_patch_mat
 	_ground_patch = null
+	_ground_patch_mat = null
 	var parent := get_parent()
 	if parent != null:
-		decal.reparent(parent, true)
-	var tw := decal.create_tween()
-	tw.tween_property(decal, "modulate:a", 0.0, GROUND_PATCH_FADE_TIME)
-	tw.tween_callback(Callable(decal, "queue_free"))
+		mi.reparent(parent, true)
+	if mat == null:
+		mi.queue_free()
+		return
+	var tw := mi.create_tween()
+	tw.tween_method(func(v: float): mat.set_shader_parameter("base_alpha", v), GROUND_PATCH_ALPHA, 0.0, GROUND_PATCH_FADE_TIME)
+	tw.tween_callback(Callable(mi, "queue_free"))
 	
 	
 func _apply_nation_start_bonus():

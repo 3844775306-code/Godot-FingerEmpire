@@ -1092,7 +1092,9 @@ func _is_bridge_at_client(pos: Vector3) -> bool:
 			return true
 	return false
 
-# 建筑脚下的土色贴花：与服务端 Building 保持一致的尺寸与配色，纹理直接复用同一个静态资源
+# 建筑脚下的土色薄片：与服务端 Building 用同一套贴图/着色器/配色，
+# 尺寸同样按 ENTITY_MODEL_SCALE 放大后的视觉半径计算。
+# 这里刻意不用 Decal：本项目地形上 Decal 投射不稳定，会完全看不见。
 func _attach_ground_patch(node: Node3D, info: Dictionary) -> void:
 	if node == null or not is_instance_valid(node):
 		return
@@ -1108,29 +1110,43 @@ func _attach_ground_patch(node: Node3D, info: Dictionary) -> void:
 	var eid: int = int(info.get("entity_id", -1))
 	var visual_radius: float = float(info.get("body_radius", 1.0)) * RTSConfig.get_model_scale(eid)
 	var half: float = visual_radius + Building.GROUND_PATCH_MARGIN
-	var decal := Decal.new()
-	decal.name = "GroundPatch"
-	decal.texture_albedo = Building._ground_patch_texture()
-	decal.size = Vector3(half * 2.0, 12.0, half * 2.0)
-	decal.modulate = Building.GROUND_PATCH_COLOR
-	decal.albedo_mix = 1.0
-	decal.upper_fade = 1.2
-	decal.lower_fade = 1.2
-	node.add_child(decal)
 
-# 建筑倒塌时把土色贴花摘下来独立淡出，让地面痕迹比建筑多留一会儿
+	var quad := PlaneMesh.new()
+	quad.size = Vector2(half * 2.0, half * 2.0)
+	var mat := ShaderMaterial.new()
+	mat.shader = Building._ground_patch_material_shader()
+	mat.set_shader_parameter("patch_texture", Building._ground_patch_texture())
+	mat.set_shader_parameter("tint", Vector3(Building.GROUND_PATCH_COLOR.r,
+		Building.GROUND_PATCH_COLOR.g, Building.GROUND_PATCH_COLOR.b))
+	mat.set_shader_parameter("base_alpha", Building.GROUND_PATCH_ALPHA)
+	quad.material = mat
+
+	var mi := MeshInstance3D.new()
+	mi.name = "GroundPatch"
+	mi.mesh = quad
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	mi.position = Vector3(0.0, Building.GROUND_PATCH_LIFT, 0.0)
+	node.add_child(mi)
+
+# 建筑倒塌时把土色薄片摘下来独立淡出，让地面痕迹比建筑多留一会儿
 func _fade_ground_patch_of(node: Node3D) -> void:
 	if node == null or not is_instance_valid(node):
 		return
-	var decal = node.get_node_or_null("GroundPatch")
-	if decal == null or not is_instance_valid(decal):
+	var mi = node.get_node_or_null("GroundPatch")
+	if mi == null or not is_instance_valid(mi):
 		return
 	var host := get_parent()
 	if host != null:
-		decal.reparent(host, true)
-	var tw := decal.create_tween()
-	tw.tween_property(decal, "modulate:a", 0.0, Building.GROUND_PATCH_FADE_TIME)
-	tw.tween_callback(Callable(decal, "queue_free"))
+		mi.reparent(host, true)
+	var quad := mi.mesh as PlaneMesh
+	var mat = quad.material if quad != null else null
+	if mat == null:
+		mi.queue_free()
+		return
+	var tw := mi.create_tween()
+	tw.tween_method(func(v: float): mat.set_shader_parameter("base_alpha", v),
+		Building.GROUND_PATCH_ALPHA, 0.0, Building.GROUND_PATCH_FADE_TIME)
+	tw.tween_callback(Callable(mi, "queue_free"))
 
 func _play_sink_animation(node: Node3D, info: Dictionary) -> void:
 	if node == null or not is_instance_valid(node):
