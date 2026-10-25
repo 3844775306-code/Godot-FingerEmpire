@@ -1088,15 +1088,10 @@ func _primary_enemy_team() -> int:
 # 主攻目标：优先外交确定的主敌，其次对位队伍，最后找最近的敌对城堡。
 # 乱斗里 BLUE/RED 不一定有国家，只按队伍找会拿到空目标，导致 AI 永远不发起主攻。
 func _get_attack_target_castle() -> Building:
-	if _primary_enemy_owner != -1:
-		var oc = get_peer_castle(_primary_enemy_owner)
-		if oc != null and oc.health > 0:
-			return oc
-	var tc = get_team_castle(_primary_enemy_team())
-	if tc != null:
-		return tc
+	# 优先打「最近的」敌方主城：多国混战时等于就近开战，
+	# 避免 AI 隔着半个地图去扑一个固定主敌、把后方基地晾着。
 	var my_castle = get_peer_castle(my_peer_id)
-	var base = my_castle.global_position if my_castle else Vector3.ZERO
+	var base: Vector3 = my_castle.global_position if my_castle else Vector3.ZERO
 	var best: Building = null
 	var best_d: float = INF
 	for e in battle.entities.get_children():
@@ -1108,7 +1103,15 @@ func _get_attack_target_castle() -> Building:
 		if d < best_d:
 			best_d = d
 			best = e
-	return best
+	if best != null:
+		return best
+	# 兜底：没有可测距的敌方主城时，退回主敌/主敌队伍的城堡
+	if _primary_enemy_owner != -1:
+		var oc = get_peer_castle(_primary_enemy_owner)
+		if oc != null and oc.health > 0:
+			return oc
+	var tc = get_team_castle(_primary_enemy_team())
+	return tc
 
 # 该实体是否对我构成敌对（owner 感知）。无外交管理器时退化为纯队伍判定，资源恒非敌。
 func _entity_is_enemy(e) -> bool:

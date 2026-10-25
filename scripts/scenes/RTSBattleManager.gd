@@ -775,13 +775,14 @@ func get_enemy_castle() -> Building:
 # 关闭后：正在攻击具体目标的军队不受影响，其余军队停止向敌方主城移动。
 func set_local_auto_attack(enabled: bool) -> void:
 	local_auto_attack = enabled
-	var target = _get_auto_attack_target(-1, get_local_team())
 	for e in get_tree().get_nodes_in_group("entities"):
 		if not (e is Army) or e.health <= 0: continue
 		if not is_local_player_owned(e.owner_peer_id, e.team): continue
 		if not e._is_military() or e.entity_id in AUTO_ATTACK_EXCLUDE_IDS: continue
 		if enabled:
 			if e.current_target != null: continue
+			# 每支军队各自挑最近的敌方主城，避免全军挤在同一条路线上
+			var target = _get_auto_attack_target(e.owner_peer_id, e.team, e.global_position)
 			if target:
 				e._clear_command_queue()
 				e.attack_move_to(target.global_position)
@@ -800,16 +801,34 @@ func _has_attack_move_order(e: Army) -> bool:
 func _is_auto_attack_enabled_for(owner: int, team: int) -> bool:
 	return local_auto_attack and is_local_player_owned(owner, team)
 
-func _get_auto_attack_target(_owner: int, _team: int) -> Building:
-	var castle = get_enemy_castle()
-	if castle: return castle
-	# 乱斗模式没有 RED 队伍：选择任意非本地玩家的主城
+# 挑选自动进攻目标：所有存活敌方主城里距离 from_pos 最近的那个。
+# 多国混战时这条决定了「就近开战」而不是全军扑向同一个固定目标。
+# from_pos 留空时用己方主城位置作为参考点。
+func _get_auto_attack_target(owner: int, team: int, from_pos: Vector3 = Vector3.ZERO) -> Building:
 	_ensure_cache_fresh()
+	var origin: Vector3 = from_pos
+	if origin == Vector3.ZERO:
+		# 没给起点时用己方主城位置，让「最近的敌方主城」有意义
+		for e in _buildings:
+			if e is Building and int(e.entity_id) == 20 and e.health > 0 and e.team == team:
+				origin = e.global_position
+				break
+	var best: Building = null
+	var best_d: float = INF
 	for e in _buildings:
-		if e is Building and e.entity_id == 20 and e.health > 0:
-			if not is_local_player_owned(e.owner_peer_id, e.team):
-				return e
-	return null
+		if not (e is Building) or int(e.entity_id) != 20 or e.health <= 0:
+			continue
+		if e.team == team:
+			continue
+		if owner >= 0 and int(e.owner_peer_id) == owner:
+			continue
+		if is_local_player_owned(e.owner_peer_id, e.team):
+			continue
+		var d: float = origin.distance_squared_to(e.global_position)
+		if d < best_d:
+			best_d = d
+			best = e
+	return best
 
 # 新生产的军队继承当前自动进攻状态
 func _apply_auto_attack_to_entity(entity: GameEntity) -> void:
@@ -818,7 +837,7 @@ func _apply_auto_attack_to_entity(entity: GameEntity) -> void:
 	if entity.entity_id in AUTO_ATTACK_EXCLUDE_IDS: return
 	if not _is_auto_attack_enabled_for(entity.owner_peer_id, entity.team): return
 	if entity.current_target != null: return
-	var target = _get_auto_attack_target(entity.owner_peer_id, entity.team)
+	var target = _get_auto_attack_target(entity.owner_peer_id, entity.team, entity.global_position)
 	if target:
 		entity.attack_move_to(target.global_position)
 

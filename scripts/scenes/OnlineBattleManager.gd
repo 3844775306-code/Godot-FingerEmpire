@@ -1106,18 +1106,40 @@ func _is_auto_attack_enabled_for(owner: int, team: int) -> bool:
 		return auto_attack_peers.get(owner, false)
 	return auto_attack_teams.get(team, false)
 
-func _get_auto_attack_target(_owner: int, team: int) -> Building:
-	var enemy_team = RTSConfig.Team.RED if team == RTSConfig.Team.BLUE else RTSConfig.Team.BLUE
-	return _get_first_alive_castle(enemy_team)
+# 挑选自动进攻目标：所有存活敌方主城里距离 from_pos 最近的那个。
+# 多国混战中这条决定「就近开战」，而不是全军扑向同一个固定主城。
+func _get_auto_attack_target(owner: int, team: int, from_pos: Vector3 = Vector3.ZERO) -> Building:
+	var origin: Vector3 = from_pos
+	if origin == Vector3.ZERO:
+		# 没给起点时用己方主城位置，让「最近的敌方主城」有意义
+		for e in entities.get_children():
+			if e is Building and int(e.entity_id) == 20 and e.health > 0 and e.team == team:
+				origin = e.global_position
+				break
+	var best: Building = null
+	var best_d: float = INF
+	for e in entities.get_children():
+		if not (e is Building) or int(e.entity_id) != 20 or e.health <= 0:
+			continue
+		if e.team == team:
+			continue
+		if owner >= 0 and int(e.owner_peer_id) == owner:
+			continue
+		var d: float = origin.distance_squared_to(e.global_position)
+		if d < best_d:
+			best_d = d
+			best = e
+	return best
 
 func _1v1_set_auto_attack(team: int, enabled: bool) -> void:
 	auto_attack_teams[team] = enabled
-	var target = _get_auto_attack_target(-1, team)
 	for entity in entities.get_children():
 		if not (entity is Army) or entity.team != team or entity.health <= 0: continue
 		if not entity._is_military() or entity.entity_id in AUTO_ATTACK_EXCLUDE_IDS: continue
 		if enabled:
 			if entity.current_target != null: continue
+			# 每支军队各自挑最近的敌方主城
+			var target = _get_auto_attack_target(-1, team, entity.global_position)
 			if target:
 				entity._clear_command_queue()
 				entity.attack_move_to(target.global_position)
@@ -1130,12 +1152,12 @@ func _2v2_set_auto_attack(peer_id: int, enabled: bool) -> void:
 	auto_attack_peers[peer_id] = enabled
 	if not player_info.has(peer_id): return
 	var team = player_info[peer_id].team
-	var target = _get_auto_attack_target(peer_id, team)
 	for entity in entities.get_children():
 		if not (entity is Army) or entity.get("owner_peer_id") != peer_id or entity.health <= 0: continue
 		if not entity._is_military() or entity.entity_id in AUTO_ATTACK_EXCLUDE_IDS: continue
 		if enabled:
 			if entity.current_target != null: continue
+			var target = _get_auto_attack_target(peer_id, team, entity.global_position)
 			if target:
 				entity._clear_command_queue()
 				entity.attack_move_to(target.global_position)
