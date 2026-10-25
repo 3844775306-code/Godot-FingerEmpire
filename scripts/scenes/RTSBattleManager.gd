@@ -39,6 +39,10 @@ var player_team: int = RTSConfig.Team.BLUE
 var enemy_team: int = RTSConfig.Team.RED
 var local_auto_attack: bool = false           # 本地玩家的自动进攻开关
 const AUTO_ATTACK_EXCLUDE_IDS = [5, 6, 9, 10, 14, 43, 44, 45, 51, 46, 47, 48, 49, 50]
+# 官员编制：官员总数不能超过己方“可进驻建筑”的数量。
+# 桥(7)、梯(8)、城墙(27)不是驻军建筑，不提供官员名额；在建/被毁建筑也不计。
+const OFFICIAL_UNIT_IDS: Array[int] = [46, 47, 48, 49, 50]
+const OFFICIAL_HOST_EXCLUDE_IDS: Array[int] = [7, 8, 27]
 var ai_players: Dictionary = {}               # { peer_id: { "team":, "slot":, "castle": } }
 var ai_resources: Dictionary = {}             # peer_id -> resources dict
 var ai_population: Dictionary = {}            # peer_id -> population dict
@@ -1551,6 +1555,63 @@ func increase_player_population(owner_id: int, amount: int = 1):
 # 单机多AI：生产检查（人口 < 上限）
 func can_player_train(owner_id: int) -> bool:
 	return can_train_for(owner_id)
+
+# ==================== 官员编制上限 ====================
+# 官员与农民共用随机人物模型；这里只负责生产端：官员总数（含排队中）
+# 不得超过己方已完成、可进驻建筑的数量，避免书院无限排队刷出一堆无处安放的官员。
+func _is_official_host_building(b: Building) -> bool:
+	if not is_instance_valid(b):
+		return false
+	if b.health <= 0.0 or b.build_timer > 0.0:
+		return false
+	return b.entity_id not in OFFICIAL_HOST_EXCLUDE_IDS
+
+func _same_owner_or_team(entity_owner: int, entity_team: int, owner_peer_id: int, team: int) -> bool:
+	if owner_peer_id != -1:
+		return entity_owner == owner_peer_id
+	return entity_team == team
+
+func get_official_host_capacity(team: int, owner_peer_id: int) -> int:
+	_ensure_cache_fresh()
+	var capacity := 0
+	for b in _buildings:
+		if not _is_official_host_building(b):
+			continue
+		if not _same_owner_or_team(b.owner_peer_id, b.team, owner_peer_id, team):
+			continue
+		capacity += 1
+	return capacity
+
+func count_official_units(team: int, owner_peer_id: int, include_queue: bool = true) -> int:
+	_ensure_cache_fresh()
+	var total := 0
+	for e in _armies:
+		if not is_instance_valid(e) or e.health <= 0:
+			continue
+		if e.entity_id not in OFFICIAL_UNIT_IDS:
+			continue
+		if not _same_owner_or_team(e.owner_peer_id, e.team, owner_peer_id, team):
+			continue
+		total += 1
+	if include_queue:
+		for b in _buildings:
+			if not is_instance_valid(b):
+				continue
+			if not _same_owner_or_team(b.owner_peer_id, b.team, owner_peer_id, team):
+				continue
+			for queued_id in b.production_queue:
+				if int(queued_id) in OFFICIAL_UNIT_IDS:
+					total += 1
+	return total
+
+# Building.try_produce 在扣资源前调用：名额已满时直接拒绝，客户端 UI 也会置灰按钮。
+func can_produce_official(unit_id: int, building: Building) -> bool:
+	if unit_id not in OFFICIAL_UNIT_IDS:
+		return true
+	if not is_instance_valid(building):
+		return false
+	var capacity := get_official_host_capacity(building.team, building.owner_peer_id)
+	return count_official_units(building.team, building.owner_peer_id) < capacity
 
 # 单机多AI：按 owner 刷新资源上限（建筑/仓库/船坞）
 func update_player_limits(owner_id: int):

@@ -420,6 +420,14 @@ func update_info(entity):
 		for c in produce_vbox.get_children(): c.queue_free()
 		if not entity.production_list.is_empty():
 			produce_vbox.visible = true
+			# 书院显示当前官员编制，让玩家知道为什么官员生产按钮会置灰。
+			if entity.entity_id == 42 and battle and battle.has_method("get_official_host_capacity"):
+				var cap: int = battle.get_official_host_capacity(entity.team, entity.owner_peer_id)
+				var used: int = battle.count_official_units(entity.team, entity.owner_peer_id)
+				var cap_label := _make_rtl_label()
+				cap_label.text = "官员编制（含排队）[color=%s]%d / %d[/color]" % [
+					UITheme.hex_str(UITheme.GOLD), used, cap]
+				produce_vbox.add_child(cap_label)
 			var seen = {}
 			for prod in entity.production_list:
 				if seen.has(prod.unit_id): continue
@@ -443,8 +451,13 @@ func update_info(entity):
 					var have = _get_res().get(res, 0)
 					if have < need: ok = false
 					cs.append({"res": res, "need": need})
-				btn.disabled = (not ok) or readonly
-				if readonly:
+				var official_full := false
+				if battle and battle.has_method("can_produce_official") and uc.get("official_type", "") != "":
+					official_full = not battle.can_produce_official(prod.unit_id, entity)
+				btn.disabled = (not ok) or readonly or official_full
+				if official_full and not readonly:
+					btn.tooltip_text = "官员总数不能超过可进驻建筑数"
+				elif readonly:
 					btn.tooltip_text = "队友建筑仅可查看，无法下达生产命令"
 				var rtl = RichTextLabel.new(); rtl.bbcode_enabled = true; rtl.fit_content = true; rtl.autowrap_mode = TextServer.AUTOWRAP_OFF
 				rtl.mouse_filter = Control.MOUSE_FILTER_IGNORE
