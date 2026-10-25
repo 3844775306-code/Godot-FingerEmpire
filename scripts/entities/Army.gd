@@ -158,6 +158,11 @@ var _advance_path_fail_time: float = 0.0
 # 寻路失败后正在等待下一次重试。此时 astar_path 为空、astar_target 仍是原目的地，
 # 不能把它误判成“已经走到最近可达点”。
 var _advance_path_recovering: bool = false
+# 攻击移动状态与寻路层彻底脱节时的兜底：既没有路径、也没有待处理/失败标记，
+# 说明路径被其他逻辑清掉或状态残留。短暂等待后重发一次目的地，仍无路就结束，
+# 避免单位永远停在“攻击移动但无路径且原地不动”。
+const ATTACK_MOVE_STALE_GRACE: float = 1.5
+var _attack_move_stale_time: float = 0.0
 
 # 驻扎防御：驻扎点附近这个半径内的敌人优先清掉，再返回驻扎点
 const GARRISON_DEFEND_RADIUS: float = 10.0
@@ -671,6 +676,7 @@ func set_combat_advance_enabled(enabled: bool) -> void:
 		# _process_combat_advance 又会因为旧路径一直存在而不判定“路径耗尽”，
 		# 单位就永久停在“攻击移动但不动”。这里把行军终点转换成攻击移动终点。
 		attack_move_target = combat_destination
+		hold_position = false
 		current_target = null
 		_target_lost_since_ms = 0
 		_attack_watch_target_id = -1
@@ -764,6 +770,9 @@ func _start_combat_march(pos: Vector3) -> void:
 func _start_combat_advance(pos: Vector3) -> void:
 	_defense_return_position = Vector3.ZERO
 	remove_meta("ai_building_defense_until")
+	# 攻击移动是显式移动命令，必须解除“原地坚守”，否则 process_move 会拒绝移动，
+	# 单位却一直显示为攻击移动状态。
+	hold_position = false
 	current_target = null
 	combat_destination = pos
 	combat_resume_destination = Vector3.ZERO
@@ -1431,11 +1440,81 @@ func _check_attack_approach(delta: float, bm: RTSBattleManager, preserve_attack_
 	_handle_unreachable_attack_target(bm, preserve_attack_move)
 
 # ==================== 五状态单位 AI ====================
+# 攻击移动标记与状态/路径层脱节时的最后兜底。正常推进由 _process_combat_advance
+# 处理；这里只抓“状态还写着攻击移动，但既无路径、也无任何寻路重试/失败标记”的残留，
+# 避免单位永久原地站着（常见于路径被其他逻辑清掉、或外部只改了状态没清标记）。
+func _recover_stale_attack_move(delta: float) -> void:
+	if not is_attack_moving:
+		_attack_move_stale_time = 0.0
+		return
+	if not _uses_combat_state():
+		_clear_attack_move_state()
+		return
+	# 墙顶守军只固守城墙，攻击移动标记对它没有意义，不能让它一直顶着这个状态。
+	if _is_effective_wall_guard():
+		_clear_attack_move_state()
+		return
+	if combat_state != CombatState.ADVANCE:
+		_clear_attack_move_state()
+		return
+	if combat_destination == Vector3.ZERO:
+		is_attack_moving = false
+		attack_move_target = Vector3.ZERO
+		_attack_move_stale_time = 0.0
+		_set_combat_state(CombatState.IDLE)
+		return
+	# 坚守姿态与攻击移动互斥；兼容旧命令/外部状态留下的组合，显式攻击移动优先。
+	if hold_position and not has_meta("ai_wall_guard"):
+		hold_position = false
+	if current_target != null and is_instance_valid(current_target):
+		_attack_move_stale_time = 0.0
+		return
+	if _movement == null:
+		_clear_attack_move_state()
+		return
+	# 寻路层正在重试/失败处理时交给 _process_combat_advance 的计时器，不在这里重复判定。
+	if _movement._pending_path or _movement.move_path_failed \
+			or _movement.attack_path_failed or _advance_path_recovering:
+		_attack_move_stale_time = 0.0
+		return
+	if not _movement.astar_path.is_empty():
+		_attack_move_stale_time = 0.0
+		return
+	if global_position.distance_to(combat_destination) <= body_radius + 0.75:
+		_finish_combat_move()
+		return
+	_attack_move_stale_time += delta
+	if _attack_move_stale_time < ATTACK_MOVE_STALE_GRACE:
+		return
+	_attack_move_stale_time = 0.0
+	# 没有路径也没有 A* 记录：先补发一次目的地。若 A* 仍然给不出路径，
+	# 下一轮宽限期结束时结束攻击移动，而不是继续无限重试。
+	if _movement.astar_target.distance_to(combat_destination) > 0.5:
+		_movement.clear_blacklist_at(combat_destination)
+		_movement.set_move_target(combat_destination)
+		return
+	_finish_combat_move()
+
+func _clear_attack_move_state() -> void:
+	is_attack_moving = false
+	attack_move_target = Vector3.ZERO
+	# 残留状态可能还带着“打完继续攻击移动”的续接点；不清掉会在目标死亡后
+	# 再次把单位拉回攻击移动，形成循环。
+	combat_resume_advance = false
+	combat_resume_destination = Vector3.ZERO
+	_attack_move_stale_time = 0.0
+	_advance_path_fail_time = 0.0
+	_advance_path_recovering = false
+	if combat_state == CombatState.IDLE:
+		_clear_combat_destination()
+
+# ==================== 五状态单位 AI ====================
 # 军事单位的每帧入口。旧的 _process_action 继续只服务农民/商队/官员等非战斗单位。
 func _process_combat_frame(delta, bm) -> void:
 	_release_invalid_wall_guard()
 	_process_combat_target_cleanup(delta, bm)
 	_process_combat_action(delta, bm)
+	_recover_stale_attack_move(delta)
 	var stationary_in_range := false
 	if combat_state == CombatState.ATTACK and current_target != null \
 			and is_instance_valid(current_target) and current_target is GameEntity:
