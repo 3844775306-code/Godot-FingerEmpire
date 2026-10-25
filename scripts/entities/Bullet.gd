@@ -85,39 +85,60 @@ func _spawn_impact_effect(pos: Vector3, big: bool) -> void:
 	# 统一用 position 而不是 global_position：父节点（战斗管理器 / 场景根）就在原点，
 	# 局部坐标即世界坐标；而在 add_child 的同一帧设置 global_position 会依赖父级的
 	# transform 缓存，粒子常常全在原点（地图正中央）发射。
-	# ── 1) 碎屑粒子：往外炸开的亮色颗粒 ──
+	# ── 1) 碎屑粒子：往外炸开的不规则小石块 ──
+	# 逼真感来自三点：碎块形状不规则（方块而不是圆球）、飞行中翻滚（角速度）、
+	# 尺寸随存活时间收缩（scale_amount_curve），单靠多个圆球会像"气泡"。
 	var p := CPUParticles3D.new()
 	p.one_shot = true
-	p.amount = 18 if big else 12
-	p.lifetime = 0.7
+	p.amount = 24 if big else 16
+	p.lifetime = 0.8
 	p.explosiveness = 1.0
 	p.direction = Vector3.UP
 	p.spread = 180.0
 	p.initial_velocity_min = 2.5
-	p.initial_velocity_max = 6.5 if big else 4.5
+	p.initial_velocity_max = 7.0 if big else 5.0
 	p.gravity = Vector3(0.0, -14.0, 0.0)
+	p.angle_min = 0.0
+	p.angle_max = 360.0
+	# 碎片翻滚：角速度范围越大，看起来越像被炸飞的石块
+	p.angular_velocity_min = -540.0
+	p.angular_velocity_max = 540.0
 	p.scale_amount_min = 1.0
-	p.scale_amount_max = 1.4 if big else 1.2
-	var mesh := SphereMesh.new()
+	p.scale_amount_max = 1.5 if big else 1.25
+	# 尺寸随生命期收缩：飞出去的同时变小，避免像悬浮的方块
+	var size_curve := Curve.new()
+	size_curve.add_point(Vector2(0.0, 1.0))
+	size_curve.add_point(Vector2(0.55, 0.85))
+	size_curve.add_point(Vector2(1.0, 0.2))
+	p.scale_amount_curve = size_curve
+	var mesh := BoxMesh.new()
 	# 注意：scale_amount 是相对网格尺寸的倍率，不是绝对大小。
-	# 之前网格半径只有 0.13，再乘 0.18 的倍率实际直径才 5 厘米，几乎看不见。
-	mesh.radius = 0.12 if big else 0.09
-	mesh.height = 0.24 if big else 0.18
+	# 长宽高不一致，碎片才不会是统一的立方体。
+	mesh.size = Vector3(0.17, 0.11, 0.21) if big else Vector3(0.11, 0.08, 0.14)
 	var mat := StandardMaterial3D.new()
 	if big:
-		# 石头：白色碎屑，带一点自发光，阴影里也能看清
-		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		mat.albedo_color = Color(0.93, 0.93, 0.95)
-		mat.emission_enabled = true
-		mat.emission = Color(0.7, 0.7, 0.75)
-		mat.emission_energy_multiplier = 1.0
-	else:
-		# 炮弹：黑色火药碎屑；受光照影响，暗处自然不会发亮
+		# 石头：浅灰色碎块，受光照影响才能看出棱角；略加自发光避免阴影里全黑
 		mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
-		mat.albedo_color = Color(0.05, 0.05, 0.06)
+		mat.albedo_color = Color(0.80, 0.79, 0.74)
+		mat.emission_enabled = true
+		mat.emission = Color(0.3, 0.3, 0.3)
+		mat.emission_energy_multiplier = 0.35
+	else:
+		# 炮弹：深灰近黑的火药碎屑；受光照影响，暗处自然不会发亮
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+		mat.albedo_color = Color(0.10, 0.10, 0.11)
 		mat.emission_enabled = false
 	mesh.material = mat
 	p.mesh = mesh
+	# 初始颜色在灰阶范围内随机，碎块深浅不一
+	var shard_grad := Gradient.new()
+	if big:
+		shard_grad.set_color(0, Color(0.88, 0.87, 0.82))
+		shard_grad.set_color(1, Color(0.62, 0.60, 0.55))
+	else:
+		shard_grad.set_color(0, Color(0.16, 0.16, 0.17))
+		shard_grad.set_color(1, Color(0.05, 0.05, 0.06))
+	p.color_initial_ramp = shard_grad
 	# 顺序很关键：先设好 position 再 add_child，并且延迟一帧才开始发射。
 	# CPUParticles3D 在同一帧里 transform 还没同步，直接用 emitting = true
 	# 会用旧位置（原点，也就是地图正中央）发射第一批粒子。
@@ -127,6 +148,81 @@ func _spawn_impact_effect(pos: Vector3, big: bool) -> void:
 	get_tree().create_timer(1.4).timeout.connect(func():
 		if is_instance_valid(p):
 			p.queue_free())
+
+	# ── 1b) 扬尘：一团膨胀后淡出的灰雾，是"砸出坑"的关键观感 ──
+	var dust := CPUParticles3D.new()
+	dust.one_shot = true
+	dust.amount = 9 if big else 6
+	dust.lifetime = 1.1
+	dust.explosiveness = 1.0
+	dust.direction = Vector3.UP
+	dust.spread = 180.0
+	dust.initial_velocity_min = 0.5
+	dust.initial_velocity_max = 1.8
+	# 烟往上飘，重力取正值
+	dust.gravity = Vector3(0.0, 0.8, 0.0)
+	dust.scale_amount_min = 1.0
+	dust.scale_amount_max = 1.8
+	var dust_curve := Curve.new()
+	dust_curve.add_point(Vector2(0.0, 0.45))
+	dust_curve.add_point(Vector2(1.0, 1.6))
+	dust.scale_amount_curve = dust_curve
+	var dmesh := SphereMesh.new()
+	dmesh.radius = 0.34 if big else 0.26
+	dmesh.height = 0.68 if big else 0.52
+	var dmat := StandardMaterial3D.new()
+	dmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	dmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	dmat.albedo_color = Color(0.74, 0.73, 0.68, 1.0) if big else Color(0.42, 0.41, 0.40, 1.0)
+	dmesh.material = dmat
+	dust.mesh = dmesh
+	# 生命周期内从半透明淡出到完全消失
+	var dust_grad := Gradient.new()
+	dust_grad.set_color(0, Color(1.0, 1.0, 1.0, 0.45))
+	dust_grad.set_color(1, Color(1.0, 1.0, 1.0, 0.0))
+	dust.color_ramp = dust_grad
+	dust.position = pos
+	parent.add_child(dust)
+	dust.set_deferred("emitting", true)
+	get_tree().create_timer(1.6).timeout.connect(func():
+		if is_instance_valid(dust):
+			dust.queue_free())
+
+	# ── 1c) 火星：只有炮弹有，亮橙色高速小点，模拟火药爆燃 ──
+	if not big:
+		var spark := CPUParticles3D.new()
+		spark.one_shot = true
+		spark.amount = 10
+		spark.lifetime = 0.38
+		spark.explosiveness = 1.0
+		spark.direction = Vector3.UP
+		spark.spread = 180.0
+		spark.initial_velocity_min = 3.5
+		spark.initial_velocity_max = 8.0
+		spark.gravity = Vector3(0.0, -20.0, 0.0)
+		spark.scale_amount_min = 1.0
+		spark.scale_amount_max = 1.4
+		var smesh := SphereMesh.new()
+		smesh.radius = 0.045
+		smesh.height = 0.09
+		var smat := StandardMaterial3D.new()
+		smat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		smat.albedo_color = Color(1.0, 0.72, 0.32)
+		smat.emission_enabled = true
+		smat.emission = Color(1.0, 0.55, 0.18)
+		smat.emission_energy_multiplier = 3.0
+		smesh.material = smat
+		spark.mesh = smesh
+		var spark_grad := Gradient.new()
+		spark_grad.set_color(0, Color(1.0, 0.85, 0.5, 1.0))
+		spark_grad.set_color(1, Color(0.85, 0.25, 0.05, 0.0))
+		spark.color_ramp = spark_grad
+		spark.position = pos
+		parent.add_child(spark)
+		spark.set_deferred("emitting", true)
+		get_tree().create_timer(1.0).timeout.connect(func():
+			if is_instance_valid(spark):
+				spark.queue_free())
 
 	# ── 2) 闪光球：命中瞬间炸亮一下再迅速缩掉，是最直观的"打中了"反馈 ──
 	var flash := MeshInstance3D.new()
