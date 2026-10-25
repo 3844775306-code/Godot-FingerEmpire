@@ -2178,10 +2178,11 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 			var animin: float = _model_local_min_y(ani)
 			if absf(animin) > 0.005:
 				ani.position.y -= animin
-	# 建筑整体放大为原来的 2 倍（瞭望塔 41 除外）：
+	# 建筑整体放大为原来的 2 倍（瞭望塔 41、城墙 27、炮台 64、桥 7、梯子 8 除外：
+	# 它们与地形/城墙拼接尺寸绑定，放大后会出现缝隙、接不上岸或悬空）：
 	# 模型、碰撞体、body_radius 必须一起放大，只放大模型会让单位走进建筑内部，
 	# 放置校验、AOE 判定也仍按旧尺寸计算。
-	if entity is Building and entity.entity_id != 41:
+	if entity is Building and entity.entity_id not in [41, 27, 64, 7, 8]:
 		entity.body_radius *= 2.0
 		if entity.has_method("_update_collision_shape"):
 			entity.call("_update_collision_shape")
