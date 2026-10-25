@@ -262,15 +262,38 @@ func report_astar_cost(usec: int) -> void:
 
 # 顶部诊断：统计需要移动、但当前 astar_path 为空的存活单位。
 # 攻击射程内、采集/交付接触距离内、坚守或不能移动的单位不计入。
-func count_moving_units_without_path() -> int:
+# pending 单独计数：这些单位在排队等 A* 预算，并不一定是状态卡死。
+func get_moving_no_path_stats() -> Dictionary:
 	_ensure_cache_fresh()
-	var count: int = 0
+	var stats := {
+		"total": 0,
+		"pending": 0,
+		"move_failed": 0,
+		"attack_failed": 0,
+		"partial": 0,
+		"stalled": 0,
+	}
 	for army in _armies:
 		if not is_instance_valid(army) or army.health <= 0:
 			continue
-		if army.needs_move_without_path():
-			count += 1
-	return count
+		if not army.needs_move_without_path():
+			continue
+		stats["total"] += 1
+		var mover = army._movement
+		if mover == null:
+			continue
+		if mover._pending_path:
+			stats["pending"] += 1
+		elif mover.move_path_failed:
+			stats["move_failed"] += 1
+		elif mover.attack_path_failed:
+			stats["attack_failed"] += 1
+		elif mover.path_partial:
+			stats["partial"] += 1
+		else:
+			# 没有路径、没有排队、也没有失败/部分路径标记：状态兜底没有接上
+			stats["stalled"] += 1
+	return stats
 
 # ==================== 诊断工具 ====================
 var _diag_timer: float = 5.0
@@ -3650,10 +3673,12 @@ func _process(delta):
 			]
 		else:
 			_fps_label.add_theme_color_override("font_color", Color.LIME_GREEN)
-			_fps_label.text = "FPS:%.0f | 画质:%d | 实体:%d(A%d B%d) | 移动无路径:%d" % [
+			var np_stats := get_moving_no_path_stats()
+			_fps_label.text = "FPS:%.0f | 画质:%d | 实体:%d(A%d B%d) | 移动无路径:%d(排队:%d,卡:%d)" % [
 				Engine.get_frames_per_second(), _perf_quality_level,
 				_all_entities.size(), _armies.size(), _buildings.size(),
-				count_moving_units_without_path()
+				int(np_stats.get("total", 0)), int(np_stats.get("pending", 0)),
+				int(np_stats.get("stalled", 0))
 			]
 		if _snap_rate_label:
 			var diff_names = ["简单", "普通", "困难", "地狱"]

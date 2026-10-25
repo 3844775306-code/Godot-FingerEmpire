@@ -16,9 +16,11 @@ var astar_recalc_timer: float = 0.0
 const ASTAR_RECALC_INTERVAL: float = 2.0
 # 追击移动目标时目标位置每帧都在变；若每次变化都重算 A*（最多 1000 节点），
 # 大部队交战时每帧会跑数百次寻路。按单位错峰限频，保留路径跟随和最终接近。
-const ATTACK_PATH_COOLDOWN_MS: int = 700
-# 追击目标在小范围内移动时继续沿用现有路径，避免每 0.5~0.7s 为每个单位重跑一次 A*
-const ATTACK_TARGET_MOVE_TOLERANCE: float = 2.5
+# 后期几十个单位同时追击时，0.7 秒一次仍会把 A* 预算排队堆到几十个；
+# 拉长到 1 秒并配合下面的目标移动容差，先让已有路径继续走，减少无效重算。
+const ATTACK_PATH_COOLDOWN_MS: int = 1000
+# 追击目标在小范围内移动时继续沿用现有路径，避免每 1 秒为每个单位重跑一次 A*
+const ATTACK_TARGET_MOVE_TOLERANCE: float = 3.0
 # 路径预览最多绘制多少个点，避免长路径为每个格子创建一个 MeshInstance3D。
 const MAX_PATH_PREVIEW_POINTS: int = 64
 var _last_attack_path_ms: int = -100000
@@ -36,6 +38,10 @@ var _last_path_partial: bool = false
 # 大量单位同时追击时 A* 预算可能连续多帧排不到某个单位。
 # 等待超过这个时间就按“无路”处理，交给 Army 的换目标/拆墙兜底，不能让单位永远站着。
 const PENDING_PATH_TIMEOUT_MS: int = 2000
+# 状态层偶发漏发路径请求时的兜底：没有路径、没有排队、也没有失败标记，
+# 但目标仍很远，隔一段时间主动补一次请求，避免单位永久停在“移动中但无路径”。
+const NO_PATH_REISSUE_INTERVAL_MS: int = 1200
+var _next_no_path_reissue_ms: int = 0
 
 var _path_sphere: SphereMesh = null
 var _path_mat: StandardMaterial3D = null
@@ -109,6 +115,9 @@ func set_move_target(pos: Vector3, stop_range: float = 0.0):
 		# 目标只挪动一点点时旧路径仍然可用，先不重算；等偏移超过容差或冷却到期再更新
 		if astar_path.size() > 0 and astar_target != Vector3.ZERO and astar_target.distance_to(pos) < ATTACK_TARGET_MOVE_TOLERANCE:
 			return
+		# 已经有一个请求在排队时不要重复占预算；process_move 会按重试配额继续处理
+		if _pending_path and astar_path.is_empty():
+			return
 		var now_ms := Time.get_ticks_msec()
 		# 首次追击按 unit id 分 16 个相位错峰，避免全军在同一帧集中跑 A*；
 		# 后续只加少量抖动，保证追击路径不会滞后太久。
@@ -117,9 +126,14 @@ func set_move_target(pos: Vector3, stop_range: float = 0.0):
 		if _last_attack_path_ms < 0:
 			_last_attack_path_ms = now_ms - cooldown_ms + phase_ms
 		if now_ms - _last_attack_path_ms < cooldown_ms:
-			# 注意：这里不能写 astar_target，否则下一次调用会被开头的
-			# distance_to < 0.5 提前返回，永远不再生成路径。
-			return
+			# 还有旧路径可走时，冷却用于限制无效重算；
+			# 但路径已经为空、也没有失败标记时，单位正站着等，继续卡冷却只会
+			# 让它保持“追击中却无路径”。这种情况立即补一次请求；
+			# 失败路径仍交给 Army 的换目标/拆墙超时，避免每帧重算。
+			if not astar_path.is_empty() or attack_path_failed or move_path_failed:
+				# 注意：这里不能写 astar_target，否则下一次调用会被开头的
+				# distance_to < 0.5 提前返回，永远不再生成路径。
+				return
 		_last_attack_path_ms = now_ms
 
 	# Only cache normal movement (stop_range==0). Attacks recalc every time.
@@ -249,7 +263,28 @@ func stop():
 	blocking_building = null
 	_pending_path = false
 	_pending_since_ms = 0
+	_next_no_path_reissue_ms = 0
 	_stop_velocity()
+
+# 只处理“移动逻辑还在要路径，但既没排队也没有失败标记”的漏网状态。
+# 失败的路径交给 Army 的换目标/拆墙超时，不能在这里反复重算。
+func _try_reissue_missing_path(target_pos: Vector3) -> bool:
+	if target_pos == Vector3.ZERO or _pending_path or not astar_path.is_empty():
+		return false
+	if move_path_failed or attack_path_failed or path_partial:
+		return false
+	var now_ms := Time.get_ticks_msec()
+	if now_ms < _next_no_path_reissue_ms:
+		return false
+	_next_no_path_reissue_ms = now_ms + NO_PATH_REISSUE_INTERVAL_MS
+	var stop_range := 0.0
+	if _army.current_target != null and is_instance_valid(_army.current_target) \
+			and _army.current_target is GameEntity and not (_army.current_target is WorldResource) \
+			and not _army._order_is(_army.UnitState.MOVING):
+		stop_range = _army.attack_range
+	clear_blacklist_at(target_pos)
+	set_move_target(target_pos, stop_range)
+	return true
 
 # 单位停止/进入攻击距离后必须把残留速度清零，否则 Army 的 simple_idle 永远不成立，
 # 后期几百个已经停下的单位仍会每 0.15~0.22 秒做一次碰撞近邻查询。
@@ -325,8 +360,11 @@ func process_move(delta, bm: RTSBattleManager):
 	# No A* path = no movement, unless close to target (final approach)
 	if astar_path.size() == 0:
 		if astar_target.distance_squared_to(_army.global_position) > 3.0:
+			# 没有路径但目标仍远：先让状态层补发请求，避免个别漏发请求的单位
+			# 永久停在“移动中但无路径”。失败/排队状态不在这里处理。
+			_try_reissue_missing_path(target_pos)
 			_stop_velocity()
-			return  # too far, no path → stay put
+			return  # too far, no path → stay put until the request is served
 		# 无路径的最终接近也不能跨悬崖：目标就在脚下另一侧时，
 		# 直接插值过去会让单位从台地边缘滑下陡坡。
 		if bm != null and _is_cliff_between_positions(bm, _army.global_position, target_pos):
