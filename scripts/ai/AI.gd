@@ -108,7 +108,7 @@ const WALL_COUNT: int = 12
 const WALL_SPACING: float = 1.3
 # 远程单位上墙：墙未破时免疫伤害，因此优先把闲置远程兵铺到墙格上；
 # 每面城墙独立选择“墙顶炮台”或“远程驻军”，赶路中的单位用 ai_wall_guard 预留墙格。
-const WALL_DEPLOY_INTERVAL: float = 6.0
+const WALL_DEPLOY_INTERVAL: float = 30.0
 const WALL_DEPLOY_MAX_DISTANCE: float = 60.0
 const WALL_CANNON_ID: int = 64
 const WALL_GUARD_MODE_META: String = "ai_wall_guard_mode"
@@ -806,7 +806,11 @@ func get_counter_priority() -> Array:
 # ═══ Init ═══
 func _ready():
 	_add_nation_special_unit()
-	_create_debug_panel()
+	# 手机端不创建 AI 决策面板：屏幕装不下多块 540×400 的面板，
+	# 而且 MobileHUD 只在自己装配时隐藏一次，AI 是开局后才建的，压不住。
+	# 相关信息在手机端已并入全屏统计大屏。
+	if not InputSource.is_mobile_platform():
+		_create_debug_panel()
 	_defense = AIDefenseScript.new(self)
 	_water_crossing = AIWaterCrossingScript.new(self)
 
