@@ -729,6 +729,7 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 	_last_path_partial = false
 	var bm = _army._get_bm() as RTSBattleManager
 	if not bm: return []
+	bm.note_astar_path_call()
 	var start = _army.global_position
 	var start_tile = bm.world_to_grid(start)
 	var end_tile = bm.world_to_grid(target_pos)

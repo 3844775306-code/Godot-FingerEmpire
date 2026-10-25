@@ -142,6 +142,13 @@ const ASTAR_RETRY_RESERVE_USEC: int = 8000
 var _astar_budget_frame: int = -1
 var _astar_budget_count: int = 0
 var _astar_budget_usec: int = 0
+# 顶部信息栏的 A* 统计：上一秒实际寻路调用次数 / 成功分配到预算的次数。
+# 实际调用包含建筑变化后 recalculate() 的直算，所以可能略高于分配次数。
+var _astar_calls_window: int = 0
+var _astar_alloc_window: int = 0
+var _astar_calls_last_second: int = 0
+var _astar_alloc_last_second: int = 0
+var _astar_stats_window_ms: int = 0
 # ==================== 墙体/梯子网格缓存（O(1) 查询，随实体缓存重建） ====================
 var _wall_cache_version: int = 0          # 墙体/建筑布局实际变化时递增，MovementController 据此判断墙集合是否失效
 var _wall_layout_signature: int = 0       # 建筑/资源布局签名，避免实体缓存每 0.5s 刷新都让寻路墙缓存失效
@@ -213,7 +220,26 @@ func reserve_astar_request(is_retry: bool = false) -> bool:
 	if _astar_budget_count >= max_count or _astar_budget_usec >= max_usec:
 		return false
 	_astar_budget_count += 1
+	_astar_alloc_window += 1
 	return true
+
+# 每次真正进入 A* 计算时调用（包括不走预算的 recalculate 直算）。
+func note_astar_path_call() -> void:
+	_astar_calls_window += 1
+
+# 每帧滚动统计窗口；顶部信息栏读取 *_last_second 两个值。
+func _tick_astar_stats() -> void:
+	var now_ms: int = Time.get_ticks_msec()
+	if _astar_stats_window_ms == 0:
+		_astar_stats_window_ms = now_ms
+		return
+	if now_ms - _astar_stats_window_ms < 1000:
+		return
+	_astar_calls_last_second = _astar_calls_window
+	_astar_alloc_last_second = _astar_alloc_window
+	_astar_calls_window = 0
+	_astar_alloc_window = 0
+	_astar_stats_window_ms = now_ms
 
 func report_astar_cost(usec: int) -> void:
 	if usec > 0:
@@ -3517,6 +3543,7 @@ func _loot_text(loot: Dictionary) -> String:
 # ==================== 每帧更新 ====================
 var _limit_update_timer: float = 0.0
 func _process(delta):
+	_tick_astar_stats()
 	# 手机端居中建造：地图被单指平移后，预览始终落在新的屏幕中心
 	if build_mode and mobile_centered_build and build_preview:
 		_mobile_preview_timer -= delta
@@ -3556,14 +3583,15 @@ func _process(delta):
 		var phys_ok = (phys_frames != _diag_physics_heartbeat)
 		if not phys_ok and _diag_physics_heartbeat > 0:
 			_fps_label.add_theme_color_override("font_color", Color.RED)
-			_fps_label.text = "🔴 物理卡死 FPS:%.0f | 实体:%d" % [
+			_fps_label.text = "🔴 主循环卡死 FPS:%.0f | 实体:%d" % [
 				Engine.get_frames_per_second(), _all_entities.size()
 			]
 		else:
 			_fps_label.add_theme_color_override("font_color", Color.LIME_GREEN)
-			_fps_label.text = "FPS:%.0f | 画质:%d | 实体:%d(A%d B%d) | 物理:%d" % [
+			_fps_label.text = "FPS:%.0f | 画质:%d | 实体:%d(A%d B%d) | A*:%d/%d" % [
 				Engine.get_frames_per_second(), _perf_quality_level,
-				_all_entities.size(), _armies.size(), _buildings.size(), phys_frames
+				_all_entities.size(), _armies.size(), _buildings.size(),
+				_astar_calls_last_second, _astar_alloc_last_second
 			]
 		if _snap_rate_label:
 			var diff_names = ["简单", "普通", "困难", "地狱"]
