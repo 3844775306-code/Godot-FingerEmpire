@@ -88,7 +88,7 @@ func _build() -> void:
 	panel.add_child(title)
 
 	var hint = Label.new()
-	hint.text = "特殊地形支持 1V1 / 2V2 / 3V3；地形会改变视野、移速与资源分布"
+	hint.text = "特殊地形适用于所有模式；地形会改变视野、移速与资源分布"
 	if not mobile:
 		hint.text += " · 滚轮滚动查看全部"
 	hint.position = Vector2(0, UILayout.dp(27.0) if mobile else 66)

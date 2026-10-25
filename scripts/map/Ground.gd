@@ -178,10 +178,6 @@ func _generate_terrain():
 	if stages.is_empty():
 		_generate_classic(size)
 		return
-	if not _special_map_supported():
-		push_warning("[地图] 特殊地形只支持 1V1/2V2/3V3，乱斗模式回退经典大陆")
-		_generate_classic(size)
-		return
 	_generate_with_stages(size, stages)
 
 # 经典生成：与历史版本逐字节一致，作为默认图与回归基线
@@ -1965,10 +1961,6 @@ func _force_flat_spot(gx: int, gy: int, safe_size: int) -> Vector3:
 				height_grid[nx][ny] = 0.0
 	return grid_to_world(gx, gy)
 
-# 特殊地图适用范围：单机/联机的 1V1 与 2V2/3V3；乱斗是环绕布局，锚点体系不适用
-func _special_map_supported() -> bool:
-	return not GameSettings.is_ffa
-
 # 当前对局每队人数：1=1V1，2=2V2，3=3V3（联机看 selected_mode，单机看 ai_mode）
 func _team_size_for_layout() -> int:
 	if NetworkManager.mode != NetworkManager.Mode.NONE:
@@ -1981,8 +1973,10 @@ func _team_size_for_layout() -> int:
 				return 1
 	return clampi(GameSettings.ai_mode, 1, 3)
 
+# 特殊地图的预设锚点布局只适用于 1V1/2V2/3V3；乱斗固定用环绕布局，
+# 避免两套城堡坐标体系互相覆盖。
 func _use_preset_layout() -> bool:
-	return _special_map_supported() and not map_preset.get("castle_layout", {}).is_empty()
+	return not GameSettings.is_ffa and not map_preset.get("castle_layout", {}).is_empty()
 
 # 按归一化锚点放置城堡：先压平地形与高度，再转世界坐标
 func _place_castles_from_anchors(layout: Dictionary) -> void:

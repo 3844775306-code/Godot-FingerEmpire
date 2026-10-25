@@ -5,8 +5,6 @@ const MapSelectDialog = preload("res://scripts/ui/MapSelectDialog.gd")
 
 var nation_select: OptionButton
 var _map_button: Button = null
-var _last_map_id: String = "classic"
-var _map_allowed: bool = true
 
 # 主菜单场景没有战斗内的 TouchGestureRouter：触摸拖动直接驱动 ScrollContainer 滚动
 # （手机点击仍由引擎模拟鼠标完成，这里只管滑动）。
@@ -164,7 +162,7 @@ func _ready():
 	_style_option(mode_select, 16)
 	add_child(mode_select)
 
-	# 战场地形：按钮打开卡片选择器（试点：特殊地图仅 1V1 可选）
+	# 战场地形：所有模式（含乱斗）都可以选择特殊地图
 	var map_label = Label.new()
 	map_label.text = "战场地形"
 	map_label.position = Vector2(700, 488)
@@ -302,20 +300,11 @@ func _set_cmd_toggle(btn: Button, on: bool) -> void:
 	else:
 		UITheme.apply_muted_button(btn, UITheme.FONT_SM)
 
-## 特殊地形支持 1V1 / 2V2 / 3V3，乱斗（3/4/5 国环绕）禁用并回退经典大陆
-func _update_map_availability(mode_idx: int) -> void:
+## 地图选择对所有模式开放；乱斗同样可以选特殊地形，只是城堡布局仍按环形展开
+func _update_map_availability(_mode_idx: int) -> void:
 	if not _map_button:
 		return
-	var allow := mode_idx <= 2
-	if not allow and _map_allowed:
-		# 只有从"可选"切到"不可选"时才记下选择，避免每次切模式都把选图清掉
-		if GameSettings.map_id != "classic":
-			_last_map_id = GameSettings.map_id
-		GameSettings.map_id = "classic"
-	elif allow and not _map_allowed:
-		GameSettings.map_id = _last_map_id
-	_map_allowed = allow
-	_map_button.disabled = not allow
+	_map_button.disabled = false
 	_refresh_map_button()
 
 func _refresh_map_button() -> void:
@@ -326,8 +315,6 @@ func _refresh_map_button() -> void:
 	if String(info["battle"]) != "":
 		suffix = " · " + String(info["battle"])
 	_map_button.text = "  %s%s ▸" % [String(info["name"]), suffix]
-	if _map_button.disabled:
-		_map_button.text += "（乱斗不支持）"
 
 # ---------- 战场地形卡片选择器 ----------
 func _open_map_dialog() -> void:
@@ -373,9 +360,7 @@ func _on_play_pressed():
 	else:
 		GameSettings.ffa_nation_count = 3
 		GameSettings.ai_mode = mode_idx + 1
-	# 战场地形：仅 1V1 生效，其余模式回经典大陆
-	if _map_button and _map_button.disabled:
-		GameSettings.map_id = "classic"
+	# 战场地形对所有模式生效（包括乱斗）
 	var fc = _find_ui("FastCheck")
 	GameSettings.fast_mode = fc.button_pressed if fc else false
 	get_tree().change_scene_to_file("res://scenes/rts_battle.tscn")
