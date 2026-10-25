@@ -51,9 +51,8 @@ const ALERT_WARNING = UITheme.ALERT_WARNING
 const ALERT_INFO = UITheme.ALERT_INFO
 const ALERT_GROUP = UITheme.ALERT_GROUP
 
-var _alert_label: Label = null
-var _alert_bg: Panel = null
-var _alert_timer: float = 0.0
+var _alert_stack: VBoxContainer = null
+var _alert_rows: Array = []      # [{ "rtl": RichTextLabel, "holder": PanelContainer, "life": float }]
 # 同一条服务器警报可能同时走可靠 RPC 和快照兜底，按 alert_id 去重，避免重复播报。
 var _seen_server_alert_ids: Dictionary = {}
 
@@ -600,67 +599,84 @@ func _on_retreat_all_pressed():
 	})
 
 
+# 战况栏：同时最多 3 条，新的在最下面最亮，旧的逐级变淡（与单机 HUD 一致）
+const ALERT_MAX_ROWS: int = 3
+const ALERT_LIFE: float = 3.4
+
 func show_alert_message(msg: String, color: Color = ALERT_DANGER, team: int = -1):
 	var mobile := InputSource.use_mobile_ui()
-	# 联机端拿不到完整的「队伍→国家」配置，这里只做兼容处理：能解析出国家就在前面加【国家名】。
-	# 三行堆叠与按国家着色（自己绿/友方蓝/敌方红）只在单机 HUD 实现。
-	var shown: String = msg
-	if team >= 0:
-		var nation_name := _alert_nation_of_team(team)
-		if not nation_name.is_empty():
-			shown = "【%s】%s" % [nation_name, msg]
-	if not _alert_label:
-		# 皇庭横幅背景：暖黑底 + 警报色细边 + 顶部警报色强调条
-		_alert_bg = Panel.new()
-		# 文字标签
-		_alert_label = Label.new()
-		_alert_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		_alert_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		_alert_label.add_theme_color_override("font_outline_color", Color.BLACK)
-		_alert_label.add_theme_constant_override("outline_size", 3)
+	if _alert_stack == null:
+		_alert_stack = VBoxContainer.new()
+		_alert_stack.name = "AlertStack"
+		_alert_stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_alert_stack.add_theme_constant_override("separation", 2 if mobile else 4)
 		if mobile:
-			# 手机端按 dp 放大并居中，且可点击跳转；
-			# 位置固定在资源胶囊（左上，收起 42dp / 展开 72dp）下方，避免挡住资源数值
-			var w: float = UILayout.dp(320.0)
-			var h: float = UILayout.dp(40.0)
-			var top_y: float = UILayout.dp(118.0)
-			_alert_bg.anchor_left = 0.5; _alert_bg.anchor_right = 0.5
-			_alert_bg.anchor_top = 0.0; _alert_bg.anchor_bottom = 0.0
-			_alert_bg.offset_left = -w; _alert_bg.offset_right = w
-			_alert_bg.offset_top = top_y; _alert_bg.offset_bottom = top_y + h
-			_alert_bg.mouse_filter = Control.MOUSE_FILTER_STOP
-			_alert_bg.gui_input.connect(_on_alert_gui_input)
-			_alert_label.anchor_left = 0.5; _alert_label.anchor_right = 0.5
-			_alert_label.anchor_top = 0.0; _alert_label.anchor_bottom = 0.0
-			_alert_label.offset_left = -w; _alert_label.offset_right = w
-			_alert_label.offset_top = top_y; _alert_label.offset_bottom = top_y + h
-			_alert_label.add_theme_font_size_override("font_size", UILayout.font_dp(14.0))
-			_alert_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			var w: float = UILayout.dp(310.0)
+			var top_y: float = UILayout.dp(114.0)
+			_alert_stack.anchor_left = 0.5; _alert_stack.anchor_right = 0.5
+			_alert_stack.anchor_top = 0.0; _alert_stack.anchor_bottom = 0.0
+			_alert_stack.offset_left = -w * 0.5; _alert_stack.offset_right = w * 0.5
+			_alert_stack.offset_top = top_y; _alert_stack.offset_bottom = top_y
 		else:
-			_alert_bg.position = Vector2(755, 196)
-			_alert_bg.size = Vector2(810, 46)
-			_alert_label.add_theme_font_size_override("font_size", UITheme.FONT_XXL)
-			_alert_label.position = Vector2(760, 202)
-			_alert_label.size = Vector2(800, 40)
-		add_child(_alert_bg)
-		add_child(_alert_label)
-	_alert_label.text = shown
-	_alert_label.add_theme_color_override("font_color", color)
-	# 横幅边框色跟随警报类型（危险红 / 警告黄 / 信息绿 / 编队蓝）
-	# 横幅底色压到半透明：原来 0.88 几乎是一块实心黑条，报警时正好挡住最需要看的战场。
-	# 文字带黑色描边，降到 0.55 依然清晰。
-	var ab := StyleBoxFlat.new()
-	ab.bg_color = Color(UITheme.INK, 0.55)
-	ab.set_corner_radius_all(UITheme.RADIUS_MD)
-	ab.set_border_width_all(UITheme.BORDER_THIN)
-	ab.border_color = Color(color, 0.5)
-	ab.border_width_top = UITheme.BORDER_THICK
-	_alert_bg.add_theme_stylebox_override("panel", ab)
-	_alert_label.visible = true
-	_alert_bg.visible = true
-	_alert_timer = 3.0
+			_alert_stack.position = Vector2(752, 194)
+			_alert_stack.custom_minimum_size = Vector2(820, 0)
+			_alert_stack.size = Vector2(820, 0)
+		add_child(_alert_stack)
 
-# 点警报条：跳到警报位置
+	# 每行一个半透明背景块：纯文字压在战场上读不清，但也不能变回实心黑条挡住战场
+	var holder := PanelContainer.new()
+	holder.mouse_filter = Control.MOUSE_FILTER_STOP
+	holder.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(UITheme.INK, 0.62)
+	sb.set_corner_radius_all(UITheme.RADIUS_MD)
+	sb.border_width_left = 3
+	sb.border_color = color
+	var pad_x: int = int(UILayout.dp(9.0)) if mobile else 10
+	sb.content_margin_left = float(pad_x)
+	sb.content_margin_right = float(pad_x)
+	sb.content_margin_top = 2.0
+	sb.content_margin_bottom = 2.0
+	holder.add_theme_stylebox_override("panel", sb)
+	holder.gui_input.connect(_on_alert_gui_input)
+
+	# 国家名和正文要两种颜色，普通 Label 做不到
+	var row := RichTextLabel.new()
+	row.bbcode_enabled = true
+	row.fit_content = true
+	row.scroll_active = false
+	row.autowrap_mode = TextServer.AUTOWRAP_OFF
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	row.add_theme_color_override("font_outline_color", Color.BLACK)
+	row.add_theme_constant_override("outline_size", 3)
+	row.text = _alert_bbcode(msg, color, team)
+	holder.add_child(row)
+	_alert_stack.add_child(holder)
+	_alert_rows.append({"rtl": row, "holder": holder, "life": ALERT_LIFE})
+	while _alert_rows.size() > ALERT_MAX_ROWS:
+		var old: Dictionary = _alert_rows.pop_front()
+		var old_holder = old.get("holder")
+		if is_instance_valid(old_holder):
+			old_holder.queue_free()
+	_refresh_alert_weights()
+
+# 消息前加「【国家】」前缀：自己绿、同阵营友方蓝、其余红
+func _alert_bbcode(msg: String, color: Color, team: int) -> String:
+	var out := ""
+	var nation_name := _alert_nation_of_team(team)
+	if not nation_name.is_empty():
+		out += "[color=#%s]【%s】[/color]" % [_alert_team_color(team).to_html(false), nation_name]
+	out += "[color=#%s]%s[/color]" % [color.to_html(false), msg.replace("[", "[lb]")]
+	return out
+
+func _alert_my_team() -> int:
+	var r = get_tree().get_first_node_in_group("client_renderer")
+	if r == null or not is_instance_valid(r):
+		return -1
+	if int(r.my_team) != -1:
+		return int(r.my_team)
+	return int(r.player_team)
+
 # 队伍 → 国家名。联机端只有 ClientRenderer 知道各国的分配，
 # 拿不到映射时返回空串，调用方退化成不带前缀的纯消息。
 func _alert_nation_of_team(team: int) -> String:
@@ -672,12 +688,47 @@ func _alert_nation_of_team(team: int) -> String:
 		return ""
 	return String(ClientRenderer.NATION_LABELS[n])
 
+# 自己 → 绿；同阵营友方 → 蓝；敌方与中立 → 红
+func _alert_team_color(team: int) -> Color:
+	if team < 0:
+		return Color(1.0, 1.0, 1.0, 0.0)
+	var me: int = _alert_my_team()
+	var enemy: int = -1
+	if me != -1:
+		enemy = RTSConfig.Team.RED if me == RTSConfig.Team.BLUE else RTSConfig.Team.BLUE
+	if team == me:
+		return Color(0.35, 1.0, 0.45)
+	if enemy != -1 and team != enemy:
+		return Color(0.45, 0.72, 1.0)
+	return Color(1.0, 0.38, 0.32)
+
+func _refresh_alert_weights() -> void:
+	var n: int = _alert_rows.size()
+	var mobile := InputSource.use_mobile_ui()
+	var base_size: int = UILayout.font_dp(12.5) if mobile else UITheme.FONT_LG
+	var alphas: Array = [1.0, 0.70, 0.46]
+	for i in range(n):
+		var row: Dictionary = _alert_rows[i]
+		var rtl = row.get("rtl")
+		var holder = row.get("holder")
+		if not is_instance_valid(rtl) or not is_instance_valid(holder):
+			continue
+		var age: int = n - 1 - i
+		holder.modulate = Color(1.0, 1.0, 1.0, float(alphas[mini(age, alphas.size() - 1)]))
+		rtl.add_theme_font_size_override("normal_font_size", maxi(base_size - age, base_size - 2))
+
+func _clear_alert_rows() -> void:
+	for row in _alert_rows:
+		var holder = row.get("holder")
+		if is_instance_valid(holder):
+			holder.queue_free()
+	_alert_rows.clear()
+
+# 点任意一条战况：跳到警报位置并清空整个战况栏
 func _on_alert_gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		_on_jump_to_alert()
-		_alert_timer = 0.0
-		if _alert_label: _alert_label.visible = false
-		if _alert_bg: _alert_bg.visible = false
+		_clear_alert_rows()
 		accept_event()
 
 func _ready():
@@ -776,12 +827,12 @@ func _ready():
 			NetworkManager.client_alert_received.connect(_on_server_alert)
 
 # 收到服务器警报：直接走本地播报条
-func _on_server_alert(msg: String, color: Color, alert_id: int = 0) -> void:
-	show_server_alert(msg, color, alert_id)
+func _on_server_alert(msg: String, color: Color, alert_id: int = 0, source_team: int = -1) -> void:
+	show_server_alert(msg, color, alert_id, source_team)
 
 # 服务器警报统一入口：RPC 与快照兜底都会调用，按 id 去重；
 # 危险/警告级警报补一次客户端本地音效（服务器端 AudioManager 不会在客户端播放）。
-func show_server_alert(msg: String, color: Color, alert_id: int = 0) -> void:
+func show_server_alert(msg: String, color: Color, alert_id: int = 0, source_team: int = -1) -> void:
 	if alert_id > 0:
 		if _seen_server_alert_ids.has(alert_id):
 			return
@@ -790,7 +841,7 @@ func show_server_alert(msg: String, color: Color, alert_id: int = 0) -> void:
 		_seen_server_alert_ids[alert_id] = true
 	if color == ALERT_DANGER or color == ALERT_WARNING:
 		AudioManager.play_sfx("alert")
-	show_alert_message(msg, color)
+	show_alert_message(msg, color, source_team)
 
 func _make_cmd_button(text: String, cb: Callable, danger: bool) -> Button:
 	var b := Button.new()
@@ -941,9 +992,15 @@ func _process(delta):
 		_snap_recv_count = 0
 	# Ping every 1s
 	NetworkManager.ping_server.rpc_id(1, Time.get_ticks_msec())
-	if _alert_label and _alert_timer > 0:
-		_alert_timer -= delta
-		if _alert_timer <= 0:
-			_alert_label.visible = false
-			if _alert_bg:
-				_alert_bg.visible = false
+	# 战况栏计时：每行各自倒计时，到期的自己消失，剩下的重新分配明暗
+	if not _alert_rows.is_empty():
+		for i in range(_alert_rows.size() - 1, -1, -1):
+			var row: Dictionary = _alert_rows[i]
+			row["life"] = float(row.get("life", 0.0)) - delta
+			if float(row["life"]) > 0.0:
+				continue
+			var holder = row.get("holder")
+			if is_instance_valid(holder):
+				holder.queue_free()
+			_alert_rows.remove_at(i)
+		_refresh_alert_weights()

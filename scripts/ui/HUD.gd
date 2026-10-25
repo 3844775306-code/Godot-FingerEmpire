@@ -822,25 +822,44 @@ func show_alert_message(msg: String, color: Color = ALERT_DANGER, team: int = -1
 			_alert_stack.size = Vector2(820, 0)
 		add_child(_alert_stack)
 
-	# 每行用 RichTextLabel：一条消息里国家名和正文要显示成两种颜色，普通 Label 做不到
+	# 每行一个半透明背景块 + 内部 RichTextLabel。
+	# 纯文字直接压在战场上很难读（草地和雪地尤其糟），背景压到 0.62 既保证可读
+	# 又不至于变回一条实心黑条把战场挡住；左侧 3px 竖条沿用警报色标明类型。
+	var holder := PanelContainer.new()
+	holder.mouse_filter = Control.MOUSE_FILTER_STOP
+	holder.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = Color(UITheme.INK, 0.62)
+	sb.set_corner_radius_all(UITheme.RADIUS_MD)
+	sb.border_width_left = 3
+	sb.border_color = color
+	var pad_x: int = int(UILayout.dp(9.0)) if mobile else 10
+	sb.content_margin_left = float(pad_x)
+	sb.content_margin_right = float(pad_x)
+	sb.content_margin_top = 2.0
+	sb.content_margin_bottom = 2.0
+	holder.add_theme_stylebox_override("panel", sb)
+	holder.gui_input.connect(_on_alert_gui_input)
+
+	# 一行里国家名和正文要显示成两种颜色，普通 Label 做不到
 	var row := RichTextLabel.new()
 	row.bbcode_enabled = true
 	row.fit_content = true
 	row.scroll_active = false
 	row.autowrap_mode = TextServer.AUTOWRAP_OFF
-	row.mouse_filter = Control.MOUSE_FILTER_STOP
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_theme_color_override("font_outline_color", Color.BLACK)
 	row.add_theme_constant_override("outline_size", 3)
 	row.text = _alert_bbcode(msg, color, team)
-	row.gui_input.connect(_on_alert_gui_input)
-	_alert_stack.add_child(row)
-	_alert_rows.append({"rtl": row, "life": ALERT_LIFE})
+	holder.add_child(row)
+	_alert_stack.add_child(holder)
+	_alert_rows.append({"rtl": row, "holder": holder, "life": ALERT_LIFE})
 	# 只保留最近几条：战况栏本身是临时提示，堆多了会盖住战场
 	while _alert_rows.size() > ALERT_MAX_ROWS:
 		var old: Dictionary = _alert_rows.pop_front()
-		var old_rtl = old.get("rtl")
-		if is_instance_valid(old_rtl):
-			old_rtl.queue_free()
+		var old_holder = old.get("holder")
+		if is_instance_valid(old_holder):
+			old_holder.queue_free()
 	_refresh_alert_weights()
 	set_process(true)
 
@@ -884,7 +903,8 @@ func _alert_team_color(team: int) -> Color:
 		return Color(0.45, 0.72, 1.0)
 	return Color(1.0, 0.38, 0.32)
 
-# 最新的那条最亮、字号最大；往上逐级变淡缩小，扫一眼就知道哪条刚发生
+# 最新的那条最亮、字号最大；往上逐级变淡缩小，扫一眼就知道哪条刚发生。
+# 透明度调在整行背景块上，文字和底色一起淡出，不会出现字淡了底还实的情况。
 func _refresh_alert_weights() -> void:
 	var n: int = _alert_rows.size()
 	var mobile := InputSource.use_mobile_ui()
@@ -893,17 +913,18 @@ func _refresh_alert_weights() -> void:
 	for i in range(n):
 		var row: Dictionary = _alert_rows[i]
 		var rtl = row.get("rtl")
-		if not is_instance_valid(rtl):
+		var holder = row.get("holder")
+		if not is_instance_valid(rtl) or not is_instance_valid(holder):
 			continue
 		var age: int = n - 1 - i
-		rtl.modulate = Color(1.0, 1.0, 1.0, float(alphas[mini(age, alphas.size() - 1)]))
+		holder.modulate = Color(1.0, 1.0, 1.0, float(alphas[mini(age, alphas.size() - 1)]))
 		rtl.add_theme_font_size_override("normal_font_size", maxi(base_size - age, base_size - 2))
 
 func _clear_alert_rows() -> void:
 	for row in _alert_rows:
-		var rtl = row.get("rtl")
-		if is_instance_valid(rtl):
-			rtl.queue_free()
+		var holder = row.get("holder")
+		if is_instance_valid(holder):
+			holder.queue_free()
 	_alert_rows.clear()
 
 # 点任意一条战况：跳到警报位置并清空整个战况栏
@@ -977,8 +998,9 @@ func _process(delta):
 			if float(row["life"]) > 0.0:
 				continue
 			var rtl = row.get("rtl")
-			if is_instance_valid(rtl):
-				rtl.queue_free()
+			var holder = row.get("holder")
+			if is_instance_valid(holder):
+				holder.queue_free()
 			_alert_rows.remove_at(i)
 		_refresh_alert_weights()
 

@@ -889,11 +889,13 @@ func _on_2v2_castle_died(team: int, owner: int = -1):
 	game_over = true
 	AudioManager.play_music("defeat" if team == get_host_team() else "victory")
 	if team == get_host_team():
-		_show_hud_alert("我方基地正遭受攻击！", Color(1.0, 0.2, 0.1))
+		# 来源是发起进攻的敌方，只推给我方
+		_show_hud_alert("我方基地正遭受攻击！", Color(1.0, 0.2, 0.1), get_enemy_team(), get_host_team())
 		game_over_label.text = "你输了！"
 		game_over_label.add_theme_color_override("font_color", Color.RED)
 	else:
-		_show_hud_alert("敌军基地已被摧毁！", Color(0.2, 1.0, 0.3))
+		# 来源是我方（这是自己打下的战果）
+		_show_hud_alert("敌军基地已被摧毁！", Color(0.2, 1.0, 0.3), get_host_team(), get_host_team())
 		game_over_label.text = "你赢了！"
 		game_over_label.add_theme_color_override("font_color", Color.GREEN)
 	_show_battle_stats()
@@ -905,11 +907,13 @@ func _on_castle_died(team: int):
 	AudioManager.play_music("defeat" if team == get_host_team() else "victory")
 
 	if team == get_host_team():
-		_show_hud_alert("我方基地正遭受攻击！", Color(1.0, 0.2, 0.1))
+		# 来源是发起进攻的敌方，只推给我方
+		_show_hud_alert("我方基地正遭受攻击！", Color(1.0, 0.2, 0.1), get_enemy_team(), get_host_team())
 		game_over_label.text = "你输了！"
 		game_over_label.add_theme_color_override("font_color", Color.RED)
 	else:
-		_show_hud_alert("敌军基地已被摧毁！", Color(0.2, 1.0, 0.3))
+		# 来源是我方（这是自己打下的战果）
+		_show_hud_alert("敌军基地已被摧毁！", Color(0.2, 1.0, 0.3), get_host_team(), get_host_team())
 		game_over_label.text = "你赢了！"
 		game_over_label.add_theme_color_override("font_color", Color.GREEN)
 
@@ -2387,7 +2391,7 @@ func _place_building_at(pos: Vector3):
 		res = get_host_resources()
 	for k in cost:
 		if res[k] < cost[k]:
-			_show_hud_alert({"gold":"黄金","wood":"木材","stone":"石头","food":"食物","oil":"石油"}.get(k, k) + "不足！", Color(1.0, 0.8, 0.1))
+			_show_hud_alert({"gold":"黄金","wood":"木材","stone":"石头","food":"食物","oil":"石油"}.get(k, k) + "不足！", Color(1.0, 0.8, 0.1), get_host_team(), get_host_team())
 			return
 	
 	# 人口检查（防御塔）
@@ -2836,7 +2840,7 @@ func _place_building():
 		res = get_host_resources()
 	for k in cost:
 		if res[k] < cost[k]:
-			_show_hud_alert({"gold":"黄金","wood":"木材","stone":"石头","food":"食物","oil":"石油"}.get(k, k) + "不足！", Color(1.0, 0.8, 0.1))
+			_show_hud_alert({"gold":"黄金","wood":"木材","stone":"石头","food":"食物","oil":"石油"}.get(k, k) + "不足！", Color(1.0, 0.8, 0.1), get_host_team(), get_host_team())
 			return
 
 	# 人口（防御塔）
@@ -3120,13 +3124,15 @@ func is_mobile_ui_point(pos: Vector2) -> bool:
 		return bool(mh.call("is_point_over_panel", pos))
 	return false
 
-func _show_hud_alert(msg: String, color: Color = Color(1.0, 0.2, 0.1), _target_team: int = -1):
+# source_team：这条战况的发出方队伍，HUD 据此显示国家名并着色
+# （自己绿 / 同阵营友方蓝 / 敌方红）。无法判定来源时传 -1，只显示消息本体。
+# target_team：联机模式下只推给哪个阵营；-1 表示广播给双方。单机忽略这个参数。
+func _show_hud_alert(msg: String, color: Color = Color(1.0, 0.2, 0.1), source_team: int = -1, target_team: int = -1):
 	if color == Color(1.0, 0.2, 0.1) or color == Color(1.0, 0.8, 0.1): AudioManager.play_sfx("alert")
 	if has_node("UI"):
 		var hud = $UI
 		if hud and hud.has_method("show_alert_message"):
-			# 带上队伍，HUD 才能推出这条战况属于哪个国家并着色
-			hud.show_alert_message(msg, color, _target_team)
+			hud.show_alert_message(msg, color, source_team)
 
 func _is_alert_on_cooldown(key: String, duration: float = 5.0) -> bool:
 	return _alert_cooldowns.has(key) and _alert_cooldowns[key] > 0
@@ -3149,7 +3155,7 @@ func _detect_enemy_near_base():
 
 	if threat_detected and not _is_alert_on_cooldown("enemy_approach"):
 		var loc_str = "(%d,%d)" % [int(player_castle.global_position.x), int(player_castle.global_position.z)]
-		_show_hud_alert("敌军来袭！接近我方基地方向 %s" % loc_str, Color(1.0, 0.8, 0.1))
+		_show_hud_alert("敌军来袭！接近我方基地方向 %s" % loc_str, Color(1.0, 0.8, 0.1), get_enemy_team(), get_host_team())
 		_set_alert_cooldown("enemy_approach", 5.0)
 
 # ==================== 废弃建筑：生成 / 占领 ====================
@@ -3313,7 +3319,7 @@ func _capture_abandoned_site(site: Building, army: Army) -> void:
 	var loot: Dictionary = _abandoned_loot_for(site.entity_id)
 	_grant_capture_loot(army, loot)
 	_show_hud_alert("【废弃建筑】我方占领了%s%s" % [_abandoned_label(site.entity_id), _loot_text(loot)],
-		Color(0.95, 0.85, 0.35), team)
+		Color(0.95, 0.85, 0.35), team, team)
 	print("[废弃建筑] team=%d owner=%d 占领 %s" % [team, owner_id, _abandoned_label(site.entity_id)])
 
 # 战利品按队伍/玩家入账：自建模式走 owner 资源，单机 1v1 走队伍资源

@@ -78,6 +78,13 @@ var last_snapshot_time = 0
 
 var my_nation: int = -1  # for nation-specific unit production
 var my_team: int = -1
+# 队伍 → 国家（RTSConfig.Nation 枚举）。服务器在快照里下发 team_nations，
+# 客户端 HUD 的战况播报要靠它显示「哪个国家发出来的」。
+var team_nations: Dictionary = {}
+
+# 查某队伍对应的国家枚举，查不到返回 -1
+func get_team_nation(team: int) -> int:
+	return int(team_nations.get(team, -1))
 
 var stale_snapshot: bool = false
 
@@ -500,6 +507,8 @@ func _process_snapshot(data: Dictionary):
 			var enemy_nation = data.get("enemy_nation", -1) if player_team == RTSConfig.Team.BLUE else data["nation"]
 			$UI/HUD.set_nations(my_nation, enemy_nation)
 		elif data.has("team_nations") and my_team != -1:
+			# 存档一份：HUD 的播报需要按队伍查国家名（自己是哪国、敌方是哪国）
+			team_nations = data["team_nations"].duplicate()
 			my_nation = data["team_nations"].get(my_team, -1)
 			var my_team_nation = my_nation
 			var enemy_team = RTSConfig.Team.RED if my_team == RTSConfig.Team.BLUE else RTSConfig.Team.BLUE
@@ -515,9 +524,9 @@ func _process_snapshot(data: Dictionary):
 			for alert in alerts:
 				if not (alert is Dictionary): continue
 				if hud and hud.has_method("show_server_alert"):
-					hud.show_server_alert(alert["msg"], alert.get("color", Color(1.0, 0.2, 0.1)), int(alert.get("id", 0)))
+					hud.show_server_alert(alert["msg"], alert.get("color", Color(1.0, 0.2, 0.1)), int(alert.get("id", 0)), int(alert.get("source_team", -1)))
 				elif hud and hud.has_method("show_alert_message"):
-					hud.show_alert_message(alert["msg"], alert.get("color", Color(1.0, 0.2, 0.1)))
+					hud.show_alert_message(alert["msg"], alert.get("color", Color(1.0, 0.2, 0.1)), int(alert.get("source_team", -1)))
 
 	if data.has("bullets"):
 		var server_ids = {}
