@@ -26,11 +26,17 @@ const ROW_STOP_SPEED: float = 0.35  # 减速到这个倍率以下桨就慢慢停
 # ==================== 帆 ====================
 const SAIL_MAX_YAW_DEG: float = 38.0  # 帆相对船体的最大转角，过大就不像固定在桅杆上
 const SAIL_LERP: float = 2.4          # 帆转到目标角度的速度
+const SAIL_FLUTTER_DEG: float = 7.0   # 视风很弱时帆的飘摆幅度
+# 风的绝对速度（m/s）。船自身速度大约 1.2~2.5，取 3.0 让「视风」有明显变化：
+# 顺风全速时相对气流只剩约 1 m/s，帆会明显松下来。
+const WIND_SPEED: float = 3.0
+const APPARENT_MIN_SPEED: float = 0.25  # 低于这个视风速度就当没风，帆不转向
 
 var _paddles: Node3D = null
 var _paddles_base_pos: Vector3 = Vector3.ZERO
 var _sails: Array = []       # [{ "node": Node3D, "base": float, "cur": float }]
 var _last_pos: Vector3 = Vector3.ZERO
+var _ship_vel: Vector3 = Vector3.ZERO
 var _row_phase: float = 0.0
 var _move_factor: float = 0.0
 var _has_host: bool = false
@@ -67,8 +73,10 @@ func _process(delta: float) -> void:
 
 	# 用位移判断是否在行驶：不依赖服务端的 velocity，客户端也算得出来
 	var pos := host.global_position
-	var speed_sq := pos.distance_squared_to(_last_pos) / maxf(delta * delta, 0.000001)
+	var step_vec: Vector3 = pos - _last_pos
 	_last_pos = pos
+	_ship_vel = step_vec / maxf(delta, 0.000001)
+	var speed_sq := step_vec.length_squared() / maxf(delta * delta, 0.000001)
 	var target_factor: float = clampf(speed_sq / 0.25, 0.0, 1.0)
 	_move_factor = lerpf(_move_factor, target_factor, clampf(delta * 4.0, 0.0, 1.0))
 
@@ -86,14 +94,24 @@ func _update_paddles(delta: float) -> void:
 	_paddles.rotation.x = cos(_row_phase) * ROW_PITCH * _move_factor
 	_paddles.position.y = _paddles_base_pos.y + sin(_row_phase * 2.0) * ROW_BOB * _move_factor
 
-# 帆面转到「尽量垂直风向」的位置，并根据风力大小给一点额外摆动
+# 帆看的是「视风」——风相对船的速度，不是风的绝对速度。
+# 顺风行驶时船跟着风跑，帆上感受到的气流变弱，帆会松开飘一下；
+# 逆风或横风时相对气流变大，帆绷紧并对准视风方向。
 func _update_sails(host: Node3D, delta: float) -> void:
+	var wind_vec: Vector3 = Vector3(sin(wind_angle), 0.0, cos(wind_angle)) * WIND_SPEED * wind_strength
+	# 视风 = 风的速度 - 船自身速度（船冲起来等于迎面多了一股气流）
+	var apparent: Vector3 = wind_vec - _ship_vel
+	var apparent_speed: float = apparent.length()
 	var ship_yaw: float = host.global_rotation.y
-	var rel: float = wrapf(wind_angle - ship_yaw, -PI, PI)
-	# 帆默认朝船头，转到垂直风需要再偏 90°
-	var want_deg: float = clampf(rad_to_deg(wrapf(rel + PI * 0.5, -PI, PI)), -SAIL_MAX_YAW_DEG, SAIL_MAX_YAW_DEG)
-	# 风力越大帆越"顶住"，风小的时候帆会自己飘一下
-	var gust: float = sin(_wind_time * 1.9) * (1.0 - wind_strength) * 6.0
+	var want_deg: float = 0.0
+	if apparent_speed > APPARENT_MIN_SPEED:
+		var apparent_angle: float = atan2(apparent.x, apparent.z)
+		var rel: float = wrapf(apparent_angle - ship_yaw, -PI, PI)
+		# 帆默认朝船头，转到垂直视风需要再偏 90°
+		want_deg = clampf(rad_to_deg(wrapf(rel + PI * 0.5, -PI, PI)), -SAIL_MAX_YAW_DEG, SAIL_MAX_YAW_DEG)
+	# 视风越弱帆越飘：完全无风时帆只是随船身轻微晃动
+	var slack: float = clampf(1.0 - apparent_speed / (WIND_SPEED * 0.9), 0.0, 1.0)
+	var gust: float = sin(_wind_time * 1.9) * slack * SAIL_FLUTTER_DEG
 	var want: float = deg_to_rad(want_deg + gust)
 	var step: float = clampf(SAIL_LERP * delta, 0.0, 1.0)
 	for entry in _sails:
