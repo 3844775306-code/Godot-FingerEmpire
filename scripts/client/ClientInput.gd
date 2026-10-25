@@ -736,8 +736,8 @@ func _get_ground_position(screen_pos: Vector2) -> Vector3:
 	return result.position if result else Vector3.ZERO
 
 func _process(_delta):
-	# 每帧更新选择环位置（跟随目标）
-	if selection_rings.size() > 0:
+	# 每帧更新选择环位置（跟随目标）；范围圈挂在实体节点下自己跟随，这里只做失效清理
+	if selection_rings.size() > 0 or range_rings.size() > 0:
 		_process_selection_rings()
 	# 手机端居中建造：地图平移后，预览重新落到屏幕中心
 	if renderer and renderer.placement_mode and renderer.mobile_centered_placement:
@@ -778,11 +778,27 @@ func _jump_camera_to_group(g: int):
 
 # ---------- 选择环 ----------
 var selection_rings: Dictionary = {}
+
+# 联机范围圈：选中「单个己方单位」时，在脚下贴地画出视野（细线）与作用范围（粗线）。
+# 视觉类在 scripts/effects/GroundRangeRing.gd：网格按局部空间建、每 0.12 秒重采样地形，
+# 直接 add_child 到实体节点下就会跟着单位走，不需要每帧同步位置。
+var range_rings: Dictionary = {}   # 实体 id -> Array[GroundRangeRing]
+
+# 快照里没有「光环半径」字段，只能查 EntityDatabase 配置 + 少量与服务端一致的硬编码
+const CLIENT_AURA_RADII := {
+	46: 15.0,   # 县吏：进驻仓库后给附近农民加成，Army.gd 里写死 15 米
+}
+const CLIENT_AURA_TINT := Color(0.62, 1.0, 0.72, 0.32)
+# 近战 0.5 米的作用范围画出来是一团噪点，低于这个值不画
+const CLIENT_MIN_ACTION_RING := 1.5
+
 func _update_selection_visuals():
 	for rid in selection_rings.keys():
 		if is_instance_valid(selection_rings[rid]):
 			selection_rings[rid].queue_free()
 	selection_rings.clear()
+	# 范围圈跟着选择一起清：取消选中/改选另一个单位时不能留下上一圈的残留
+	_clear_range_rings()
 	for id in client_selected_ids:
 		_create_ring_for_entity(id)
 
@@ -850,6 +866,8 @@ func _create_ring_for_entity(id):
 	ring.material_override.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	node.add_child(ring)
 	selection_rings[id] = ring
+	# 紧挨着选择环再加贴地的视野/作用范围圈（只在单选且是自己单位时才会真正创建）
+	_create_range_rings_for_entity(int(id))
 
 func _process_selection_rings():
 	# 每帧更新选择环的位置（跟随目标移动）
@@ -869,6 +887,102 @@ func _process_selection_rings():
 			to_remove.append(id)
 	for id in to_remove:
 		selection_rings.erase(id)
+	# 范围圈：节点挂在实体下会自己跟随，这里只清理失效项，并把视野半径的变化跟上去
+	for id in range_rings.keys().duplicate():
+		var owner_node = renderer.entity_nodes.get(id) if renderer else null
+		if not is_instance_valid(owner_node) or not owner_node.has_meta("snapshot_info"):
+			_free_range_rings(int(id))
+			continue
+		var info: Dictionary = owner_node.get_meta("snapshot_info")
+		var vision: float = float(info.get("vision_range", 0.0))
+		for ring in range_rings[id]:
+			if not is_instance_valid(ring):
+				continue
+			# 单位升级/科技会改视野，快照里数值一变就把细圈半径跟上去（不重建节点）
+			if int(ring.get_meta("_ring_kind", -1)) == GroundRangeRing.Kind.VISION and vision > 0.5:
+				ring.set_radius(vision)
+
+# ==================== 联机范围圈 ====================
+# 只在「单选 + 自己的单位」时画：队友和敌人的范围属于看不到的信息，多选时几十个单位
+# 各画两圈会糊满整张地图。数值来源只有快照 info + EntityDatabase 配置。
+func _create_range_rings_for_entity(id: int) -> void:
+	if client_selected_ids.size() != 1:
+		return
+	if renderer == null:
+		return
+	var node = renderer.entity_nodes.get(id)
+	if not is_instance_valid(node) or not node.has_meta("snapshot_info"):
+		return
+	var info: Dictionary = node.get_meta("snapshot_info")
+	# 只画自己队伍的单位：联机里 2v2/3v3 队友的单位也不能指挥，范围同样不展示
+	var is_own: bool = false
+	if renderer.has_method("_is_own_entity"):
+		is_own = bool(renderer._is_own_entity(info))
+	else:
+		is_own = _is_own_id(id)
+	if not is_own:
+		return
+	var specs: Array = _get_range_ring_specs(info)
+	if specs.is_empty():
+		return
+	var height_fn: Callable
+	if renderer.has_method("get_ground_height_fn"):
+		height_fn = renderer.get_ground_height_fn()
+	else:
+		height_fn = GroundStripMesh.height_fn_for(renderer)
+	var rings: Array = []
+	for s in specs:
+		var kind: int = int(s.get("kind", 0))
+		var radius: float = float(s.get("radius", 0.0))
+		var tint: Color = s.get("tint", Color(0, 0, 0, 0))
+		var ring: GroundRangeRing = GroundRangeRing.create(kind, radius, height_fn, tint)
+		# 顶点 y 由 GroundRangeRing 自己换算成「相对节点」的局部高度，
+		# 直接挂在站在地面上的实体节点下即可，不需要再抵掉实体高度。
+		ring.set_meta("_ring_kind", kind)
+		node.add_child(ring)
+		rings.append(ring)
+	if not rings.is_empty():
+		range_rings[id] = rings
+
+# 按快照 + 配置算出这一圈要画什么：
+#   视野 = 快照 info["vision_range"]（服务端已算过国家加成），缺失时查配置
+#   射程 = 配置 attack_range，近战 < 1.5 米不画
+#   光环 = 配置 aura_radius（统帅 12 米）/ 服务端写死的半径（县吏 15 米，仅在进驻时有效）
+func _get_range_ring_specs(info: Dictionary) -> Array:
+	var specs: Array = []
+	var entity_id: int = int(info.get("entity_id", -1))
+	var cfg: Dictionary = {}
+	if entity_id >= 0 and EntityDatabase != null:
+		cfg = EntityDatabase.get_config(entity_id)
+	var vision: float = float(info.get("vision_range", 0.0))
+	if vision <= 0.0:
+		vision = float(cfg.get("vision_range", 0.0))
+	if vision > 0.5:
+		specs.append({"kind": GroundRangeRing.Kind.VISION, "radius": vision})
+	var attack_range: float = float(cfg.get("attack_range", 0.0))
+	if attack_range >= CLIENT_MIN_ACTION_RING:
+		specs.append({"kind": GroundRangeRing.Kind.ACTION, "radius": attack_range})
+	var aura: float = float(cfg.get("aura_radius", 0.0))
+	if aura <= 0.0:
+		aura = float(CLIENT_AURA_RADII.get(entity_id, 0.0))
+		# 县吏的光环只在进驻仓库里时生效，没进驻就不画
+		if entity_id == 46 and not bool(info.get("is_garrisoned", false)):
+			aura = 0.0
+	if aura > 0.5:
+		specs.append({"kind": GroundRangeRing.Kind.ACTION, "radius": aura, "tint": CLIENT_AURA_TINT})
+	return specs
+
+func _free_range_rings(id: int) -> void:
+	if not range_rings.has(id):
+		return
+	for ring in range_rings[id]:
+		if is_instance_valid(ring):
+			ring.queue_free()
+	range_rings.erase(id)
+
+func _clear_range_rings() -> void:
+	for id in range_rings.keys().duplicate():
+		_free_range_rings(int(id))
 
 # ---------- 建造放置 ----------
 func _update_placement_preview(screen_pos: Vector2):

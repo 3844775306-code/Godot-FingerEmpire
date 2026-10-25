@@ -1,0 +1,133 @@
+class_name GroundPathGuide
+extends Node3D
+
+# 路径指引带：替换掉原来那一串青色小球（路径球）。
+#
+# 小球的问题是又硬又飘：球心统一抬 0.3~1 米，和地面没有关系，草地、石板、
+# 斜坡上都是一模一样的青点，整条路径看起来像「悬在空中的虚线」。
+# 这里改成贴地的指引带：
+#   1. 中心线逐顶点贴地，草坡/台阶会自然弯下去；
+#   2. 实线会变成流动的虚线（沿线滚动），方向感由流动方向表达，比小球更直观；
+#   3. 起点从脚下淡出、末端是一个缓慢呼吸的落点环，两头都不会突然断掉；
+#   4. 整体半透明叠加在地面上，不写深度、不投影，跟地面的颜色混在一起。
+#
+# 一个单位最多一条指引带；框选大部队时只给第一个选中单位画（和原来一致）。
+
+const DASH_COLOR: Color = Color(0.60, 0.96, 0.88, 0.42)   # 青白，和草地/土地都能叠
+const DASH_WIDTH: float = 0.30                             # 虚线带宽（米）
+const DASH_PER_METER: float = 0.85                         # 每米几个虚线周期（约 1.2 米一段）
+const FLOW_SPEED: float = 0.55                             # 虚线滚动速度（周期/秒）
+const END_COLOR: Color = Color(0.98, 0.86, 0.52, 0.50)     # 落点暖黄
+const END_RADIUS: float = 0.85
+const END_WIDTH: float = 0.20
+const END_PULSE_SPEED: float = 2.1
+
+var points: Array = []
+var _height_fn: Callable
+var _dash_mat: ShaderMaterial
+var _end_mat: ShaderMaterial
+var _end_node: MeshInstance3D
+var _flow: float = 0.0
+var _pulse_t: float = 0.0
+var _pending_build: bool = false
+
+static func create(p_points: Array, p_height_fn: Callable, tint: Color = Color(0, 0, 0, 0)) -> GroundPathGuide:
+	var guide := GroundPathGuide.new()
+	guide.name = "GroundPathGuide"
+	guide._init_guide(p_points, p_height_fn, tint)
+	return guide
+
+func _init_guide(p_points: Array, p_height_fn: Callable, tint: Color) -> void:
+	_height_fn = p_height_fn
+	_dash_mat = GroundStripMesh.make_material(tint if tint.a > 0.001 else DASH_COLOR, 0.46, DASH_PER_METER, 0.25, 1.0)
+	var ribbon := MeshInstance3D.new()
+	ribbon.name = "GuideRibbon"
+	ribbon.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	ribbon.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	ribbon.material_override = _dash_mat
+	add_child(ribbon)
+	_end_node = MeshInstance3D.new()
+	_end_node.name = "GuideEnd"
+	_end_node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_end_node.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
+	_end_mat = GroundStripMesh.make_material(END_COLOR, 0.40, 0.0, 0.18, 0.0)
+	_end_node.material_override = _end_mat
+	add_child(_end_node)
+	points = _sanitize(p_points)
+	# 网格要进树之后才建（依赖 global_position / 地形高度），_ready 里补建
+	_pending_build = true
+
+func _ready() -> void:
+	if _pending_build:
+		_pending_build = false
+		_rebuild()
+
+func set_points(p_points: Array) -> void:
+	points = _sanitize(p_points)
+	if not is_inside_tree():
+		_pending_build = true
+		return
+	_rebuild()
+
+# 路径点可能是 Vector3，也可能是快照里的 [x,y,z] 数组或字典，这里统一成 Vector3
+func _sanitize(src: Array) -> Array:
+	var out: Array = []
+	for e in src:
+		var v: Vector3
+		if e is Vector3:
+			v = e
+		elif e is Array and e.size() >= 3:
+			v = Vector3(float(e[0]), float(e[1]), float(e[2]))
+		elif e is Dictionary and e.has("x"):
+			v = Vector3(float(e["x"]), 0.0, float(e["z"]))
+		else:
+			continue
+		# 贴地之后 y 由地形决定，原始 y 只作为拿不到地形时的兜底
+		var base: Vector3 = v
+		base.y = 0.0
+		if not out.is_empty():
+			# 距离过近的点直接丢掉，避免虚线被抖成一片
+			var prev: Vector3 = out[out.size() - 1]
+			if Vector2(base.x - prev.x, base.z - prev.z).length() < 0.25:
+				continue
+		out.append(base)
+	return out
+
+func _rebuild() -> void:
+	var ribbon := get_node_or_null("GuideRibbon") as MeshInstance3D
+	if ribbon == null:
+		return
+	if points.size() < 2:
+		ribbon.mesh = null
+		if _end_node != null:
+			_end_node.mesh = null
+		return
+	# 中心线在本地空间：节点自身放在世界原点（挂在 entities_container 下）
+	var origin: Vector3 = global_position
+	var local: Array = []
+	for p in points:
+		local.append(Vector3(p.x - origin.x, 0.0, p.z - origin.z))
+	# 路径点可能被抽样得很稀，先加密到 1.1 米一段，贴地带才不会斜插进地形
+	local = GroundStripMesh.densify(local, 1.1)
+	var to_local_y := func(lp: Vector3) -> float:
+		return float(_height_fn.call(origin + Vector3(lp.x, 0.0, lp.z))) - origin.y
+	ribbon.mesh = GroundStripMesh.build_strip(local, DASH_WIDTH * 0.5, to_local_y, false)
+	# 落点环
+	var last_world: Vector3 = points[points.size() - 1]
+	var circle: Array = GroundStripMesh.circle_points(Vector3.ZERO, END_RADIUS)
+	var last_local := Vector3(last_world.x - origin.x, 0.0, last_world.z - origin.z)
+	var end_local: Array = []
+	for p in circle:
+		end_local.append(p + last_local)
+	_end_node.mesh = GroundStripMesh.build_strip(end_local, END_WIDTH * 0.5, to_local_y, true)
+
+func _process(delta: float) -> void:
+	# 虚线沿线滚动 = 前进方向；静止时不更新，避免空转
+	_flow += delta * FLOW_SPEED
+	if _dash_mat != null:
+		_dash_mat.set_shader_parameter("dash_flow", _flow)
+	_pulse_t += delta
+	if _end_mat != null:
+		var c: Color = END_COLOR
+		c.a = clampf(END_COLOR.a * (1.0 + 0.20 * sin(_pulse_t * END_PULSE_SPEED)), 0.0, 1.0)
+		_end_mat.set_shader_parameter("tint", c)

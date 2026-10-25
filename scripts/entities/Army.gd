@@ -270,6 +270,8 @@ func _apply_nation_bonus():
 		gather_search_range = float(vision_range)
 		if entity_id == 14:
 			gather_search_range = maxf(gather_search_range, BOAT_GATHER_SEARCH_RANGE)
+	# 国家加成可能改了视野/射程：若这个单位正被单选，范围圈半径跟着更新
+	_sync_range_rings()
 	  # ²»Ö÷¶¯×·»÷£¬Ö»¹¥»÷½øÈëÉä³ÌµÄµÐÈË
 	# Ô­ÓÐ×·»÷Âß¼­...
 func _ready():
@@ -461,8 +463,8 @@ func _play_step_sfx(terrain: int, overlay: int, vehicle: bool) -> void:
 # ----------------- ÊÓ¾õÓëÅö×² -----------------
 func _create_visual():
 	for child in get_children():
-		# 选择环和法术光环不是身体网格，重建外观时不能删掉
-		if child is MeshInstance3D and child.name != "SelectionRing" and child.name != "CasterAura":
+		# 选择环、法术光环、贴地范围圈都不是身体网格，重建外观时不能删掉
+		if child is MeshInstance3D and child.name != "SelectionRing" and child.name != "CasterAura" and child.name != "GroundRangeRing":
 			child.queue_free()
 	var mesh = MeshInstance3D.new()
 	var capsule = CapsuleMesh.new()
@@ -520,6 +522,156 @@ func _add_selection_ring():
 		ring.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
 		ring.visible = false
 		add_child(ring)
+
+# ==================== 贴地范围圈（视野 / 作用范围） ====================
+# 单选一个己方单位时，在它脚下的地面上画两圈：视野用细线，作用范围（远程射程、
+# 官员光环）用粗线。贴地网格由 GroundRangeRing 自己负责（逐顶点采样地形高度、
+# 每 0.12 秒按地形重建），这里只决定「什么时候画」：只有唯一被选中的单位才画。
+var _range_rings: Array = []              # 复用中的范围圈节点（隐藏时不销毁，避免反复建网格）
+var _range_rings_selected: bool = false   # set_selected 记录的状态（基类不保存它）
+var _range_rings_flag: int = -1           # 显式开关：-1=未同步 0=关闭 1=允许
+var _range_ring_height_fn: Callable       # 地形高度采样器，只建一次
+
+# 近战射程只有 0.5~1.0 米，画出来就是脚下一小团噪点，索性不画
+const RANGE_RING_MIN_ATTACK: float = 1.5
+# 官员光环统一用淡绿，和射程的琥珀色区分开
+const RANGE_RING_AURA_TINT: Color = Color(0.62, 1.0, 0.72, 0.32)
+# 书记官（ID 46）的农民采集光环半径，_process_official 里硬编码的就是 15 米
+const CLERK_AURA_RADIUS: float = 15.0
+
+# 由 SelectionManager 调用：单选时开启范围圈，多选全部关闭。
+# 单独一个开关（而不是复用 set_selected），是因为编队召回/双击同类这些路径会直接
+# 改选择数组，需要外部把「单选还是多选」这个全局状态同步进来。
+func set_range_rings_enabled(enabled: bool) -> void:
+	_range_rings_flag = 1 if enabled else 0
+	_sync_range_rings()
+
+# 按当前状态创建/更新/隐藏范围圈；节点复用，不在这里 queue_free（见 _clear_range_rings）
+func _sync_range_rings() -> void:
+	if not _range_rings_allowed():
+		_set_range_rings_visible(false)
+		return
+	var specs: Array = get_range_ring_specs()
+	if specs.is_empty():
+		_set_range_rings_visible(false)
+		return
+	if _range_ring_layout_changed(specs):
+		_rebuild_range_rings(specs)
+	else:
+		for i in range(specs.size()):
+			var ring = _range_rings[i]
+			ring.set_radius(float(specs[i]["radius"]))
+			# 只有显式给了 tint 的规格才覆盖颜色：普通射程保留 GroundRangeRing 的默认琥珀色
+			if specs[i].has("tint"):
+				ring.set_tint(specs[i]["tint"])
+	_set_range_rings_visible(true)
+
+# 销毁全部范围圈节点（单位释放/切换类型时用；常规取消选中只隐藏）
+func _clear_range_rings() -> void:
+	for ring in _range_rings:
+		if is_instance_valid(ring):
+			# 先立即隐藏再销毁：queue_free 要到帧末才生效，否则会多画一帧旧圈
+			ring.set_ring_visible(false)
+			ring.queue_free()
+	_range_rings.clear()
+
+# 范围圈的绘制规格：空数组 = 这个单位不该画任何圈
+func get_range_ring_specs() -> Array:
+	var specs: Array = []
+	if health <= 0:
+		return specs
+	# 视野：细线，表示「这个单位能看多远」，所有单位都有
+	if vision_range >= RANGE_RING_MIN_ATTACK:
+		specs.append({"kind": GroundRangeRing.Kind.VISION, "radius": float(vision_range)})
+	# 射程：粗线；只有远程单位画（近战射程太短，围一圈会糊在脚下）
+	if attack_range >= RANGE_RING_MIN_ATTACK:
+		specs.append({"kind": GroundRangeRing.Kind.ACTION, "radius": attack_range})
+	# 官员光环：绿色粗线，半径来源见 _official_aura_radius()
+	var aura_r: float = _official_aura_radius()
+	if aura_r >= RANGE_RING_MIN_ATTACK:
+		specs.append({"kind": GroundRangeRing.Kind.ACTION, "radius": aura_r, "tint": RANGE_RING_AURA_TINT})
+	return specs
+
+# 是否允许显示：必须被选中，并且要么 SelectionManager 显式同步过「单选」，
+# 要么自己问选择管理器确认是唯一选中（兜底那些没走 _refresh_selection_rings 的旧路径）
+func _range_rings_allowed() -> bool:
+	if not _range_rings_selected:
+		return false
+	if _range_rings_flag >= 0:
+		return _range_rings_flag == 1
+	return _is_range_ring_single_selected()
+
+# 单机选中的唯一权威是 SelectionManager；联机客户端由 ClientInput 自己维护选择，
+# 这里拿不到选择列表就返回 false（范围圈是单机特性，联机由 task-5 单独处理）。
+func _is_range_ring_single_selected() -> bool:
+	var bm = _get_bm()
+	if bm == null:
+		return false
+	var sel = bm.get("selection")
+	if sel == null:
+		return false
+	var arr: Array = sel.selected_entities
+	return arr.size() == 1 and arr[0] == self
+
+# 圈的「种类序列」变了才算布局变化（官员进驻/离开会让光环圈出现或消失）；
+# 只改半径不算，用 set_radius 更新即可，省掉一次网格重建。
+func _range_ring_layout_changed(specs: Array) -> bool:
+	if _range_rings.size() != specs.size():
+		return true
+	for i in range(specs.size()):
+		var ring = _range_rings[i]
+		if not is_instance_valid(ring):
+			return true
+		if int(ring.kind) != int(specs[i]["kind"]):
+			return true
+	return false
+
+func _rebuild_range_rings(specs: Array) -> void:
+	_clear_range_rings()
+	if not is_inside_tree():
+		return
+	if not _range_ring_height_fn.is_valid():
+		# 高度采样器内部抓着 Map 节点，建一次就够，没必要每个圈各建一份
+		_range_ring_height_fn = GroundStripMesh.height_fn_for(_get_bm())
+	for spec in specs:
+		var tint: Color = spec.get("tint", Color(0, 0, 0, 0))
+		var ring = GroundRangeRing.create(int(spec["kind"]), float(spec["radius"]), _range_ring_height_fn, tint)
+		# 网格建在节点局部空间，直接挂到单位下面就会跟着单位移动/转身，不需要每帧同步位置
+		ring.visible = false
+		add_child(ring)
+		_range_rings.append(ring)
+
+func _set_range_rings_visible(on: bool) -> void:
+	for ring in _range_rings:
+		if is_instance_valid(ring):
+			ring.set_ring_visible(on)
+
+# 官员/法师光环半径：配置表里只有统帅（49）带 aura_radius=12，其余按实际机制取值
+func _official_aura_radius() -> float:
+	# 只有官员（46~50）和法师（55~57）才可能带光环，普通士兵不用去查配置
+	if entity_id < 46 or entity_id > 57:
+		return 0.0
+	# 书记官（46）：必须进驻仓库且光环生效，才有 15 米农民采集光环
+	if entity_id == 46:
+		if _official_active and _is_official_garrisoned():
+			return CLERK_AURA_RADIUS
+		return 0.0
+	var cfg: Dictionary = EntityDatabase.get_config(entity_id)
+	if cfg.is_empty():
+		return 0.0
+	var r: float = float(cfg.get("aura_radius", 0.0))
+	if r <= 0.0:
+		# 47/48/50 与僧侣/长老/宗师（55/56/57）配置里没有光环半径字段：
+		# 僧侣的治疗范围本身就等于射程（_find_monk_heal_target 用 attack_range），不额外画
+		return 0.0
+	# 没发工资时光环已经失效，圈也不该还画着
+	if not _official_active:
+		return 0.0
+	return r
+
+func _is_official_garrisoned() -> bool:
+	var gb = _garrison_building.get_ref() if _garrison_building else null
+	return gb != null and is_instance_valid(gb)
 
 # 模型替换后重新绑定 AnimationPlayer；新模型默认播放，LOD 状态复位。
 func bind_animation_player(ap: AnimationPlayer) -> void:
@@ -590,6 +742,9 @@ func _update_collision_shape():
 func set_selected(selected: bool):
 	super.set_selected(selected)
 	if _movement: _movement.set_selected(selected)
+	# 选择环之外再叠一层贴地范围圈：单选时显示，多选/取消选中一律隐藏
+	_range_rings_selected = selected
+	_sync_range_rings()
 func _set_order(state: UnitState):
 	var new_order: String = _STATE_NAMES.get(state, "")
 	if current_order == new_order:
@@ -3942,6 +4097,8 @@ func _do_garrison(building: Building) -> bool:
 					if ogb and ogb.get_ref() == building:
 						e._ungarrison_official()
 						e._do_garrison(building)
+	# 进驻状态变了（书记官光环可能因此生效），同步一次范围圈
+	_sync_range_rings()
 	return true
 
 func _ungarrison_official():
@@ -3984,6 +4141,8 @@ func _ungarrison_official():
 	if building and is_instance_valid(building):
 		global_position = building.global_position + Vector3(building.body_radius + body_radius + 1.0, 0, 0)
 	collision_layer = 1
+	# 离开建筑后光环消失，范围圈要跟着撤掉
+	_sync_range_rings()
 
 func _has_chancellor_in(building: Building) -> bool:
 	for e in get_tree().get_nodes_in_group("entities"):

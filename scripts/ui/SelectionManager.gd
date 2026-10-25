@@ -459,6 +459,12 @@ func _refresh_selection_rings() -> void:
 		var e = selected_entities[i]
 		if is_instance_valid(e):
 			e.set_selected(i < MAX_SELECTION_RINGS)
+	# 贴地范围圈（视野/射程/光环）只在单选时画：多选几十个单位各画两圈会把地面糊成一片。
+	# Army 内部还会按选择列表兜底判断，这里显式同步一次，编队召回/双击同类等路径都收敛。
+	var single: bool = selected_entities.size() == 1
+	for e in selected_entities:
+		if is_instance_valid(e) and e is Army and e.has_method("set_range_rings_enabled"):
+			e.set_range_rings_enabled(single)
 
 func _remove_from_selection(entity):
 	if entity == null or not is_instance_valid(entity):

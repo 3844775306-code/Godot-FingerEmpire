@@ -456,12 +456,7 @@ func _process_snapshot(data: Dictionary):
 						entity_nodes.erase(id)
 			_remove_all_bars(id)
 
-			if has_meta("_wp_markers"):
-				var all_wp = get_meta("_wp_markers")
-				if all_wp.has(id):
-					for m in all_wp[id]:
-						if is_instance_valid(m): m.queue_free()
-					all_wp.erase(id)
+			_free_waypoint_markers(int(id))
 
 	# 兜底清理：全量快照里缺失的己方实体一律删除（防止死亡 ID 丢失导致残留尸体）
 	if is_full_snap:
@@ -1621,7 +1616,7 @@ func _process_fog_batch() -> bool:
 func _update_local_fog():
 	# 兼容旧接口：启动增量迷雾周期
 	_start_fog_cycle()
-# 选中变化时立即刷新路径球/航点：不等下一次快照，避免“选中后看不到 A* 路径球”
+# 选中变化时立即刷新路径指引带：不等下一次快照，避免「选中后看不到路径」
 func _refresh_waypoint_markers(ids: Array):
 	if not has_meta("_wp_markers"):
 		if ids.is_empty(): return
@@ -1631,14 +1626,17 @@ func _refresh_waypoint_markers(ids: Array):
 	for id in ids: keep[id] = true
 	for eid in all_wp.keys().duplicate():
 		if keep.has(eid): continue
-		for m in all_wp[eid]:
-			if is_instance_valid(m): m.queue_free()
-		all_wp.erase(eid)
+		_free_waypoint_markers(int(eid))
 	for id in ids:
 		var node = entity_nodes.get(id)
 		if node and node.has_meta("snapshot_info"):
 			_update_waypoint_markers(node, node.get_meta("snapshot_info"))
 
+# ==================== 联机路径指引带 ====================
+# 原来给每个 A* 路径点建一颗青球、给每个 waypoint 建「竖直杆 + 悬空环 + 地面球」，
+# 全都 no_depth_test，看着是一串飘在空中的标记。现在整条路径换成一条贴地的
+# GroundPathGuide：中心线逐顶点贴地、虚线往前流动、末端自带落点环。
+# 只给选中单位画；waypoint 编号保留为贴地抬高 0.6 米的 Label3D。
 func _update_waypoint_markers(node: Node3D, info: Dictionary):
 	# Only show waypoints for selected entities
 	var inp = get_node_or_null("ClientInput")
@@ -1646,120 +1644,131 @@ func _update_waypoint_markers(node: Node3D, info: Dictionary):
 	if inp and inp.has_method("get_client_selected_ids"):
 		is_selected = info["id"] in inp.get_client_selected_ids()
 	if not is_selected:
-		# Clear any existing markers for this entity
-		if has_meta("_wp_markers"):
-			var awp = get_meta("_wp_markers")
-			if awp.has(info["id"]):
-				for m in awp[info["id"]]:
-					if is_instance_valid(m): m.queue_free()
-				awp.erase(info["id"])
+		_free_waypoint_markers(int(info.get("id", -1)))
 		return
 
-	# Track all waypoint markers globally (keyed by entity instance id)
+	# Track all waypoint markers globally (keyed by entity id)
 	if not has_meta("_wp_markers"):
 		set_meta("_wp_markers", {})
 	var all_wp = get_meta("_wp_markers")
-	var eid = info["id"]
-
-	# Clear previous markers for this entity
-	if all_wp.has(eid):
-		for m in all_wp[eid]:
-			if is_instance_valid(m): m.queue_free()
-		all_wp.erase(eid)
+	var eid: int = int(info.get("id", -1))
 
 	var wps = info.get("waypoints", [])
 	var apath = info.get("astar_path", [])
-	if wps.is_empty() and apath.is_empty(): return
+	# 中心线取点：优先 A*（单位真正在走的路线），A* 缺失时退回 waypoint 链
+	var pts: Array = []
+	if apath is Array:
+		for a in apath:
+			var ap: Vector3 = _path_point_to_vector3(a)
+			if is_finite(ap.x):
+				pts.append(ap)
+	if pts.size() < 2 and wps is Array:
+		pts.clear()
+		for w in wps:
+			var wp: Vector3 = _path_point_to_vector3(w)
+			if is_finite(wp.x):
+				pts.append(wp)
+	# loop（巡逻/循环）指令：整条带子用橙色，和普通移动的青白区分开
+	var loop: bool = false
+	if wps is Array:
+		for w in wps:
+			if w is Dictionary and bool(w.get("is_loop", false)):
+				loop = true
+				break
+	if pts.size() < 2:
+		_free_waypoint_markers(eid)
+		return
 
-	var new_markers: Array = []
-	# Render A* path spheres (green)
-	for i in range(apath.size()):
-		var awp = apath[i]
-		var aworld_pos: Vector3
-		if awp is Vector3:
-			aworld_pos = awp
-		elif awp is Array and awp.size() >= 3:
-			aworld_pos = Vector3(awp[0], awp[1], awp[2])
+	# 快照 10Hz 每次都会走这个函数：路径点没变就复用现有指引带，绝不重建网格
+	var sig: int = hash([pts, loop])
+	var guide: GroundPathGuide = null
+	if all_wp.has(eid):
+		var arr = all_wp[eid]
+		if arr is Array and arr.size() > 0 and is_instance_valid(arr[0]) and arr[0] is GroundPathGuide:
+			guide = arr[0]
+			# loop 语义变了要换带子颜色，只能重建节点
+			if bool(guide.get_meta("_path_loop", false)) != loop:
+				guide.queue_free()
+				guide = null
 		else:
-			aworld_pos = Vector3(awp["x"], awp.get("y", 0), awp["z"])
-		var acol = Color(0, 1, 0, 0.9) if i == apath.size() - 1 else Color(0, 1, 1, 0.8)
-		var asphere = MeshInstance3D.new()
-		var asph = SphereMesh.new(); asph.radius = 0.13; asph.height = 0.26
-		asphere.mesh = asph
-		asphere.position = aworld_pos + Vector3(0, 1.0, 0)
-		var amat = StandardMaterial3D.new()
-		amat.albedo_color = acol; amat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
-		amat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		amat.render_priority = 10; amat.no_depth_test = true
-		asphere.material_override = amat
-		entities_container.add_child(asphere)
-		new_markers.append(asphere)
-	for i in range(wps.size()):
+			# 旧版本留下的球/杆/环：整组清掉，统一换成贴地指引带
+			for m in arr:
+				if is_instance_valid(m):
+					m.queue_free()
+			all_wp.erase(eid)
+	if guide != null and int(guide.get_meta("_path_sig", 0)) == sig:
+		return
+	if guide != null:
+		# 路径变了但颜色不用变：只重建中心线，节点和编号标签都复用
+		guide.set_points(pts)
+		guide.set_meta("_path_sig", sig)
+		_refresh_path_guide_labels(guide, wps)
+		return
+	# 首次创建：节点放在世界原点，网格按世界坐标建（地形高度逐顶点采样）
+	guide = _make_path_guide(pts, loop)
+	entities_container.add_child(guide)
+	guide.set_meta("_path_sig", sig)
+	guide.set_meta("_path_loop", loop)
+	all_wp[eid] = [guide]
+	_refresh_path_guide_labels(guide, wps)
+
+func _make_path_guide(pts: Array, loop: bool) -> GroundPathGuide:
+	# tint 的 alpha=0 表示「用默认青白」，loop 指令用橙色
+	var tint: Color = Color(1.0, 0.56, 0.12, 0.46) if loop else Color(0, 0, 0, 0)
+	var guide: GroundPathGuide = GroundPathGuide.create(pts, get_ground_height_fn(), tint)
+	guide.name = "ClientPathGuide"
+	return guide
+
+# waypoint 编号标签：位置只跟 waypoint 走，A* 路径变化时不用重建
+func _refresh_path_guide_labels(guide: GroundPathGuide, wps) -> void:
+	var wp_sig: int = hash(wps) if wps is Array else 0
+	if int(guide.get_meta("_wp_sig", -1)) == wp_sig:
+		return
+	guide.set_meta("_wp_sig", wp_sig)
+	for c in guide.get_children():
+		if c is Label3D:
+			c.queue_free()
+	if not (wps is Array) or wps.is_empty():
+		return
+	var height_fn: Callable = get_ground_height_fn()
+	for i in wps.size():
 		var wp = wps[i]
-		var world_pos = Vector3(wp["x"], wp.get("y", 0), wp["z"])
-		var is_loop = wp.get("is_loop", false)
-
-		# Last = green, loop = orange, others = cyan
-		var is_last = (i == wps.size() - 1)
-		var ring_color = Color(0, 1, 0, 0.9) if is_last else (Color(1.0, 0.55, 0.0, 0.9) if is_loop else Color(0, 1, 1, 0.8))
-		var pole_color = Color(0, 1, 0, 0.5) if is_last else (Color(1.0, 0.55, 0.0, 0.5) if is_loop else Color(0, 1, 1, 0.5))
-
-		# Vertical pole — world space, child of entities_container
-		var pole = MeshInstance3D.new()
-		var cyl = CylinderMesh.new()
-		cyl.top_radius = 0.08; cyl.bottom_radius = 0.08; cyl.height = 2.0
-		pole.mesh = cyl
-		pole.position = world_pos + Vector3(0, 1.0, 0)
-		var pole_mat = StandardMaterial3D.new()
-		pole_mat.albedo_color = pole_color
-		pole_mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
-		pole_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		pole_mat.render_priority = 10
-		pole_mat.no_depth_test = true
-		pole.material_override = pole_mat
-		entities_container.add_child(pole)
-		new_markers.append(pole)
-
-		# Ring marker — world space, child of entities_container
-		var marker = MeshInstance3D.new()
-		var ring = TorusMesh.new()
-		ring.inner_radius = 0.5; ring.outer_radius = 0.7
-		marker.mesh = ring
-		marker.position = world_pos + Vector3(0, 2.0, 0)
-		var mat = StandardMaterial3D.new()
-		mat.albedo_color = ring_color
-		mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
-		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		mat.render_priority = 10
-		mat.no_depth_test = true
-		marker.material_override = mat
-		entities_container.add_child(marker)
-		new_markers.append(marker)
-
-		# Ground dot at exact click position
-		var dot = MeshInstance3D.new()
-		var sphere = SphereMesh.new()
-		sphere.radius = 0.2; sphere.height = 0.4
-		dot.mesh = sphere
-		dot.position = world_pos + Vector3(0, 0.2, 0)
-		var dot_mat = StandardMaterial3D.new()
-		dot_mat.albedo_color = ring_color
-		dot_mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
-		dot_mat.render_priority = 10
-		dot_mat.no_depth_test = true
-		dot.material_override = dot_mat
-		entities_container.add_child(dot)
-		new_markers.append(dot)
-
-		# Number label
-		var lbl = Label3D.new()
-		lbl.text = str(i + 1); lbl.font_size = 32
-		lbl.position = Vector3(0, 0.8, 0); lbl.modulate = Color.GREEN if is_last else (Color(1.0, 0.55, 0.0) if is_loop else Color.CYAN)
+		var p: Vector3 = _path_point_to_vector3(wp)
+		if not is_finite(p.x):
+			continue
+		var is_loop: bool = wp is Dictionary and bool(wp.get("is_loop", false))
+		var is_last: bool = (i == wps.size() - 1)
+		var lbl := Label3D.new()
+		lbl.text = str(i + 1)
+		lbl.font_size = 32
+		# 原来编号挂在 2 米高的悬空环上，俯视角看是飘的；改成贴地抬高 0.6 米
+		lbl.position = Vector3(p.x, float(height_fn.call(p)) + 0.6, p.z)
+		lbl.modulate = Color.GREEN if is_last else (Color(1.0, 0.55, 0.0) if is_loop else Color.CYAN)
 		lbl.render_priority = 11
 		lbl.no_depth_test = true
-		marker.add_child(lbl)
+		guide.add_child(lbl)
 
-	all_wp[eid] = new_markers
+# 路径点可能是 Vector3，也可能是快照里的 [x,y,z] 数组或 {x,y,z} 字典
+func _path_point_to_vector3(v) -> Vector3:
+	if v is Vector3:
+		return v
+	if v is Array and v.size() >= 3:
+		return Vector3(float(v[0]), float(v[1]), float(v[2]))
+	if v is Dictionary and v.has("x") and v.has("z"):
+		return Vector3(float(v["x"]), float(v.get("y", 0.0)), float(v["z"]))
+	return Vector3(INF, INF, INF)
+
+# 释放某实体的指引带（连同它下面的编号标签）：_wp_markers 里始终只存一个节点
+func _free_waypoint_markers(eid: int) -> void:
+	if eid < 0 or not has_meta("_wp_markers"):
+		return
+	var all_wp = get_meta("_wp_markers")
+	if not all_wp.has(eid):
+		return
+	for m in all_wp[eid]:
+		if is_instance_valid(m):
+			m.queue_free()
+	all_wp.erase(eid)
 
 # Control-group label colors (same as HUD)
 # Helper: get control-group prefix string for label
@@ -2309,6 +2318,12 @@ func get_terrain_height(world_pos: Vector3) -> float:
 	if map and map.has_method("get_height_at"):
 		return map.get_height_at(world_pos)
 	return 0.0
+
+# 贴地视觉（范围圈 / 路径指引带）用的地形高度函数：
+# GroundStripMesh.height_fn_for 需要一个「有 Map 子节点、且 Map 有 get_height_at」的对象，
+# 传 self 即可；拿不到地形时会退回点的原始 y，不会把贴地带压到 0 高度。
+func get_ground_height_fn() -> Callable:
+	return GroundStripMesh.height_fn_for(self)
 
 # ==================== 游戏结束面板 ====================
 # 结算层出现前，先隐藏客户端统计面板，避免压在全屏结算层之上

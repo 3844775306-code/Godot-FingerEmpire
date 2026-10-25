@@ -24,8 +24,9 @@ const ATTACK_TARGET_MOVE_TOLERANCE: float = 3.0
 # 队列压力阈值：与 RTSBattleManager.ASTAR_BACKLOG_PRESSURE 保持一致。
 # 排队多时进一步降低追击重算频率、放大目标移动容差，先让现有路径继续走。
 const A_STAR_PRESSURE_THRESHOLD: int = 30
-# 路径预览最多绘制多少个点，避免长路径为每个格子创建一个 MeshInstance3D。
-const MAX_PATH_PREVIEW_POINTS: int = 64
+# 路径预览最多采样多少个点。贴地指引带内部会再按 1.1 米加密并逐顶点贴地，
+# 这里只限制单条路径的顶点总量，避免超长路径生成过大的网格。
+const MAX_PATH_PREVIEW_POINTS: int = 200
 var _last_attack_path_ms: int = -100000
 # 缓坡速度平滑：避免在坡道入口/出口瞬间跳速，也避免同一格来回抖动。
 var _slope_speed_mult: float = 1.0
@@ -53,11 +54,9 @@ const DIRECT_CHECK_CACHE_MS: int = 250
 var _direct_check_result: bool = true
 var _direct_check_ms: int = 0
 
-var _path_sphere: SphereMesh = null
-var _path_mat: StandardMaterial3D = null
-var _path_mat_end: StandardMaterial3D = null  # green for last waypoint
-# Path markers
-var _path_markers: Array = []
+# 路径预览：一条贴地流动的指引带（替代原来那一串青色小球），只给第一个选中单位画。
+var _path_guide: GroundPathGuide = null
+var _path_preview_points: Array = []  # 当前指引带使用的路径点，用来判断是否需要重建
 var _is_selected: bool = false
 
 # Collision
@@ -80,7 +79,7 @@ func _init(army: Army):
 	_army = army
 	# 错开各单位首次碰撞分离的帧，避免几百个单位在同一物理帧集中做近邻查询
 	collision_timer = randf_range(0.0, COLLISION_INTERVAL)
-	# 单位死亡/离场时清理挂在 battle_manager 下的路径球。不能用
+	# 单位死亡/离场时清理挂在 battle_manager 下的路径指引带。不能用
 	# MovementController 的 PREDELETE 通知里再调方法，RefCounted 析构阶段方法表已不可用。
 	if army != null and not army.tree_exiting.is_connected(_hide_path):
 		army.tree_exiting.connect(_hide_path)
@@ -414,8 +413,8 @@ func process_move(delta, bm: RTSBattleManager):
 		var h_dist = Vector2(move_target.x - _army.global_position.x, move_target.z - _army.global_position.z)
 		if h_dist.length() < 0.5:
 			astar_path.pop_front()
-			# 不要每经过一个航点就重建全部路径球：选中大部队时这一步会瞬间
-			# 创建/销毁数千个 MeshInstance3D。只在路径走完时收起预览，换目标时
+			# 不要每经过一个航点就重建路径指引带：选中大部队时这一步会瞬间
+			# 生成/销毁大量网格。只在路径走完时收起预览，换目标时
 			# 由 set_move_target()/recalculate() 重新生成。
 			if astar_path.is_empty() and _is_selected:
 				_hide_path()
@@ -683,64 +682,53 @@ func _separate_from(entity: GameEntity, delta: float, bm: RTSBattleManager) -> v
 		if not _try_push_position(offset, bm):
 			_try_push_position(-offset, bm)
 
-func _path_height(wp: Vector3, bm) -> float:
-	if bm.has_node("Map") and bm.get_node("Map").has_method("get_height_at"):
-		return bm.get_node("Map").get_height_at(wp)
-	if bm.has_method("get_height_at_grid"):
-		var g = bm.world_to_grid(wp)
-		return bm.get_height_at_grid(g.x, g.y)
-	return 0.0
-
 # ==================== Path markers ====================
 
+# 路径预览：用一条贴地流动的指引带代替原来那一串青色小球。
+# 指引带内部逐顶点贴地，并自带「起点淡出 + 末端呼吸落点环」，所以不再需要绿球标终点。
+# 只有「第一个被选中的单位」才画；路径点没变就沿用现有节点，不重复生成网格。
 func _show_path():
-	if not _path_sphere:
-		_path_sphere = SphereMesh.new()
-		_path_sphere.radius = 0.2; _path_sphere.height = 0.4
-	if not _path_mat:
-		_path_mat = StandardMaterial3D.new()
-		_path_mat.albedo_color = Color(0, 1, 1, 0.8)
-		if not _path_mat_end:
-			_path_mat_end = StandardMaterial3D.new()
-			_path_mat_end.albedo_color = Color(0, 1, 0, 0.8)  # green
-			_path_mat_end.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-		_path_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	_hide_path()
-	if astar_path.size() < 2: return
-	var bm = _army.get_tree().get_first_node_in_group("battle_manager")
-
-	if not bm: return
+	if astar_path.size() < 2:
+		_hide_path()
+		return
+	var bm = _get_bm()
+	if bm == null:
+		_hide_path()
+		return
 	# 框选大部队时只为第一个选中单位绘制路径，避免几十/上百条路径同时生成。
 	if bm.selection != null and bm.selection.selected_entities.size() > 1:
 		if bm.selection.selected_entities[0] != _army:
+			# 多选状态下不该有路径带：顺手收掉可能残留的那一条
+			_hide_path()
 			return
-	# 单条长路径也不逐格创建，按固定上限抽样；尾点始终保留。
+	# 单条长路径也不逐格取点，按固定上限抽样；尾点始终保留。
 	var points: Array = []
 	if astar_path.size() <= MAX_PATH_PREVIEW_POINTS:
-		points = astar_path
+		# 必须复制：astar_path 会被 process_move 逐个 pop_front，共享引用会让缓存对比失真
+		points = astar_path.duplicate()
 	else:
 		var step: float = float(astar_path.size() - 1) / float(MAX_PATH_PREVIEW_POINTS - 1)
 		for i in range(MAX_PATH_PREVIEW_POINTS):
 			points.append(astar_path[int(round(float(i) * step))])
-	var last_wp: Vector3 = astar_path[astar_path.size() - 1]
-	for wp in points:
-		var m = MeshInstance3D.new()
-		m.mesh = _path_sphere
-		m.position = Vector3(wp.x, _path_height(wp, bm) + 0.3, wp.z)
-		# 路径点只是操作提示，不参与阴影投射，避免额外 shadow pass。
-		m.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		# Last waypoint is green
-		if wp == last_wp:
-			m.material_override = _path_mat_end
-		else:
-			m.material_override = _path_mat
-		bm.add_child(m)
-		_path_markers.append(m)
+	# 路径完全没有变化时沿用现有指引带，避免同一条路径反复生成网格
+	if _path_guide != null and is_instance_valid(_path_guide) and _path_preview_points == points:
+		return
+	_path_preview_points = points
+	# 节点还在、只是路径变了：直接重设中心线，比销毁重建便宜
+	if _path_guide != null and is_instance_valid(_path_guide):
+		_path_guide.set_points(points)
+		return
+	# 指引带要挂在世界空间（不旋转）的节点下，沿用原来的 battle_manager；
+	# 高度采样交给 GroundStripMesh.height_fn_for()，拿不到地形时退回路径点的原始 y。
+	_path_guide = GroundPathGuide.create(points, GroundStripMesh.height_fn_for(bm))
+	bm.add_child(_path_guide)
 
 func _hide_path():
-	for m in _path_markers:
-		if is_instance_valid(m): m.queue_free()
-	_path_markers.clear()
+	_path_preview_points.clear()
+	if _path_guide != null:
+		if is_instance_valid(_path_guide):
+			_path_guide.queue_free()
+		_path_guide = null
 
 # ==================== A* Pathfinding (optimized) ====================
 
