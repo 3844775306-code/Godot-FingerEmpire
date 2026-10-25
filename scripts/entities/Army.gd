@@ -713,6 +713,22 @@ func _combat_edge_distance(target) -> float:
 		target_radius = target.body_radius
 	return h_diff.length() - body_radius - target_radius
 
+# 远程单位仰射的落差上限（米）。站在低处往高处打，落差超过这个值就打不到。
+# 投石车(17)与巨型投石机(59)靠抛物线抛射，不受这个限制；近战要贴身才能打，
+# 位置本身就贴在一起了，也不需要限制。
+const HIGH_GROUND_MAX_RISE: float = 5.0
+
+# 是否被高度差挡住：低处打高处且落差过大。
+# 近战平射/抛射没有仰角可言，命中判定只在贴脸时发生，因此不做限制。
+func _blocked_by_high_ground(target) -> bool:
+	if target == null or not is_instance_valid(target):
+		return false
+	if entity_id == 17 or entity_id == 59:
+		return false
+	if attack_range <= 2.0 and damage_radius <= 0.0:
+		return false
+	return (target.global_position.y - global_position.y) > HIGH_GROUND_MAX_RISE
+
 func _set_combat_target(target, from_advance: bool = false) -> void:
 	if target == null or not is_instance_valid(target):
 		return
@@ -723,6 +739,9 @@ func _set_combat_target(target, from_advance: bool = false) -> void:
 	# 水上军队追击前先筛掉离岸太远的地面目标，避免写进 current_target 后
 	# 才在攻击校验里被放弃，导致索敌反复选中同一个目标。
 	if _is_naval_chase_target_blocked(target):
+		return
+	# 站在低处打不到高处的远目标，直接不锁定，让索敌去挑别的敌人
+	if _blocked_by_high_ground(target):
 		return
 	current_target = target
 	if from_advance and combat_destination != Vector3.ZERO:
@@ -1886,6 +1905,9 @@ func _find_combat_enemy(radius: float, attack_only: bool) -> GameEntity:
 		var dist: float = _combat_edge_distance(entity)
 		if dist > attack_range:
 			continue
+		# 低处打高处落差过大：射不到，别选成目标
+		if _blocked_by_high_ground(entity):
+			continue
 		var score: float
 		if entity is Building:
 			# 非攻城单位只有在射程内没有敌军时才拆建筑。
@@ -1921,6 +1943,9 @@ func _find_combat_enemy(radius: float, attack_only: bool) -> GameEntity:
 		if far_dist > radius:
 			continue
 		if attack_only and far_dist > attack_range:
+			continue
+		# 追击目标同样要排除打不到的高处目标，否则会白跑一趟
+		if _blocked_by_high_ground(entity):
 			continue
 		var far_score: float = far_dist
 		if entity is Building:
@@ -2602,6 +2627,14 @@ func _attack(target, delta):
 				if _movement:
 					_movement.stop()
 			_refresh_animation_now()
+		return
+
+	# 保险：低处打高处落差过大时不出手（索敌阶段已尽量排除，
+	# 但目标可能在追击途中走到高处，这里再兜一次）
+	if _blocked_by_high_ground(target):
+		if current_target == target:
+			current_target = null
+			_attack_move_search_timer = 0.0
 		return
 
 	# 特殊攻击类型：僧侣治疗 / 长老百分比伤害 / 宗师降攻招降
