@@ -208,6 +208,14 @@ func _reload_wall_model(bm, path):
 	if s:
 		var inst = s.instantiate()
 		if inst:
+			# 和服务端首次生成、客户端换拐角模型保持同一套缩放：
+			# wall.glb 原始高度 1.31，按 body_radius 自动缩放到约 2 米。
+			# 原来换拐角后直接使用原始模型，会比直墙矮一截，墙顶单位也会悬空/陷墙。
+			var target_size: float = body_radius * 2.0
+			var aabb: AABB = bm._get_model_aabb(inst)
+			var current_size: float = maxf(aabb.size.x, maxf(aabb.size.y, aabb.size.z))
+			if current_size > 0.01:
+				inst.scale = Vector3.ONE * (target_size / current_size * RTSConfig.get_model_scale(entity_id))
 			add_child(inst); set_meta("_model_instance", inst)
 			BuildingConstructionVisual.rebind(self)
 			var tint: Color = bm.get_entity_color(self) if bm.has_method("get_entity_color") else (Color(0.3, 0.6, 1.0) if team == RTSConfig.Team.BLUE else Color(1.0, 0.4, 0.4))

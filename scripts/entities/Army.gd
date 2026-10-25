@@ -4012,9 +4012,9 @@ func _is_unit_on_wall() -> bool:
 		return false
 	return wall.health > 0 and wall.build_timer <= 0.0 and wall.team == team
 
-# 城墙模型 wall.glb 的顶面高度：模型底面在局部 y=0、顶面在 1.31 米。
-# 与 RTSBattleManager.WALL_TOP_HEIGHT 必须保持一致，两处改了要同步。
-const WALL_TOP_HEIGHT: float = 1.31
+# 城墙模型 wall.glb 的顶面高度会随生成时的自动缩放变化（原始 1.31 米，
+# 实际通常约 2 米），因此必须通过 BattleManager.get_wall_top_height() 计算。
+# 这里不再硬编码常量，避免拐角换模型或模型尺寸调整后再次陷墙。
 
 # 墙顶高度只需要照顾“正在墙上”的单位。普通地面单位每 0.5 秒确认一次即可，
 # 不能每帧对全场单位做 world_to_grid + 字典查询；已经确认在墙上的单位才逐帧平滑。
@@ -4050,7 +4050,9 @@ func _try_climb_assigned_wall() -> bool:
 	var reach: float = body_radius + float(wall.body_radius) + 0.8
 	if h_dist > reach:
 		return false
-	global_position = Vector3(slot.x, float(wall.global_position.y) + WALL_TOP_HEIGHT, slot.z)
+	var bm = _get_bm()
+	var wall_top_h: float = bm.get_wall_top_height(wall) if bm != null else RTSBattleManager.WALL_TOP_HEIGHT
+	global_position = Vector3(slot.x, float(wall.global_position.y) + wall_top_h, slot.z)
 	velocity = Vector3.ZERO
 	_wall_height_on_wall = true
 	hold_position = true
@@ -4071,9 +4073,9 @@ func _update_wall_height(delta: float) -> void:
 	var on_wall: bool = wall != null and is_instance_valid(wall) and wall.health > 0 and wall.build_timer <= 0.0
 	var target_y: float = ground_y
 	if on_wall:
-		# 站到城墙顶面上。这里原本硬编码 +4.5，比真实墙高（1.31 米）高出三米多，
-		# 单位看起来就是凭空吊在墙上方，所以改成按城墙实体位置 + 模型高度算。
-		target_y = wall.global_position.y + WALL_TOP_HEIGHT
+		# 站到城墙实际顶面上。城墙模型会被自动缩放，固定 +1.31 只对
+		# 未缩放的原始模型成立；按当前模型实例的高度计算才能恰好站在墙顶。
+		target_y = wall.global_position.y + bm.get_wall_top_height(wall)
 	elif global_position.y <= ground_y + 0.8:
 		return
 	global_position.y = move_toward(global_position.y, target_y, 5.0 * delta)

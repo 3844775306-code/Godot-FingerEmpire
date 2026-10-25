@@ -5,8 +5,9 @@ const BattleStatsScript = preload("res://scripts/core/BattleStats.gd")
 const PROC_ATTACK_IDS = [18, 16, 17, 59, 13, 39]
 # 开火时需要在炮口喷烟尘火光的建筑/炮台（攻城器械由 SiegeAttackFx 单独处理）
 const MUZZLE_ATTACK_IDS = [25, 26, 64]
-# 城墙模型 wall.glb 的包围盒高度：底面在局部 y=0、顶面在 1.31。
-# 炮台要精确坐在这层顶面上，模型一改这个数就得跟着改。
+# 城墙模型 wall.glb 的原始顶面高度：模型底面在局部 y=0、原始顶面在 1.31。
+# 生成时模型还会按 body_radius 自动缩放，所以实际站墙高度必须用
+# get_wall_top_height() 按每面墙的模型实例计算，不能直接加这个常量。
 const WALL_TOP_HEIGHT: float = 1.31
 # 放置炮台时向最近城墙吸附的水平半径（米）
 const WALL_CANNON_SNAP: float = 6.0
@@ -2151,7 +2152,7 @@ func _enable_vertex_colors(node: Node):
 		_enable_vertex_colors(child)
 
 # 距给定点最近的同队城墙的顶面世界高度；附近没有城墙时返回一个很负的哨兵值。
-# 城墙模型底面在局部 y=0，所以顶面 = 实体 y + WALL_TOP_HEIGHT。
+# 城墙模型底面在局部 y=0，但实际顶面取决于模型自动缩放后的高度。
 func get_wall_top_y_near(pos: Vector3, team: int) -> float:
 	var best: float = -1e20
 	var best_d: float = WALL_CANNON_SNAP
@@ -2161,8 +2162,36 @@ func get_wall_top_y_near(pos: Vector3, team: int) -> float:
 		var d: float = Vector2(e.global_position.x - pos.x, e.global_position.z - pos.z).length()
 		if d <= best_d:
 			best_d = d
-			best = e.global_position.y + WALL_TOP_HEIGHT
+			best = e.global_position.y + get_wall_top_height(e as Building)
 	return best
+
+# 城墙实际顶面高度（相对城墙实体原点）。wall.glb 原始高 1.31 米，
+# 生成时会被自动缩放到 body_radius 对应的尺寸，因此不能再用固定 1.31。
+# 按模型实例缓存，拐角换模型后 instance_id 变化会自动重算。
+func get_wall_top_height(wall: Building) -> float:
+	if wall == null or not is_instance_valid(wall) or int(wall.entity_id) != 27:
+		return WALL_TOP_HEIGHT
+	var mi = wall.get_meta("_model_instance", null)
+	if not (mi is Node3D):
+		return WALL_TOP_HEIGHT
+	var model := mi as Node3D
+	var model_id := model.get_instance_id()
+	var cached_id := int(wall.get_meta("_wall_top_model_id", 0))
+	var cached_scale := float(wall.get_meta("_wall_top_scale_y", -1.0))
+	if cached_id == model_id and absf(cached_scale - model.scale.y) < 0.0001:
+		return float(wall.get_meta("_wall_top_height", WALL_TOP_HEIGHT))
+	var local_top := 0.0
+	var aabb := _get_model_aabb(model)
+	if aabb.size.length() > 0.001:
+		local_top = maxf(aabb.end.y, 0.0)
+	var top := WALL_TOP_HEIGHT
+	if local_top > 0.001:
+		top = local_top * model.scale.y + model.position.y
+	top = maxf(top, 0.0)
+	wall.set_meta("_wall_top_model_id", model_id)
+	wall.set_meta("_wall_top_scale_y", model.scale.y)
+	wall.set_meta("_wall_top_height", top)
+	return top
 
 # 计算模型自身坐标系里的最低点：动物模型的原点常不在脚底，
 # 用它把模型最低点对齐到实体原点（实体原点就是地面高度）。
@@ -2504,7 +2533,7 @@ func _update_build_preview_from_screen(screen_pos: Vector2):
 					if hdist2 < (e.body_radius + 1.0):
 						pos.x = e.global_position.x
 						pos.z = e.global_position.z
-						pos.y = e.global_position.y + WALL_TOP_HEIGHT
+						pos.y = e.global_position.y + get_wall_top_height(e as Building)
 						build_preview.rotation.y = e.rotation.y
 						break
 		build_preview.global_position = pos
@@ -2734,7 +2763,7 @@ func _update_build_preview(screen_pos: Vector2):
 					if hd2 < (e.body_radius + 1.0):
 						pos.x = e.global_position.x
 						pos.z = e.global_position.z
-						pos.y = e.global_position.y + WALL_TOP_HEIGHT
+						pos.y = e.global_position.y + get_wall_top_height(e as Building)
 						build_preview.rotation.y = e.rotation.y
 						break
 		build_preview.global_position = pos

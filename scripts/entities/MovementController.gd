@@ -403,10 +403,13 @@ func process_move(delta, bm: RTSBattleManager):
 			var gpos2 = bm.world_to_grid(_army.global_position)
 			var wall_b = bm._wall_entity_grid.get(gpos2)
 			if wall_b:
+				# 城墙模型生成时会被自动缩放，顶面高度必须按模型实例计算；
+				# 固定加 WALL_TOP_HEIGHT 会让单位陷进 2 米高的墙体里。
+				var wall_top_h: float = bm.get_wall_top_height(wall_b)
 				if wall_b.team == _army.team:
-					target_height += RTSBattleManager.WALL_TOP_HEIGHT  # friendly wall
+					target_height += wall_top_h  # friendly wall
 				elif _has_adjacent_ladder(bm, gpos2, _army.team):
-					target_height += RTSBattleManager.WALL_TOP_HEIGHT  # laddered enemy wall
+					target_height += wall_top_h  # laddered enemy wall
 			_army.global_position.y = move_toward(_army.global_position.y, target_height, 5.0 * delta)
 
 # 根据坡面高度差计算实际移速倍率。只识别缓坡/台地，平原、沼泽、浅滩保持原逻辑。
