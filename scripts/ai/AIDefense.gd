@@ -959,7 +959,7 @@ func _manage_home_guard(castle, delta: float) -> void:
 		# 已经在主城守卫名单里的单位允许刷新集结点。
 		var has_active_task: bool = (
 			(u.current_target != null and is_instance_valid(u.current_target))
-			or u.is_attack_moving or u.current_order != ""
+			or u.is_attack_moving or u.current_order != "" or not u.command_queue.is_empty()
 		)
 		if has_active_task and threat_level < 3 and not _home_guard_ids.has(uid):
 			continue

@@ -2625,7 +2625,7 @@ func _is_ranged_wall_candidate(e) -> bool:
 		return false
 	if float(e.attack_range) < 2.0 or int(e.target_type) <= 0:
 		return false
-	if int(e.entity_id) in [5, 6, 9, 10, 14, 17, 43, 44, 45, 46, 47, 48, 49, 50, 51, 55, 56, 57, 59]:
+	if int(e.entity_id) in [5, 6, 9, 10, 14, 16, 17, 43, 44, 45, 46, 47, 48, 49, 50, 51, 55, 56, 57, 59]:
 		return false
 	var animal_type = e.get("_animal_type")
 	if animal_type != null and str(animal_type) != "":
@@ -2638,6 +2638,9 @@ func _is_ranged_wall_candidate(e) -> bool:
 	if e.garrison_point != Vector3.ZERO:
 		return false
 	if e.current_target != null or e.current_order != "":
+		return false
+	# 有排队命令的单位马上要执行下一步，不能被守墙调度截走。
+	if not e.command_queue.is_empty():
 		return false
 	var sgb = e.get("_soldier_garrison_building")
 	if sgb != null and sgb.get_ref() != null:
