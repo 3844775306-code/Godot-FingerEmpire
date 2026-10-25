@@ -290,7 +290,70 @@ func _ready():
 	can_move = false
 	_add_selection_ring()
 	_add_collision_shape()
+	_spawn_ground_patch()
 	call_deferred("_apply_nation_start_bonus")
+
+# ==================== 建筑脚下的土色地面 ====================
+# 建筑压住的那块地面泛出土色，范围比实际占地略大一圈，
+# 让建筑看起来是「坐」在土地上而不是浮在草皮上。
+# 建筑被摧毁后土色在几秒内慢慢褪去，留下一点被翻动过的痕迹再消失。
+const GROUND_PATCH_MARGIN: float = 1.6      # 比占地外扩多少米
+const GROUND_PATCH_FADE_TIME: float = 3.5   # 摧毁后淡出耗时（秒）
+const GROUND_PATCH_COLOR: Color = Color(0.42, 0.31, 0.19, 0.85)
+
+static var _ground_patch_tex: ImageTexture = null
+
+var _ground_patch: Decal = null
+
+# 程序生成一张柔边方形贴图当贴花底图：中间实、四边渐隐，
+# 这样土色边缘不会出现生硬的方框。全项目共用一张，用完缓存。
+static func _ground_patch_texture() -> ImageTexture:
+	if _ground_patch_tex != null:
+		return _ground_patch_tex
+	var n: int = 64
+	var feather: float = 12.0
+	var img := Image.create(n, n, false, Image.FORMAT_RGBA8)
+	for y in n:
+		for x in n:
+			var edge: float = minf(minf(float(x), float(n - 1 - x)), minf(float(y), float(n - 1 - y)))
+			var a: float = clampf(edge / feather, 0.0, 1.0)
+			# 轻微随机，避免整块土色像刷子刷出来的一样均匀
+			var shade: float = 0.88 + float((x * 7 + y * 13) % 11) * 0.012
+			img.set_pixel(x, y, Color(shade, shade, shade, a))
+	_ground_patch_tex = ImageTexture.create_from_image(img)
+	return _ground_patch_tex
+
+func _spawn_ground_patch() -> void:
+	if _ground_patch != null and is_instance_valid(_ground_patch):
+		return
+	var half: float = body_radius + GROUND_PATCH_MARGIN
+	var decal := Decal.new()
+	decal.name = "GroundPatch"
+	decal.texture_albedo = _ground_patch_texture()
+	# size.y 是垂直投射深度，给足高度以覆盖脚下的坡度起伏
+	decal.size = Vector3(half * 2.0, 12.0, half * 2.0)
+	decal.modulate = GROUND_PATCH_COLOR
+	decal.albedo_mix = 1.0
+	decal.upper_fade = 1.2
+	decal.lower_fade = 1.2
+	decal.position = Vector3.ZERO
+	add_child(decal)
+	_ground_patch = decal
+
+# 建筑死亡时调用：贴花脱离建筑挂在场景里继续淡出，
+# 直接挂在建筑上会跟着一起被 queue_free，看不到褪色过程。
+func _fade_ground_patch() -> void:
+	if _ground_patch == null or not is_instance_valid(_ground_patch):
+		_ground_patch = null
+		return
+	var decal := _ground_patch
+	_ground_patch = null
+	var parent := get_parent()
+	if parent != null:
+		decal.reparent(parent, true)
+	var tw := decal.create_tween()
+	tw.tween_property(decal, "modulate:a", 0.0, GROUND_PATCH_FADE_TIME)
+	tw.tween_callback(Callable(decal, "queue_free"))
 	
 	
 func _apply_nation_start_bonus():
@@ -660,4 +723,6 @@ func die():
 		return
 	# 先释放所有进驻单位，再执行死亡逻辑
 	release_all_garrisoned()
+	# 脚下的土色脱离建筑独立淡出，不会跟着模型一起瞬间消失
+	_fade_ground_patch()
 	super.die()
