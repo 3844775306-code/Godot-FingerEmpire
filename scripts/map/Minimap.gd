@@ -146,12 +146,20 @@ func _draw():
 	if _tex_dirty or not _terrain_tex:
 		_rebuild_terrain_texture()
 
+	# 手机端节点尺寸可能小于内部基准 400：内部照旧按 MINIMAP_SIZE 坐标画，
+	# 这里统一换算成缩放因子，所有绘制代码不必改。
+	var sc: float = size.x / float(MINIMAP_SIZE) if MINIMAP_SIZE > 0 else 1.0
+	if sc <= 0.01:
+		sc = 1.0
+	# 小地图随相机朝向一起转：屏幕上"往前"的方向永远是小地图的"上"，
+	# 这样点小地图移动和拖动战场的手感才一致。
+	# yaw 增大表示视角向右转，2D 正值也是顺时针，所以这里用正号跟住。
+	var yaw_rad: float = deg_to_rad(_last_cam_yaw) if _last_cam_yaw < 9999.0 else 0.0
+	var pivot := Vector2(size.x, size.y) * 0.5
+	draw_set_transform(pivot, yaw_rad, Vector2(sc, sc))
+
 	if _terrain_tex:
 		draw_texture(_terrain_tex, Vector2.ZERO)
-
-	# 双层边框：内层暖黑细边 + 外层金粗边（镶金宝镜徽章感）
-	draw_rect(Rect2(Vector2(2, 2), Vector2(MINIMAP_SIZE - 4, MINIMAP_SIZE - 4)), Color(UITheme.INK, 0.4), false, UITheme.BORDER_MED)
-	draw_rect(Rect2(Vector2.ZERO, Vector2(MINIMAP_SIZE, MINIMAP_SIZE)), Color(UITheme.GOLD, UITheme.ALPHA_BG), false, UITheme.BORDER_THICK)
 
 	# 每次绘制时实时查询颜色，和战场实体同源
 	var pc = {}
@@ -259,6 +267,12 @@ func _draw():
 	# 当前视角框（画在最后，压在地形与单位点上面）
 	_draw_view_frame(ms, cell)
 
+	# 复位变换后再画边框：边框要正对屏幕，不跟着地图一起转
+	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+	# 双层边框：内层暖黑细边 + 外层金粗边（镶金宝镜徽章感）
+	draw_rect(Rect2(Vector2(2, 2), Vector2(MINIMAP_SIZE - 4, MINIMAP_SIZE - 4)), Color(UITheme.INK, 0.4), false, UITheme.BORDER_MED)
+	draw_rect(Rect2(Vector2.ZERO, Vector2(MINIMAP_SIZE, MINIMAP_SIZE)), Color(UITheme.GOLD, UITheme.ALPHA_BG), false, UITheme.BORDER_THICK)
+
 # 在小地图上标出屏幕中心对应的地面位置：一个白色十字准星
 func _draw_view_frame(ms: float, cell: float) -> void:
 	if camera == null or not is_instance_valid(camera):
@@ -278,8 +292,17 @@ func _gui_input(event):
 		var w = maxf(size.x, 1.0)
 		var h = maxf(size.y, 1.0)
 		if local.x >= 0 and local.x <= w and local.y >= 0 and local.y <= h:
-			var world_x = (local.x / w - 0.5) * RTSConfig.MAP_SIZE
-			var world_z = (local.y / h - 0.5) * RTSConfig.MAP_SIZE
+			var u: float = local.x / w - 0.5
+			var v: float = local.y / h - 0.5
+			# 小地图是旋转显示的：点击位置要逆旋转回地图坐标系，
+			# 否则转过视角之后点哪里都会跳到错误的位置
+			var yaw_rad: float = deg_to_rad(_last_cam_yaw) if _last_cam_yaw < 9999.0 else 0.0
+			var ca: float = cos(-yaw_rad)
+			var sa: float = sin(-yaw_rad)
+			var ru: float = u * ca - v * sa
+			var rv: float = u * sa + v * ca
+			var world_x = ru * RTSConfig.MAP_SIZE
+			var world_z = rv * RTSConfig.MAP_SIZE
 			if camera:
 				if camera.has_method("focus_on_ground"):
 					camera.focus_on_ground(Vector3(world_x, 0, world_z))

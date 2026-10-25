@@ -157,15 +157,15 @@ func _create_camera_buttons() -> void:
 		btn.pressed.connect(_on_camera_rotate.bind(dir, cam))
 		row.add_child(btn)
 		_cam_buttons.append(btn)
-	# 右上角小地图下方（小地图 110dp 见方 + 顶部留白）
+	# 右上角小地图下方（小地图 77dp 见方 + 顶部留白）
 	row.anchor_left = 1.0
 	row.anchor_right = 1.0
 	row.anchor_top = 0.0
 	row.anchor_bottom = 0.0
 	row.offset_left = -UILayout.dp(112.0)
 	row.offset_right = -UILayout.dp(10.0)
-	row.offset_top = UILayout.dp(122.0)
-	row.offset_bottom = UILayout.dp(168.0)
+	row.offset_top = UILayout.dp(90.0)
+	row.offset_bottom = UILayout.dp(136.0)
 
 func _on_camera_rotate(dir: float, cam: Camera3D) -> void:
 	if is_instance_valid(cam) and cam.has_method("rotate_by"):
@@ -191,7 +191,9 @@ func _relayout_shared_nodes() -> void:
 	# 小地图与单位信息面板复用桌面节点，只重排位置与尺寸
 	var minimap := _find_ui_node("Minimap")
 	if minimap is Control:
-		UILayout.place_dp(minimap, "tr", 110.0, 110.0)
+		# 缩到原来的 0.7 倍：手机上小地图太占右上角，缩小后给战场让空间
+		minimap.custom_minimum_size = Vector2.ZERO
+		UILayout.place_dp(minimap, "tr", 77.0, 77.0)
 		minimap.mouse_filter = Control.MOUSE_FILTER_STOP
 
 	var info := _find_ui_node("InfoPanel")

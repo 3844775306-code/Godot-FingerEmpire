@@ -271,7 +271,7 @@ func _update_walk_dust(delta: float) -> void:
 		var gpos = bm.world_to_grid(global_position)
 		overlay = bm.get_overlay_at_grid(gpos.x, gpos.y)
 		# 战争迷雾里的敌人不要在地面上留下可见痕迹
-		if bm.has_method("is_position_in_player_vision") and not bm.is_position_in_player_vision(global_position):
+		if not _is_walk_position_visible(bm, gpos):
 			return
 	var side: int = 0
 	if not vehicle:
@@ -281,6 +281,20 @@ func _update_walk_dust(delta: float) -> void:
 	if mgr != null:
 		mgr.emit_step(global_position, move_dir, vehicle, terrain, overlay, side)
 	_play_step_sfx(terrain, overlay, vehicle)
+
+# 直接查迷雾网格，避免每走一步都遍历全场实体做距离判定。
+func _is_walk_position_visible(bm, gpos: Vector2i) -> bool:
+	if not is_instance_valid(bm):
+		return true
+	var vg = bm.get("visible_grid")
+	if vg == null or not (vg is Array) or vg.is_empty():
+		return true
+	if gpos.x < 0 or gpos.y < 0 or gpos.x >= vg.size():
+		return true
+	var col = vg[gpos.x]
+	if col == null or not (col is Array) or gpos.y >= col.size():
+		return true
+	return bool(col[gpos.y])
 
 func _play_step_sfx(terrain: int, overlay: int, vehicle: bool) -> void:
 	var key := "walk"
@@ -298,7 +312,7 @@ func _play_step_sfx(terrain: int, overlay: int, vehicle: bool) -> void:
 		pitch = randf_range(0.94, 1.06)
 	if vehicle:
 		pitch *= 0.82
-	_play_sfx_if_visible(key, pitch)
+	AudioManager.play_sfx_3d(key, global_position, _get_cam_pos(), pitch)
 
 # ----------------- ÊÓ¾õÓëÅö×² -----------------
 func _create_visual():
