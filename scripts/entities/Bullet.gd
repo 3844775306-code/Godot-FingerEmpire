@@ -32,10 +32,11 @@ const ARROW_STICK_TIME: float = 1.5
 var _stuck_to: Node3D = null          # 命中后箭矢附着的目标
 var _stuck_offset: Vector3 = Vector3.ZERO  # 命中瞬间相对目标的偏移，跟着目标一起动
 var _stuck_timer: float = 0.0
-# 巨石的伤害倍率：命中中心 1.5 倍，扩散到边缘降到 0.45 倍
-const BOULDER_CENTER_MULT: float = 1.5
-const BOULDER_EDGE_MULT: float = 0.45
-const BOULDER_SOURCE_ID: int = 59     # 巨型投石机：唯一走距离衰减的巨石
+# 石头类弹丸（投石车 17、巨型投石机 59）统一使用同一条距离衰减：
+# 落点中心 100% 伤害，向外线性衰减，到达 damage_radius 边缘时为 0。
+const STONE_SOURCE_IDS: Array[int] = [17, 59]
+const STONE_CENTER_MULT: float = 1.0
+const STONE_EDGE_MULT: float = 0.0
 
 # 弹丸模型缓存：后期每秒会生成几十到上百发子弹，不能每发都做
 # ResourceLoader.exists + load + GLB 实例化。PackedScene 只加载一次，之后只 instantiate。
@@ -67,12 +68,19 @@ func _reset_ballistic_state() -> void:
 func _is_arrow_bullet() -> bool:
 	return source_entity_id in [12, 13, 25, 31, 33, 37, 58]
 
-# 巨型投石机的巨石按落点距离衰减伤害；其它弹丸保持原样
+# 石头类弹丸按落点距离统一衰减；其它弹丸保持原样。
 func _damage_multiplier(dist: float) -> float:
-	if source_entity_id != BOULDER_SOURCE_ID:
+	if source_entity_id not in STONE_SOURCE_IDS:
 		return 1.0
 	var t: float = clampf(dist / maxf(damage_radius, 0.01), 0.0, 1.0)
-	return lerpf(BOULDER_CENTER_MULT, BOULDER_EDGE_MULT, t)
+	return lerpf(STONE_CENTER_MULT, STONE_EDGE_MULT, t)
+
+# AOE 伤害入口：边缘倍率为 0 时直接跳过，避免 0 伤害仍触发受击/仇恨逻辑。
+func _deal_aoe_damage(entity: GameEntity, src: GameEntity, dist: float) -> void:
+	var mult := _damage_multiplier(dist)
+	if mult <= 0.0:
+		return
+	entity.take_damage(damage * mult, src)
 
 # 炮弹与巨石的命中特效：一次性尘土/碎屑爆发，节点播完自行销毁
 func _spawn_impact_effect(pos: Vector3, big: bool) -> void:
@@ -497,23 +505,25 @@ func _on_hit(entity: GameEntity):
 
 	# 确保 source 有效，无效则不传
 	var src = source if is_instance_valid(source) else null
-	entity.take_damage(damage * _damage_multiplier(0.0), src)
+	_deal_aoe_damage(entity, src, 0.0)
 
 	if damage_radius > 0:
-		_spawn_impact_effect(global_position, source_entity_id in [17, 59])
+		_spawn_impact_effect(global_position, source_entity_id in STONE_SOURCE_IDS)
 		var bm = _get_bm()
 		if bm:
 			var nearby = bm.get_nearby_enemies(global_position, damage_radius, team, owner_peer_id)
 			for e in nearby:
 				if e == entity or e == src: continue
-				if e.global_position.distance_to(global_position) <= damage_radius:
-					e.take_damage(damage * _damage_multiplier(e.global_position.distance_to(global_position)), src)
+				var d: float = e.global_position.distance_to(global_position)
+				if d <= damage_radius:
+					_deal_aoe_damage(e, src, d)
 		else:
 			for e in get_tree().get_nodes_in_group("entities"):
 				if e == entity or e == src: continue
 				if e is GameEntity and e.team != team:
-					if e.global_position.distance_to(global_position) <= damage_radius:
-						e.take_damage(damage * _damage_multiplier(e.global_position.distance_to(global_position)), src)
+					var d: float = e.global_position.distance_to(global_position)
+					if d <= damage_radius:
+						_deal_aoe_damage(e, src, d)
 
 	if attack_type == 2: entity.shock(0.5)
 	elif attack_type == 3: entity.freeze(3.0)
@@ -550,7 +560,7 @@ func _on_hit_pos():
 
 	# 炮弹/巨石砸地：先放命中特效，巨石带更大的碎屑爆发
 	if damage_radius > 0:
-		_spawn_impact_effect(global_position, source_entity_id in [17, 59])
+		_spawn_impact_effect(global_position, source_entity_id in STONE_SOURCE_IDS)
 
 	if damage_radius > 0:
 		var bm = _get_bm()
@@ -560,12 +570,12 @@ func _on_hit_pos():
 				if e == src: continue
 				var d: float = e.global_position.distance_to(global_position)
 				if d <= damage_radius:
-					e.take_damage(damage * _damage_multiplier(d), src)
+					_deal_aoe_damage(e, src, d)
 		else:
 			for e in get_tree().get_nodes_in_group("entities"):
 				if e == src: continue
 				if e is GameEntity and e.team != team:
 					var d: float = e.global_position.distance_to(global_position)
 					if d <= damage_radius:
-						e.take_damage(damage * _damage_multiplier(d), src)
+						_deal_aoe_damage(e, src, d)
 	recycle()
