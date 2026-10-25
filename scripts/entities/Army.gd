@@ -20,6 +20,9 @@ var _defense_return_position: Vector3 = Vector3.ZERO
 
 # ÒÆ¶¯ÊôÐÔ
 var original_speed: float = 0.0
+# 船只模型放大后，配置里的 body_radius 不再代表视觉体积；此半径仅用于推挤/碰撞，
+# 不参与攻击距离、靶心等战斗判定。0 表示沿用 body_radius。
+var push_radius: float = 0.0
 var loop_index:int = 0
 # Cached terrain/speed lookups — avoid per-frame grid queries when stationary
 var _cached_bm = null
@@ -471,6 +474,15 @@ func _add_collision_shape():
 		col.shape = shape
 		col.name = "CollisionShape3D"
 		add_child(col)
+
+# 船只推挤半径在 spawn 时按视觉倍率补偿；这里同步物理碰撞球。
+func _update_collision_shape():
+	if not has_node("CollisionShape3D"):
+		return
+	var col = $CollisionShape3D
+	if col.shape is SphereShape3D:
+		var r: float = push_radius if push_radius > 0.0 else body_radius
+		col.shape.radius = r * 0.6
 
 # ----------------- Ö÷Ñ­»· -----------------
 

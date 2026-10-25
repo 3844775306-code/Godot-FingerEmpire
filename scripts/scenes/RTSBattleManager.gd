@@ -2191,6 +2191,14 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 					var bmin: float = _model_local_min_y(bmi)
 					if absf(bmin) > 0.005:
 						bmi.position.y -= bmin
+	# 船只模型已通过 ENTITY_MODEL_SCALE 放大，推挤/碰撞半径同步补偿；
+	# 只改 push_radius，不改 body_radius，避免攻击距离等战斗数值一起变化。
+	if entity is Army:
+		var ship_collision_scale: float = RTSConfig.get_ship_collision_scale(entity.entity_id)
+		if ship_collision_scale != 1.0:
+			entity.push_radius = entity.body_radius * ship_collision_scale
+			if entity.has_method("_update_collision_shape"):
+				entity.call("_update_collision_shape")
 	# 资源需要 setup 后再重建 visual
 	if entity.entity_type == 0 and not model_loaded and entity.has_method("_create_visual"):
 		entity._create_visual()

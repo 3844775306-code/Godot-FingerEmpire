@@ -399,7 +399,7 @@ func apply_collision(delta):
 		return
 	# 单位碰撞只需要极近的邻居，过去固定查 5 格会把密集人群整片返回；
 	# 建筑中心半径较大，单独走建筑桶查询，避免为了命中建筑而扫描周围所有单位。
-	var near_range: float = maxf(_army.body_radius * 2.0 + 0.8, 1.2)
+	var near_range: float = maxf(_get_collision_radius(_army) * 2.0 + 0.8, 1.2)
 	var entities_nearby: Array = bm.get_nearby_entities(_army.global_position, near_range)
 	var buildings_nearby: Array = []
 	if bm.has_method("get_nearby_buildings"):
@@ -420,11 +420,18 @@ func apply_collision(delta):
 			if _has_adjacent_ladder(bm, bm.world_to_grid(entity.global_position), _army.team): continue  # pass through laddered enemy walls
 		_separate_from(entity, delta, bm)
 
+# 船只视觉模型放大后使用 push_radius 做推挤；普通单位仍沿用 body_radius。
+func _get_collision_radius(entity: GameEntity) -> float:
+	if entity is Army and entity.push_radius > 0.0:
+		return entity.push_radius
+	return entity.body_radius
+
 # 按体积近似推挤质量；配置里显式给了 mass 时优先使用。
 func _get_push_mass(entity: GameEntity) -> float:
 	if entity.mass > 0.0:
 		return entity.mass
-	return maxf(1.0, entity.body_radius * entity.body_radius * 10.0)
+	var r: float = _get_collision_radius(entity)
+	return maxf(1.0, r * r * 10.0)
 
 # 推挤落点是否合法：陆军不能进深水/河流，海军不能上岸，桥面按各自通行规则处理。
 func _can_push_to(pos: Vector3, bm: RTSBattleManager) -> bool:
@@ -503,7 +510,7 @@ func _building_slide_dir(push_dir: Vector3, velocity: Vector3) -> Vector3:
 
 func _separate_from(entity: GameEntity, delta: float, bm: RTSBattleManager) -> void:
 	var dist = _army.global_position.distance_to(entity.global_position)
-	var min_dist = _army.body_radius + entity.body_radius
+	var min_dist = _get_collision_radius(_army) + _get_collision_radius(entity)
 	if dist < min_dist and dist > 0.001:
 		if entity is Building and entity.team != _army.team:
 			blocking_building = entity

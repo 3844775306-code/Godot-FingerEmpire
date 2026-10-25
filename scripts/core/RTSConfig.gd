@@ -184,6 +184,17 @@ static func get_building_body_scale(entity_id: int) -> float:
 		return 1.0
 	return BUILDING_BODY_SCALE
 
+# 船只模型按 ENTITY_MODEL_SCALE 放大了一倍，但配置里的 body_radius 仍是旧值。
+# 推挤/碰撞半径用单独倍率补偿，避免船只视觉上互相大面积重叠；不直接改
+# body_radius，避免同时改变攻击距离、靶心大小等战斗数值。
+const SHIP_IDS := [9, 13, 14, 39, 40]
+const SHIP_COLLISION_SCALE := 2.0
+
+static func get_ship_collision_scale(entity_id: int) -> float:
+	if entity_id in SHIP_IDS:
+		return SHIP_COLLISION_SCALE
+	return 1.0
+
 const DEMOLISHED_MODELS = {
 	17: "res://models/castle/siege-catapult-demolished.glb",
 	18: "res://models/castle/siege-ram-demolished.glb",
