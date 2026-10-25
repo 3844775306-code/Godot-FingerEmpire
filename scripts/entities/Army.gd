@@ -43,17 +43,23 @@ var delivery_target: Building = null
 var last_resource_target: WorldResource = null   
 # 采集时朝资源点移动的“无进展”累计时长：距离持续缩短就清零，避免长距离赶路被误判
 var _gather_approach_time: float = 0.0
-# 只用“距离是否缩短”判断是否卡住：长距离赶路不能因为总时长超过 8 秒就被放弃
-var _gather_last_dist: float = -1.0
+# 用实际位移判断进展：绕路时直线距离可能暂时不缩短，但单位确实在走
+var _gather_last_distance: float = -1.0
+var _gather_last_position: Vector3 = Vector3.ZERO
 var _gather_progress_timer: float = 0.0
 # 附近确实没有可采资源时的重搜节流，避免大量空闲农民每帧扫描
 var _gather_search_retry_ms: int = 0
+# 同一个资源反复寻路失败时按次数延长记忆，避免 5 秒到期后又选回同一个点
+var _resource_fail_counts: Dictionary = {}
 # 交付时朝仓库/主城移动的累计时长与失败次数：走不到就重算路径、换交付点
 var _deliver_approach_time: float = 0.0
 var _deliver_retry_count: int = 0
 # 交付时"距离是否在缩短"的检测（卡住时强制重算 A* 路径）
 var _deliver_check_timer: float = 0.0
 var _deliver_last_dist: float = -1.0
+var _deliver_total_time: float = 0.0
+# 连续交付失败的主城/仓库暂时不再选，避免一直往同一个不可达点跑
+var _delivery_failed_targets: Dictionary = {}
 
 # ¹¥»÷ÒÆ¶¯
 var is_attack_moving: bool = false
@@ -62,6 +68,8 @@ var attack_move_target: Vector3 = Vector3.ZERO
 # 改为尝试攻击最近的敌方建筑（拆墙）或放弃该目标。
 const ATTACK_APPROACH_STUCK_TIME: float = 1.2
 const UNREACHABLE_TARGET_MEMORY_MS: int = 5000
+const DELIVERY_FAILED_MEMORY_MS: int = 15000
+const DELIVERY_ABSOLUTE_TIMEOUT: float = 150.0
 const TARGET_VALIDATE_INTERVAL: float = 0.5
 var _attack_stall_time: float = 0.0
 var _attack_watch_target_id: int = -1
@@ -1155,6 +1163,31 @@ func _mark_target_unreachable(target) -> void:
 		return
 	_unreachable_targets[target.get_instance_id()] = Time.get_ticks_msec() + UNREACHABLE_TARGET_MEMORY_MS
 
+# 资源点连续失败时逐步延长冷却：5s→10s→20s→40s→60s。
+# 5 秒太短时，采空基地里被水/墙隔开的最近资源会在记忆过期后又被选回来，
+# 形成“选点→寻路失败→发呆 5 秒→再选同一点”的循环。
+func _mark_resource_unreachable(target) -> void:
+	if target == null or not is_instance_valid(target) or not (target is GameEntity):
+		return
+	var tid: int = target.get_instance_id()
+	var count: int = int(_resource_fail_counts.get(tid, 0)) + 1
+	_resource_fail_counts[tid] = count
+	var ttl: int = UNREACHABLE_TARGET_MEMORY_MS * (1 << mini(count - 1, 4))
+	_unreachable_targets[tid] = Time.get_ticks_msec() + mini(ttl, 60000)
+
+func _clear_resource_unreachable(target) -> void:
+	if target == null or not is_instance_valid(target):
+		return
+	var tid: int = target.get_instance_id()
+	_unreachable_targets.erase(tid)
+	_resource_fail_counts.erase(tid)
+
+# 只解除“暂时不可达”标记，保留失败次数；自动重试仍然按次数退避。
+func _clear_resource_mark(target) -> void:
+	if target == null or not is_instance_valid(target):
+		return
+	_unreachable_targets.erase(target.get_instance_id())
+
 # 阵营/敌对关系是否仍允许攻击。中立动物是手动狩猎的合法目标，不按敌对判定。
 func _is_target_team_valid(target) -> bool:
 	if target == null or not is_instance_valid(target) or not (target is GameEntity):
@@ -1683,6 +1716,7 @@ func _process_action(delta, bm):
 			delivery_target = null
 			_deliver_approach_time = 0.0
 			_deliver_retry_count = 0
+			_deliver_total_time = 0.0
 			current_target = null
 			if not _return_to_deliver():
 				_set_order(UnitState.IDLE)
@@ -1700,10 +1734,13 @@ func _process_action(delta, bm):
 				
 				bm.deliver_resources(cargo, team)
 			cargo.clear()
+			if delivery_target != null and is_instance_valid(delivery_target):
+				_delivery_failed_targets.erase(delivery_target.get_instance_id())
 			delivery_target = null
 			current_target = null
 			_deliver_approach_time = 0.0
 			_deliver_retry_count = 0
+			_deliver_total_time = 0.0
 			_set_order(UnitState.IDLE)
 			if is_instance_valid(last_resource_target) and last_resource_target.health > 0 \
 					and not _is_target_marked_unreachable(last_resource_target):
@@ -1713,6 +1750,7 @@ func _process_action(delta, bm):
 			last_resource_target = null
 		else:
 			_deliver_approach_time += delta
+			_deliver_total_time += delta
 			var cur_dist: float = h_diff.length()
 			# 每 1.5 秒检查一次：距离没有明显缩短就强制重算路径。
 			# 农民可能因为 A* 失败/建筑格被 blacklist/目标点仍停在旧值而原地不动，
@@ -1720,31 +1758,33 @@ func _process_action(delta, bm):
 			_deliver_check_timer += delta
 			if _deliver_check_timer >= 1.5:
 				_deliver_check_timer = 0.0
-				var moved_enough: bool = _deliver_last_dist < 0.0 or absf(cur_dist - _deliver_last_dist) > 0.4
+				# 必须是“在接近”才算进展；被挤得来回晃、绕圈但没靠近不能重置计时。
+				var moved_enough: bool = _deliver_last_dist < 0.0 \
+						or cur_dist < _deliver_last_dist - 0.4
 				_deliver_last_dist = cur_dist
 				if moved_enough:
 					# 长距离回城也会超过 DELIVER_APPROACH_TIMEOUT，只要距离仍在
-					# 稳定缩短就说明没卡住，必须重置累计时间，否则农民会在半路
-					# 被判定“走不到”而放弃，表现为载着货物发呆。
+					# 稳定缩短就说明没卡住，必须重置无进展计时；但失败次数不能
+					# 跟着清零，否则“连续失败两次换交付点”的分支永远不会触发。
 					_deliver_approach_time = 0.0
-					_deliver_retry_count = 0
 				elif _movement:
 					_movement.recalculate()
 			if _deliver_approach_time > DELIVER_APPROACH_TIMEOUT:
 				_deliver_approach_time = 0.0
 				_deliver_retry_count += 1
 				if _deliver_retry_count >= 2:
-					# 反复走不到：换一个交付点；没有别的仓库就回空闲等玩家处理
-					_deliver_retry_count = 0
-					delivery_target = null
-					current_target = null
-					if not _return_to_deliver():
-						_set_order(UnitState.IDLE)
+					# 反复走不到：把这个交付点暂时排除，换下一个仓库/主城；
+					# 没有别的可交付建筑就空闲等待，避免满载永久在 A* 循环里空转。
+					_abandon_delivery_target()
 				elif _movement:
 					# 主城周围被建筑/单位围住时 A* 会算不出完整路径，强制重算一次
 					_movement.recalculate()
 					_deliver_last_dist = -1.0
 					_deliver_check_timer = 0.0
+			elif _deliver_total_time > DELIVERY_ABSOLUTE_TIMEOUT:
+				# 极端情况：单位一直在小幅抖动/绕圈，距离偶尔缩短导致上面
+				# 的无进展计时反复清零。这里加一个绝对上限，保证不会永久载货。
+				_abandon_delivery_target()
 			else:
 				# 目标点取建筑外缘（走到城堡中心会导致路径不可达而原地卡住）
 				var arrive: float = delivery_target.body_radius + body_radius + 0.5
@@ -1892,32 +1932,33 @@ func _process_action(delta, bm):
 
 		if current_target is WorldResource:
 			if h_dist <= 0.5:
+				_clear_resource_unreachable(current_target)
 				_gather_approach_time = 0.0
-				_gather_last_dist = -1.0
+				_gather_last_distance = -1.0
+				_gather_last_position = global_position
 				_gather_progress_timer = 0.0
 				_gather(current_target, delta)
 			else:
-				# 用“距离有没有缩短”而不是“总走了多久”判断卡住：远距离资源点
-				# 正常赶路可能超过 8 秒，旧的累计计时会在半路把目标丢掉，
-				# 农民随后重新选同一个点，看起来就是原地发呆。
+				# 用“实际有没有移动”判断卡住，而不是直线距离。绕城堡/山体/河岸
+				# 时直线距离可能长时间不缩短，但单位确实沿 A* 路径在走。
 				_gather_progress_timer += delta
 				if _gather_progress_timer >= 1.0:
-					var gather_moved: bool = _gather_last_dist < 0.0 or h_dist < _gather_last_dist - 0.2
-					if gather_moved:
+					var moved: bool = global_position.distance_to(_gather_last_position) > 0.3
+					var closer: bool = _gather_last_distance < 0.0 or h_dist < _gather_last_distance - 0.2
+					if moved or closer:
 						_gather_approach_time = 0.0
 					else:
 						_gather_approach_time += _gather_progress_timer
-					_gather_last_dist = h_dist
+					_gather_last_distance = h_dist
+					_gather_last_position = global_position
 					_gather_progress_timer = 0.0
-				# A* 明确失败（目标点被黑名单/完全不可达）或长时间没有接近：
-				# 把这个资源点记成暂时不可达，换下一个，避免反复锁回同一个点。
-				# 已经很靠近资源时先不走这条：寻路失败但允许最后一段直走，
-				# 否则会站在资源边缘却判定不可达。
-				if _gather_approach_time > GATHER_APPROACH_TIMEOUT \
-						or (_movement.move_path_failed and h_dist > 2.0):
-					_mark_target_unreachable(current_target)
+				# 长时间既没有位移也没有接近资源：记成暂时不可达并换下一个。
+				# 不直接用 move_path_failed：黑名单/无 battle_manager 也会置位，
+				# 那不代表资源本身不可达。
+				if _gather_approach_time > GATHER_APPROACH_TIMEOUT:
+					_mark_resource_unreachable(current_target)
 					_gather_approach_time = 0.0
-					_gather_last_dist = -1.0
+					_gather_last_distance = -1.0
 					_gather_progress_timer = 0.0
 					current_target = null
 					_set_order(UnitState.IDLE)
@@ -2241,6 +2282,8 @@ func _think(delta, bm):
 func recalculate_path():
 	# 建筑布局变化后，之前“打不到”的目标可能已经可达
 	_unreachable_targets.clear()
+	_resource_fail_counts.clear()
+	_delivery_failed_targets.clear()
 	_attack_stall_time = 0.0
 	if _movement: _movement.recalculate()
 
@@ -2619,13 +2662,27 @@ func _return_to_deliver() -> bool:
 			last_resource_target = current_target
 		delivery_target = target
 		current_target = target
+		_delivery_failed_targets.erase(target.get_instance_id())
 		_deliver_approach_time = 0.0
 		_deliver_retry_count = 0
+		_deliver_total_time = 0.0
 		_deliver_check_timer = 0.0
 		_deliver_last_dist = -1.0
 		_set_order(UnitState.DELIVERING)
 		return true
 	return false
+
+func _abandon_delivery_target() -> void:
+	_deliver_approach_time = 0.0
+	_deliver_retry_count = 0
+	_deliver_total_time = 0.0
+	if delivery_target != null and is_instance_valid(delivery_target):
+		_delivery_failed_targets[delivery_target.get_instance_id()] = \
+				Time.get_ticks_msec() + DELIVERY_FAILED_MEMORY_MS
+	delivery_target = null
+	current_target = null
+	if not _return_to_deliver():
+		_set_order(UnitState.IDLE)
 
 # ----------------- Ñ°ÕÒ½»¸¶µã -----------------
 func find_delivery_point() -> Building:
@@ -2636,8 +2693,14 @@ func find_delivery_point() -> Building:
 	# 农民每次回城交付都会调用；优先使用 battle 的 Building 缓存，避免全实体扫描
 	var bm = _get_bm()
 	var candidates = bm._buildings if bm else get_tree().get_nodes_in_group("entities")
+	var now_ms: int = Time.get_ticks_msec()
+	for key in _delivery_failed_targets.keys():
+		if int(_delivery_failed_targets[key]) <= now_ms:
+			_delivery_failed_targets.erase(key)
 	for entity in candidates:
 		if not is_instance_valid(entity):
+			continue
+		if _delivery_failed_targets.has(entity.get_instance_id()):
 			continue
 		if entity is Building and entity.team == team and entity.health > 0:
 			if cargo.get("oil", 0) > 0:
@@ -2664,10 +2727,11 @@ func _find_nearest_resource():
 		var best = _pick_gather_resource(bm, search_r)
 		if best == null:
 			# 身边一圈采空或都被判定不可达时，再向外扩一档，避免农民
-			# 因为半视野/整段视野内暂时没有资源就永久待在原地。
-			var wider: float = maxf(search_r * 2.5, 30.0)
+			# 因为视野内暂时没有资源就永久待在原地。给一个绝对上限，
+			# 防止采集船 32m 视野被放大到 80m 跨战线找资源。
+			var wider: float = minf(maxf(search_r * 2.5, 30.0), 40.0)
 			best = _pick_gather_resource(bm, wider)
-		if best:
+		if best != null:
 			gather_at(best)
 		else:
 			_gather_search_retry_ms = now_ms + 800
@@ -2690,10 +2754,12 @@ func _find_nearest_resource():
 # 避免每次都锁回同一个隔着水/墙的资源点反复超时。
 func _pick_gather_resource(bm, radius: float) -> WorldResource:
 	var nearest = bm.get_nearest_resource(global_position, radius, gatherable_resources)
-	if nearest != null and not _is_target_marked_unreachable(nearest):
+	if nearest == null:
+		return null
+	if not _is_target_marked_unreachable(nearest):
 		return nearest
 	# get_nearest_resource 只返回一个点，最近的恰好不可达时无法换目标。
-	# 这里直接遍历 battle 的资源缓存（数量远小于单位），筛出范围内可达的次近点。
+	# 此时才遍历 battle 的资源缓存（数量远小于单位），筛出范围内可达的次近点。
 	var best: WorldResource = null
 	var best_dist: float = INF
 	var radius_sq: float = radius * radius
@@ -2846,8 +2912,10 @@ func _execute_command(cmd: Dictionary):
 			if not _is_valid_command_target(gather_cmd_target):
 				return
 			current_target = gather_cmd_target
+			_clear_resource_mark(gather_cmd_target)
 			_gather_approach_time = 0.0
-			_gather_last_dist = -1.0
+			_gather_last_distance = -1.0
+			_gather_last_position = global_position
 			_gather_progress_timer = 0.0
 			_gather_search_retry_ms = 0
 			_set_order(UnitState.GATHERING)
@@ -2995,6 +3063,8 @@ func attack_target(p_target):
 func gather_at(source):
 	if not _is_valid_command_target(source):
 		return
+	# 玩家手动点采集时解除“不可达”标记，让命令立即生效；失败次数保留用于退避
+	_clear_resource_mark(source)
 	_queue_command({"type": "gather", "target": source})
 
 func attack_move_to(pos: Vector3):
