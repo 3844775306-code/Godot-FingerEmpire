@@ -34,6 +34,10 @@ const BOARD_DISTANCE := 7.0
 const PARK_DISTANCE := 3.0
 const UNLOAD_DISTANCE := 7.0
 const BOARD_WAIT_TIMEOUT := 50.0
+# 集结宽限：船坞被其他船占满、人口封顶或运载船在队列里迟迟不下水时，
+# 不能永远等“4 运载船 + 4 护航舰”齐编。超过这个时间就按现有船先组织登陆，
+# 否则海峡图这种完全无陆路的地图会一直停在 STATE_IDLE，永远不投送陆军。
+const FLEET_ASSEMBLY_TIMEOUT := 45.0
 
 const MODE_NONE := 0
 const MODE_BRIDGE := 1
@@ -83,6 +87,7 @@ var _wave_transport_target: int = 0
 var _wave_escort_target: int = 0
 var _wave_troop_target: int = 0
 var _wave_troop_quota: int = 0
+var _fleet_wait_timer: float = 0.0
 
 func _init(owner):
 	ai = owner
@@ -189,6 +194,7 @@ func _abort_transport():
 	_escort_advanced = false
 	_transport_state = STATE_IDLE
 	_transport_timer = 0.0
+	_fleet_wait_timer = 0.0
 	# 中断后下一次组织登陆按当时时间重新计算波次规模
 	_reset_wave_targets()
 
@@ -563,6 +569,7 @@ func _reset_wave_targets():
 	_wave_escort_target = 0
 	_wave_troop_target = 0
 	_wave_troop_quota = 0
+	_fleet_wait_timer = 0.0
 
 func _refresh_fleet():
 	_transports.clear()
@@ -606,11 +613,22 @@ func _tick_transport(delta: float):
 	# 舰队已经开始集结/出航后，个别船只战损不应让整波返航，
 	# 否则后期护航舰越多、损失一艘就越容易导致登陆部队被反复撤回。
 	if _transport_state == STATE_IDLE:
-		if _transports.size() < _wave_transport_target or _escorts.size() < _wave_escort_target:
+		var fleet_short: bool = _transports.size() < _wave_transport_target \
+			or _escorts.size() < _wave_escort_target
+		if fleet_short:
 			_ensure_transport_tech()
 			_ensure_transport_fleet()
 			_ensure_escort_ships()
-			return
+			_fleet_wait_timer += delta
+			# 船没造出来/卡在船坞队列时不能无限等满编；超过宽限后按现有
+			# 运载船组织一波较小的登陆，至少让海峡图 AI 能越过海面。
+			if _fleet_wait_timer < FLEET_ASSEMBLY_TIMEOUT:
+				return
+			_relax_fleet_requirement()
+			if _transports.is_empty():
+				return
+		else:
+			_fleet_wait_timer = 0.0
 	elif _transports.is_empty():
 		_abort_transport()
 		return
@@ -636,6 +654,22 @@ func _tick_transport(delta: float):
 			_transport_timer = 0.0
 			# 下一次组织登陆时按当时的时间重新计算更大的波次规模
 			_reset_wave_targets()
+
+# 久等仍凑不满编队：把本波目标降到实际拥有的运载船/护航舰数量。
+# 只降低“这一波”的目标，下一波仍会按游戏时间重新要求更大的编队。
+func _relax_fleet_requirement() -> void:
+	var actual_transports: int = _transports.size()
+	if actual_transports <= 0:
+		return
+	_wave_transport_target = actual_transports
+	_wave_escort_target = mini(_wave_escort_target, _escorts.size())
+	_wave_troop_target = mini(_wave_troop_target, actual_transports * TRANSPORT_CAPACITY)
+	_wave_troop_quota = 0
+	_fleet_wait_timer = 0.0
+	if OS.is_debug_build():
+		print("[AI] 运载船编队未凑齐，按现有 %d 艘运载船/ %d 艘护航舰组织登陆" % [
+			actual_transports, _escorts.size()
+		])
 
 func _tick_fleet_idle(delta: float):
 	# 运载船要用“靠岸停泊点”，而不是随便一个水面点
@@ -665,17 +699,17 @@ func _tick_fleet_idle(delta: float):
 			escorts_home = false
 	if not escorts_home:
 		return
-	# 本波次实际目标兵力：不超过本次运载船总容量
-	var desired_troops: int = mini(
-		maxi(_wave_troop_target, MIN_TRANSPORT_TROOPS),
-		_transports.size() * TRANSPORT_CAPACITY
-	)
+	# 本波次实际目标兵力：不超过本次运载船总容量。
+	# 编队缩水时最低人数也随运力下降，否则 2 艘船永远达不到 30 人。
+	var capacity: int = _transports.size() * TRANSPORT_CAPACITY
+	var min_troops: int = mini(MIN_TRANSPORT_TROOPS, capacity)
+	var desired_troops: int = mini(maxi(_wave_troop_target, min_troops), capacity)
 	var units: Array = _pick_units(desired_troops)
 	if units.size() < desired_troops:
 		# 尽量等本波次要求的兵力到齐；兵力实在不足时等待 TROOP_GATHER_GRACE 后
-		# 仍按基础30兵出发，避免一波永远凑不齐导致 AI 再也不从海上进攻。
+		# 仍按当前运力能接受的最低人数出发，避免一波永远凑不齐导致 AI 再也不从海上进攻。
 		_transport_timer += delta
-		if _transport_timer < TROOP_GATHER_GRACE or units.size() < MIN_TRANSPORT_TROOPS:
+		if _transport_timer < TROOP_GATHER_GRACE or units.size() < min_troops:
 			return
 	else:
 		_transport_timer = 0.0
@@ -770,7 +804,9 @@ func _tick_fleet_gather(delta: float):
 			boarded_now += 1
 	# 已经够本波次目标人数时不要为了等最后几个掉队的兵一直拖到 50 秒超时；
 	# 给落单单位一个短暂追赶窗口后直接出发。
-	var troop_quota: int = maxi(_wave_troop_quota, MIN_TRANSPORT_TROOPS)
+	var capacity: int = _transports.size() * TRANSPORT_CAPACITY
+	var min_troops: int = mini(MIN_TRANSPORT_TROOPS, capacity)
+	var troop_quota: int = maxi(_wave_troop_quota, min_troops)
 	var stop_waiting: bool = _transport_timer > BOARD_WAIT_TIMEOUT or (boarded_now >= troop_quota and _transport_timer > 8.0)
 	for u in _transport_units:
 		if is_instance_valid(u) and not u.has_meta("_boarded_on") and stop_waiting:
@@ -778,8 +814,8 @@ func _tick_fleet_gather(delta: float):
 	if waiting > 0 and not stop_waiting:
 		return
 	_transport_units = boarded_units
-	if _transport_units.size() < MIN_TRANSPORT_TROOPS:
-		# 连基础30人都没上船，回岸边重来，不把过小的部队送过去
+	if _transport_units.size() < min_troops:
+		# 连当前运力能接受的最低人数都没上船，回岸边重来，不把过小的部队送过去
 		_abort_transport()
 		return
 	_transport_state = STATE_SAIL
@@ -1093,7 +1129,9 @@ func _ensure_transport_tech():
 		ai.upgrade_building(SHIPYARD_ID)
 
 func _ensure_transport_fleet():
-	if ai.count_unit(TRANSPORT_ID) >= _wave_transport_target:
+	# 只统计已经下水的运载船。count_unit 默认包含生产队列，若把队列里的船
+	# 当成已拥有，就会出现“实际只有2艘、队列里4艘、AI以为够了不再下单”的卡死。
+	if ai.count_unit(TRANSPORT_ID, false) >= _wave_transport_target:
 		return
 	var sy = ai._find_own_building(SHIPYARD_ID)
 	if not is_instance_valid(sy) or sy.build_timer > 0.0:
@@ -1121,7 +1159,8 @@ func _ensure_transport_fleet():
 				sy.production_queue.insert(1, TRANSPORT_ID)
 
 func _ensure_escort_ships():
-	var total: int = ai.count_unit(13) + ai.count_unit(39) + ai.count_unit(40)
+	# 同上：只算已经下水的护航舰，队列里的不计入“已具备”。
+	var total: int = ai.count_unit(13, false) + ai.count_unit(39, false) + ai.count_unit(40, false)
 	if total >= _wave_escort_target:
 		return
 	var sy = ai._find_own_building(SHIPYARD_ID)
