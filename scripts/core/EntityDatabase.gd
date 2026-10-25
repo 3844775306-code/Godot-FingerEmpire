@@ -92,14 +92,14 @@ func _init_data():
 		{
 			"id": 12, "type": 2, "name": "弓箭手", "team": 0,
 			"cost": {"food": 30, "wood": 40},
-			"max_health": 70, "attack": 8, "attack_speed": 0.9, "speed": 1.5,
+			"max_health": 70, "attack": 8, "attack_speed": 0.69, "speed": 1.5,
 			"vision_range": 18, "attack_range": 5.0, "damage_radius": 0, "target_type": 3,
 			"body_radius": 0.35, "melee_armor": 0, "shield_armor": 2, "can_move": true
 		},
 		{
 			"id": 13, "type": 2, "name": "战船", "team": 0,
 			"cost": {"wood": 80, "gold": 60},
-			"max_health": 300, "attack": 25, "attack_speed": 2.0, "speed": 1.5,
+			"max_health": 300, "attack": 25, "attack_speed": 1.54, "speed": 1.5,
 			"vision_range": 20, "attack_range": 4.0, "target_type": 3, "body_radius": 0.8,
 			"melee_armor": 4, "shield_armor": 4, "water_capable": true, "can_move": true
 		},
@@ -358,7 +358,7 @@ func _init_data():
 		{
 			"id": 37, "type": 2, "name": "重装弓箭手", "team": 0,
 			"cost": {"food": 60, "stone": 60, "oil": 40},
-			"max_health": 160, "attack": 35, "attack_speed": 3.0, "speed": 1.0,
+			"max_health": 160, "attack": 35, "attack_speed": 2.31, "speed": 1.0,
 			"vision_range": 16, "attack_range": 6.0, "damage_radius": 0, "target_type": 3,
 			"body_radius": 0.5, "melee_armor": 2, "shield_armor": 4, "can_move": true
 		},
