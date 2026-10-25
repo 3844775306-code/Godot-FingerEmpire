@@ -142,12 +142,9 @@ const ASTAR_RETRY_RESERVE_USEC: int = 8000
 var _astar_budget_frame: int = -1
 var _astar_budget_count: int = 0
 var _astar_budget_usec: int = 0
-# 顶部信息栏的 A* 统计：上一秒实际寻路调用次数 / 成功分配到预算的次数。
+# A* 统计：调用次数按 1 秒窗口滚动，峰值/累计供结算面板使用。
 # 实际调用包含建筑变化后 recalculate() 的直算，所以可能略高于分配次数。
 var _astar_calls_window: int = 0
-var _astar_alloc_window: int = 0
-var _astar_calls_last_second: int = 0
-var _astar_alloc_last_second: int = 0
 var _astar_stats_window_ms: int = 0
 # 结算面板用的全场累计值：总调用、总分配、峰值/秒、总耗时
 var _astar_calls_total: int = 0
@@ -225,7 +222,6 @@ func reserve_astar_request(is_retry: bool = false) -> bool:
 	if _astar_budget_count >= max_count or _astar_budget_usec >= max_usec:
 		return false
 	_astar_budget_count += 1
-	_astar_alloc_window += 1
 	_astar_alloc_total += 1
 	return true
 
@@ -242,11 +238,8 @@ func _tick_astar_stats() -> void:
 		return
 	if now_ms - _astar_stats_window_ms < 1000:
 		return
-	_astar_calls_last_second = _astar_calls_window
-	_astar_alloc_last_second = _astar_alloc_window
 	_astar_peak_calls_per_sec = maxi(_astar_peak_calls_per_sec, _astar_calls_window)
 	_astar_calls_window = 0
-	_astar_alloc_window = 0
 	_astar_stats_window_ms = now_ms
 
 # 结算面板读取：全场累计 + 平均/峰值（平均按对局时长计算）
@@ -266,6 +259,18 @@ func report_astar_cost(usec: int) -> void:
 	if usec > 0:
 		_astar_budget_usec += usec
 		_astar_usec_total += usec
+
+# 顶部诊断：统计需要移动、但当前 astar_path 为空的存活单位。
+# 攻击射程内、采集/交付接触距离内、坚守或不能移动的单位不计入。
+func count_moving_units_without_path() -> int:
+	_ensure_cache_fresh()
+	var count: int = 0
+	for army in _armies:
+		if not is_instance_valid(army) or army.health <= 0:
+			continue
+		if army.needs_move_without_path():
+			count += 1
+	return count
 
 # ==================== 诊断工具 ====================
 var _diag_timer: float = 5.0
@@ -3610,10 +3615,10 @@ func _process(delta):
 			]
 		else:
 			_fps_label.add_theme_color_override("font_color", Color.LIME_GREEN)
-			_fps_label.text = "FPS:%.0f | 画质:%d | 实体:%d(A%d B%d) | A*:%d/%d" % [
+			_fps_label.text = "FPS:%.0f | 画质:%d | 实体:%d(A%d B%d) | 移动无路径:%d" % [
 				Engine.get_frames_per_second(), _perf_quality_level,
 				_all_entities.size(), _armies.size(), _buildings.size(),
-				_astar_calls_last_second, _astar_alloc_last_second
+				count_moving_units_without_path()
 			]
 		if _snap_rate_label:
 			var diff_names = ["简单", "普通", "困难", "地狱"]

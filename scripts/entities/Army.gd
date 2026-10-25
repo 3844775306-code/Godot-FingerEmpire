@@ -622,6 +622,56 @@ func _order_in(states: Array) -> bool:
 		if _order_is(s): return true
 	return false
 
+# 顶部诊断：单位是否处于“需要移动、但当前没有 A* 路径”的状态。
+# 包括普通移动、采集/交付、行军、攻击移动和追击；已经进入攻击射程的单位不算。
+# pending 也计入“没有路径”：这些单位还停在原地等 A* 预算。
+func needs_move_without_path() -> bool:
+	if health <= 0 or not can_move or speed <= 0.0:
+		return false
+	if hold_position and not has_meta("ai_wall_guard"):
+		return false
+	if _movement == null or not _movement.astar_path.is_empty():
+		return false
+	# 采集/交付已经到接触距离：原地工作，不需要路径
+	if _order_is(UnitState.GATHERING) and current_target is WorldResource:
+		if _combat_edge_distance(current_target) <= 0.6:
+			return false
+	if _order_is(UnitState.DELIVERING) and delivery_target != null and is_instance_valid(delivery_target):
+		if _combat_edge_distance(delivery_target) <= DELIVER_CONTACT_SLACK:
+			return false
+	# 已有目标且在攻击射程内：站着攻击，不需要路径
+	if current_target != null and is_instance_valid(current_target) \
+			and _combat_edge_distance(current_target) <= attack_range:
+		return false
+	# 有明确目标但还不在射程/接触距离：需要路径推进
+	if current_target != null and is_instance_valid(current_target):
+		if _combat_edge_distance(current_target) > attack_range:
+			return true
+	# 行军 / 攻击移动
+	if combat_state == CombatState.MARCH or combat_state == CombatState.ADVANCE:
+		if combat_destination == Vector3.ZERO:
+			return false
+		return _horizontal_distance_to(combat_destination) > body_radius + 0.6
+	if is_attack_moving:
+		if attack_move_target == Vector3.ZERO:
+			return false
+		return _horizontal_distance_to(attack_move_target) > body_radius + 0.6
+	# 普通移动
+	if _order_is(UnitState.MOVING):
+		if _movement.astar_target == Vector3.ZERO:
+			return false
+		return _horizontal_distance_to(_movement.astar_target) > body_radius + 0.5
+	# 采集/交付目标仍有效但尚未到达
+	if _order_is(UnitState.GATHERING):
+		return current_target != null and is_instance_valid(current_target)
+	if _order_is(UnitState.DELIVERING):
+		return delivery_target != null and is_instance_valid(delivery_target)
+	return false
+
+func _horizontal_distance_to(target_pos: Vector3) -> float:
+	var d := Vector2(target_pos.x - global_position.x, target_pos.z - global_position.z)
+	return d.length()
+
 # ==================== 五状态战斗模型 ====================
 # 只有真正的军事单位走这套逻辑；农民、商队、官员、僧侣、动物和运输单位
 # 继续使用 UnitState 原有的任务逻辑。
