@@ -694,6 +694,34 @@ const PRESETS := {
 		"chips": ["三重台地", "南北盘山道", "台缘绝壁", "高地视野 +30%"],
 		"recommended": "1v1 / 2v2 / 3v3",
 	},
+	# 翡翠盆地：外圈缓坡高地、中央低洼盆地（非水域），四个斜向坡口连接盆底；
+	# 盆底有额外林田资源，高地视野开阔，形成“高地控视野、盆底控经济”的拉扯
+	"jade_basin": {
+		"id": "jade_basin",
+		"name": "翡翠盆地",
+		"battle": "喀尔巴阡盆地 1241",
+		"desc": "地图中央是一整片低洼盆地，盆底不是水域，可以正常通行和建造；外圈高地只能从缓坡上去，想下到盆底则只有四个斜向坡口。盆底有额外的林田与金矿，高地则能获得视野优势，是下去抢经济还是留在高地控视野，是这张图的核心选择。",
+		"stages": [
+			["noise_base", {"freq": 0.03, "octaves": 3, "mountain_threshold": 1.1, "water_threshold": -1.2}],
+			["basin", {"center_x": 0.5, "center_y": 0.5, "floor_radius_frac": 0.18, "rim_width_frac": 0.10, "outer_slope_frac": 0.06, "rim_height": 2.8, "floor_height": -0.3, "gate_width": 5, "gates": [45, 135, 225, 315]}],
+		],
+		"castle_layout": {"type": "mirror_z", "anchors": [[0.5, 0.10], [0.5, 0.90]], "flat_radius": 5},
+		"extra_groups": [
+			{"type": 3, "count": 4, "min_sz": 3, "max_sz": 4, "center": [0.5, 0.5], "dist": 12, "terrain": 0},
+			{"type": 1, "count": 3, "min_sz": 5, "max_sz": 6, "center": [0.5, 0.5], "dist": 13, "terrain": 0},
+		],
+		"palette": {
+			"plain_low": [0.22, 0.34, 0.18],
+			"plain_high": [0.48, 0.53, 0.29],
+			"mountain_low": [0.40, 0.37, 0.28],
+			"mountain_high": [0.68, 0.64, 0.52],
+		},
+		"resources": {"gold": 1.05, "wood": 1.1, "stone": 1.2, "food": 1.2, "oil": 0.0, "gold_at_passes": true, "wood_near": "any", "stone_near": "any"},
+		"modifiers": {"high_ground_vision": 0.30, "high_ground_min": 1.5},
+		"reachable_only": true,
+		"chips": ["盆底低地", "四向斜向坡口", "盆底林田", "高地视野 +30%"],
+		"recommended": "1v1 / 2v2 / 3v3",
+	},
 }
 
 static func has_preset(id: String) -> bool:

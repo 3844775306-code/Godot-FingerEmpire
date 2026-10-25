@@ -278,6 +278,8 @@ func _generate_with_stages(size: int, stages: Array) -> void:
 				_op_mesa_field(size, params)
 			"switchback":
 				_op_switchback(size, params)
+			"basin":
+				_op_basin(size, params)
 			"crater":
 				_op_crater(size, params)
 			"coast":
@@ -1188,6 +1190,78 @@ func _op_switchback(size: int, params: Dictionary) -> void:
 		_pass_centers.append(Vector2i(
 			int(round(cx + cos(a) * outer_r)),
 			int(round(cy + sin(a) * outer_r))))
+
+# 盆地：外圈是缓坡高地，内圈是低洼平地（不是水）；高地和盆底之间是绝壁，
+# 只有指定角度上的坡口能下到盆底。外围缓坡全周可上，盆底只靠坡口进出。
+func _op_basin(size: int, params: Dictionary) -> void:
+	var center_x := float(params.get("center_x", 0.5))
+	var center_y := float(params.get("center_y", 0.5))
+	var cx := float(size) * center_x
+	var cy := float(size) * center_y
+	var floor_r := clampf(float(params.get("floor_radius_frac", 0.18)), 0.10, 0.30) * float(size)
+	var rim_w := clampf(float(params.get("rim_width_frac", 0.10)), 0.05, 0.16) * float(size)
+	var slope_w := clampf(float(params.get("outer_slope_frac", 0.06)), 0.03, 0.12) * float(size)
+	var rim_h := maxf(1.6, float(params.get("rim_height", 2.8)))
+	var floor_h := float(params.get("floor_height", -0.3))
+	var gate_w := maxi(3, int(params.get("gate_width", 5)))
+	var half_w := float(gate_w) * 0.5
+	var gates: Array = params.get("gates", [45, 135, 225, 315])
+	var max_step := RTSConfig.MAX_WALK_SLOPE * 0.8
+	# 盆底必须比外圈明显低，形成真正的盆地；同时保证坡口单步高差可走。
+	floor_h = minf(floor_h, rim_h - RTSConfig.MAX_WALK_SLOPE * 1.2)
+	if (rim_h - floor_h) / maxf(rim_w, 1.0) > max_step:
+		rim_h = floor_h + rim_w * max_step
+	var outer_r := floor_r + rim_w
+	if outer_r + slope_w > float(size) * 0.47:
+		var over := outer_r + slope_w - float(size) * 0.47
+		floor_r = maxf(float(size) * 0.10, floor_r - over)
+		outer_r = floor_r + rim_w
+	var seed_val := custom_seed if custom_seed != 0 else randi()
+	var noise := FastNoiseLite.new()
+	noise.seed = seed_val + 7717
+	noise.frequency = 0.055
+	noise.fractal_octaves = 2
+	for x in range(size):
+		for y in range(size):
+			var dx := float(x) - cx
+			var dy := float(y) - cy
+			var r := sqrt(dx * dx + dy * dy)
+			if r <= floor_r:
+				# 盆底：低洼平地，不生成水；地形类型仍是普通平地，可建造、可采集。
+				terrain_grid[x][y] = 0
+				height_grid[x][y] = floor_h + noise.get_noise_2d(x, y) * 0.025
+				overlay_grid[x][y] = 0
+			elif r <= outer_r:
+				# 高地内圈：普通台缘是直上直下的绝壁。
+				terrain_grid[x][y] = 1
+				height_grid[x][y] = rim_h + noise.get_noise_2d(x + 19, y + 7) * 0.05
+				overlay_grid[x][y] = 0
+			elif r <= outer_r + slope_w:
+				# 高地外圈：全周缓坡，外面可以爬上高地；里侧仍要靠坡口下盆地。
+				var t := (r - outer_r) / maxf(slope_w, 1.0)
+				terrain_grid[x][y] = 1
+				height_grid[x][y] = lerpf(rim_h, 0.0, clampf(t, 0.0, 1.0)) + noise.get_noise_2d(x, y) * 0.02
+				overlay_grid[x][y] = 0
+			# 坡口：穿过高地内圈的一整条缓坡，从盆底连续升到高地顶面。
+			for ang in gates:
+				var a := deg_to_rad(float(ang))
+				var perp := absf(-sin(a) * dx + cos(a) * dy)
+				if perp > half_w:
+					continue
+				if r <= floor_r or r > outer_r:
+					continue
+				var t := (r - floor_r) / maxf(outer_r - floor_r, 1.0)
+				terrain_grid[x][y] = 1
+				height_grid[x][y] = lerpf(floor_h, rim_h, clampf(t, 0.0, 1.0)) + noise.get_noise_2d(x + 31, y + 23) * 0.02
+				overlay_grid[x][y] = 0
+				break
+	# 坡口内侧记作隘口，金矿会集中到这里；盆底中心也记一处，作为低地争夺点。
+	for ang in gates:
+		var a := deg_to_rad(float(ang))
+		_pass_centers.append(Vector2i(
+			int(round(cx + cos(a) * maxf(floor_r - 3.0, 1.0))),
+			int(round(cy + sin(a) * maxf(floor_r - 3.0, 1.0)))))
+	_pass_centers.append(Vector2i(int(round(cx)), int(round(cy))))
 
 # 环形山：地图中心一圈环形山壁，四个方向各开一处山口；山心是聚金洼地，
 # 全图金矿只落在四处山口与山心，逼双方为"进坑"还是"守口"做选择
@@ -2176,6 +2250,9 @@ func _place_resources():
 	if wood_forest:
 		_place_forest_wood(size, castles, placed, mult)
 
+	# 地图额外资源组：用于盆地盆底林田、特殊经济区等，在通用随机布点之后补齐
+	_place_extra_resource_groups(size, placed)
+
 	# 特殊地图：隘口上的争议金矿，逼双方争夺通道
 	# 山脊图全图金矿只在隘口：1V1 每处 2 组，2V2/3V3 按人数加组
 	var players := 2
@@ -2257,6 +2334,28 @@ func _oil_water_weight(tx: int, ty: int, size: int) -> int:
 			if terrain_grid[nx][ny] == 2 and get_overlay(nx, ny) != 3:
 				count += 1
 	return maxi(1, count)
+
+# 预设额外资源组：在指定中心附近补若干组资源，用于盆地盆底、特殊经济区等
+# 通用随机布点不方便表达的地图。格式：
+# {"type": 3, "count": 4, "min_sz": 3, "max_sz": 4, "center": [0.5, 0.5], "dist": 12, "terrain": 0}
+func _place_extra_resource_groups(size: int, placed: Dictionary) -> void:
+	var groups: Array = map_preset.get("extra_groups", [])
+	for g in groups:
+		if not (g is Dictionary):
+			continue
+		var center: Array = g.get("center", [0.5, 0.5])
+		if center.size() < 2:
+			continue
+		var cx := clampi(int(round(float(center[0]) * float(size))), 2, size - 3)
+		var cy := clampi(int(round(float(center[1]) * float(size))), 2, size - 3)
+		var rtype := int(g.get("type", 3))
+		var count := maxi(0, int(g.get("count", 1)))
+		var min_sz := maxi(1, int(g.get("min_sz", 2)))
+		var max_sz := maxi(min_sz, int(g.get("max_sz", min_sz)))
+		var dist := maxi(1, int(g.get("dist", 10)))
+		var terrain := int(g.get("terrain", 0))
+		for _i in range(count):
+			_place_group_near(rtype, min_sz, max_sz, cx, cy, dist, terrain, placed, size)
 
 # 从每座城堡出发做一次洪水填充（地形 0/1 可走，水面仅浅滩可走），
 # 把落在孤岛上的资源点/兽群剔除，避免工人永远走不到、AI 反复尝试
