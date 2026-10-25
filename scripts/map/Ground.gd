@@ -57,6 +57,7 @@ var multi_castle_positions: Array = []  # 单机多AI：所有基地位置（含
 
 # 资源生成列表
 var resource_positions: Array = []
+var _castle_cells: Array = []  # 各基地所在格子，生成资源时避开，防止资源和主城模型重叠
 var _cached_four_castle_positions: Array = []  # cached for consistency
 var _cached_six_castle_positions: Array = []  # 3v3 用，缓存保证一致性
 var _cached_ffa_castle_positions: Dictionary = {}  # 乱斗 N 国环绕布局缓存（n -> Array）
@@ -1891,6 +1892,10 @@ func _place_resources():
 		guaranteed = guaranteed.filter(func(e): return int(e["type"]) != 0)
 	if wood_forest:
 		guaranteed = guaranteed.filter(func(e): return int(e["type"]) != 1)
+	_castle_cells.clear()
+	for c in castles:
+		_castle_cells.append([int(c[0]), int(c[1])])
+
 	for castle in castles:
 		for gu in guaranteed:
 			_place_group_near(gu.type, gu.min_sz, gu.max_sz, castle[0], castle[1], gu.dist, gu.terrain, placed, size, gu.get("near_mountain", false), gu.get("adjacent_mountains", 0))
@@ -2226,6 +2231,13 @@ func _mark_wood_as_forest(size: int) -> void:
 				overlay_grid[nx][ny] = 1
 
 # ── Helper: place a group near a position ──
+# 判断某个格子是否离任一基地太近（资源不能压在主城上）
+func _cell_near_castle(tx: int, ty: int, min_dist: int) -> bool:
+	for c in _castle_cells:
+		if absi(int(c[0]) - tx) <= min_dist and absi(int(c[1]) - ty) <= min_dist:
+			return true
+	return false
+
 func _place_group_near(rtype, min_sz, max_sz, cx, cy, max_dist, terrain, placed, size, near_mountain=false, adjacent_mountains=0):
 	var best_x = -1; var best_y = -1
 	for _attempt in range(200):
@@ -2233,6 +2245,7 @@ func _place_group_near(rtype, min_sz, max_sz, cx, cy, max_dist, terrain, placed,
 		var ty = cy + randi_range(-max_dist, max_dist)
 		if tx < 0 or tx >= size or ty < 0 or ty >= size: continue
 		if terrain_grid[tx][ty] != terrain: continue
+		if _cell_near_castle(tx, ty, 3): continue
 		if placed.has("g%d,%d,%d" % [rtype, tx, ty]): continue
 		if near_mountain and not _has_nearby_terrain(tx, ty, 1, 3, size): continue
 		if adjacent_mountains > 0 and _count_adjacent_terrain(tx, ty, 1, size) < adjacent_mountains: continue
@@ -2286,6 +2299,7 @@ func _place_group_random(rtype, min_sz, max_sz, terrain, placed, size, castles, 
 	for _attempt in range(100):
 		var tx = randi_range(5, size - 6); var ty = randi_range(5, size - 6)
 		if terrain_grid[tx][ty] != terrain: continue
+		if _cell_near_castle(tx, ty, 3): continue
 		if placed.has("g%d,%d,%d" % [rtype, tx, ty]): continue
 		# Away from castles (min 8)
 		var too_close = false

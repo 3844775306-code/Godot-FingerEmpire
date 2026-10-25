@@ -584,6 +584,16 @@ func _can_place_ai_building(building_id: int, pos: Vector3) -> bool:
 	var gz = int(round(pos.z + half))
 	if gx < 0 or gx >= RTSConfig.MAP_SIZE or gz < 0 or gz >= RTSConfig.MAP_SIZE:
 		return false
+	# 建筑有体积：中心格在地图内还不够，建筑边缘也不能超出地图，
+	# 否则贴边造出来的建筑会有半截漂在地图外面。
+	var cfg_edge = EntityDatabase.get_config(building_id)
+	var br_edge: float = maxf(0.5, float(cfg_edge.get("body_radius", 1.0))) if cfg_edge else 1.0
+	# 服务端会把建筑放大 2 倍（部分特殊建筑除外），这里的半径要按放大后的算
+	if building_id not in [41, 27, 64, 7, 8, 25, 26]:
+		br_edge *= 2.0
+	var edge_limit: float = half - br_edge - 0.5
+	if pos.x < -edge_limit or pos.x > edge_limit or pos.z < -edge_limit or pos.z > edge_limit:
+		return false
 	# 桥只能建在水上，使用战斗管理器与玩家共用的选址校验
 	if building_id == 7:
 		if battle.has_method("is_valid_bridge_position"):
@@ -2091,7 +2101,7 @@ func _cache_shipyard_location():
 func _find_best_water_adjacent_plain() -> Vector3:
 	var castle = get_peer_castle(my_peer_id)
 	if not castle: return Vector3.ZERO
-	var best_pos = Vector3.ZERO; var best_dist = 9999.0
+	var best_pos = Vector3.ZERO; var best_score = -1.0
 	var oil_pos_list: Array[Vector3] = []
 	for ent in battle.entities.get_children():
 		if ent is GameEntity and ent.entity_id == 4 and ent.health > 0: oil_pos_list.append(ent.global_position)
@@ -2107,9 +2117,26 @@ func _find_best_water_adjacent_plain() -> Vector3:
 			for op in oil_pos_list:
 				if wp.distance_to(op) < SHIPYARD_OIL_REACH: reach_oil = true; break
 			if not reach_oil: continue
+			# 船坞要下水和跑采集船，周围水域越开阔越好：
+			# 按半径 6 格内的水面数量打分，距离只作次要参考，
+			# 避免选址落到窄小的死水塘导致船出不来。
+			var water_area: int = _count_water_in_radius(gx, gz, 6)
+			if water_area < 8: continue
 			var dis = wp.distance_to(castle.global_position)
-			if dis < best_dist: best_dist = dis; best_pos = wp
+			var score: float = float(water_area) * 10.0 - dis * 0.5
+			if score > best_score: best_score = score; best_pos = wp
 	return best_pos
+
+# 统计以 (gx,gz) 为中心、半径 r 格范围内的水面格数，用于评估水域开阔程度
+func _count_water_in_radius(gx: int, gz: int, r: int) -> int:
+	var n := 0
+	for dx in range(-r, r + 1):
+		for dz in range(-r, r + 1):
+			var nx: int = gx + dx
+			var nz: int = gz + dz
+			if nx < 0 or nx >= RTSConfig.MAP_SIZE or nz < 0 or nz >= RTSConfig.MAP_SIZE: continue
+			if battle.get_terrain_at_grid(nx, nz) == 2: n += 1
+	return n
 
 func _check_near_water(gx: int, gz: int) -> bool:
 	for dx in [-1,0,1]:
