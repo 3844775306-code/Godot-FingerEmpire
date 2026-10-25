@@ -160,6 +160,7 @@ func _input(event):
 					KEY_R: if produces.size() >= 4: bm.produce_unit(e, produces[3].unit_id)
 					KEY_F: if produces.size() >= 5: bm.produce_unit(e, produces[4].unit_id)
 					KEY_A: bm.upgrade_building(e)
+					KEY_G: if bm.has_method("repair_building"): bm.repair_building(e)
 					KEY_S: if e.entity_id != 20: bm.demolish_building(e)
 					KEY_D: bm.release_garrisoned(e)
 					_: handled = false

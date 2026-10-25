@@ -295,10 +295,11 @@ func _input(event):
 					KEY_R: if produces.size() >= 4: _send_produce(bid, produces[3]["unit_id"])
 					KEY_F: if produces.size() >= 5: _send_produce(bid, produces[4]["unit_id"])
 					KEY_A: NetworkManager.send_command.rpc_id(1, {"action":"upgrade","building_id":bid})
+					KEY_G: NetworkManager.send_command.rpc_id(1, {"action":"repair","building_id":bid,"shift_held":Input.is_key_pressed(KEY_SHIFT)})
 					KEY_S: if sel_info.get("entity_id") != 20: NetworkManager.send_command.rpc_id(1, {"action":"demolish","building_id":bid})
 					KEY_D: NetworkManager.send_command.rpc_id(1, {"action":"ungarrison_soldiers","selected_ids":[bid]})
 					_: pass
-				if key in [KEY_Q,KEY_W,KEY_E,KEY_R,KEY_F,KEY_A,KEY_S,KEY_D]:
+				if key in [KEY_Q,KEY_W,KEY_E,KEY_R,KEY_F,KEY_A,KEY_G,KEY_S,KEY_D]:
 					get_viewport().set_input_as_handled(); return
 
 		# 命令卡网格热键（选中军队时；队友单位只读）
