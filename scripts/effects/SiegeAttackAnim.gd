@@ -99,9 +99,10 @@ static func _ram(model: Node3D) -> float:
 	if ram != null:
 		var p: Vector3 = ram.position
 		# 模型绕 Y 旋转 90°，局部 +X 对应实体正前方
+		# 撞木顶出的距离给足：远景下整车位移不明显，槌头单独前冲才是"撞"的读感
 		_seq(model, ram, "position", [
-			{"v": p + Vector3(-0.06, 0.0, 0.0), "t": 0.16, "tr": Tween.TRANS_SINE},
-			{"v": p + Vector3(0.20, 0.0, 0.0), "t": 0.22, "tr": Tween.TRANS_EXPO, "e": Tween.EASE_IN},
+			{"v": p + Vector3(-0.16, 0.0, 0.0), "t": 0.16, "tr": Tween.TRANS_SINE},
+			{"v": p + Vector3(0.58, 0.0, 0.0), "t": 0.22, "tr": Tween.TRANS_EXPO, "e": Tween.EASE_IN},
 			{"v": p, "t": 0.56, "tr": Tween.TRANS_ELASTIC},
 		])
 	_wheels(model, 0.14)
@@ -130,52 +131,54 @@ static func _cannon(model: Node3D) -> float:
 static func _catapult(model: Node3D) -> float:
 	var pos: Vector3 = model.position
 	_seq(model, model, "position", [
-		{"v": pos + Vector3(0.0, -0.05, 0.02), "t": 0.22, "tr": Tween.TRANS_SINE},
-		{"v": pos, "t": 0.84, "tr": Tween.TRANS_ELASTIC},
+		{"v": pos + Vector3(0.0, -0.11, 0.04), "t": 0.22, "tr": Tween.TRANS_SINE},
+		{"v": pos, "t": 0.96, "tr": Tween.TRANS_ELASTIC},
 	])
 	_entity_pitch(model, [
-		{"a": -0.05, "t": 0.20, "tr": Tween.TRANS_SINE},
-		{"a": 0.0, "t": 0.86, "tr": Tween.TRANS_ELASTIC},
+		{"a": -0.11, "t": 0.20, "tr": Tween.TRANS_SINE},
+		{"a": 0.0, "t": 0.98, "tr": Tween.TRANS_ELASTIC},
 	])
 	var arm := _find(model, "catapult")
 	if arm != null:
 		var rz: float = arm.rotation.z
+		# 投臂摆幅给到 1.25 弧度（约 72°），远远超过车体倾斜能传达的幅度
 		_seq(model, arm, "rotation:z", [
-			{"v": rz - 0.55, "t": 0.18, "tr": Tween.TRANS_EXPO, "e": Tween.EASE_OUT},
-			{"v": rz + 0.12, "t": 0.22, "tr": Tween.TRANS_BACK, "e": Tween.EASE_OUT},
-			{"v": rz, "t": 0.64, "tr": Tween.TRANS_ELASTIC},
+			{"v": rz - 1.25, "t": 0.20, "tr": Tween.TRANS_EXPO, "e": Tween.EASE_OUT},
+			{"v": rz + 0.32, "t": 0.24, "tr": Tween.TRANS_BACK, "e": Tween.EASE_OUT},
+			{"v": rz, "t": 0.72, "tr": Tween.TRANS_ELASTIC},
 		])
-	_wheels(model, 0.07)
-	return 1.12
+	_wheels(model, 0.10)
+	return 1.25
 
 # 巨型投石机：配重下坠带动投臂缓慢释放，再以低频余摆收住
 static func _trebuchet(model: Node3D) -> float:
 	var pos: Vector3 = model.position
 	_seq(model, model, "position", [
-		{"v": pos + Vector3(0.0, -0.08, 0.02), "t": 0.50, "tr": Tween.TRANS_SINE},
-		{"v": pos, "t": 1.18, "tr": Tween.TRANS_ELASTIC},
+		{"v": pos + Vector3(0.0, -0.17, 0.05), "t": 0.52, "tr": Tween.TRANS_SINE},
+		{"v": pos, "t": 1.30, "tr": Tween.TRANS_ELASTIC},
 	])
 	_entity_pitch(model, [
-		{"a": -0.055, "t": 0.55, "tr": Tween.TRANS_SINE},
-		{"a": 0.0, "t": 1.12, "tr": Tween.TRANS_ELASTIC},
+		{"a": -0.11, "t": 0.56, "tr": Tween.TRANS_SINE},
+		{"a": 0.0, "t": 1.24, "tr": Tween.TRANS_ELASTIC},
 	])
 	var arm := _find(model, "arm")
 	if arm != null:
 		var rz: float = arm.rotation.z
+		# 巨型投石机的臂最长，摆幅给到 1.55 弧度（约 89°），从任何缩放级别都看得清
 		_seq(model, arm, "rotation:z", [
-			{"v": rz - 0.72, "t": 0.22, "tr": Tween.TRANS_EXPO, "e": Tween.EASE_OUT},
-			{"v": rz + 0.14, "t": 0.30, "tr": Tween.TRANS_BACK, "e": Tween.EASE_OUT},
-			{"v": rz, "t": 1.10, "tr": Tween.TRANS_ELASTIC},
+			{"v": rz - 1.55, "t": 0.24, "tr": Tween.TRANS_EXPO, "e": Tween.EASE_OUT},
+			{"v": rz + 0.36, "t": 0.32, "tr": Tween.TRANS_BACK, "e": Tween.EASE_OUT},
+			{"v": rz, "t": 1.22, "tr": Tween.TRANS_ELASTIC},
 		])
 	var weight := _find(model, "weight")
 	if weight != null:
 		var wr: Vector3 = weight.rotation
 		_seq(model, weight, "rotation", [
-			{"v": wr + Vector3(0.0, 0.0, 0.10), "t": 0.48, "tr": Tween.TRANS_SINE},
-			{"v": wr, "t": 0.92, "tr": Tween.TRANS_ELASTIC},
+			{"v": wr + Vector3(0.0, 0.0, 0.20), "t": 0.50, "tr": Tween.TRANS_SINE},
+			{"v": wr, "t": 1.00, "tr": Tween.TRANS_ELASTIC},
 		])
-	_wheels(model, 0.06)
-	return 1.72
+	_wheels(model, 0.09)
+	return 1.90
 
 # 战船/炮艇：侧舷齐射的横摇、下沉、帆布鼓起和旗帜后甩
 static func _warship(model: Node3D, heavy: bool, side: float) -> float:
