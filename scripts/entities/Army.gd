@@ -2718,6 +2718,10 @@ func turn_toward_dir(dir: Vector3, delta: float) -> bool:
 		return true
 	flat = flat.normalized()
 	var target_yaw: float = atan2(-flat.x, -flat.z)
+	# 动物的 GLB 模型朝向是 +Z，和单位/建筑模型（-Z）正好相反。
+	# 不加这 180° 偏移，动物就会一边朝目标平移、一边把屁股冲着行进方向，看起来像在倒退走。
+	if _animal_type != "":
+		target_yaw = wrapf(target_yaw + PI, -PI, PI)
 	var yaw: float = rotation.y
 	var diff: float = wrapf(target_yaw - yaw, -PI, PI)
 	if absf(diff) < 0.0087:   # 0.5°
@@ -4428,6 +4432,7 @@ const ANIMAL_ARRIVE_DIST: float = 0.4       # 走到这个距离内算到达
 const ANIMAL_PAUSE_MIN: float = 1.0         # 到达后原地停留时间
 const ANIMAL_PAUSE_MAX: float = 4.0
 const ANIMAL_REPICK_DIST: float = 22.0      # 离家太远（被推挤/传送）直接重设家
+const ANIMAL_CLEARANCE: float = 0.25        # 和别的实体之间至少留这么多米，别贴着穿模
 
 var _animal_home: Vector3 = Vector3.ZERO
 var _animal_has_home: bool = false
@@ -4459,9 +4464,18 @@ func _process_animal(delta):
 				_animal_attacker.take_damage(attack, self)
 				attack_timer = attack_speed
 			_animal_moving = false
+			# 站定顶人时也要转身面向攻击者，别侧着身子撞
+			turn_toward_dir(_animal_attacker.global_position - global_position, delta)
 		else:
-			global_position += (_animal_attacker.global_position - global_position).normalized() * speed * delta
+			var chase: Vector3 = (_animal_attacker.global_position - global_position)
+			chase.y = 0.0
+			var chase_step: Vector3 = chase.normalized() * speed * delta
+			# 冲过去也要绕开挡路的东西（房子、树、别的动物），否则会直接穿模型
+			if _animal_can_stand_at(global_position + chase_step):
+				global_position += chase_step
+				_snap_animal_to_ground()
 			_animal_moving = true
+			turn_toward_dir(chase, delta)
 		if attack_timer > 0: attack_timer -= delta
 		return
 
@@ -4497,6 +4511,11 @@ func _update_animal_wander(delta: float) -> void:
 		# 被推挤或传送走远了，就地重新安家，免得它一路游回地图另一头
 		_animal_home = global_position
 		_animal_has_target = false
+
+	# 和别的实体重叠时（出生点/繁殖点挨太近、被推挤进去）先慢慢挤出来。
+	# 这一步要放在「原地停留」之前：两只动物一起停在原地时也在重叠，
+	# 如果只在走动时才分离，它们会一直叠着不走。
+	_animal_separate(delta)
 
 	if _animal_pause > 0.0:
 		_animal_pause -= delta
@@ -4540,20 +4559,81 @@ func _pick_animal_wander_target() -> bool:
 		# sqrt 让采样在圆内按面积均匀，否则会全挤在圆心附近
 		var dist: float = sqrt(randf()) * ANIMAL_WANDER_RADIUS
 		var cand: Vector3 = _animal_home + Vector3(cos(ang) * dist, 0.0, sin(ang) * dist)
-		if _animal_can_stand_at(cand):
-			_animal_wander_target = cand
-			return true
+		if not _animal_can_stand_at(cand):
+			continue
+		# 再抽查一下路程中点：只要求目标点空闲的话，动物会频繁往墙/房子另一侧选点，
+		# 走两步就被挡住然后重新选，看起来像在抽搐。
+		var mid: Vector3 = (global_position + cand) * 0.5
+		if not _animal_can_stand_at(mid):
+			continue
+		_animal_wander_target = cand
+		return true
 	return false
 
 # 地形校验：鱼只能待在水里，其他动物不能进水
-func _animal_can_stand_at(pos: Vector3) -> bool:
-	var bm = get_tree().get_first_node_in_group("battle_manager")
+func _animal_terrain_ok(pos: Vector3, bm) -> bool:
 	if bm == null:
 		return true
 	var terrain: int = bm.get_terrain_at(pos)
 	if _animal_type == "fish":
 		return terrain == 2
 	return terrain != 2
+
+# 完整的可站立判定：地形 + 障碍物
+func _animal_can_stand_at(pos: Vector3) -> bool:
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if bm == null:
+		return true
+	if not _animal_terrain_ok(pos, bm):
+		return false
+	return not _animal_blocked_at(pos, bm)
+
+# 避障：动物是直接写坐标移动的，物理碰撞不参与，所以必须自己查一遍附近实体。
+# 房子、城墙、树、石头、别的动物、路过的部队都算障碍——以前会直接穿模走进去，
+# 看起来像贴纸从建筑里穿过去。
+func _animal_blocked_at(pos: Vector3, bm = null) -> bool:
+	if bm == null:
+		bm = get_tree().get_first_node_in_group("battle_manager")
+	if bm == null or not bm.has_method("get_nearby_entities"):
+		return false
+	# 查询半径要够大：城里最大建筑半径 2.5 米，加上自身半径和间隙
+	var probe: float = body_radius + 3.2
+	var list = bm.get_nearby_entities(pos, probe)
+	for e in list:
+		if e == self or not is_instance_valid(e) or e.health <= 0:
+			continue
+		var min_d: float = body_radius + float(e.body_radius) + ANIMAL_CLEARANCE
+		if pos.distance_to(e.global_position) < min_d:
+			return true
+	return false
+
+# 把自己从重叠的实体里挤出来（只走地形允许的方向）
+func _animal_separate(delta: float) -> void:
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if bm == null or not bm.has_method("get_nearby_entities"):
+		return
+	var list = bm.get_nearby_entities(global_position, body_radius + 3.2)
+	var push := Vector3.ZERO
+	for e in list:
+		if e == self or not is_instance_valid(e) or e.health <= 0:
+			continue
+		var min_d: float = body_radius + float(e.body_radius) + ANIMAL_CLEARANCE
+		var off: Vector3 = global_position - e.global_position
+		off.y = 0.0
+		var dd: float = off.length()
+		if dd >= min_d:
+			continue
+		if dd < 0.001:
+			off = Vector3(randf_range(-1.0, 1.0), 0.0, randf_range(-1.0, 1.0))
+			dd = maxf(off.length(), 0.001)
+		push += off.normalized() * (min_d - dd)
+	if push.length_squared() < 0.0004:
+		return
+	var move: Vector3 = push.limit_length(speed * delta * 2.0)
+	var np: Vector3 = global_position + move
+	if _animal_terrain_ok(np, bm):
+		global_position = np
+		_snap_animal_to_ground()
 
 # 跟随地形高度贴地。动物不经过 MovementController 的地形平滑，
 # 以前 y 坐标从头到尾不变，走上坡就浮在半空、走下坡就陷进土里。

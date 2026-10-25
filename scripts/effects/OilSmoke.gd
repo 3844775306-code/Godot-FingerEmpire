@@ -11,12 +11,16 @@ extends Node3D
 # 服务端（单机/联机主机）与联机客户端共用同一份实现，两边外观一致。
 
 # 一个油点最多同时存在的烟粒子数。取值偏小是因为地图上石油点可能成片出现。
-const SMOKE_AMOUNT: int = 16
-const SMOKE_LIFETIME: float = 2.8
-const SMOKE_RISE: float = 0.65        # 上升初速度（米/秒）
-const SMOKE_SPREAD: float = 0.16      # 出生点水平散布半径
+const SMOKE_AMOUNT: int = 28
+# 烟要飘到半空中才有「油井在冒气」的样子：寿命拉长到 3.6 秒，
+# 配合上升初速度和持续上浮加速度，柱顶能到 7~8 米（约两三层楼高）。
+const SMOKE_LIFETIME: float = 3.6
+const SMOKE_RISE: float = 1.15        # 上升初速度（米/秒）
+const SMOKE_UP_ACCEL: float = 0.42    # 持续上浮加速度，模拟热气往上顶
+const SMOKE_DRIFT: Vector3 = Vector3(0.10, 0.0, 0.06)  # 轻微横向漂移，柱子别笔直得像根杆
+const SMOKE_SPREAD: float = 0.22      # 出生点水平散布半径
 const SMOKE_START_SCALE: float = 0.34
-const SMOKE_END_SCALE: float = 1.25
+const SMOKE_END_SCALE: float = 1.85   # 飘到高处散得更开
 
 const OIL_STAIN_COLOR: Color = Color(0.10, 0.09, 0.08, 0.72)
 const OIL_STAIN_CULL_MASK: int = 1 | (1 << 19)
@@ -79,12 +83,14 @@ func _add_smoke(body_radius: float) -> void:
 	smoke.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
 	smoke.emission_sphere_radius = SMOKE_SPREAD
 	smoke.direction = Vector3.UP
-	smoke.spread = 14.0
-	smoke.initial_velocity_min = SMOKE_RISE * 0.6
+	smoke.spread = 12.0
+	smoke.initial_velocity_min = SMOKE_RISE * 0.75
 	smoke.initial_velocity_max = SMOKE_RISE * 1.3
-	smoke.gravity = Vector3(0.0, 0.18, 0.0)   # 略微上浮，别像落灰一样往下掉
-	smoke.damping_min = 0.05
-	smoke.damping_max = 0.12
+	# 重力这里当「浮力」用：持续向上加速，烟才爬得高，不会升两步就散在原地
+	smoke.gravity = Vector3(SMOKE_DRIFT.x, SMOKE_UP_ACCEL, SMOKE_DRIFT.z)
+	# 阻尼要小，否则初速度几秒就被吃掉，烟柱只能贴着地面打转
+	smoke.damping_min = 0.02
+	smoke.damping_max = 0.05
 	smoke.angular_velocity_min = -12.0
 	smoke.angular_velocity_max = 12.0
 	smoke.scale_amount_min = SMOKE_START_SCALE
@@ -94,10 +100,10 @@ func _add_smoke(body_radius: float) -> void:
 	grow.add_point(Vector2(0.0, 1.0))
 	grow.add_point(Vector2(1.0, SMOKE_END_SCALE / SMOKE_START_SCALE))
 	smoke.scale_amount_curve = grow
-	smoke.visibility_aabb = AABB(Vector3(-6, -2, -6), Vector3(12, 10, 12))
+	smoke.visibility_aabb = AABB(Vector3(-7, -2, -7), Vector3(14, 14, 14))
 
 	var quad := QuadMesh.new()
-	quad.size = Vector2(0.55, 0.55)
+	quad.size = Vector2(0.6, 0.6)
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
@@ -112,8 +118,9 @@ func _add_smoke(body_radius: float) -> void:
 	var ramp := Gradient.new()
 	ramp.set_color(0, Color(0.16, 0.15, 0.14, 0.0))    # 刚冒出来是透明的
 	ramp.set_color(1, Color(0.16, 0.14, 0.12, 0.0))    # 飘散了也透明
-	ramp.add_point(0.18, Color(0.13, 0.12, 0.11, 0.55))
-	ramp.add_point(0.65, Color(0.24, 0.22, 0.20, 0.30))
+	ramp.add_point(0.12, Color(0.12, 0.11, 0.10, 0.62))
+	ramp.add_point(0.45, Color(0.18, 0.17, 0.16, 0.42))
+	ramp.add_point(0.78, Color(0.26, 0.24, 0.22, 0.22))
 	smoke.color_ramp = ramp
 
 	# 从石头堆顶部往外冒，不要从地基下面钻出来
