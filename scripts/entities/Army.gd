@@ -1000,6 +1000,19 @@ func _process_action(delta, bm):
 				_movement.set_move_target(_dest_blocker.global_position, attack_range)
 				return
 			if _movement.move_path_failed:
+				# 攻击移动的终点被城墙/建筑封锁时，先改打视野内最近的敌方建筑；
+				# 拆掉挡路物后目标死亡，攻击移动状态会继续把部队送往原目的地。
+				var fallback: Building = _find_attack_fallback_building(bm)
+				if fallback != null and is_instance_valid(fallback) and _can_attack_target(fallback):
+					current_target = fallback
+					_retarget_target_id = fallback.get_instance_id()
+					_retarget_timer = _retarget_interval(bm)
+					_attack_watch_target_id = fallback.get_instance_id()
+					_attack_stall_time = 0.0
+					is_attack_moving = true
+					_set_order(UnitState.ATTACK_MOVING)
+					_movement.set_move_target(fallback.global_position, attack_range)
+					return
 				is_attack_moving = false
 				attack_move_target = Vector3.ZERO
 				_set_order(UnitState.IDLE)
@@ -1011,6 +1024,10 @@ func _process_action(delta, bm):
 				if _current_move_queued and _visual_waypoints.size() > 0:
 					_visual_waypoints.pop_front()
 					_current_move_queued = false
+				# 攻击移动已经到达终点且没有可打目标，必须显式回到 IDLE。
+				# 否则 current_order 会一直停在 attack_move：命令队列不会弹出，
+				# 空闲索敌也不会执行，单位会原地站着不还手。
+				_set_order(UnitState.IDLE)
 			else:
 				_movement.set_move_target(attack_move_target)
 		return
@@ -2339,6 +2356,9 @@ func stop_movement():
 	if _movement:
 		_movement.stop()
 	is_attack_moving = false
+	# 停止的语义是清空当前行动和后续排队命令。只清路径的话，
+	# 下一次 _think 会立刻执行队列里的下一条命令，表现为“点了停止又自己走”。
+	_clear_command_queue()
 
 # Override die() for official cleanup
 func die_official_cleanup():

@@ -266,6 +266,27 @@ func count_military(peer: int) -> int:
 				total += 1
 	return total
 
+# 可出击的野战军：只统计活着、当前没有防守/驻扎/守墙/骚扰/运输角色的陆军战斗单位。
+# 主攻和进攻阶段不能直接用 count_military()：后者包含生产队列、主城守军和守墙兵，
+# 会出现“账面 30 人，实际能出门的只有几个”的假兵力。
+func count_field_military(peer: int) -> int:
+	var total = 0
+	for entity in _cached_armies():
+		if not is_instance_valid(entity) or entity.health <= 0:
+			continue
+		if my_peer_id != -1 and entity.owner_peer_id != peer: continue
+		if my_peer_id == -1 and entity.team != peer: continue
+		if int(entity.target_type) <= 0: continue
+		if entity.entity_id in [10,14,43,44,45,46,47,48,49,50,51]: continue
+		# 海军由 AIWaterCrossing / 船坞逻辑单独调度，不能算作陆地主攻兵力。
+		if entity.water_capable: continue
+		if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass") or entity.has_meta("ai_wall_guard"):
+			continue
+		if entity.has_meta("ai_transporting"): continue
+		if _is_held_by_garrison(entity): continue
+		total += 1
+	return total
+
 func count_military_by_team(tm: int) -> int:
 	var total = 0
 	for entity in _cached_armies():
@@ -982,10 +1003,6 @@ func decide(_delta):
 	if _defense == null:
 		_defense = AIDefenseScript.new(self)
 	_defense.tick(_delta)
-	_wall_deploy_timer -= _delta
-	if _wall_deploy_timer <= 0.0:
-		_wall_deploy_timer = WALL_DEPLOY_INTERVAL
-		_deploy_ranged_units_to_walls()
 	if Engine.get_process_frames() % 60 == 0:
 		var _w = count_unit(10)
 	# State dispatch
@@ -993,11 +1010,19 @@ func decide(_delta):
 		Phase.PRODUCTION: _state_production(_delta)
 		Phase.DEVELOPMENT: _state_development(_delta)
 		Phase.ASSAULT: _state_assault(_delta)
-	# 进攻阶段转换只在思考节流里判断；count_military 会遍历全部实体，不能每帧调用
+	# 进攻阶段转换只在思考节流里判断；count_field_military 会遍历全部实体，不能每帧调用
 	if phase == Phase.DEVELOPMENT:
-		var army_count = count_military(my_peer_id if my_peer_id != -1 else my_team)
+		# 用可出击野战军而不是总军事人口：守墙/守家/队列里的兵不会出门，
+		# 用总数判断会让 AI 提前进入 ASSAULT，却只有少量部队可派。
+		var army_count = count_field_military(my_peer_id if my_peer_id != -1 else my_team)
 		if army_count >= 30:
 			phase = Phase.ASSAULT
+	# 先让 _state_* 里的集结逻辑拿到刚生产的空闲部队，再补守墙；
+	# 否则新远程兵会先被城墙吸走，永远进不了野战军集结。
+	_wall_deploy_timer -= _delta
+	if _wall_deploy_timer <= 0.0:
+		_wall_deploy_timer = WALL_DEPLOY_INTERVAL
+		_deploy_ranged_units_to_walls()
 	if _water_crossing:
 		_water_crossing.tick(_delta)
 	if OS.is_debug_build() and (Engine.get_process_frames() + int(get_instance_id())) % 30 == 0:
@@ -1483,6 +1508,15 @@ func attack_move(target_position: Vector3, max_units: int):
 				continue
 			if _is_local_defense_active(entity):
 				continue
+			# 主攻只调度真正空闲的野战部队。正在交战/移动/攻击移动/排队命令的单位
+			# 如果被重新下发，会清空 current_target 和命令队列，表现为“打两下就转身”。
+			if entity.current_target != null or entity.current_order != "" or entity.is_attack_moving:
+				continue
+			if not entity.command_queue.is_empty():
+				continue
+			# 海军不能收到陆地城堡的攻击移动命令，否则会一直寻路失败。
+			if entity.water_capable:
+				continue
 			var boarded = entity.get("_boarded_on")
 			if boarded != null and int(boarded) != -1:
 				continue
@@ -1698,7 +1732,7 @@ func _check_hunt_cleanup():
 func update_tactic(_delta):
 	var now = Time.get_ticks_msec() / 1000.0
 	var my_key = my_peer_id if my_peer_id != -1 else my_team
-	var my_mil = count_military(my_key)
+	var my_mil = count_field_military(my_key)
 	# 战术判断只看当前视野内看到的敌军，不读取全图敌人军力
 	var player_mil = _visible_enemy_military()
 	_cleanup_harass_squad(float(battle.game_time))
@@ -1870,6 +1904,9 @@ func execute_overwhelm():
 			if int(entity.entity_id) in [5,6,10,14,43,44,45,46,47,48,49,50,51]: continue
 			if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass") or entity.has_meta("ai_wall_guard"): continue
 			if _is_held_by_garrison(entity): continue
+			if entity.water_capable: continue
+			# 已经在交战/移动的单位不重新下发，避免“全军压上”把前线目标清掉。
+			if entity.current_target != null or entity.current_order != "" or entity.is_attack_moving: continue
 			entity.attack_move_to(rally)
 	# 等待部队集结
 	await get_tree().create_timer(10.0).timeout
@@ -1881,6 +1918,8 @@ func execute_overwhelm():
 			if int(entity.entity_id) in [5,6,10,14,43,44,45,46,47,48,49,50,51]: continue
 			if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass") or entity.has_meta("ai_wall_guard"): continue
 			if _is_held_by_garrison(entity): continue
+			if entity.water_capable: continue
+			if entity.current_target != null or entity.current_order != "" or entity.is_attack_moving: continue
 			if not enemy_castle or not is_instance_valid(enemy_castle): continue
 			entity.attack_move_to(enemy_castle.global_position)
 
@@ -1915,6 +1954,8 @@ func execute_raid():
 			if e.has_meta("ai_home_guard") or e.has_meta("ai_resource_guard") or e.has_meta("ai_harass") or e.has_meta("ai_wall_guard"):
 				continue
 			if _is_held_by_garrison(e):
+				continue
+			if e.water_capable:
 				continue
 			raid_army.append(e)
 	if raid_army.is_empty(): return
@@ -2416,7 +2457,7 @@ func _process_line_4():
 		return
 	# 骚扰小队出门时主力仍可进攻；attack_move 会跳过 ai_harass 单位
 	var my_key = my_peer_id if my_peer_id != -1 else my_team
-	if count_military(my_key) >= 12 and an_attack():
+	if count_field_military(my_key) >= 12 and an_attack():
 		var target = _get_attack_target_castle()
 		if target:
 			attack_move(target.global_position, 30)

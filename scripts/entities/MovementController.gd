@@ -51,7 +51,10 @@ const LARGE_UNIT_CLEARANCE_BODY: float = 1.0
 const LARGE_UNIT_CLEARANCE_COST: float = 30.0
 var _last_recalc_frame: int = -99  # prevent recalc spam
 var _path_cache: Dictionary = {}  # Vector2i(world_x, world_z) -> path_array, cleared on building placement
-var _blacklist: Dictionary = {}  # Vector2i -> true for unreachable targets
+var _blacklist: Dictionary = {}  # Vector2i -> 过期时间戳，暂时跳过不可达目标
+# 普通移动失败只临时拉黑：如果永久记住，玩家一次失败后同一位置就再也点不动，
+# 只有建筑布局变化触发 recalculate() 才会恢复，表现为“单位不听移动命令”。
+const MOVE_BLACKLIST_TTL_MS: int = 4000
 
 func _init(army: Army):
 	_army = army
@@ -88,9 +91,12 @@ func set_move_target(pos: Vector3, stop_range: float = 0.0):
 	# 黑名单只用于普通移动；攻击追击要允许重新尝试墙后/建筑中心的目标，
 	# 否则目标站在曾经寻路失败过的格子上时，单位会连攻击路径都不再计算。
 	if not is_attack_move and _blacklist.has(key):
-		_pending_path = false
-		move_path_failed = true
-		return  # permanently blacklisted (cleared on building placement)
+		var blacklist_until: int = int(_blacklist[key])
+		if Time.get_ticks_msec() < blacklist_until:
+			_pending_path = false
+			move_path_failed = true
+			return
+		_blacklist.erase(key)
 
 	# 新一次寻路请求开始前先清掉旧的失败标记，避免上一目标失败导致移动命令被立即取消
 	move_path_failed = false
@@ -167,7 +173,7 @@ func _apply_path(pos: Vector3, path: Array, stop_range: float) -> void:
 	else:
 		attack_path_failed = false
 		move_path_failed = true
-		_blacklist[key] = true
+		_blacklist[key] = Time.get_ticks_msec() + MOVE_BLACKLIST_TTL_MS
 	if _is_selected: _show_path()
 
 func _try_compute_pending_path(bm: RTSBattleManager) -> bool:
