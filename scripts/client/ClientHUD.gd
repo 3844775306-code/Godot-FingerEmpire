@@ -638,8 +638,10 @@ func show_alert_message(msg: String, color: Color = ALERT_DANGER):
 	_alert_label.text = msg
 	_alert_label.add_theme_color_override("font_color", color)
 	# 横幅边框色跟随警报类型（危险红 / 警告黄 / 信息绿 / 编队蓝）
+	# 横幅底色压到半透明：原来 0.88 几乎是一块实心黑条，报警时正好挡住最需要看的战场。
+	# 文字带黑色描边，降到 0.55 依然清晰。
 	var ab := StyleBoxFlat.new()
-	ab.bg_color = Color(UITheme.INK, 0.88)
+	ab.bg_color = Color(UITheme.INK, 0.55)
 	ab.set_corner_radius_all(UITheme.RADIUS_MD)
 	ab.set_border_width_all(UITheme.BORDER_THIN)
 	ab.border_color = Color(color, 0.5)
