@@ -502,13 +502,15 @@ func _add_selection_ring():
 		# 不再为每个单位分配一份网格/材质资源。
 		var ring_key: String = "%.2f" % body_radius
 		var ring_mesh: TorusMesh = _selection_ring_meshes.get(ring_key)
+		# 选择环要套在模型上，模型还乘了 ENTITY_MODEL_SCALE，环径与高度都得跟着放大
+		var visual_r: float = body_radius * RTSConfig.get_model_scale(entity_id)
 		if ring_mesh == null:
 			ring_mesh = TorusMesh.new()
-			ring_mesh.inner_radius = body_radius + 0.1
-			ring_mesh.outer_radius = body_radius + 0.15
+			ring_mesh.inner_radius = visual_r + 0.1
+			ring_mesh.outer_radius = visual_r + 0.15
 			_selection_ring_meshes[ring_key] = ring_mesh
 		ring.mesh = ring_mesh
-		ring.position = Vector3(0, body_radius * 2.5 + 0.1, 0)
+		ring.position = Vector3(0, visual_r * 2.5 + 0.1, 0)
 		if _selection_ring_material == null:
 			_selection_ring_material = StandardMaterial3D.new()
 			_selection_ring_material.albedo_color = Color.GREEN
@@ -1115,15 +1117,9 @@ func _physics_process(delta):
 				_cached_speed_mod = float(bm.map_modifiers.get("marsh_speed", 0.6))
 			elif not water_capable and here_overlay == 1:
 				_cached_speed_mod = 0.9
-			elif not water_capable and here_overlay == 4:
-				# 缓坡本身的基础速度；具体上下坡倍率由 MovementController 按高差叠加
-				_cached_speed_mod = 0.9
-			elif not water_capable and here_overlay == 5:
-				# 山顶台地可正常展开，但仍比平原略慢
-				_cached_speed_mod = 0.95
-			elif _cached_terrain == 1:
-				_cached_speed_mod = 0.5
 			else:
+				# 山地不再有额外的基础减速：坡度的减速由 MovementController
+				# 按逐格高差统一计算，避免地形类型和坡度重复扣速度。
 				_cached_speed_mod = 1.0
 			speed = base_speed * _cached_speed_mod
 			# 船只保留持续航行音；步兵脚步音改由 _play_step_sfx 在落脚时触发
@@ -2720,7 +2716,7 @@ func _attack(target, delta):
 			var perpendicular = Vector3(spawn_dir.z, 0, -spawn_dir.x)
 			var offset = perpendicular * sin(angle_offset) * 0.3
 			# acquire_bullet 已把弹丸挂到 BattleManager 下，这里只设置入树后的全局坐标
-			bullet.global_position = global_position + Vector3(0, body_radius * 2.5, 0) + offset
+			bullet.global_position = global_position + Vector3(0, body_radius * RTSConfig.get_model_scale(entity_id) * 2.5, 0) + offset
 	else:
 		var _dmg_m = attack
 		# 农民对动物伤害+900%
@@ -2894,7 +2890,7 @@ func _spawn_effect_marker(target, color: Color):
 	var sphere = SphereMesh.new()
 	sphere.radius = 0.3; sphere.height = 0.6
 	marker.mesh = sphere
-	marker.position = target.global_position + Vector3(0, target.body_radius * 3.0, 0)
+	marker.position = target.global_position + Vector3(0, target.body_radius * RTSConfig.get_model_scale(target.entity_id) * 3.0, 0)
 	var mat = StandardMaterial3D.new()
 	mat.albedo_color = color
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -3635,7 +3631,10 @@ func _do_garrison(building: Building):
 	if not building.died.is_connected(_on_garrison_building_died):
 		building.died.connect(_on_garrison_building_died.bind(get_instance_id()))
 	# Move to top of building instead of hiding
-	global_position = building.global_position + Vector3(0, building.body_radius * 1.8, 0)
+	# 建筑模型会再乘 ENTITY_MODEL_SCALE（主城/巨型投石机等），这里要按放大后的
+	# 实际高度抬高，否则官员会陷进大建筑里
+	var top_height: float = building.body_radius * RTSConfig.get_model_scale(building.entity_id)
+	global_position = building.global_position + Vector3(0, top_height * 1.8, 0)
 	collision_layer = 0
 	stop_movement()
 	
@@ -4419,8 +4418,8 @@ func unboard_at(pos: Vector3):
 	_boarded_units.clear()
 
 # 把某个点吸附到能站人的地面上，顺带按地形重算高度。
-# 平原可以；浅滩（overlay==3）陆军也能走；水面和山地（terrain==1）都不行。
-# 不能站人时返回 Vector3.ZERO。
+# 平原、缓坡和可走的山地台地都可以；浅滩（overlay==3）陆军也能走；
+# 水面和悬崖格不行。不能站人时返回 Vector3.ZERO。
 func _land_snap(p: Vector3) -> Vector3:
 	var battle = get_tree().get_first_node_in_group("battle_manager")
 	if battle == null:
@@ -4429,7 +4428,9 @@ func _land_snap(p: Vector3) -> Vector3:
 	if g.x < 0 or g.y < 0 or g.x >= RTSConfig.MAP_SIZE or g.y >= RTSConfig.MAP_SIZE:
 		return Vector3.ZERO
 	var terrain: int = int(battle.get_terrain_at_grid(g.x, g.y))
-	if terrain < 0 or terrain == 1:
+	if terrain < 0:
+		return Vector3.ZERO
+	if terrain != 2 and battle.is_cliff_tile(g.x, g.y):
 		return Vector3.ZERO
 	if terrain == 2 and int(battle.get_overlay_at_grid(g.x, g.y)) != 3:
 		return Vector3.ZERO

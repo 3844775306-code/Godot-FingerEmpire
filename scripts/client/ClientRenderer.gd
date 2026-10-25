@@ -1098,6 +1098,9 @@ func _attach_ground_patch(node: Node3D, info: Dictionary) -> void:
 		return
 	if int(info.get("type", -1)) != 1:
 		return
+	# 与服务端一致：城墙/炮台/桥/梯子这些构件不铺土色
+	if int(info.get("entity_id", -1)) in RTSConfig.BUILDING_BODY_SCALE_EXCLUDED:
+		return
 	if node.get_node_or_null("GroundPatch") != null:
 		return
 	# 快照里的 body_radius 已经是服务端放大后的有效半径，这里不能再乘建筑放大倍率；

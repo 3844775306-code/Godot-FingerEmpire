@@ -192,7 +192,8 @@ func _attack(target, delta):
 		bullet.source = self
 		bullet.damage_radius = damage_radius
 		# acquire_bullet 已把弹丸挂到 BattleManager 下，这里只设置入树后的全局坐标
-		bullet.global_position = global_position + Vector3(0, body_radius * 1.5, 0)
+		# 模型乘了 ENTITY_MODEL_SCALE，出手高度也要按放大后的实际尺寸算
+		bullet.global_position = global_position + Vector3(0, body_radius * RTSConfig.get_model_scale(entity_id) * 1.5, 0)
 	else:
 		target.take_damage(attack, self)
 	attack_timer = attack_speed
@@ -328,6 +329,10 @@ static func _ground_patch_texture() -> ImageTexture:
 func _spawn_ground_patch() -> void:
 	if _ground_patch != null and is_instance_valid(_ground_patch):
 		return
+	# 城墙/炮台/桥/梯子这类贴在城墙或水面上的构件不铺土色：
+	# 它们本来就没压在地面上，铺一层土反倒像浮在空中
+	if entity_id in RTSConfig.BUILDING_BODY_SCALE_EXCLUDED:
+		return
 	var half: float = _ground_patch_half_size()
 	var decal := Decal.new()
 	decal.name = "GroundPatch"
@@ -392,15 +397,17 @@ func _apply_nation_start_bonus():
 # ====================== 修复：建筑选择环 水平贴地 ======================
 func _add_selection_ring():
 	if not has_node("SelectionRing"):
+		# 环径与高度都按模型放大后的尺寸算，否则大建筑的选择环会陷在模型里
+		var visual_r: float = body_radius * RTSConfig.get_model_scale(entity_id)
 		var ring = MeshInstance3D.new()
 		ring.name = "SelectionRing"
 		var torus = TorusMesh.new()
-		torus.inner_radius = body_radius + 0.2
-		torus.outer_radius = body_radius + 0.35
+		torus.inner_radius = visual_r + 0.2
+		torus.outer_radius = visual_r + 0.35
 		ring.mesh = torus
 
 		# 水平圆环 + 贴地面
-		ring.position.y = body_radius * 1.5 + 0.1
+		ring.position.y = visual_r * 1.5 + 0.1
 		#ring.rotation.x = deg_to_rad(90)
 
 		var mat = StandardMaterial3D.new()
