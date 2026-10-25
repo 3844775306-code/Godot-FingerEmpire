@@ -1171,11 +1171,12 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 			loaded_model.scale *= 1.5
 		entity.add_child(loaded_model)
 		entity.set_meta("_model_instance", loaded_model)
-		# 建筑整体放大 2 倍（瞭望塔 41、城墙 27、炮台 64、桥 7、梯子 8、箭塔 25、炮塔 26 除外），与服务端保持视觉一致
-		if int(info.get("type", -1)) == 1 and int(info.get("entity_id", 0)) not in [41, 27, 64, 7, 8, 25, 26]:
-			loaded_model.scale *= 2.0
-			if aabb.size.y > 0.01:
-				loaded_model.position.y -= aabb.position.y * 2.0
+		# 快照里的 body_radius 已经是服务端放大后的有效半径，模型按它缩放到目标尺寸即可。
+		# 这里不能再乘一次建筑放大 2 倍，否则客户端建筑会是服务端的 2 倍（配置的 4 倍）。
+		# 服务端对普通建筑放大后按包围盒重新贴地，客户端这里做同样的底部对齐。
+		if int(info.get("type", -1)) == 1 and RTSConfig.get_building_body_scale(int(info.get("entity_id", 0))) != 1.0:
+			if absf(aabb.position.y * scale_factor) > 0.005:
+				loaded_model.position.y -= aabb.position.y * scale_factor
 		_ensure_model_shadows(loaded_model)
 		# GLB 动画默认不循环；缓存 AnimationPlayer 并配置 idle/walk/attack 循环
 		var cached_ap := AnimationHelper.configure_loops(loaded_model)
