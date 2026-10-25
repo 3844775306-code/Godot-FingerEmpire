@@ -4,10 +4,6 @@ extends Node3D
 const MapPresets = preload("res://scripts/map/MapPresets.gd")
 
 const TEX_SIZE = 512
-# 地面碎石：低多边形、随机形状的 3D 小块，纯视觉装饰。
-# 使用 MultiMesh 合批，不添加碰撞体、导航网格或任何寻路数据。
-const PEBBLE_VARIANTS := 4
-const PEBBLE_CLUSTERS_PER_TILE := 0.09
 
 # 强制覆盖地图尺寸（0表示使用全局常量）
 var map_size_override: int = 0
@@ -34,7 +30,6 @@ var _fog_prev_explored: Array = []     # 上一次已应用的探索格，用于
 var _fog_prev_visible: Array = []      # 上一次已应用的可见格
 var _fog_prev_size: int = -1
 var terrain_mesh_instance: MeshInstance3D
-var _pebble_root: Node3D = null
 var vertex_grid: Array = []           # 存储顶点高度，用于快速查询
 var height_scale: float = 2.0         # 高度缩放系数
 # 水面材质（用于把船只位置推给着色器做涟漪/尾迹，以及按画质档调反射强度）
@@ -2726,131 +2721,6 @@ func _create_visual_and_texture():
 	terrain_mesh_instance.mesh = mesh
 	terrain_mesh_instance.material_override = _terrain_mat if _terrain_mat != null else mat
 	add_child(terrain_mesh_instance)
-	_create_ground_pebbles(size)
-
-# 在普通陆地上随机撒一批不规则低多边形碎石。
-# 这些石头只挂在 MultiMeshInstance3D 上：没有 CollisionShape、没有 NavigationRegion，
-# 也不参与任何寻路/建造/选择逻辑，纯粹是地面上的视觉细节。
-func _create_ground_pebbles(size: int) -> void:
-	if _pebble_root != null and is_instance_valid(_pebble_root):
-		_pebble_root.queue_free()
-	_pebble_root = Node3D.new()
-	_pebble_root.name = "GroundPebbles"
-	add_child(_pebble_root)
-	var rng := RandomNumberGenerator.new()
-	var seed_value: int = custom_seed
-	if seed_value == 0:
-		seed_value = int(hash(String(map_preset.get("id", "classic")) + ":pebbles:" + str(size)))
-	rng.seed = seed_value
-
-	var variants: Array = []
-	for _i in range(PEBBLE_VARIANTS):
-		variants.append(_make_pebble_mesh(rng))
-	var mats: Array = []
-	for _i in range(PEBBLE_VARIANTS):
-		mats.append(_make_pebble_material(rng))
-
-	var transforms: Array = []
-	for _i in range(PEBBLE_VARIANTS):
-		transforms.append([])
-	var half := float(size) * 0.5
-	var clusters: int = maxi(48, int(float(size * size) * PEBBLE_CLUSTERS_PER_TILE))
-	for _i in range(clusters):
-		var cx := rng.randf_range(-half + 2.0, half - 2.0)
-		var cz := rng.randf_range(-half + 2.0, half - 2.0)
-		if not _is_pebble_ground(cx, cz):
-			continue
-		var stones: int = rng.randi_range(1, 3)
-		for _s in range(stones):
-			var px := cx + rng.randf_range(-0.75, 0.75)
-			var pz := cz + rng.randf_range(-0.75, 0.75)
-			if not _is_pebble_ground(px, pz):
-				continue
-			var h0 := _get_terrain_height(px, pz)
-			var slope := absf(_get_terrain_height(px + 0.6, pz) - _get_terrain_height(px - 0.6, pz)) \
-					+ absf(_get_terrain_height(px, pz + 0.6) - _get_terrain_height(px, pz - 0.6))
-			if slope > 0.65:
-				continue
-			var variant: int = rng.randi_range(0, PEBBLE_VARIANTS - 1)
-			var sx := rng.randf_range(0.16, 0.34)
-			var sy := sx * rng.randf_range(0.55, 0.95)
-			var basis := Basis(Vector3.UP, rng.randf_range(0.0, TAU))
-			basis = basis.rotated(Vector3.RIGHT, rng.randf_range(-0.20, 0.20))
-			basis = basis.rotated(Vector3.FORWARD, rng.randf_range(-0.20, 0.20))
-			basis = basis.scaled(Vector3(sx, sy, sx * rng.randf_range(0.75, 1.20)))
-			# 石头中心稍微埋进地面，避免看起来像悬浮的小方块
-			transforms[variant].append(Transform3D(basis, Vector3(px, h0 + sy * 0.55, pz)))
-
-	for i in range(PEBBLE_VARIANTS):
-		var list: Array = transforms[i]
-		if list.is_empty():
-			continue
-		var mm := MultiMesh.new()
-		mm.transform_format = MultiMesh.TRANSFORM_3D
-		mm.mesh = variants[i]
-		mm.instance_count = list.size()
-		for j in range(list.size()):
-			mm.set_instance_transform(j, list[j])
-		var mmi := MultiMeshInstance3D.new()
-		mmi.name = "Pebbles_%d" % i
-		mmi.multimesh = mm
-		mmi.material_override = mats[i]
-		mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		_pebble_root.add_child(mmi)
-
-func _is_pebble_ground(world_x: float, world_z: float) -> bool:
-	var size := _get_map_size()
-	var gx := int(round(world_x + float(size) * 0.5))
-	var gz := int(round(world_z + float(size) * 0.5))
-	if gx < 0 or gz < 0 or gx >= size or gz >= size:
-		return false
-	if terrain_grid[gx][gz] != 0:
-		return false
-	var ov := get_overlay(gx, gz)
-	return ov != 2 and ov != 3
-
-func _make_pebble_material(rng: RandomNumberGenerator) -> ShaderMaterial:
-	var mat := ShaderMaterial.new()
-	var shader = load("res://resources/ground_pebbles.gdshader")
-	mat.shader = shader
-	mat.set_shader_parameter("fog_tex", terrain_texture)
-	mat.set_shader_parameter("map_size", float(_get_map_size()))
-	var tone := rng.randf_range(0.46, 0.60)
-	mat.set_shader_parameter("stone_color", Color(tone, tone * 0.95, tone * 0.86))
-	return mat
-
-# 用十二面体球做底，随机挤歪顶点 + 随机压扁，得到不规则的块状碎石。
-# 平面法线（smooth_group=-1）让它在低面数下仍然有明显的棱角。
-func _make_pebble_mesh(rng: RandomNumberGenerator) -> ArrayMesh:
-	var t := (1.0 + sqrt(5.0)) / 2.0
-	var base := [
-		Vector3(-1, t, 0), Vector3(1, t, 0), Vector3(-1, -t, 0), Vector3(1, -t, 0),
-		Vector3(0, -1, t), Vector3(0, 1, t), Vector3(0, -1, -t), Vector3(0, 1, -t),
-		Vector3(t, 0, -1), Vector3(t, 0, 1), Vector3(-t, 0, -1), Vector3(-t, 0, 1)
-	]
-	var faces := [
-		[0, 11, 5], [0, 5, 1], [0, 1, 7], [0, 7, 10], [0, 10, 11],
-		[1, 5, 9], [5, 11, 4], [11, 10, 2], [10, 7, 6], [7, 1, 8],
-		[3, 9, 4], [3, 4, 2], [3, 2, 6], [3, 6, 8], [3, 8, 9],
-		[4, 9, 5], [2, 4, 11], [6, 2, 10], [8, 6, 7], [9, 8, 1]
-	]
-	var verts: Array = []
-	for v in base:
-		var jitter := Vector3(
-			rng.randf_range(-0.18, 0.18),
-			rng.randf_range(-0.18, 0.18),
-			rng.randf_range(-0.18, 0.18)
-		)
-		verts.append((v + jitter).normalized() * rng.randf_range(0.72, 1.12))
-	var st := SurfaceTool.new()
-	st.begin(Mesh.PRIMITIVE_TRIANGLES)
-	st.set_smooth_group(-1)
-	for f in faces:
-		st.add_vertex(verts[f[0]])
-		st.add_vertex(verts[f[1]])
-		st.add_vertex(verts[f[2]])
-	st.generate_normals()
-	return st.commit()
 
 # ---------- 碰撞与导航 ----------
 func _create_chunked_collisions():
