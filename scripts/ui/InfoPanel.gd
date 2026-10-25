@@ -323,6 +323,9 @@ func update_info(entity):
 		observed_entity = null
 		visible = false
 		return
+	# 单选时不该留着框选多选的登船按钮
+	_hide_multi_board_btn()
+	_multi_entities.clear()
 	observed_entity = entity; visible = true
 
 	# Batch count from selection
@@ -607,6 +610,14 @@ func _on_board_down_pressed() -> void:
 var _refresh_timer: float = 0.0
 
 func _process(delta):
+	# 多选时 observed_entity 是空的，下面会早退，所以登船按钮的可用性要在这里单独刷新：
+	# 船可能在这期间开走或装满，按钮必须跟着变灰。
+	if _multi_entities.size() > 0:
+		_multi_refresh_accum += delta
+		if _multi_refresh_accum >= 1.0:
+			_multi_refresh_accum = 0.0
+			if visible:
+				_refresh_multi_board_btn()
 	if not visible or observed_entity == null or not is_instance_valid(observed_entity) or observed_entity.health <= 0:
 		return
 	_refresh_timer -= delta
@@ -628,6 +639,122 @@ const ROW_COLORS = [
 
 var _pending_multi_entities: Array = []
 var _pending_multi_btns: Dictionary = {}
+
+# 框选多选时底部的「陆地单位上附近运载船」按钮
+const MULTI_BOARD_SEARCH_RADIUS: float = 120.0
+var _multi_board_btn: Button = null
+var _multi_entities: Array = []
+var _multi_refresh_accum: float = 0.0
+
+func _ensure_multi_board_btn() -> void:
+	if _multi_board_btn and is_instance_valid(_multi_board_btn):
+		# 每次重选都把它挪到面板最底部
+		if _multi_board_btn.get_parent() == _vb:
+			_vb.move_child(_multi_board_btn, _vb.get_child_count() - 1)
+		return
+	_multi_board_btn = Button.new()
+	_multi_board_btn.name = "MultiBoardBtn"
+	_multi_board_btn.custom_minimum_size = Vector2(0, UILayout.dp(38.0)) if _is_mobile() else Vector2(200, 34)
+	_multi_board_btn.add_theme_font_size_override("font_size", UILayout.font_dp(12.0) if _is_mobile() else UITheme.FONT_SM)
+	UITheme.apply_row_button(_multi_board_btn, Color(0.35, 0.75, 1.0))
+	_multi_board_btn.pressed.connect(_on_multi_board_pressed)
+	_vb.add_child(_multi_board_btn)
+
+func _hide_multi_board_btn() -> void:
+	if _multi_board_btn and is_instance_valid(_multi_board_btn):
+		_multi_board_btn.visible = false
+
+# 刷新「上附近运载船」按钮：有可上船的陆地单位、且附近有停靠岸边且没装满的运载船才能点
+func _refresh_multi_board_btn() -> void:
+	_ensure_multi_board_btn()
+	_multi_board_btn.visible = true
+	var candidates: Array = []
+	for u in _multi_entities:
+		if is_instance_valid(u) and u is Army and u.health > 0 and not bool(u.get("water_capable")):
+			candidates.append(u)
+	if candidates.is_empty():
+		_multi_board_btn.visible = false
+		return
+	var ship = _nearest_idle_shore_transport(candidates[0].global_position, int(candidates[0].team), {})
+	if ship == null:
+		_multi_board_btn.text = "⛵ 附近没有空闲运载船"
+		_multi_board_btn.disabled = true
+		_multi_board_btn.tooltip_text = "需要一艘停在岸边、还有空位的运载船"
+	else:
+		_multi_board_btn.text = "⛵ 陆地单位上附近运载船 (%d)" % candidates.size()
+		_multi_board_btn.disabled = false
+		_multi_board_btn.tooltip_text = "框选中的陆地单位会自动走到最近的运载船并登船"
+
+# 找最近的、还有空位、且停在岸边的运载船。
+# load_map 记录本轮已经分配出去的名额，避免一艘船被塞爆。
+func _nearest_idle_shore_transport(from: Vector3, team: int, load_map: Dictionary):
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if bm == null:
+		return null
+	bm._ensure_cache_fresh()
+	var best = null
+	var best_d: float = MULTI_BOARD_SEARCH_RADIUS
+	for e in bm._armies:
+		if not is_instance_valid(e) or e.health <= 0:
+			continue
+		if int(e.entity_id) != 9 or int(e.team) != team:
+			continue
+		var used: int = int(load_map.get(e.get_instance_id(), 0))
+		if e.get_boarded_count() + used >= e.get_board_capacity():
+			continue
+		if not _is_transport_at_shore(e):
+			continue
+		var d: float = from.distance_to(e.global_position)
+		if d <= best_d:
+			best_d = d
+			best = e
+	return best
+
+# 船停在岸边：船所在格是水，周围两圈内有可通行的陆地（平原或浅滩）
+func _is_transport_at_shore(ship) -> bool:
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if bm == null:
+		return false
+	var g: Vector2i = bm.world_to_grid(ship.global_position)
+	if int(bm.get_terrain_at_grid(g.x, g.y)) != 2:
+		return false
+	for r in range(1, 3):
+		for dx in range(-r, r + 1):
+			for dy in range(-r, r + 1):
+				if maxi(absi(dx), absi(dy)) != r:
+					continue
+				var gx: int = g.x + dx
+				var gy: int = g.y + dy
+				if gx < 0 or gy < 0 or gx >= RTSConfig.MAP_SIZE or gy >= RTSConfig.MAP_SIZE:
+					continue
+				var t: int = int(bm.get_terrain_at_grid(gx, gy))
+				if t < 0 or t == 1:
+					continue
+				if t == 2 and int(bm.get_overlay_at_grid(gx, gy)) != 3:
+					continue
+				return true
+	return false
+
+# 点击：框选中的所有陆地单位各自走向最近的空闲运载船，到位后由 Army 自动登船
+func _on_multi_board_pressed() -> void:
+	var load_map: Dictionary = {}
+	var assigned: int = 0
+	for u in _multi_entities:
+		if not is_instance_valid(u) or not (u is Army) or u.health <= 0:
+			continue
+		if bool(u.get("water_capable")):
+			continue
+		var ship = _nearest_idle_shore_transport(u.global_position, int(u.team), load_map)
+		if ship == null:
+			continue
+		var shore: Vector3 = _ship_shore_point(ship)
+		if shore == Vector3.ZERO:
+			continue
+		load_map[ship.get_instance_id()] = int(load_map.get(ship.get_instance_id(), 0)) + 1
+		u.move_to(shore)
+		u.set_meta("_auto_board_ship", ship.get_instance_id())
+		assigned += 1
+	_refresh_multi_board_btn()
 
 func show_multi_selection(entities: Array):
 	var old_box = _vb.get_node_or_null("UpgradeInfoBox")
@@ -717,6 +844,10 @@ func show_multi_selection(entities: Array):
 
 	# Start monitoring Ctrl key release
 	set_process_input(true)
+
+	# 框选面板底部：一键让选中的陆地单位上附近的运载船
+	_multi_entities = entities.duplicate()
+	_refresh_multi_board_btn()
 
 # Detect Ctrl release to commit pending multi-selection
 func _input(event):

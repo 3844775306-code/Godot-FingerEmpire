@@ -321,6 +321,28 @@ var _trail_side: int = 1
 # 供动画层使用：实际位移速度，地形减速/被挡住时步频会跟着变慢
 var _visual_speed: float = 0.0
 
+# 走到船边后自动上船：信息面板的「上附近运载船」按钮给单位挂上
+# _auto_board_ship（运载船 instance_id），到这里负责走到位就登船。
+func _update_auto_board(delta: float) -> void:
+	if not has_meta("_auto_board_ship"):
+		return
+	var sid: int = int(get_meta("_auto_board_ship"))
+	var ship = instance_from_id(sid)
+	if ship == null or not is_instance_valid(ship) or (ship is GameEntity and (ship as GameEntity).health <= 0):
+		remove_meta("_auto_board_ship")
+		return
+	# 船被开走或已经装满了就取消，不能让它一直挂在半路上
+	if ship.get_boarded_count() >= ship.get_board_capacity():
+		remove_meta("_auto_board_ship")
+		stop_movement()
+		return
+	# 岸边点最远可能离船 8 米（信息面板搜岸边点的半径上限），
+	# 判定必须跟着放宽，否则单位会站在岸边却永远上不了船
+	if global_position.distance_to(ship.global_position) <= 8.0:
+		remove_meta("_auto_board_ship")
+		stop_movement()
+		ship.board_unit(self)
+
 func _update_walk_dust(delta: float) -> void:
 	# 船只在水中前进不该有扬尘；鱼也排除
 	if entity_id in [9, 13, 14, 39, 40]:
@@ -644,10 +666,23 @@ func set_combat_advance_enabled(enabled: bool) -> void:
 		if combat_destination == Vector3.ZERO:
 			is_attack_moving = false
 			return
+		# 普通行军中也保留着 combat_destination，但 attack_move_target 是空的。
+		# 切换攻击移动时若不补上终点，process_move 会拿 (0,0,0) 当目标而原地站住，
+		# _process_combat_advance 又会因为旧路径一直存在而不判定“路径耗尽”，
+		# 单位就永久停在“攻击移动但不动”。这里把行军终点转换成攻击移动终点。
+		attack_move_target = combat_destination
+		current_target = null
+		_target_lost_since_ms = 0
+		_attack_watch_target_id = -1
+		_attack_stall_time = 0.0
 		is_attack_moving = true
 		_advance_path_fail_time = 0.0
 		_advance_path_recovering = false
 		_set_combat_state(CombatState.ADVANCE)
+		if _movement:
+			_movement.attack_path_failed = false
+			_movement.move_path_failed = false
+			_movement.set_move_target(combat_destination)
 		return
 	is_attack_moving = false
 	if combat_state == CombatState.ADVANCE:
@@ -952,6 +987,9 @@ func _physics_process(delta):
 
 	# 走动时脚下扬尘、地面留脚印/车辙，停下自动消失（内部已排除船只与鱼）
 	_update_walk_dust(delta)
+
+	# 走到船边后自动上船（由信息面板的「上附近运载船」按钮下达）
+	_update_auto_board(delta)
 
 	# 爆破船/运载船/手推车/贸易车 特殊行为
 	if entity_id == 40:
@@ -1540,6 +1578,13 @@ func _process_combat_advance(delta, bm) -> void:
 		_advance_path_recovering = false
 		_set_combat_state(CombatState.IDLE)
 		return
+	# 兼容旧状态：切换攻击移动时 attack_move_target 可能漏设，而 combat_destination
+	# 仍然有效。若只保留 is_attack_moving/ADVANCE，process_move 会把 (0,0,0)
+	# 当作目标而原地不动。这里把目的地补回去，正在卡住的单位也能立即恢复。
+	if attack_move_target == Vector3.ZERO:
+		attack_move_target = combat_destination
+		if _movement:
+			_movement.set_move_target(combat_destination)
 	if _movement.move_path_failed:
 		var fallback: Building = _find_attack_fallback_building(bm)
 		if fallback != null and is_instance_valid(fallback) and _can_attack_target(fallback):
