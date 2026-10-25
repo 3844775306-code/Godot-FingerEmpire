@@ -44,10 +44,9 @@ var collision_timer: float = 0.0
 # 单位实际会顶在墙上原地踏步；Army 用它改打这面挡路的墙。
 var blocking_building: Building = null
 const COLLISION_INTERVAL: float = 0.15
-# 攻城单位体积较大，A* 只避开建筑中心格时路径会贴着建筑边角；
-# 碰撞推挤会让大体型单位在两个建筑/墙角之间来回弹，表现为“被建筑卡住”。
-# 这里给大体型单位的寻路额外加上建筑周围的高成本格，让路径优先从外侧绕行。
-const LARGE_UNIT_RADIUS: float = 0.75
+# A* 只避开建筑中心格时，路径会贴着建筑边角甚至从碰撞体侧面穿过去；
+# 步兵被主城卡住、大体型单位在墙角来回弹，根因都在这里。
+# 这里给所有陆军的寻路额外加上建筑周围的高成本格，让路径优先从外侧绕行。
 const LARGE_UNIT_CLEARANCE_BODY: float = 1.0
 const LARGE_UNIT_CLEARANCE_COST: float = 30.0
 var _last_recalc_frame: int = -99  # prevent recalc spam
@@ -259,17 +258,15 @@ func process_move(delta, bm: RTSBattleManager):
 			_pending_path = false
 			_pending_since_ms = 0
 		elif not _try_compute_pending_path(bm):
-			if Time.get_ticks_msec() - _pending_since_ms >= PENDING_PATH_TIMEOUT_MS:
+			# 只有攻击目标需要超时兜底；普通移动的寻路请求不能因为 A* 预算拥堵
+			# 等了两秒就被判失败，否则玩家下令后单位会直接停住不动。
+			if attack_order and Time.get_ticks_msec() - _pending_since_ms >= PENDING_PATH_TIMEOUT_MS:
 				# 连续等待超时：按寻路失败处理，让 Army 换目标/拆挡路建筑，避免永久站桩。
 				_pending_path = false
 				_pending_since_ms = 0
-				if attack_order:
-					attack_path_failed = true
-					move_path_failed = false
-					astar_target = Vector3.ZERO
-				else:
-					attack_path_failed = false
-					move_path_failed = true
+				attack_path_failed = true
+				move_path_failed = false
+				astar_target = Vector3.ZERO
 			# 攻击移动即使新路径还没算完，也可以先沿现有路径继续推进；
 			# 普通攻击/普通移动没有可用新路径时先停住，等下一帧重试。
 			if not (_army.is_attack_moving and astar_path.size() > 0):
@@ -632,15 +629,16 @@ static var _wall_set: Dictionary = {}    # Vector2i -> true
 static var _wall_ver: int = -1
 static var _wall_bm_id: int = -1
 static var _wall_team: int = -1  # friendly-wall passability is team-dependent
-static var _clearance_cost: Dictionary = {}  # Vector2i -> 大体型单位绕开建筑的高成本格
+static var _clearance_cost: Dictionary = {}  # Vector2i -> 建筑周围给陆军绕行的高成本格
 static var _bridge_set: Dictionary = {}          # 桥所在格子
 static var _ladder_set: Dictionary = {}          # 梯子使该敌方城墙格可通行
 static var _transport_water: Dictionary = {}     # 运载船周围3格水域(陆军可通行)
 static var _transport_frame: int = -1            # 运载船是移动的，水域标记单独做帧级缓存
 static var _transport_team: int = -1
 
-# 把建筑周围需要体型余量的格子标记为高成本。只给大体型单位使用，
-# 路径仍可勉强通过这些格子（出生点被围住时能走出来），但会优先绕行。
+# 把建筑周围需要体型余量的格子标记为高成本。所有陆军寻路都使用：
+# 建筑碰撞体是实体，A* 把建筑中心格当普通软障碍时，小兵会直接从城堡侧面穿过去，
+# 然后被碰撞体顶在墙边反复抖动。高成本格让它们提前从建筑外侧绕行。
 func _stamp_building_clearance(center: Vector2i, building_radius: float) -> void:
 	var clearance: float = LARGE_UNIT_CLEARANCE_BODY + building_radius + 0.3
 	var radius: int = maxi(1, ceili(clearance) - 1)
@@ -651,9 +649,6 @@ func _stamp_building_clearance(center: Vector2i, building_radius: float) -> void
 			var tile := Vector2i(center.x + dx, center.y + dy)
 			if tile.x < 0 or tile.x >= RTSConfig.MAP_SIZE or tile.y < 0 or tile.y >= RTSConfig.MAP_SIZE: continue
 			_clearance_cost[tile] = LARGE_UNIT_CLEARANCE_COST
-
-func _is_large_unit() -> bool:
-	return _army != null and _army.body_radius >= LARGE_UNIT_RADIUS
 
 func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Array:
 	var bm = _army._get_bm() as RTSBattleManager
@@ -812,8 +807,8 @@ func _get_terrain_cost(tile: Vector2i, bm: RTSBattleManager, wall_cache: Diction
 				1: cost = 2.5
 				2: cost = 1.5 if _bridge_set.has(tile) or _transport_water.has(tile) else 999.0
 				_: cost = 999.0
-	# 陆军大体型单位：建筑周围格子加高成本，优先从外侧绕行，避免贴边卡住
-	if not _army.water_capable and _is_large_unit():
+	# 陆军单位：建筑周围格子加高成本，优先从外侧绕行，避免贴边卡住。
+	if not _army.water_capable:
 		cost = maxf(cost, _clearance_cost.get(tile, 0.0))
 	return cost
 
