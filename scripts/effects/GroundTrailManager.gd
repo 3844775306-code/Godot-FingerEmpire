@@ -193,17 +193,22 @@ func _print_color_for(terrain: int, overlay: int, vehicle: bool) -> Color:
 # 不再让每个单位常驻一个粒子发射器；用 10 个一次性粒子节点轮转。
 func _build_dust() -> void:
 	_dust_mesh = SphereMesh.new()
-	_dust_mesh.radius = 0.09
-	_dust_mesh.height = 0.18
+	_dust_mesh.radius = 0.11
+	_dust_mesh.height = 0.22
 	_dust_mesh.radial_segments = 6
 	_dust_mesh.rings = 3
 	_dust_mat = StandardMaterial3D.new()
 	_dust_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	_dust_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	# CPUParticles3D 的 p.color / color_ramp 是通过顶点色传给网格的；
+	# StandardMaterial3D 默认不读取顶点色，颜色会被忽略成白色，必须显式打开。
+	_dust_mat.vertex_color_use_as_albedo = true
 	_dust_mat.albedo_color = Color.WHITE
 	_dust_mesh.material = _dust_mat
 	_dust_ramp = Gradient.new()
-	_dust_ramp.set_color(0, Color(1.0, 1.0, 1.0, 0.32))
+	# 这里的 alpha 只负责粒子生命周期内的淡出，真正的浓度由 p.color 控制。
+	# 两边都乘一次会把 alpha 从 0.22 压到 0.07，远景下几乎完全透明。
+	_dust_ramp.set_color(0, Color(1.0, 1.0, 1.0, 1.0))
 	_dust_ramp.set_color(1, Color(1.0, 1.0, 1.0, 0.0))
 	for i in DUST_POOL_SIZE:
 		var p := CPUParticles3D.new()
@@ -298,36 +303,36 @@ func emit_step(pos: Vector3, dir: Vector3, vehicle: bool, terrain: int, overlay:
 	if water:
 		if _within_camera(pos, DUST_DISTANCE):
 			_spawn_ripple(pos, 1.1 if vehicle else 0.62)
-			_spawn_dust(pos, Color(0.62, 0.78, 0.82, 0.24), 4, 0.5, 0.55)
+			_spawn_dust(pos, Color(0.62, 0.78, 0.82, 0.32), 6, 0.52, 0.55)
 		return
 	if not _within_camera(pos, PRINT_DISTANCE):
 		return
 	_add_print(pos, dir, vehicle, terrain, overlay, side)
 	if not _within_camera(pos, DUST_DISTANCE):
 		return
-	var color := Color(0.62, 0.55, 0.42, 0.22)
-	var amount := 4
-	var lifetime := 0.55
+	var color := Color(0.62, 0.55, 0.42, 0.38)
+	var amount := 7
+	var lifetime := 0.58
 	var strength := 0.9
 	if vehicle:
-		color = Color(0.58, 0.49, 0.35, 0.28)
-		amount = 9
-		lifetime = 0.78
+		color = Color(0.58, 0.49, 0.35, 0.46)
+		amount = 12
+		lifetime = 0.80
 		strength = 1.35
 	elif terrain == 1:
-		color = Color(0.48, 0.46, 0.42, 0.16)
-		amount = 3
-		lifetime = 0.45
+		color = Color(0.48, 0.46, 0.42, 0.26)
+		amount = 5
+		lifetime = 0.46
 		strength = 0.7
 	elif overlay == 2:
-		color = Color(0.34, 0.29, 0.21, 0.24)
-		amount = 4
-		lifetime = 0.52
+		color = Color(0.34, 0.29, 0.21, 0.42)
+		amount = 7
+		lifetime = 0.54
 		strength = 0.8
 	elif overlay == 1:
-		color = Color(0.45, 0.43, 0.30, 0.18)
-		amount = 3
-		lifetime = 0.5
+		color = Color(0.45, 0.43, 0.30, 0.32)
+		amount = 5
+		lifetime = 0.52
 		strength = 0.75
 	_spawn_dust(pos, color, amount, lifetime, strength)
 
