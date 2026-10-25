@@ -129,14 +129,16 @@ var _building_cells: Dictionary = {}  # Vector2i -> Array[Building]，仅供碰�
 # ==================== A* 分帧预算 ====================
 # 大部队同时下令时，几十/上百个单位会在同一帧各跑一次 A*。这里按帧限制
 # 请求数和耗时，超出的单位延后到后续帧重试；调用方 MovementController 会等待。
-# 原 8 请求/6ms 在大部队同时下令时首批路径分配偏慢，放宽到 12 请求/9ms；
-# 仍按帧限制总耗时，避免单帧被寻路无限拖长。
-const ASTAR_REQUESTS_PER_FRAME: int = 12
-const ASTAR_TIME_BUDGET_USEC: int = 9000
-# 给“已经因为预算不足排队过”的请求预留配额。新请求最多用 8 个名额/6ms，
-# 剩余 4 个名额/3ms 留给 pending 重试，避免大量新移动命令永远压在场景树后段的单位前面。
-const ASTAR_RETRY_RESERVE_REQUESTS: int = 4
-const ASTAR_RETRY_RESERVE_USEC: int = 3000
+# 原 8/6ms → 12/9ms 仍然偏紧：长路径单次就可能吃掉几毫秒，十几帧才轮到
+# 后面的单位，大部队看起来像“下了命令却站着不动”。这里按路径耗时而不是
+# 单纯按单位数限流，时间预算放宽到 24ms，请求数放宽到 48；仍保留上限，
+# 避免一次全军寻路把单帧拖到几十毫秒。
+const ASTAR_REQUESTS_PER_FRAME: int = 48
+const ASTAR_TIME_BUDGET_USEC: int = 24000
+# 给“已经因为预算不足排队过”的请求预留配额。新请求最多用 32 个名额/16ms，
+# 剩余 16 个名额/8ms 留给 pending 重试，避免新移动命令长期压住已排队单位。
+const ASTAR_RETRY_RESERVE_REQUESTS: int = 16
+const ASTAR_RETRY_RESERVE_USEC: int = 8000
 var _astar_budget_frame: int = -1
 var _astar_budget_count: int = 0
 var _astar_budget_usec: int = 0
