@@ -87,12 +87,12 @@ static func _finish(model: Node3D) -> void:
 static func _ram(model: Node3D) -> float:
 	var pos: Vector3 = model.position
 	_seq(model, model, "position", [
-		{"v": pos + Vector3(0.0, 0.0, 0.72), "t": 0.16, "tr": Tween.TRANS_SINE},
-		{"v": pos + Vector3(0.0, 0.04, -2.05), "t": 0.22, "tr": Tween.TRANS_EXPO, "e": Tween.EASE_IN},
+		{"v": pos + Vector3(0.0, 0.0, 0.28), "t": 0.16, "tr": Tween.TRANS_SINE},
+		{"v": pos + Vector3(0.0, 0.01, -0.70), "t": 0.22, "tr": Tween.TRANS_EXPO, "e": Tween.EASE_IN},
 		{"v": pos, "t": 0.56, "tr": Tween.TRANS_ELASTIC},
 	])
 	_entity_pitch(model, [
-		{"a": -0.20, "t": 0.38, "tr": Tween.TRANS_QUAD},
+		{"a": -0.08, "t": 0.38, "tr": Tween.TRANS_QUAD},
 		{"a": 0.0, "t": 0.56, "tr": Tween.TRANS_ELASTIC},
 	])
 	var ram := _find(model, "ram")
@@ -100,28 +100,28 @@ static func _ram(model: Node3D) -> float:
 		var p: Vector3 = ram.position
 		# 模型绕 Y 旋转 90°，局部 +X 对应实体正前方
 		_seq(model, ram, "position", [
-			{"v": p + Vector3(-0.14, 0.0, 0.0), "t": 0.16, "tr": Tween.TRANS_SINE},
-			{"v": p + Vector3(0.58, 0.0, 0.0), "t": 0.22, "tr": Tween.TRANS_EXPO, "e": Tween.EASE_IN},
+			{"v": p + Vector3(-0.06, 0.0, 0.0), "t": 0.16, "tr": Tween.TRANS_SINE},
+			{"v": p + Vector3(0.20, 0.0, 0.0), "t": 0.22, "tr": Tween.TRANS_EXPO, "e": Tween.EASE_IN},
 			{"v": p, "t": 0.56, "tr": Tween.TRANS_ELASTIC},
 		])
-	_wheels(model, 0.32)
+	_wheels(model, 0.14)
 	return 0.96
 
 # 火炮：整炮后坐并上跳，两侧轮轴被后坐力带得急停回摆
 static func _cannon(model: Node3D) -> float:
 	var pos: Vector3 = model.position
 	_seq(model, model, "position", [
-		{"v": pos + Vector3(0.0, 0.30, 0.68), "t": 0.12, "tr": Tween.TRANS_EXPO},
+		{"v": pos + Vector3(0.0, 0.12, 0.30), "t": 0.12, "tr": Tween.TRANS_EXPO},
 		{"v": pos, "t": 0.62, "tr": Tween.TRANS_BOUNCE},
 	])
 	_entity_pitch(model, [
-		{"a": 0.18, "t": 0.10, "tr": Tween.TRANS_EXPO},
+		{"a": 0.08, "t": 0.10, "tr": Tween.TRANS_EXPO},
 		{"a": 0.0, "t": 0.64, "tr": Tween.TRANS_BOUNCE},
 	])
 	for wheel in _find_prefix(model, "Group"):
 		var r: Vector3 = wheel.rotation
 		_seq(model, wheel, "rotation", [
-			{"v": r + Vector3(0.34, 0.0, 0.0), "t": 0.12, "tr": Tween.TRANS_QUAD},
+			{"v": r + Vector3(0.14, 0.0, 0.0), "t": 0.12, "tr": Tween.TRANS_QUAD},
 			{"v": r, "t": 0.55, "tr": Tween.TRANS_ELASTIC},
 		])
 	return 0.78
@@ -130,60 +130,60 @@ static func _cannon(model: Node3D) -> float:
 static func _catapult(model: Node3D) -> float:
 	var pos: Vector3 = model.position
 	_seq(model, model, "position", [
-		{"v": pos + Vector3(0.0, -0.12, 0.06), "t": 0.22, "tr": Tween.TRANS_SINE},
+		{"v": pos + Vector3(0.0, -0.05, 0.02), "t": 0.22, "tr": Tween.TRANS_SINE},
 		{"v": pos, "t": 0.84, "tr": Tween.TRANS_ELASTIC},
 	])
 	_entity_pitch(model, [
-		{"a": -0.10, "t": 0.20, "tr": Tween.TRANS_SINE},
+		{"a": -0.05, "t": 0.20, "tr": Tween.TRANS_SINE},
 		{"a": 0.0, "t": 0.86, "tr": Tween.TRANS_ELASTIC},
 	])
 	var arm := _find(model, "catapult")
 	if arm != null:
 		var rz: float = arm.rotation.z
 		_seq(model, arm, "rotation:z", [
-			{"v": rz - 1.08, "t": 0.18, "tr": Tween.TRANS_EXPO, "e": Tween.EASE_OUT},
-			{"v": rz + 0.24, "t": 0.22, "tr": Tween.TRANS_BACK, "e": Tween.EASE_OUT},
+			{"v": rz - 0.55, "t": 0.18, "tr": Tween.TRANS_EXPO, "e": Tween.EASE_OUT},
+			{"v": rz + 0.12, "t": 0.22, "tr": Tween.TRANS_BACK, "e": Tween.EASE_OUT},
 			{"v": rz, "t": 0.64, "tr": Tween.TRANS_ELASTIC},
 		])
-	_wheels(model, 0.16)
+	_wheels(model, 0.07)
 	return 1.12
 
 # 巨型投石机：配重下坠带动投臂缓慢释放，再以低频余摆收住
 static func _trebuchet(model: Node3D) -> float:
 	var pos: Vector3 = model.position
 	_seq(model, model, "position", [
-		{"v": pos + Vector3(0.0, -0.18, 0.05), "t": 0.50, "tr": Tween.TRANS_SINE},
+		{"v": pos + Vector3(0.0, -0.08, 0.02), "t": 0.50, "tr": Tween.TRANS_SINE},
 		{"v": pos, "t": 1.18, "tr": Tween.TRANS_ELASTIC},
 	])
 	_entity_pitch(model, [
-		{"a": -0.12, "t": 0.55, "tr": Tween.TRANS_SINE},
+		{"a": -0.055, "t": 0.55, "tr": Tween.TRANS_SINE},
 		{"a": 0.0, "t": 1.12, "tr": Tween.TRANS_ELASTIC},
 	])
 	var arm := _find(model, "arm")
 	if arm != null:
 		var rz: float = arm.rotation.z
 		_seq(model, arm, "rotation:z", [
-			{"v": rz - 1.38, "t": 0.22, "tr": Tween.TRANS_EXPO, "e": Tween.EASE_OUT},
-			{"v": rz + 0.30, "t": 0.30, "tr": Tween.TRANS_BACK, "e": Tween.EASE_OUT},
+			{"v": rz - 0.72, "t": 0.22, "tr": Tween.TRANS_EXPO, "e": Tween.EASE_OUT},
+			{"v": rz + 0.14, "t": 0.30, "tr": Tween.TRANS_BACK, "e": Tween.EASE_OUT},
 			{"v": rz, "t": 1.10, "tr": Tween.TRANS_ELASTIC},
 		])
 	var weight := _find(model, "weight")
 	if weight != null:
 		var wr: Vector3 = weight.rotation
 		_seq(model, weight, "rotation", [
-			{"v": wr + Vector3(0.0, 0.0, 0.22), "t": 0.48, "tr": Tween.TRANS_SINE},
+			{"v": wr + Vector3(0.0, 0.0, 0.10), "t": 0.48, "tr": Tween.TRANS_SINE},
 			{"v": wr, "t": 0.92, "tr": Tween.TRANS_ELASTIC},
 		])
-	_wheels(model, 0.12)
+	_wheels(model, 0.06)
 	return 1.72
 
 # 战船/炮艇：侧舷齐射的横摇、下沉、帆布鼓起和旗帜后甩
 static func _warship(model: Node3D, heavy: bool, side: float) -> float:
 	var pos: Vector3 = model.position
 	var rz: float = model.rotation.z
-	var roll: float = 0.20 if heavy else 0.13
-	var sink: float = 0.32 if heavy else 0.18
-	var push: float = 0.60 if heavy else 0.36
+	var roll: float = 0.09 if heavy else 0.06
+	var sink: float = 0.14 if heavy else 0.08
+	var push: float = 0.24 if heavy else 0.15
 	var total: float = 1.18 if heavy else 0.98
 	_seq(model, model, "rotation:z", [
 		{"v": rz + side * roll, "t": 0.18, "tr": Tween.TRANS_QUAD},
@@ -198,7 +198,7 @@ static func _warship(model: Node3D, heavy: bool, side: float) -> float:
 	])
 	for sail in _find_prefix(model, "sail"):
 		var b: Vector3 = sail.scale
-		var grow: float = 1.075 if heavy else 1.05
+		var grow: float = 1.035 if heavy else 1.02
 		_seq(model, sail, "scale", [
 			{"v": b * grow, "t": 0.18, "tr": Tween.TRANS_BACK, "e": Tween.EASE_OUT},
 			{"v": b, "t": 0.62 if heavy else 0.50, "tr": Tween.TRANS_ELASTIC},
@@ -206,7 +206,7 @@ static func _warship(model: Node3D, heavy: bool, side: float) -> float:
 	var flag_index: int = 0
 	for flag in _find_prefix(model, "flag"):
 		var fr: Vector3 = flag.rotation
-		var amp: float = 0.28 if heavy else 0.18
+		var amp: float = 0.12 if heavy else 0.08
 		_seq(model, flag, "rotation", [
 			{"wait": float(flag_index) * 0.025},
 			{"v": fr + Vector3(0.0, 0.0, amp), "t": 0.10, "tr": Tween.TRANS_QUAD},

@@ -1410,9 +1410,18 @@ func _play_attack_feedback() -> void:
 		AudioManager.play_sfx_3d(_sfx, global_position, _get_cam_pos())
 	# 真正出手时刷新一次动画：单位可能刚进入攻击距离，不能只等 30 帧轮询
 	# 才从走路切到攻击；这里每次攻击只调用一次，不会形成每帧音效/动画刷新。
+	# 只有攻城六件套需要联机端按“真实出手次数”播放动画；其他兵种不递增，
+	# 避免每次普攻都改变快照哈希、平白增加同步带宽。
+	if SiegeAttackAnim.is_siege(entity_id):
+		attack_seq += 1
 	var bm = _get_bm()
-	if bm and bm.has_method("_update_entity_animation"):
-		bm._update_entity_animation(self)
+	if bm:
+		# 攻城器械在这里直接播放一次分层动画；联机客户端没有 Army，
+		# 会在快照里检测 attack_seq 变化后播放一次。
+		if bm.has_method("_on_entity_attack_started"):
+			bm._on_entity_attack_started(self)
+		if bm.has_method("_update_entity_animation"):
+			bm._update_entity_animation(self)
 
 # ==================== 特殊攻击 ====================
 

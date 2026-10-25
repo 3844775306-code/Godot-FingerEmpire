@@ -6,7 +6,7 @@ const BuildingDeathEffect = preload("res://scripts/effects/BuildingDeathEffect.g
 const BuildingConstructionVisual = preload("res://scripts/effects/BuildingConstructionVisual.gd")
 const TreeFallEffect = preload("res://scripts/effects/TreeFallEffect.gd")
 const EntityDamageVisual = preload("res://scripts/effects/EntityDamageVisual.gd")
-enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ATTACK_SPEED, MELEE_ARMOR, SHIELD_ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH, GARRISONED, NATION, IN_ACTION_RANGE }
+enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ATTACK_SPEED, MELEE_ARMOR, SHIELD_ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH, GARRISONED, NATION, IN_ACTION_RANGE, ATTACK_SEQ }
 enum EB { UPGRADE=0, MAX_UPGRADE, CAN_UPGRADE, BUILD_TIMER, MAX_BUILD, PROD_CURRENT, PROD_PROGRESS, PROD_QSIZE, UPGRADE_TIMER, MAX_UPGRADE_TIME, GARRISON_COUNT }
 # 与 RTSBattleManager.get_nation_name() 保持一致；客户端不跑服务端脚本，血条文字单独查表
 const NATION_LABELS := ["维京", "英格兰", "法兰西", "中国", "匈牙利", "日本", "拜占庭"]
@@ -636,6 +636,7 @@ func _update_single_entity(info):
 			"is_garrisoned": arr[E.GARRISONED] if arr.size() > E.GARRISONED else false,
 			"nation": arr[E.NATION] if arr.size() > E.NATION else -1,
 			"in_action_range": arr[E.IN_ACTION_RANGE] if arr.size() > E.IN_ACTION_RANGE else 0,
+			"attack_seq": arr[E.ATTACK_SEQ] if arr.size() > E.ATTACK_SEQ else 0,
 		}
 		# Building extras
 		if arr.size() > E.size() and arr[E.size()] is Array:
@@ -715,7 +716,8 @@ func _update_single_entity(info):
 	if not prev_info.is_empty():
 		var order_changed: bool = prev_info.get("current_order", "") != info.get("current_order", "")
 		var range_changed: bool = int(prev_info.get("in_action_range", 0)) != int(info.get("in_action_range", 0))
-		if order_changed or range_changed:
+		var attack_changed: bool = int(prev_info.get("attack_seq", 0)) != int(info.get("attack_seq", 0))
+		if order_changed or range_changed or attack_changed:
 			_update_entity_animation(node, info)
 	node.set_meta("_prev_info", info.duplicate())
 	# Update waypoint markers if present
@@ -834,46 +836,37 @@ func _update_entity_animation(node: Node3D, info: Dictionary):
 			if ap.current_animation != anim:
 				ap.play(anim)
 	elif SiegeAttackAnim.is_siege(entity_id):
-		_update_client_siege_attack(node, info, anim)
+		_update_client_siege_attack(node, info)
 
-# 联机客户端没有服务端的 attack_timer，改用快照里的“攻击中 + 已进入距离”
-# 按攻击冷却循环播放程序化动作。每次开火的确切时刻可能有半拍误差，
-# 但视觉上足以表现攻城器械的蓄力、后坐和回位。
-func _update_client_siege_attack(node: Node3D, info: Dictionary, anim: String) -> void:
+# 联机客户端没有 Army/attack_timer，改为比较快照里的 attack_seq：
+# 每真正攻击一次 seq 才 +1，客户端只在变化时播放一次，不再按冷却循环猜测。
+func _update_client_siege_attack(node: Node3D, info: Dictionary) -> void:
 	var model = node.get_meta("_model_instance", null) as Node3D
 	if model == null:
 		return
 	var entity_id := int(info.get("entity_id", -1))
 	if not SiegeAttackAnim.is_siege(entity_id):
 		return
+	var seq := int(info.get("attack_seq", 0))
+	var prev_seq := int(node.get_meta("_siege_attack_seq", -1))
 	if info.get("health", 0) <= 0:
 		SiegeAttackAnim.reset(model)
-		node.set_meta("_siege_next_ms", 0)
+		node.set_meta("_siege_attack_seq", seq)
 		return
-	var attacking: bool = anim == "attack-melee-left"
-	if not attacking:
-		node.set_meta("_siege_next_ms", 0)
+	if prev_seq == -1:
+		# 刚进入视野：只记录基线，不补播进入视野前的攻击
+		node.set_meta("_siege_attack_seq", seq)
 		return
-	var now := Time.get_ticks_msec()
-	var next_ms := int(node.get_meta("_siege_next_ms", 0))
-	var atk_speed := maxf(float(info.get("attack_speed", 2.0)), 0.8)
-	if next_ms == 0:
-		# 首次进入射程时错开不超过 30% 冷却，避免整支部队同时开火
-		next_ms = now + randi_range(0, int(atk_speed * 300.0))
-	if now < next_ms:
-		node.set_meta("_siege_next_ms", next_ms)
+	if seq == prev_seq:
 		return
+	node.set_meta("_siege_attack_seq", seq)
 	var opts := {
 		"target": null,
 		"body_radius": float(info.get("body_radius", 0.8)),
 		"forward": -node.global_transform.basis.z,
 		"right": node.global_transform.basis.x,
 	}
-	if SiegeAttackAnim.play(entity_id, model, opts):
-		next_ms = now + int(atk_speed * 1000.0)
-	else:
-		next_ms = now + 250
-	node.set_meta("_siege_next_ms", next_ms)
+	SiegeAttackAnim.play(entity_id, model, opts)
 
 func _refresh_client_construction_visual(node: Node3D, info: Dictionary) -> void:
 	if int(info.get("type", -1)) != 1:
@@ -1165,6 +1158,9 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 
 	# 存储 owner_peer_id 元数据，供后续使用
 	entity.set_meta("owner_peer_id", owner_id)
+	# 攻城单位：以首次快照为动画基线，避免第一次攻击时把旧序号当成新事件
+	if SiegeAttackAnim.is_siege(int(info.get("entity_id", -1))):
+		entity.set_meta("_siege_attack_seq", int(info.get("attack_seq", 0)))
 	entities_container.add_child(entity)
 	return entity
 

@@ -74,7 +74,7 @@ static func _ram_impact(root: Node3D, model: Node3D, origin: Vector3, forward: V
 		"velocity_min": 1.8, "velocity_max": 4.4, "gravity": Vector3(0.0, -9.0, 0.0),
 		"size": 0.055, "radius": 0.22,
 	})
-	_shake(model, 0.075, 0.24)
+	_shake(model, 0.040, 0.18)
 
 static func _cannon_shot(root: Node3D, model: Node3D, origin: Vector3, forward: Vector3, radius: float) -> void:
 	var muzzle := origin + forward * (radius * 1.5 + 0.55) + Vector3.UP * (radius * 0.7 + 0.75)
@@ -97,7 +97,7 @@ static func _cannon_shot(root: Node3D, model: Node3D, origin: Vector3, forward: 
 		"size": 0.32, "radius": 0.24, "grow": 2.4,
 	})
 	_dust(root, origin + forward * (radius * 0.8), radius * 0.75, 10)
-	_shake(model, 0.055, 0.18)
+	_shake(model, 0.030, 0.14)
 
 static func _catapult_shot(root: Node3D, model: Node3D, origin: Vector3, forward: Vector3, radius: float) -> void:
 	var base := origin + forward * 0.2
@@ -108,7 +108,7 @@ static func _catapult_shot(root: Node3D, model: Node3D, origin: Vector3, forward
 		"velocity_min": 0.6, "velocity_max": 2.0, "gravity": Vector3(0.0, 0.5, 0.0),
 		"size": 0.30, "radius": 0.32, "grow": 2.0,
 	})
-	_shake(model, 0.05, 0.20)
+	_shake(model, 0.030, 0.16)
 
 static func _trebuchet_shot(root: Node3D, model: Node3D, origin: Vector3, forward: Vector3, radius: float) -> void:
 	var base := origin + forward * 0.15
@@ -120,7 +120,7 @@ static func _trebuchet_shot(root: Node3D, model: Node3D, origin: Vector3, forwar
 		"size": 0.42, "radius": 0.5, "grow": 2.6,
 	})
 	_shockwave(root, base + Vector3.UP * 0.05, radius * 3.0, Color(0.78, 0.66, 0.44, 0.55))
-	_shake(model, 0.13, 0.42)
+	_shake(model, 0.060, 0.28)
 
 static func _broadside(root: Node3D, model: Node3D, origin: Vector3, forward: Vector3, right: Vector3,
 		radius: float, side: int, heavy: bool) -> void:
@@ -142,7 +142,7 @@ static func _broadside(root: Node3D, model: Node3D, origin: Vector3, forward: Ve
 			"size": 0.24 if not heavy else 0.34, "radius": 0.20, "grow": 2.2,
 		})
 	_water(root, origin + side_dir * (radius * 1.55) + Vector3.UP * 0.05, radius * (1.15 if not heavy else 1.6), heavy)
-	_shake(model, 0.035 if not heavy else 0.085, 0.18 if not heavy else 0.30)
+	_shake(model, 0.020 if not heavy else 0.040, 0.14 if not heavy else 0.22)
 
 static func _dust(root: Node3D, pos: Vector3, radius: float, amount: int) -> void:
 	_burst(root, pos + Vector3.UP * 0.08, {

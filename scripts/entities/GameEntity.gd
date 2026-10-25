@@ -42,6 +42,8 @@ var production_timer: float = 0.0
 var production_queue: Array = []
 
 var attack_timer: float = 0.0
+# 每次真正出手递增；联机快照用它让客户端“一次攻击只播一次”攻击动画
+var attack_seq: int = 0
 var gather_timer: float = 0.0
 # 目标引用不设静态类型：实体可能在同一帧被击杀并 queue_free，强类型赋值会直接
 # 报 "Trying to assign invalid previously freed instance"。使用处统一用

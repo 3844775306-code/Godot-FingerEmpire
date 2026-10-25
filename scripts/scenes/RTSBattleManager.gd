@@ -1851,6 +1851,19 @@ func _cached_override_material(src: Material, suffix: String):
 		_team_material_cache[key] = cached
 	return cached
 
+# 单机/联机主机：Army 每次真正出手时调用一次。不要放在 _update_entity_animation
+# 里，否则进入攻击距离、状态切换等也会触发，导致一次攻击播放多次动画。
+func _on_entity_attack_started(entity: Army) -> void:
+	if entity == null or not is_instance_valid(entity):
+		return
+	if not entity.has_meta("_model_instance"):
+		return
+	var model = entity.get_meta("_model_instance")
+	if model is not Node3D:
+		return
+	if SiegeAttackAnim.is_siege(entity.entity_id):
+		_play_entity_attack_anim(entity, model as Node3D)
+
 func _update_entity_animation(entity: GameEntity):
 	if not entity.has_meta("_model_instance"): return
 	var model = entity.get_meta("_model_instance")
@@ -1893,9 +1906,6 @@ func _update_entity_animation(entity: GameEntity):
 		ap.speed_scale = spd
 		if ap.current_animation != anim:
 			ap.play(anim)
-	elif anim == "attack-melee-left" and entity is Army and entity.entity_id in PROC_ATTACK_IDS and _is_entity_in_action_range(entity):
-		# 攻城六件套没有内置攻击动画（或幅度太小），统一走分层程序化动作
-		_play_entity_attack_anim(entity, model3d)
 
 # 判断单位是否已经进入实际出手距离。攻击/攻击移动看攻击距离，
 # 采集看资源点采集距离；还没走到时统一按走路处理。
