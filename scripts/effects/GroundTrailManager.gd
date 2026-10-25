@@ -6,7 +6,15 @@ extends Node3D
 # 环缓冲加一小组复用粒子，所有单位共用。
 
 const MAX_PRINTS := 384
-const PRINT_LIFETIME := 10.0
+# 痕迹改成「按格子累积强度」：同一块地反复被踩会越来越深，而不是每次
+# 都新画一片再各自淡出。加深刻意放慢（约 18 次经过才到最深），
+# 消退比加深更慢（满强度约 55 秒才淡完），大部队走过之后会留下能看出来的路。
+const TRAIL_CELL_SIZE := 0.5
+const TRAIL_STEP_GAIN := 0.055
+const TRAIL_DECAY_RATE := 0.018
+const TRAIL_MAX_ALPHA := 0.85
+# 与建筑脚下贴花同一套土色，路径和建筑地基看起来属于同一片土地
+const TRAIL_SOIL_COLOR := Color(0.42, 0.31, 0.19)
 # RTS 相机不是贴地视角：默认 size=17.5 时相机到地面焦点约 66 米，最远约 97 米，
 # 边缘单位还要再加一段水平距离。之前 42/36 米的上限会把默认视野里的痕迹全部裁掉，
 # 所以这里只裁剪真正远离战场的痕迹，不用它做近景优化。
@@ -20,10 +28,12 @@ static var _shared = null
 
 var _print_mm: MultiMesh
 var _print_node: MultiMeshInstance3D
-var _print_age := PackedFloat32Array()
+var _print_strength := PackedFloat32Array()   # 0..1 的踩踏强度，决定颜色深浅
+var _print_base_color := PackedColorArray()   # 按地形定下的土色基底，alpha 交给强度
 var _print_active := PackedByteArray()
-var _print_color := PackedColorArray()
 var _print_next: int = 0
+var _trail_cell: Dictionary = {}              # 格子 key -> MultiMesh 槽位，用于同格累积
+var _slot_key: Array = []                     # 槽位 -> 它代表的格子，释放时反查用
 var _fade_accum: float = 0.0
 
 var _dust_pool: Array[CPUParticles3D] = []
@@ -107,16 +117,19 @@ void fragment() {
 	_print_mm.mesh = quad
 	_print_mm.instance_count = MAX_PRINTS
 
-	_print_age.resize(MAX_PRINTS)
+	_print_strength.resize(MAX_PRINTS)
+	_print_base_color.resize(MAX_PRINTS)
 	_print_active.resize(MAX_PRINTS)
-	_print_color.resize(MAX_PRINTS)
 	var hidden := Transform3D(Basis.from_scale(Vector3(0.001, 0.001, 0.001)), Vector3(0.0, -1000.0, 0.0))
 	for i in MAX_PRINTS:
-		_print_age[i] = 0.0
+		_print_strength[i] = 0.0
+		_print_base_color[i] = TRAIL_SOIL_COLOR
 		_print_active[i] = 0
-		_print_color[i] = Color(0.0, 0.0, 0.0, 0.0)
 		_print_mm.set_instance_transform(i, hidden)
 		_print_mm.set_instance_color(i, Color(0.0, 0.0, 0.0, 0.0))
+	_slot_key.resize(MAX_PRINTS)
+	for i in MAX_PRINTS:
+		_slot_key[i] = Vector2i(-999999, -999999)
 
 	_print_node = MultiMeshInstance3D.new()
 	_print_node.name = "Footprints"
@@ -139,18 +152,30 @@ func _process(delta: float) -> void:
 	for i in MAX_PRINTS:
 		if _print_active[i] == 0:
 			continue
-		_print_age[i] += elapsed
-		var t: float = _print_age[i] / PRINT_LIFETIME
-		if t >= 1.0:
+		# 按强度衰减：每一步都在慢慢变浅，而不是按固定寿命一刀切
+		_print_strength[i] -= TRAIL_DECAY_RATE * elapsed
+		if _print_strength[i] <= 0.0:
 			_print_active[i] = 0
+			_print_strength[i] = 0.0
 			_print_mm.set_instance_color(i, Color(0.0, 0.0, 0.0, 0.0))
+			_trail_cell.erase(_cell_key_of(i))
 			continue
 		any_active = true
-		var c: Color = _print_color[i]
-		c.a *= (1.0 - t) * (1.0 - t)
+		var c: Color = _print_base_color[i]
+		c.a = minf(_print_strength[i], 1.0) * TRAIL_MAX_ALPHA
 		_print_mm.set_instance_color(i, c)
 	if not any_active:
 		set_process(false)
+
+# 同一格内的重复经过视为同一条痕迹，用来累加强度而不是铺新的一片
+func _cell_key(pos: Vector3) -> Vector2i:
+	return Vector2i(int(floor(pos.x / TRAIL_CELL_SIZE)), int(floor(pos.z / TRAIL_CELL_SIZE)))
+
+# 槽位反查格子 key：释放时要把映射一起清掉，否则会残留假条目
+func _cell_key_of(slot: int) -> Vector2i:
+	if slot < 0 or slot >= _slot_key.size():
+		return Vector2i(-999999, -999999)
+	return _slot_key[slot]
 
 func _add_print(pos: Vector3, dir: Vector3, vehicle: bool, terrain: int, overlay: int, side: int) -> void:
 	var flat := Vector3(dir.x, 0.0, dir.z)
@@ -166,28 +191,52 @@ func _add_print(pos: Vector3, dir: Vector3, vehicle: bool, terrain: int, overlay
 	var length: float = 3.00 if vehicle else 1.10
 	var jitter: float = randf_range(0.86, 1.14)
 	var basis := Basis(Vector3.UP, yaw) * Basis.from_scale(Vector3(width * jitter, 1.0, length * jitter))
+	var world_pos: Vector3 = pos + right * lateral + Vector3(0.0, TRAIL_Y_OFFSET, 0.0)
+	var key := _cell_key(world_pos)
+
+	# 这块地已经被踩过：只加深刻度，不再占用新的槽位
+	if _trail_cell.has(key):
+		var existing: int = int(_trail_cell[key])
+		if _print_active[existing] == 1:
+			_print_strength[existing] = minf(_print_strength[existing] + TRAIL_STEP_GAIN, 1.0)
+			var c2: Color = _print_base_color[existing]
+			c2.a = _print_strength[existing] * TRAIL_MAX_ALPHA
+			_print_mm.set_instance_color(existing, c2)
+			set_process(true)
+			return
+		_trail_cell.erase(key)
+
 	var i := _print_next
 	_print_next = (_print_next + 1) % MAX_PRINTS
-	_print_age[i] = 0.0
+	# 槽位被别的格子占着：先把旧格子的映射断掉，避免两处共用一个 key
+	if _print_active[i] == 1:
+		_trail_cell.erase(_cell_key_of(i))
 	_print_active[i] = 1
-	_print_color[i] = _print_color_for(terrain, overlay, vehicle)
-	_print_mm.set_instance_transform(i, Transform3D(basis, pos + right * lateral + Vector3(0.0, TRAIL_Y_OFFSET, 0.0)))
-	_print_mm.set_instance_color(i, _print_color[i])
+	_print_strength[i] = TRAIL_STEP_GAIN
+	_print_base_color[i] = _print_color_for(terrain, overlay, vehicle)
+	var col: Color = _print_base_color[i]
+	col.a = _print_strength[i] * TRAIL_MAX_ALPHA
+	_print_mm.set_instance_transform(i, Transform3D(basis, world_pos))
+	_print_mm.set_instance_color(i, col)
+	_slot_key[i] = key
+	_trail_cell[key] = i
 	set_process(true)
 
+# 土色基底：颜色跟着地形走，深浅由踩踏强度决定（见 _process）
 func _print_color_for(terrain: int, overlay: int, vehicle: bool) -> Color:
-	var color := Color(0.24, 0.18, 0.11, 0.55)
+	var color := TRAIL_SOIL_COLOR
 	if vehicle:
-		color = Color(0.27, 0.20, 0.13, 0.62)
+		# 车辙比脚印更压实，略深一点
+		color = Color(0.36, 0.26, 0.16)
 	if terrain == 1:
-		# 山地/石地：更像压痕而不是泥印
-		color = Color(0.32, 0.30, 0.27, 0.36)
+		# 山地/石地：压痕偏灰，不是泥色
+		color = Color(0.40, 0.37, 0.32)
 	elif overlay == 1:
 		# 森林地表：腐殖土更深
-		color = Color(0.20, 0.18, 0.12, 0.52)
+		color = Color(0.31, 0.24, 0.15)
 	elif overlay == 2:
-		# 沼泽：湿泥，深且窄
-		color = Color(0.16, 0.14, 0.10, 0.60)
+		# 沼泽：湿泥最深
+		color = Color(0.26, 0.21, 0.15)
 	return color
 
 # ── 脚步扬尘 ──
