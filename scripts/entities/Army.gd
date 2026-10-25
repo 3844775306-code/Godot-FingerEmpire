@@ -856,6 +856,8 @@ func _physics_process(delta):
 			_movement.collision_timer = 0.8
 			_movement.apply_collision(delta)
 		_tick_think(delta, bm)
+		if _uses_combat_state():
+			_update_combat_ground_height(bm, delta)
 		return
 
 	if bm:
@@ -1252,6 +1254,20 @@ func _process_combat_frame(delta, bm) -> void:
 		_movement.collision_timer = collision_interval
 		_movement.apply_collision(delta)
 	_tick_think(delta, bm)
+	_update_combat_ground_height(bm, delta)
+
+# 五状态分支提前接管了 _think，原 _think 末尾的地形高度平滑不会执行；
+# 这里补回来，避免停在山坡上的部队悬空/陷地。墙上的单位交给 _update_wall_height。
+func _update_combat_ground_height(bm, delta: float) -> void:
+	if has_meta("ai_wall_guard") or _is_unit_on_wall():
+		return
+	if bm == null:
+		return
+	var map = bm.get_node_or_null("Map")
+	if map == null or not map.has_method("get_height_at"):
+		return
+	var target_height: float = map.get_height_at(global_position)
+	global_position.y = move_toward(global_position.y, target_height, 5.0 * delta)
 
 func _process_combat_target_cleanup(delta, bm) -> void:
 	if current_target != null and (_is_target_gone(current_target) or not _is_target_team_valid(current_target)):
