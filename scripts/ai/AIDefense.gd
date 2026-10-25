@@ -306,11 +306,10 @@ func _cell_blocks_land(gx: int, gz: int) -> bool:
 	var terrain: int = ai.battle.get_terrain_at_grid(gx, gz)
 	if terrain < 0:
 		return true
-	if terrain == 1:
-		return true
 	if terrain == 2 and ai.battle.get_overlay_at_grid(gx, gz) != 3:
 		return true
-	return false
+	# 山地不再按类型视为墙；只有超过最大可走坡度的陡坎才是天然屏障。
+	return ai.battle.is_cliff_tile(gx, gz)
 
 func _is_ford_cell(gx: int, gz: int) -> bool:
 	return ai.battle.get_terrain_at_grid(gx, gz) == 2 and ai.battle.get_overlay_at_grid(gx, gz) == 3

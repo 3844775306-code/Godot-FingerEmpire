@@ -2,6 +2,24 @@ extends Node
 
 static var MAP_SIZE: int = 100
 const GRID_SIZE = 1.0
+# ── 统一坡度通行 ──
+# 坡度 s = |高差| / 水平距离。实际移速 = 基础速度 / (1 + 权重 * s²)，
+# A* 的单步时间成本 = 水平距离 * (1 + 权重 * s²)。
+# 这样“速度平方级下降”和“寻路成本平方级上升”严格互为倒数，
+# 平原、丘陵、山地共用同一套规则，不再依赖地形类型或 overlay 标记。
+const SLOPE_TIME_WEIGHT: float = 2.0
+# 可通行最大坡度。超过这个坡度的台阶（悬崖）上下都不允许走：
+# 军队不能下陡坡，也不能爬绝壁。这个值同时用于 A*、实际移动、地图可达性。
+const MAX_WALK_SLOPE: float = 1.5
+
+static func slope_time_multiplier(dh: float, run_distance: float) -> float:
+	var run: float = maxf(run_distance, 0.001)
+	var slope: float = absf(dh) / run
+	return 1.0 + SLOPE_TIME_WEIGHT * slope * slope
+
+static func is_cliff_slope(dh: float, run_distance: float) -> bool:
+	var run: float = maxf(run_distance, 0.001)
+	return absf(dh) / run > MAX_WALK_SLOPE
 enum Team { BLUE = 1, RED = 0, NEUTRAL = 2 }
 enum Nation { VIKING, ENGLAND, FRANCE, CHINA, HUNGARY, JAPAN, BYZANTINE }
 const MAX_PLAYERS = 6

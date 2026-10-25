@@ -2824,11 +2824,8 @@ func _is_valid_build_position(pos: Vector3) -> bool:
 			if e.global_position.distance_to(pos) < 10.0:
 				return false
 	var t = get_terrain_at(pos)
-	# 缓坡/山顶台地只作为行军与视野地形，第一版不允许在上面盖建筑，避免高地塔楼失衡。
-	var bg := world_to_grid(pos)
-	var bov := get_overlay_at_grid(bg.x, bg.y)
-	if bov == 4 or bov == 5:
-		return false
+	# 山体不再按 terrain 或 overlay 禁止建造：是否平整由下面的 _is_terrain_flat 判断。
+	# 这样可走的缓坡/台地与陡崖都统一用高度坡度规则处理。
 	# 桥：只能在水上建造
 	if selected_building_id == 7:
 		return is_valid_bridge_position(pos)
@@ -3956,6 +3953,7 @@ func get_water_distance_at(pos: Vector3) -> float:
 	return float(dist)
 
 # 覆盖层：0=无 1=森林 2=沼泽 3=浅滩（只影响移速/视野，不改地形判定）
+# 山体的可通行性不再依赖覆盖层，统一由高度坡度规则决定。
 func get_overlay_at_grid(gx: int, gy: int) -> int:
 	if not $Map or not $Map.has_method("get_overlay"):
 		return 0
@@ -3985,6 +3983,32 @@ func get_height_at_grid(gx: int, gy: int) -> float:
 		if not $Map or not $Map.has_method("get_height_at_grid"):
 			return 0.0
 		return $Map.get_height_at_grid(gx, gy)
+
+# 某格是否存在超过最大可走坡度的邻接台阶。用于出生点、登陆点、AI 防线等
+# “能不能站/能不能过去”的判定；真正的寻路仍由 MovementController 逐边计算。
+func is_cliff_tile(gx: int, gy: int) -> bool:
+	var h: float = get_height_at_grid(gx, gy)
+	for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		var nx: int = gx + d.x
+		var ny: int = gy + d.y
+		if nx < 0 or ny < 0 or nx >= RTSConfig.MAP_SIZE or ny >= RTSConfig.MAP_SIZE:
+			continue
+		if RTSConfig.is_cliff_slope(get_height_at_grid(nx, ny) - h, 1.0):
+			return true
+	return false
+
+# 两个世界坐标所在格之间是否是悬崖台阶。注意这不是完整路径校验，
+# 只用于判断“当前点到下一落脚点”这种相邻格移动。
+func is_cliff_between_world(from_pos: Vector3, to_pos: Vector3) -> bool:
+	var a: Vector2i = world_to_grid(from_pos)
+	var b: Vector2i = world_to_grid(to_pos)
+	if a == b:
+		return false
+	var run: float = Vector2(float(b.x - a.x), float(b.y - a.y)).length()
+	if run < 0.001:
+		return false
+	return RTSConfig.is_cliff_slope(get_height_at_grid(b.x, b.y) - get_height_at_grid(a.x, a.y), run)
+
 func stop_all_gather():
 
 	

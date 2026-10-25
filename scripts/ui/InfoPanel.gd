@@ -535,14 +535,16 @@ func _ship_shore_point(ship) -> Vector3:
 	if bm == null:
 		return Vector3.ZERO
 	var base: Vector3 = ship.global_position
-	# 原来只排除了水面（terrain != 2 就当岸边），结果山壁也被当成可以下船的地面。
-	# 这里连山地一起排除；浅滩（overlay==3）陆军能走，算合格落点。
+	# 山地本身也可以作为登陆点，但船到落点之间的台阶不能是悬崖/陡坎。
+	# 浅滩（overlay==3）陆军能走，算合格落点。
 	for r in [1.5, 2.5, 3.5, 5.0, 6.5, 8.0]:
 		for i in 16:
 			var ang: float = TAU * float(i) / 16.0
 			var p := base + Vector3(cos(ang) * float(r), 0.0, sin(ang) * float(r))
 			var terrain: int = int(bm.get_terrain_at(p))
-			if terrain < 0 or terrain == 1:
+			if terrain < 0:
+				continue
+			if terrain != 2 and bm.is_cliff_between_world(base, p):
 				continue
 			if terrain == 2:
 				var g: Vector2i = bm.world_to_grid(p)

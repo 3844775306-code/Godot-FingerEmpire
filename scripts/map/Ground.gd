@@ -15,12 +15,12 @@ func _get_map_size() -> int:
 # 地形数据 0=平原, 1=山地, 2=水域
 var terrain_grid: Array = []
 var height_grid: Array = []            # per-tile height values
-# 覆盖层 0=无, 1=森林, 2=沼泽, 3=浅滩, 4=缓坡, 5=山顶台地。只影响移速/视野/观感与 A* 通行，不改变地形类型判定
+# 覆盖层 0=无, 1=森林, 2=沼泽, 3=浅滩。只影响移速/视野/观感与 A* 通行，
+# 不改变地形类型判定。山体不再需要缓坡/台地等专用覆盖层，通行性统一由高度坡度决定。
 var overlay_grid: Array = []
-const CLIFF_THRESHOLD: float = 3.0     # 与 MovementController 的 A* 陡坡阈值一致：高差 > 此值视为不可翻越
-# 人工山墙（迷宫/台地/环形山/峡谷）的墙高：必须比相邻地面高出 CLIFF_THRESHOLD 以上，
-# 否则部队会顺着缓坡直接翻墙；4.4 也为中层台地（0.9）和噪声起伏留出余量
-const WALL_CLIFF_HEIGHT: float = CLIFF_THRESHOLD + 1.4
+# 人工山墙（迷宫/台地/环形山/峡谷）的墙高：必须明显高于最大可走坡度对应的单格高差，
+# 否则部队会顺着缓坡直接翻墙；4.4 也为噪声起伏留出余量。
+const WALL_CLIFF_HEIGHT: float = 4.4
 var base_colors: Array = []           # 原始颜色 (MAP_SIZE x MAP_SIZE)
 var terrain_image: Image
 var terrain_texture: ImageTexture
@@ -1010,10 +1010,9 @@ func _op_terrace(size: int, params: Dictionary) -> void:
 		_pass_centers.append(Vector2i(int(float(g) * float(size)), int(low_top * float(size))))
 	_pass_centers.append(Vector2i(size / 2, size / 2))
 
-# 太行八陉：一条横向山脊横贯全图，山脊顶部是可站立的高地台地，
-# 但普通山壁仍是悬崖；只有若干条缓坡（overlay=4）能从山脚走上台地。
-# 台地（overlay=5）本身可走，作为高地视野与侧翼通道；山顶不放资源。
-# 山脚与台地之间的高差必须平滑，A* 才会把这些格子当成可通行的缓坡。
+# 太行八陉：一条横向山脊横贯全图，山脊顶部是可站立的高地台地。
+# 这里只生成高度场，不再写 overlay=4/5 之类的“可走坡/台地”标记：
+# 通行性由 RTSConfig 的统一坡度规则从高度自动推导。
 func _op_mountain_slopes(size: int, params: Dictionary) -> void:
 	var ridge_half := maxi(4, int(round(float(params.get("ridge_half_frac", 0.085)) * float(size))))
 	var ramp_len := maxi(6, int(round(float(params.get("ramp_len_frac", 0.11)) * float(size))))
@@ -1029,15 +1028,14 @@ func _op_mountain_slopes(size: int, params: Dictionary) -> void:
 	var ridge_top := maxi(1, cy - ridge_half)
 	var ridge_bottom := mini(size - 2, cy + ridge_half)
 
-	# 山脊顶部整片抬升为可站立的台地。普通山壁在台地外沿，
-	# 高度差超过 CLIFF_THRESHOLD，A* 不会从山脚直接翻上来。
+	# 山脊顶部整片抬升为可站立的高地台地。台地外沿的陡坎由坡度规则自动判定为悬崖。
 	for x in range(size):
 		for y in range(ridge_top, ridge_bottom + 1):
 			terrain_grid[x][y] = 1
 			height_grid[x][y] = plateau_h + noise.get_noise_2d(x, y) * 0.12
-			overlay_grid[x][y] = 5
+			overlay_grid[x][y] = 0
 
-	# 缓坡：从山脚（平地高度）平滑抬升到台地边缘，坡面本身标记为 overlay=4。
+	# 缓坡：从山脚（平地高度）平滑抬升到台地边缘。
 	# 南北两侧各生成一条，保证 1v1 双方都能从自己的半场上山。
 	for c in centers:
 		var cx := clampi(int(round(float(c) * float(size))), slope_half + 1, size - slope_half - 2)
@@ -1055,7 +1053,7 @@ func _op_mountain_slopes(size: int, params: Dictionary) -> void:
 					t = smoothstep(0.0, 1.0, t)
 					terrain_grid[x][y] = 1
 					height_grid[x][y] = lerpf(foot_h, plateau_h, t)
-					overlay_grid[x][y] = 4
+					overlay_grid[x][y] = 0
 		# 记录坡道入口，供资源/预览等需要"争议点"的逻辑使用
 		_pass_centers.append(Vector2i(cx, ridge_top - ramp_len))
 		_pass_centers.append(Vector2i(cx, ridge_bottom + ramp_len))
@@ -1370,6 +1368,23 @@ func _colorize_grid(size: int) -> void:
 # 主机用噪声算出的高度，客户端用服务器同步来的高度网格，因此同一块地两端配色完全一致。
 # 纯观感，不参与任何寻路/建造判定（那些只认 terrain_grid 的类型）。
 
+# 山体局部坡度（最大单轴高差/格）。只用于着色，让可走的缓坡和陡壁在视觉上能分开。
+func _local_height_slope(gx: int, gy: int) -> float:
+	if height_grid.is_empty():
+		return 0.0
+	var size := _get_map_size()
+	if size <= 1:
+		return 0.0
+	var x0: int = clampi(gx - 1, 0, size - 1)
+	var x1: int = clampi(gx + 1, 0, size - 1)
+	var y0: int = clampi(gy - 1, 0, size - 1)
+	var y1: int = clampi(gy + 1, 0, size - 1)
+	if x0 >= height_grid.size() or y0 >= height_grid.size():
+		return 0.0
+	var hx := absf(float(height_grid[x1][gy]) - float(height_grid[x0][gy])) / maxf(float(x1 - x0), 0.001)
+	var hz := absf(float(height_grid[gx][y1]) - float(height_grid[gx][y0])) / maxf(float(y1 - y0), 0.001)
+	return maxf(hx, hz)
+
 func _terrain_color_for(terrain_type: int, h: float, gx: int, gy: int, overlay: int = 0) -> Color:
 	var color: Color
 	var pal: Dictionary = map_preset.get("palette", {})
@@ -1378,6 +1393,15 @@ func _terrain_color_for(terrain_type: int, h: float, gx: int, gy: int, overlay: 
 			color = _pal_color(pal, "mountain_low", Color(0.40, 0.30, 0.18)).lerp(
 				_pal_color(pal, "mountain_high", Color(0.64, 0.62, 0.58)),
 				clamp(h / (height_scale * 5.0), 0.0, 1.0))
+			# 坡度着色：坡度越缓越像可走的草甸/土坡，越陡越像裸露岩壁。
+			# 这样移除 overlay=4/5 后，玩家仍能一眼看出哪条坡能上山。
+			var local_slope := _local_height_slope(gx, gy)
+			if local_slope <= RTSConfig.MAX_WALK_SLOPE:
+				var walk := 1.0 - local_slope / RTSConfig.MAX_WALK_SLOPE
+				var walk_color := Color(0.48, 0.50, 0.30).lerp(Color(0.56, 0.48, 0.33), 1.0 - walk)
+				color = color.lerp(walk_color, 0.22 + 0.30 * walk)
+			else:
+				color = color.darkened(0.12)
 		2:  # 水域：深度没有进高度网格，改用邻域陆地量当靠岸程度 —— 近岸浅亮、远海深暗
 			color = _pal_color(pal, "water_deep", Color(0.10, 0.28, 0.50)).lerp(
 				_pal_color(pal, "water_shallow", Color(0.24, 0.58, 0.72)), _shore_amount(gx, gy))
@@ -1406,16 +1430,6 @@ func _terrain_color_for(terrain_type: int, h: float, gx: int, gy: int, overlay: 
 		elif hv > 0.94:
 			sand = Color(0.38, 0.52, 0.50)     # 偶发水色
 		color = color.lerp(sand, 0.82)
-	elif overlay == 4:
-		# 缓坡：踩实的土石路面，比山体更亮，远看能辨认上山通道
-		var sh := float(absi(hash(Vector2i(gx, gy))) % 1000) / 1000.0
-		var path_color := Color(0.56, 0.48, 0.33).lerp(Color(0.70, 0.62, 0.44), sh)
-		color = color.lerp(path_color, 0.62)
-	elif overlay == 5:
-		# 山顶台地：高山草甸/碎石混合，和陡峭山壁拉开层次
-		var ph := float(absi(hash(Vector2i(gx, gy))) % 1000) / 1000.0
-		var top_color := Color(0.44, 0.46, 0.30).lerp(Color(0.58, 0.55, 0.38), ph)
-		color = color.lerp(top_color, 0.48)
 	# 高频细节噪声：明暗微扰打散整片纯色，远看是自然纹理而不是塑料色块
 	var d := _get_detail_noise().get_noise_2d(float(gx), float(gy))
 	if d > 0.0:
@@ -2135,9 +2149,10 @@ func _drop_unreachable_resources(size: int, castles: Array) -> void:
 			var t: int = terrain_grid[n.x][n.y]
 			if t == 2 and get_overlay(n.x, n.y) != 3:
 				continue
-			# 与 A* 相同的陡坡规则：高差超过阈值即不可通行，避免资源被留在
-			# 陡峭山脊围出的孤岛口袋里（类型 BFS 会把山地当可走，检查不出来）
-			if absf(height_grid[n.x][n.y] - height_grid[cur.x][cur.y]) > CLIFF_THRESHOLD:
+			# 与 A* 完全相同的坡度规则：过陡的台阶上下都不能走。
+			# 不能用地形类型判断，否则可走的坡地和不可走的绝壁会被混在一起。
+			var dh := float(height_grid[n.x][n.y]) - float(height_grid[cur.x][cur.y])
+			if RTSConfig.is_cliff_slope(dh, 1.0):
 				continue
 			reach[n] = true
 			q.append(n)

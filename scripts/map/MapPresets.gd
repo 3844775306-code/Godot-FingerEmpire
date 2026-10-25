@@ -592,12 +592,12 @@ const PRESETS := {
 		"chips": ["九曲淝水", "南北支流", "河湾湖沼", "六处渡口"],
 		"recommended": "1v1 / 2v2 / 3v3",
 	},
-	# 太行八陉：横向山脊 + 三处缓坡 + 山顶台地；普通山壁不可直翻，缓坡上慢下快
+	# 太行八陉：横向山脊 + 三处缓坡 + 山顶台地；通行性由高度坡度统一决定，绝壁不可上下
 	"taihang": {
 		"id": "taihang",
 		"name": "太行八陉",
 		"battle": "井陉之战 204 BC",
-		"desc": "太行山脊横贯全图，普通山壁仍是悬崖；三条缓坡可从南北山脚登上山顶台地，高地视野开阔。上坡减速、下坡加速，抢占陉口与高地是这张图的核心。",
+		"desc": "太行山脊横贯全图，坡度越陡行军越慢；三条缓坡可从南北山脚登上山顶台地，高地视野开阔，但陡峭的台地边缘无法上下。抢占陉口与高地是这张图的核心。",
 		"stages": [
 			["noise_base", {"freq": 0.035, "octaves": 3, "mountain_threshold": 1.1, "water_threshold": -1.1}],
 			["mountain_slopes", {"ridge_half_frac": 0.085, "ramp_len_frac": 0.11, "slope_half_frac": 0.022, "plateau_height": 5.0, "centers": [0.25, 0.5, 0.75]}],
@@ -612,7 +612,7 @@ const PRESETS := {
 		"resources": {"gold": 1.1, "wood": 1.0, "stone": 1.2, "food": 1.0, "oil": 0.0, "wood_near": "any", "stone_near": "any"},
 		"modifiers": {"high_ground_vision": 0.3, "high_ground_min": 3.0},
 		"reachable_only": true,
-		"chips": ["三处缓坡", "山顶高地视野", "普通山壁不可直翻"],
+		"chips": ["三处缓坡", "山顶高地视野", "绝壁不可上下"],
 		"recommended": "1v1 / 2v2 / 3v3",
 	},
 }
