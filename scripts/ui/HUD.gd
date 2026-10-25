@@ -64,9 +64,13 @@ var _capsule_pop_label: Label = null
 var _capsule_res_labels: Dictionary = {}
 # 全局指令按钮底板（6 个按钮排两行）
 var _cmd_panel: Panel = null
-var _alert_label: Label = null
-var _alert_bg: Control = null
-var _alert_timer: float = 0.0
+# 战况栏：同时最多堆 3 条，新的在最下面、最亮，旧的逐级变淡
+const ALERT_MAX_ROWS: int = 3
+const ALERT_LIFE: float = 3.4
+# 与 RTSConfig.Nation 枚举顺序一致
+const ALERT_NATION_NAMES: Array = ["维京", "英格兰", "法兰西", "中国", "匈牙利", "日本", "拜占庭"]
+var _alert_stack: VBoxContainer = null
+var _alert_rows: Array = []      # [{ "rtl": RichTextLabel, "life": float }]
 var _unit_stats_timer: float = 1.0
 
 # ==================== FFA 外交部面板 ====================
@@ -795,68 +799,118 @@ const ALERT_WARNING = UITheme.ALERT_WARNING   # 黄色 — 敌军来袭/资源�
 const ALERT_INFO = UITheme.ALERT_INFO      # 绿色 — 建造/训练/升级完成
 const ALERT_GROUP = UITheme.ALERT_GROUP     # 蓝色 — 编队反馈
 
-func show_alert_message(msg: String, color: Color = ALERT_DANGER):
+func show_alert_message(msg: String, color: Color = ALERT_DANGER, team: int = -1):
 	var mobile := InputSource.use_mobile_ui()
-	if not _alert_label:
-		# 皇庭横幅背景：暖黑底 + 警报色细边 + 顶部警报色强调条（与联机客户端同一套皮肤）
-		_alert_bg = Panel.new()
-		# 文字标签
-		_alert_label = Label.new()
-		_alert_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		_alert_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		_alert_label.add_theme_color_override("font_outline_color", Color.BLACK)
-		_alert_label.add_theme_constant_override("outline_size", 3)
+	if _alert_stack == null:
+		# 战况栏改成竖排多行：每条战况独立一行，新消息加在末尾（最下面），
+		# 超过上限就从最上面挤掉。用 VBoxContainer 自动排版，增删行不用手算坐标。
+		_alert_stack = VBoxContainer.new()
+		_alert_stack.name = "AlertStack"
+		_alert_stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_alert_stack.add_theme_constant_override("separation", 2 if mobile else 4)
 		if mobile:
-			# 手机端按 dp 放大并居中，且可点击跳转；
-			# 位置固定在资源胶囊（左上，收起 42dp / 展开 72dp）下方，避免挡住资源数值
-			var w: float = UILayout.dp(320.0)
-			var h: float = UILayout.dp(40.0)
-			var top_y: float = UILayout.dp(118.0)
-			_alert_bg.anchor_left = 0.5; _alert_bg.anchor_right = 0.5
-			_alert_bg.anchor_top = 0.0; _alert_bg.anchor_bottom = 0.0
-			_alert_bg.offset_left = -w; _alert_bg.offset_right = w
-			_alert_bg.offset_top = top_y; _alert_bg.offset_bottom = top_y + h
-			_alert_bg.mouse_filter = Control.MOUSE_FILTER_STOP
-			_alert_bg.gui_input.connect(_on_alert_gui_input)
-			_alert_label.anchor_left = 0.5; _alert_label.anchor_right = 0.5
-			_alert_label.anchor_top = 0.0; _alert_label.anchor_bottom = 0.0
-			_alert_label.offset_left = -w; _alert_label.offset_right = w
-			_alert_label.offset_top = top_y; _alert_label.offset_bottom = top_y + h
-			_alert_label.add_theme_font_size_override("font_size", UILayout.font_dp(14.0))
-			_alert_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			# 手机端按 dp 居中，压在资源胶囊下方，宽度收窄以免挡住战场
+			var w: float = UILayout.dp(310.0)
+			var top_y: float = UILayout.dp(114.0)
+			_alert_stack.anchor_left = 0.5; _alert_stack.anchor_right = 0.5
+			_alert_stack.anchor_top = 0.0; _alert_stack.anchor_bottom = 0.0
+			_alert_stack.offset_left = -w * 0.5; _alert_stack.offset_right = w * 0.5
+			_alert_stack.offset_top = top_y; _alert_stack.offset_bottom = top_y
 		else:
-			_alert_bg.position = Vector2(755, 196)
-			_alert_bg.size = Vector2(810, 46)
-			_alert_label.add_theme_font_size_override("font_size", UITheme.FONT_XXL)
-			_alert_label.position = Vector2(760, 202)
-			_alert_label.size = Vector2(800, 40)
-		add_child(_alert_bg)
-		add_child(_alert_label)
-	_alert_label.text = msg
-	_alert_label.add_theme_color_override("font_color", color)
-	# 横幅边框色跟随警报类型（危险红 / 警告黄 / 信息绿 / 编队蓝）
-	# 横幅底色压到半透明：原来 0.88 几乎是一块实心黑条，报警时正好挡住最需要看的战场。
-	# 文字带黑色描边，降到 0.55 依然清晰。
-	var ab := StyleBoxFlat.new()
-	ab.bg_color = Color(UITheme.INK, 0.55)
-	ab.set_corner_radius_all(UITheme.RADIUS_MD)
-	ab.set_border_width_all(UITheme.BORDER_THIN)
-	ab.border_color = Color(color, 0.5)
-	ab.border_width_top = UITheme.BORDER_THICK
-	_alert_bg.add_theme_stylebox_override("panel", ab)
-	_alert_label.visible = true
-	_alert_bg.visible = true
-	_alert_timer = 3.0
+			_alert_stack.position = Vector2(752, 194)
+			_alert_stack.custom_minimum_size = Vector2(820, 0)
+			_alert_stack.size = Vector2(820, 0)
+		add_child(_alert_stack)
 
+	# 每行用 RichTextLabel：一条消息里国家名和正文要显示成两种颜色，普通 Label 做不到
+	var row := RichTextLabel.new()
+	row.bbcode_enabled = true
+	row.fit_content = true
+	row.scroll_active = false
+	row.autowrap_mode = TextServer.AUTOWRAP_OFF
+	row.mouse_filter = Control.MOUSE_FILTER_STOP
+	row.add_theme_color_override("font_outline_color", Color.BLACK)
+	row.add_theme_constant_override("outline_size", 3)
+	row.text = _alert_bbcode(msg, color, team)
+	row.gui_input.connect(_on_alert_gui_input)
+	_alert_stack.add_child(row)
+	_alert_rows.append({"rtl": row, "life": ALERT_LIFE})
+	# 只保留最近几条：战况栏本身是临时提示，堆多了会盖住战场
+	while _alert_rows.size() > ALERT_MAX_ROWS:
+		var old: Dictionary = _alert_rows.pop_front()
+		var old_rtl = old.get("rtl")
+		if is_instance_valid(old_rtl):
+			old_rtl.queue_free()
+	_refresh_alert_weights()
 	set_process(true)
 
-# 点警报条：跳到警报位置（没有小地图警报时至少跳回主城，保证有反馈）
+# 消息前加「【国家】」前缀：自己绿、友方蓝、其余红。
+# 国家名比正文略暗一档，避免抢走对内容的注意力。
+func _alert_bbcode(msg: String, color: Color, team: int) -> String:
+	var out := ""
+	var nation := _alert_nation_name(team)
+	if not nation.is_empty():
+		out += "[color=#%s]【%s】[/color]" % [_alert_team_color(team).to_html(false), nation]
+	# 正文里的方括号必须转义，否则会被当成 BBCode 标签吞掉
+	out += "[color=#%s]%s[/color]" % [color.to_html(false), msg.replace("[", "[lb]")]
+	return out
+
+func _alert_nation_name(team: int) -> String:
+	if team < 0:
+		return ""
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if bm == null or not bm.has_method("get_team_nation"):
+		return ""
+	var n: int = int(bm.get_team_nation(team))
+	if n < 0 or n >= ALERT_NATION_NAMES.size():
+		return ""
+	return String(ALERT_NATION_NAMES[n])
+
+# 自己 → 绿；同阵营友方 → 蓝；敌方与中立 → 红
+func _alert_team_color(team: int) -> Color:
+	if team < 0:
+		return Color(1.0, 1.0, 1.0, 0.0)
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	var me: int = -1
+	var enemy: int = -1
+	if bm != null:
+		if bm.has_method("get_host_team"):
+			me = int(bm.get_host_team())
+		if bm.has_method("get_enemy_team"):
+			enemy = int(bm.get_enemy_team())
+	if team == me:
+		return Color(0.35, 1.0, 0.45)
+	if enemy != -1 and team != enemy:
+		return Color(0.45, 0.72, 1.0)
+	return Color(1.0, 0.38, 0.32)
+
+# 最新的那条最亮、字号最大；往上逐级变淡缩小，扫一眼就知道哪条刚发生
+func _refresh_alert_weights() -> void:
+	var n: int = _alert_rows.size()
+	var mobile := InputSource.use_mobile_ui()
+	var base_size: int = UILayout.font_dp(12.5) if mobile else UITheme.FONT_LG
+	var alphas: Array = [1.0, 0.70, 0.46]
+	for i in range(n):
+		var row: Dictionary = _alert_rows[i]
+		var rtl = row.get("rtl")
+		if not is_instance_valid(rtl):
+			continue
+		var age: int = n - 1 - i
+		rtl.modulate = Color(1.0, 1.0, 1.0, float(alphas[mini(age, alphas.size() - 1)]))
+		rtl.add_theme_font_size_override("normal_font_size", maxi(base_size - age, base_size - 2))
+
+func _clear_alert_rows() -> void:
+	for row in _alert_rows:
+		var rtl = row.get("rtl")
+		if is_instance_valid(rtl):
+			rtl.queue_free()
+	_alert_rows.clear()
+
+# 点任意一条战况：跳到警报位置并清空整个战况栏
 func _on_alert_gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		_on_jump_to_alert()
-		_alert_timer = 0.0
-		if _alert_label: _alert_label.visible = false
-		if _alert_bg: _alert_bg.visible = false
+		_clear_alert_rows()
 		get_viewport().set_input_as_handled()
 
 
@@ -915,13 +969,18 @@ func _process(delta):
 				_minimap_fog_version = fog_ver
 				minimap.set_data(bm.explored_grid, bm.visible_grid, entities_info, terrain_dirty)
 
-	# 警报消息计时
-	if _alert_label and _alert_timer > 0:
-		_alert_timer -= delta
-		if _alert_timer <= 0:
-			_alert_label.visible = false
-			if _alert_bg:
-				_alert_bg.visible = false
+	# 战况栏计时：每行各自倒计时，到期的自己消失，剩下的重新分配明暗
+	if not _alert_rows.is_empty():
+		for i in range(_alert_rows.size() - 1, -1, -1):
+			var row: Dictionary = _alert_rows[i]
+			row["life"] = float(row.get("life", 0.0)) - delta
+			if float(row["life"]) > 0.0:
+				continue
+			var rtl = row.get("rtl")
+			if is_instance_valid(rtl):
+				rtl.queue_free()
+			_alert_rows.remove_at(i)
+		_refresh_alert_weights()
 
 	health_bar_timer -= delta
 	if health_bar_timer <= 0:

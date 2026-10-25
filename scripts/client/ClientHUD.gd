@@ -600,8 +600,15 @@ func _on_retreat_all_pressed():
 	})
 
 
-func show_alert_message(msg: String, color: Color = ALERT_DANGER):
+func show_alert_message(msg: String, color: Color = ALERT_DANGER, team: int = -1):
 	var mobile := InputSource.use_mobile_ui()
+	# 联机端拿不到完整的「队伍→国家」配置，这里只做兼容处理：能解析出国家就在前面加【国家名】。
+	# 三行堆叠与按国家着色（自己绿/友方蓝/敌方红）只在单机 HUD 实现。
+	var shown: String = msg
+	if team >= 0:
+		var nation_name := _alert_nation_of_team(team)
+		if not nation_name.is_empty():
+			shown = "【%s】%s" % [nation_name, msg]
 	if not _alert_label:
 		# 皇庭横幅背景：暖黑底 + 警报色细边 + 顶部警报色强调条
 		_alert_bg = Panel.new()
@@ -637,7 +644,7 @@ func show_alert_message(msg: String, color: Color = ALERT_DANGER):
 			_alert_label.size = Vector2(800, 40)
 		add_child(_alert_bg)
 		add_child(_alert_label)
-	_alert_label.text = msg
+	_alert_label.text = shown
 	_alert_label.add_theme_color_override("font_color", color)
 	# 横幅边框色跟随警报类型（危险红 / 警告黄 / 信息绿 / 编队蓝）
 	# 横幅底色压到半透明：原来 0.88 几乎是一块实心黑条，报警时正好挡住最需要看的战场。
@@ -654,6 +661,17 @@ func show_alert_message(msg: String, color: Color = ALERT_DANGER):
 	_alert_timer = 3.0
 
 # 点警报条：跳到警报位置
+# 队伍 → 国家名。联机端只有 ClientRenderer 知道各国的分配，
+# 拿不到映射时返回空串，调用方退化成不带前缀的纯消息。
+func _alert_nation_of_team(team: int) -> String:
+	var r = get_tree().get_first_node_in_group("client_renderer")
+	if r == null or not is_instance_valid(r) or not r.has_method("get_team_nation"):
+		return ""
+	var n: int = int(r.get_team_nation(team))
+	if n < 0 or n >= ClientRenderer.NATION_LABELS.size():
+		return ""
+	return String(ClientRenderer.NATION_LABELS[n])
+
 func _on_alert_gui_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
 		_on_jump_to_alert()

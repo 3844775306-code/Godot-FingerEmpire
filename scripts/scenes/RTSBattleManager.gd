@@ -3125,7 +3125,8 @@ func _show_hud_alert(msg: String, color: Color = Color(1.0, 0.2, 0.1), _target_t
 	if has_node("UI"):
 		var hud = $UI
 		if hud and hud.has_method("show_alert_message"):
-			hud.show_alert_message(msg, color)
+			# 带上队伍，HUD 才能推出这条战况属于哪个国家并着色
+			hud.show_alert_message(msg, color, _target_team)
 
 func _is_alert_on_cooldown(key: String, duration: float = 5.0) -> bool:
 	return _alert_cooldowns.has(key) and _alert_cooldowns[key] > 0
