@@ -694,6 +694,9 @@ func _update_single_entity(info):
 	node.set_meta("_prev_pos", node.global_position)
 	node.rotation.y = info.get("rotation_y", 0.0)
 	node.visible = _should_entity_be_visible(info)
+	# 联机客户端没有 Army，脚印/脚步扬尘也从快照位移里补出来。
+	if int(info.get("type", -1)) == 2 and node.visible:
+		_update_client_ground_trail(node, info)
 	node.set_meta("snapshot_info", info)
 	_refresh_client_construction_visual(node, info)
 	_refresh_client_damage_visual(node, info)
@@ -798,6 +801,77 @@ func _get_model_aabb(node: Node) -> AABB:
 			result = result.merge(cr)
 	return result
 
+# 联机客户端的地面痕迹：按快照间的实际位移累计步长，避免只按时间生成导致
+# 单位停住时还在留脚印。与 Army 共用 GroundTrailManager 的 MultiMesh/粒子池。
+func _update_client_ground_trail(node: Node3D, info: Dictionary) -> void:
+	var eid := int(info.get("entity_id", -1))
+	if eid in [9, 13, 14, 39, 40] or int(info.get("health", 0)) <= 0:
+		return
+	var now := Time.get_ticks_msec()
+	var last_pos: Vector3 = node.get_meta("_trail_last_pos", node.global_position)
+	var moved := node.global_position.distance_to(last_pos)
+	if moved > 8.0:
+		# 快照传送/重连：只重置基线，不补一串脚印
+		node.set_meta("_trail_last_pos", node.global_position)
+		node.set_meta("_trail_last_ms", now)
+		node.set_meta("_trail_accum", 0.0)
+		return
+	var dt := maxf(0.03, float(now - int(node.get_meta("_trail_last_ms", now))) / 1000.0)
+	var inst_speed := moved / dt
+	var old_speed := float(node.get_meta("_visual_speed", info.get("speed", 2.0)))
+	node.set_meta("_visual_speed", lerpf(old_speed, inst_speed, 0.4))
+	node.set_meta("_trail_last_ms", now)
+	node.set_meta("_trail_last_pos", node.global_position)
+	if moved < 0.005:
+		node.set_meta("_trail_accum", 0.0)
+		return
+
+	var vehicle: bool = eid in [5, 6, 16, 17, 18, 59]
+	var stride: float = 0.95 if vehicle else 0.52
+	var accum: float = float(node.get_meta("_trail_accum", 0.0)) + moved
+	if accum < stride:
+		node.set_meta("_trail_accum", accum)
+		return
+	accum = fmod(accum, stride)
+	node.set_meta("_trail_accum", accum)
+
+	var dir := node.global_position - last_pos
+	if dir.length_squared() < 0.0001:
+		dir = -node.global_transform.basis.z
+	var terrain := get_terrain_at(node.global_position)
+	var overlay := 0
+	var map := get_node_or_null("Map")
+	if map and map.has_method("get_overlay"):
+		var gx := int(node.global_position.x + RTSConfig.MAP_SIZE / 2.0)
+		var gz := int(node.global_position.z + RTSConfig.MAP_SIZE / 2.0)
+		overlay = int(map.get_overlay(gx, gz))
+	var side := 0
+	if not vehicle:
+		side = int(node.get_meta("_trail_side", 1))
+		node.set_meta("_trail_side", -side)
+	var mgr := GroundTrailManager.get_instance(get_tree())
+	if mgr != null:
+		mgr.emit_step(node.global_position, dir, vehicle, terrain, overlay, side)
+	_play_client_step_sfx(node.global_position, terrain, overlay, vehicle)
+
+func _play_client_step_sfx(pos: Vector3, terrain: int, overlay: int, vehicle: bool) -> void:
+	var key := "walk"
+	var pitch := 1.0
+	if terrain == 2 or overlay == 3:
+		key = "water_step"
+		pitch = randf_range(0.90, 1.0)
+	elif terrain == 1:
+		pitch = 0.82
+	elif overlay == 2:
+		pitch = 0.85
+	elif overlay == 1:
+		pitch = 0.95
+	else:
+		pitch = randf_range(0.94, 1.06)
+	if vehicle:
+		pitch *= 0.82
+	AudioManager.play_sfx_3d(key, pos, _get_cam_pos(), pitch)
+
 func _update_entity_animation(node: Node3D, info: Dictionary):
 	var ap: AnimationPlayer = node.get_meta("_anim_player", null)
 	if not is_instance_valid(ap):
@@ -831,9 +905,15 @@ func _update_entity_animation(node: Node3D, info: Dictionary):
 			elif anim == "walk":
 				var mv_raw = info.get("speed", 2.0)
 				var mv_spd := float(mv_raw) if mv_raw != null else 2.0
-				spd = clampf(mv_spd * 0.6, 0.2, 3.0)
+				if node.has_meta("_visual_speed"):
+					var measured := float(node.get_meta("_visual_speed"))
+					if measured > 0.05:
+						mv_spd = measured
+				spd = AnimationHelper.walk_speed_scale(mv_spd)
 			ap.speed_scale = spd
-			if ap.current_animation != anim:
+			if anim == "walk":
+				AnimationHelper.play_looped(ap, anim, true)
+			elif ap.current_animation != anim:
 				ap.play(anim)
 	elif SiegeAttackAnim.is_siege(entity_id):
 		_update_client_siege_attack(node, info)
@@ -2099,11 +2179,12 @@ func _process(delta):
 			var inf = n.get_meta("snapshot_info")
 			# 动画更新（状态切换已在 _update_single_entity 中即时触发）
 			_update_entity_animation(n, inf)
-			# 持续性移动音效（与动画同频）
+			# 船只持续航行音；陆地脚步已由 _update_client_ground_trail 按落脚触发
 			var ord = inf.get("current_order", "")
 			if ord in ["move", "deliver"] and inf.get("health", 0) > 0 and _is_audible(n.global_position):
-				var terr = get_terrain_at(n.global_position)
-				AudioManager.play_sfx_3d("sail" if terr == 2 else "walk", n.global_position, _get_cam_pos())
+				var eid_walk := int(inf.get("entity_id", 0))
+				if eid_walk in [9, 13, 14, 39, 40] and get_terrain_at(n.global_position) == 2:
+					AudioManager.play_sfx_3d("sail", n.global_position, _get_cam_pos())
 			# 城墙朝向
 			if inf.get("entity_id", 0) == 27:
 				_update_wall_orientation(n, inf)

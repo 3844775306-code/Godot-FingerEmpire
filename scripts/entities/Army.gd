@@ -221,129 +221,13 @@ func _ready():
 	_add_selection_ring()
 	_add_collision_shape()
 
-# 走路扬尘：陆军（含牲畜）在地面前进时脚下冒起尘土，停下来就消失。
-# 用挂载式粒子而不是每次生成节点，避免几百个单位走位时反复创建销毁。
-var _walk_dust: CPUParticles3D = null
-var _walk_dust_last_pos: Vector3 = Vector3.ZERO
-
-func _setup_walk_dust() -> void:
-	if _walk_dust != null:
-		return
-	var p := CPUParticles3D.new()
-	# 扬尘只能贴着地面形成薄薄一层：颗粒小、初速低、几乎不上飘，
-	# 否则会糊住单位本身，把整个模型染成土黄色。
-	p.amount = 10
-	p.lifetime = 0.8
-	p.emitting = false
-	p.local_coords = false
-	p.direction = Vector3.UP
-	p.spread = 80.0
-	p.initial_velocity_min = 0.12
-	p.initial_velocity_max = 0.5
-	p.gravity = Vector3(0.0, 0.12, 0.0)
-	p.scale_amount_min = 1.0
-	p.scale_amount_max = 1.6
-	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
-	p.emission_sphere_radius = 0.55
-	var mesh := SphereMesh.new()
-	mesh.radius = 0.10
-	mesh.height = 0.20
-	var mat := StandardMaterial3D.new()
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	# 透明度压到很低：只是地面上一层淡尘，不能盖住单位
-	mat.albedo_color = Color(0.80, 0.77, 0.70, 0.34)
-	mesh.material = mat
-	p.mesh = mesh
-	var grad := Gradient.new()
-	grad.set_color(0, Color(1.0, 1.0, 1.0, 0.34))
-	grad.set_color(1, Color(1.0, 1.0, 1.0, 0.0))
-	p.color_ramp = grad
-	p.position = Vector3(0.0, 0.05, 0.0)
-	# 显式给足包围盒，否则粒子飞出默认范围会被视锥剔除，看起来就像"完全没发射"
-	p.visibility_aabb = AABB(Vector3(-3.0, -3.0, -3.0), Vector3(6.0, 6.0, 6.0))
-	add_child(p)
-	_walk_dust = p
-
-# ── 脚印 / 车辙 ──
-# 粒子一闪就消失，远不如留在地面上的痕迹有存在感。
-# 每个单位循环使用 10 个贴地面片，挂在场景根下（不能挂在单位下，否则会跟着人走）。
-var _prints: Array[MeshInstance3D] = []
-var _print_idx: int = 0
-var _print_timer: float = 0.0
-
-func _setup_prints() -> void:
-	if not _prints.is_empty():
-		return
-	var root := get_tree().current_scene as Node3D
-	if root == null:
-		# 场景还没就绪时先放弃，下一次移动会再次尝试
-		return
-	# 车轮留下的是一整条宽车辙，步兵是窄脚印
-	var vehicle: bool = entity_id in [5, 6, 16, 17, 18, 59]
-	var pmat := StandardMaterial3D.new()
-	pmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	pmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	pmat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	# 硬边矩形看起来像贴纸，用径向渐变做柔边：中心实、边缘透明，
-	# 再配合非等比拉伸就是一枚椭圆脚印/一段压痕。
-	var shape_grad := Gradient.new()
-	shape_grad.set_color(0, Color(1.0, 1.0, 1.0, 1.0))
-	shape_grad.set_color(1, Color(1.0, 1.0, 1.0, 0.0))
-	var shape_tex := GradientTexture2D.new()
-	shape_tex.gradient = shape_grad
-	shape_tex.fill = GradientTexture2D.FILL_RADIAL
-	shape_tex.fill_from = Vector2(0.5, 0.5)
-	shape_tex.fill_to = Vector2(1.0, 0.5)
-	shape_tex.width = 96
-	shape_tex.height = 96
-	pmat.albedo_texture = shape_tex
-	# 土壤色而不是纯黑，压在草地上才像被踩实的土
-	pmat.albedo_color = Color(0.30, 0.22, 0.14, 0.62) if vehicle else Color(0.34, 0.26, 0.17, 0.50)
-	for i in 14:
-		var mi := MeshInstance3D.new()
-		mi.name = "GroundPrint"
-		var quad := PlaneMesh.new()
-		# PlaneMesh 默认平躺在 XZ 平面，正好贴地。
-		# 尺寸要按相机视角反过来给：RTS 相机拉远到 size 40 时，
-		# 半米见方的贴花只有 5 像素，几乎看不见，所以这里放大到接近单位体积。
-		quad.size = Vector2(1.70, 3.00) if vehicle else Vector2(0.75, 1.10)
-		quad.material = pmat
-		mi.mesh = quad
-		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		mi.visible = false
-		root.add_child(mi)
-		_prints.append(mi)
-
-func _update_prints(delta: float, move_dir: Vector3) -> void:
-	if _prints.is_empty():
-		_setup_prints()
-		if _prints.is_empty():
-			return
-	# 每 0.2 米左右留一个脚印，按移动距离而不是时间，速度快也不会变成虚线
-	_print_timer -= delta
-	if _print_timer > 0.0:
-		return
-	_print_timer = 0.13
-	var mi: MeshInstance3D = _prints[_print_idx]
-	if not is_instance_valid(mi):
-		return
-	_print_idx = (_print_idx + 1) % _prints.size()
-	# 抬到地面上方 4 厘米，避免与地形共面产生 z-fighting 而闪烁不可见
-	mi.global_position = Vector3(global_position.x, global_position.y + 0.06, global_position.z)
-	if move_dir.length_squared() > 0.0001:
-		# 加一点随机偏转和缩放：完全等距等大的痕迹会像规则网格，很不自然
-		mi.rotation.y = atan2(move_dir.x, move_dir.z) + randf_range(-0.28, 0.28)
-	var jitter: float = randf_range(0.82, 1.18)
-	mi.scale = Vector3(jitter, 1.0, jitter)
-	mi.visible = true
-
-func _exit_tree() -> void:
-	# 单位被销毁时把它留在场景根下的脚印一起清掉
-	for mi in _prints:
-		if is_instance_valid(mi):
-			mi.queue_free()
-	_prints.clear()
+# 走路扬尘与地面痕迹：不再给每个单位各挂一个粒子发射器，也不在场景里
+# 创建 14 个独立脚印节点；统一交给 GroundTrailManager 的共享池处理。
+var _trail_last_pos: Vector3 = Vector3.ZERO
+var _trail_step_accum: float = 0.0
+var _trail_side: int = 1
+# 供动画层使用：实际位移速度，地形减速/被挡住时步频会跟着变慢
+var _visual_speed: float = 0.0
 
 func _update_walk_dust(delta: float) -> void:
 	# 船只在水中前进不该有扬尘；鱼也排除
@@ -352,24 +236,69 @@ func _update_walk_dust(delta: float) -> void:
 	if _animal_type == "fish":
 		return
 	# 用实际位置变化来判断是否在走：单位移动是直接写 global_position 的，
-	# velocity 常常是零，is_on_floor() 也永远是 false，拿它们判断会一直不发射。
+	# velocity 常常是零，is_on_floor() 也永远是 false。
 	var delta_pos := Vector3.ZERO
 	var moved: float = 0.0
-	if _walk_dust_last_pos != Vector3.ZERO:
-		delta_pos = global_position - _walk_dust_last_pos
+	if _trail_last_pos != Vector3.ZERO:
+		delta_pos = global_position - _trail_last_pos
 		moved = Vector2(delta_pos.x, delta_pos.z).length()
-	_walk_dust_last_pos = global_position
+	_trail_last_pos = global_position
 	var moving: bool = moved > 0.012
 	if not moving:
-		if _walk_dust != null:
-			_walk_dust.emitting = false
+		_trail_step_accum = 0.0
+		_visual_speed = move_toward(_visual_speed, 0.0, delta * 8.0)
 		return
-	# 懒创建：只有真正走起来才建粒子节点，待命单位不占开销
-	if _walk_dust == null:
-		_setup_walk_dust()
-	if _walk_dust != null:
-		_walk_dust.emitting = true
-	_update_prints(delta, delta_pos)
+	_visual_speed = lerpf(_visual_speed, moved / maxf(delta, 0.001), clampf(delta * 10.0, 0.0, 1.0))
+
+	var vehicle: bool = entity_id in [5, 6, 16, 17, 18, 59]
+	var stride: float = 0.95 if vehicle else 0.52
+	_trail_step_accum += moved
+	if _trail_step_accum < stride:
+		return
+	_trail_step_accum = fmod(_trail_step_accum, stride)
+
+	var move_dir := delta_pos
+	if move_dir.length_squared() < 0.0001:
+		move_dir = -global_transform.basis.z
+	var bm = _cached_bm
+	if not is_instance_valid(bm):
+		bm = get_tree().get_first_node_in_group("battle_manager")
+		_cached_bm = bm
+	var terrain: int = 0
+	var overlay: int = 0
+	if bm:
+		terrain = bm.get_terrain_at(global_position)
+		var gpos = bm.world_to_grid(global_position)
+		overlay = bm.get_overlay_at_grid(gpos.x, gpos.y)
+		# 战争迷雾里的敌人不要在地面上留下可见痕迹
+		if bm.has_method("is_position_in_player_vision") and not bm.is_position_in_player_vision(global_position):
+			return
+	var side: int = 0
+	if not vehicle:
+		side = _trail_side
+		_trail_side = -_trail_side
+	var mgr := GroundTrailManager.get_instance(get_tree())
+	if mgr != null:
+		mgr.emit_step(global_position, move_dir, vehicle, terrain, overlay, side)
+	_play_step_sfx(terrain, overlay, vehicle)
+
+func _play_step_sfx(terrain: int, overlay: int, vehicle: bool) -> void:
+	var key := "walk"
+	var pitch := 1.0
+	if terrain == 2 or overlay == 3:
+		key = "water_step"
+		pitch = randf_range(0.90, 1.0)
+	elif terrain == 1:
+		pitch = 0.82
+	elif overlay == 2:
+		pitch = 0.85
+	elif overlay == 1:
+		pitch = 0.95
+	else:
+		pitch = randf_range(0.94, 1.06)
+	if vehicle:
+		pitch *= 0.82
+	_play_sfx_if_visible(key, pitch)
 
 # ----------------- ÊÓ¾õÓëÅö×² -----------------
 func _create_visual():
@@ -704,15 +633,13 @@ func _physics_process(delta):
 			else:
 				_cached_speed_mod = 1.0
 			speed = base_speed * _cached_speed_mod
-			# Movement sounds (every 20 frames, when position changed)
+			# 船只保留持续航行音；步兵脚步音改由 _play_step_sfx 在落脚时触发
 			if Engine.get_process_frames() % 10 == 0 and health > 0:
-					if _cached_terrain == 2:
-						_play_sfx_if_visible("sail")
-					else:
-						_play_sfx_if_visible("walk")
-					# 移动音效触发时立即同步行走动画
-					if bm.has_method("_update_entity_animation"):
-						bm._update_entity_animation(self)
+				if _cached_terrain == 2 and water_capable:
+					_play_sfx_if_visible("sail")
+				# 移动音效触发时立即同步行走动画
+				if bm.has_method("_update_entity_animation"):
+					bm._update_entity_animation(self)
 			# Water transition sounds (every 30 frames)
 			if Engine.get_process_frames() % 30 == 0:
 				var _in_water = (_cached_terrain == 2)

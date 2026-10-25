@@ -83,6 +83,7 @@ func play_sfx(key: String):
 	_sfx_index = (_sfx_index + 1) % SFX_POOL_SIZE
 	p.stream = stream
 	p.volume_db = linear_to_db(_sfx_volume)
+	p.pitch_scale = 1.0
 	p.play()
 
 # 音效资源按 key 懒缓存。后期混战时 play_sfx_3d 每秒会被调用很多次，
@@ -105,9 +106,10 @@ func play_sfx_quiet(key: String):
 	_sfx_index = (_sfx_index + 1) % SFX_POOL_SIZE
 	p.stream = stream
 	p.volume_db = linear_to_db(_sfx_volume * 0.3)
+	p.pitch_scale = 1.0
 	p.play()
 
-func play_sfx_3d(key: String, pos: Vector3, cam_pos: Vector3):
+func play_sfx_3d(key: String, pos: Vector3, cam_pos: Vector3, pitch_scale: float = 1.0):
 	var frame = Engine.get_process_frames()
 	if _cooldowns.get(key, -99) + 10 > frame: return  # 10-frame cooldown
 	_cooldowns[key] = frame
@@ -123,6 +125,7 @@ func play_sfx_3d(key: String, pos: Vector3, cam_pos: Vector3):
 	p.stream = stream
 	var vol = _sfx_volume * clamp(1.0 - dist / 50.0, 0.1, 1.0)
 	p.volume_db = linear_to_db(vol)
+	p.pitch_scale = clampf(pitch_scale, 0.5, 2.0)
 	p.play()
 		# Queue for network clients
 

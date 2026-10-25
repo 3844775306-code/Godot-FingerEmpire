@@ -88,13 +88,13 @@ func _get_cam_pos() -> Vector3:
 	return cam.global_position if cam else Vector3.ZERO
 
 # 仅在玩家视野内播放音效
-func _play_sfx_if_visible(key: String):
+func _play_sfx_if_visible(key: String, pitch: float = 1.0):
 	var bm = _get_bm()
 	if bm and bm.has_method("is_position_in_player_vision"):
 		if bm.is_position_in_player_vision(global_position):
-			AudioManager.play_sfx_3d(key, global_position, _get_cam_pos())
+			AudioManager.play_sfx_3d(key, global_position, _get_cam_pos(), pitch)
 	else:
-		AudioManager.play_sfx_3d(key, global_position, _get_cam_pos())
+		AudioManager.play_sfx_3d(key, global_position, _get_cam_pos(), pitch)
 
 # 递归设置实体颜色
 func apply_color(c: Color):

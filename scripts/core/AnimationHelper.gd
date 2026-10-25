@@ -41,3 +41,20 @@ static func attack_speed_scale(ap: AnimationPlayer, anim_name: String, cooldown:
 		return 1.0
 	# 冷却极短时限制最大播放速度，避免动作糊成一片；冷却极长时保留慢动作。
 	return clampf(anim.length / maxf(cooldown, 0.1), 0.1, 5.0)
+
+# 统一切换循环动作。walk 首次进入时随机相位，避免几十个单位同手同脚；
+# 已在播放同一个 walk 时不重新 seek，否则会不断把脚步卡回起点。
+static func play_looped(ap: AnimationPlayer, anim_name: String, randomize_walk: bool = true) -> void:
+	if ap == null or anim_name == "" or not ap.has_animation(anim_name):
+		return
+	if ap.current_animation == anim_name:
+		return
+	ap.play(anim_name)
+	if randomize_walk and anim_name == "walk":
+		var length := ap.current_animation_length
+		if length > 0.01:
+			ap.seek(randf_range(0.0, length * 0.9), true)
+
+# 用实际位移速度换算步频；单位被地形减速或撞住时，脚步不会继续原地滑动。
+static func walk_speed_scale(actual_speed: float) -> float:
+	return clampf(actual_speed * 0.6, 0.2, 3.0)

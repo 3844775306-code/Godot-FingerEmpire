@@ -351,13 +351,12 @@ func process_move(delta, bm: RTSBattleManager):
 			#move_dir = alt
 	_army.velocity = Vector3(move_dir.x, 0, move_dir.z) * _army.speed
 	_army.move_and_slide()
-	# Movement sounds (every 10 frames, when actually moving)
+	# 陆地单位的脚步音由 Army._play_step_sfx 按实际落脚点触发；
+	# 这里只保留船只的持续航行音，避免和脚步音重复。
 	if _army.speed > 0.1 and Engine.get_process_frames() % 40 == 0:
 		var terr = bm.get_terrain_at(_army.global_position) if bm else 0
-		if terr == 2:
+		if terr == 2 and _army.water_capable:
 			_army._play_sfx_if_visible("sail")
-		else:
-			_army._play_sfx_if_visible("walk")
 
 	# Rotate toward movement direction
 	if move_dir.length() > 0.01:

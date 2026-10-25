@@ -1908,9 +1908,16 @@ func _update_entity_animation(entity: GameEntity):
 			# 攻击动作按攻击冷却循环；GATHERING 也复用攻击动作，让采集有挥动反馈
 			spd = AnimationHelper.attack_speed_scale(ap, anim, entity.attack_speed)
 		elif anim == "walk":
-			spd = clampf(entity.speed * 0.6, 0.2, 3.0)
+			var actual_speed: float = entity.speed
+			if entity is Army:
+				var army_walk := entity as Army
+				if army_walk._visual_speed > 0.05:
+					actual_speed = army_walk._visual_speed
+			spd = AnimationHelper.walk_speed_scale(actual_speed)
 		ap.speed_scale = spd
-		if ap.current_animation != anim:
+		if anim == "walk":
+			AnimationHelper.play_looped(ap, anim, true)
+		elif ap.current_animation != anim:
 			ap.play(anim)
 
 # 判断单位是否已经进入实际出手距离。攻击/攻击移动看攻击距离，
