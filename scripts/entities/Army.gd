@@ -277,6 +277,9 @@ func _ready():
 	_add_selection_ring()
 	_add_collision_shape()
 	_add_caster_aura()
+	# spawn_entity 先 add_child 再 setup：_ready 执行时 entity_id/body_radius 还是默认值。
+	# 延迟到本帧末尾，等 setup 写完配置后再挂官员标识。
+	call_deferred("_add_official_marker")
 
 # ==================== 僧侣/长老/宗师：脚下法术光环 ====================
 # 这三个兵种和农民、官员共用「随机人物模型」，光看模型分不清谁是谁。
@@ -312,6 +315,16 @@ func _add_caster_aura() -> void:
 	ring.position = Vector3(0.0, 0.12, 0.0)
 	add_child(ring)
 	_caster_aura = ring
+
+# ==================== 官员：金色身份标识 ====================
+# 官员与农民共用随机人物模型，仅靠衣服颜色难以分辨。给官员加金色脚环和
+# 头顶金色菱形，单机与服务端、联机客户端共用 OfficialMarker 的实现。
+func _add_official_marker() -> void:
+	if not OfficialMarker.is_official(entity_id):
+		return
+	if has_node("OfficialMarker"):
+		return
+	add_child(OfficialMarker.create(body_radius))
 
 func _update_caster_aura(delta: float) -> void:
 	if _caster_aura == null or not is_instance_valid(_caster_aura):
@@ -1603,6 +1616,9 @@ func _update_combat_ground_height(bm, delta: float) -> void:
 	# 墙格查询只在低频结算时做；逐帧先判断墙会让全军每帧多一次网格查询。
 	if _is_unit_on_wall():
 		return
+	# 进驻建筑的官员站在建筑顶上，不能被地形高度拉回地面
+	if _is_garrisoned_in_building():
+		return
 	var map = bm.get_node_or_null("Map")
 	if map == null or not map.has_method("get_height_at"):
 		return
@@ -2552,7 +2568,8 @@ func _think(delta, bm):
 
 		# ¸ù¾ÝµØÐÎ¸ß¶ÈÆ½»¬¸üÐÂ Y ×ø±ê
 	
-	if bm:
+	# 进驻建筑的官员站在建筑顶上，不能被地形高度拉回地面
+	if bm and not _is_garrisoned_in_building():
 		var map = bm.get_node("Map")
 		if map and map.has_method("get_height_at"):
 			var target_height = map.get_height_at(global_position)
@@ -4058,9 +4075,21 @@ func _try_climb_assigned_wall() -> bool:
 	stop_movement()
 	return true
 
+# 是否正作为官员进驻在某栋建筑里。
+# 进驻时单位会被抬到建筑顶上，此后必须跳过所有「贴地形高度」的逻辑，
+# 否则每帧 move_toward 会把官员一点点拉回地面，看起来像慢慢陷进建筑。
+func _is_garrisoned_in_building() -> bool:
+	if _garrison_building == null:
+		return false
+	var gb = _garrison_building.get_ref()
+	return gb != null and is_instance_valid(gb) and gb.health > 0
+
 # 单位停在墙格上后不会再走 process_move 的高度平滑，这里补一帧级修正：
 # 墙在时抬到墙顶，墙被拆掉后落回地面。只处理已经离地/正在墙格的单位，正常地面单位直接返回。
 func _update_wall_height(delta: float) -> void:
+	# 进驻建筑的官员站在建筑顶上，和城墙高度无关，别被拉回地面
+	if _is_garrisoned_in_building():
+		return
 	var bm = _get_bm()
 	if bm == null or bm._wall_entity_grid.is_empty():
 		return
