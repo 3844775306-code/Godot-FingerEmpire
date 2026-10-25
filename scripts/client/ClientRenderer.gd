@@ -1177,12 +1177,12 @@ func _attach_resource_ground_patch(node: Node3D, info: Dictionary) -> void:
 	decal.name = "GroundPatch"
 	decal.texture_albedo = WorldResource.ground_patch_texture()
 	decal.modulate = WorldResource.ground_patch_color(WorldResource.resource_type_for_id(eid))
-	decal.albedo_mix = 0.72
-	decal.cull_mask = 1
-	decal.size = Vector3(half * 2.0, 2.6, half * 2.0)
-	decal.position = Vector3(0, -0.85, 0)
-	decal.upper_fade = 0.45
-	decal.lower_fade = 0.8
+	decal.albedo_mix = 0.9
+	decal.cull_mask = WorldResource.GROUND_PATCH_CULL_MASK
+	decal.size = Vector3(half * 2.0, 6.0, half * 2.0)
+	decal.position = Vector3.ZERO
+	decal.upper_fade = 1.0
+	decal.lower_fade = 1.0
 	node.add_child(decal)
 
 # 建筑倒塌时把土色贴花摘下来独立淡出，让地面痕迹比建筑多留一会儿
@@ -1379,6 +1379,8 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 	entities_container.add_child(entity)
 	# 建筑脚下铺一层土色贴花，让建筑看起来压在地上而不是浮着
 	_attach_ground_patch(entity, info)
+	# 资源脚下同样铺一层软边地皮，消除模型与地表的生硬切边
+	_attach_resource_ground_patch(entity, info)
 	return entity
 
 # ---------- 替换原有的 _create_bullet_node ----------
