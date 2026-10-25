@@ -116,6 +116,60 @@ func _create_components() -> void:
 	build_overlay.cancelled.connect(_on_build_cancel)
 
 	_hide_ai_debug_panels()
+	# 相机会晚一帧才进入视口，旋转按钮延后创建
+	call_deferred("_create_camera_buttons")
+
+# 手机端补两个明确的视角旋转按钮。
+# 双指扭转虽然是主手势，但新手很难自己发现；小地图正下方放 ↺ / ↻，
+# 点一次转 22°，连点即可快速绕场。
+const CAMERA_ROT_STEP: float = 22.0
+var _cam_buttons: Array = []
+
+func _create_camera_buttons() -> void:
+	var cam := get_viewport().get_camera_3d()
+	if cam == null or not cam.has_method("rotate_by"):
+		return
+	var row := HBoxContainer.new()
+	row.name = "CameraRotateRow"
+	row.add_theme_constant_override("separation", int(UILayout.dp(10.0)))
+	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(row)
+	for spec in [[-1.0, "↺"], [1.0, "↻"]]:
+		var dir: float = float(spec[0])
+		var btn := Button.new()
+		btn.text = String(spec[1])
+		btn.focus_mode = Control.FOCUS_NONE
+		btn.custom_minimum_size = Vector2(UILayout.dp(46.0), UILayout.dp(46.0))
+		btn.add_theme_font_size_override("font_size", UILayout.font_dp(20.0))
+		var sb := StyleBoxFlat.new()
+		sb.bg_color = Color(0.07, 0.09, 0.14, 0.74)
+		sb.set_corner_radius_all(int(UILayout.dp(23.0)))
+		sb.border_width_left = 2
+		sb.border_width_right = 2
+		sb.border_width_top = 2
+		sb.border_width_bottom = 2
+		sb.border_color = Color(0.45, 0.72, 1.0, 0.5)
+		btn.add_theme_stylebox_override("normal", sb)
+		btn.add_theme_stylebox_override("hover", sb)
+		btn.add_theme_stylebox_override("pressed", sb)
+		btn.add_theme_color_override("font_color", Color(0.85, 0.93, 1.0))
+		btn.add_theme_color_override("font_pressed_color", Color(1, 1, 1))
+		btn.pressed.connect(_on_camera_rotate.bind(dir, cam))
+		row.add_child(btn)
+		_cam_buttons.append(btn)
+	# 右上角小地图下方（小地图 110dp 见方 + 顶部留白）
+	row.anchor_left = 1.0
+	row.anchor_right = 1.0
+	row.anchor_top = 0.0
+	row.anchor_bottom = 0.0
+	row.offset_left = -UILayout.dp(112.0)
+	row.offset_right = -UILayout.dp(10.0)
+	row.offset_top = UILayout.dp(122.0)
+	row.offset_bottom = UILayout.dp(168.0)
+
+func _on_camera_rotate(dir: float, cam: Camera3D) -> void:
+	if is_instance_valid(cam) and cam.has_method("rotate_by"):
+		cam.call("rotate_by", CAMERA_ROT_STEP * dir)
 
 # AI 决策面板在移动端改为并入全屏统计大屏，战场上不再常驻显示
 func _hide_ai_debug_panels() -> void:
