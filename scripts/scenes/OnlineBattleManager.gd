@@ -860,7 +860,7 @@ func _1v1_right_click(team: int, data: Dictionary):
 					# 攻击过滤：不可攻击目标（如桥）改为移动
 					if entity.has_method("_can_attack_target") and entity._can_attack_target(target):
 						entity.attack_target(target)
-					else:
+					elif not (entity.has_method("_is_naval_chase_target_blocked") and entity._is_naval_chase_target_blocked(target)):
 						entity.move_to(target.global_position)
 				elif entity.entity_id >= 46 and entity.entity_id <= 50 and target is Building:
 					entity._garrison_target_id = target.get_instance_id()
@@ -959,7 +959,7 @@ func _2v2_right_click(peer_id: int, data: Dictionary):
 					# 攻击过滤：不可攻击目标（如桥）改为移动
 					if entity.has_method("_can_attack_target") and entity._can_attack_target(target):
 						entity.attack_target(target)
-					else:
+					elif not (entity.has_method("_is_naval_chase_target_blocked") and entity._is_naval_chase_target_blocked(target)):
 						entity.move_to(target.global_position)
 				elif entity.entity_id >= 46 and entity.entity_id <= 50 and target is Building:
 					entity._garrison_target_id = target.get_instance_id()

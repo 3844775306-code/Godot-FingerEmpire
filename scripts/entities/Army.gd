@@ -655,6 +655,10 @@ func _set_combat_target(target, from_advance: bool = false) -> void:
 	# 统一在写 current_target 之前拦掉，避免后续攻击日志/弹丸/伤害逻辑再补救。
 	if _is_protected_army(target):
 		return
+	# 水上军队追击前先筛掉离岸太远的地面目标，避免写进 current_target 后
+	# 才在攻击校验里被放弃，导致索敌反复选中同一个目标。
+	if _is_naval_chase_target_blocked(target):
+		return
 	current_target = target
 	if from_advance and combat_destination != Vector3.ZERO:
 		combat_resume_destination = combat_destination
@@ -3637,6 +3641,30 @@ func _is_healer() -> bool:
 func _is_land_melee() -> bool:
 	return not water_capable and attack_range <= 1.0
 
+# 水上军队只追击靠近岸边的地面目标。目标已经在射程内时直接允许；
+# 否则要求目标到最近水格的距离不超过“射程 + 双方体积”，避免战船为了
+# 一个深入内陆的农民一路撞岸、反复寻路失败。
+# 水上目标（敌舰、运载船）不受影响。
+func _is_naval_chase_target_blocked(target) -> bool:
+	if not water_capable:
+		return false
+	if target == null or not is_instance_valid(target):
+		return true
+	if not (target is Army or target is Building):
+		return false
+	if target is Army and target.water_capable:
+		return false
+	if _combat_edge_distance(target) <= attack_range:
+		return false
+	var bm = _get_bm()
+	if bm == null or not bm.has_method("get_water_distance_at"):
+		return false
+	var max_shore_dist: float = attack_range + body_radius + target.body_radius + 0.75
+	var shore_dist: float = float(bm.get_water_distance_at(target.global_position))
+	if shore_dist < 0.0:
+		return false
+	return shore_dist > max_shore_dist
+
 # 墙上/运载船上的单位受保护，攻击者必须先摧毁城墙或运载船。
 # 统一用这个入口判断，避免各处索敌/锁定/攻击校验漏掉其中一种保护。
 func _is_protected_army(target) -> bool:
@@ -3677,6 +3705,9 @@ func _can_attack_target(target: GameEntity) -> bool:
 	if entity_id == 40:
 		var at = target.get("_animal_type") if target is Army else ""
 		if at != null and str(at) != "": return false
+	# 水上军队不把深入内陆的地面目标设为追击目标；目标在射程内仍可攻击。
+	if _is_naval_chase_target_blocked(target):
+		return false
 	return true
 
 func _is_unit_on_wall() -> bool:

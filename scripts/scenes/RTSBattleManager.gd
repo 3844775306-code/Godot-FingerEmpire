@@ -137,6 +137,10 @@ var _wall_entity_grid: Dictionary = {}    # Vector2i -> Building(城墙 id==27)�
 var _wall_top_entity_grid: Dictionary = {} # Vector2i -> Building(城墙/墙顶炮台)，近战锁敌时 O(1) 判断目标是否在墙顶
 var _ladder_entity_grid: Dictionary = {}  # Vector2i -> Building(梯子 id==8)，供 _has_adjacent_ladder O(8) 查询
 var _bridge_entity_grid: Dictionary = {}  # Vector2i -> Building(桥 id==7)，供落水判定 O(1) 查询
+# 水域距离网格：每个陆地格到最近水格的格数，供海军追击目标筛选。地图水域不会变，懒构建一次即可。
+var _water_distance_grid: PackedInt32Array = PackedInt32Array()
+var _water_distance_size: int = -1
+var _water_distance_has_water: bool = false
 # 弹丸对象池：后期每秒几十上百发箭/炮弹，复用节点可避免反复 new + GLB instantiate + 物理形状创建
 var _bullet_pool: Dictionary = {}         # pool_key -> Array[Bullet]
 # 同模型同队伍的单位共享 tint / 顶点色材质，避免每个单位复制出独立材质，
@@ -2614,7 +2618,7 @@ func _command_selected_units(screen_pos: Vector2):
 					# 攻击过滤：不可攻击目标（同国/盟友/中立）改为移动
 					if u.has_method("_can_attack_target") and u._can_attack_target(target):
 						u.attack_target(target)
-					else:
+					elif not (u.has_method("_is_naval_chase_target_blocked") and u._is_naval_chase_target_blocked(target)):
 						u.move_to(target.global_position)
 				elif u.entity_id >= 46 and u.entity_id <= 50 and target is Building:
 					u._garrison_target_id = target.get_instance_id()
@@ -3784,6 +3788,85 @@ func get_terrain_at_grid(gx: int, gy: int) -> int:
 	if not $Map or not $Map.has_method("get_terrain"):
 		return -1
 	return $Map.get_terrain(gx, gy)
+
+# 懒构建“到最近水域的格数”网格。BFS 从所有水格出发，地图只加载一次，
+# 之后海军筛选追击目标就是 O(1) 查询，不会每个候选都扫一圈地形。
+func _ensure_water_distance_grid() -> void:
+	if not $Map:
+		return
+	# 地图脚本可能还没跑完 _ready，terrain_grid 先分配后填充；等节点就绪再缓存，
+	# 否则会把一张还没有水的地形网格缓存成“全陆地”。
+	if not $Map.is_node_ready():
+		return
+	var map_generated = $Map.get("map_generated")
+	if map_generated != null and not bool(map_generated):
+		return
+	var terrain = $Map.get("terrain_grid")
+	if not (terrain is Array) or terrain.is_empty():
+		return
+	var size: int = terrain.size()
+	if _water_distance_size == size and _water_distance_grid.size() == size * size:
+		return
+	var total: int = size * size
+	var grid := PackedInt32Array()
+	grid.resize(total)
+	for i in range(total):
+		grid[i] = -1
+	var queue := PackedInt32Array()
+	queue.resize(total)
+	var head: int = 0
+	var tail: int = 0
+	for gx in range(size):
+		var col = terrain[gx]
+		if not (col is Array) or col.size() < size:
+			continue
+		for gy in range(size):
+			if int(col[gy]) == 2:
+				var idx: int = gy * size + gx
+				grid[idx] = 0
+				queue[tail] = idx
+				tail += 1
+	_water_distance_has_water = tail > 0
+	while head < tail:
+		var idx: int = queue[head]
+		head += 1
+		var next_dist: int = grid[idx] + 1
+		var gx: int = idx % size
+		var gy: int = int(idx / size)
+		for dx in range(-1, 2):
+			var nx: int = gx + dx
+			if nx < 0 or nx >= size:
+				continue
+			for dy in range(-1, 2):
+				if dx == 0 and dy == 0:
+					continue
+				var ny: int = gy + dy
+				if ny < 0 or ny >= size:
+					continue
+				var nidx: int = ny * size + nx
+				if grid[nidx] != -1:
+					continue
+				grid[nidx] = next_dist
+				queue[tail] = nidx
+				tail += 1
+	_water_distance_grid = grid
+	_water_distance_size = size
+
+# 返回世界坐标所在格到最近水格的格数（一格约 1 米）。没有地图/没有水时返回 -1，
+# 调用方据此放行，避免把“没有海的地图”误判成所有地面目标都不可追。
+func get_water_distance_at(pos: Vector3) -> float:
+	if not $Map:
+		return -1.0
+	_ensure_water_distance_grid()
+	if not _water_distance_has_water or _water_distance_grid.is_empty():
+		return -1.0
+	var g: Vector2i = world_to_grid(pos)
+	if g.x < 0 or g.x >= _water_distance_size or g.y < 0 or g.y >= _water_distance_size:
+		return -1.0
+	var dist: int = _water_distance_grid[g.y * _water_distance_size + g.x]
+	if dist < 0:
+		return 9999.0
+	return float(dist)
 
 # 覆盖层：0=无 1=森林 2=沼泽 3=浅滩（只影响移速/视野，不改地形判定）
 func get_overlay_at_grid(gx: int, gy: int) -> int:
