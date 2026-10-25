@@ -36,6 +36,9 @@ const WORKER_FLEE_DISTANCE: float = 6.0
 const FORCE_GUARD_TIME: float = 16.0
 # 常驻主城守军数量。低于防守状态时保持 5 人，避免主力出门后家里完全空虚。
 const HOME_GUARD_COUNT: int = 5
+# 2 秒一次的快速补员只在家门口找兵；远处的空闲野战军由 60 秒一次的完整审计处理，
+# 否则刚集结好的部队会被每 2 秒拉走一个，永远出不了门。
+const HOME_GUARD_REFILL_RADIUS: float = 35.0
 # 友方建筑被攻击时，调动建筑周围这个半径内、没有任务的陆军反击。
 # 主城（20）单独放宽到 CASTLE_DEFENSE_RADIUS，用于“回防检查”。
 const BUILDING_DEFENSE_RADIUS: float = 15.0
@@ -1023,6 +1026,9 @@ func _quick_fill_home_guard(castle, delta: float) -> void:
 			break
 		if not is_instance_valid(u) or u.health <= 0:
 			continue
+		if u.global_position.distance_to(castle.global_position) > HOME_GUARD_REFILL_RADIUS:
+			# own 已按距离排序，后面的只会更远。
+			break
 		if u.has_meta("ai_home_guard") or u.has_meta("ai_wall_guard"):
 			continue
 		if u.current_target != null or u.is_attack_moving or u.current_order != "":
