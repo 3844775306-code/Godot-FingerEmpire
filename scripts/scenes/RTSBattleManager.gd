@@ -149,6 +149,11 @@ var _astar_alloc_window: int = 0
 var _astar_calls_last_second: int = 0
 var _astar_alloc_last_second: int = 0
 var _astar_stats_window_ms: int = 0
+# 结算面板用的全场累计值：总调用、总分配、峰值/秒、总耗时
+var _astar_calls_total: int = 0
+var _astar_alloc_total: int = 0
+var _astar_peak_calls_per_sec: int = 0
+var _astar_usec_total: int = 0
 # ==================== 墙体/梯子网格缓存（O(1) 查询，随实体缓存重建） ====================
 var _wall_cache_version: int = 0          # 墙体/建筑布局实际变化时递增，MovementController 据此判断墙集合是否失效
 var _wall_layout_signature: int = 0       # 建筑/资源布局签名，避免实体缓存每 0.5s 刷新都让寻路墙缓存失效
@@ -221,11 +226,13 @@ func reserve_astar_request(is_retry: bool = false) -> bool:
 		return false
 	_astar_budget_count += 1
 	_astar_alloc_window += 1
+	_astar_alloc_total += 1
 	return true
 
 # 每次真正进入 A* 计算时调用（包括不走预算的 recalculate 直算）。
 func note_astar_path_call() -> void:
 	_astar_calls_window += 1
+	_astar_calls_total += 1
 
 # 每帧滚动统计窗口；顶部信息栏读取 *_last_second 两个值。
 func _tick_astar_stats() -> void:
@@ -237,13 +244,28 @@ func _tick_astar_stats() -> void:
 		return
 	_astar_calls_last_second = _astar_calls_window
 	_astar_alloc_last_second = _astar_alloc_window
+	_astar_peak_calls_per_sec = maxi(_astar_peak_calls_per_sec, _astar_calls_window)
 	_astar_calls_window = 0
 	_astar_alloc_window = 0
 	_astar_stats_window_ms = now_ms
 
+# 结算面板读取：全场累计 + 平均/峰值（平均按对局时长计算）
+func get_astar_stats() -> Dictionary:
+	var secs: float = maxf(game_time, 1.0)
+	return {
+		"calls_total": _astar_calls_total,
+		"alloc_total": _astar_alloc_total,
+		# 结算发生在窗口滚动前时，把当前未结算窗口也算进峰值
+		"peak_calls_per_sec": maxi(_astar_peak_calls_per_sec, _astar_calls_window),
+		"avg_calls_per_sec": float(_astar_calls_total) / secs,
+		"avg_alloc_per_sec": float(_astar_alloc_total) / secs,
+		"usec_total": _astar_usec_total,
+	}
+
 func report_astar_cost(usec: int) -> void:
 	if usec > 0:
 		_astar_budget_usec += usec
+		_astar_usec_total += usec
 
 # ==================== 诊断工具 ====================
 var _diag_timer: float = 5.0

@@ -23,6 +23,7 @@ var _perf_fps_chart = null
 var _perf_units_chart = null
 var _perf_fps_summary: Label = null
 var _perf_units_summary: Label = null
+var _astar_summary: Label = null
 
 # 手机端字号放大倍率：设计空间 2400 宽 ≈ 674dp，桌面 13 号字只有约 3.6dp，按 2.6 倍放到约 9.5dp
 func _fs(base: int) -> int:
@@ -278,7 +279,7 @@ func _build_ui() -> void:
 
 	# ── 性能专栏：帧率 / 总单位数 ──
 	var perf_panel := PanelContainer.new()
-	perf_panel.custom_minimum_size = Vector2(0, UILayout.dp(190.0)) if _mobile else Vector2(0, 232)
+	perf_panel.custom_minimum_size = Vector2(0, UILayout.dp(232.0)) if _mobile else Vector2(0, 266)
 	perf_panel.size_flags_vertical = Control.SIZE_SHRINK_END
 	var perf_style := StyleBoxFlat.new()
 	perf_style.bg_color = Color(0.024, 0.036, 0.06, 0.96)
@@ -316,7 +317,7 @@ func _build_ui() -> void:
 	perf_header.add_child(perf_title)
 
 	var perf_hint := Label.new()
-	perf_hint.text = "帧率与总单位数 · 每 5 秒采样"
+	perf_hint.text = "帧率 / 单位数每 5 秒采样 · A* 为全场累计"
 	perf_hint.add_theme_font_size_override("font_size", _fs(12))
 	perf_hint.add_theme_color_override("font_color", Color(0.58, 0.68, 0.82))
 	perf_hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -335,6 +336,23 @@ func _build_ui() -> void:
 	var units_box: Dictionary = _build_perf_chart_box(perf_row, "总单位数（军队 + 建筑）", Color(0.32, 0.78, 0.98))
 	_perf_units_chart = units_box["chart"]
 	_perf_units_summary = units_box["summary"]
+
+	# A* 栏：寻路是全局统计，不按国家/阵营拆分；显示全场累计与每秒均值/峰值
+	var astar_row := HBoxContainer.new()
+	astar_row.add_theme_constant_override("separation", 10)
+	perf_root.add_child(astar_row)
+	var astar_title := Label.new()
+	astar_title.text = "🧭 A* 寻路"
+	astar_title.add_theme_font_size_override("font_size", _fs(15))
+	astar_title.add_theme_color_override("font_color", Color(0.62, 0.86, 1.0))
+	astar_row.add_child(astar_title)
+	_astar_summary = Label.new()
+	_astar_summary.text = "暂无 A* 调用数据"
+	_astar_summary.add_theme_font_size_override("font_size", _fs(13))
+	_astar_summary.add_theme_color_override("font_color", Color(0.70, 0.80, 0.92))
+	_astar_summary.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_astar_summary.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	astar_row.add_child(_astar_summary)
 
 func _build_perf_chart_box(parent: Control, title_text: String, color: Color) -> Dictionary:
 	var box := VBoxContainer.new()
@@ -414,6 +432,22 @@ func _refresh_performance() -> void:
 	_perf_units_chart.set_data(units_series, stats.duration, "units")
 	_perf_fps_summary.text = _perf_summary(fps_series, "fps", true)
 	_perf_units_summary.text = _perf_summary(units_series, "units", false)
+	_refresh_astar_summary()
+
+func _refresh_astar_summary() -> void:
+	if _astar_summary == null or stats == null:
+		return
+	var a: Dictionary = stats.get_astar_stats()
+	if a.is_empty():
+		_astar_summary.text = "暂无 A* 调用数据"
+		return
+	var calls: int = int(a.get("calls_total", 0))
+	var alloc: int = int(a.get("alloc_total", 0))
+	var avg: float = float(a.get("avg_calls_per_sec", 0.0))
+	var peak: int = int(a.get("peak_calls_per_sec", 0))
+	_astar_summary.text = "总调用 %d 次 · 预算分配 %d 次 · 平均 %.1f 次/秒 · 峰值 %d 次/秒" % [
+		calls, alloc, avg, peak
+	]
 
 func _perf_summary(series: Array, metric_id: String, with_min: bool) -> String:
 	if series.is_empty():

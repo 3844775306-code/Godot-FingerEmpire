@@ -23,6 +23,8 @@ const NATION_NAMES: Array = ["维京", "英格兰", "法兰西", "中国", "匈�
 var battle = null
 var samples: Array = []
 var duration: float = 0.0
+# A* 全局统计（总调用/预算分配/峰值/平均），由战斗管理器提供，联机结算时随 payload 下发
+var astar_stats: Dictionary = {}
 
 var _totals: Dictionary = {}      # key -> { gathered, produced, kills, damage }
 var _metas: Dictionary = {}       # key -> { owner, team, nation }
@@ -54,6 +56,16 @@ func finalize() -> void:
 	_finalized = true
 	if battle:
 		duration = float(battle.game_time)
+		_capture_astar_stats()
+
+func _capture_astar_stats() -> void:
+	if battle and battle.has_method("get_astar_stats"):
+		astar_stats = battle.get_astar_stats()
+
+func get_astar_stats() -> Dictionary:
+	if astar_stats.is_empty():
+		_capture_astar_stats()
+	return astar_stats
 
 func _owner_key(owner: int, team: int) -> String:
 	if owner != -1:
@@ -456,10 +468,12 @@ func format_value(metric_id: String, value: float) -> String:
 
 # 联机结算：只传采样结果，客户端不需要拥有战斗实体也能绘制曲线
 func export_payload() -> Dictionary:
-	return { "duration": duration, "samples": samples }
+	_capture_astar_stats()
+	return { "duration": duration, "samples": samples, "astar_stats": astar_stats }
 
 func load_payload(payload: Dictionary) -> void:
 	duration = float(payload.get("duration", 0.0))
 	samples = payload.get("samples", [])
+	astar_stats = payload.get("astar_stats", {})
 	_finalized = true
 
