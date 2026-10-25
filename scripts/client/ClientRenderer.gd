@@ -1042,6 +1042,11 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 			loaded_model.scale *= 1.5
 		entity.add_child(loaded_model)
 		entity.set_meta("_model_instance", loaded_model)
+		# 建筑整体放大 2 倍（瞭望塔 41 除外），与服务端保持视觉一致
+		if int(info.get("type", -1)) == 1 and int(info.get("entity_id", 0)) != 41:
+			loaded_model.scale *= 2.0
+			if aabb.size.y > 0.01:
+				loaded_model.position.y -= aabb.position.y * 2.0
 		_ensure_model_shadows(loaded_model)
 		# GLB 动画默认不循环；缓存 AnimationPlayer 并配置 idle/walk/attack 循环
 		var cached_ap := AnimationHelper.configure_loops(loaded_model)

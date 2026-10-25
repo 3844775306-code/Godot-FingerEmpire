@@ -2178,6 +2178,21 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 			var animin: float = _model_local_min_y(ani)
 			if absf(animin) > 0.005:
 				ani.position.y -= animin
+	# 建筑整体放大为原来的 2 倍（瞭望塔 41 除外）：
+	# 模型、碰撞体、body_radius 必须一起放大，只放大模型会让单位走进建筑内部，
+	# 放置校验、AOE 判定也仍按旧尺寸计算。
+	if entity is Building and entity.entity_id != 41:
+		entity.body_radius *= 2.0
+		if entity.has_method("_update_collision_shape"):
+			entity.call("_update_collision_shape")
+		if entity.has_meta("_model_instance"):
+			var bmi = entity.get_meta("_model_instance")
+			if is_instance_valid(bmi):
+				bmi.scale *= 2.0
+				# 放大后按包围盒重新贴地，避免模型原点不在底部时陷进地面
+				var bmin: float = _model_local_min_y(bmi)
+				if absf(bmin) > 0.005:
+					bmi.position.y -= bmin
 	# 资源需要 setup 后再重建 visual
 	if entity.entity_type == 0 and not model_loaded and entity.has_method("_create_visual"):
 		entity._create_visual()
