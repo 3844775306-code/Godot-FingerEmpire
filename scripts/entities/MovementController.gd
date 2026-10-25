@@ -48,11 +48,6 @@ var collision_timer: float = 0.0
 # 单位实际会顶在墙上原地踏步；Army 用它改打这面挡路的墙。
 var blocking_building: Building = null
 const COLLISION_INTERVAL: float = 0.15
-# A* 只避开建筑中心格时，路径会贴着建筑边角甚至从碰撞体侧面穿过去；
-# 步兵被主城卡住、大体型单位在墙角来回弹，根因都在这里。
-# 这里给所有陆军的寻路额外加上建筑周围的高成本格，让路径优先从外侧绕行。
-const LARGE_UNIT_CLEARANCE_BODY: float = 1.0
-const LARGE_UNIT_CLEARANCE_COST: float = 30.0
 var _last_recalc_frame: int = -99  # prevent recalc spam
 var _path_cache: Dictionary = {}  # Vector2i(world_x, world_z) -> path_array, cleared on building placement
 var _blacklist: Dictionary = {}  # Vector2i -> 过期时间戳，暂时跳过不可达目标
@@ -643,26 +638,11 @@ static var _wall_set: Dictionary = {}    # Vector2i -> true
 static var _wall_ver: int = -1
 static var _wall_bm_id: int = -1
 static var _wall_team: int = -1  # friendly-wall passability is team-dependent
-static var _clearance_cost: Dictionary = {}  # Vector2i -> 建筑周围给陆军绕行的高成本格
 static var _bridge_set: Dictionary = {}          # 桥所在格子
 static var _ladder_set: Dictionary = {}          # 梯子使该敌方城墙格可通行
 static var _transport_water: Dictionary = {}     # 运载船周围3格水域(陆军可通行)
 static var _transport_frame: int = -1            # 运载船是移动的，水域标记单独做帧级缓存
 static var _transport_team: int = -1
-
-# 把建筑周围需要体型余量的格子标记为高成本。所有陆军寻路都使用：
-# 建筑碰撞体是实体，A* 把建筑中心格当普通软障碍时，小兵会直接从城堡侧面穿过去，
-# 然后被碰撞体顶在墙边反复抖动。高成本格让它们提前从建筑外侧绕行。
-func _stamp_building_clearance(center: Vector2i, building_radius: float) -> void:
-	var clearance: float = LARGE_UNIT_CLEARANCE_BODY + building_radius + 0.3
-	var radius: int = maxi(1, ceili(clearance) - 1)
-	for dx in range(-radius, radius + 1):
-		for dy in range(-radius, radius + 1):
-			if dx == 0 and dy == 0: continue
-			if Vector2(float(dx), float(dy)).length() > float(radius) + 0.001: continue
-			var tile := Vector2i(center.x + dx, center.y + dy)
-			if tile.x < 0 or tile.x >= RTSConfig.MAP_SIZE or tile.y < 0 or tile.y >= RTSConfig.MAP_SIZE: continue
-			_clearance_cost[tile] = LARGE_UNIT_CLEARANCE_COST
 
 func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Array:
 	_last_path_partial = false
@@ -683,7 +663,6 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 	var bm_id = bm.get_instance_id()
 	if _wall_bm_id != bm_id or _wall_ver != bm._wall_cache_version or _wall_team != _army.team:
 		_wall_set.clear()
-		_clearance_cost.clear()
 		_bridge_set.clear()
 		_ladder_set.clear()
 		for e in bm.entities.get_children():
@@ -706,7 +685,6 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 				continue
 			if e is Building and e.entity_id == 27 and e.team == _army.team: continue
 			_wall_set[eg] = true
-			_stamp_building_clearance(eg, e.body_radius)
 		_wall_bm_id = bm_id; _wall_ver = bm._wall_cache_version; _wall_team = _army.team
 	# 运载船会移动：水域标记做帧级缓存（同一帧多个单位寻路只算一次）
 	if _transport_frame != frame or _transport_team != _army.team:
@@ -837,9 +815,6 @@ func _get_terrain_cost(tile: Vector2i, bm: RTSBattleManager, wall_cache: Diction
 				1: cost = 2.5
 				2: cost = 1.5 if _bridge_set.has(tile) or _transport_water.has(tile) else 999.0
 				_: cost = 999.0
-	# 陆军单位：建筑周围格子加高成本，优先从外侧绕行，避免贴边卡住。
-	if not _army.water_capable:
-		cost = maxf(cost, _clearance_cost.get(tile, 0.0))
 	return cost
 
 func _get_tile_height(tile: Vector2i, bm: RTSBattleManager) -> float:

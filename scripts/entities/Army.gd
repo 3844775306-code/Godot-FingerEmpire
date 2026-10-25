@@ -577,6 +577,10 @@ func _combat_edge_distance(target) -> float:
 func _set_combat_target(target, from_advance: bool = false) -> void:
 	if target == null or not is_instance_valid(target):
 		return
+	# 墙上/运载船上的单位受保护，任何索敌、追击、攻击移动和手动指定都不能锁定。
+	# 统一在写 current_target 之前拦掉，避免后续攻击日志/弹丸/伤害逻辑再补救。
+	if _is_protected_army(target):
+		return
 	current_target = target
 	if from_advance and combat_destination != Vector3.ZERO:
 		combat_resume_destination = combat_destination
@@ -1324,6 +1328,9 @@ func _update_combat_ground_height(bm, delta: float) -> void:
 	global_position.y = move_toward(global_position.y, target_height, 5.0 * step_dt)
 
 func _process_combat_target_cleanup(delta, bm) -> void:
+	if current_target != null and is_instance_valid(current_target) and _is_protected_army(current_target):
+		_on_combat_target_lost()
+		return
 	if current_target != null and (_is_target_gone(current_target) or not _is_target_team_valid(current_target)):
 		_on_combat_target_lost()
 		return
@@ -2151,6 +2158,9 @@ func _attack_tick(target, delta, bm) -> void:
 	if not _is_healer():
 		var _cheap_invalid: bool = not _is_target_team_valid(target)
 		if not _cheap_invalid and _is_land_melee() and target is Army and target.water_capable:
+			_cheap_invalid = true
+		# 目标刚上墙/上船时不再等 0.5 秒的完整校验，立即停火并丢目标。
+		if not _cheap_invalid and _is_protected_army(target):
 			_cheap_invalid = true
 		if _cheap_invalid:
 			if target == current_target:
@@ -3412,10 +3422,15 @@ func _is_healer() -> bool:
 func _is_land_melee() -> bool:
 	return not water_capable and attack_range <= 1.0
 
+# 墙上/运载船上的单位受保护，攻击者必须先摧毁城墙或运载船。
+# 统一用这个入口判断，避免各处索敌/锁定/攻击校验漏掉其中一种保护。
+func _is_protected_army(target) -> bool:
+	return target is Army and target.is_immune_to_damage()
+
 func _can_attack_target(target: GameEntity) -> bool:
 	if not is_instance_valid(target) or target.health <= 0: return false
 	# 在运载船/城墙保护下的单位不能直接攻击，必须先把船或城墙打掉
-	if target is Army and target.is_immune_to_damage():
+	if _is_protected_army(target):
 		return false
 	# 僧侣不参与任何攻击（包括手动指派的敌人目标）
 	if _is_healer():
