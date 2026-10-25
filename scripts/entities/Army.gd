@@ -1551,6 +1551,15 @@ func _is_blocking_building_ahead(blocker: Building, dest: Vector3) -> bool:
 		return true
 	return to_dest.normalized().dot(to_block.normalized()) >= 0.6
 
+# 自动索敌只能在“没有合法锁定目标”时换目标；一旦 current_target 还有效，
+# 就必须把它打完，不能因为附近出现更近/更高价值的敌人而中途改锁。
+func _has_locked_combat_target() -> bool:
+	if current_target == null or not is_instance_valid(current_target):
+		return false
+	if _is_target_gone(current_target) or _is_target_marked_unreachable(current_target):
+		return false
+	return _is_target_attackable_now(current_target)
+
 # 目标换阵营/上墙/上船/不再可攻击时立即放弃，避免长老/宗师把已招降的友军继续当目标。
 func _drop_current_attack_target() -> void:
 	if _uses_combat_state():
@@ -2049,15 +2058,9 @@ func _process_combat_attack(delta, bm) -> void:
 		_attack_stall_time = 0.0
 		if _movement:
 			_movement.attack_path_failed = false
-		# 混战里已经锁着一个肉盾时，也要定期比较射程内是否有更高效的目标；
-		# 只在非攻城单位之间做，避免攻城车放弃建筑。
-		if not _prefers_buildings():
-			_retarget_timer -= delta
-			if _retarget_timer <= 0.0:
-				_retarget_timer = maxf(_retarget_interval(bm), 1.0)
-				_try_retarget_in_range_priority()
-				if current_target == null or not is_instance_valid(current_target):
-					return
+		# 目标一旦锁定就不再改锁：即使附近出现更近或更高价值的敌人，
+		# 也先把当前目标打完。只有目标阵亡、换阵营、不可攻击或不可达时，
+		# 才由上面的失效检查和 _check_attack_approach 清空/改打挡路建筑。
 		_attack_tick(current_target, delta, bm)
 		return
 	if hold_position:
@@ -2068,17 +2071,12 @@ func _process_combat_attack(delta, bm) -> void:
 	if blocker != null and is_instance_valid(blocker) and blocker != current_target \
 			and blocker.health > 0 and _can_attack_target(blocker) \
 			and global_position.distance_to(blocker.global_position) <= body_radius + blocker.body_radius + 1.0:
+		# 当前目标被墙/建筑实际挡住、无法接近时，先拆挡路建筑；
+		# 这是“目标不可达”的例外，不是按距离/价值主动改锁。
 		_mark_target_unreachable(current_target)
 		_set_combat_target(blocker)
 		_movement.set_move_target(blocker.global_position, attack_range)
 		return
-	_retarget_timer -= delta
-	if _retarget_timer <= 0.0:
-		_retarget_timer = _retarget_interval(bm)
-		_try_retarget_closer(dist)
-		if current_target == null or not is_instance_valid(current_target):
-			_on_combat_target_lost()
-			return
 	if _retry_partial_combat_path(current_target.global_position, delta, attack_range):
 		return
 	_check_attack_approach(delta, bm, false)
@@ -2161,26 +2159,7 @@ func _combat_target_score(target, dist: float, self_prefers_buildings: bool) -> 
 	return (-1000.0 - dist * 0.01) if self_prefers_buildings \
 		else (_target_attack_health_ratio(target) * 1000.0 - dist * 0.01)
 
-# 已经进入射程后低频检查一次：AI 换攻击/血量效率更高的敌军；
-# 玩家军队只换射程内更近的敌军。攻城单位不调用。
-func _try_retarget_in_range_priority() -> void:
-	if current_target == null or not is_instance_valid(current_target):
-		return
-	var candidate: GameEntity = _find_combat_enemy(attack_range, true)
-	if candidate == null or candidate == current_target or not (candidate is Army):
-		return
-	if not _is_ai_controlled():
-		# 玩家军队保持距离优先：新目标必须比当前目标更近。
-		var candidate_dist: float = _combat_edge_distance(candidate)
-		var current_dist: float = _combat_edge_distance(current_target)
-		if candidate_dist + 0.05 < current_dist:
-			_set_combat_target(candidate)
-		return
-	if current_target is Army:
-		if _target_attack_health_ratio(candidate) <= _target_attack_health_ratio(current_target) + 0.0001:
-			return
-	_set_combat_target(candidate)
-
+# 目标锁定后不再按“更近/更高价值”主动改锁；这里只保留攻城单位的建筑偏好判断。
 func _prefers_buildings() -> bool:
 	# 仅攻城类单位优先建筑；普通军队必须先打敌军，不能因为 target_type 被
 	# 统一设成 1 就把所有战斗单位都当成攻城车。
@@ -2507,18 +2486,15 @@ func _process_action(delta, bm):
 					is_attack_moving = false
 					_movement.set_move_target(blocker.global_position, attack_range)
 					return
-				# 目标不在攻击范围：每秒检查一次是否有更近的敌人，避免一直追远目标
-				_retarget_timer -= delta
-				if _retarget_timer <= 0.0:
-					_retarget_timer = _retarget_interval(bm)
-					_try_retarget_closer(h_dist)
+				# 目标已锁定，不再因为附近出现更近的敌人而改锁；
+				# 只有目标失效/不可达时才由上面的校验或兜底逻辑处理。
 				if current_target != null and is_instance_valid(current_target):
 					_check_attack_approach(delta, bm)
 				if current_target != null and is_instance_valid(current_target):
 					_movement.set_move_target(current_target.global_position, attack_range)
 
-# 当前目标不在射程内时，重选更近目标会做一次空间查询。后期单位多时
-# 把它从 1s 放宽到 2~3s，避免几百个单位持续做密集查询。
+# 目标失效后的重新锁定/兜底仍沿用这个节流间隔；后期单位多时放宽，
+# 避免几百个单位同时做空间查询。
 func _retarget_interval(bm) -> float:
 	if bm != null:
 		var total: int = bm._all_entities.size()
@@ -2527,62 +2503,6 @@ func _retarget_interval(bm) -> float:
 		if total > 300:
 			return 2.0
 	return TARGET_RETARGET_INTERVAL
-
-# 当前目标不在攻击范围时，低频比较视野内目标：
-# AI 优先改锁“攻击力 / 当前血量”更高的敌军，效率相同才按距离取近的；
-# 玩家军队保持距离优先，只改锁更近的敌人。
-func _try_retarget_closer(current_dist: float) -> void:
-	# 僧侣的目标是友方伤兵，不能被「换更高效率敌人」逻辑替换
-	if _is_healer():
-		return
-	if current_target == null or not is_instance_valid(current_target):
-		return
-	if not (current_target is GameEntity) or current_target.health <= 0:
-		return
-	var best = null
-	if garrison_point != Vector3.ZERO:
-		best = _find_nearest_enemy_near(garrison_point, GARRISON_DEFEND_RADIUS, true)
-	else:
-		# 直接按视野内统一评分找目标，不再把搜索半径缩到当前目标附近。
-		best = _find_combat_enemy(vision_range, false)
-	if best == null or not is_instance_valid(best) or best == current_target:
-		return
-	if not _can_attack_target(best):
-		return
-	if _is_target_marked_unreachable(best):
-		return
-	if _uses_combat_state() and _prefers_buildings() and current_target is Building and not (best is Building):
-		return
-	var h_diff = Vector2(best.global_position.x - global_position.x,
-						best.global_position.z - global_position.z)
-	var best_dist = h_diff.length() - body_radius - best.body_radius
-	if not _is_ai_controlled():
-		# 玩家军队只看距离：新目标必须比当前目标更近才改锁。
-		if best_dist + 0.05 >= current_dist:
-			return
-	elif current_target is Army and best is Army:
-		var cur_ratio: float = _target_attack_health_ratio(current_target)
-		var best_ratio: float = _target_attack_health_ratio(best)
-		if best_ratio + 0.0001 < cur_ratio:
-			return
-		# 效率相同：只有新目标更近才切换，避免在两个同价值目标间来回跑。
-		if absf(best_ratio - cur_ratio) <= 0.0001 and best_dist + 0.05 >= current_dist:
-			return
-	elif current_target is Building and best is Army:
-		# AI 普通单位正在追建筑时，只要视野内出现敌军就改锁敌军（攻城单位已在上方排除）。
-		pass
-	else:
-		# 建筑/混合目标保留原来“更近才换”的规则。
-		if best_dist + 0.05 >= current_dist:
-			return
-	if _uses_combat_state():
-		_set_combat_target(best)
-		return
-	current_target = best
-	_set_order(UnitState.ATTACKING)
-	is_attack_moving = false
-	_retarget_target_id = best.get_instance_id()
-	_retarget_timer = _retarget_interval(_cached_bm)
 
 # 只有“正在回驻扎点”的移动才允许被驻扎防御逻辑接管；
 # 玩家/AI 的其他移动命令仍然优先，避免驻扎点把单位永久拉回去。
@@ -3053,7 +2973,10 @@ func _caster_attack(target, delta):
 
 	var cast_target = target
 	if entity_id == 55:
-		cast_target = _find_monk_heal_target()
+		# 僧侣也遵守目标锁定：当前伤兵还没治满且仍有效时，不切去治另一个伤兵。
+		cast_target = _locked_monk_heal_target()
+		if cast_target == null:
+			cast_target = _find_monk_heal_target()
 		if cast_target == null:
 			# 附近已经没有伤兵：清掉治疗目标，避免对着满血友军反复抬手
 			if current_target != null and is_instance_valid(current_target) \
@@ -3063,6 +2986,8 @@ func _caster_attack(target, delta):
 				if _movement:
 					_movement.stop()
 			return
+		if cast_target != current_target:
+			current_target = cast_target
 	else:
 		if not (target is Army) or not is_instance_valid(target) or target.health <= 0:
 			if not is_instance_valid(target):
@@ -3079,6 +3004,19 @@ func _caster_attack(target, delta):
 		# 场景切换等极端情况拿不到特效根节点时，仍立即结算，
 		# 不能让一次攻击因为视觉失败而丢治疗/伤害。
 		_apply_caster_hit(cast_target)
+
+# 僧侣当前锁定的治疗目标：必须是仍受伤、仍同队、仍在治疗距离内的友军。
+func _locked_monk_heal_target():
+	if current_target == null or not is_instance_valid(current_target):
+		return null
+	if not (current_target is Army) or current_target.health <= 0:
+		return null
+	if current_target.team != team or current_target.health >= current_target.max_health:
+		return null
+	var dist = global_position.distance_to(current_target.global_position)
+	if dist > attack_range + current_target.body_radius:
+		return null
+	return current_target
 
 # 僧侣：选择射程内血量百分比最低的友方非建筑单位
 func _find_monk_heal_target():
@@ -3440,6 +3378,9 @@ func _find_wounded_ally() -> void:
 func _find_enemy_in_range():
 	# 僧侣/官员不索敌，继续由各自的任务 AI 处理。
 	if _is_healer() or entity_id in [46, 47, 48, 50]:
+		return
+	# 已经有合法目标时绝不改锁；只有目标死亡/失效/不可达才会走到这里。
+	if _has_locked_combat_target():
 		return
 	var target = _find_combat_enemy(vision_range, false)
 	if target == null:
