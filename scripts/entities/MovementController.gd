@@ -638,6 +638,9 @@ class MinHeap extends RefCounted:
 # (NOT per frame, NOT per target — `end_tile` no longer invalidates it; the A*
 # loop already skips wall checks for the goal tile).
 static var _wall_set: Dictionary = {}    # Vector2i -> true
+# 仅建筑按半径扩展出来的格子。目标格落在这里时需要改走到建筑外沿，
+# 否则目标被自己/建筑外圈围住，A* 永远进不了中心格。
+static var _footprint_set: Dictionary = {}  # Vector2i -> true
 static var _wall_ver: int = -1
 static var _wall_bm_id: int = -1
 static var _wall_team: int = -1  # friendly-wall passability is team-dependent
@@ -666,6 +669,7 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 	var bm_id = bm.get_instance_id()
 	if _wall_bm_id != bm_id or _wall_ver != bm._wall_cache_version or _wall_team != _army.team:
 		_wall_set.clear()
+		_footprint_set.clear()
 		_bridge_set.clear()
 		_ladder_set.clear()
 		for e in bm.entities.get_children():
@@ -686,8 +690,18 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 						if wall_b and wall_b.team != _army.team:
 							_ladder_set[Vector2i(eg.x + dx, eg.y + dy)] = true
 				continue
-			if e is Building and e.entity_id == 27 and e.team == _army.team: continue
-			_wall_set[eg] = true
+			if e is Building and e.entity_id == 27:
+				if e.team == _army.team: continue
+				# 城墙按中心格阻挡：墙体本身是逐格拼接的，按半径扩大会把墙两侧
+				# 的通道和梯子落点一起堵死。
+				_wall_set[eg] = true
+			elif e is Building:
+				# 普通建筑按实际碰撞半径占用周围格子，避免放大后的建筑
+				# 只有中心一格不可走、A* 路径却从建筑外壳里穿过去。
+				_add_blocked_footprint(eg, e.body_radius)
+			else:
+				# 资源没有放大，保持中心一格，采集目标点仍然可达。
+				_wall_set[eg] = true
 		_wall_bm_id = bm_id; _wall_ver = bm._wall_cache_version; _wall_team = _army.team
 	# 运载船会移动：水域标记做帧级缓存（同一帧多个单位寻路只算一次）
 	if _transport_frame != frame or _transport_team != _army.team:
@@ -704,6 +718,23 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 		_transport_frame = frame; _transport_team = _army.team
 	var wall_cache = _wall_set
 
+	# 目标点落在放大建筑内部时，A* 不能直接走进中心格：建筑外围一圈都是障碍，
+	# 中心格会被彻底围死。把寻路终点改成最近的可走外沿，单位仍会朝向真实目标
+	# 做最终接近/攻击，不会因此丢失目标。
+	var goal_tile: Vector2i = end_tile
+	var goal_adjusted := false
+	if _footprint_set.has(goal_tile):
+		var approach_tile := _find_approach_tile(goal_tile, bm, wall_cache)
+		if approach_tile != goal_tile:
+			goal_tile = approach_tile
+			goal_adjusted = true
+
+	# 单位已经站在建筑外沿时，目标格可能就落在脚下。返回一个起点航点，
+	# 避免空路径被当成“不可达”写进黑名单，后续攻击/最终接近仍可正常工作。
+	if goal_adjusted and goal_tile == start_tile:
+		var half_map_start: float = RTSConfig.MAP_SIZE / 2.0
+		return [Vector3(start_tile.x - half_map_start, 0.0, start_tile.y - half_map_start)]
+
 	# A* data structures — Vector2i keys (fast int hash, no string allocs)
 	var open_list = MinHeap.new()
 	var closed_set := {}  # Vector2i -> true
@@ -711,7 +742,7 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 	var came_from := {}   # Vector2i -> Vector2i
 
 	g_score[start_tile] = 0.0
-	open_list.push(start_tile, _heuristic(start_tile, end_tile) * 1.2)
+	open_list.push(start_tile, _heuristic(start_tile, goal_tile) * 1.2)
 
 	var max_nodes: int = 1000
 	# 固定 1000 节点在 100×100 地图上不够跨河：桥头堡等地图的浅滩偏离起点/终点连线时，
@@ -719,33 +750,33 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 	# 表现就是 AI 部队堵在集结点、永远不发起进攻。按起终点距离放宽预算，同时保留硬上限。
 	# 150×150 的 2v2/3v3 河图上，双河/海湾类地图的绕行更远（实测最坏约 12k 节点），
 	# 因此预算与上限相应上调；普通短距离寻路命中节点数不变，不影响常规性能。
-	var tile_span: int = absi(start_tile.x - end_tile.x) + absi(start_tile.y - end_tile.y)
+	var tile_span: int = absi(start_tile.x - goal_tile.x) + absi(start_tile.y - goal_tile.y)
 	max_nodes = clampi(2000 + tile_span * 80, 2000, 12000)
 	var nodes_explored := 0
 	var from_height := _get_tile_height(start_tile, bm)
 	var best_partial_tile: Vector2i = start_tile
-	var best_partial_h: float = _heuristic(start_tile, end_tile)
+	var best_partial_h: float = _heuristic(start_tile, goal_tile)
 
 	while not open_list.is_empty() and nodes_explored < max_nodes:
 		var current_entry = open_list.pop()
 		if current_entry.is_empty(): break
 		var cur_tile: Vector2i = current_entry.tile
 		nodes_explored += 1
-		var cur_h: float = _heuristic(cur_tile, end_tile)
+		var cur_h: float = _heuristic(cur_tile, goal_tile)
 		if cur_h < best_partial_h:
 			best_partial_h = cur_h
 			best_partial_tile = cur_tile
 
 		# Goal checks
-		if stop_range > 0:
+		if stop_range > 0 and not goal_adjusted:
 			# 用曼哈顿距离判断“已进入攻击距离”：切比雪夫距离会把 (5,5) 这种对角格
 			# 当成距离5，实际中心距离 7.07，远程单位会停在射程外，表现为锁敌后不攻击。
 			# 曼哈顿距离 <= stop_range 时，欧氏距离必然 <= stop_range，终点一定在射程内。
-			if _heuristic(cur_tile, end_tile) <= stop_range:
+			if _heuristic(cur_tile, goal_tile) <= stop_range:
 				var path2 = _reconstruct_path(came_from, cur_tile)
 				if path2.size() > 1: path2.pop_front()
 				return path2
-		if cur_tile == end_tile:
+		if cur_tile == goal_tile:
 			var path = _reconstruct_path(came_from, cur_tile)
 			if path.size() > 1: path.pop_front()
 			return path
@@ -771,7 +802,7 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 				if abs(neighbor_h - from_height) > 3.0: continue
 
 				# Wall collision (skip for goal tile — allow reaching target)
-				if neighbor != end_tile and wall_cache.has(neighbor) and not _ladder_set.has(neighbor): continue
+				if neighbor != goal_tile and wall_cache.has(neighbor) and not _ladder_set.has(neighbor): continue
 
 				var step_cost = terrain_cost * (1.414 if (dx != 0 and dy != 0) else 1.0)
 				var tentative_g = cur_g + step_cost
@@ -779,7 +810,7 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 				if tentative_g < g_score.get(neighbor, 9999.0):
 					came_from[neighbor] = cur_tile
 					g_score[neighbor] = tentative_g
-					open_list.push(neighbor, tentative_g + _heuristic(neighbor, end_tile) * 1.2)
+					open_list.push(neighbor, tentative_g + _heuristic(neighbor, goal_tile) * 1.2)
 
 	# 节点预算耗尽（而不是终点真的不可达）时，返回走到离目标最近的可达格的路径，
 	# 让单位先推进一段；Army 会在该段走完后从新位置继续寻路。
@@ -824,6 +855,58 @@ func _get_tile_height(tile: Vector2i, bm: RTSBattleManager) -> float:
 	if bm and bm.has_method("get_height_at_grid"):
 		return bm.get_height_at_grid(tile.x, tile.y)
 	return 0.0
+
+# 把建筑按实际碰撞半径占用的格子加入静态障碍集合。
+# 网格一格 = 1 米，建筑放大后 body_radius 也同步变大，因此不能再只标中心格。
+func _add_blocked_footprint(center: Vector2i, radius: float) -> void:
+	var r := int(ceil(maxf(radius, 0.0)))
+	if r <= 0:
+		_wall_set[center] = true
+		_footprint_set[center] = true
+		return
+	var rr := radius * radius
+	var map_size := RTSConfig.MAP_SIZE
+	for dx in range(-r, r + 1):
+		for dy in range(-r, r + 1):
+			if float(dx * dx + dy * dy) > rr:
+				continue
+			var tx := center.x + dx
+			var ty := center.y + dy
+			if tx < 0 or ty < 0 or tx >= map_size or ty >= map_size:
+				continue
+			var tile := Vector2i(tx, ty)
+			_wall_set[tile] = true
+			_footprint_set[tile] = true
+
+# 目标格在建筑 footprint 内时，从中心向外找最近的可走格（按切比雪夫环扫描）。
+# 只要求地形可行、不是静态障碍；具体能否从起点到达仍由 A* 判断。
+func _find_approach_tile(center: Vector2i, bm: RTSBattleManager, wall_cache: Dictionary) -> Vector2i:
+	var max_radius := 16
+	for r in range(1, max_radius + 1):
+		var best_tile: Vector2i = center
+		var best_dist: float = 1e20
+		var found := false
+		for dx in range(-r, r + 1):
+			for dy in range(-r, r + 1):
+				if maxi(absi(dx), absi(dy)) != r:
+					continue
+				var tx := center.x + dx
+				var ty := center.y + dy
+				if tx < 0 or ty < 0 or tx >= RTSConfig.MAP_SIZE or ty >= RTSConfig.MAP_SIZE:
+					continue
+				var tile := Vector2i(tx, ty)
+				if wall_cache.has(tile):
+					continue
+				if _get_terrain_cost(tile, bm, wall_cache) >= 999.0:
+					continue
+				var d := float(dx * dx + dy * dy)
+				if d < best_dist:
+					best_dist = d
+					best_tile = tile
+					found = true
+		if found:
+			return best_tile
+	return center
 
 func _reconstruct_path(came_from: Dictionary, end_tile: Vector2i) -> Array:
 	# Use append + reverse instead of push_front (O(1) per step vs O(n))
