@@ -2227,14 +2227,8 @@ func _play_entity_attack_anim(entity: Army, model: Node3D) -> void:
 			"right": entity.global_transform.basis.x,
 		})
 		return
-	# 僧侣/长老/宗师是远程法术单位，走「蓄力—释放」的施法动作，
-	# 而不是近战那套整身前刺，并在出手瞬间放出带颜色的法球。
-	if CasterAttackAnim.is_caster(entity.entity_id):
-		CasterAttackAnim.play(entity.entity_id, model, {
-			"range": entity.attack_range,
-			"target": entity.current_target,
-		})
-		return
+	# 僧侣/长老/宗师的法术波由 Army._caster_attack() 直接发射，
+	# 因为命中时还要结算治疗/伤害，不能只在这里做纯视觉播放。
 	# 开火瞬间在炮口位置喷一小团亮色烟尘：车身位移在远景里容易看漏，
 	# 这个一闪而过的火光才是最容易被眼睛捕捉到的信号。0.5 秒节流避免重复刷。
 	if entity.entity_id in MUZZLE_ATTACK_IDS:

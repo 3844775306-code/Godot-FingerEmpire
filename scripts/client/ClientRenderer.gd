@@ -961,6 +961,38 @@ func _update_entity_animation(node: Node3D, info: Dictionary):
 				ap.play(anim)
 	elif SiegeAttackAnim.is_siege(entity_id):
 		_update_client_siege_attack(node, info)
+	if CasterAttackAnim.is_caster(entity_id):
+		_update_client_caster_attack(node, info)
+
+# 联机客户端没有 Army/真实目标引用，只能根据 attack_seq 按朝向和射程
+# 放一道视觉法术波；伤害/治疗仍由服务端在命中时结算，客户端只负责表现。
+func _update_client_caster_attack(node: Node3D, info: Dictionary) -> void:
+	var model = node.get_meta("_model_instance", null) as Node3D
+	if model == null:
+		return
+	var entity_id := int(info.get("entity_id", -1))
+	if not CasterAttackAnim.is_caster(entity_id):
+		return
+	var seq := int(info.get("attack_seq", 0))
+	var prev_seq := int(node.get_meta("_caster_attack_seq", -1))
+	if info.get("health", 0) <= 0:
+		node.set_meta("_caster_attack_seq", seq)
+		return
+	if prev_seq == -1:
+		# 刚进入视野：只记录基线，不补播进入视野前的施法
+		node.set_meta("_caster_attack_seq", seq)
+		return
+	if seq == prev_seq:
+		return
+	node.set_meta("_caster_attack_seq", seq)
+	var cfg := EntityDatabase.get_config(entity_id)
+	var cast_range: float = float(cfg.get("attack_range", 4.5))
+	var fwd: Vector3 = -node.global_transform.basis.z
+	fwd.y = 0.0
+	if fwd.length() < 0.01:
+		fwd = Vector3.FORWARD
+	var end_pos: Vector3 = node.global_position + fwd.normalized() * cast_range
+	CasterAttackAnim.cast_point(entity_id, node, end_pos)
 
 # 联机客户端没有 Army/attack_timer，改为比较快照里的 attack_seq：
 # 每真正攻击一次 seq 才 +1，客户端只在变化时播放一次，不再按冷却循环猜测。

@@ -13,11 +13,11 @@ extends Node3D
 
 const CASTER_IDS: Array[int] = [55, 56, 57]
 
-# 与 CasterAttackAnim.CASTER_COLOR 同色系，法球和标识颜色对得上
+# 与 CasterAttackAnim.CASTER_COLOR 同色系，法术波和标识颜色对得上
 const CASTER_COLOR := {
-	55: Color(1.0, 0.86, 0.38),   # 僧侣：金
-	56: Color(0.74, 0.48, 1.0),   # 长老：紫
-	57: Color(1.0, 0.45, 0.20),   # 宗师：赤金
+	55: Color(0.30, 1.00, 0.45),  # 僧侣：治疗绿
+	56: Color(0.58, 0.32, 1.00),  # 长老：紫
+	57: Color(1.00, 0.36, 0.12),  # 宗师：赤金
 }
 
 var _ring_outer: MeshInstance3D = null
@@ -89,7 +89,7 @@ func _make_glyph(entity_id: int, body_radius: float, color: Color) -> Node3D:
 	var size: float = maxf(0.16, body_radius * 0.62)
 
 	if entity_id == 55:
-		# 僧侣：十字
+		# 僧侣：治疗十字
 		var v := _make_box(Vector3(size * 0.26, size * 1.10, size * 0.26), mat)
 		holder.add_child(v)
 		var h := _make_box(Vector3(size * 0.80, size * 0.26, size * 0.26), mat)

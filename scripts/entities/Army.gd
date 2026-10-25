@@ -2779,21 +2779,10 @@ func _attack(target, delta):
 		_face_attack_target(target, delta)
 		return
 
-	# 特殊攻击类型：僧侣治疗 / 长老百分比伤害 / 宗师降攻招降
-	if entity_id == 55:
-		if attack_timer <= 0.0:
-			_play_attack_feedback()
-		_monk_heal(target, delta)
-		return
-	if entity_id == 56:
-		if attack_timer <= 0.0:
-			_play_attack_feedback()
-		_elder_attack(target, delta)
-		return
-	if entity_id == 57:
-		if attack_timer <= 0.0:
-			_play_attack_feedback()
-		_grandmaster_attack(target, delta)
+	# 特殊攻击类型：僧侣治疗 / 长老百分比伤害 / 宗师降攻招降。
+	# 三个法术单位都先发射法术波，命中目标后才结算，视觉与生效时间一致。
+	if entity_id in [55, 56, 57]:
+		_caster_attack(target, delta)
 		return
 
 	if attack_timer > 0:
@@ -2886,9 +2875,9 @@ func _play_attack_feedback() -> void:
 		AudioManager.play_sfx_3d(_sfx, global_position, _get_cam_pos())
 	# 真正出手时刷新一次动画：单位可能刚进入攻击距离，不能只等 30 帧轮询
 	# 才从走路切到攻击；这里每次攻击只调用一次，不会形成每帧音效/动画刷新。
-	# 只有攻城六件套需要联机端按“真实出手次数”播放动画；其他兵种不递增，
-	# 避免每次普攻都改变快照哈希、平白增加同步带宽。
-	if SiegeAttackAnim.is_siege(entity_id):
+	# 攻城六件套和法术单位需要联机端按“真实出手次数”播放动画/法术波；
+	# 其他兵种不递增，避免每次普攻都改变快照哈希、平白增加同步带宽。
+	if SiegeAttackAnim.is_siege(entity_id) or CasterAttackAnim.is_caster(entity_id):
 		attack_seq += 1
 	var bm = _get_bm()
 	if bm:
@@ -2900,71 +2889,107 @@ func _play_attack_feedback() -> void:
 			bm._update_entity_animation(self)
 
 # ==================== 特殊攻击 ====================
-
-# 僧侣：治疗周围范围内血量百分比最低的己方军队（百分比回血）
-func _monk_heal(_target, delta):
+# 僧侣/长老/宗师统一施法流程：先选目标，再发射带颜色的法术波；
+# 命中回调里才结算治疗/伤害/降攻，保证“波到了才生效”。
+func _caster_attack(target, delta):
 	if attack_timer > 0:
 		attack_timer -= delta
 		return
-	var lowest = null
-	var lowest_pct: float = 2.0
+
+	var cast_target = target
+	if entity_id == 55:
+		cast_target = _find_monk_heal_target()
+		if cast_target == null:
+			# 附近已经没有伤兵：清掉治疗目标，避免对着满血友军反复抬手
+			if current_target != null and is_instance_valid(current_target) \
+					and current_target.health >= current_target.max_health:
+				current_target = null
+				_set_order(UnitState.IDLE)
+				if _movement:
+					_movement.stop()
+			return
+	else:
+		if not (target is Army) or not is_instance_valid(target) or target.health <= 0:
+			if not is_instance_valid(target):
+				current_target = null
+			return
+		if target.team == team:
+			return
+
+	_play_attack_feedback()
+	attack_timer = attack_speed
+	var on_hit := func() -> Dictionary:
+		return _apply_caster_hit(cast_target)
+	if not CasterAttackAnim.cast(entity_id, self, cast_target, on_hit):
+		# 场景切换等极端情况拿不到特效根节点时，仍立即结算，
+		# 不能让一次攻击因为视觉失败而丢治疗/伤害。
+		_apply_caster_hit(cast_target)
+
+# 僧侣：选择射程内血量百分比最低的友方非建筑单位
+func _find_monk_heal_target():
+	var best = null
+	var best_pct: float = 2.0
 	var bm_heal = _get_bm()
-	var heal_candidates = bm_heal.get_nearby_entities(global_position, attack_range + 4.0) if bm_heal else get_tree().get_nodes_in_group("entities")
+	var heal_candidates = bm_heal.get_nearby_entities(global_position, attack_range + 4.0) \
+		if bm_heal else get_tree().get_nodes_in_group("entities")
 	for entity in heal_candidates:
-		if not (entity is Army) or entity == self or entity.health <= 0: continue
-		if entity.team != team: continue
+		if not (entity is Army) or entity == self or entity.health <= 0:
+			continue
+		if entity.team != team:
+			continue
 		var dist = global_position.distance_to(entity.global_position)
-		if dist <= attack_range + entity.body_radius:
-			var hp_pct = entity.health / entity.max_health
-			if hp_pct < lowest_pct and hp_pct < 1.0:
-				lowest_pct = hp_pct
-				lowest = entity
-	if lowest:
-		var heal_amt = min(attack, lowest.max_health - lowest.health)
-		lowest.health += heal_amt
-		attack_timer = attack_speed
-		_spawn_effect_marker(lowest, Color.GREEN)
+		if dist > attack_range + entity.body_radius:
+			continue
+		var hp_pct = entity.health / entity.max_health
+		if hp_pct < best_pct and hp_pct < 1.0:
+			best_pct = hp_pct
+			best = entity
+	return best
 
-# 长老：对目标军队造成5%最大生命值伤害，远程，无视护甲
-func _elder_attack(target, delta):
-	if attack_timer > 0:
-		attack_timer -= delta
-		return
-	if not is_instance_valid(target) or target.health <= 0: return
-	if not (target is Army):
-		current_target = null
-		return
-	var dmg = target.max_health * 0.05
-	target.health -= dmg
-	_spawn_effect_marker(target, Color.RED)
-	if target.health <= 0:
-		target.die()
-	attack_timer = attack_speed
+# 法术波命中后的实际结算。返回 Dictionary 供命中特效区分普通降攻和招降。
+func _apply_caster_hit(target) -> Dictionary:
+	var result := {}
+	if not is_instance_valid(target) or target.health <= 0:
+		return result
 
-# 宗师：降低目标攻击力（2格内翻倍），攻击<0时招降
-func _grandmaster_attack(target, delta):
-	if attack_timer > 0:
-		attack_timer -= delta
-		return
-	if not is_instance_valid(target) or target.health <= 0: return
-	if not (target is Army):
-		current_target = null
-		return
-	var reduce = attack
-	var dist = global_position.distance_to(target.global_position)
-	if dist <= 2.0 + body_radius + target.body_radius:
-		reduce *= 2
-	if not target.has_meta("_original_attack"):
-		target.set_meta("_original_attack", target.attack)
-	target.attack -= reduce
-	_spawn_effect_marker(target, Color.YELLOW)
-	if target.attack < 0:
-		# 招降：先恢复攻击力，再完整转移阵营/所有权并清理旧命令与仇恨目标
-		target.attack = target.get_meta("_original_attack")
-		target.remove_meta("_original_attack")
-		target.convert_to_team(team, owner_peer_id)
-		_spawn_effect_marker(target, Color.YELLOW)
-	attack_timer = attack_speed
+	match entity_id:
+		55:
+			if not (target is Army) or target.team != team:
+				return result
+			var heal_amt = min(attack, target.max_health - target.health)
+			if heal_amt <= 0.0:
+				return result
+			target.health += heal_amt
+			result["kind"] = "heal"
+			result["amount"] = heal_amt
+		56:
+			if not (target is Army) or target.team == team:
+				return result
+			var dmg = target.max_health * 0.05
+			target.health -= dmg
+			result["kind"] = "elder"
+			result["amount"] = dmg
+			if target.health <= 0:
+				target.die()
+		57:
+			if not (target is Army) or target.team == team:
+				return result
+			var reduce = attack
+			var dist = global_position.distance_to(target.global_position)
+			if dist <= 2.0 + body_radius + target.body_radius:
+				reduce *= 2
+			if not target.has_meta("_original_attack"):
+				target.set_meta("_original_attack", target.attack)
+			target.attack -= reduce
+			result["kind"] = "grandmaster"
+			result["reduce"] = reduce
+			if target.attack < 0:
+				# 招降：先恢复攻击力，再完整转移阵营/所有权并清理旧命令与仇恨目标
+				target.attack = target.get_meta("_original_attack")
+				target.remove_meta("_original_attack")
+				target.convert_to_team(team, owner_peer_id)
+				result["converted"] = true
+	return result
 
 # 完整转换单位的阵营与所有权。只改 team/owner 不够：
 # 旧目标的攻击者仍会锁着它，它自己也可能还锁着原友军；缓存和颜色也要同步刷新。
