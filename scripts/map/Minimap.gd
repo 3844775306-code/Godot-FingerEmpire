@@ -4,6 +4,9 @@ extends Control
 
 const TERRAIN_BRIGHTNESS = 0.55
 const MINIMAP_SIZE = 400
+# 小地图随视角旋转时，正方形转到 45° 的对角线是边长的 √2 倍，四角会冲出控件被裁掉。
+# 内容整体再乘 1/√2（≈0.707，这里取 0.70 留一点余量）之后，任意角度都刚好落在框内。
+const ROTATION_FIT: float = 0.70
 
 var terrain_colors: Array = []
 var explored_grid: Array = []
@@ -158,9 +161,11 @@ func _draw():
 	var pivot := Vector2(size.x, size.y) * 0.5
 	# draw_set_transform 是「先缩放旋转、再平移」，所以平移量必须扣掉旋转后的内容中心。
 	# 直接用 pivot 会让地图中心偏离框中心，转起来像绕着框的左上角打转。
+	# 内容额外乘 ROTATION_FIT，保证转到任意角度四角都不出框。
 	var content_center := Vector2(MINIMAP_SIZE, MINIMAP_SIZE) * 0.5
-	var offset := pivot - (content_center * sc).rotated(yaw_rad)
-	draw_set_transform(offset, yaw_rad, Vector2(sc, sc))
+	var inner: float = sc * ROTATION_FIT
+	var offset := pivot - (content_center * inner).rotated(yaw_rad)
+	draw_set_transform(offset, yaw_rad, Vector2(inner, inner))
 
 	if _terrain_tex:
 		draw_texture(_terrain_tex, Vector2.ZERO)
@@ -306,7 +311,7 @@ func _gui_input(event):
 				sc = 1.0
 			var yaw_rad: float = deg_to_rad(_last_cam_yaw) if _last_cam_yaw < 9999.0 else 0.0
 			var pivot := Vector2(w, h) * 0.5
-			var rel: Vector2 = (local - pivot).rotated(-yaw_rad) / (float(MINIMAP_SIZE) * sc)
+			var rel: Vector2 = (local - pivot).rotated(-yaw_rad) / (float(MINIMAP_SIZE) * sc * ROTATION_FIT)
 			var world_x = rel.x * RTSConfig.MAP_SIZE
 			var world_z = rel.y * RTSConfig.MAP_SIZE
 			if camera:
