@@ -22,6 +22,7 @@ var build_overlay: MobileBuildPlacementOverlay = null
 var _bm: Node = null
 var _refresh_timer: float = 0.0
 var _ai_hide_timer: float = 0.0
+var _minimap_sized: bool = false
 var _last_resources: Dictionary = {}
 var _last_population: Dictionary = {}
 var _last_limits: Dictionary = {}
@@ -191,10 +192,7 @@ func _relayout_shared_nodes() -> void:
 	# 小地图与单位信息面板复用桌面节点，只重排位置与尺寸
 	var minimap := _find_ui_node("Minimap")
 	if minimap is Control:
-		# 缩到原来的 0.7 倍：手机上小地图太占右上角，缩小后给战场让空间
-		minimap.custom_minimum_size = Vector2.ZERO
-		UILayout.place_dp(minimap, "tr", 77.0, 77.0)
-		minimap.mouse_filter = Control.MOUSE_FILTER_STOP
+		_apply_minimap_layout(minimap)
 
 	var info := _find_ui_node("InfoPanel")
 	if info is Control:
@@ -334,6 +332,16 @@ func _get_bm() -> Node:
 		_bm = get_tree().get_first_node_in_group("battle_manager")
 	return _bm
 
+# 手机端把桌面小地图缩到 77dp（0.7 倍）并挪到右上角。
+# 必须清掉 Minimap 内部写死的 custom_minimum_size=400，否则控件会被撑回原尺寸、
+# 直接铺出屏幕外。
+func _apply_minimap_layout(minimap: Control) -> void:
+	minimap.custom_minimum_size = Vector2.ZERO
+	minimap.size = Vector2(UILayout.dp(77.0), UILayout.dp(77.0))
+	UILayout.place_dp(minimap, "tr", 77.0, 77.0)
+	minimap.mouse_filter = Control.MOUSE_FILTER_STOP
+	_minimap_sized = true
+
 func _find_ui_node(node_name: String) -> Node:
 	if hud == null:
 		return null
@@ -410,6 +418,12 @@ func _process(delta: float) -> void:
 	if _ai_hide_timer <= 0.0:
 		_ai_hide_timer = 1.0
 		_hide_ai_debug_panels()
+	# 小地图的节点可能晚于本界面进入场景（或是被 Minimap._ready 重设过 min size），
+	# 缩小没生效时会按 400dp 原尺寸铺到屏幕外，所以这里持续兜底
+	if not _minimap_sized:
+		var mm := _find_ui_node("Minimap")
+		if mm is Control:
+			_apply_minimap_layout(mm)
 	_refresh_timer -= delta
 	if _refresh_timer > 0.0:
 		return
