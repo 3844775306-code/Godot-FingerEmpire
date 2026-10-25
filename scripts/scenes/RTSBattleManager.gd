@@ -129,19 +129,24 @@ var _building_cells: Dictionary = {}  # Vector2i -> Array[Building]，仅供碰�
 # ==================== A* 分帧预算 ====================
 # 大部队同时下令时，几十/上百个单位会在同一帧各跑一次 A*。这里按帧限制
 # 请求数和耗时，超出的单位延后到后续帧重试；调用方 MovementController 会等待。
-# 原 8/6ms → 12/9ms 仍然偏紧：长路径单次就可能吃掉几毫秒，十几帧才轮到
-# 后面的单位，大部队看起来像“下了命令却站着不动”。这里按路径耗时而不是
-# 单纯按单位数限流，时间预算放宽到 24ms，请求数放宽到 48；仍保留上限，
-# 避免一次全军寻路把单帧拖到几十毫秒。
-const ASTAR_REQUESTS_PER_FRAME: int = 48
-const ASTAR_TIME_BUDGET_USEC: int = 24000
-# 给“已经因为预算不足排队过”的请求预留配额。新请求最多用 32 个名额/16ms，
-# 剩余 16 个名额/8ms 留给 pending 重试，避免新移动命令长期压住已排队单位。
-const ASTAR_RETRY_RESERVE_REQUESTS: int = 16
-const ASTAR_RETRY_RESERVE_USEC: int = 8000
+# 原 8/6ms → 12/9ms → 24/48 仍然偏紧：后期几百个单位同时追击时，长路径
+# 单次就可能吃掉几毫秒，队列会长期停在几十甚至上百个。这里把基础预算再放宽
+# 到 32ms/64 个请求，并按当前排队量逐级加码（最多 44ms/88 个），让队尾能
+# 在几帧内被消化；时间预算仍按实际计算耗时截断，不会真的把整帧跑满。
+const ASTAR_REQUESTS_PER_FRAME: int = 64
+const ASTAR_TIME_BUDGET_USEC: int = 32000
+# 给“已经因为预算不足排队过”的请求预留配额。新请求最多用 44 个名额/22ms，
+# 剩余 20 个名额/10ms 留给 pending 重试，避免新移动命令长期压住已排队单位。
+const ASTAR_RETRY_RESERVE_REQUESTS: int = 20
+const ASTAR_RETRY_RESERVE_USEC: int = 10000
 # 排队单位超过这个数量时进入“泄洪”模式：新请求少放行，把预算让给
 # 已经排队的单位；否则不断到来的新移动命令会把队尾永远压在后面。
 const ASTAR_BACKLOG_PRESSURE: int = 30
+# 排队量每达到一档，额外增加的名额/耗时；最多加 3 档。
+const ASTAR_BACKLOG_STEP: int = 30
+const ASTAR_BACKLOG_MAX_BOOST: int = 3
+const ASTAR_BOOST_REQUESTS: int = 8
+const ASTAR_BOOST_USEC: int = 4000
 var _astar_budget_frame: int = -1
 var _astar_budget_count: int = 0
 var _astar_budget_usec: int = 0
@@ -222,16 +227,20 @@ func reserve_astar_request(is_retry: bool = false) -> bool:
 		_astar_budget_frame = frame
 		_astar_budget_count = 0
 		_astar_budget_usec = 0
-	var max_count: int = ASTAR_REQUESTS_PER_FRAME
-	var max_usec: int = ASTAR_TIME_BUDGET_USEC
+	# 排队越多，这一帧的 A* 总预算越大；但最多加 3 档，避免极端情况下
+	# 把所有帧时间都耗在寻路上。
+	var boost: int = clampi(_astar_pending_estimate / ASTAR_BACKLOG_STEP, 0, ASTAR_BACKLOG_MAX_BOOST)
+	var max_count: int = ASTAR_REQUESTS_PER_FRAME + boost * ASTAR_BOOST_REQUESTS
+	var max_usec: int = ASTAR_TIME_BUDGET_USEC + boost * ASTAR_BOOST_USEC
 	if not is_retry:
-		max_count -= ASTAR_RETRY_RESERVE_REQUESTS
-		max_usec -= ASTAR_RETRY_RESERVE_USEC
-		# 队列已经很长时，进一步压缩新请求配额（16 个/8ms），
-		# 让原本预留给 pending 重试的配额真正用于清空队尾。
+		var reserve_count: int = ASTAR_RETRY_RESERVE_REQUESTS
+		var reserve_usec: int = ASTAR_RETRY_RESERVE_USEC
+		# 队列已经很长时，进一步压缩新请求配额，把更多预算让给 pending 队尾。
 		if _astar_pending_estimate >= ASTAR_BACKLOG_PRESSURE:
-			max_count = ASTAR_REQUESTS_PER_FRAME - ASTAR_RETRY_RESERVE_REQUESTS * 2
-			max_usec = ASTAR_TIME_BUDGET_USEC - ASTAR_RETRY_RESERVE_USEC * 2
+			reserve_count += 8
+			reserve_usec += 4000
+		max_count -= reserve_count
+		max_usec -= reserve_usec
 	if _astar_budget_count >= max_count or _astar_budget_usec >= max_usec:
 		return false
 	_astar_budget_count += 1

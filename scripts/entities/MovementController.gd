@@ -21,6 +21,9 @@ const ASTAR_RECALC_INTERVAL: float = 2.0
 const ATTACK_PATH_COOLDOWN_MS: int = 1000
 # 追击目标在小范围内移动时继续沿用现有路径，避免每 1 秒为每个单位重跑一次 A*
 const ATTACK_TARGET_MOVE_TOLERANCE: float = 3.0
+# 队列压力阈值：与 RTSBattleManager.ASTAR_BACKLOG_PRESSURE 保持一致。
+# 排队多时进一步降低追击重算频率、放大目标移动容差，先让现有路径继续走。
+const A_STAR_PRESSURE_THRESHOLD: int = 30
 # 路径预览最多绘制多少个点，避免长路径为每个格子创建一个 MeshInstance3D。
 const MAX_PATH_PREVIEW_POINTS: int = 64
 var _last_attack_path_ms: int = -100000
@@ -37,7 +40,9 @@ var path_partial: bool = false
 var _last_path_partial: bool = false
 # 大量单位同时追击时 A* 预算可能连续多帧排不到某个单位。
 # 等待超过这个时间就按“无路”处理，交给 Army 的换目标/拆墙兜底，不能让单位永远站着。
-const PENDING_PATH_TIMEOUT_MS: int = 2000
+# 后期队列很长时放宽到 8 秒，避免“排队→超时失败→换目标→再排队”的恶性循环。
+const PENDING_PATH_TIMEOUT_MS: int = 4000
+const PENDING_PATH_TIMEOUT_MAX_MS: int = 8000
 # 状态层偶发漏发路径请求时的兜底：没有路径、没有排队、也没有失败标记，
 # 但目标仍很远，隔一段时间主动补一次请求，避免单位永久停在“移动中但无路径”。
 const NO_PATH_REISSUE_INTERVAL_MS: int = 1200
@@ -117,8 +122,12 @@ func set_move_target(pos: Vector3, stop_range: float = 0.0):
 	# 新一次寻路请求开始前先清掉旧的失败标记，避免上一目标失败导致移动命令被立即取消
 	move_path_failed = false
 	if is_attack_move:
-		# 目标只挪动一点点时旧路径仍然可用，先不重算；等偏移超过容差或冷却到期再更新
-		if astar_path.size() > 0 and astar_target != Vector3.ZERO and astar_target.distance_to(pos) < ATTACK_TARGET_MOVE_TOLERANCE:
+		var bm_pressure = _get_bm()
+		var pressure: bool = bm_pressure != null and bm_pressure.get_astar_pending_estimate() >= A_STAR_PRESSURE_THRESHOLD
+		# 目标只挪动一点点时旧路径仍然可用，先不重算；等偏移超过容差或冷却到期再更新。
+		# 排队时放大容差，避免为几米的追击漂移持续制造新的 A* 请求。
+		var move_tolerance: float = ATTACK_TARGET_MOVE_TOLERANCE * (1.6 if pressure else 1.0)
+		if astar_path.size() > 0 and astar_target != Vector3.ZERO and astar_target.distance_to(pos) < move_tolerance:
 			return
 		# 已经有一个请求在排队时不要重复占预算；process_move 会按重试配额继续处理
 		if _pending_path and astar_path.is_empty():
@@ -128,11 +137,10 @@ func set_move_target(pos: Vector3, stop_range: float = 0.0):
 		# 后续只加少量抖动，保证追击路径不会滞后太久。
 		var phase_ms := int(_army.get_instance_id() % 16) * 30
 		var cooldown_ms := ATTACK_PATH_COOLDOWN_MS + int(_army.get_instance_id() % 5) * 15
-		# 队列已经排长时，追击路径降频到约 2 秒一次；路径为空时下面的
+		# 队列已经排长时，追击路径降频到约 2.2 秒一次；路径为空时下面的
 		# 冷却分支会放行补发请求，不会让单位因为降频而永久站着。
-		var bm_pressure = _get_bm()
-		if bm_pressure != null and bm_pressure.get_astar_pending_estimate() >= 30:
-			cooldown_ms = int(cooldown_ms * 1.8)
+		if pressure:
+			cooldown_ms = int(cooldown_ms * 2.2)
 		if _last_attack_path_ms < 0:
 			_last_attack_path_ms = now_ms - cooldown_ms + phase_ms
 		if now_ms - _last_attack_path_ms < cooldown_ms:
@@ -339,8 +347,11 @@ func process_move(delta, bm: RTSBattleManager):
 			_pending_since_ms = 0
 		elif not _try_compute_pending_path(bm):
 			# 只有攻击目标需要超时兜底；普通移动的寻路请求不能因为 A* 预算拥堵
-			# 等了两秒就被判失败，否则玩家下令后单位会直接停住不动。
-			if attack_order and Time.get_ticks_msec() - _pending_since_ms >= PENDING_PATH_TIMEOUT_MS:
+			# 等了几秒就被判失败，否则玩家下令后单位会直接停住不动。
+			var pending_timeout_ms: int = PENDING_PATH_TIMEOUT_MS
+			if bm != null and bm.get_astar_pending_estimate() >= A_STAR_PRESSURE_THRESHOLD:
+				pending_timeout_ms = PENDING_PATH_TIMEOUT_MAX_MS
+			if attack_order and Time.get_ticks_msec() - _pending_since_ms >= pending_timeout_ms:
 				# 连续等待超时：按寻路失败处理，让 Army 换目标/拆挡路建筑，避免永久站桩。
 				_pending_path = false
 				_pending_since_ms = 0
@@ -953,8 +964,13 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 	var g_score := {}     # Vector2i -> float
 	var came_from := {}   # Vector2i -> Vector2i
 
+	# 排队很长时用更激进的加权 A*：稍微牺牲路径最优性，换取更少的节点展开，
+	# 让单个长路径更快算完，队尾才有机会被消化。无压力时保持原权重。
+	var heuristic_weight: float = 1.2
+	if bm.get_astar_pending_estimate() >= A_STAR_PRESSURE_THRESHOLD:
+		heuristic_weight = 1.6
 	g_score[start_tile] = 0.0
-	open_list.push(start_tile, _heuristic(start_tile, goal_tile) * 1.2)
+	open_list.push(start_tile, _heuristic(start_tile, goal_tile) * heuristic_weight)
 
 	var max_nodes: int = 1000
 	# 固定 1000 节点在 100×100 地图上不够跨河：桥头堡等地图的浅滩偏离起点/终点连线时，
@@ -1025,7 +1041,7 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 				if tentative_g < g_score.get(neighbor, 9999.0):
 					came_from[neighbor] = cur_tile
 					g_score[neighbor] = tentative_g
-					open_list.push(neighbor, tentative_g + _heuristic(neighbor, goal_tile) * 1.2)
+					open_list.push(neighbor, tentative_g + _heuristic(neighbor, goal_tile) * heuristic_weight)
 
 	# 节点预算耗尽（而不是终点真的不可达）时，返回走到离目标最近的可达格的路径，
 	# 让单位先推进一段；Army 会在该段走完后从新位置继续寻路。
