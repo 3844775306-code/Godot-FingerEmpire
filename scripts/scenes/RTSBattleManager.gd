@@ -1965,7 +1965,24 @@ func _apply_entity_model(entity: GameEntity) -> bool:
 	# 角色模型启用顶点颜色（编辑器预览依赖此特性）
 	if entity.entity_id in [10, 43, 44, 45, 46, 47, 48, 49, 50, 51]:
 		_enable_vertex_colors(model_instance)
+	# 船只：划艇摆桨、有帆的船按风向转帆（纯视觉）
+	if entity.entity_id in SHIP_ANIM_IDS:
+		_attach_ship_sail_animator(model_instance)
 	return true
+
+# 需要划桨/帆位动画的船：采集船是划艇，其余三条有帆
+const SHIP_ANIM_IDS := [13, 14, 39, 40]
+
+# 在船模型下面挂一个 ShipSailAnimator，重复调用不会叠加（客户端节点会被复用）
+func _attach_ship_sail_animator(model_instance: Node3D) -> void:
+	if model_instance == null or not is_instance_valid(model_instance):
+		return
+	if model_instance.get_node_or_null("ShipSailAnimator") != null:
+		return
+	var animator := ShipSailAnimator.new()
+	animator.name = "ShipSailAnimator"
+	model_instance.add_child(animator)
+	animator.setup(model_instance)
 
 func _set_unshaded_recursive(node: Node):
 	for child in node.get_children():
@@ -2821,8 +2838,7 @@ func _command_selected_units(screen_pos: Vector2):
 					elif not (u.has_method("_is_naval_chase_target_blocked") and u._is_naval_chase_target_blocked(target)):
 						u.move_to(target.global_position)
 				elif u.entity_id >= 46 and u.entity_id <= 50 and target is Building:
-					u._garrison_target_id = target.get_instance_id()
-					u.move_to(target.global_position)
+					u.command_garrison(target)
 				elif u.has_method("can_soldier_garrison") and u.can_soldier_garrison(target):
 					u._garrison_target_id = target.get_instance_id()
 					u.move_to(target.global_position)
@@ -4222,8 +4238,12 @@ func garrison_nearest_for_selected():
 	if best_target:
 		for e in selection.selected_entities:
 			if is_instance_valid(e) and e is Army:
-				e.set("_garrison_target_id", best_target.get_instance_id())
-				e.move_to(best_target.global_position)
+				if e.entity_id >= 46 and e.entity_id <= 50 and best_target is Building:
+					# 官员走统一进驻入口，避免多个同类型官员抢同一栋建筑
+					e.command_garrison(best_target)
+				else:
+					e.set("_garrison_target_id", best_target.get_instance_id())
+					e.move_to(best_target.global_position)
 
 func global_attack():
 	var castle = get_enemy_castle_pos()

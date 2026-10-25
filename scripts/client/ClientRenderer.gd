@@ -1011,6 +1011,20 @@ func _apply_model_tint(node: Node, tint: Color):
 					child.set_surface_override_material(si, mat2)
 		_apply_model_tint(child, tint)
 
+# 需要划桨/帆位动画的船：采集船是划艇，其余三条有帆
+const SHIP_ANIM_IDS := [13, 14, 39, 40]
+
+# 在船模型下面挂一个 ShipSailAnimator（与服务端同一套实现，纯视觉）
+func _attach_ship_sail_animator(model_instance: Node3D) -> void:
+	if model_instance == null or not is_instance_valid(model_instance):
+		return
+	if model_instance.get_node_or_null("ShipSailAnimator") != null:
+		return
+	var animator := ShipSailAnimator.new()
+	animator.name = "ShipSailAnimator"
+	model_instance.add_child(animator)
+	animator.setup(model_instance)
+
 # 模型需要投射/接收实时阴影，否则光影层次会明显变弱
 func _ensure_model_shadows(node: Node) -> void:
 	if node is MeshInstance3D:
@@ -1250,6 +1264,9 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 			if absf(aabb.position.y * scale_factor) > 0.005:
 				loaded_model.position.y -= aabb.position.y * scale_factor
 		_ensure_model_shadows(loaded_model)
+		# 船只：划艇摆桨、有帆的船按风向转帆（纯视觉，客户端自己跑）
+		if int(info.get("entity_id", 0)) in SHIP_ANIM_IDS:
+			_attach_ship_sail_animator(loaded_model)
 		# GLB 动画默认不循环；缓存 AnimationPlayer 并配置 idle/walk/attack 循环
 		var cached_ap := AnimationHelper.configure_loops(loaded_model)
 		if cached_ap != null:
