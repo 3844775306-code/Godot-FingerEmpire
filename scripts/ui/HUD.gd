@@ -799,7 +799,7 @@ const ALERT_WARNING = UITheme.ALERT_WARNING   # 黄色 — 敌军来袭/资源�
 const ALERT_INFO = UITheme.ALERT_INFO      # 绿色 — 建造/训练/升级完成
 const ALERT_GROUP = UITheme.ALERT_GROUP     # 蓝色 — 编队反馈
 
-func show_alert_message(msg: String, color: Color = ALERT_DANGER, teams = [], alert_kind: int = 0, is_castle: bool = false):
+func show_alert_message(msg: String, color: Color = ALERT_DANGER, teams = [], alert_kind: int = 0, is_castle: bool = false, nations: Array = []):
 	var mobile := InputSource.use_mobile_ui()
 	var team_list: Array = _normalize_alert_teams(teams)
 	# 按设置过滤掉不关心的战报（主要是队友的建造/升级/生产）
@@ -854,7 +854,7 @@ func show_alert_message(msg: String, color: Color = ALERT_DANGER, teams = [], al
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_theme_color_override("font_outline_color", Color.BLACK)
 	row.add_theme_constant_override("outline_size", 3)
-	row.text = _alert_bbcode(msg, color, team_list)
+	row.text = _alert_bbcode(msg, color, team_list, nations)
 	holder.add_child(row)
 	_alert_stack.add_child(holder)
 	_alert_rows.append({"rtl": row, "holder": holder, "life": ALERT_LIFE})
@@ -908,12 +908,19 @@ func _alert_is_filtered(teams: Array, alert_kind: int, is_castle: bool) -> bool:
 
 # 消息前加国家前缀。一条战报可能同时涉及多个国家（例如「A 攻打 B」），
 # 全部按同一规则着色：自己绿、同阵营友方蓝、敌方红，国家之间用箭头连接。
-func _alert_bbcode(msg: String, color: Color, teams: Array) -> String:
+# nations 是直接给出的国家索引（与 teams 一一对应时优先使用）：
+# 2v2 里队友与自己同队但不同国，只靠 teams 会把队友的单位误标成自己的国家。
+func _alert_bbcode(msg: String, color: Color, teams: Array, nations: Array = []) -> String:
 	var out := ""
 	var parts: Array = []
-	for t in teams:
-		var team: int = int(t)
-		var nation := _alert_nation_name(team)
+	for i in teams.size():
+		var team: int = int(teams[i])
+		var nation_idx: int = int(nations[i]) if i < nations.size() else -1
+		var nation := ""
+		if nation_idx >= 0 and nation_idx < ALERT_NATION_NAMES.size():
+			nation = String(ALERT_NATION_NAMES[nation_idx])
+		else:
+			nation = _alert_nation_name(team)
 		if nation.is_empty():
 			continue
 		parts.append("[color=#%s]【%s】[/color]" % [_alert_team_color(team).to_html(false), nation])

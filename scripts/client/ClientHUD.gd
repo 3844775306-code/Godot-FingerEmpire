@@ -603,7 +603,7 @@ func _on_retreat_all_pressed():
 const ALERT_MAX_ROWS: int = 3
 const ALERT_LIFE: float = 3.4
 
-func show_alert_message(msg: String, color: Color = ALERT_DANGER, teams = [], alert_kind: int = 0, is_castle: bool = false):
+func show_alert_message(msg: String, color: Color = ALERT_DANGER, teams = [], alert_kind: int = 0, is_castle: bool = false, nations: Array = []):
 	var mobile := InputSource.use_mobile_ui()
 	var team_list: Array = _normalize_alert_teams(teams)
 	# 按设置过滤掉不关心的战报（主要是队友的建造/升级/生产）
@@ -653,7 +653,7 @@ func show_alert_message(msg: String, color: Color = ALERT_DANGER, teams = [], al
 	row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	row.add_theme_color_override("font_outline_color", Color.BLACK)
 	row.add_theme_constant_override("outline_size", 3)
-	row.text = _alert_bbcode(msg, color, team_list)
+	row.text = _alert_bbcode(msg, color, team_list, nations)
 	holder.add_child(row)
 	_alert_stack.add_child(holder)
 	_alert_rows.append({"rtl": row, "holder": holder, "life": ALERT_LIFE})
@@ -702,12 +702,19 @@ func _alert_is_filtered(teams: Array, alert_kind: int, is_castle: bool) -> bool:
 
 # 消息前加国家前缀。一条战报可能同时涉及多个国家（例如「A 攻打 B」），
 # 全部按同一规则着色：自己绿、同阵营友方蓝、敌方红，国家之间用箭头连接。
-func _alert_bbcode(msg: String, color: Color, teams: Array) -> String:
+# nations 是服务器直接下发的国家索引（与 teams 一一对应时优先使用）：
+# 2v2 里队友与自己同队但不同国，只靠 teams 会把队友的单位误标成自己的国家。
+func _alert_bbcode(msg: String, color: Color, teams: Array, nations: Array = []) -> String:
 	var out := ""
 	var parts: Array = []
-	for t in teams:
-		var team: int = int(t)
-		var nation_name := _alert_nation_of_team(team)
+	for i in teams.size():
+		var team: int = int(teams[i])
+		var nation_name := ""
+		var nation_idx: int = int(nations[i]) if i < nations.size() else -1
+		if nation_idx >= 0 and nation_idx < ClientRenderer.NATION_LABELS.size():
+			nation_name = String(ClientRenderer.NATION_LABELS[nation_idx])
+		else:
+			nation_name = _alert_nation_of_team(team)
 		if nation_name.is_empty():
 			continue
 		parts.append("[color=#%s]【%s】[/color]" % [_alert_team_color(team).to_html(false), nation_name])
@@ -875,12 +882,12 @@ func _ready():
 			NetworkManager.client_alert_received.connect(_on_server_alert)
 
 # 收到服务器警报：直接走本地播报条
-func _on_server_alert(msg: String, color: Color, alert_id: int = 0, teams = [], alert_kind: int = 0, is_castle: bool = false) -> void:
-	show_server_alert(msg, color, alert_id, teams, alert_kind, is_castle)
+func _on_server_alert(msg: String, color: Color, alert_id: int = 0, teams = [], alert_kind: int = 0, is_castle: bool = false, nations: Array = []) -> void:
+	show_server_alert(msg, color, alert_id, teams, alert_kind, is_castle, nations)
 
 # 服务器警报统一入口：RPC 与快照兜底都会调用，按 id 去重；
 # 危险/警告级警报补一次客户端本地音效（服务器端 AudioManager 不会在客户端播放）。
-func show_server_alert(msg: String, color: Color, alert_id: int = 0, teams = [], alert_kind: int = 0, is_castle: bool = false) -> void:
+func show_server_alert(msg: String, color: Color, alert_id: int = 0, teams = [], alert_kind: int = 0, is_castle: bool = false, nations: Array = []) -> void:
 	if alert_id > 0:
 		if _seen_server_alert_ids.has(alert_id):
 			return
@@ -889,7 +896,7 @@ func show_server_alert(msg: String, color: Color, alert_id: int = 0, teams = [],
 		_seen_server_alert_ids[alert_id] = true
 	if color == ALERT_DANGER or color == ALERT_WARNING:
 		AudioManager.play_sfx("alert")
-	show_alert_message(msg, color, teams, alert_kind, is_castle)
+	show_alert_message(msg, color, teams, alert_kind, is_castle, nations)
 
 func _make_cmd_button(text: String, cb: Callable, danger: bool) -> Button:
 	var b := Button.new()

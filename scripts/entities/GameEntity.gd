@@ -263,16 +263,20 @@ func take_damage(amount: float, source = null):
 							group_str = " [T%d]" % groups[0]
 					# 位置信息
 					var loc_str = "(%d,%d)" % [int(global_position.x), int(global_position.z)]
+					# 文案里不写「我方」：这条警报对任何队伍的单位都会触发，
+					# 是谁被攻击交给前面的彩色国家前缀说明，否则队友挨打会误写成「我方」
 					var msg = ""
 					if entity_id == 20:
-						msg = "我方基地正遭受攻击！%s%s" % [loc_str, group_str]
-					elif self is Building:
-						msg = "%s正遭受攻击 %s%s" % [display_name, loc_str, group_str]
+						msg = "基地正遭受攻击！%s%s" % [loc_str, group_str]
 					else:
-						msg = "我方%s正遭受攻击 %s%s" % [display_name, loc_str, group_str]
-					# 攻守双方都带上：攻击方在前、被攻击方在后
+						msg = "%s正遭受攻击 %s%s" % [display_name, loc_str, group_str]
+					# 攻守双方都带上：攻击方在前、被攻击方在后。
+					# 同时给国家索引，2v2 里同队不同国才不会把队友的战报说成「我方」
 					var atk_team: int = int(source.team) if source and is_instance_valid(source) else -1
-					bm._show_hud_alert(msg, Color(1.0, 0.2, 0.1), [atk_team, team], team)
+					var atk_nation: int = int(bm.get_entity_nation(source)) if source and is_instance_valid(source) else -1
+					var my_nation: int = int(bm.get_entity_nation(self))
+					bm._show_hud_alert(msg, Color(1.0, 0.2, 0.1), [atk_team, team], team,
+						GameSettings.AlertKind.COMBAT, false, [atk_nation, my_nation])
 					bm._set_alert_cooldown(cooldown_key, 3.0)
 	# 乱斗 FFA 军事伤害背叛上报：军队对当前仍结盟的盟友造成军事伤害 → 揭发背叛。
 	# notify_military_attack 内部会再校验 is_ally；非盟/同国/中立伤害均不产生副作用。

@@ -524,9 +524,9 @@ func _process_snapshot(data: Dictionary):
 			for alert in alerts:
 				if not (alert is Dictionary): continue
 				if hud and hud.has_method("show_server_alert"):
-					hud.show_server_alert(alert["msg"], alert.get("color", Color(1.0, 0.2, 0.1)), int(alert.get("id", 0)), alert.get("teams", []), int(alert.get("kind", 0)), bool(alert.get("castle", false)))
+					hud.show_server_alert(alert["msg"], alert.get("color", Color(1.0, 0.2, 0.1)), int(alert.get("id", 0)), alert.get("teams", []), int(alert.get("kind", 0)), bool(alert.get("castle", false)), alert.get("nations", []))
 				elif hud and hud.has_method("show_alert_message"):
-					hud.show_alert_message(alert["msg"], alert.get("color", Color(1.0, 0.2, 0.1)), alert.get("teams", []), int(alert.get("kind", 0)), bool(alert.get("castle", false)))
+					hud.show_alert_message(alert["msg"], alert.get("color", Color(1.0, 0.2, 0.1)), alert.get("teams", []), int(alert.get("kind", 0)), bool(alert.get("castle", false)), alert.get("nations", []))
 
 	if data.has("bullets"):
 		var server_ids = {}

@@ -62,7 +62,7 @@ func _alert_team_of_peer(pid: int) -> int:
 		return int(player_teams[pid])
 	return -1
 
-func _record_recent_alert(target_team: int, msg: String, color: Color, teams: Array = [], alert_kind: int = 0, is_castle: bool = false) -> int:
+func _record_recent_alert(target_team: int, msg: String, color: Color, teams: Array = [], alert_kind: int = 0, is_castle: bool = false, nations: Array = []) -> int:
 	_alert_seq += 1
 	var alert_id: int = _alert_seq
 	var now: int = Time.get_ticks_msec()
@@ -72,7 +72,8 @@ func _record_recent_alert(target_team: int, msg: String, color: Color, teams: Ar
 			arr.remove_at(i)
 	arr.append({
 		"id": alert_id, "msg": msg, "color": color, "teams": teams.duplicate(),
-		"kind": alert_kind, "castle": is_castle, "until": now + ALERT_SNAPSHOT_TTL_MS,
+		"kind": alert_kind, "castle": is_castle, "nations": nations.duplicate(),
+		"until": now + ALERT_SNAPSHOT_TTL_MS,
 	})
 	_recent_alerts[target_team] = arr
 	return alert_id
@@ -89,6 +90,7 @@ func _alerts_for_team(team: int) -> Array:
 				"teams": alert.get("teams", []),
 				"kind": int(alert.get("kind", 0)),
 				"castle": bool(alert.get("castle", false)),
+				"nations": alert.get("nations", []),
 			})
 	return out
 
@@ -99,9 +101,9 @@ func _is_alert_client(pid: int, peers: PackedInt32Array) -> bool:
 		return false
 	return not is_ai_peer(int(pid))
 
-func _queue_client_alert(target_key, msg: String, color: Color = Color(1.0, 0.2, 0.1), teams: Array = [], alert_kind: int = 0, is_castle: bool = false):
+func _queue_client_alert(target_key, msg: String, color: Color = Color(1.0, 0.2, 0.1), teams: Array = [], alert_kind: int = 0, is_castle: bool = false, nations: Array = []):
 	var target_team: int = int(target_key)
-	var alert_id: int = _record_recent_alert(target_team, msg, color, teams, alert_kind, is_castle)
+	var alert_id: int = _record_recent_alert(target_team, msg, color, teams, alert_kind, is_castle, nations)
 	if multiplayer.multiplayer_peer == null:
 		return
 	var peers: PackedInt32Array = multiplayer.get_peers()
@@ -112,7 +114,7 @@ func _queue_client_alert(target_key, msg: String, color: Color = Color(1.0, 0.2,
 		if _alert_team_of_peer(int(pid)) != target_team:
 			continue
 		sent[int(pid)] = true
-		NetworkManager._client_receive_alert.rpc_id(int(pid), msg, color, alert_id, teams, alert_kind, is_castle)
+		NetworkManager._client_receive_alert.rpc_id(int(pid), msg, color, alert_id, teams, alert_kind, is_castle, nations)
 	# 1v1 的客户端只登记在 player_teams 里，player_info 只有房主；补扫一遍。
 	for pid in player_teams.keys():
 		if not _is_alert_client(int(pid), peers) or sent.has(int(pid)):
@@ -120,24 +122,24 @@ func _queue_client_alert(target_key, msg: String, color: Color = Color(1.0, 0.2,
 		if _alert_team_of_peer(int(pid)) != target_team:
 			continue
 		sent[int(pid)] = true
-		NetworkManager._client_receive_alert.rpc_id(int(pid), msg, color, alert_id, teams, alert_kind, is_castle)
+		NetworkManager._client_receive_alert.rpc_id(int(pid), msg, color, alert_id, teams, alert_kind, is_castle, nations)
 
 # Override: queue alerts for clients in online mode
 # source_teams 是战报涉及的国家队伍（可以是单个 int，也可以是数组），
 # 只用于客户端着色与显示国家名；target_team 决定推给哪一方：
 # -1 表示双方都发（城堡被毁、游戏结束这类全局事件）。
-func _show_hud_alert(msg: String, color: Color = Color(1.0, 0.2, 0.1), source_teams = -1, target_team: int = -1, alert_kind: int = 0, is_castle: bool = false):
+func _show_hud_alert(msg: String, color: Color = Color(1.0, 0.2, 0.1), source_teams = -1, target_team: int = -1, alert_kind: int = 0, is_castle: bool = false, nations: Array = []):
 	var team_list: Array = _alert_team_list(source_teams)
 	if target_team < 0:
 		# 全局警报：双方都发，房主本地也显示
-		super._show_hud_alert(msg, color, team_list, -1, alert_kind, is_castle)
-		_queue_client_alert(RTSConfig.Team.BLUE, msg, color, team_list, alert_kind, is_castle)
-		_queue_client_alert(RTSConfig.Team.RED, msg, color, team_list, alert_kind, is_castle)
+		super._show_hud_alert(msg, color, team_list, -1, alert_kind, is_castle, nations)
+		_queue_client_alert(RTSConfig.Team.BLUE, msg, color, team_list, alert_kind, is_castle, nations)
+		_queue_client_alert(RTSConfig.Team.RED, msg, color, team_list, alert_kind, is_castle, nations)
 	else:
 		# 阵营事件：只发给该阵营；房主仅在本方阵营事件时本地显示，避免看到敌方播报
 		if target_team == _host_player_team():
-			super._show_hud_alert(msg, color, team_list, -1, alert_kind, is_castle)
-		_queue_client_alert(target_team, msg, color, team_list, alert_kind, is_castle)
+			super._show_hud_alert(msg, color, team_list, -1, alert_kind, is_castle, nations)
+		_queue_client_alert(target_team, msg, color, team_list, alert_kind, is_castle, nations)
 
 # 房主（peer 1）所在队伍：用于过滤服务器本地 HUD 上的播报
 func is_ai_peer(peer_id: int) -> bool:

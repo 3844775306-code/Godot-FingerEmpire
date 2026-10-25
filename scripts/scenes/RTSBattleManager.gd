@@ -585,6 +585,28 @@ func get_nation_name(nation: int) -> String:
 		RTSConfig.Nation.BYZANTINE: return "拜占庭"
 	return "未知"
 
+# 返回某个玩家（owner_peer_id）所属的国家索引，未知返回 -1。
+# 战报要靠它区分「同队不同国」：2v2 里队友和自己同属一个 team，
+# 只看 team 会把队友的单位说成自己的国家。
+func get_nation_of_owner(owner: int) -> int:
+	if owner < 0:
+		return -1
+	if _owner_nations.has(owner):
+		return int(_owner_nations[owner])
+	var info = ai_players.get(owner, {})
+	if info.has("nation"):
+		return int(info.get("nation", -1))
+	return -1
+
+# 返回某个玩家（owner_peer_id）所属的队伍，未知返回 -1
+func get_team_of_owner(owner: int) -> int:
+	if owner < 0:
+		return -1
+	var info = ai_players.get(owner, {})
+	if info.has("team"):
+		return int(info.get("team", -1))
+	return -1
+
 # 返回实体所属国家的索引（owner 感知优先；无 owner 时按队伍推断），未知返回 -1
 func get_entity_nation(entity) -> int:
 	if entity == null:
@@ -3148,12 +3170,12 @@ func is_mobile_ui_point(pos: Vector2) -> bool:
 # 「【被攻击国】某某被打了」，而不是「【攻击国】打了某某」。
 # 无法判定时传 -1，只显示消息本体。
 # target_team：联机模式下只推给哪个阵营；-1 表示广播给双方。单机忽略这个参数。
-func _show_hud_alert(msg: String, color: Color = Color(1.0, 0.2, 0.1), source_teams = -1, target_team: int = -1, alert_kind: int = 0, is_castle: bool = false):
+func _show_hud_alert(msg: String, color: Color = Color(1.0, 0.2, 0.1), source_teams = -1, target_team: int = -1, alert_kind: int = 0, is_castle: bool = false, nations: Array = []):
 	if color == Color(1.0, 0.2, 0.1) or color == Color(1.0, 0.8, 0.1): AudioManager.play_sfx("alert")
 	if has_node("UI"):
 		var hud = $UI
 		if hud and hud.has_method("show_alert_message"):
-			hud.show_alert_message(msg, color, source_teams, alert_kind, is_castle)
+			hud.show_alert_message(msg, color, source_teams, alert_kind, is_castle, nations)
 
 # 队伍列表归一化：支持单个 int 与 Array，负数（未知来源）丢弃
 func _alert_team_list(raw) -> Array:
