@@ -3600,6 +3600,95 @@ func _find_target_castle(bm):
 			_merchant_target_castle = weakref(e)
 			return
 
+# 官员进驻命令：先检查目标建筑是否已被同类型官员占用或预约。
+# 同类型官员一栋建筑只能有一个，避免多个官员同时扑向同一栋建筑，
+# 最后只有一个能进驻、其余抵达后无事可做。
+func command_garrison(building: Building) -> bool:
+	if entity_id < 46 or entity_id > 50:
+		return false
+	if not is_instance_valid(building) or building.health <= 0:
+		return false
+	if building.team != team or building.build_timer > 0:
+		return false
+	# 已在目标建筑里：无需重复下命令
+	var current_gb = _garrison_building.get_ref() if _garrison_building else null
+	if current_gb != null and is_instance_valid(current_gb):
+		if current_gb == building:
+			return true
+		# 换驻另一栋建筑时先完整移除旧加成，避免旧建筑残留效果
+		_ungarrison_official()
+	# 统帅不占建筑，只在建筑附近提供光环；直接过去，避免抵达后卡在进驻失败状态
+	if entity_id == 49:
+		_garrison_target_id = -1
+		move_to(building.global_position)
+		return true
+	if _has_type_official_in(building) or _is_type_official_reserved(building):
+		# 目标已被同类型官员占用/预约：自动改派到最近的一栋同类空建筑，
+		# 而不是让这名官员停在原地等玩家再点一次。
+		var alt := _find_free_official_building()
+		if alt != null:
+			_garrison_target_id = alt.get_instance_id()
+			move_to(alt.global_position)
+			return true
+		return false
+	_garrison_target_id = building.get_instance_id()
+	move_to(building.global_position)
+	return true
+
+# 该建筑里是否已经有同类型官员
+func _has_type_official_in(building: Building) -> bool:
+	for e in get_tree().get_nodes_in_group("entities"):
+		if e is Army and e != self and e.entity_id == entity_id and e.health > 0:
+			var gb = e.get("_garrison_building")
+			if gb and gb.get_ref() == building:
+				return true
+	return false
+
+# 是否已有同类型官员在赶往这栋建筑（尚未抵达也算占用）
+func _is_type_official_reserved(building: Building) -> bool:
+	var bid := building.get_instance_id()
+	for e in get_tree().get_nodes_in_group("entities"):
+		if e is Army and e != self and e.entity_id == entity_id and e.health > 0:
+			if int(e.get("_garrison_target_id")) == bid:
+				return true
+	return false
+
+# 进驻失败后，给官员换一栋同类可用建筑，避免站在原建筑旁边发呆。
+# 只考虑该官员真正能发挥作用的建筑类型；没有空位时返回 null。
+func _find_free_official_building() -> Building:
+	var preferred: Array = []
+	match entity_id:
+		46: preferred = [22]                    # 县吏：仓库
+		47: preferred = [25, 26]                # 上校：箭塔/炮塔
+		48: preferred = [21, 23, 24, 29, 25, 26] # 尚书：生产/防御建筑
+		50: preferred = []                      # 丞相：任意已建成建筑
+		_: return null
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if not bm: return null
+	var best: Building = null
+	var best_d := INF
+	for e in bm.entities.get_children():
+		if not (e is Building):
+			continue
+		if e.health <= 0 or e.team != team or e.build_timer > 0:
+			continue
+		if not preferred.is_empty() and not (e.entity_id in preferred):
+			continue
+		if _has_type_official_in(e) or _is_type_official_reserved(e):
+			continue
+		var d = global_position.distance_squared_to(e.global_position)
+		if d < best_d:
+			best_d = d
+			best = e
+	return best
+
+func _redirect_official_to_free_building() -> void:
+	if entity_id < 46 or entity_id > 50 or entity_id == 49:
+		return
+	var alt := _find_free_official_building()
+	if alt != null:
+		command_garrison(alt)
+
 func _process_official(delta):
 	var bm = get_tree().get_first_node_in_group("battle_manager")
 	if not bm: return
@@ -3636,16 +3725,22 @@ func _process_official(delta):
 
 	# Check garrison target arrival (right-click on building command)
 	if _garrison_target_id != -1:
+		var found_target := false
 		for e in bm.entities.get_children():
 			if e is Building and e.get_instance_id() == _garrison_target_id:
+				found_target = true
 				var dist = global_position.distance_to(e.global_position)
 				if entity_id >= 46 and entity_id <= 50:
 					# 官员进驻：距离 < 2
 					if dist < 2.0:
-						_do_garrison(e)
+						var garrisoned := _do_garrison(e)
 						_garrison_target_id = -1
 						_set_order(UnitState.IDLE)
 						_movement.astar_target = Vector3.ZERO
+						if not garrisoned:
+							# 目标已被同类型官员抢先占用（或建筑不可用）：
+							# 不要原地发呆，换一栋同类空建筑继续进驻
+							_redirect_official_to_free_building()
 				elif _is_garrisonable_unit() and dist < 4.0:
 					# 士兵/农民进驻：距离 < 4
 					_do_soldier_garrison(e)
@@ -3654,6 +3749,7 @@ func _process_official(delta):
 					_movement.astar_target = Vector3.ZERO
 				break
 			elif e is Army and e.entity_id == 18 and e.get_instance_id() == _garrison_target_id:
+				found_target = true
 				var dist = global_position.distance_to(e.global_position)
 				if _is_garrisonable_unit() and dist < 4.0:
 					# 攻城车进驻
@@ -3662,10 +3758,21 @@ func _process_official(delta):
 					_set_order(UnitState.IDLE)
 					_movement.astar_target = Vector3.ZERO
 				break
+		if not found_target:
+			# 目标建筑在途中被拆掉：清理目标，官员尝试换一栋可用建筑
+			_garrison_target_id = -1
+			_set_order(UnitState.IDLE)
+			_movement.astar_target = Vector3.ZERO
+			if entity_id >= 46 and entity_id <= 50:
+				_redirect_official_to_free_building()
 
 	# If garrisoned but moved far away, auto-ungarrison
-	if is_garrisoned and global_position.distance_to(gb.global_position) > 3.0:
-		_ungarrison_official()
+	# 只比较水平距离：进驻后官员会被抬到建筑顶上，用 3D 距离会把“正常站在屋顶”
+	# 误判成离开建筑，尤其是城堡这类高层建筑，刚进驻就会立刻退出。
+	if is_garrisoned:
+		var hd := Vector2(global_position.x - gb.global_position.x, global_position.z - gb.global_position.z).length()
+		if hd > 3.0:
+			_ungarrison_official()
 		
 
 	# Commander (ID 49): aura effect for nearby allies
@@ -3695,15 +3802,12 @@ func _get_academy_level() -> int:
 			return e.upgrade_level
 	return 0
 
-func _do_garrison(building: Building):
-	if not building or building.team != team: return
-	if building.build_timer > 0: return
-	
-	for e in get_tree().get_nodes_in_group("entities"):
-		if e is Army and e != self and e.entity_id >= 46 and e.entity_id <= 50:
-			var ogb = e.get("_garrison_building")
-			if ogb and ogb.get_ref() == building and e.entity_id == entity_id:
-				return
+func _do_garrison(building: Building) -> bool:
+	if not building or building.health <= 0 or building.team != team: return false
+	if building.build_timer > 0: return false
+
+	if _has_type_official_in(building):
+		return false
 	
 	_garrison_building = weakref(building)
 	building.set_meta("_orig_melee_armor_%d" % entity_id, building.melee_armor)
@@ -3739,7 +3843,7 @@ func _do_garrison(building: Building):
 			_garrison_building = null
 			visible = true
 			collision_layer = 1
-			return
+			return false
 		50:
 			# Chancellor: re-garrison all other officials to apply doubled bonuses
 			for e in get_tree().get_nodes_in_group("entities"):
@@ -3748,6 +3852,7 @@ func _do_garrison(building: Building):
 					if ogb and ogb.get_ref() == building:
 						e._ungarrison_official()
 						e._do_garrison(building)
+	return true
 
 func _ungarrison_official():
 	var building = _garrison_building.get_ref() if _garrison_building else null

@@ -240,8 +240,7 @@ func _input(event):
 				if clicked_entity is Building and Input.is_key_pressed(KEY_ALT) and _is_local_owned(clicked_entity) and _selection_all_local():
 					for e in selected_entities:
 						if e is Army and e.entity_id >= 46 and e.entity_id <= 50:
-							e._garrison_target_id = clicked_entity.get_instance_id()
-							e.move_to(clicked_entity.global_position)
+							e.command_garrison(clicked_entity)
 							return
 				# 双击检测：短时间内再次点击同一个实体
 				if last_clicked_entity == clicked_entity and (now - last_click_time) < DOUBLE_CLICK_THRESHOLD:

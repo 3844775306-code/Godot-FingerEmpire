@@ -1644,7 +1644,7 @@ func _ai_garrison_officials():
 			47: target = _find_vacant_tower_s()
 			48: target = _find_random_prod_or_def_s()
 			50: target = _find_most_officiated_s()
-		if target: entity._garrison_target_id = target.get_instance_id(); entity.move_to(target.global_position)
+		if target: entity.command_garrison(target)
 
 # ═══ Hunting ═══
 # 沙漠类地图食物资源几乎为零、全靠兽群：狩猎要更频繁、范围更大，并允许农民一起上
@@ -2329,32 +2329,39 @@ func _find_shipyard_pos_near_oil() -> Vector3:
 	return Vector3.ZERO
 
 # ═══ Official helpers ═══
+# 某栋建筑是否已被同类型官员占用，或已有同类型官员在赶往那里。
+# AI 可能训练出多个同类型官员，选目标时必须把“在路上”的预约也算进去，
+# 否则他们会一起冲向同一栋建筑，最后只有一个能进驻。
+func _official_slot_claimed(building: Building, official_id: int) -> bool:
+	for oe in battle.entities.get_children():
+		if oe is Army and oe.entity_id == official_id and oe.health > 0:
+			var ogb = oe.get("_garrison_building")
+			if ogb and ogb.get_ref() == building:
+				return true
+			if int(oe.get("_garrison_target_id")) == building.get_instance_id():
+				return true
+	return false
+
 func _find_vacant_warehouse_s() -> Building:
 	for e in battle.entities.get_children():
 		if e is Building and e.entity_id == 22 and e.team == my_team and e.health > 0 and e.build_timer <= 0:
-			var ok = true
-			for oe in battle.entities.get_children():
-				if oe is Army and oe.entity_id == 46 and oe.get("_garrison_building") and oe.get("_garrison_building").get_ref() == e: ok = false; break
-			if ok: return e
+			if not _official_slot_claimed(e, 46):
+				return e
 	return null
 
 func _find_vacant_tower_s() -> Building:
 	for e in battle.entities.get_children():
 		if e is Building and e.entity_id in [25,26] and e.team == my_team and e.health > 0:
-			var ok = true
-			for oe in battle.entities.get_children():
-				if oe is Army and oe.entity_id == 47 and oe.get("_garrison_building") and oe.get("_garrison_building").get_ref() == e: ok = false; break
-			if ok: return e
+			if not _official_slot_claimed(e, 47):
+				return e
 	return null
 
 func _find_random_prod_or_def_s() -> Building:
 	var cand = []
 	for e in battle.entities.get_children():
 		if e is Building and e.entity_id in [21,23,24,29,25,26] and e.team == my_team and e.health > 0 and e.build_timer <= 0:
-			var ok = true
-			for oe in battle.entities.get_children():
-				if oe is Army and oe.entity_id == 48 and oe.get("_garrison_building") and oe.get("_garrison_building").get_ref() == e: ok = false; break
-			if ok: cand.append(e)
+			if not _official_slot_claimed(e, 48):
+				cand.append(e)
 	return cand[randi() % cand.size()] if cand.size() > 0 else null
 
 func _find_most_officiated_s() -> Building:
