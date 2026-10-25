@@ -274,6 +274,10 @@ func _generate_with_stages(size: int, stages: Array) -> void:
 				_op_terrace(size, params)
 			"mountain_slopes":
 				_op_mountain_slopes(size, params)
+			"mesa_field":
+				_op_mesa_field(size, params)
+			"switchback":
+				_op_switchback(size, params)
 			"crater":
 				_op_crater(size, params)
 			"coast":
@@ -1059,6 +1063,131 @@ func _op_mountain_slopes(size: int, params: Dictionary) -> void:
 		_pass_centers.append(Vector2i(cx, ridge_top - ramp_len))
 		_pass_centers.append(Vector2i(cx, ridge_bottom + ramp_len))
 	_pass_centers.append(Vector2i(size / 2, cy))
+
+# 平顶台地群：若干座独立平顶山，山顶平坦、普通台缘是绝壁，
+# 每座台地只通过指定方向的缓坡与地面相连。参数 mesas 格式：
+# [中心x比例, 中心y比例, 半径比例, 山顶高度, [坡道角度...]]
+# 坡度越陡移速越慢，台缘无法直接上下，适合围绕高地视野与坡道做攻防。
+func _op_mesa_field(size: int, params: Dictionary) -> void:
+	var mesas: Array = params.get("mesas", [])
+	var ramp_width := maxi(2, int(params.get("ramp_width", 3)))
+	var half_w := int(ramp_width / 2.0)
+	var add_pass_feet := bool(params.get("pass_feet", false))
+	var base_ramp_len := maxi(4, int(round(float(params.get("ramp_len_frac", 0.10)) * float(size))))
+	var seed_val := custom_seed if custom_seed != 0 else randi()
+	var noise := FastNoiseLite.new()
+	noise.seed = seed_val + 1217
+	noise.frequency = 0.08
+	noise.fractal_octaves = 2
+	for m in mesas:
+		if not (m is Array) or m.size() < 4:
+			continue
+		var cx := clampi(int(round(float(m[0]) * float(size))), 2, size - 3)
+		var cy := clampi(int(round(float(m[1]) * float(size))), 2, size - 3)
+		var radius := maxf(3.0, float(m[2]) * float(size))
+		var top_h := maxf(1.5, float(m[3]))
+		var dirs: Array = m[4] if m.size() > 4 and m[4] is Array else []
+		# 坡道长度至少保证单步高差低于统一坡度阈值；否则台地会变成孤岛。
+		var max_step := RTSConfig.MAX_WALK_SLOPE * 0.8
+		var ramp_len := maxi(base_ramp_len, int(ceil(top_h / max_step)))
+
+		var x_min := maxi(0, int(floor(float(cx) - radius)) - 2)
+		var x_max := mini(size - 1, int(ceil(float(cx) + radius)) + 2)
+		var y_min := maxi(0, int(floor(float(cy) - radius)) - 2)
+		var y_max := mini(size - 1, int(ceil(float(cy) + radius)) + 2)
+		for x in range(x_min, x_max + 1):
+			for y in range(y_min, y_max + 1):
+				var r := Vector2(float(x - cx), float(y - cy)).length()
+				if r <= radius:
+					terrain_grid[x][y] = 1
+					height_grid[x][y] = top_h + noise.get_noise_2d(x, y) * 0.05
+					overlay_grid[x][y] = 0
+
+		for ang in dirs:
+			var a := deg_to_rad(float(ang))
+			var dir := Vector2(cos(a), sin(a))
+			var side := Vector2(-dir.y, dir.x)
+			for step in range(0, ramp_len + 1):
+				var r := radius + float(step)
+				var t := float(step) / float(ramp_len)
+				var h := lerpf(top_h, 0.0, t)
+				for off in range(-half_w, half_w + 1):
+					var wx := int(round(float(cx) + dir.x * r + side.x * float(off)))
+					var wy := int(round(float(cy) + dir.y * r + side.y * float(off)))
+					if wx < 0 or wy < 0 or wx >= size or wy >= size:
+						continue
+					terrain_grid[wx][wy] = 1
+					height_grid[wx][wy] = h + noise.get_noise_2d(wx, wy) * 0.015
+					overlay_grid[wx][wy] = 0
+			var foot := Vector2i(
+				int(round(float(cx) + dir.x * float(radius + ramp_len))),
+				int(round(float(cy) + dir.y * float(radius + ramp_len))))
+			if add_pass_feet:
+				_pass_centers.append(foot)
+		_pass_centers.append(Vector2i(cx, cy))
+
+# 盘山道：中央三重台地，台缘是绝壁，只有指定角度上的长坡能缓慢上山。
+# 坡面从山脚连续抬升到山顶，跨越所有台层；普通台层之间高差超过可走坡度，
+# 因此想上高地只能走坡道，适合做高地争夺与绕后截断。
+func _op_switchback(size: int, params: Dictionary) -> void:
+	var center_x := float(params.get("center_x", 0.5))
+	var center_y := float(params.get("center_y", 0.5))
+	var cx := float(size) * center_x
+	var cy := float(size) * center_y
+	var outer_r := maxf(6.0, float(params.get("outer_radius_frac", 0.30)) * float(size))
+	var top_r := maxf(2.0, float(params.get("top_radius_frac", 0.08)) * float(size))
+	if top_r >= outer_r - 2.0:
+		top_r = maxf(2.0, outer_r - 2.0)
+	var top_h := maxf(2.0, float(params.get("top_height", 8.0)))
+	# 坡道单步高差不能超过统一阈值；台地过高时自动把山顶压低到可走范围。
+	var max_step := RTSConfig.MAX_WALK_SLOPE * 0.8
+	if top_h / maxf(outer_r - top_r, 1.0) > max_step:
+		top_h = (outer_r - top_r) * max_step
+	var tiers := maxi(1, int(params.get("tiers", 3)))
+	var step_h := top_h / float(tiers)
+	var ramp_angles: Array = params.get("ramp_angles", [90, 270])
+	var ramp_width := maxi(2, int(params.get("ramp_width", 4)))
+	var half_w := float(ramp_width) * 0.5
+	var seed_val := custom_seed if custom_seed != 0 else randi()
+	var noise := FastNoiseLite.new()
+	noise.seed = seed_val + 4409
+	noise.frequency = 0.07
+	noise.fractal_octaves = 2
+	for x in range(size):
+		for y in range(size):
+			var dx := float(x) - cx
+			var dy := float(y) - cy
+			var r := sqrt(dx * dx + dy * dy)
+			if r > outer_r + 1.0:
+				continue
+			var h := 0.0
+			var terrain := 0
+			if r <= top_r:
+				h = top_h
+				terrain = 1
+			elif r <= outer_r:
+				var t := clampf((outer_r - r) / maxf(outer_r - top_r, 1.0), 0.0, 1.0)
+				var tier := clampi(int(ceil(t * float(tiers))), 1, tiers)
+				h = float(tier) * step_h
+				terrain = 1
+			# 坡道：沿指定角度的长条带，从山脚 0 连续升到山顶，覆盖所有台层。
+			for ang in ramp_angles:
+				var a := deg_to_rad(float(ang))
+				var perp := absf(-sin(a) * dx + cos(a) * dy)
+				if perp <= half_w and r >= top_r - 0.1:
+					var t := clampf((outer_r - r) / maxf(outer_r - top_r, 1.0), 0.0, 1.0)
+					h = top_h * t
+					terrain = 1
+					break
+			terrain_grid[x][y] = terrain
+			height_grid[x][y] = h + noise.get_noise_2d(x, y) * 0.02 if terrain == 1 else 0.0
+			overlay_grid[x][y] = 0
+	_pass_centers.append(Vector2i(int(round(cx)), int(round(cy))))
+	for ang in ramp_angles:
+		var a := deg_to_rad(float(ang))
+		_pass_centers.append(Vector2i(
+			int(round(cx + cos(a) * outer_r)),
+			int(round(cy + sin(a) * outer_r))))
 
 # 环形山：地图中心一圈环形山壁，四个方向各开一处山口；山心是聚金洼地，
 # 全图金矿只落在四处山口与山心，逼双方为"进坑"还是"守口"做选择

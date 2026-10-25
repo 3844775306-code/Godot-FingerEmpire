@@ -616,6 +616,84 @@ const PRESETS := {
 		"chips": ["三处缓坡", "山顶高地视野", "绝壁不可上下"],
 		"recommended": "1v1 / 2v2 / 3v3",
 	},
+	# 云顶台原：五座平顶台地错落分布，台缘绝壁、山顶缓坡，围绕高地视野与坡道入口争夺
+	"cloud_mesa": {
+		"id": "cloud_mesa",
+		"name": "云顶台原",
+		"battle": "蒙吉萨 1177",
+		"desc": "五座平顶台地散布全图，普通的台缘都是无法上下的绝壁，只有少数几条长坡能缓慢登顶。山顶视野开阔，但上坡耗时、下崖无路，围绕坡道入口与高地金矿的争夺决定战局。",
+		"stages": [
+			["noise_base", {"freq": 0.032, "octaves": 3, "mountain_threshold": 1.1, "water_threshold": -1.2}],
+			["mesa_field", {"ramp_width": 3, "ramp_len_frac": 0.10, "pass_feet": false, "mesas": [
+				[0.5, 0.5, 0.105, 5.0, [0, 90, 180, 270]],
+				[0.25, 0.28, 0.062, 3.2, [45, 225]],
+				[0.75, 0.28, 0.062, 3.2, [135, 315]],
+				[0.25, 0.72, 0.062, 3.2, [135, 315]],
+				[0.75, 0.72, 0.062, 3.2, [45, 225]],
+			]}],
+		],
+		"castle_layout": {"type": "mirror_z", "anchors": [[0.5, 0.14], [0.5, 0.86]], "flat_radius": 6},
+		"palette": {
+			"plain_low": [0.28, 0.39, 0.20],
+			"plain_high": [0.53, 0.57, 0.32],
+			"mountain_low": [0.42, 0.37, 0.28],
+			"mountain_high": [0.70, 0.66, 0.55],
+		},
+		"resources": {"gold": 1.0, "wood": 1.0, "stone": 1.1, "gold_at_passes": true, "wood_near": "any", "stone_near": "any"},
+		"modifiers": {"high_ground_vision": 0.25, "high_ground_min": 2.5},
+		"reachable_only": true,
+		"chips": ["五座平顶台地", "台缘绝壁", "长坡慢行", "高地视野 +25%"],
+		"recommended": "1v1 / 2v2 / 3v3",
+	},
+	# 双台要塞：南北两座大型平顶台地夹住中央谷地，各自东西两条长坡；出生点在东西两侧
+	"twin_mesa": {
+		"id": "twin_mesa",
+		"name": "双台要塞",
+		"battle": "阿莱西亚 52 BC",
+		"desc": "南北两座大型平顶台地夹出中央谷地，两座台地各只有东西两条长坡可以上山。出生点分列东西，谁先控制台顶，谁就能用高地视野俯瞰中央通道并威胁对方侧翼。",
+		"stages": [
+			["noise_base", {"freq": 0.032, "octaves": 3, "mountain_threshold": 1.1, "water_threshold": -1.2}],
+			["mesa_field", {"ramp_width": 4, "ramp_len_frac": 0.11, "pass_feet": true, "mesas": [
+				[0.5, 0.30, 0.115, 5.5, [0, 180]],
+				[0.5, 0.70, 0.115, 5.5, [0, 180]],
+			]}],
+		],
+		"castle_layout": {"type": "mirror_x", "anchors": [[0.15, 0.5], [0.85, 0.5]], "spread": 0.16, "flat_radius": 6},
+		"palette": {
+			"plain_low": [0.30, 0.38, 0.19],
+			"plain_high": [0.57, 0.55, 0.30],
+			"mountain_low": [0.45, 0.38, 0.29],
+			"mountain_high": [0.72, 0.66, 0.54],
+		},
+		"resources": {"gold": 1.05, "wood": 1.0, "stone": 1.15, "gold_at_passes": true, "wood_near": "any", "stone_near": "any"},
+		"modifiers": {"high_ground_vision": 0.25, "high_ground_min": 3.0},
+		"reachable_only": true,
+		"chips": ["南北双台", "东西长坡", "中央谷地", "高地视野 +25%"],
+		"recommended": "1v1 / 2v2",
+	},
+	# 盘山古道：中央三重台地，台缘是绝壁，只有南北两条连续长坡通往山顶
+	"switchback": {
+		"id": "switchback",
+		"name": "盘山古道",
+		"battle": "崤之战 627 BC",
+		"desc": "中央山体分成三重台地，层与层之间都是无法直接攀爬的绝壁，只有南北两条盘山长坡能一路缓行到顶。坡道又长又慢，绕行山脚则路程更远；抢坡、封坡与山顶视野是这张图的核心。",
+		"stages": [
+			["noise_base", {"freq": 0.032, "octaves": 3, "mountain_threshold": 1.1, "water_threshold": -1.2}],
+			["switchback", {"outer_radius_frac": 0.30, "top_radius_frac": 0.085, "top_height": 9.0, "tiers": 3, "ramp_width": 4, "ramp_angles": [90, 270]}],
+		],
+		"castle_layout": {"type": "mirror_z", "anchors": [[0.5, 0.12], [0.5, 0.88]], "flat_radius": 5},
+		"palette": {
+			"plain_low": [0.27, 0.36, 0.18],
+			"plain_high": [0.50, 0.53, 0.28],
+			"mountain_low": [0.41, 0.34, 0.27],
+			"mountain_high": [0.70, 0.62, 0.48],
+		},
+		"resources": {"gold": 1.1, "wood": 1.0, "stone": 1.25, "gold_at_passes": true, "wood_near": "any", "stone_near": "any"},
+		"modifiers": {"high_ground_vision": 0.30, "high_ground_min": 3.5},
+		"reachable_only": true,
+		"chips": ["三重台地", "南北盘山道", "台缘绝壁", "高地视野 +30%"],
+		"recommended": "1v1 / 2v2 / 3v3",
+	},
 }
 
 static func has_preset(id: String) -> bool:
