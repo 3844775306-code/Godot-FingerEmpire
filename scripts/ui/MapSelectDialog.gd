@@ -32,9 +32,10 @@ func _build() -> void:
 	var per_row := 4
 	var card_w := 400.0
 	var card_h := 400.0
+	var content_pad := 10.0
 
 	if mobile:
-		# 手机：尺寸全部走 dp、字号走 font_dp；卡片数量多（二十多张），中段用 ScrollContainer 竖向滚动，
+		# 手机：尺寸全部走 dp、字号走 font_dp；卡片数量多（三十多张），中段用 ScrollContainer 竖向滚动，
 		# 否则固定高度下每张卡只能分到很扁的一条，字再大也看不清。
 		gap = UILayout.dp(8.0)
 		header_h = UILayout.dp(52.0)
@@ -50,30 +51,23 @@ func _build() -> void:
 		panel_w = max_w
 		panel_h = minf(header_h + content_h + footer_h, max_h)
 	else:
-		# 桌面：先按可用高度定"最多几行"，再据此决定每行张数与卡宽，
-		# 卡片内容按 400 高设计，高度不足时整体缩小，保证整块面板不溢出视口
-		var max_panel_w := minf(1720.0, vp.x - 60.0)
-		var max_panel_h := maxf(520.0, vp.y - 24.0)
-		var rows: int = int(ceil(float(ids.size()) / float(per_row)))
-		var found := false
-		while card_h >= 240.0:
-			var rows_max := maxi(1, int(floor((max_panel_h - 128.0 + gap) / (card_h + gap))))
-			var pr := maxi(4, int(ceil(float(ids.size()) / float(rows_max))))
-			var cw := (max_panel_w - float(pr - 1) * gap) / float(pr)
-			if cw >= 130.0 and cw >= minf(card_h * 0.5, 300.0):
-				per_row = pr
-				rows = int(ceil(float(ids.size()) / float(per_row)))
-				card_w = minf(400.0, cw)
-				found = true
-				break
-			card_h -= 20.0
-		if not found:
-			per_row = 4
-			rows = int(ceil(float(ids.size()) / float(per_row)))
-			card_w = minf(400.0, (max_panel_w - float(per_row - 1) * gap) / float(per_row))
-			card_h = 300.0
-		panel_w = float(per_row) * card_w + float(per_row - 1) * gap
-		panel_h = header_h + float(rows) * card_h + float(rows - 1) * gap + footer_h
+		# 桌面：固定卡片/字号尺寸，不再为了塞下所有地图而缩小卡片。
+		# 地图更多时只增加滚动行数，避免卡片越挤越小、文字被裁切。
+		var max_panel_w := maxf(360.0, minf(1720.0, vp.x - 60.0))
+		var max_panel_h := maxf(420.0, vp.y - 24.0)
+		var min_card_w := 340.0
+		# 预留垂直滚动条宽度，避免最右列被滚动条压住
+		var scrollbar_gutter := 16.0
+		var usable_w: float = max_panel_w - content_pad * 2.0 - scrollbar_gutter
+		per_row = clampi(int(floor((usable_w + gap) / (min_card_w + gap))), 1, 4)
+		card_w = minf(400.0, (usable_w - float(per_row - 1) * gap) / float(per_row))
+		card_w = maxf(240.0, card_w)
+		card_h = 400.0
+		panel_w = float(per_row) * card_w + float(per_row - 1) * gap \
+				+ content_pad * 2.0 + scrollbar_gutter
+		var visible_rows: int = clampi(int(floor(
+			(max_panel_h - header_h - footer_h + gap) / (card_h + gap))), 1, 3)
+		panel_h = header_h + float(visible_rows) * card_h + float(visible_rows - 1) * gap + footer_h
 
 	var panel = Panel.new()
 	var panel_pos_y: float = maxf(0.0, (vp.y - panel_h) * 0.5) if mobile else maxf(16.0, (vp.y - panel_h) * 0.5)
@@ -95,6 +89,8 @@ func _build() -> void:
 
 	var hint = Label.new()
 	hint.text = "特殊地形支持 1V1 / 2V2 / 3V3；地形会改变视野、移速与资源分布"
+	if not mobile:
+		hint.text += " · 滚轮滚动查看全部"
 	hint.position = Vector2(0, UILayout.dp(27.0) if mobile else 66)
 	hint.size = Vector2(panel_w, UILayout.dp(18.0) if mobile else 26)
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -118,12 +114,23 @@ func _build() -> void:
 			card.custom_minimum_size = Vector2(card_w, card_h)
 			grid.add_child(card)
 	else:
-		var start_x := (panel_w - float(per_row) * card_w - float(per_row - 1) * gap) * 0.5
+		# 桌面同样用滚动网格：一屏显示 1~3 行，地图再多也只向下滚动，卡片尺寸和字号不变
+		var scroll := ScrollContainer.new()
+		scroll.position = Vector2(content_pad, header_h)
+		scroll.size = Vector2(panel_w - content_pad * 2.0, maxf(120.0, panel_h - header_h - footer_h))
+		scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+		scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+		panel.add_child(scroll)
+		var grid := GridContainer.new()
+		grid.columns = per_row
+		grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		grid.add_theme_constant_override("h_separation", int(gap))
+		grid.add_theme_constant_override("v_separation", int(gap))
+		scroll.add_child(grid)
 		for i in range(ids.size()):
-			var col := i % per_row
-			var row: int = int(i / per_row)
-			var pos := Vector2(start_x + float(col) * (card_w + gap), header_h + float(row) * (card_h + gap))
-			panel.add_child(_make_map_card(String(ids[i]), pos, Vector2(card_w, card_h)))
+			var card = _make_map_card(String(ids[i]), Vector2.ZERO, Vector2(card_w, card_h))
+			card.custom_minimum_size = Vector2(card_w, card_h)
+			grid.add_child(card)
 
 	var close = Button.new()
 	close.text = "✕"
@@ -141,10 +148,10 @@ func _make_map_card(id: String, pos: Vector2, card_size: Vector2) -> Control:
 	var selected := id == GameSettings.map_id
 	var cw := card_size.x
 	var thumb_size := minf(cw - 100.0, 200.0)
-	var fs_name := 24
-	var fs_battle := 16
+	var fs_name := 26
+	var fs_battle := 17
 	var fs_chips := 15
-	var fs_desc := 14
+	var fs_desc := 15
 	var pad := 10.0
 	var thumb_top := 14.0
 	var name_h := 34.0
