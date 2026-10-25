@@ -2699,7 +2699,9 @@ func _release_wall_guard(unit) -> void:
 	unit.remove_meta("ai_wall_guard")
 	unit.remove_meta(WALL_GUARD_SLOT_META)
 	unit.hold_position = false
-	if unit.current_order == "move":
+	# 城墙被拆时不管当前是在赶路还是正在攻击，都立即清空战斗状态；
+	# 否则单位会带着旧的 attack 目标继续追出去，看起来像“守墙兵弃墙”。
+	if unit.has_method("stop_movement"):
 		unit.stop_movement()
 
 func _deploy_ranged_units_to_walls() -> void:

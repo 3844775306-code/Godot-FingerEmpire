@@ -880,6 +880,22 @@ func _skip_near_castle_active(unit, castle) -> bool:
 	var target = unit.current_target
 	return target != null and is_instance_valid(target)
 
+# 城墙优先保留远程兵：守墙逻辑每 30 秒才巡检一次，守军快速补员
+# 不能在这之前把刚生产出来的远程兵全部收进主城，否则城墙会长期空着。
+func _has_valid_walls() -> bool:
+	for b in ai.battle.entities.get_children():
+		if b is Building and int(b.entity_id) == 27 and b.health > 0 and b.build_timer <= 0.0 \
+				and ai.entity_belongs_to_me(b):
+			return true
+	return false
+
+func _reserve_ranged_for_wall(unit, walls_exist: bool) -> bool:
+	if not walls_exist or unit == null or not is_instance_valid(unit):
+		return false
+	if not ai.has_method("_is_ranged_wall_candidate") or not ai._is_ranged_wall_candidate(unit):
+		return false
+	return true
+
 func _manage_home_guard(castle, delta: float) -> void:
 	_guard_timer -= delta
 	if _guard_timer > 0.0:
@@ -892,6 +908,7 @@ func _manage_home_guard(castle, delta: float) -> void:
 		return
 	var now: float = float(ai.battle.game_time)
 	var is_defending: bool = _defense_mode_active()
+	var walls_exist: bool = _has_valid_walls()
 	var desired: int = 0
 	if now < _force_guard_until:
 		desired = own.size()
@@ -946,6 +963,9 @@ func _manage_home_guard(castle, delta: float) -> void:
 		)
 		if has_active_task and threat_level < 3 and not _home_guard_ids.has(uid):
 			continue
+		# 城墙优先保留远程兵；已经在守军名单里的单位不受影响。
+		if not _home_guard_ids.has(uid) and _reserve_ranged_for_wall(u, walls_exist):
+			continue
 		# 已经在执行主攻的单位不能再被拉回主城驻扎；否则 attack_move 会被守军调度覆盖
 		if threat_level < 2 and (u.is_attack_moving or u.current_order == "attack_move"):
 			continue
@@ -991,6 +1011,7 @@ func _quick_fill_home_guard(castle, delta: float) -> void:
 	var own: Array = _land_combat_units()
 	if own.is_empty():
 		return
+	var walls_exist: bool = _has_valid_walls()
 	own.sort_custom(func(a, b):
 		return a.global_position.distance_squared_to(castle.global_position) < b.global_position.distance_squared_to(castle.global_position)
 	)
@@ -1007,6 +1028,8 @@ func _quick_fill_home_guard(castle, delta: float) -> void:
 		if not u.command_queue.is_empty() or u.garrison_point != Vector3.ZERO:
 			continue
 		if _is_local_building_defender(u, float(ai.battle.game_time)):
+			continue
+		if _reserve_ranged_for_wall(u, walls_exist):
 			continue
 		_assign_guard(u, rally)
 

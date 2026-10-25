@@ -510,7 +510,7 @@ func cancel_combat_orders() -> void:
 	_clear_combat_destination()
 	_defense_return_position = Vector3.ZERO
 	remove_meta("ai_building_defense_until")
-	combat_state = CombatState.IDLE
+	_set_combat_state(CombatState.IDLE)
 	_target_lost_since_ms = 0
 	if _movement:
 		_movement.stop()
@@ -522,6 +522,9 @@ func set_combat_advance_enabled(enabled: bool) -> void:
 	is_attack_moving = enabled
 	if not enabled:
 		if combat_state == CombatState.ADVANCE:
+			_clear_combat_destination()
+			if _movement:
+				_movement.stop()
 			_set_combat_state(CombatState.IDLE)
 	elif combat_destination != Vector3.ZERO:
 		_set_combat_state(CombatState.ADVANCE)
@@ -552,6 +555,7 @@ func _set_combat_target(target, from_advance: bool = false) -> void:
 	_retarget_timer = _retarget_interval(_cached_bm)
 	_attack_watch_target_id = target.get_instance_id()
 	_attack_stall_time = 0.0
+	_target_validate_timer = TARGET_VALIDATE_INTERVAL
 	_set_combat_state(CombatState.ATTACK if _combat_edge_distance(target) <= attack_range else CombatState.PURSUE)
 
 func _combat_leash_radius() -> float:
@@ -569,7 +573,8 @@ func _clear_stale_defense_anchor() -> void:
 		_defense_return_position = Vector3.ZERO
 
 func _start_combat_march(pos: Vector3) -> void:
-	_clear_stale_defense_anchor()
+	_defense_return_position = Vector3.ZERO
+	remove_meta("ai_building_defense_until")
 	current_target = null
 	combat_destination = pos
 	combat_resume_destination = Vector3.ZERO
@@ -582,7 +587,8 @@ func _start_combat_march(pos: Vector3) -> void:
 		_movement.set_move_target(pos)
 
 func _start_combat_advance(pos: Vector3) -> void:
-	_clear_stale_defense_anchor()
+	_defense_return_position = Vector3.ZERO
+	remove_meta("ai_building_defense_until")
 	current_target = null
 	combat_destination = pos
 	combat_resume_destination = Vector3.ZERO
@@ -599,6 +605,8 @@ func _finish_combat_move() -> void:
 	_clear_combat_destination()
 	_set_combat_state(CombatState.IDLE)
 	current_target = null
+	is_attack_moving = false
+	attack_move_target = Vector3.ZERO
 	if _movement:
 		_movement.stop()
 	if _current_move_queued and _visual_waypoints.size() > 0:
@@ -634,6 +642,8 @@ func _return_to_garrison() -> void:
 
 func _on_combat_target_lost() -> void:
 	current_target = null
+	is_attack_moving = false
+	attack_move_target = Vector3.ZERO
 	_target_lost_since_ms = 0
 	_attack_watch_target_id = -1
 	_attack_stall_time = 0.0
@@ -679,10 +689,8 @@ func _release_invalid_wall_guard() -> bool:
 	remove_meta("ai_wall_guard")
 	remove_meta("ai_wall_guard_slot")
 	hold_position = false
-	if current_order == "move" and _movement:
-		_movement.stop()
-	current_target = null
-	_set_combat_state(CombatState.IDLE)
+	# 城墙失效后立即停步并清空目标/队列；只清 meta 会让单位带着旧路径滑出城墙。
+	stop_movement()
 	return true
 
 # 目标是否已经失效：节点被释放或血量归零（死亡动画期间节点仍可能存在）。
@@ -1202,7 +1210,7 @@ func _check_attack_approach(delta: float, bm: RTSBattleManager, preserve_attack_
 # 军事单位的每帧入口。旧的 _process_action 继续只服务农民/商队/官员等非战斗单位。
 func _process_combat_frame(delta, bm) -> void:
 	_release_invalid_wall_guard()
-	_process_combat_target_cleanup(bm)
+	_process_combat_target_cleanup(delta, bm)
 	_process_combat_action(delta, bm)
 	var stationary_in_range := false
 	if combat_state == CombatState.ATTACK and current_target != null \
@@ -1242,10 +1250,17 @@ func _process_combat_frame(delta, bm) -> void:
 		_movement.apply_collision(delta)
 	_tick_think(delta, bm)
 
-func _process_combat_target_cleanup(bm) -> void:
+func _process_combat_target_cleanup(delta, bm) -> void:
 	if current_target != null and (_is_target_gone(current_target) or not _is_target_team_valid(current_target)):
 		_on_combat_target_lost()
 		return
+	# 上墙/上船/招降等状态变化不需要每帧做完整攻击类型校验，0.5 秒一次足够。
+	_target_validate_timer -= delta
+	if current_target != null and _target_validate_timer <= 0.0:
+		_target_validate_timer = TARGET_VALIDATE_INTERVAL
+		if not _is_target_attackable_now(current_target):
+			_on_combat_target_lost()
+			return
 	if current_target == null and (combat_state == CombatState.PURSUE or combat_state == CombatState.ATTACK):
 		_on_combat_target_lost()
 		return
@@ -1297,6 +1312,8 @@ func _process_combat_march() -> void:
 
 func _process_combat_advance(delta, bm) -> void:
 	if combat_destination == Vector3.ZERO:
+		is_attack_moving = false
+		attack_move_target = Vector3.ZERO
 		_set_combat_state(CombatState.IDLE)
 		return
 	if _movement.move_path_failed:
@@ -3331,6 +3348,14 @@ func _clear_garrison():
 func set_garrison(pos: Vector3):
 	if not _is_military(): return
 	garrison_point = pos
+	# 驻扎会接管单位去向，旧的攻击移动续接点必须清掉；否则目标丢失后
+	# 会越过驻扎点跑回之前的推进终点。
+	if _uses_combat_state():
+		combat_resume_destination = Vector3.ZERO
+		combat_resume_advance = false
+		if combat_state == CombatState.ADVANCE:
+			_clear_combat_destination()
+			_set_combat_state(CombatState.IDLE)
 	_show_garrison_marker()
 
 func _show_garrison_marker():
