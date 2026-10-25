@@ -382,15 +382,18 @@ func process_move(delta, bm: RTSBattleManager):
 			var wall_b = bm._wall_entity_grid.get(gpos2)
 			if wall_b:
 				if wall_b.team == _army.team:
-					target_height += 4.5  # friendly wall
+					target_height += RTSBattleManager.WALL_TOP_HEIGHT  # friendly wall
 				elif _has_adjacent_ladder(bm, gpos2, _army.team):
-					target_height += 4.5  # laddered enemy wall
+					target_height += RTSBattleManager.WALL_TOP_HEIGHT  # laddered enemy wall
 			_army.global_position.y = move_toward(_army.global_position.y, target_height, 5.0 * delta)
 
 # ==================== Collision separation ====================
 
 func apply_collision(delta):
 	blocking_building = null
+	# 墙顶空间很小，守墙单位之间不能再按地面半径互相推挤，否则会被推下墙格。
+	if _army.has_meta("ai_wall_guard") and _army._is_unit_on_wall():
+		return
 	var bm = _army._get_bm()
 	if bm == null:
 		return

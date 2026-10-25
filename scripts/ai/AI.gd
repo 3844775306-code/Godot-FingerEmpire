@@ -115,6 +115,7 @@ const WALL_GUARD_MODE_META: String = "ai_wall_guard_mode"
 const WALL_GUARD_TARGET_META: String = "ai_wall_guard_target"
 const WALL_GUARD_SMALL_META: String = "ai_wall_guard_small"
 const WALL_GUARD_SLOT_META: String = "ai_wall_guard_slot"
+const WALL_GUARD_POS_META: String = "ai_wall_guard_pos"
 const WALL_GUARD_SMALL_BODY: float = 0.5
 var _wall_deploy_timer: float = 0.0
 var defense_wall_axis: Vector3 = Vector3.RIGHT
@@ -2657,13 +2658,16 @@ func _is_ranged_wall_candidate(e) -> bool:
 func _assign_wall_guard(unit, wall, slot: int = 0, count: int = 1) -> void:
 	unit.set_meta("ai_wall_guard", wall.get_instance_id())
 	unit.set_meta(WALL_GUARD_SLOT_META, slot)
+	unit.set_meta(WALL_GUARD_POS_META, _wall_guard_slot_position(wall, slot, count))
 	unit.hold_position = true
 	# 同一个墙格可能安排 2~3 个小型远程兵，用槽位错开站位；
-	# MovementController 会在进入墙格后自动把高度抬到墙顶。
+	# 抵达墙脚后由 Army 负责把单位抬到墙顶。
 	_order_wall_move(unit, wall, slot, count)
 
 func _order_wall_move(unit, wall, slot: int = 0, count: int = 1) -> void:
 	var target_pos: Vector3 = _wall_guard_slot_position(wall, slot, count)
+	# 记录精确落点：Army 抵达墙脚后要靠它判断上墙位置和槽位偏移。
+	unit.set_meta(WALL_GUARD_POS_META, target_pos)
 	# 城墙刚补建/刚完成时，单位可能曾把该墙格记为不可达；不清掉的话会永远站在原地。
 	if unit._movement:
 		unit._movement.clear_blacklist_at(target_pos)
@@ -2706,6 +2710,7 @@ func _release_wall_guard(unit) -> void:
 		return
 	unit.remove_meta("ai_wall_guard")
 	unit.remove_meta(WALL_GUARD_SLOT_META)
+	unit.remove_meta(WALL_GUARD_POS_META)
 	unit.hold_position = false
 	# 城墙被拆时不管当前是在赶路还是正在攻击，都立即清空战斗状态；
 	# 否则单位会带着旧的 attack 目标继续追出去，看起来像“守墙兵弃墙”。

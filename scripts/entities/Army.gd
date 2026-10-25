@@ -738,6 +738,7 @@ func _release_invalid_wall_guard() -> bool:
 		return false
 	remove_meta("ai_wall_guard")
 	remove_meta("ai_wall_guard_slot")
+	remove_meta("ai_wall_guard_pos")
 	hold_position = false
 	# 城墙失效后立即停步并清空目标/队列；只清 meta 会让单位带着旧路径滑出城墙。
 	stop_movement()
@@ -3481,6 +3482,8 @@ const WALL_TOP_HEIGHT: float = 1.31
 # 不能每帧对全场单位做 world_to_grid + 字典查询；已经确认在墙上的单位才逐帧平滑。
 func _tick_wall_height(delta: float) -> void:
 	if has_meta("ai_wall_guard"):
+		# AI 守墙单位靠寻路只能走到墙脚，必须在这里完成最后的上墙动作。
+		_try_climb_assigned_wall()
 		_update_wall_height(delta)
 		return
 	_wall_height_timer -= delta
@@ -3489,6 +3492,32 @@ func _tick_wall_height(delta: float) -> void:
 		_wall_height_on_wall = _is_unit_on_wall()
 	if _wall_height_on_wall:
 		_update_wall_height(delta)
+
+# 城墙碰撞体是实心的，A* 终点虽然允许落在墙格，但 move_and_slide 会把单位顶在墙脚。
+# AI 守墙单位抵达墙脚后，直接落到预分配的墙顶槽位；槽位位置由 AI 在派兵时写入。
+func _try_climb_assigned_wall() -> bool:
+	if not has_meta("ai_wall_guard") or _is_unit_on_wall():
+		return false
+	var wall = instance_from_id(int(get_meta("ai_wall_guard")))
+	if wall == null or not is_instance_valid(wall) or not (wall is Building):
+		return false
+	if int(wall.entity_id) != 27 or wall.health <= 0 or wall.build_timer > 0.0 or wall.team != team:
+		return false
+	var slot: Vector3 = wall.global_position
+	if has_meta("ai_wall_guard_pos"):
+		var raw = get_meta("ai_wall_guard_pos")
+		if raw is Vector3:
+			slot = raw
+	var h_dist: float = Vector2(slot.x - global_position.x, slot.z - global_position.z).length()
+	var reach: float = body_radius + float(wall.body_radius) + 0.8
+	if h_dist > reach:
+		return false
+	global_position = Vector3(slot.x, float(wall.global_position.y) + WALL_TOP_HEIGHT, slot.z)
+	velocity = Vector3.ZERO
+	_wall_height_on_wall = true
+	hold_position = true
+	stop_movement()
+	return true
 
 # 单位停在墙格上后不会再走 process_move 的高度平滑，这里补一帧级修正：
 # 墙在时抬到墙顶，墙被拆掉后落回地面。只处理已经离地/正在墙格的单位，正常地面单位直接返回。
