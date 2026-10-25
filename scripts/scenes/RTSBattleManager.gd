@@ -2,9 +2,9 @@ class_name RTSBattleManager
 extends Node3D
 const BattleStatsScript = preload("res://scripts/core/BattleStats.gd")
 # 强制走程序化攻击动作的兵种：模型即使自带 attack 动画幅度也太小，看不出来
-const PROC_ATTACK_IDS = [18, 16, 17, 13, 39]
-# 开火时需要在炮口喷烟尘火光的兵种（攻城车、火炮、投石车、战船、炮艇，以及塔类）
-const MUZZLE_ATTACK_IDS = [18, 16, 17, 13, 39, 25, 26, 64]
+const PROC_ATTACK_IDS = [18, 16, 17, 59, 13, 39]
+# 开火时需要在炮口喷烟尘火光的建筑/炮台（攻城器械由 SiegeAttackFx 单独处理）
+const MUZZLE_ATTACK_IDS = [25, 26, 64]
 const BattleStatsPanelScript = preload("res://scripts/ui/BattleStatsPanel.gd")
 const MapPresets = preload("res://scripts/map/MapPresets.gd")
 var previous_emulate_mouse: bool
@@ -1854,8 +1854,14 @@ func _cached_override_material(src: Material, suffix: String):
 func _update_entity_animation(entity: GameEntity):
 	if not entity.has_meta("_model_instance"): return
 	var model = entity.get_meta("_model_instance")
+	if model is not Node3D:
+		return
+	var model3d := model as Node3D
+	# 攻城器械的死亡/清场：先停掉程序化动作并复位，避免尸体还在甩炮臂
+	if entity is Army and SiegeAttackAnim.is_siege(entity.entity_id):
+		if entity.health <= 0:
+			SiegeAttackAnim.reset(model3d)
 	var ap = model.get_node_or_null("AnimationPlayer") as AnimationPlayer
-	if not ap: return
 	var anim = ""
 	if entity.health <= 0:
 		anim = "die"
@@ -1877,7 +1883,7 @@ func _update_entity_animation(entity: GameEntity):
 	# 这些兵种即使模型自带 attack 动画也偏弱（挥动幅度很小），
 	# 统一强制走程序化动作，保证攻城/远程单位开火时一眼能看出来
 	var force_proc: bool = entity is Army and entity.entity_id in PROC_ATTACK_IDS
-	if anim != "" and ap.has_animation(anim) and not (force_proc and anim == "attack-melee-left"):
+	if ap != null and anim != "" and ap.has_animation(anim) and not (force_proc and anim == "attack-melee-left"):
 		var spd := 1.0
 		if anim == "attack-melee-left":
 			# 攻击动作按攻击冷却循环；GATHERING 也复用攻击动作，让采集有挥动反馈
@@ -1887,10 +1893,9 @@ func _update_entity_animation(entity: GameEntity):
 		ap.speed_scale = spd
 		if ap.current_animation != anim:
 			ap.play(anim)
-	elif anim == "attack-melee-left" and entity is Army and _is_entity_in_action_range(entity):
-		# 模型里没有内置攻击动画（很多单位的 GLB 只有 idle/walk）：
-		# 按兵种选不同的程序化动作，让每种攻击有各自的手感
-		_play_entity_attack_anim(entity, model)
+	elif anim == "attack-melee-left" and entity is Army and entity.entity_id in PROC_ATTACK_IDS and _is_entity_in_action_range(entity):
+		# 攻城六件套没有内置攻击动画（或幅度太小），统一走分层程序化动作
+		_play_entity_attack_anim(entity, model3d)
 
 # 判断单位是否已经进入实际出手距离。攻击/攻击移动看攻击距离，
 # 采集看资源点采集距离；还没走到时统一按走路处理。
@@ -1910,9 +1915,19 @@ func _is_entity_in_action_range(entity: Army) -> bool:
 	return false
 
 # ── 兵种专用攻击动作分发 ──
-# 18 攻城车：整台车撞门；35 长枪兵：长距离直刺；17 投石车：后仰甩臂抛石；
-# 16 火炮：开火后坐抬跳；58 连弩：高频小幅连射抖动；其余单位用通用刺击。
+# 攻城六件套由 SiegeAttackAnim 分层处理（炮臂/撞木/轮子/帆/旗 + 炮口特效）；
+# 35/58 等旧兵种保留原有程序化动作。
 func _play_entity_attack_anim(entity: Army, model: Node3D) -> void:
+	# 攻城器械统一走分层程序化动画：炮臂/撞木/轮子/帆/旗分别动，
+	# 并在出手瞬间补炮口、尘土、水花等特效。
+	if SiegeAttackAnim.is_siege(entity.entity_id):
+		SiegeAttackAnim.play(entity.entity_id, model, {
+			"target": entity.current_target,
+			"body_radius": entity.body_radius,
+			"forward": -entity.global_transform.basis.z,
+			"right": entity.global_transform.basis.x,
+		})
+		return
 	# 开火瞬间在炮口位置喷一小团亮色烟尘：车身位移在远景里容易看漏，
 	# 这个一闪而过的火光才是最容易被眼睛捕捉到的信号。0.5 秒节流避免重复刷。
 	if entity.entity_id in MUZZLE_ATTACK_IDS:
@@ -1921,20 +1936,10 @@ func _play_entity_attack_anim(entity: Army, model: Node3D) -> void:
 			entity.set_meta("_muzzle_last", now)
 			_spawn_muzzle_effect(entity)
 	match entity.entity_id:
-		18:
-			_procedural_ram_attack(model)
 		35:
 			_procedural_pike_thrust(model)
-		17:
-			_procedural_catapult_throw(model)
-		16:
-			_procedural_cannon_recoil(model)
 		58:
 			_procedural_repeater_fire(model)
-		13:
-			_procedural_warship_fire(model)
-		39:
-			_procedural_gunboat_fire(model)
 		_:
 			_procedural_attack(model)
 
@@ -2001,47 +2006,6 @@ func _procedural_pike_thrust(model: Node3D) -> void:
 		if is_instance_valid(model):
 			model.set_meta("_proc_anim_running", false))
 
-# 投石车：整机后仰蓄力，再猛地前甩抛出石弹，最后缓慢复位
-func _procedural_catapult_throw(model: Node3D) -> void:
-	if not _begin_proc_anim(model):
-		return
-	var base_pos: Vector3 = model.position
-	var base_rx: float = model.rotation.x
-	var dur: float = 1.5
-	var tw := model.create_tween()
-	# 后仰蓄力（车体后倾、略微后移）
-	tw.tween_property(model, "rotation:x", base_rx + 0.85, dur * 0.35) \
-		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-	tw.parallel().tween_property(model, "position", base_pos + Vector3(0.0, 0.0, 0.7), dur * 0.35)
-	# 前甩（甩臂瞬间）
-	tw.tween_property(model, "rotation:x", base_rx - 1.3, dur * 0.2) \
-		.set_trans(Tween.TRANS_EXPO).set_ease(Tween.EASE_IN)
-	tw.parallel().tween_property(model, "position", base_pos + Vector3(0.0, 0.0, -0.85), dur * 0.2)
-	# 缓慢复位
-	tw.tween_property(model, "rotation:x", base_rx, dur * 0.45) \
-		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	tw.parallel().tween_property(model, "position", base_pos, dur * 0.45)
-	tw.tween_callback(func():
-		if is_instance_valid(model):
-			model.set_meta("_proc_anim_running", false))
-
-# 火炮：开火瞬间整台炮被后坐力顶得后移并略微上跳，再缓缓落回
-func _procedural_cannon_recoil(model: Node3D) -> void:
-	if not _begin_proc_anim(model):
-		return
-	var base_pos: Vector3 = model.position
-	var dur: float = 0.8
-	var tw := model.create_tween()
-	# 后坐 + 抬跳
-	tw.tween_property(model, "position", base_pos + Vector3(0.0, 0.45, 1.5), dur * 0.18) \
-		.set_trans(Tween.TRANS_EXPO).set_ease(Tween.EASE_OUT)
-	# 落回原位（轻微弹跳）
-	tw.tween_property(model, "position", base_pos, dur * 0.82) \
-		.set_trans(Tween.TRANS_BOUNCE).set_ease(Tween.EASE_OUT)
-	tw.tween_callback(func():
-		if is_instance_valid(model):
-			model.set_meta("_proc_anim_running", false))
-
 # 连弩：射速极快，只用很短的小幅后坐，连发时看起来是连续"哒哒"的抖动
 func _procedural_repeater_fire(model: Node3D) -> void:
 	if not _begin_proc_anim(model):
@@ -2052,50 +2016,6 @@ func _procedural_repeater_fire(model: Node3D) -> void:
 	tw.tween_property(model, "position", base_pos + Vector3(0.0, 0.0, 0.2), dur * 0.35) \
 		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 	tw.tween_property(model, "position", base_pos, dur * 0.65) \
-		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	tw.tween_callback(func():
-		if is_instance_valid(model):
-			model.set_meta("_proc_anim_running", false))
-
-# 战船：侧舷齐射，船身轻微后坐、下沉并侧倾一下（幅度小，船在水上本来就晃）
-func _procedural_warship_fire(model: Node3D) -> void:
-	if not _begin_proc_anim(model):
-		return
-	var base_pos: Vector3 = model.position
-	var base_rz: float = model.rotation.z
-	var dur: float = 0.7
-	var tw := model.create_tween()
-	# 后坐 + 微下沉 + 侧倾
-	tw.tween_property(model, "position", base_pos + Vector3(0.0, -0.22, 0.7), dur * 0.3) \
-		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	tw.parallel().tween_property(model, "rotation:z", base_rz - 0.2, dur * 0.3) \
-		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-	# 回浮归位
-	tw.tween_property(model, "position", base_pos, dur * 0.7) \
-		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	tw.parallel().tween_property(model, "rotation:z", base_rz, dur * 0.7) \
-		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	tw.tween_callback(func():
-		if is_instance_valid(model):
-			model.set_meta("_proc_anim_running", false))
-
-# 炮艇：开炮后坐力比战船大得多，整船后退、下沉，再浮回原位
-func _procedural_gunboat_fire(model: Node3D) -> void:
-	if not _begin_proc_anim(model):
-		return
-	var base_pos: Vector3 = model.position
-	var base_rz: float = model.rotation.z
-	var dur: float = 1
-	var tw := model.create_tween()
-	# 后坐 + 明显下沉 + 侧倾
-	tw.tween_property(model, "position", base_pos + Vector3(0.0, -0.5, 1.3), dur * 0.22) \
-		.set_trans(Tween.TRANS_EXPO).set_ease(Tween.EASE_OUT)
-	tw.parallel().tween_property(model, "rotation:z", base_rz - 0.38, dur * 0.22) \
-		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	# 浮回原位（带一点弹跳，像船被涌起的浪顶回来）
-	tw.tween_property(model, "position", base_pos, dur * 0.78) \
-		.set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
-	tw.parallel().tween_property(model, "rotation:z", base_rz, dur * 0.78) \
 		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
 	tw.tween_callback(func():
 		if is_instance_valid(model):
@@ -2136,35 +2056,6 @@ func _procedural_attack(model: Node3D) -> void:
 	tw.chain().tween_callback(func():
 		if is_instance_valid(model):
 			model.set_meta("_proc_atk_running", false))
-
-# 攻城车攻击动作：整车先后拉蓄力，再猛地向前撞击，最后回弹归位。
-# 位移比普通单位大得多，配合弹性缓动，看起来像整台撞车砸在城门上。
-func _procedural_ram_attack(model: Node3D) -> void:
-	if model == null or not is_instance_valid(model):
-		return
-	if bool(model.get_meta("_proc_ram_running", false)):
-		return
-	model.set_meta("_proc_ram_running", true)
-	var base_pos: Vector3 = model.position
-	var base_rx: float = model.rotation.x
-	var dur: float = 1
-	var tw := model.create_tween()
-	# 1) 后拉蓄力
-	tw.tween_property(model, "position", base_pos + Vector3(0.0, 0.0, 0.8), dur * 0.2) \
-		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_OUT)
-	# 2) 猛地前撞（位移 0.5 米，镜头下能明显看出整台车往前顶）
-	tw.tween_property(model, "position", base_pos + Vector3(0.0, 0.0, -2.4), dur * 0.22) \
-		.set_trans(Tween.TRANS_EXPO).set_ease(Tween.EASE_IN)
-	tw.parallel().tween_property(model, "rotation:x", base_rx - 0.5, dur * 0.22) \
-		.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
-	# 3) 弹性回弹归位
-	tw.tween_property(model, "position", base_pos, dur * 0.53) \
-		.set_trans(Tween.TRANS_ELASTIC).set_ease(Tween.EASE_OUT)
-	tw.parallel().tween_property(model, "rotation:x", base_rx, dur * 0.53) \
-		.set_trans(Tween.TRANS_SINE).set_ease(Tween.EASE_IN_OUT)
-	tw.tween_callback(func():
-		if is_instance_valid(model):
-			model.set_meta("_proc_ram_running", false))
 
 func _enable_vertex_colors(node: Node):
 	for child in node.get_children():

@@ -530,9 +530,9 @@ func _process_snapshot(data: Dictionary):
 					var cam = _get_cam_pos()
 					if eid == 12 or eid == 31 or eid == 37:
 						AudioManager.play_sfx_3d("arrow_shoot", bpos, cam)
-					elif eid == 16 or eid == 39:
+					elif eid == 16 or eid == 39 or eid == 13:
 						AudioManager.play_sfx_3d("cannon_fire", bpos, cam)
-					elif eid == 17:
+					elif eid == 17 or eid == 59:
 						AudioManager.play_sfx_3d("treb_fire", bpos, cam)
 					else:
 						AudioManager.play_sfx_3d("arrow_shoot", bpos, cam)
@@ -557,9 +557,9 @@ func _process_snapshot(data: Dictionary):
 				if _is_audible(n.global_position):
 					var eid2 = _prev_bullet_ids.get(id, -1)
 					var cam = _get_cam_pos()
-					if eid2 == 16 or eid2 == 39:
+					if eid2 == 16 or eid2 == 39 or eid2 == 13:
 						AudioManager.play_sfx_3d("cannon_hit", n.global_position, cam)
-					elif eid2 == 17:
+					elif eid2 == 17 or eid2 == 59:
 						AudioManager.play_sfx_3d("treb_hit", n.global_position, cam)
 					else:
 						AudioManager.play_sfx_3d("arrow_hit", n.global_position, cam)
@@ -802,7 +802,9 @@ func _update_entity_animation(node: Node3D, info: Dictionary):
 		ap = AnimationHelper.find_player(node)
 		if ap != null:
 			node.set_meta("_anim_player", ap)
-	if not ap: return
+	# 先算出目标动作名，再决定是由 AnimationPlayer 播放还是走程序化攻城动画。
+	# 攻城模型（火炮/投石车/巨投/战船等）没有 AnimationPlayer，不能像以前那样
+	# 直接 return，否则客户端完全看不到开火动作。
 	var anim = ""
 	var ord = info.get("current_order", "")
 	if info.get("health", 0) <= 0:
@@ -816,19 +818,62 @@ func _update_entity_animation(node: Node3D, info: Dictionary):
 		anim = "walk"
 	else:
 		anim = "idle"
-	if anim != "" and ap.has_animation(anim):
-		var spd := 1.0
-		if anim == "attack-melee-left":
-			var atk_raw = info.get("attack_speed", 1.0)
-			var atk_spd := float(atk_raw) if atk_raw != null else 1.0
-			spd = AnimationHelper.attack_speed_scale(ap, anim, atk_spd)
-		elif anim == "walk":
-			var mv_raw = info.get("speed", 2.0)
-			var mv_spd := float(mv_raw) if mv_raw != null else 2.0
-			spd = clampf(mv_spd * 0.6, 0.2, 3.0)
-		ap.speed_scale = spd
-		if ap.current_animation != anim:
-			ap.play(anim)
+	var entity_id := int(info.get("entity_id", -1))
+	if ap != null:
+		if anim != "" and ap.has_animation(anim):
+			var spd := 1.0
+			if anim == "attack-melee-left":
+				var atk_raw = info.get("attack_speed", 1.0)
+				var atk_spd := float(atk_raw) if atk_raw != null else 1.0
+				spd = AnimationHelper.attack_speed_scale(ap, anim, atk_spd)
+			elif anim == "walk":
+				var mv_raw = info.get("speed", 2.0)
+				var mv_spd := float(mv_raw) if mv_raw != null else 2.0
+				spd = clampf(mv_spd * 0.6, 0.2, 3.0)
+			ap.speed_scale = spd
+			if ap.current_animation != anim:
+				ap.play(anim)
+	elif SiegeAttackAnim.is_siege(entity_id):
+		_update_client_siege_attack(node, info, anim)
+
+# 联机客户端没有服务端的 attack_timer，改用快照里的“攻击中 + 已进入距离”
+# 按攻击冷却循环播放程序化动作。每次开火的确切时刻可能有半拍误差，
+# 但视觉上足以表现攻城器械的蓄力、后坐和回位。
+func _update_client_siege_attack(node: Node3D, info: Dictionary, anim: String) -> void:
+	var model = node.get_meta("_model_instance", null) as Node3D
+	if model == null:
+		return
+	var entity_id := int(info.get("entity_id", -1))
+	if not SiegeAttackAnim.is_siege(entity_id):
+		return
+	if info.get("health", 0) <= 0:
+		SiegeAttackAnim.reset(model)
+		node.set_meta("_siege_next_ms", 0)
+		return
+	var attacking: bool = anim == "attack-melee-left"
+	if not attacking:
+		node.set_meta("_siege_next_ms", 0)
+		return
+	var now := Time.get_ticks_msec()
+	var next_ms := int(node.get_meta("_siege_next_ms", 0))
+	var atk_speed := maxf(float(info.get("attack_speed", 2.0)), 0.8)
+	if next_ms == 0:
+		# 首次进入射程时错开不超过 30% 冷却，避免整支部队同时开火
+		next_ms = now + randi_range(0, int(atk_speed * 300.0))
+	if now < next_ms:
+		node.set_meta("_siege_next_ms", next_ms)
+		return
+	var opts := {
+		"target": null,
+		"body_radius": float(info.get("body_radius", 0.8)),
+		"forward": -node.global_transform.basis.z,
+		"right": node.global_transform.basis.x,
+	}
+	if SiegeAttackAnim.play(entity_id, model, opts):
+		next_ms = now + int(atk_speed * 1000.0)
+	else:
+		next_ms = now + 250
+	node.set_meta("_siege_next_ms", next_ms)
 
 func _refresh_client_construction_visual(node: Node3D, info: Dictionary) -> void:
 	if int(info.get("type", -1)) != 1:

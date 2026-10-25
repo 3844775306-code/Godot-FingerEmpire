@@ -43,6 +43,11 @@ const PITCH_FAR_DEG: float = 78.0    # size 最大时（全景俯瞰）的相机
 const HEIGHT_AT_MIN: float = 10.0    # size 最小时相机的离地高度
 const HEIGHT_AT_MAX: float = 95.0    # size 最大时相机的离地高度
 
+# ── 镜头轻微震动（攻城器械重击/开炮时由特效层触发）──
+var _shake_left: float = 0.0
+var _shake_total: float = 0.0
+var _shake_amp: float = 0.0
+
 func _ready():
 	if projection == PROJECTION_ORTHOGONAL:
 		# 默认视野取缩放范围的中值：原来写死 30，比允许的最远视角（max_zoom 20）还大，
@@ -177,7 +182,31 @@ func pan_by_screen_delta(screen_delta: Vector2) -> void:
 	var world_per_px := size / maxf(view_h, 1.0)
 	global_translate((-_view_right() * screen_delta.x + _view_forward() * screen_delta.y) * world_per_px)
 
+# 攻城器械重击时叠加一个很小的镜头抖动；用 Camera3D 的 h/v_offset 实现，
+# 不改相机 transform，不会影响平移、缩放和跟随视角。
+func add_shake(amp: float, duration: float) -> void:
+	if amp <= 0.0 or duration <= 0.0:
+		return
+	_shake_amp = maxf(_shake_amp, amp)
+	_shake_left = maxf(_shake_left, duration)
+	_shake_total = maxf(_shake_total, duration)
+
+func _update_shake(delta: float) -> void:
+	if _shake_left <= 0.0:
+		if h_offset != 0.0 or v_offset != 0.0:
+			h_offset = 0.0
+			v_offset = 0.0
+		_shake_amp = 0.0
+		_shake_total = 0.0
+		return
+	_shake_left -= delta
+	var ratio: float = clampf(_shake_left / maxf(_shake_total, 0.001), 0.0, 1.0)
+	var current: float = _shake_amp * ratio * ratio
+	h_offset = randf_range(-current, current)
+	v_offset = randf_range(-current, current)
+
 func _process(delta):
+	_update_shake(delta)
 	# 跟随视角模式：相机位置/朝向由跟随目标决定，禁用键盘移动
 	if _follow_target:
 		_update_follow()

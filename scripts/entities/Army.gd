@@ -1400,8 +1400,9 @@ func _attack(target, delta):
 # 每秒尝试播放几千次音效，同时反复刷新动画状态。
 func _play_attack_feedback() -> void:
 	var _sfx = ""
-	if entity_id in [12, 26, 33, 13, 58]: _sfx = "arrow_shoot"
-	elif entity_id in [16, 17, 59]: _sfx = "cannon_fire" if entity_id == 16 else "treb_fire"
+	if entity_id in [12, 26, 33, 58]: _sfx = "arrow_shoot"
+	elif entity_id == 16 or entity_id in [13, 39]: _sfx = "cannon_fire"
+	elif entity_id in [17, 59]: _sfx = "treb_fire"
 	elif entity_id in [15]: _sfx = "sword_swing"
 	elif entity_id in [11, 30, 49, 18, 35]: _sfx = "heavy_swing"
 	elif entity_id in [38, 40]: _sfx = "sword_swing"
