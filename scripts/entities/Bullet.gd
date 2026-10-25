@@ -97,12 +97,12 @@ func _spawn_impact_effect(pos: Vector3, big: bool) -> void:
 	p.initial_velocity_max = 6.5 if big else 4.5
 	p.gravity = Vector3(0.0, -14.0, 0.0)
 	p.scale_amount_min = 1.0
-	p.scale_amount_max = 1.7 if big else 1.3
+	p.scale_amount_max = 1.4 if big else 1.2
 	var mesh := SphereMesh.new()
 	# 注意：scale_amount 是相对网格尺寸的倍率，不是绝对大小。
 	# 之前网格半径只有 0.13，再乘 0.18 的倍率实际直径才 5 厘米，几乎看不见。
-	mesh.radius = 0.17 if big else 0.13
-	mesh.height = 0.34 if big else 0.26
+	mesh.radius = 0.12 if big else 0.09
+	mesh.height = 0.24 if big else 0.18
 	var mat := StandardMaterial3D.new()
 	if big:
 		# 石头：白色碎屑，带一点自发光，阴影里也能看清
@@ -118,9 +118,12 @@ func _spawn_impact_effect(pos: Vector3, big: bool) -> void:
 		mat.emission_enabled = false
 	mesh.material = mat
 	p.mesh = mesh
-	parent.add_child(p)
+	# 顺序很关键：先设好 position 再 add_child，并且延迟一帧才开始发射。
+	# CPUParticles3D 在同一帧里 transform 还没同步，直接用 emitting = true
+	# 会用旧位置（原点，也就是地图正中央）发射第一批粒子。
 	p.position = pos
-	p.emitting = true
+	parent.add_child(p)
+	p.set_deferred("emitting", true)
 	get_tree().create_timer(1.4).timeout.connect(func():
 		if is_instance_valid(p):
 			p.queue_free())
@@ -140,8 +143,8 @@ func _spawn_impact_effect(pos: Vector3, big: bool) -> void:
 	fmesh.material = fmat
 	flash.mesh = fmesh
 	flash.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	parent.add_child(flash)
 	flash.position = pos
+	parent.add_child(flash)
 	var ftw := flash.create_tween()
 	ftw.set_parallel(true)
 	ftw.tween_property(flash, "scale", Vector3(2.2, 2.2, 2.2), 0.22) \
@@ -168,8 +171,8 @@ func _spawn_impact_effect(pos: Vector3, big: bool) -> void:
 	# TorusMesh 默认就平躺在 XZ 平面上（环轴朝上），不要再绕 X 轴旋转，
 	# 否则冲击环会立起来变成竖直的一圈。
 	ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	parent.add_child(ring)
 	ring.position = Vector3(pos.x, pos.y + 0.06, pos.z)
+	parent.add_child(ring)
 	var rtw := ring.create_tween()
 	rtw.set_parallel(true)
 	rtw.tween_property(ring, "scale", Vector3(3.2 if big else 2.2, 1.0, 3.2 if big else 2.2), 0.4) \
@@ -184,8 +187,8 @@ func _spawn_impact_effect(pos: Vector3, big: bool) -> void:
 	light.light_color = Color(1.0, 0.75, 0.4)
 	light.light_energy = 6.0 if big else 3.5
 	light.omni_range = 6.0 if big else 4.0
-	parent.add_child(light)
 	light.position = pos + Vector3.UP * 0.5
+	parent.add_child(light)
 	var ltw := light.create_tween()
 	ltw.tween_property(light, "light_energy", 0.0, 0.3)
 	ltw.chain().tween_callback(func():
