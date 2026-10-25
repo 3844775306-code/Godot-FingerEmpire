@@ -513,6 +513,11 @@ func cancel_combat_orders() -> void:
 	_clear_combat_destination()
 	_defense_return_position = Vector3.ZERO
 	remove_meta("ai_building_defense_until")
+	# 清除命令时也必须退出攻击移动，否则 is_attack_moving 会一直为 true，
+	# AI 和自动进攻会把这支已经停下的部队当成仍在执行任务。
+	is_attack_moving = false
+	attack_move_target = Vector3.ZERO
+	_attack_move_search_timer = 0.0
 	_set_combat_state(CombatState.IDLE)
 	_target_lost_since_ms = 0
 	if _movement:
