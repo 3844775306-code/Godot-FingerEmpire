@@ -3312,6 +3312,10 @@ func _is_unit_on_wall() -> bool:
 		return false
 	return wall.health > 0 and wall.build_timer <= 0.0 and wall.team == team
 
+# 城墙模型 wall.glb 的顶面高度：模型底面在局部 y=0、顶面在 1.31 米。
+# 与 RTSBattleManager.WALL_TOP_HEIGHT 必须保持一致，两处改了要同步。
+const WALL_TOP_HEIGHT: float = 1.31
+
 # 单位停在墙格上后不会再走 process_move 的高度平滑，这里补一帧级修正：
 # 墙在时抬到墙顶，墙被拆掉后落回地面。只处理已经离地/正在墙格的单位，正常地面单位直接返回。
 func _update_wall_height(delta: float) -> void:
@@ -3326,7 +3330,9 @@ func _update_wall_height(delta: float) -> void:
 	var on_wall: bool = wall != null and is_instance_valid(wall) and wall.health > 0 and wall.build_timer <= 0.0
 	var target_y: float = ground_y
 	if on_wall:
-		target_y = ground_y + 4.5
+		# 站到城墙顶面上。这里原本硬编码 +4.5，比真实墙高（1.31 米）高出三米多，
+		# 单位看起来就是凭空吊在墙上方，所以改成按城墙实体位置 + 模型高度算。
+		target_y = wall.global_position.y + WALL_TOP_HEIGHT
 	elif global_position.y <= ground_y + 0.8:
 		return
 	global_position.y = move_toward(global_position.y, target_y, 5.0 * delta)
