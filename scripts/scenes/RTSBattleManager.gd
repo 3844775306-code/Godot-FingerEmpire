@@ -1752,6 +1752,8 @@ func _apply_entity_model(entity: GameEntity) -> bool:
 	if current_size > 0.01:
 		scale_factor = target_size / current_size * RTSConfig.get_model_scale(entity.entity_id)
 		model_instance.scale = Vector3.ONE * scale_factor
+	# 打个标记，让 Army 能稳定取到自己的模型根节点（不能按名字找：名字来自 GLB）
+	model_instance.set_meta("entity_model", true)
 	entity.add_child(model_instance)
 	_ensure_model_shadows(model_instance)
 	# 特殊朝向调整

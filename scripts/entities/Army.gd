@@ -267,8 +267,10 @@ func _update_walk_dust(delta: float) -> void:
 	if not moving:
 		_trail_step_accum = 0.0
 		_visual_speed = move_toward(_visual_speed, 0.0, delta * 8.0)
+		_update_siege_walk(delta)
 		return
 	_visual_speed = lerpf(_visual_speed, moved / maxf(delta, 0.001), clampf(delta * 10.0, 0.0, 1.0))
+	_update_siege_walk(delta)
 
 	var vehicle: bool = entity_id in [5, 6, 16, 17, 18, 59]
 	var stride: float = 0.95 if vehicle else 0.52
@@ -301,6 +303,24 @@ func _update_walk_dust(delta: float) -> void:
 	if mgr != null:
 		mgr.emit_step(global_position, move_dir, vehicle, terrain, overlay, side)
 	_play_step_sfx(terrain, overlay, vehicle)
+
+# 攻城器械行走动画：轮子按实际位移滚动，火炮没有轮子就靠炮架腿摆动表现拖行。
+# 只驱动 GLB 内部节点，不碰实体位置，因此不会和攻击动画抢同一属性。
+func _update_siege_walk(delta: float) -> void:
+	if not SiegeWalkAnim.is_walker(entity_id):
+		return
+	var model := _get_entity_model()
+	if model == null:
+		return
+	SiegeWalkAnim.update(model, entity_id, delta, _visual_speed)
+
+# 取挂在本单位下的 GLB 模型根节点（由 RTSBattleManager._apply_entity_model 打标记）。
+# 不能按节点名找：名字来自 GLB 根节点，不同器械完全不一样。
+func _get_entity_model() -> Node3D:
+	for child in get_children():
+		if child is Node3D and child.has_meta("entity_model"):
+			return child as Node3D
+	return null
 
 # 直接查迷雾网格，避免每走一步都遍历全场实体做距离判定。
 func _is_walk_position_visible(bm, gpos: Vector2i) -> bool:
