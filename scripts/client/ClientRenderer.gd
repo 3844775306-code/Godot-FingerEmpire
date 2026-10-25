@@ -1092,61 +1092,57 @@ func _is_bridge_at_client(pos: Vector3) -> bool:
 			return true
 	return false
 
-# 建筑脚下的土色薄片：与服务端 Building 用同一套贴图/着色器/配色，
-# 尺寸同样按 ENTITY_MODEL_SCALE 放大后的视觉半径计算。
-# 这里刻意不用 Decal：本项目地形上 Decal 投射不稳定，会完全看不见。
+# 建筑脚下的土色贴花：与服务端 Building 保持一致的尺寸与配色，纹理直接复用同一个静态资源
 func _attach_ground_patch(node: Node3D, info: Dictionary) -> void:
 	if node == null or not is_instance_valid(node):
 		return
 	if int(info.get("type", -1)) != 1:
 		return
 	# 与服务端一致：城墙/炮台/桥/梯子这些构件不铺土色
-	if int(info.get("entity_id", -1)) in RTSConfig.BUILDING_BODY_SCALE_EXCLUDED:
+	if int(info.get("entity_id", -1)) in Building.GROUND_PATCH_EXCLUDE_IDS:
 		return
 	if node.get_node_or_null("GroundPatch") != null:
 		return
-	# 快照里的 body_radius 已经是服务端放大后的有效半径，这里不能再乘建筑放大倍率；
-	# 但模型还会乘 ENTITY_MODEL_SCALE（主城/巨型投石机等特殊体型），土色要跟着一起放大
 	var eid: int = int(info.get("entity_id", -1))
+	# 尺寸优先按模型实际水平尺寸算（与服务端同一套判据）：body_radius 是按
+	# 模型「最大边」缩放的，高瘦的塔类建筑水平方向比它窄，直接用会偏大。
 	var visual_radius: float = float(info.get("body_radius", 1.0)) * RTSConfig.get_model_scale(eid)
+	var model := node.get_node_or_null("Model") if node.has_node("Model") else null
+	if model == null:
+		for child in node.get_children():
+			if child is Node3D and child.get_meta("entity_model", false):
+				model = child
+				break
+	if model is Node3D and model.scale.x > 0.001:
+		var aabb: AABB = _get_model_aabb(model)
+		var horiz: float = maxf(aabb.size.x, aabb.size.z) * absf(model.scale.x) * 0.5
+		if horiz > 0.05:
+			visual_radius = horiz
 	var half: float = visual_radius + Building.GROUND_PATCH_MARGIN
 
-	var quad := PlaneMesh.new()
-	quad.size = Vector2(half * 2.0, half * 2.0)
-	var mat := ShaderMaterial.new()
-	mat.shader = Building._ground_patch_material_shader()
-	mat.set_shader_parameter("patch_texture", Building._ground_patch_texture())
-	mat.set_shader_parameter("tint", Vector3(Building.GROUND_PATCH_COLOR.r,
-		Building.GROUND_PATCH_COLOR.g, Building.GROUND_PATCH_COLOR.b))
-	mat.set_shader_parameter("base_alpha", Building.GROUND_PATCH_ALPHA)
-	quad.material = mat
+	var decal := Decal.new()
+	decal.name = "GroundPatch"
+	decal.texture_albedo = Building._ground_patch_texture()
+	decal.size = Vector3(half * 2.0, 12.0, half * 2.0)
+	decal.modulate = Building.GROUND_PATCH_COLOR
+	decal.albedo_mix = 1.0
+	decal.upper_fade = 1.2
+	decal.lower_fade = 1.2
+	node.add_child(decal)
 
-	var mi := MeshInstance3D.new()
-	mi.name = "GroundPatch"
-	mi.mesh = quad
-	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	mi.position = Vector3(0.0, Building.GROUND_PATCH_LIFT, 0.0)
-	node.add_child(mi)
-
-# 建筑倒塌时把土色薄片摘下来独立淡出，让地面痕迹比建筑多留一会儿
+# 建筑倒塌时把土色贴花摘下来独立淡出，让地面痕迹比建筑多留一会儿
 func _fade_ground_patch_of(node: Node3D) -> void:
 	if node == null or not is_instance_valid(node):
 		return
-	var mi = node.get_node_or_null("GroundPatch")
-	if mi == null or not is_instance_valid(mi):
+	var decal = node.get_node_or_null("GroundPatch")
+	if decal == null or not is_instance_valid(decal):
 		return
 	var host := get_parent()
 	if host != null:
-		mi.reparent(host, true)
-	var quad := mi.mesh as PlaneMesh
-	var mat = quad.material if quad != null else null
-	if mat == null:
-		mi.queue_free()
-		return
-	var tw := mi.create_tween()
-	tw.tween_method(func(v: float): mat.set_shader_parameter("base_alpha", v),
-		Building.GROUND_PATCH_ALPHA, 0.0, Building.GROUND_PATCH_FADE_TIME)
-	tw.tween_callback(Callable(mi, "queue_free"))
+		decal.reparent(host, true)
+	var tw := decal.create_tween()
+	tw.tween_property(decal, "modulate:a", 0.0, Building.GROUND_PATCH_FADE_TIME)
+	tw.tween_callback(Callable(decal, "queue_free"))
 
 func _play_sink_animation(node: Node3D, info: Dictionary) -> void:
 	if node == null or not is_instance_valid(node):
@@ -1308,6 +1304,11 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 				mesh.material_override = mat
 		if mesh:
 			entity.add_child(mesh)
+
+	# 官员与农民共用随机人物模型，联机端也必须补上同样的金色标识，
+	# 否则只有服务端/单机看得到，联机玩家仍然分不清。
+	if OfficialMarker.is_official(eid):
+		entity.add_child(OfficialMarker.create(float(info.get("body_radius", 0.4))))
 
 	# 存储 owner_peer_id 元数据，供后续使用
 	entity.set_meta("owner_peer_id", owner_id)
