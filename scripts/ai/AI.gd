@@ -958,6 +958,7 @@ func _state_development(_delta):
 		if not _priority_upgrade():
 			_process_line_upgrade()
 	_manage_shipyards()
+	_manage_merchant_bridges()
 	_process_line_5()
 	_rally_land_army_to_castle()
 	_ai_hunt_animals(_delta)
@@ -979,6 +980,7 @@ func _state_assault(_delta):
 	_try_produce_merchants_or_officials()
 	_try_produce_monks()
 	_manage_shipyards()
+	_manage_merchant_bridges()
 	_process_line_5()
 	_ai_hunt_animals(_delta)
 	_check_hunt_cleanup()
@@ -2237,6 +2239,62 @@ func _manage_shipyards():
 			if can_afford_building(23):
 				var pos = _find_shipyard_pos_near_oil()
 				if pos != Vector3.ZERO: build_building(23, pos)
+
+# ── 为商人搭桥 ──
+# 商人往返城堡与集市，如果集市场或商人被河隔开就会一直绕路甚至卡住。
+# 这里检测"商人 → 己方城堡"连线是否跨水，跨水就在商人这一侧的岸边尝试修桥。
+func _manage_merchant_bridges() -> void:
+	# 桥数上限和普通建筑一致，到顶就不再折腾
+	if count_building(7) >= 10:
+		return
+	# 没有商人就没有需求，避免每帧全量遍历实体
+	if _count_merchants() <= 0:
+		return
+	var castle = get_peer_castle(my_peer_id)
+	if not castle or not is_instance_valid(castle):
+		return
+	for e in battle.entities.get_children():
+		if not (e is Army) or e.health <= 0 or not entity_belongs_to_me(e):
+			continue
+		if not (e.entity_id in MERCHANT_UNIT_IDS):
+			continue
+		var from: Vector3 = e.global_position
+		var to: Vector3 = castle.global_position
+		if not _line_crosses_water(from, to):
+			continue
+		for spot in _bridge_spot_candidates(from, to):
+			if build_building(7, spot):
+				return
+
+# 两点连线上的采样是否出现过水面
+func _line_crosses_water(from: Vector3, to: Vector3) -> bool:
+	const STEPS: int = 40
+	for i in range(1, STEPS):
+		var t: float = float(i) / float(STEPS)
+		if battle.get_terrain_at(from.lerp(to, t)) == 2:
+			return true
+	return false
+
+# 沿"商人 → 城堡"方向找到第一段水面，返回水面附近几个可尝试建桥的位置
+func _bridge_spot_candidates(from: Vector3, to: Vector3) -> Array:
+	var out: Array = []
+	var dir: Vector3 = to - from
+	dir.y = 0.0
+	if dir.length() < 0.1:
+		return out
+	dir = dir.normalized()
+	const STEPS: int = 40
+	for i in range(1, STEPS):
+		var t: float = float(i) / float(STEPS)
+		var p: Vector3 = from.lerp(to, t)
+		if battle.get_terrain_at(p) != 2:
+			continue
+		# 先试靠商人这一侧的岸边，再试水面正中，最后试对岸
+		out.append(p - dir * 2.0)
+		out.append(p)
+		out.append(p + dir * 2.0)
+		break
+	return out
 
 func _find_shipyard_pos_near_oil() -> Vector3:
 	var castle = get_peer_castle(my_peer_id)
