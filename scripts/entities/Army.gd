@@ -14,6 +14,10 @@ var combat_resume_advance: bool = false
 # 追击目标的丢失宽限：目标跑出视野后允许再追一段时间，避免边界抖动立刻放弃。
 const TARGET_LOST_RANGE_MULT: float = 1.5
 const TARGET_LOST_GRACE_MS: int = 3000
+# 真正优先拆建筑的攻城单位：火炮、投石车、攻城车、巨型投石机。
+# 不能用 target_type 判断：Army._init 会把所有战斗单位的 target_type 统一设为 1，
+# 这会让步兵/弓兵/骑兵也误以为自己是攻城单位，锁敌时无脑优先建筑。
+const SIEGE_UNIT_IDS := [16, 17, 18, 59]
 var _target_lost_since_ms: int = 0
 # 建筑被攻击后的临时回防位；目标消失/超时后回到这里，而不是留在远处。
 var _defense_return_position: Vector3 = Vector3.ZERO
@@ -2023,7 +2027,9 @@ func _try_retarget_in_range_priority() -> void:
 	_set_combat_target(candidate)
 
 func _prefers_buildings() -> bool:
-	return int(target_type) == 1 or entity_id in [16, 17, 59]
+	# 仅攻城类单位优先建筑；普通军队必须先打敌军，不能因为 target_type 被
+	# 统一设成 1 就把所有战斗单位都当成攻城车。
+	return entity_id in SIEGE_UNIT_IDS
 
 # ----------------- ÐÐÎª´¦Àí -----------------
 func _process_action(delta, bm):
