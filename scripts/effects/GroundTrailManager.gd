@@ -7,8 +7,11 @@ extends Node3D
 
 const MAX_PRINTS := 384
 const PRINT_LIFETIME := 10.0
-const PRINT_DISTANCE := 42.0
-const DUST_DISTANCE := 36.0
+# RTS 相机不是贴地视角：默认 size=17.5 时相机到地面焦点约 66 米，最远约 97 米，
+# 边缘单位还要再加一段水平距离。之前 42/36 米的上限会把默认视野里的痕迹全部裁掉，
+# 所以这里只裁剪真正远离战场的痕迹，不用它做近景优化。
+const PRINT_DISTANCE := 160.0
+const DUST_DISTANCE := 120.0
 const DUST_POOL_SIZE := 10
 const RIPPLE_POOL_SIZE := 6
 const TRAIL_Y_OFFSET := 0.055
