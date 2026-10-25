@@ -35,3 +35,7 @@ desktop.ini
 /libgodotsteam.*.dll
 /steam-multiplayer-peer.*.dll
 /steam_api64.dll
+
+# 手机远程控制台运行时数据
+tools/mobile_console/queue.json
+tools/mobile_console/token.txt
