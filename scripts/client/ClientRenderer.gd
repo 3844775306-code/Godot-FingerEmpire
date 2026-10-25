@@ -902,6 +902,14 @@ func _update_entity_animation(node: Node3D, info: Dictionary):
 	var entity_id := int(info.get("entity_id", -1))
 	if info.get("health", 0) <= 0:
 		anim = "die"
+	elif RTSConfig.is_animal(entity_id):
+		# 动物没有指令流，快照里 order 恒为 idle；只能靠位置变化判断它在不在走，
+		# 否则联机端整群动物都是滑行不迈腿。
+		var prev_pos: Vector3 = node.get_meta("_anim_prev_pos", node.global_position)
+		var moved: float = node.global_position.distance_to(prev_pos)
+		node.set_meta("_anim_prev_pos", node.global_position)
+		var move_speed: float = moved / maxf(get_process_delta_time(), 0.001)
+		anim = "walk" if move_speed > 0.06 else "idle"
 	elif ord in ["attack", "attack_move", "gather"]:
 		# 锁定目标后还要先走到攻击/采集距离；服务端在快照里标记是否已进入距离。
 		# 追击途中播放走路，进入距离后才播放攻击/采集动作。
@@ -1017,6 +1025,8 @@ func _apply_model_tint(node: Node, tint: Color):
 
 # 需要划桨/帆位动画的船：采集船是划艇，其余三条有帆
 const SHIP_ANIM_IDS := [13, 14, 39, 40]
+# 石油资源（EntityDatabase id 4），模型是 water-rocks，靠冒黑烟才认得出来
+const OIL_RESOURCE_ID := 4
 
 # 在船模型下面挂一个 ShipSailAnimator（与服务端同一套实现，纯视觉）
 func _attach_ship_sail_animator(model_instance: Node3D) -> void:
@@ -1028,6 +1038,14 @@ func _attach_ship_sail_animator(model_instance: Node3D) -> void:
 	animator.name = "ShipSailAnimator"
 	model_instance.add_child(animator)
 	animator.setup(model_instance)
+
+# 石油资源：常年冒黑烟 + 脚下油渍（纯视觉，客户端自己跑，不依赖服务端快照）
+func _attach_oil_smoke(model_instance: Node3D, body_radius: float) -> void:
+	if model_instance == null or not is_instance_valid(model_instance):
+		return
+	if model_instance.get_node_or_null("OilSmoke") != null:
+		return
+	model_instance.add_child(OilSmoke.create(body_radius))
 
 # 模型需要投射/接收实时阴影，否则光影层次会明显变弱
 func _ensure_model_shadows(node: Node) -> void:
@@ -1299,6 +1317,9 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 		# 船只：划艇摆桨、有帆的船按风向转帆（纯视觉，客户端自己跑）
 		if int(info.get("entity_id", 0)) in SHIP_ANIM_IDS:
 			_attach_ship_sail_animator(loaded_model)
+		# 石油：冒黑烟 + 脚下油渍
+		if int(info.get("entity_id", 0)) == OIL_RESOURCE_ID:
+			_attach_oil_smoke(loaded_model, float(info.get("body_radius", 0.6)))
 		# GLB 动画默认不循环；缓存 AnimationPlayer 并配置 idle/walk/attack 循环
 		var cached_ap := AnimationHelper.configure_loops(loaded_model)
 		if cached_ap != null:
@@ -1370,6 +1391,14 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 	# 僧侣/长老/宗师同理：双层法阵 + 头顶职业符号，客户端与服务端共用 CasterMarker
 	if CasterMarker.is_caster(eid):
 		entity.add_child(CasterMarker.create(eid, float(info.get("body_radius", 0.4))))
+	# 动物：脚下接触阴影，把模型压在地面上（鱼不需要）
+	if RTSConfig.is_animal(eid) and eid != 63:
+		var animal_model: Node3D = null
+		if entity.has_meta("_model_instance"):
+			var mi = entity.get_meta("_model_instance")
+			if mi is Node3D and is_instance_valid(mi):
+				animal_model = mi
+		entity.add_child(GroundContact.create(GroundContact.half_size_for(float(info.get("body_radius", 0.4)), animal_model)))
 
 	# 存储 owner_peer_id 元数据，供后续使用
 	entity.set_meta("owner_peer_id", owner_id)

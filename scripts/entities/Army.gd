@@ -280,6 +280,22 @@ func _ready():
 	# 延迟到本帧末尾，等 setup 写完配置后再挂法师/官员标识，否则拿到的永远是 0 号配置。
 	call_deferred("_add_caster_marker")
 	call_deferred("_add_official_marker")
+	call_deferred("_add_animal_contact")
+
+# ==================== 动物：脚下接触阴影 ====================
+# 动物贴地游走，但模型小、光照阴影软，站在起伏地形上仍然像浮着。
+# 加一层贴地暗影把模型和地面连起来，服务端与客户端共用 GroundContact。
+func _add_animal_contact() -> void:
+	if _animal_type == "" or _animal_type == "fish":
+		return
+	if has_node("GroundContact"):
+		return
+	var model: Node3D = null
+	if has_meta("_model_instance"):
+		var mi = get_meta("_model_instance")
+		if mi is Node3D and is_instance_valid(mi):
+			model = mi
+	add_child(GroundContact.create(GroundContact.half_size_for(body_radius, model)))
 
 # ==================== 僧侣/长老/宗师：战场标识 ====================
 # 具体外观（双层法阵 + 头顶职业符号）在 CasterMarker 里实现，
@@ -4397,6 +4413,25 @@ func _hide_garrison_marker():
 	_garrison_marker = null
 var _animal_attacker :GameEntity = null
 # ==================== Animal AI ====================
+# 动物的行为只有三件事：长大、等级满了繁殖、在自己家附近游走。
+# 挨打会反击，但不会再整群逃跑——以前一有人靠近动物就成群跑开，
+# 牧区永远是空的，看起来更像一群不受控的贴纸。
+const ANIMAL_WANDER_RADIUS: float = 7.0     # 游走范围半径（以出生点为中心）
+const ANIMAL_WALK_SCALE: float = 0.55       # 实际移动速度占配置 speed 的比例
+const ANIMAL_ARRIVE_DIST: float = 0.4       # 走到这个距离内算到达
+const ANIMAL_PAUSE_MIN: float = 1.0         # 到达后原地停留时间
+const ANIMAL_PAUSE_MAX: float = 4.0
+const ANIMAL_REPICK_DIST: float = 22.0      # 离家太远（被推挤/传送）直接重设家
+
+var _animal_home: Vector3 = Vector3.ZERO
+var _animal_has_home: bool = false
+var _animal_wander_target: Vector3 = Vector3.ZERO
+var _animal_has_target: bool = false
+var _animal_pause: float = 0.0
+# 供动画层用：动物不走 MovementController，velocity 恒为 0，
+# 没有这个标记服务端会一直播 idle，动物就成了滑行的贴纸。
+var _animal_moving: bool = false
+
 func _process_animal(delta):
 	# 成长计时：升到5级后不可再成长
 	_animal_grow_timer -= delta
@@ -4417,8 +4452,10 @@ func _process_animal(delta):
 			if attack_timer <= 0:
 				_animal_attacker.take_damage(attack, self)
 				attack_timer = attack_speed
+			_animal_moving = false
 		else:
 			global_position += (_animal_attacker.global_position - global_position).normalized() * speed * delta
+			_animal_moving = true
 		if attack_timer > 0: attack_timer -= delta
 		return
 
@@ -4440,52 +4477,90 @@ func _process_animal(delta):
 
 	
 
-	# 探测人类 → 逃跑
-	var human = _find_nearest_human()
-	if human:
-		var flee_dir = (global_position - human.global_position).normalized()
-		var flee_speed = 0.5
-		if _animal_type == "sheep" or _animal_type == "fish":
-			flee_speed = 0.8
-		var is_fish = (_animal_type == "fish")
-		var bm = get_tree().get_first_node_in_group("battle_manager")
-		for angle_offset in [0, 45, -45, 90, -90, 135, -135, 180]:
-			var test_dir = flee_dir.rotated(Vector3.UP, deg_to_rad(angle_offset))
-			var new_pos = global_position + test_dir * flee_speed * delta
-			if bm:
-				var t = bm.get_terrain_at(new_pos)
-				if (is_fish and t == 2) or (not is_fish and t != 2):
-					global_position = new_pos; return
+	# 在自己家附近游走（不再因为附近有人而逃跑）
+	_update_animal_wander(delta)
+
+# 在家附近随机游走：挑一个目标点 → 走过去 → 停一会 → 再挑。
+# 只写 global_position 不走寻路，但每步都校验地形（鱼只在水里、陆生不下水）
+# 并重新贴地，否则动物会悬在斜坡上，和地面明显脱开。
+func _update_animal_wander(delta: float) -> void:
+	if not _animal_has_home:
+		_animal_home = global_position
+		_animal_has_home = true
+	elif global_position.distance_to(_animal_home) > ANIMAL_REPICK_DIST:
+		# 被推挤或传送走远了，就地重新安家，免得它一路游回地图另一头
+		_animal_home = global_position
+		_animal_has_target = false
+
+	if _animal_pause > 0.0:
+		_animal_pause -= delta
+		_animal_moving = false
 		return
 
-	# 闲逛
-	if randf() < 0.05:
-		var wander = Vector3(randf_range(-2, 2), 0, randf_range(-2, 2))
-		var new_pos = global_position + wander * speed * delta
-		if _animal_type == "fish":
-			var bm = get_tree().get_first_node_in_group("battle_manager")
-			if bm and bm.get_terrain_at(new_pos) != 2:
-				return  # 鱼不离开水
-		elif not _animal_type == "fish":
-			var bm = get_tree().get_first_node_in_group("battle_manager")
-			if bm and bm.get_terrain_at(new_pos) == 2:
-				return  # 陆地动物不进水
-		global_position = new_pos
+	if not _animal_has_target:
+		_animal_has_target = _pick_animal_wander_target()
+		if not _animal_has_target:
+			_animal_pause = 0.4
+			_animal_moving = false
+			return
 
-func _find_nearest_human():
-	var best_dist = vision_range * 1.5
-	var best = null
-	for e in get_tree().get_nodes_in_group("entities"):
-		if e == self or not is_instance_valid(e) or e.health <= 0: continue
-		if not (e is Army): continue
-		if e.team == RTSConfig.Team.NEUTRAL: continue
-		if e.get("_animal_type") != null and str(e.get("_animal_type")) != "": continue
-		if e.entity_id in [10, 14, 43, 44, 45, 46, 47, 48, 49, 50]: continue
-		var dist = global_position.distance_to(e.global_position)
-		if dist < best_dist:
-			best_dist = dist
-			best = e
-	return best
+	var to_target: Vector3 = _animal_wander_target - global_position
+	to_target.y = 0.0
+	if to_target.length() <= ANIMAL_ARRIVE_DIST:
+		_animal_has_target = false
+		_animal_pause = randf_range(ANIMAL_PAUSE_MIN, ANIMAL_PAUSE_MAX)
+		_animal_moving = false
+		return
+
+	var step: Vector3 = to_target.normalized() * speed * ANIMAL_WALK_SCALE * delta
+	var next_pos: Vector3 = global_position + step
+	if not _animal_can_stand_at(next_pos):
+		# 前方是水/岸，放弃这个目标，停一下再换一个
+		_animal_has_target = false
+		_animal_pause = randf_range(0.3, 0.8)
+		_animal_moving = false
+		return
+
+	global_position = next_pos
+	_animal_moving = true
+	# 朝行进方向转身（复用统一的质量转身逻辑，动物体型小转得快）
+	turn_toward_dir(step, delta)
+	_snap_animal_to_ground()
+
+# 在离家半径内均匀撒点找一个能站的位置；最多试 8 次，全失败就先歇一下
+func _pick_animal_wander_target() -> bool:
+	for i in range(8):
+		var ang: float = randf() * TAU
+		# sqrt 让采样在圆内按面积均匀，否则会全挤在圆心附近
+		var dist: float = sqrt(randf()) * ANIMAL_WANDER_RADIUS
+		var cand: Vector3 = _animal_home + Vector3(cos(ang) * dist, 0.0, sin(ang) * dist)
+		if _animal_can_stand_at(cand):
+			_animal_wander_target = cand
+			return true
+	return false
+
+# 地形校验：鱼只能待在水里，其他动物不能进水
+func _animal_can_stand_at(pos: Vector3) -> bool:
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if bm == null:
+		return true
+	var terrain: int = bm.get_terrain_at(pos)
+	if _animal_type == "fish":
+		return terrain == 2
+	return terrain != 2
+
+# 跟随地形高度贴地。动物不经过 MovementController 的地形平滑，
+# 以前 y 坐标从头到尾不变，走上坡就浮在半空、走下坡就陷进土里。
+func _snap_animal_to_ground() -> void:
+	if _animal_type == "fish":
+		return   # 鱼飘在水面上，沿用出生时的高度
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if bm == null:
+		return
+	var map = bm.get_node_or_null("Map")
+	if map == null or not map.has_method("get_height_at"):
+		return
+	global_position.y = map.get_height_at(global_position)
 
 func _spawn_baby_animal():
 	var bm = get_tree().get_first_node_in_group("battle_manager")

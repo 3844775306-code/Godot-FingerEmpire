@@ -232,6 +232,14 @@ static func get_ship_collision_scale(entity_id: int) -> float:
 		return SHIP_COLLISION_SCALE
 	return 1.0
 
+# 动物（牛/猪/羊/鱼）。它们不走普通指令流，行为完全由 Army._process_animal 驱动：
+# 在出生点附近游走、挨打才反击。服务端动画和客户端动画都需要单独判断，
+# 否则快照里 order 恒为 idle，动物会滑行不迈腿。
+const ANIMAL_IDS := [60, 61, 62, 63]
+
+static func is_animal(entity_id: int) -> bool:
+	return entity_id in ANIMAL_IDS
+
 const DEMOLISHED_MODELS = {
 	17: "res://models/castle/siege-catapult-demolished.glb",
 	18: "res://models/castle/siege-ram-demolished.glb",

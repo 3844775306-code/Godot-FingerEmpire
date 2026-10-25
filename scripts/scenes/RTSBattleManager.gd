@@ -2010,7 +2010,23 @@ func _apply_entity_model(entity: GameEntity) -> bool:
 	# 船只：划艇摆桨、有帆的船按风向转帆（纯视觉）
 	if entity.entity_id in SHIP_ANIM_IDS:
 		_attach_ship_sail_animator(model_instance)
+	# 石油：常年冒黑烟 + 脚下一圈油渍，把黑石头和地面糊在一起
+	if entity.entity_id == OIL_RESOURCE_ID:
+		_attach_oil_smoke(model_instance, entity.body_radius)
 	return true
+
+# 石油资源（EntityDatabase id 4）。模型是 water-rocks（几块黑石头），
+# 没有任何“油”的视觉暗示，靠冒烟来区分。
+const OIL_RESOURCE_ID := 4
+
+# 在石油模型下面挂 OilSmoke，重复调用不会叠加（联机客户端节点会被复用）
+func _attach_oil_smoke(model_instance: Node3D, body_radius: float) -> void:
+	if model_instance == null or not is_instance_valid(model_instance):
+		return
+	if model_instance.get_node_or_null("OilSmoke") != null:
+		return
+	model_instance.add_child(OilSmoke.create(body_radius))
+
 
 # 需要划桨/帆位动画的船：采集船是划艇，其余三条有帆
 const SHIP_ANIM_IDS := [13, 14, 39, 40]
@@ -2130,6 +2146,10 @@ func _update_entity_animation(entity: GameEntity):
 	var anim = ""
 	if entity.health <= 0:
 		anim = "die"
+	elif entity is Army and (entity as Army)._animal_type != "":
+		# 动物不走指令流、也不经过 MovementController，velocity 恒为 0；
+		# 只能看 _process_animal 里标的 _animal_moving，否则整群动物都滑行不迈腿。
+		anim = "walk" if (entity as Army)._animal_moving else "idle"
 	elif entity is Army:
 		var army := entity as Army
 		var _moving_now: bool = army.velocity.length_squared() > 0.04
