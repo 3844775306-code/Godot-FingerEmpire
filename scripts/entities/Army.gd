@@ -230,36 +230,36 @@ func _setup_walk_dust() -> void:
 	if _walk_dust != null:
 		return
 	var p := CPUParticles3D.new()
-	# 数量与体积给足：单位在地图上本来就小，远景下太细的尘土完全看不见
-	p.amount = 14
-	p.lifetime = 0.95
+	# 扬尘只能贴着地面形成薄薄一层：颗粒小、初速低、几乎不上飘，
+	# 否则会糊住单位本身，把整个模型染成土黄色。
+	p.amount = 10
+	p.lifetime = 0.8
 	p.emitting = false
 	p.local_coords = false
 	p.direction = Vector3.UP
-	p.spread = 55.0
-	p.initial_velocity_min = 0.25
-	p.initial_velocity_max = 1.1
-	# 尘土先往上飘一点再散开，重力取很小的正值
-	p.gravity = Vector3(0.0, 0.45, 0.0)
+	p.spread = 80.0
+	p.initial_velocity_min = 0.12
+	p.initial_velocity_max = 0.5
+	p.gravity = Vector3(0.0, 0.12, 0.0)
 	p.scale_amount_min = 1.0
-	p.scale_amount_max = 1.9
+	p.scale_amount_max = 1.6
 	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
-	p.emission_sphere_radius = 0.45
+	p.emission_sphere_radius = 0.55
 	var mesh := SphereMesh.new()
-	mesh.radius = 0.24
-	mesh.height = 0.48
+	mesh.radius = 0.10
+	mesh.height = 0.20
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	# 偏灰的土色，略微透明，不会盖住单位本身
-	mat.albedo_color = Color(0.80, 0.77, 0.70, 0.78)
+	# 透明度压到很低：只是地面上一层淡尘，不能盖住单位
+	mat.albedo_color = Color(0.80, 0.77, 0.70, 0.34)
 	mesh.material = mat
 	p.mesh = mesh
 	var grad := Gradient.new()
-	grad.set_color(0, Color(1.0, 1.0, 1.0, 0.8))
+	grad.set_color(0, Color(1.0, 1.0, 1.0, 0.34))
 	grad.set_color(1, Color(1.0, 1.0, 1.0, 0.0))
 	p.color_ramp = grad
-	p.position = Vector3(0.0, 0.10, 0.0)
+	p.position = Vector3(0.0, 0.05, 0.0)
 	# 显式给足包围盒，否则粒子飞出默认范围会被视锥剔除，看起来就像"完全没发射"
 	p.visibility_aabb = AABB(Vector3(-3.0, -3.0, -3.0), Vector3(6.0, 6.0, 6.0))
 	add_child(p)
@@ -277,6 +277,7 @@ func _setup_prints() -> void:
 		return
 	var root := get_tree().current_scene as Node3D
 	if root == null:
+		# 场景还没就绪时先放弃，下一次移动会再次尝试
 		return
 	# 车轮留下的是一整条宽车辙，步兵是窄脚印
 	var vehicle: bool = entity_id in [5, 6, 16, 17, 18, 59]
@@ -284,13 +285,14 @@ func _setup_prints() -> void:
 	pmat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	pmat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	pmat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	pmat.albedo_color = Color(0.24, 0.22, 0.19, 0.50) if vehicle else Color(0.28, 0.25, 0.20, 0.40)
-	for i in 10:
+	# 比之前更暗更实：太淡的深色贴花在草地上几乎看不见
+	pmat.albedo_color = Color(0.18, 0.16, 0.12, 0.62) if vehicle else Color(0.22, 0.19, 0.14, 0.52)
+	for i in 14:
 		var mi := MeshInstance3D.new()
 		mi.name = "GroundPrint"
 		var quad := PlaneMesh.new()
 		# PlaneMesh 默认平躺在 XZ 平面，正好贴地
-		quad.size = Vector2(0.62, 1.10) if vehicle else Vector2(0.24, 0.34)
+		quad.size = Vector2(0.85, 1.50) if vehicle else Vector2(0.36, 0.55)
 		quad.material = pmat
 		mi.mesh = quad
 		mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -312,7 +314,8 @@ func _update_prints(delta: float, move_dir: Vector3) -> void:
 	if not is_instance_valid(mi):
 		return
 	_print_idx = (_print_idx + 1) % _prints.size()
-	mi.global_position = Vector3(global_position.x, global_position.y + 0.015, global_position.z)
+	# 抬到地面上方 4 厘米，避免与地形共面产生 z-fighting 而闪烁不可见
+	mi.global_position = Vector3(global_position.x, global_position.y + 0.04, global_position.z)
 	if move_dir.length_squared() > 0.0001:
 		mi.rotation.y = atan2(move_dir.x, move_dir.z)
 	mi.visible = true
