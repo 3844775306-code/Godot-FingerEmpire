@@ -90,3 +90,12 @@ func _refresh_ui():
 func _on_building_selected(building_id: int):
 	emit_signal("build_placement_started", building_id)
 	hide()
+
+# 手机端触摸转发需要知道菜单实际面板范围（根 Control 尺寸为 0）
+func is_point_inside(pos: Vector2) -> bool:
+	if not visible:
+		return false
+	for child in get_children():
+		if child is Control and child.visible and child.get_global_rect().has_point(pos):
+			return true
+	return false

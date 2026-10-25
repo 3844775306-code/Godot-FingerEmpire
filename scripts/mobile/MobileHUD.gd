@@ -17,6 +17,7 @@ var router: TouchGestureRouter = null
 var capsule: MobileResourceCapsule = null
 var command_bar: MobileCommandBar = null
 var stats_screen: StatsOverviewScreen = null
+var build_overlay: MobileBuildPlacementOverlay = null
 
 var _bm: Node = null
 var _refresh_timer: float = 0.0
@@ -107,6 +108,12 @@ func _create_components() -> void:
 	stats_screen.hud = hud
 	stats_screen.visible = false
 	add_child(stats_screen)
+
+	# 居中建造浮层：勾/叉按钮由这里转发给单机或联机建造后端
+	build_overlay = MobileBuildPlacementOverlay.new()
+	add_child(build_overlay)
+	build_overlay.confirmed.connect(_on_build_confirm)
+	build_overlay.cancelled.connect(_on_build_cancel)
 
 	_hide_ai_debug_panels()
 
@@ -298,6 +305,8 @@ func _collect_selection() -> Array:
 func is_point_over_panel(pos: Vector2) -> bool:
 	if stats_screen and stats_screen.visible and stats_screen.is_point_inside(pos):
 		return true
+	if build_overlay and build_overlay.visible and build_overlay.is_point_inside(pos):
+		return true
 	if _point_over_build_menu(pos):
 		return true
 	for ctrl in [capsule, command_bar]:
@@ -323,14 +332,23 @@ func is_point_over_panel(pos: Vector2) -> bool:
 # 长按呼出的建造菜单也是触屏面板：命中的触摸要转成 UI 点击，不能漏进世界选择
 func _point_over_build_menu(pos: Vector2) -> bool:
 	var bm := _get_bm()
-	if bm == null:
-		return false
-	var menu = bm.get("current_build_menu")
-	if menu is Control and is_instance_valid(menu) and menu.visible:
-		return menu.get_global_rect().has_point(pos)
+	if bm != null:
+		var menu = bm.get("current_build_menu")
+		if menu is Control and is_instance_valid(menu) and menu.visible:
+			return menu.get_global_rect().has_point(pos)
+	# 联机客户端没有 battle_manager，建造菜单挂在 ClientRenderer/UI 下
+	var renderer := get_tree().get_first_node_in_group("client_renderer")
+	if renderer:
+		var menu := renderer.get_node_or_null("UI/BuildMenu")
+		if menu is Control and menu.visible:
+			if menu.has_method("is_point_inside"):
+				return bool(menu.call("is_point_inside", pos))
+			return menu.get_global_rect().has_point(pos)
 	return false
 
 func _process(delta: float) -> void:
+	# 居中建造状态每帧同步：预览/勾叉按钮与手势路由必须同时生效
+	_sync_build_overlay()
 	# AI 面板由 AI 自己创建/重建，定期扫一遍确保移动端始终隐藏
 	_ai_hide_timer -= delta
 	if _ai_hide_timer <= 0.0:
@@ -343,6 +361,40 @@ func _process(delta: float) -> void:
 	if capsule:
 		_refresh_resources()
 		capsule.set_time_text(_format_game_time())
+
+# 单机读 RTSBattleManager，联机读 ClientRenderer；两者都只暴露「居中建造」状态
+func _sync_build_overlay() -> void:
+	if build_overlay == null:
+		return
+	var active := false
+	var bm := _get_bm()
+	if bm != null and bool(bm.get("build_mode")):
+		active = bool(bm.get("mobile_centered_build"))
+	else:
+		var renderer := get_tree().get_first_node_in_group("client_renderer")
+		if renderer != null and bool(renderer.get("placement_mode")):
+			active = bool(renderer.get("mobile_centered_placement"))
+	build_overlay.set_active(active, GameSettings.mobile_continuous_build)
+	if router:
+		router.set_centered_build_mode(active)
+
+func _on_build_confirm() -> void:
+	var bm := _get_bm()
+	if bm != null and bool(bm.get("build_mode")) and bm.has_method("confirm_mobile_build"):
+		bm.call("confirm_mobile_build")
+		return
+	var ci := get_tree().get_first_node_in_group("client_input")
+	if ci != null and ci.has_method("confirm_mobile_placement"):
+		ci.call("confirm_mobile_placement")
+
+func _on_build_cancel() -> void:
+	var bm := _get_bm()
+	if bm != null and bool(bm.get("build_mode")) and bm.has_method("cancel_mobile_build"):
+		bm.call("cancel_mobile_build")
+		return
+	var ci := get_tree().get_first_node_in_group("client_input")
+	if ci != null and ci.has_method("cancel_mobile_placement"):
+		ci.call("cancel_mobile_placement")
 
 # 资源数据来源分两种：
 #   单机 —— battle_manager 里有 player_resources，直接读（桌面 HUD 的 update_data 只服务桌面标签）

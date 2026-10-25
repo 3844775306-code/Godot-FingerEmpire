@@ -39,6 +39,7 @@ var player_team: int:
 
 # 用于建造预览的世界坐标
 var last_world_pos: Vector3 = Vector3.ZERO
+var _mobile_preview_timer: float = 0.0
 
 # Query which groups an entity belongs to
 func get_entity_groups(entity_id: int) -> Array:
@@ -156,6 +157,10 @@ func _input(event):
 
 	# 建造放置模式优先
 	if renderer.placement_mode:
+		# 手机端居中建造：世界触摸只用于平移地图（由 TouchGestureRouter 处理），
+		# 不在这里确认，避免拖动地图或点按钮时误放建筑；勾叉由 MobileHUD 转发。
+		if renderer.mobile_centered_placement:
+			return
 		# 鼠标移动
 		if event is InputEventMouseMotion:
 			_update_placement_preview(event.position)
@@ -733,6 +738,12 @@ func _process(_delta):
 	# 每帧更新选择环位置（跟随目标）
 	if selection_rings.size() > 0:
 		_process_selection_rings()
+	# 手机端居中建造：地图平移后，预览重新落到屏幕中心
+	if renderer and renderer.placement_mode and renderer.mobile_centered_placement:
+		_mobile_preview_timer -= _delta
+		if _mobile_preview_timer <= 0.0:
+			_mobile_preview_timer = 0.05
+			_update_placement_preview(_viewport_center())
 
 func get_last_world_pos() -> Vector3:
 	return last_world_pos
@@ -905,14 +916,39 @@ func _confirm_placement():
 		"pos_x": pos.x, "pos_y": pos.y, "pos_z": pos.z
 	}
 	NetworkManager.send_command.rpc_id(1, cmd)
-	if not Input.is_key_pressed(KEY_SHIFT):
+	var keep_building := Input.is_key_pressed(KEY_SHIFT)
+	if InputSource.use_mobile_ui():
+		keep_building = keep_building or GameSettings.mobile_continuous_build
+	if not keep_building:
 		_cancel_placement()
+	else:
+		_update_placement_preview(_viewport_center())
 
 func _cancel_placement():
 	renderer.placement_mode = false
 	renderer.placement_building_id = -1
+	renderer.mobile_centered_placement = false
 	if renderer.placement_preview:
 		renderer.placement_preview.visible = false
+
+# 手机端勾选：在屏幕中央确认放置；连续建造开时保持放置模式
+func confirm_mobile_placement() -> void:
+	if not renderer or not renderer.placement_mode:
+		return
+	_update_placement_preview(_viewport_center())
+	_confirm_placement()
+
+# 手机端叉号：无条件退出放置模式
+func cancel_mobile_placement() -> void:
+	if renderer and renderer.placement_mode:
+		_cancel_placement()
+
+func update_centered_placement_preview() -> void:
+	if renderer and renderer.placement_mode and renderer.mobile_centered_placement:
+		_update_placement_preview(_viewport_center())
+
+func _viewport_center() -> Vector2:
+	return get_viewport().get_visible_rect().size * 0.5
 
 func _check_adjacent_water(world_pos: Vector3) -> bool:
 	var gx = int(world_pos.x + RTSConfig.MAP_SIZE / 2)

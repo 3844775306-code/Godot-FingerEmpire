@@ -23,6 +23,10 @@ const LONG_PRESS_MS: int = 500          # 长按阈值：呼出建造菜单（�
 var enabled: bool = true
 var box_select_mode: bool = false
 
+# 手机端居中建造模式：预览固定在屏幕中央，单指拖动只平移地图；
+# 确认/取消由建造浮层上的勾叉按钮负责，触摸不再直接放置建筑。
+var centered_build_mode: bool = false
+
 # 由 MobileHUD 注入：判断某个屏幕坐标是否落在移动端 UI 面板上
 var is_over_ui: Callable = Callable()
 
@@ -56,6 +60,9 @@ func _ready() -> void:
 func _process(_delta: float) -> void:
 	if _mode != Mode.TAP_CANDIDATE or _touch_index == -1:
 		return
+	# 居中建造时滑动地图，不把长按当成再次打开建造菜单
+	if centered_build_mode:
+		return
 	if Time.get_ticks_msec() - _start_msec < LONG_PRESS_MS:
 		return
 	if (_last_pos - _start_pos).length() > TAP_MOVE_LIMIT:
@@ -85,6 +92,10 @@ func set_box_select_mode(active: bool) -> void:
 
 func toggle_box_select_mode() -> void:
 	set_box_select_mode(not box_select_mode)
+
+# 由 MobileHUD 在进入/退出居中建造时调用
+func set_centered_build_mode(active: bool) -> void:
+	centered_build_mode = active
 
 func _get_camera() -> Camera3D:
 	if _camera == null or not is_instance_valid(_camera):
@@ -215,6 +226,8 @@ func _begin_drag() -> void:
 		_push_left_button(_start_pos, true)
 
 func _decide_drag_mode() -> int:
+	if centered_build_mode:
+		return Mode.PAN
 	if _in_build_mode():
 		return Mode.BUILD_PREVIEW
 	if box_select_mode:
@@ -228,7 +241,8 @@ func _finish_gesture(pos: Vector2) -> void:
 
 	match mode:
 		Mode.TAP_CANDIDATE:
-			if dist <= TAP_MOVE_LIMIT and elapsed <= TAP_TIME_LIMIT:
+			# 居中建造只认浮层上的勾叉，点地图不放置建筑
+			if dist <= TAP_MOVE_LIMIT and elapsed <= TAP_TIME_LIMIT and not centered_build_mode:
 				_emit_tap(pos)
 		Mode.BOX:
 			_push_motion(pos, Vector2.ZERO)

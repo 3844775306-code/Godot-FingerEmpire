@@ -2419,6 +2419,8 @@ func _update_build_preview_from_screen(screen_pos: Vector2):
 	var to = from + cam.project_ray_normal(screen_pos) * 500
 	var space = get_world_3d().direct_space_state
 	var query = PhysicsRayQueryParameters3D.create(from, to)
+	# 居中建造只看地面，避免镜头中央压在建筑/单位上时把预览吸到它们身上
+	query.collision_mask = 2
 	var result = space.intersect_ray(query)
 	if result:
 		var pos = result.position
@@ -2841,12 +2843,12 @@ func _exit_build_mode():
 	build_touch_active = false
 	build_drag_started = false
 	selected_building_id = -1
-	if build_preview:
+	if build_preview and is_instance_valid(build_preview):
 		build_preview.queue_free()
-		build_preview = null
-	if current_build_menu:
+	build_preview = null
+	if current_build_menu and is_instance_valid(current_build_menu):
 		current_build_menu.queue_free()
-		current_build_menu = null
+	current_build_menu = null
 
 func _mobile_screen_center() -> Vector2:
 	return get_viewport().get_visible_rect().size * 0.5
