@@ -2625,7 +2625,9 @@ func _update_water_boats() -> void:
 			break
 		if not is_instance_valid(n) or not (n is Node3D):
 			continue
-		if not bool(n.get("water_capable")):
+		# n 是渲染出来的实体节点，没有 water_capable 属性，get() 返回 null 时
+		# bool(null) 会报「Nonexistent 'bool' constructor」刷屏，这里直接比较 true
+		if n.get("water_capable") != true:
 			continue
 		var hp = n.get("health")
 		if hp != null and int(hp) <= 0:
