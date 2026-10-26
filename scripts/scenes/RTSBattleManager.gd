@@ -148,14 +148,40 @@ const ASTAR_BACKLOG_STEP: int = 30
 const ASTAR_BACKLOG_MAX_BOOST: int = 3
 const ASTAR_BOOST_REQUESTS: int = 8
 const ASTAR_BOOST_USEC: int = 4000
+# 排队太久的请求会饿死：普通配额按帧分配，但每帧新请求和重建请求
+# 不断插队，队尾可能几秒都轮不到，最后触发 pending 超时→判失败→重发，
+# 形成“永远在排队、永远没路径”的循环。给等过头的请求一条强制通道：
+# 不受普通名额限制，但每帧最多放行几个，避免一次性把所有长路径都算完造成卡顿。
+const ASTAR_FORCE_REQUESTS_PER_FRAME: int = 3
 var _astar_budget_frame: int = -1
 var _astar_budget_count: int = 0
 var _astar_budget_usec: int = 0
+var _astar_force_frame: int = -1
+var _astar_force_count: int = 0
 # 顶部诊断/预算共用的排队估计值，由 get_moving_no_path_stats() 定期刷新。
 var _astar_pending_estimate: int = 0
 
 func get_astar_pending_estimate() -> int:
 	return _astar_pending_estimate
+
+# 攻击移动共用路线：读取/写入都只操作本管理器，单位移动控制器不各自缓存，
+# 这样同一波部队才能真的复用同一条 A* 路线。
+func get_group_attack_path(cache_key: Vector3i) -> Array:
+	var entry = _group_attack_path_cache.get(cache_key, null)
+	if entry == null:
+		return []
+	return entry.get("path", [])
+
+func set_group_attack_path(cache_key: Vector3i, path: Array, start_pos: Vector3) -> void:
+	if path.is_empty():
+		return
+	# 目的地种类可能很多，限制缓存条目；超出后整体丢弃重建，避免长期占内存。
+	if _group_attack_path_cache.size() >= GROUP_ATTACK_PATH_CACHE_MAX:
+		_group_attack_path_cache.clear()
+	_group_attack_path_cache[cache_key] = {
+		"path": path.duplicate(),
+		"start": start_pos,
+	}
 # A* 统计：调用次数按 1 秒窗口滚动，峰值/累计供结算面板使用。
 # 实际调用包含建筑变化后 recalculate() 的直算，所以可能略高于分配次数。
 var _astar_calls_window: int = 0
@@ -169,6 +195,12 @@ var _astar_usec_total: int = 0
 var _wall_cache_version: int = 0          # 墙体/建筑布局实际变化时递增，MovementController 据此判断墙集合是否失效
 var _wall_layout_signature: int = 0       # 建筑/资源布局签名，避免实体缓存每 0.5s 刷新都让寻路墙缓存失效
 var _wall_signature_initialized: bool = false
+# 攻击移动群体路线缓存：同一边、同一片目的地的部队共用一条 A* 路线。
+# 后期 AI 一波几十个单位同时攻击移动，若每个单位各跑一次 A*，预算很快被吃光，
+# 队尾单位会长期停在“攻击移动却没有路径”。这里只让第一个单位算完整路线，
+# 其余单位从最近航点并入；布局变化时整体清空。
+const GROUP_ATTACK_PATH_CACHE_MAX: int = 48
+var _group_attack_path_cache: Dictionary = {}  # Vector3i(team, cell_x, cell_z) -> {"path": Array, "start": Vector3}
 var _wall_entity_grid: Dictionary = {}    # Vector2i -> Building(城墙 id==27)，供 process_move 高度平滑 O(1) 查询
 var _wall_top_entity_grid: Dictionary = {} # Vector2i -> Building(城墙/墙顶炮台)，近战锁敌时 O(1) 判断目标是否在墙顶
 var _ladder_entity_grid: Dictionary = {}  # Vector2i -> Building(梯子 id==8)，供 _has_adjacent_ladder O(8) 查询
@@ -222,12 +254,24 @@ func recycle_bullet(b: Bullet) -> void:
 
 # 预扣一次 A* 请求的配额。返回 false 时调用方应把目标记为 pending，下一帧再试。
 # is_retry 为 true 表示这是已经排队过的 pending 请求，可使用预留配额。
-func reserve_astar_request(is_retry: bool = false) -> bool:
+# force 为 true 时给排队过久的请求开放强制通道：绕过普通名额/耗时预算，
+# 每帧最多放行 ASTAR_FORCE_REQUESTS_PER_FRAME 个，下一帧继续消化队尾。
+func reserve_astar_request(is_retry: bool = false, force: bool = false) -> bool:
 	var frame: int = Engine.get_process_frames()
 	if frame != _astar_budget_frame:
 		_astar_budget_frame = frame
 		_astar_budget_count = 0
 		_astar_budget_usec = 0
+	if force:
+		if frame != _astar_force_frame:
+			_astar_force_frame = frame
+			_astar_force_count = 0
+		if _astar_force_count >= ASTAR_FORCE_REQUESTS_PER_FRAME:
+			return false
+		_astar_force_count += 1
+		_astar_budget_count += 1
+		_astar_alloc_total += 1
+		return true
 	# 排队越多，这一帧的 A* 总预算越大；但最多加 3 档，避免极端情况下
 	# 把所有帧时间都耗在寻路上。
 	var boost: int = clampi(_astar_pending_estimate / ASTAR_BACKLOG_STEP, 0, ASTAR_BACKLOG_MAX_BOOST)
@@ -540,6 +584,8 @@ func _rebuild_entity_cache():
 		_wall_layout_signature = layout_sig
 		_wall_signature_initialized = true
 		_wall_cache_version += 1
+		# 建筑/资源布局变化后旧路线可能穿墙，整批丢弃，让下一波单位重新算。
+		_group_attack_path_cache.clear()
 	_entity_cache_dirty = false
 
 func mark_entity_cache_dirty():

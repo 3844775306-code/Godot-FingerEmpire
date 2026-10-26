@@ -42,11 +42,12 @@ var _pending_since_ms: int = 0
 # 到达该段末端后由 Army 重新寻路。否则大部队攻击移动会停在原地。
 var path_partial: bool = false
 var _last_path_partial: bool = false
-# 大量单位同时追击时 A* 预算可能连续多帧排不到某个单位。
-# 等待超过这个时间就按“无路”处理，交给 Army 的换目标/拆墙兜底，不能让单位永远站着。
-# 后期队列很长时放宽到 8 秒，避免“排队→超时失败→换目标→再排队”的恶性循环。
-const PENDING_PATH_TIMEOUT_MS: int = 4000
-const PENDING_PATH_TIMEOUT_MAX_MS: int = 8000
+# 大量单位同时移动/攻击移动时 A* 预算可能连续多帧排不到某个单位。
+# 以前等 4~8 秒后直接判“无路”再重发，结果队尾单位反复经历
+# “排队→超时失败→换目标/重发→继续排队”，永远拿不到路径。
+# 现在排队超过这个时间就强制放行一次（忽略普通 A* 配额），
+# 真正算不出路径才由 _apply_path 写入失败标记，交给 Army 的换目标/拆墙兜底。
+const PENDING_PATH_URGENT_MS: int = 1200
 # 状态层偶发漏发路径请求时的兜底：没有路径、没有排队、也没有失败标记，
 # 但目标仍很远，隔一段时间主动补一次请求，避免单位永久停在“移动中但无路径”。
 const NO_PATH_REISSUE_INTERVAL_MS: int = 1200
@@ -78,6 +79,10 @@ const SLOPE_BASE_COST: float = 1.35
 const PLATEAU_BASE_COST: float = 1.1
 var _last_recalc_frame: int = -99  # prevent recalc spam
 var _path_cache: Dictionary = {}  # Vector2i(world_x, world_z) -> path_array, cleared on building placement
+# 攻击移动群体路线：同目的地的大部队共用一个 A* 结果，避免几十个单位
+# 同时展开上千节点把 A* 预算吃光。单位从最近航点并入缓存路线。
+const GROUP_PATH_MERGE_RADIUS: float = 7.0
+const GROUP_PATH_CACHE_CELL: float = 2.0
 var _blacklist: Dictionary = {}  # Vector2i -> 过期时间戳，暂时跳过不可达目标
 # 普通移动失败只临时拉黑：如果永久记住，玩家一次失败后同一位置就再也点不动，
 # 只有建筑布局变化触发 recalculate() 才会恢复，表现为“单位不听移动命令”。
@@ -189,7 +194,7 @@ func set_move_target(pos: Vector3, stop_range: float = 0.0):
 	_pending_since_ms = 0
 
 func _try_compute_path(pos: Vector3, stop_range: float, bm: RTSBattleManager = null,
-		is_retry: bool = false) -> bool:
+		is_retry: bool = false, force: bool = false) -> bool:
 	if bm == null:
 		bm = _get_bm()
 	# 开阔地直走不消耗 A* 预算：这是后期队列增长的主要来源。
@@ -208,9 +213,14 @@ func _try_compute_path(pos: Vector3, stop_range: float, bm: RTSBattleManager = n
 				_last_path_partial = false
 				_apply_path(pos, direct_path, stop_range)
 				return true
+	# 攻击移动：如果同目的地已经有人算好路线，直接从最近航点并入，
+	# 不必再跑一次 A*。这一步在 reserve 之前，能显著降低大部队的寻路压力。
+	if bm != null and stop_range <= 0.0 and _is_group_attack_move():
+		if _try_merge_group_path(pos, bm):
+			return true
 	# 已经排队等过的请求走 retry 配额。若新请求可以吃满全部名额，场景树里排在
 	# 后面的单位会被前面不断产生的新请求长期挤掉，表现为“有移动命令但一直没路径”。
-	if bm != null and not bm.reserve_astar_request(is_retry):
+	if bm != null and not bm.reserve_astar_request(is_retry, force):
 		return false
 	var started_usec := Time.get_ticks_usec()
 	var path := _calculate_astar_path(pos, stop_range)
@@ -229,7 +239,13 @@ func _apply_path(pos: Vector3, path: Array, stop_range: float) -> void:
 		attack_path_failed = false
 		move_path_failed = false
 		if not is_attack_move:
-			_path_cache[key] = astar_path
+			# duplicate：astar_path 会在 process_move 里被 pop_front 消费，
+			# 缓存必须保留完整路线给后面的单位复用。
+			_path_cache[key] = astar_path.duplicate()
+			if _is_group_attack_move():
+				var bm = _get_bm()
+				if bm != null:
+					bm.set_group_attack_path(_group_path_cache_key(pos), astar_path, _army.global_position)
 	elif is_attack_move:
 		# 追击目标寻路失败时不写永久黑名单；重置目标，让冷却后还能重试
 		attack_path_failed = true
@@ -241,10 +257,10 @@ func _apply_path(pos: Vector3, path: Array, stop_range: float) -> void:
 		_blacklist[key] = Time.get_ticks_msec() + MOVE_BLACKLIST_TTL_MS
 	if _is_selected: _show_path()
 
-func _try_compute_pending_path(bm: RTSBattleManager) -> bool:
+func _try_compute_pending_path(bm: RTSBattleManager, force: bool = false) -> bool:
 	if not _pending_path:
 		return true
-	if not _try_compute_path(_pending_target, _pending_stop_range, bm, true):
+	if not _try_compute_path(_pending_target, _pending_stop_range, bm, true, force):
 		return false
 	_pending_path = false
 	_pending_since_ms = 0
@@ -282,7 +298,12 @@ func recalculate():
 		move_path_failed = astar_path.is_empty()
 		_pending_path = false
 		_pending_since_ms = 0
-		if astar_path.size() > 0: _path_cache[key] = astar_path  # only cache valid paths
+		if astar_path.size() > 0:
+			_path_cache[key] = astar_path.duplicate()  # only cache valid paths
+			if _is_group_attack_move():
+				var bm = _get_bm()
+				if bm != null:
+					bm.set_group_attack_path(_group_path_cache_key(astar_target), astar_path, _army.global_position)
 		if _is_selected:
 			_show_path()
 
@@ -345,31 +366,27 @@ func process_move(delta, bm: RTSBattleManager):
 	# 不能拿旧路径继续走，否则大部队下令后会先朝旧目标移动。
 	# 攻击追目标时旧路径通常仍指向同一目标，可以边沿旧路径推进边等新路径。
 	if _pending_path:
-		var attack_order: bool = _army.is_attack_moving or _army._order_is(_army.UnitState.ATTACKING)
 		if not _army.is_attack_moving and not _army._order_is(_army.UnitState.MOVING) \
 				and not _army._order_is(_army.UnitState.ATTACKING):
 			# 只有真正不需要寻路的命令才丢弃待处理请求；攻击索敌必须保留，
 			# 否则 A* 预算连续几帧排不到时会表现为“锁着目标却一步不走”。
 			_pending_path = false
 			_pending_since_ms = 0
-		elif not _try_compute_pending_path(bm):
-			# 只有攻击目标需要超时兜底；普通移动的寻路请求不能因为 A* 预算拥堵
-			# 等了几秒就被判失败，否则玩家下令后单位会直接停住不动。
-			var pending_timeout_ms: int = PENDING_PATH_TIMEOUT_MS
-			if bm != null and bm.get_astar_pending_estimate() >= A_STAR_PRESSURE_THRESHOLD:
-				pending_timeout_ms = PENDING_PATH_TIMEOUT_MAX_MS
-			if attack_order and Time.get_ticks_msec() - _pending_since_ms >= pending_timeout_ms:
-				# 连续等待超时：按寻路失败处理，让 Army 换目标/拆挡路建筑，避免永久站桩。
-				_pending_path = false
-				_pending_since_ms = 0
-				attack_path_failed = true
-				move_path_failed = false
-				astar_target = Vector3.ZERO
-			# 攻击移动即使新路径还没算完，也可以先沿现有路径继续推进；
-			# 普通攻击/普通移动没有可用新路径时先停住，等下一帧重试。
-			if not (_army.is_attack_moving and astar_path.size() > 0):
-				_stop_velocity()
-				return
+		else:
+			var pending_age_ms: int = Time.get_ticks_msec() - _pending_since_ms
+			if pending_age_ms >= PENDING_PATH_URGENT_MS:
+				# 排队过久：强制放行一次（每帧限额），不能再等普通配额。
+				# 这样即使队列一直被新请求插队，队尾单位也一定能拿到一次真正的寻路结果：
+				# 有路就继续走，无路就由 _apply_path 写失败标记交给 Army 兜底。
+				_try_compute_pending_path(bm, true)
+			else:
+				_try_compute_pending_path(bm)
+			if _pending_path:
+				# 攻击移动即使新路径还没算完，也可以先沿现有路径继续推进；
+				# 普通攻击/普通移动没有可用新路径时先停住，等下一帧重试。
+				if not (_army.is_attack_moving and astar_path.size() > 0):
+					_stop_velocity()
+					return
 	if not _army.can_move or _army.speed <= 0:
 		_stop_velocity()
 		return
@@ -968,6 +985,63 @@ func _try_direct_path(bm: RTSBattleManager, target_pos: Vector3, stop_range: flo
 			return []
 		prev_tile = tile
 	return [path_goal_pos]
+
+# 攻击移动群体路线缓存键：按队伍和 2 米网格分组，让同一波部队
+# 即使队形落点相差一两米也能共用同一条主路线。
+func _group_path_cache_key(target_pos: Vector3) -> Vector3i:
+	# 水军和陆军可走的格子不同，必须分车道；否则一方会复用另一方穿水/上岸的路线。
+	var lane: int = int(_army.team) * 2 + (1 if _army.water_capable else 0)
+	return Vector3i(
+		lane,
+		int(round(target_pos.x / GROUP_PATH_CACHE_CELL)),
+		int(round(target_pos.z / GROUP_PATH_CACHE_CELL))
+	)
+
+func _is_group_attack_move() -> bool:
+	return _army != null and (_army.is_attack_moving or _army._order_is(_army.UnitState.ATTACK_MOVING))
+
+# 尝试并入已经算好的攻击移动路线。只从最近航点做一次直线可达检查；
+# 不可达就退回正常 A*，不会为了复用路线把单位硬塞进墙里。
+func _try_merge_group_path(target_pos: Vector3, bm: RTSBattleManager) -> bool:
+	if bm == null or not _is_group_attack_move():
+		return false
+	var route: Array = bm.get_group_attack_path(_group_path_cache_key(target_pos))
+	if route.size() < 2:
+		return false
+	var origin := _army.global_position
+	var best_index: int = -1
+	var best_dist: float = GROUP_PATH_MERGE_RADIUS
+	for i in range(route.size()):
+		var wp: Vector3 = route[i]
+		var d := Vector2(wp.x - origin.x, wp.z - origin.z).length()
+		if d < best_dist:
+			best_dist = d
+			best_index = i
+	if best_index < 0:
+		return false
+	# 到最近航点必须能直线走通；否则从当前位置硬切过去可能穿墙。
+	var prefix: Array = _try_direct_path(bm, route[best_index], 0.0)
+	if prefix.is_empty():
+		return false
+	var merged: Array = prefix.duplicate()
+	for i in range(best_index, route.size()):
+		var wp2: Vector3 = route[i]
+		if merged.size() > 0 and (merged[merged.size() - 1] as Vector3).distance_to(wp2) < 0.2:
+			continue
+		merged.append(wp2)
+	if merged.is_empty():
+		return false
+	astar_target = target_pos
+	astar_path = merged
+	path_partial = false
+	_last_path_partial = false
+	move_path_failed = false
+	attack_path_failed = false
+	_pending_path = false
+	_pending_since_ms = 0
+	if _is_selected:
+		_show_path()
+	return true
 
 func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Array:
 	_last_path_partial = false
