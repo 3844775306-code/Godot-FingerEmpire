@@ -39,6 +39,29 @@ var mobile_gyro_rotate: bool = false       # 倾斜手机旋转视角（旧开�
 # 手机端双指手势固定为「缩放」：捏合缩放，拖动/扭转都不动视角。
 # 旋转视角改由命令栏的「↻ 按住旋转」按钮控制（按住缓慢顺时针转，松手停）。
 
+# ── 相机放大倍数（设置面板滑条）──
+# 倍数越大 = 视野越近、单位看着越大、能看到的战场越少。
+# 屏幕越小，同一片视野在眼里越小，所以默认值按设备区分：
+#   电脑 1.00（最小）、iPad/平板 1.12、手机 1.25（最大）。
+# 滑条范围故意收窄到 0.85~1.35，两端都还属于"看得舒服"的区间。
+const CAMERA_ZOOM_MIN: float = 0.85
+const CAMERA_ZOOM_MAX: float = 1.35
+var camera_zoom_mult: float = 1.0
+
+# 按设备给出相机放大倍数的默认值
+static func default_camera_zoom_mult() -> float:
+	# 桌面端用 -- --mobile-ui 预览时按手机处理，方便在电脑上验证手机默认值
+	if InputSource.force_mobile_ui:
+		return 1.25
+	if not InputSource.is_mobile_platform():
+		return 1.0
+	# 手机和平板都算 mobile 平台，用窗口最小边区分：手机普遍 ≤1200px，平板 ≥1536px
+	var win: Vector2i = DisplayServer.window_get_size()
+	var min_side: int = mini(win.x, win.y)
+	if min_side >= 1400:
+		return 1.12
+	return 1.25
+
 var post_game_data: Dictionary = {}  # {power_history, player_is_blue} for results screen
 
 # ==================== 战报接收筛选 ====================
@@ -92,4 +115,6 @@ func _ready() -> void:
 	# 移动端默认单次命令（下令后取消选择），PC端默认连续命令
 	if OS.has_feature("mobile") or OS.has_feature("android") or OS.has_feature("ios"):
 		command_mode = CommandMode.SINGLE
+	# 相机放大倍数按设备取默认值（必须在解析完 --mobile-ui 之后）
+	camera_zoom_mult = default_camera_zoom_mult()
 	update_ui_scale()

@@ -32,6 +32,11 @@ var _two_finger_dist: float = 0.0
 var _hold_rotate: float = 0.0
 var _hold_rotate_center: Vector3 = Vector3.ZERO
 
+# 相机放大倍数（设置面板滑条）：1.0 基准，越大视野越近。
+# 实际生效方式是缩放视野 size 与缩放边界，滚轮/双指缩放的可用区间跟着平移，
+# 这样放大倍数只影响"看起来多大"，不会把玩家原有的缩放习惯挤掉。
+var _zoom_mult: float = 1.0
+
 # 触摸拖拽相关
 var _touch_count: int = 0           # 当前触摸点数
 var touch_pan_active: bool = false  # 三指拖拽移动相机
@@ -57,12 +62,33 @@ var _shake_total: float = 0.0
 var _shake_amp: float = 0.0
 
 func _ready():
+	add_to_group("camera_controller")
+	# 相机放大倍数：设备默认值（电脑最小、平板居中、手机最大），可在设置面板调
+	_zoom_mult = clampf(GameSettings.camera_zoom_mult, GameSettings.CAMERA_ZOOM_MIN, GameSettings.CAMERA_ZOOM_MAX)
 	if projection == PROJECTION_ORTHOGONAL:
 		# 默认视野取缩放范围的中值：原来写死 30，比允许的最远视角（max_zoom 20）还大，
 		# 开局视野过大、单位显得很小，而且第一次滚轮/双指缩放会瞬间跳到 20
-		size = (min_zoom + max_zoom) * 0.5
+		size = (min_zoom + max_zoom) * 0.5 / _zoom_mult
 	# 开局视角朝太阳（逆光方向）：等场景里的方向光就绪后再摆相机
 	call_deferred("_apply_initial_sun_yaw")
+
+# 放大倍数生效后的缩放边界：倍数越大，允许的 size 越小（看得越近）
+func zoom_min() -> float:
+	return min_zoom / maxf(_zoom_mult, 0.01)
+
+func zoom_max() -> float:
+	return max_zoom / maxf(_zoom_mult, 0.01)
+
+# 设置面板拖动「相机放大倍数」时调用：边拖边生效，不打断当前视野中心
+func apply_zoom_mult(mult: float) -> void:
+	var m: float = clampf(mult, GameSettings.CAMERA_ZOOM_MIN, GameSettings.CAMERA_ZOOM_MAX)
+	if absf(m - _zoom_mult) < 0.001:
+		return
+	var center: Vector3 = _screen_center_ground()
+	# size * 旧倍数 是"基准视野"，除以新倍数就得到新的 size
+	size = clampf(size * _zoom_mult / m, min_zoom / m, max_zoom / m)
+	_zoom_mult = m
+	_rig_over_center(center)
 
 # 开局把水平朝向对准太阳，形成逆光：地形和单位有明显的背光明暗对比
 func _apply_initial_sun_yaw() -> void:
@@ -233,6 +259,9 @@ func _update_shake(delta: float) -> void:
 
 func _process(delta):
 	_update_shake(delta)
+	# 设置面板的放大倍数滑条：每帧比对一次，拖动立即生效（面板也会直接调 apply_zoom_mult）
+	if absf(GameSettings.camera_zoom_mult - _zoom_mult) > 0.001:
+		apply_zoom_mult(GameSettings.camera_zoom_mult)
 	# 按住旋转按钮：绕按下瞬间锁定的地面焦点匀速转，松开即停
 	if _hold_rotate != 0.0:
 		yaw_deg = fposmod(yaw_deg + _hold_rotate * HOLD_ROTATE_SPEED * delta, 360.0)
@@ -260,7 +289,7 @@ func _process(delta):
 # ═══ 缩放联动（视野大小 ↔ 相机高度/俯角）═══
 # 应用缩放：保持屏幕中心的地面点不变，同步调整相机高度与俯角
 func _apply_zoom_to(target_size: float):
-	var new_size = clamp(target_size, min_zoom, max_zoom)
+	var new_size = clamp(target_size, zoom_min(), zoom_max())
 	if absf(new_size - size) < 0.01:
 		return
 	var center = _screen_center_ground()
@@ -269,7 +298,9 @@ func _apply_zoom_to(target_size: float):
 
 # 重新摆放相机：以地面焦点 center 为轴，随 size 改变高度与俯角
 func _rig_over_center(center: Vector3):
-	var t = clamp((size - min_zoom) / max(1.0, max_zoom - min_zoom), 0.0, 1.0)
+	var lo: float = zoom_min()
+	var span: float = maxf(0.001, zoom_max() - lo)
+	var t = clamp((size - lo) / span, 0.0, 1.0)
 	var pitch = deg_to_rad(lerpf(PITCH_NEAR_DEG, PITCH_FAR_DEG, t))
 	var height = lerpf(HEIGHT_AT_MIN, HEIGHT_AT_MAX, t)
 	# 水平视线方向由 yaw 决定：0 度朝北看（相机在南侧），与原来的默认朝向一致

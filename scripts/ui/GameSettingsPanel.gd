@@ -3,7 +3,9 @@ extends Control
 # 单机与联机客户端共用；联机模式下"暂停"不可用（服务器权威，客户端暂停无意义）
 
 const PANEL_W: float = 470.0
-const PANEL_H: float = 580.0
+# 加了「相机放大倍数」一行后内容约 627px，面板留到 660 让桌面版一屏放得下；
+# 真放不下时（更小的窗口）内容区会自动变成可滚动，不会裁掉底部按钮。
+const PANEL_H: float = 660.0
 
 const QUALITY_NAMES: Array = ["流畅", "标准", "高清", "极致"]
 const QUALITY_DESC: Array = [
@@ -68,31 +70,24 @@ func _build() -> void:
 	panel.add_theme_stylebox_override("panel", st)
 	add_child(panel)
 
-	var content_parent: Control = panel
-	if _mobile:
-		var scroll := ScrollContainer.new()
-		scroll.name = "SettingsScroll"
-		scroll.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		scroll.offset_left = UILayout.dp(5.0)
-		scroll.offset_right = -UILayout.dp(5.0)
-		scroll.offset_top = UILayout.dp(5.0)
-		scroll.offset_bottom = -UILayout.dp(5.0)
-		scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-		scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
-		panel.add_child(scroll)
-		content_parent = scroll
+	# 内容统一放进滚动容器：手机上必须滚动（屏矮），桌面上内容变多后
+	#（画质 + 相机倍数 + 音量 + 血条 + 战报 + 底部按钮）也不会把底部按钮挤出面板。
+	var scroll := ScrollContainer.new()
+	scroll.name = "SettingsScroll"
+	scroll.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	var pad: float = UILayout.dp(5.0) if _mobile else 8.0
+	scroll.offset_left = pad
+	scroll.offset_right = -pad
+	scroll.offset_top = pad
+	scroll.offset_bottom = -pad
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	panel.add_child(scroll)
+	var content_parent: Control = scroll
 
 	var vb := VBoxContainer.new()
-	if _mobile:
-		vb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		vb.add_theme_constant_override("separation", int(UILayout.dp(7.0)))
-	else:
-		vb.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		vb.offset_left = 20
-		vb.offset_right = -20
-		vb.offset_top = 14
-		vb.offset_bottom = -14
-		vb.add_theme_constant_override("separation", 10)
+	vb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vb.add_theme_constant_override("separation", int(UILayout.dp(7.0)) if _mobile else 9)
 	content_parent.add_child(vb)
 
 	# 标题行
@@ -126,6 +121,10 @@ func _build() -> void:
 		_quality_btns.append(b)
 	_hint_label = _make_label(QUALITY_DESC[_quality_level], UITheme.PARCHMENT, UITheme.FONT_SM)
 	vb.add_child(_hint_label)
+
+	# 相机放大倍数：屏幕越小的设备默认放大越多（电脑 100%、平板 112%、手机 125%）
+	vb.add_child(_make_label("📷 相机放大倍数", UITheme.GOLD))
+	vb.add_child(_make_zoom_row())
 
 	# 音量
 	vb.add_child(_make_label("🔊 音量", UITheme.GOLD))
@@ -259,6 +258,52 @@ func _make_volume_row(label_text: String, value: float, setter: Callable) -> HBo
 		pct.text = "%d%%" % int(v)
 		setter.call(clampf(v / 100.0, 0.0, 1.0)))
 	return row
+
+# ==================== 相机放大倍数 ====================
+# 百分比显示：100% = 基准视野；百分比越大单位看着越大、能看到的战场越少。
+# 范围收窄到 85%~135%，两端都还算舒服，不会出现贴脸或极远视角。
+func _make_zoom_row() -> HBoxContainer:
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 10)
+	var lb := Label.new()
+	lb.text = "放大倍数"
+	lb.custom_minimum_size = Vector2(86, 0)
+	lb.add_theme_font_size_override("font_size", UITheme.FONT_MD)
+	lb.add_theme_color_override("font_color", UITheme.PARCHMENT)
+	row.add_child(lb)
+
+	var slider := HSlider.new()
+	slider.min_value = roundf(GameSettings.CAMERA_ZOOM_MIN * 100.0)
+	slider.max_value = roundf(GameSettings.CAMERA_ZOOM_MAX * 100.0)
+	slider.step = 5.0
+	slider.value = clampf(GameSettings.camera_zoom_mult * 100.0, slider.min_value, slider.max_value)
+	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	slider.custom_minimum_size = Vector2(0, UILayout.dp(26.0) if _mobile else 28)
+	row.add_child(slider)
+
+	var pct := Label.new()
+	pct.text = "%d%%" % int(slider.value)
+	pct.custom_minimum_size = Vector2(52, 0)
+	pct.add_theme_font_size_override("font_size", UITheme.FONT_MD)
+	pct.add_theme_color_override("font_color", UITheme.GOLD)
+	row.add_child(pct)
+
+	slider.value_changed.connect(func(v: float):
+		pct.text = "%d%%" % int(v)
+		_set_camera_zoom(v / 100.0))
+	return row
+
+func _set_camera_zoom(mult: float) -> void:
+	GameSettings.camera_zoom_mult = clampf(mult, GameSettings.CAMERA_ZOOM_MIN, GameSettings.CAMERA_ZOOM_MAX)
+	# 立即生效：面板直接推给相机，暂停状态下也能看到变化
+	for cam in get_tree().get_nodes_in_group("camera_controller"):
+		if cam.has_method("apply_zoom_mult"):
+			cam.apply_zoom_mult(GameSettings.camera_zoom_mult)
+	var scene := get_tree().current_scene
+	if scene != null:
+		var cam: Node = scene.get_node_or_null("Camera3D")
+		if cam != null and cam.has_method("apply_zoom_mult"):
+			cam.call("apply_zoom_mult", GameSettings.camera_zoom_mult)
 
 # ==================== 暂停 / 退出 ====================
 func _on_pause_pressed() -> void:
