@@ -103,6 +103,7 @@ addons/                编辑器与运行时插件（见下）
 | `GameSettings` | 国家选择、AI 难度、单机模式、UI 缩放 |
 | `AudioManager` | 背景音乐与音效（含 3D 音效） |
 | `SteamManager` | Steam 初始化、大厅、P2P 会话 |
+| `WebTunnel` | PC 网页房：自动启动 Cloudflare 快速隧道，生成公网 `wss://` 邀请链接 |
 | `ThemeHelper` | UI 主题工具 |
 | `Profiler` | 性能采样 |
 
@@ -117,6 +118,21 @@ addons/                编辑器与运行时插件（见下）
 - 客户端 → 服务端：`NetworkManager.send_command({action: ...})`，支持 `right_click`、`build`、`upgrade`、`produce`、`rally`、`set_group`、`global_attack`、`global_retreat`、`stop_gather`、`toggle_hold_position`、`demolish`、`set_garrison`、`clear_garrison` 等
 - 服务端 → 客户端：约 10Hz 快照，100ms 增量 + 每 3s 全量；紧凑数组序列化，按队伍可见性裁剪
 - 端口：ENet `9000`，WebSocket `8080`；支持 UPnP 自动端口映射
+
+### 网页版联机（PC 开房 + 自动公网 wss）
+
+浏览器不能监听 TCP 端口，Netlify 也只能托管静态文件，因此网页版采用“PC 主机开房、浏览器加入”的模式：
+
+1. PC 端进入「联机对战」，传输方式选 **WebSocket**，点击「创建网页房间（自动公网）」；
+2. 游戏会启动本机 WS 服务器（8080），并自动拉起 `cloudflared` 快速隧道，生成形如
+   `https://fingerempire.netlify.app/?server=wss%3A%2F%2Fxxxx.trycloudflare.com` 的邀请链接；
+3. 把链接发给网页玩家。对方打开后会自动进入联机大厅并连接；主机点击「开始游戏」即可。
+
+注意：
+
+- 主机需要保持游戏运行，电脑休眠/断网会断开网页玩家；
+- 每次开房都会生成新的随机 `trycloudflare.com` 地址，关房后旧链接失效；
+- Windows 发布 zip 会带上 `cloudflared.exe`；从源码运行可先执行 `tools/get_cloudflared.ps1` 下载到项目根目录。
 
 ## 插件（addons）
 

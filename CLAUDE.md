@@ -166,6 +166,7 @@ These are globally accessible nodes loaded before any scene:
 | `AudioManager` | `scripts/core/AudioManager.gd` | Music and SFX playback (play_music, play_sfx, play_sfx_3d) |
 | `Profiler` | `scripts/core/Profiler.gd` | Performance profiling |
 | `SteamManager` | `scripts/core/SteamManager.gd` | Steam init, lobby and P2P session; auto-detects `steam-multiplayer-peer` GDExtension vs GodotSteam built-in |
+| `WebTunnel` | `scripts/core/WebTunnel.gd` | 网页房公网入口：启动/停止 Cloudflare Quick Tunnel，生成 `wss://` 邀请链接；自动查找 exe 同目录或项目根目录的 `cloudflared.exe` |
 
 ### Entity System (`scripts/entities/`)
 
