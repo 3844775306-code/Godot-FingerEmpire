@@ -22,6 +22,8 @@ var is_box_selecting: bool = false
 var box_start: Vector2 = Vector2.ZERO
 var box_end: Vector2 = Vector2.ZERO
 var box_rect: ColorRect
+# 选中实体清理：敌方走出迷雾/死亡时移除只读选中
+var _selection_cleanup_timer: float = 0.0
 
 # 双击全选
 var last_clicked_id: int = -1
@@ -474,8 +476,9 @@ func _input(event):
 
 				var is_own := _is_own_id(clicked_id)
 				var is_ally := _is_teammate_id(clicked_id)
-				if not is_own and not is_ally:
-					_send_left_click(event)  # 敌方 → 攻击命令
+				var is_enemy := _is_enemy_id(clicked_id) and int(info.get("type", -1)) in [1, 2]
+				if not is_own and not is_ally and not is_enemy:
+					_send_left_click(event)  # 非己方/队友/敌方（或迷雾中的敌人）→ 命令
 					return
 
 				if info["health"] <= 0: return
@@ -490,20 +493,25 @@ func _input(event):
 				last_clicked_id = clicked_id
 				last_click_time = now
 
-				# 单击：Shift追加，否则替换选择；己方与队友不混选，避免命令误发
-				if Input.is_key_pressed(KEY_SHIFT) and not client_selected_ids.is_empty():
-					if _selection_all_local() != is_own:
-						client_selected_ids.clear()
-				if clicked_id in client_selected_ids:
-					if Input.is_key_pressed(KEY_SHIFT):
-						client_selected_ids.erase(clicked_id)
-					else:
-						client_selected_ids.clear()
-				elif Input.is_key_pressed(KEY_SHIFT):
-					client_selected_ids.append(clicked_id)
-				else:
+				# 敌方单位只允许单选查看：替换当前选择，不参与 Shift 混选、
+				# 编队和任何命令；右键移动/攻击仍然只作用于己方选中单位。
+				if is_enemy:
 					client_selected_ids.clear()
 					client_selected_ids.append(clicked_id)
+				else:
+					# 单击：Shift追加，否则替换选择；己方、队友、敌方不混选
+					if not client_selected_ids.is_empty() and (_selection_has_enemy() or _selection_all_local() != is_own):
+						client_selected_ids.clear()
+					if clicked_id in client_selected_ids:
+						if Input.is_key_pressed(KEY_SHIFT):
+							client_selected_ids.erase(clicked_id)
+						else:
+							client_selected_ids.clear()
+					elif Input.is_key_pressed(KEY_SHIFT):
+						client_selected_ids.append(clicked_id)
+					else:
+						client_selected_ids.clear()
+						client_selected_ids.append(clicked_id)
 
 				emit_signal("selection_changed", client_selected_ids.duplicate())
 				_update_selection_visuals()
@@ -520,8 +528,8 @@ func _input(event):
 					box_end = pos
 				else:
 					# 有选中单位 + 点击空地/敌方 → 攻击/移动命令
-					# 队友单位只可查看：取消选中，不发送任何命令
-					if _selection_has_teammate():
+					# 队友/敌方单位只可查看：取消选中，不发送任何命令
+					if _selection_has_teammate() or _selection_has_enemy():
 						client_selected_ids.clear()
 						_update_selection_visuals()
 						emit_signal("selection_changed", [])
@@ -567,6 +575,13 @@ func _on_left_release(_event):
 func _select_all_of_same_type(target_id: int, info: Dictionary):
 	var target_is_ally := _is_teammate_id(target_id)
 	client_selected_ids.clear()
+	# 敌方单位只允许单选查看，双击同类不批量选中敌方
+	if _is_enemy_info(target_id):
+		if int(info.get("health", 0)) > 0:
+			client_selected_ids.append(target_id)
+		emit_signal("selection_changed", client_selected_ids.duplicate())
+		_update_selection_visuals()
+		return
 	var target_entity_id = info.get("entity_id", -1)
 	if target_entity_id == -1: return
 	for node in renderer.entity_nodes.values():
@@ -614,9 +629,11 @@ func _unhandled_input(event):
 # ---------- 命令发送 ----------
 func _send_left_click(event):
 	if not renderer: return
-	# 队友单位只可查看，不能被指挥（防御性拦截，正常选择流程不会走到这里）
-	if _selection_has_teammate():
-		_notify_teammate_readonly()
+	if client_selected_ids.is_empty():
+		return
+	# 只有己方单位可被指挥；队友/敌方选中仅用于查看信息
+	if not _selection_all_local():
+		_notify_readonly()
 		return
 	var cam = get_viewport().get_camera_3d()
 	if not cam: return
@@ -707,6 +724,23 @@ func _is_teammate_id(id: int) -> bool:
 	if int(info.get("team", -1)) != renderer.player_team: return false
 	return int(info.get("owner_peer_id", -1)) != renderer.my_peer_id
 
+# 敌方单位：不同队伍、非中立，且在当前视野内。只允许选中查看，不允许指挥。
+func _is_enemy_info(id: int) -> bool:
+	var info = _get_entity_info(id)
+	if info.is_empty(): return false
+	if renderer == null or renderer.player_team == -1:
+		return false
+	var team := int(info.get("team", -1))
+	if team == RTSConfig.Team.NEUTRAL:
+		return false
+	return team != renderer.player_team
+
+func _is_enemy_id(id: int) -> bool:
+	if not _is_enemy_info(id):
+		return false
+	var node = renderer.entity_nodes.get(id) if renderer else null
+	return is_instance_valid(node) and node.visible
+
 func _selection_all_local() -> bool:
 	if client_selected_ids.is_empty(): return false
 	for sid in client_selected_ids:
@@ -717,6 +751,38 @@ func _selection_has_teammate() -> bool:
 	for sid in client_selected_ids:
 		if _is_teammate_id(sid): return true
 	return false
+
+func _selection_has_enemy() -> bool:
+	for sid in client_selected_ids:
+		if _is_enemy_info(sid): return true
+	return false
+
+func _notify_readonly():
+	var chud = _get_client_hud()
+	if chud and chud.has_method("show_alert_message"):
+		var msg := "敌方单位仅可查看，无法指挥" if _selection_has_enemy() else "队友单位仅可查看，无法指挥"
+		chud.show_alert_message(msg, Color(1.0, 0.75, 0.2))
+
+# 敌方单位是只读选择：死亡、从快照消失或走出迷雾后立即取消选中，
+# 避免信息面板停留在旧数据上，也避免后续右键把敌方 id 当成可指挥单位。
+func _sanitize_client_selection():
+	if client_selected_ids.is_empty() or renderer == null:
+		return
+	var changed := false
+	for i in range(client_selected_ids.size() - 1, -1, -1):
+		var sid: int = client_selected_ids[i]
+		var node = renderer.entity_nodes.get(sid)
+		var info := _get_entity_info(sid)
+		if info.is_empty() or not is_instance_valid(node) or int(info.get("health", 0)) <= 0:
+			client_selected_ids.remove_at(i)
+			changed = true
+			continue
+		if _is_enemy_info(sid) and not (node as Node3D).visible:
+			client_selected_ids.remove_at(i)
+			changed = true
+	if changed:
+		_update_selection_visuals()
+		emit_signal("selection_changed", client_selected_ids.duplicate())
 
 func _notify_teammate_readonly():
 	var chud = _get_client_hud()
@@ -739,6 +805,10 @@ func _process(_delta):
 	# 每帧更新选择环位置（跟随目标）；范围圈挂在实体节点下自己跟随，这里只做失效清理
 	if selection_rings.size() > 0 or range_rings.size() > 0:
 		_process_selection_rings()
+	_selection_cleanup_timer -= _delta
+	if _selection_cleanup_timer <= 0.0:
+		_selection_cleanup_timer = 0.25
+		_sanitize_client_selection()
 	# 手机端居中建造：地图平移后，预览重新落到屏幕中心
 	if renderer and renderer.placement_mode and renderer.mobile_centered_placement:
 		_mobile_preview_timer -= _delta

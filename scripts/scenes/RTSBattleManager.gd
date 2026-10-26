@@ -2862,8 +2862,10 @@ func _end_build_drag_and_place():
 	# 无论是否放置成功，都退出建造模式
 	_exit_build_mode()
 func _handle_right_click(event):
-	# Alt+右键 → 清除驻扎点
+	# Alt+右键 → 清除驻扎点（仅己方单位；敌方/队友只读）
 	if Input.is_key_pressed(KEY_ALT):
+		if not (selection and selection.has_method("_selection_all_local") and selection._selection_all_local()):
+			return false
 		for u in selection.selected_entities:
 			if u is Army and u.has_method("_clear_garrison"):
 				u._clear_garrison()
@@ -2899,8 +2901,8 @@ func _handle_right_click(event):
 	_command_selected_units(event.position)
 
 func _set_garrison_for_selected(screen_pos: Vector2):
-	# 防御：队友单位只可查看，不允许设置驻扎点
-	if selection and selection.has_method("_selection_has_teammate") and selection._selection_has_teammate():
+	# 防御：队友/敌方单位只可查看，不允许设置驻扎点
+	if not (selection and selection.has_method("_selection_all_local") and selection._selection_all_local()):
 		return
 	var pos = _get_ground_pos(screen_pos)
 	if pos == Vector3.ZERO: return
@@ -2937,8 +2939,8 @@ func _get_entity_under_click(screen_pos: Vector2):
 	return null
 
 func _command_selected_units(screen_pos: Vector2):
-	# 防御：队友单位只可查看，任何路径都不能把命令发给队友
-	if selection and selection.has_method("_selection_has_teammate") and selection._selection_has_teammate():
+	# 防御：只有己方单位可被指挥；队友/敌方选中仅用于查看信息
+	if not (selection and selection.has_method("_selection_all_local") and selection._selection_all_local()):
 		return
 	var cam = get_viewport().get_camera_3d()
 	if not cam: return
@@ -4542,6 +4544,10 @@ func _update_command_card_sp():
 	if not cc or not cc.visible: return
 	if selection.selected_entities.size() == 1:
 		var e = selection.selected_entities[0]
+		# 队友/敌方建筑或军队只可查看：不显示生产/升级/拆除/指挥按钮
+		if not selection._is_local_owned(e):
+			cc.hide_all()
+			return
 		if is_instance_valid(e) and e is Building:
 			cc.show_building(e.production_list, e.get_instance_id(), e.entity_id, self)
 		elif is_instance_valid(e) and e is Army:

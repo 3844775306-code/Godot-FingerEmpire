@@ -302,6 +302,13 @@ func is_local_owned_info(info: Dictionary) -> bool:
 		return int(info.get("owner_peer_id", -1)) == my_peer_id
 	return int(info.get("team", -1)) == player_team
 
+# 敌方单位只读：不展示路径/航点等指挥信息
+func is_enemy_info(info: Dictionary) -> bool:
+	if info.is_empty(): return false
+	if player_team == -1: return false
+	var team := int(info.get("team", -1))
+	return team != RTSConfig.Team.NEUTRAL and team != player_team
+
 func _update_command_card(cc, ids: Array):
 	# 队友单位只可查看：不显示任何生产/升级/拆除/指挥按钮
 	if not ids.is_empty():
@@ -1669,6 +1676,10 @@ func _update_waypoint_markers(node: Node3D, info: Dictionary):
 	if inp and inp.has_method("get_client_selected_ids"):
 		is_selected = info["id"] in inp.get_client_selected_ids()
 	if not is_selected:
+		_free_waypoint_markers(int(info.get("id", -1)))
+		return
+	# 敌方单位只读：路径/航点属于指挥信息，不展示
+	if is_enemy_info(info):
 		_free_waypoint_markers(int(info.get("id", -1)))
 		return
 

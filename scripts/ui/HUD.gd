@@ -610,7 +610,11 @@ func _on_space_pressed():
 		var sm = bm.get_node("SelectionManager")
 		if sm.has_method("get_selected_entities"):
 			var sel = sm.get_selected_entities()
+			# 队友/敌方选中只读：不能释放对方进驻单位
+			var can_command: bool = sm.has_method("_selection_all_local") and sm._selection_all_local()
 			var released = false
+			if not can_command:
+				sel = []
 			for e in sel:
 				if e is Building and e.garrisoned_soldiers.size() > 0:
 					e.release_all_garrisoned()
@@ -1475,6 +1479,9 @@ func _on_demolish_selected():
 	if not bm: return
 	var sel = bm.get_node_or_null("SelectionManager") as SelectionManager
 	if not sel: return
+	# 只有己方建筑可拆除；敌方/队友选中只用于查看信息
+	if not sel._selection_all_local():
+		return
 	# 收集选中实体中的建筑（先copy防止迭代中修改）
 	var buildings_to_demolish: Array = []
 	for e in sel.selected_entities:

@@ -293,6 +293,13 @@ func _is_local_owned_info(info: Dictionary) -> bool:
 		return int(info.get("owner_peer_id", -1)) == renderer.my_peer_id
 	return int(info.get("team", -1)) == renderer.player_team
 
+# 不同队伍且非中立：只读信息面板上显示「敌方」而不是「队友」
+func _is_enemy_info(info: Dictionary) -> bool:
+	if info.is_empty() or not renderer or renderer.player_team == -1:
+		return false
+	var team := int(info.get("team", -1))
+	return team != RTSConfig.Team.NEUTRAL and team != renderer.player_team
+
 # ==================== 修理信息 ====================
 # 已损比例：优先用快照里的权威值 repair_damage_ratio，老快照按 HP 现算
 func _repair_damage_ratio(info: Dictionary) -> float:
@@ -367,13 +374,14 @@ func update_info(entity_id: int):
 	var group_prefix = ""
 	# Client side: group display not available (needs server-side GameEntity ref)
 	var readonly := not _is_local_owned_info(info)
+	var readonly_label := "敌方" if _is_enemy_info(info) else "队友"
 	var nm = group_prefix + "%s %s  [color=%s]Lv.%d[/color]" % [
 		UITheme.entity_emoji(info.get("entity_id", -1), info.get("type", 2)),
 		info["name"], UITheme.hex_str(UITheme.GOLD), info.get("level", 1)]
 	if batch_count > 1:
 		nm += "  [color=%s][Ctrl + x%d][/color]" % [UITheme.hex_str(UITheme.ALERT_WARNING), batch_count]
 	if readonly:
-		nm += "  [color=%s]（队友 · 仅查看）[/color]" % UITheme.hex_str(UITheme.PARCHMENT)
+		nm += "  [color=%s]（%s · 仅查看）[/color]" % [UITheme.hex_str(UITheme.PARCHMENT), readonly_label]
 	name_rtl.text = nm
 
 	var pct = float(info["health"]) / max(float(info["max_health"]), 1.0)
@@ -464,7 +472,7 @@ func update_info(entity_id: int):
 						cs.append({"res": res, "need": need, "have": have})
 				btn.disabled = (not ok) or readonly
 				if readonly:
-					btn.tooltip_text = "队友建筑仅可查看，无法下达生产命令"
+					btn.tooltip_text = "%s建筑仅可查看，无法下达生产命令" % readonly_label
 				var rtl = RichTextLabel.new(); rtl.bbcode_enabled = true; rtl.fit_content = true; rtl.autowrap_mode = TextServer.AUTOWRAP_OFF
 				rtl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 				rtl.anchor_left = 0; rtl.anchor_right = 1; rtl.anchor_top = 0; rtl.anchor_bottom = 1

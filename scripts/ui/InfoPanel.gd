@@ -468,6 +468,14 @@ func _is_local_owned_entity(entity) -> bool:
 		return bm.is_local_player_owned(entity.owner_peer_id, entity.team)
 	return entity.team == bm.get_host_team()
 
+# 不同队伍且非中立：只读信息面板上显示「敌方」而不是「队友」
+func _is_enemy_entity(entity) -> bool:
+	if entity == null or not is_instance_valid(entity):
+		return false
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if not bm: return false
+	return entity.team != RTSConfig.Team.NEUTRAL and entity.team != bm.get_host_team()
+
 func update_info(entity):
 	if entity == null or not is_instance_valid(entity) or entity.health <= 0:
 		observed_entity = null
@@ -498,11 +506,12 @@ func update_info(entity):
 		unit_name,
 		UITheme.hex_str(UITheme.GOLD), entity.level]
 	var readonly := not _is_local_owned_entity(entity)
+	var readonly_label := "敌方" if _is_enemy_entity(entity) else "队友"
 	if batch_count > 1:
 		nm += "  [color=%s][Ctrl + x%d][/color]" % [UITheme.hex_str(UITheme.ALERT_WARNING), batch_count]
 	if readonly:
 		# 另起一行：和名字挤在同一行时，长中文会把名字挤出可视区域，看起来像"名字不见了"
-		nm += "\n[color=%s]（队友 · 仅查看）[/color]" % UITheme.hex_str(UITheme.ALERT_WARNING)
+		nm += "\n[color=%s]（%s · 仅查看）[/color]" % [UITheme.hex_str(UITheme.ALERT_WARNING), readonly_label]
 	name_rtl.text = nm
 
 	var pct = float(entity.health) / max(float(entity.max_health), 1.0)
@@ -617,7 +626,7 @@ func update_info(entity):
 				if official_full and not readonly:
 					btn.tooltip_text = "官员总数不能超过可进驻建筑数"
 				elif readonly:
-					btn.tooltip_text = "队友建筑仅可查看，无法下达生产命令"
+					btn.tooltip_text = "%s建筑仅可查看，无法下达生产命令" % readonly_label
 				var rtl = RichTextLabel.new(); rtl.bbcode_enabled = true; rtl.fit_content = true; rtl.autowrap_mode = TextServer.AUTOWRAP_OFF
 				rtl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 				rtl.anchor_left = 0; rtl.anchor_right = 1; rtl.anchor_top = 0; rtl.anchor_bottom = 1
