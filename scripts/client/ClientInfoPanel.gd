@@ -12,6 +12,7 @@ var hp_bar_bg: ColorRect = null
 var observed_entity_id: int = -1
 var renderer: ClientRenderer = null
 var demolish_btn: Button = null
+var repair_btn: Button = null
 var resources: Dictionary = {}
 var limits: Dictionary = {}
 var population: Dictionary = {}
@@ -58,6 +59,16 @@ func _ready():
 	demolish_btn.pressed.connect(_on_demolish_pressed)
 	UITheme.apply_danger_button(demolish_btn, UITheme.FONT_SM)
 	$VBox.add_child(demolish_btn)
+
+	# 修理按钮 — 建筑掉血后才出现；主城不可修，逻辑与命令卡一致。
+	repair_btn = Button.new()
+	repair_btn.name = "RepairBtn"
+	repair_btn.text = "🔧 修理建筑"
+	repair_btn.custom_minimum_size = Vector2(180, 36)
+	repair_btn.visible = false
+	repair_btn.pressed.connect(_on_repair_pressed)
+	UITheme.apply_primary_button(repair_btn, UITheme.FONT_SM)
+	$VBox.add_child(repair_btn)
 
 	set_process(true)
 	renderer = get_tree().get_first_node_in_group("client_renderer")
@@ -346,6 +357,7 @@ const ROW_COLORS = [
 
 var _multi_vbox: VBoxContainer = null
 var _pending_multi_ids: Array = []         # IDs being accumulated via Ctrl+click
+		_update_repair_ui(info, readonly)
 var _pending_multi_btns: Dictionary = {}   # btn -> true for tracking pressed state
 
 func show_multi_selection(ids: Array):
@@ -412,7 +424,71 @@ func show_multi_selection(ids: Array):
 								_pending_multi_ids.append(rid)
 						_pending_multi_btns[btn] = true
 				else:
+		if repair_btn: repair_btn.visible = false
 					for rid in row_ids:
+	_apply_detail_mode()
+
+func _update_repair_ui(info: Dictionary, readonly: bool) -> void:
+	if repair_btn == null:
+		return
+	repair_btn.visible = false
+	var eid := int(info.get("entity_id", -1))
+	if readonly or eid in [20, 53]:
+		return
+	var ratio := _repair_damage_ratio(info)
+	var under := float(info.get("repair_timer", 0.0)) > 0.0
+	var busy := float(info.get("build_timer", 0.0)) > 0.0 or float(info.get("upgrade_timer", 0.0)) > 0.0
+	if busy or (ratio <= 0.001 and not under):
+		return
+	repair_btn.visible = true
+	var cost := _repair_cost_from_info(info, ratio)
+	var can_click := bool(int(info.get("can_repair", 1))) if info.has("can_repair") else true
+	if can_click and not under:
+		for k in cost:
+			if int(resources.get(k, 0)) < int(cost[k]):
+				can_click = false
+				break
+	repair_btn.disabled = under or not can_click
+	if under:
+		var mrt := maxf(float(info.get("max_repair_time", 0.0)), 0.001)
+		var pct := clampf(1.0 - float(info.get("repair_timer", 0.0)) / mrt, 0.0, 1.0)
+		repair_btn.text = "🔧 修理中 %d%%" % int(pct * 100.0)
+	else:
+		repair_btn.text = "🔧 修理 %s" % _repair_cost_text(cost)
+	var ctime := float(info.get("repair_time_total", 0.0))
+	var tip := "修理残破建筑：修完回复到满血（主城不可修理）"
+	tip += "\n费用：%s" % (_repair_cost_text(cost) if not cost.is_empty() else "免费")
+	if ctime > 0.0:
+		tip += "\n耗时：%.1f 秒" % ctime
+	if under:
+		tip += "\n状态：修理中"
+	elif not can_click:
+		tip += "\n状态：资源不足或附近有敌军，暂不可修"
+	repair_btn.tooltip_text = tip
+
+func _repair_cost_text(cost: Dictionary) -> String:
+	var parts: Array[String] = []
+	for res in ["wood", "stone", "gold", "oil"]:
+		var need := int(cost.get(res, 0))
+		if need > 0:
+			parts.append("%s%d" % [UITheme.RESOURCE_ICONS.get(res, ""), need])
+	return " ".join(parts) if not parts.is_empty() else "免费"
+
+func _on_repair_pressed():
+	if observed_entity_id == -1:
+		return
+	if not _is_local_owned_info(renderer.get_entity_info(observed_entity_id)):
+		return
+	NetworkManager.send_command.rpc_id(1, {
+		"action": "repair",
+		"building_id": observed_entity_id,
+		"shift_held": Input.is_key_pressed(KEY_SHIFT),
+	})
+	# 快照回来前先本地置灰，避免连点重复下单
+	if repair_btn:
+		repair_btn.disabled = true
+		repair_btn.text = "🔧 修理中…"
+		repair_btn.tooltip_text = "修理已提交，等待服务端确认"
 						_pending_multi_ids.erase(rid)
 					_pending_multi_btns.erase(btn)
 			else:
@@ -463,3 +539,4 @@ func _on_close_pressed():
 		ci.client_selected_ids.clear()
 		ci._update_selection_visuals()
 		ci.emit_signal("selection_changed", [])
+	if repair_btn: repair_btn.visible = false

@@ -34,6 +34,7 @@ func _get_res() -> Dictionary:
 	return battle.player_resources
 
 # 移动端字号：设计空间 2400x1400 直接写 14 号字在手机上只有约 4dp。
+var repair_btn: Button = null
 # 注意 RichTextLabel 的字号主题项是 normal_font_size，只设 font_size 不会生效。
 func _is_mobile() -> bool:
 	return InputSource.use_mobile_ui()
@@ -99,6 +100,16 @@ func _ready():
 	demolish_btn.pressed.connect(_on_demolish_pressed)
 	UITheme.apply_danger_button(demolish_btn, UITheme.FONT_SM)
 	_vb.add_child(demolish_btn)
+
+	# 修理按钮 — 建筑掉血后才出现；主城不可修，逻辑与命令卡一致。
+	repair_btn = Button.new()
+	repair_btn.name = "RepairBtn"
+	repair_btn.text = "🔧 修理建筑"
+	repair_btn.custom_minimum_size = Vector2(180, 36)
+	repair_btn.visible = false
+	repair_btn.pressed.connect(_on_repair_pressed)
+	UITheme.apply_primary_button(repair_btn, UITheme.FONT_SM)
+	_vb.add_child(repair_btn)
 
 	set_process(true)
 	if _is_mobile():
@@ -510,6 +521,14 @@ func _ensure_board_box() -> void:
 		return
 	_board_box = VBoxContainer.new()
 	_board_box.name = "BoardBox"
+	if entity is Building and entity.has_method("repair_damage_ratio"):
+		if entity.is_under_repair() and entity.max_repair_time > 0.0:
+			var rep_pct := clampf(1.0 - entity.repair_timer / entity.max_repair_time, 0.0, 1.0)
+			t += "\n🔧 [color=%s]修理中[/color]:  [color=white]%d%%[/color]" % [
+				UITheme.hex_str(UITheme.REPAIR_PROGRESS), int(rep_pct * 100.0)]
+		elif entity.repair_damage_ratio() > 0.001:
+			t += "\n🔧 [color=%s]已损[/color]:  [color=white]%d%%[/color]" % [
+				UITheme.hex_str(UITheme.ALERT_WARNING), int(entity.repair_damage_ratio() * 100.0)]
 	_board_box.add_theme_constant_override("separation", 2)
 	_vb.add_child(_board_box)
 
@@ -524,6 +543,7 @@ func _ensure_board_box() -> void:
 	_board_up_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	if _is_mobile():
 		_board_up_btn.custom_minimum_size = Vector2(0, UILayout.dp(40.0))
+		_update_repair_ui(entity, readonly)
 		UITheme.apply_primary_button(_board_up_btn, UILayout.font_dp(12.0))
 	else:
 		_board_up_btn.custom_minimum_size = Vector2(90, 32)
@@ -623,6 +643,7 @@ func _on_board_down_pressed() -> void:
 	update_info(ship)
 
 var _refresh_timer: float = 0.0
+		if repair_btn: repair_btn.visible = false
 
 func _process(delta):
 	# 多选时 observed_entity 是空的，下面会早退，所以登船按钮的可用性要在这里单独刷新：
@@ -634,6 +655,67 @@ func _process(delta):
 			if visible:
 				_refresh_multi_board_btn()
 	if not visible or observed_entity == null or not is_instance_valid(observed_entity) or observed_entity.health <= 0:
+# 信息面板里的修理入口：只在「掉血且不是主城」时出现，和命令卡规则保持一致。
+# 建造/升级中不显示；资源不足或附近有敌军时保留按钮但置灰，tooltip 说明原因。
+func _update_repair_ui(entity: Building, readonly: bool) -> void:
+	if repair_btn == null:
+		return
+	repair_btn.visible = false
+	if readonly or entity.entity_id in [20, 53]:
+		return
+	if not entity.has_method("repair_damage_ratio") or not entity.has_method("can_repair"):
+		return
+	var dmg: float = entity.repair_damage_ratio()
+	var under: bool = entity.is_under_repair() if entity.has_method("is_under_repair") else false
+	var busy: bool = entity.build_timer > 0.0 or entity.upgrade_timer > 0.0
+	if busy or (dmg <= 0.001 and not under):
+		return
+	repair_btn.visible = true
+	var cost: Dictionary = entity.repair_cost() if entity.has_method("repair_cost") else {}
+	var time_total: float = entity.repair_time_total() if entity.has_method("repair_time_total") else 0.0
+	var can_click := false
+	if not under:
+		if battle and battle.has_method("can_repair_building"):
+			can_click = battle.can_repair_building(entity)
+		else:
+			can_click = entity.can_repair()
+	repair_btn.disabled = not can_click
+	if under and entity.max_repair_time > 0.0:
+		var pct: float = clampf(1.0 - entity.repair_timer / entity.max_repair_time, 0.0, 1.0)
+		repair_btn.text = "🔧 修理中 %d%%" % int(pct * 100.0)
+	else:
+		repair_btn.text = "🔧 修理 %s" % _repair_cost_text(cost)
+	var tip := "修理残破建筑：修完回复到满血（主城不可修理）"
+	tip += "\n费用：%s" % (_repair_cost_text(cost) if not cost.is_empty() else "免费")
+	tip += "\n耗时：%.1f 秒" % maxf(time_total, 0.0)
+	if under:
+		tip += "\n状态：修理中"
+	elif dmg <= 0.001:
+		tip += "\n状态：建筑完好"
+	elif not can_click:
+		tip += "\n状态：资源不足或附近有敌军，暂不可修"
+	repair_btn.tooltip_text = tip
+
+func _repair_cost_text(cost: Dictionary) -> String:
+	var parts: Array[String] = []
+	for res in ["wood", "stone", "gold", "oil"]:
+		var need := int(cost.get(res, 0))
+		if need > 0:
+			parts.append("%s%d" % [UITheme.RESOURCE_ICONS.get(res, ""), need])
+	return " ".join(parts) if not parts.is_empty() else "免费"
+
+func _on_repair_pressed():
+	if not observed_entity or not is_instance_valid(observed_entity):
+		return
+	if not (observed_entity is Building):
+		return
+	if not _is_local_owned_entity(observed_entity):
+		return
+	var bm = battle if battle else get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
+	if bm and bm.has_method("repair_building"):
+		bm.repair_building(observed_entity)
+	update_info(observed_entity)
+
 		return
 	_refresh_timer -= delta
 	if _refresh_timer <= 0:
@@ -906,3 +988,4 @@ func _on_close_pressed():
 		var sel = bm.get_node_or_null("SelectionManager")
 		if sel and sel.has_method("_clear_selection"):
 			sel._clear_selection()
+	if repair_btn: repair_btn.visible = false
