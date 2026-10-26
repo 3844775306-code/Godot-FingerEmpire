@@ -2097,11 +2097,10 @@ func _process_wall_guard_action(delta, bm) -> void:
 	_target_lost_since_ms = 0
 	_set_combat_state(CombatState.IDLE)
 
-# 在视野/射程内选目标：AI 优先选择“攻击力 / 当前血量”最高的敌军，
-# 同效率时近距离优先，攻城单位仍建筑优先；玩家军队只按距离选最近的敌人。
+# 在视野/射程内选目标：所有军队（包括 AI）都优先攻击最近的可攻击目标，
+# 不再计算“攻击力/当前血量”效率；只有攻城单位仍保留建筑优先的兵种特性。
 func _find_combat_enemy(radius: float, attack_only: bool) -> GameEntity:
 	var bm = _get_bm()
-	var ai_controlled: bool = _is_ai_controlled(bm)
 	var self_prefers_buildings: bool = _prefers_buildings()
 	var candidates: Array = bm.get_nearby_enemies(global_position, radius, team, owner_peer_id) if bm \
 		else get_tree().get_nodes_in_group("entities")
@@ -2124,40 +2123,18 @@ func _find_combat_enemy(radius: float, attack_only: bool) -> GameEntity:
 		# 低处打高处落差过大：射不到，别选成目标
 		if _blocked_by_high_ground(entity):
 			continue
-		# AI 按攻击/血量效率；玩家军队保持按距离，越近越先打。
-		var score: float = _combat_target_score(entity, dist, self_prefers_buildings) \
-			if ai_controlled else -dist
+		# 所有军队都优先最近目标；不再给 AI 计算“攻击力/当前血量”效率。
+		var score: float = _combat_target_score(entity, dist, self_prefers_buildings)
 		if score > best_score:
 			best_score = score
 			best = entity
 	return best
 
-# 该单位是否由 AI 控制：AI 锁敌按“攻击力 / 当前血量”效率优先，
-# 玩家军队仍按距离优先。联机随机 peer_id 不能按数值猜 AI，统一交给战斗管理器判定。
-func _is_ai_controlled(bm: RTSBattleManager = null) -> bool:
-	if bm == null:
-		bm = _get_bm()
-	if bm != null and bm.has_method("is_human_owned"):
-		return not bool(bm.call("is_human_owned", owner_peer_id, team))
-	return owner_peer_id >= 1000
-
-# 目标威胁效率：攻击力除以当前血量。残血的高攻单位会被优先集火。
-func _target_attack_health_ratio(target) -> float:
-	if target == null or not is_instance_valid(target):
-		return 0.0
-	var atk: float = float(target.get("attack")) if target.get("attack") != null else 0.0
-	var hp: float = float(target.health)
-	if hp <= 0.0:
-		return 0.0
-	return atk / hp
-
-# 锁敌统一评分：普通单位优先攻击力/当前血量高的敌军，同效率时距离近的优先；
-# 攻城单位仍优先建筑。分数越高越优先。
+# 目标分数：普通单位一律越近越优先；攻城单位仍保留“建筑优先”的兵种特性。
 func _combat_target_score(target, dist: float, self_prefers_buildings: bool) -> float:
 	if target is Building:
-		return (1000.0 - dist * 0.01) if self_prefers_buildings else (-1000.0 - dist * 0.01)
-	return (-1000.0 - dist * 0.01) if self_prefers_buildings \
-		else (_target_attack_health_ratio(target) * 1000.0 - dist * 0.01)
+		return (-dist) if self_prefers_buildings else (-1000.0 - dist * 0.01)
+	return (-1000.0 - dist * 0.01) if self_prefers_buildings else (-dist)
 
 # 目标锁定后不再按“更近/更高价值”主动改锁；这里只保留攻城单位的建筑偏好判断。
 func _prefers_buildings() -> bool:
@@ -2585,7 +2562,7 @@ func _think_garrison(bm) -> void:
 				and current_target.global_position.distance_to(garrison_point) > defend_radius:
 			_on_combat_target_lost()
 		return
-	var enemy = _find_nearest_enemy_near(garrison_point, defend_radius, true)
+	var enemy = _find_nearest_enemy_near(garrison_point, defend_radius)
 	if enemy != null and is_instance_valid(enemy) and enemy.health > 0:
 		_set_combat_target(enemy)
 		return
@@ -2650,7 +2627,7 @@ func _think(delta, bm):
 				move_to(garrison_point)
 				return
 		if current_target == null and not is_attack_moving and (_order_is(UnitState.IDLE) or _is_returning_to_garrison()):
-			var enemy = _find_nearest_enemy_near(garrison_point, defend_radius, true)
+			var enemy = _find_nearest_enemy_near(garrison_point, defend_radius)
 			if enemy and is_instance_valid(enemy) and enemy.health > 0:
 				attack_target(enemy)
 			else:
@@ -4476,20 +4453,17 @@ func is_immune_to_damage() -> bool:
 
 # ==================== Garrison System ====================
 func _find_nearest_enemy_in_vision():
-	return _find_nearest_enemy_near(global_position, vision_range, true)
+	return _find_nearest_enemy_near(global_position, vision_range)
 
 # 以任意位置为中心找敌人；驻扎单位用驻扎点做中心，
 # 这样即使敌人不在本单位视野内，只要靠近驻扎点也会被发现并清掉。
-# prefer_efficiency=true 时只有 AI 按攻击力/当前血量优先；玩家军队仍取最近的。
-func _find_nearest_enemy_near(center: Vector3, radius: float, prefer_efficiency: bool = false):
-	var best_dist: float = radius
-	var best_score: float = -INF
+# 所有军队（包括 AI）一律取最近的可攻击目标，不再按攻击力/血量效率排序。
+func _find_nearest_enemy_near(center: Vector3, radius: float):
+	var best_dist: float = INF
 	var best_target = null
-	var self_prefers_buildings: bool = _prefers_buildings()
 	# 驻扎/守军单位空闲时每 0.3s 都会调用此函数。后期几十上百个守军若每个
 	# 都全量扫描 entities，会形成 O(n²) 的主线程热点；优先走空间索引。
 	var bm = _get_bm()
-	var use_efficiency: bool = prefer_efficiency and _is_ai_controlled(bm)
 	var candidates: Array = bm.get_nearby_enemies(center, radius, team, owner_peer_id) if bm else get_tree().get_nodes_in_group("entities")
 	for entity in candidates:
 		if entity == self or not is_instance_valid(entity) or entity.health <= 0: continue
@@ -4503,19 +4477,9 @@ func _find_nearest_enemy_near(center: Vector3, radius: float, prefer_efficiency:
 		var dist = h_diff.length() - body_radius - entity.body_radius
 		if dist > radius:
 			continue
-		if use_efficiency:
-			var score: float = _combat_target_score(entity, dist, self_prefers_buildings)
-			if score > best_score:
-				best_score = score
-				best_target = entity
-		else:
-			if dist <= attack_range:
-				# 射程内敌人已经是“最近”的可攻击目标，直接返回，避免在密集人群里
-				# 为一次重选目标遍历几十上百个候选。
-				return entity
-			if dist < best_dist:
-				best_dist = dist
-				best_target = entity
+		if dist < best_dist:
+			best_dist = dist
+			best_target = entity
 	return best_target
 
 func _clear_garrison():
