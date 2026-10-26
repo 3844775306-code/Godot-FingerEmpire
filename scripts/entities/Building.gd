@@ -1,6 +1,8 @@
 class_name Building
 extends GameEntity
 
+const LevelVisualScript = preload("res://scripts/effects/BuildingLevelVisual.gd")
+
 var upgrade_level: int = 1                         # 当前等级
 var upgrade_data: Array = []                       # 从配置加载的升级表
 var max_upgrade_level: int = 5
@@ -47,6 +49,8 @@ func start_construction(time: float, data: Dictionary):
 	if building_data.has("produces") and building_data["produces"] is Array:
 		_sync_production_unlocks()
 	BuildingConstructionVisual.begin(self)
+	# 建造期间先隐藏等级旗帜/徽章，等脚手架撤掉、等级确定后再显示。
+	LevelVisualScript.set_visible(self, false)
 func _process(delta):
 	super._process(delta)
 	# 城墙动态朝向 + 拐角模型切换
@@ -287,6 +291,15 @@ func _finish_construction():
 			_unlock_nation_units(nation)
 	# 建造期间视野为 0，完成后恢复；若建筑正被选中，立即补上视野/射程圈
 	_sync_range_rings()
+	# 建造完成、全局等级同步后重建一次等级外观。
+	refresh_level_visual()
+
+func refresh_level_visual() -> void:
+	var bm = _get_bm()
+	var color := Color.WHITE
+	if bm != null and bm.has_method("get_entity_color"):
+		color = bm.get_entity_color(self)
+	LevelVisualScript.apply(self, maxi(upgrade_level, level), 0.0, color, build_timer <= 0.0)
 
 	
 func is_under_construction() -> bool:
@@ -421,6 +434,7 @@ func _apply_nation_start_bonus():
 		# 如果初始等级达到 3，立刻解锁特色兵种
 		if upgrade_level >= 3 and entity_id == 53:
 			_unlock_nation_units(nation)
+		refresh_level_visual()
 # ====================== 修复：建筑选择环 水平贴地 ======================
 func _add_selection_ring():
 	if not has_node("SelectionRing"):
