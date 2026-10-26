@@ -27,6 +27,9 @@ const A_STAR_PRESSURE_THRESHOLD: int = 30
 # 路径预览最多采样多少个点。贴地指引带内部会再按 1.1 米加密并逐顶点贴地，
 # 这里只限制单条路径的顶点总量，避免超长路径生成过大的网格。
 const MAX_PATH_PREVIEW_POINTS: int = 200
+# 路径指引带排头跟随单位的步长：单位每走这么远才重建一次网格，
+# 既保证「走一段收一段」的实时感，又不至于每帧重新贴地。
+const PATH_HEAD_STEP: float = 0.45
 var _last_attack_path_ms: int = -100000
 # 缓坡速度平滑：避免在坡道入口/出口瞬间跳速，也避免同一格来回抖动。
 var _slope_speed_mult: float = 1.0
@@ -57,6 +60,8 @@ var _direct_check_ms: int = 0
 # 路径预览：一条贴地流动的指引带（替代原来那一串青色小球），只给第一个选中单位画。
 var _path_guide: GroundPathGuide = null
 var _path_preview_points: Array = []  # 当前指引带使用的路径点，用来判断是否需要重建
+var _path_preview_tail: Array = []    # 除排头之外还剩的路径点（用来判断路径是否被消费掉）
+var _path_built_head: Vector3 = Vector3(INF, 0.0, INF)  # 上次建网格时单位的脚下位置
 var _is_selected: bool = false
 
 # Collision
@@ -413,13 +418,20 @@ func process_move(delta, bm: RTSBattleManager):
 		var h_dist = Vector2(move_target.x - _army.global_position.x, move_target.z - _army.global_position.z)
 		if h_dist.length() < 0.5:
 			astar_path.pop_front()
-			# 不要每经过一个航点就重建路径指引带：选中大部队时这一步会瞬间
-			# 生成/销毁大量网格。只在路径走完时收起预览，换目标时
-			# 由 set_move_target()/recalculate() 重新生成。
+			# 走过一个航点后让指引带跟着收一段（_show_path 内部按 0.45 米步长节流，
+			# 不会每帧重建网格）。路径走完则收起预览。
 			if astar_path.is_empty() and _is_selected:
 				_hide_path()
+			elif _is_selected:
+				_show_path()
 			if astar_path.size() > 0:
 				move_target = astar_path[0]
+	# 沿着长直路段前进时不会经过航点，这里按位移节流地刷新一次排头，
+	# 让线一直贴着脚下走，而不是等到下一个航点才跳一段。
+	if _is_selected and _path_guide != null and not astar_path.is_empty():
+		var head_now: Vector3 = _army.global_position
+		if _path_built_head.distance_to(head_now) > PATH_HEAD_STEP:
+			_show_path()
 	# 兜底：路径可能因建筑变化/单位被挤动而临期，实际行走前再检查一次下一段坡度。
 	# 尤其禁止从高地/台地边缘直接走下悬崖；发现后停止并按寻路失败处理，等待重算。
 	if bm != null and astar_path.size() > 0 and _is_cliff_between_positions(bm, _army.global_position, move_target):
@@ -702,17 +714,26 @@ func _show_path():
 			_hide_path()
 			return
 	# 单条长路径也不逐格取点，按固定上限抽样；尾点始终保留。
-	var points: Array = []
+	# 排头用单位当前位置，这样线始终从脚下开始，走一段收一段（实时缩短）。
+	var head: Vector3 = _army.global_position
+	head.y = 0.0
+	var tail: Array = []
 	if astar_path.size() <= MAX_PATH_PREVIEW_POINTS:
 		# 必须复制：astar_path 会被 process_move 逐个 pop_front，共享引用会让缓存对比失真
-		points = astar_path.duplicate()
+		tail = astar_path.duplicate()
 	else:
 		var step: float = float(astar_path.size() - 1) / float(MAX_PATH_PREVIEW_POINTS - 1)
 		for i in range(MAX_PATH_PREVIEW_POINTS):
-			points.append(astar_path[int(round(float(i) * step))])
-	# 路径完全没有变化时沿用现有指引带，避免同一条路径反复生成网格
-	if _path_guide != null and is_instance_valid(_path_guide) and _path_preview_points == points:
+			tail.append(astar_path[int(round(float(i) * step))])
+	# 单位在原地小幅晃动、或者只走了一点点时不必重建网格：
+	# 路径点没变、排头位移不到 PATH_HEAD_STEP 就沿用现有的指引带。
+	var head_moved: bool = _path_built_head.distance_to(head) > PATH_HEAD_STEP
+	if not head_moved and _path_preview_tail == tail and _path_guide != null and is_instance_valid(_path_guide):
 		return
+	var points: Array = [head]
+	points.append_array(tail)
+	_path_preview_tail = tail
+	_path_built_head = head
 	_path_preview_points = points
 	# 节点还在、只是路径变了：直接重设中心线，比销毁重建便宜
 	if _path_guide != null and is_instance_valid(_path_guide):
@@ -725,6 +746,8 @@ func _show_path():
 
 func _hide_path():
 	_path_preview_points.clear()
+	_path_preview_tail.clear()
+	_path_built_head = Vector3(INF, 0.0, INF)
 	if _path_guide != null:
 		if is_instance_valid(_path_guide):
 			_path_guide.queue_free()

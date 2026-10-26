@@ -19,9 +19,9 @@ const DASH_MIN_PIXELS: float = 3.2                         # 屏幕上至少占�
 const DASH_PER_METER: float = 0.85                         # 每米几个虚线周期（约 1.2 米一段）
 const FLOW_SPEED: float = 0.55                             # 虚线滚动速度（周期/秒）
 const END_COLOR: Color = Color(0.98, 0.86, 0.52, 0.62)     # 落点暖黄
-const END_RADIUS: float = 0.85
-const END_WIDTH: float = 0.22
-const END_MIN_PIXELS: float = 2.6
+const END_RADIUS: float = 0.45
+const END_WIDTH: float = 0.15
+const END_MIN_PIXELS: float = 2.2
 const END_PULSE_SPEED: float = 2.1
 # 相机距离变化超过这个比例就重算线宽
 const CAMERA_DIST_REL: float = 0.12

@@ -1678,6 +1678,13 @@ func _update_waypoint_markers(node: Node3D, info: Dictionary):
 	if pts.size() < 2:
 		_free_waypoint_markers(eid)
 		return
+	# 排头换成单位当前（插值后）的位置：线始终从脚下开始，走一段收一段，
+	# 而不是等服务器把走过的航点删掉才跳一格。量化到 10 厘米，避免站立时反复重建。
+	if node is Node3D:
+		var head: Vector3 = (node as Node3D).global_position
+		head = Vector3(snappedf(head.x, 0.1), 0.0, snappedf(head.z, 0.1))
+		if Vector2(head.x - pts[0].x, head.z - pts[0].z).length() > 0.1:
+			pts.insert(0, head)
 
 	# 快照 10Hz 每次都会走这个函数：路径点没变就复用现有指引带，绝不重建网格
 	var sig: int = hash([pts, loop])
