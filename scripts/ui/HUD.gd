@@ -632,6 +632,16 @@ func _on_space_pressed():
 	# 否则：跳转到警报位置
 	_on_jump_to_alert()
 
+# 把镜头定位到某个世界坐标（战报点击跳转用）
+func _jump_to_world(target: Vector3) -> void:
+	var cam = get_viewport().get_camera_3d()
+	if cam == null:
+		return
+	if cam.has_method("focus_on_ground"):
+		cam.focus_on_ground(target)
+	else:
+		cam.global_position = Vector3(target.x, cam.global_position.y, target.z)
+
 func _on_jump_to_alert():
 	var minimap = $Minimap as Minimap
 	if minimap and minimap.has_latest_alert:
@@ -809,11 +819,11 @@ const ALERT_WARNING = UITheme.ALERT_WARNING   # 黄色 — 敌军来袭/资源�
 const ALERT_INFO = UITheme.ALERT_INFO      # 绿色 — 建造/训练/升级完成
 const ALERT_GROUP = UITheme.ALERT_GROUP     # 蓝色 — 编队反馈
 
-func show_alert_message(msg: String, color: Color = ALERT_DANGER, teams = [], alert_kind: int = 0, is_castle: bool = false, nations: Array = []):
+func show_alert_message(msg: String, color: Color = ALERT_DANGER, teams = [], alert_kind: int = 0, is_castle: bool = false, nations: Array = [], alert_pos: Vector3 = Vector3.ZERO, source_owner: int = -1):
 	var mobile := InputSource.use_mobile_ui()
 	var team_list: Array = _normalize_alert_teams(teams)
 	# 按设置过滤掉不关心的战报（主要是队友的建造/升级/生产）
-	if _alert_is_filtered(team_list, alert_kind, is_castle):
+	if _alert_is_filtered(team_list, alert_kind, is_castle, source_owner):
 		return
 	if _alert_stack == null:
 		# 战况栏改成竖排多行：每条战况独立一行，新消息加在末尾（最下面），
@@ -854,7 +864,8 @@ func show_alert_message(msg: String, color: Color = ALERT_DANGER, teams = [], al
 	sb.content_margin_top = 2.0
 	sb.content_margin_bottom = 2.0
 	holder.add_theme_stylebox_override("panel", sb)
-	holder.gui_input.connect(_on_alert_gui_input)
+	holder.gui_input.connect(_on_alert_gui_input.bind(holder))
+	holder.set_meta("alert_pos", alert_pos)
 
 	# 一行里国家名和正文要显示成两种颜色，普通 Label 做不到
 	var row := RichTextLabel.new()
@@ -893,7 +904,7 @@ func _normalize_alert_teams(raw) -> Array:
 
 # 战报筛选：队友国家的建造/升级/生产默认不接收，主城升级例外。
 # 其他类型（战斗、外交、经济）与自己直接相关，始终接收。
-func _alert_is_filtered(teams: Array, alert_kind: int, is_castle: bool) -> bool:
+func _alert_is_filtered(teams: Array, alert_kind: int, is_castle: bool, source_owner: int = -1) -> bool:
 	if alert_kind != GameSettings.AlertKind.BUILD \
 		and alert_kind != GameSettings.AlertKind.UPGRADE \
 		and alert_kind != GameSettings.AlertKind.PRODUCE:
@@ -901,9 +912,13 @@ func _alert_is_filtered(teams: Array, alert_kind: int, is_castle: bool) -> bool:
 	if teams.is_empty():
 		return false
 	var sender: int = int(teams[0])
-	var me: int = get_my_team()
-	# 自己国家的战报，以及无法判定归属的消息，一律保留
-	if sender < 0 or sender == me:
+	# 「自己」和「队友」按 owner 区分：2v2/3v3 里 AI 队友与自己同队，只看 team
+	# 会把队友的动静当成自己的而永远显示，「战报筛选」开关也就失效了。
+	# owner 缺失（1v1 队伍级单位、旧数据）时按自己处理，保持原有行为。
+	if sender < 0:
+		return false
+	var my_owner: int = _alert_my_owner()
+	if source_owner < 0 or (my_owner >= 0 and source_owner == my_owner):
 		return false
 	# 队友主城升级是重要节点（意味着对方整体实力跃升），不跟着一起过滤
 	if alert_kind == GameSettings.AlertKind.UPGRADE and is_castle:
@@ -961,6 +976,16 @@ func get_my_team() -> int:
 		return int(bm.get_host_team())
 	return -1
 
+# 本地玩家的 owner（单机 2v2/3v3/乱斗用来区分「自己的建筑」和「AI 队友的建筑」）
+func _alert_my_owner() -> int:
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if bm == null:
+		return -1
+	var v = bm.get("player_owner_id")
+	if v == null:
+		return -1
+	return int(v)
+
 # 自己 → 绿；同阵营友方 → 蓝；敌方与中立 → 红
 func _alert_team_color(team: int) -> Color:
 	if team < 0:
@@ -1000,12 +1025,24 @@ func _clear_alert_rows() -> void:
 			holder.queue_free()
 	_alert_rows.clear()
 
-# 点任意一条战况：跳到警报位置并清空整个战况栏
-func _on_alert_gui_input(event: InputEvent) -> void:
+# 点任意一条战况：跳到该条战报对应的位置（没有位置信息时退回最新警报位置）并清空战况栏
+func _on_alert_gui_input(event: InputEvent, holder = null) -> void:
+	var clicked: bool = false
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		clicked = true
+	elif event is InputEventScreenTouch and event.pressed:
+		clicked = true
+	if not clicked:
+		return
+	var alert_pos: Vector3 = Vector3.ZERO
+	if holder != null and is_instance_valid(holder):
+		alert_pos = holder.get_meta("alert_pos", Vector3.ZERO)
+	_clear_alert_rows()
+	if alert_pos != Vector3.ZERO:
+		_jump_to_world(alert_pos)
+	else:
 		_on_jump_to_alert()
-		_clear_alert_rows()
-		get_viewport().set_input_as_handled()
+	get_viewport().set_input_as_handled()
 
 
 func update_data(resources: Dictionary, population: Dictionary, limits: Dictionary = {}):

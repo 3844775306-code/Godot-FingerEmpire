@@ -576,6 +576,16 @@ func _input(event):
 		match event.keycode:
 			_: pass  # Space等由ClientInput统一处理
 
+# 把镜头定位到某个世界坐标（战报点击跳转用）
+func _jump_to_world(target: Vector3) -> void:
+	var cam = get_viewport().get_camera_3d()
+	if cam == null:
+		return
+	if cam.has_method("focus_on_ground"):
+		cam.focus_on_ground(target)
+	else:
+		cam.global_position = Vector3(target.x, cam.global_position.y, target.z)
+
 func _on_jump_to_alert():
 	var minimap = get_node_or_null("../Minimap") as Minimap
 	if minimap and minimap.has_latest_alert:
@@ -607,11 +617,11 @@ func _on_retreat_all_pressed():
 const ALERT_MAX_ROWS: int = 3
 const ALERT_LIFE: float = 3.4
 
-func show_alert_message(msg: String, color: Color = ALERT_DANGER, teams = [], alert_kind: int = 0, is_castle: bool = false, nations: Array = []):
+func show_alert_message(msg: String, color: Color = ALERT_DANGER, teams = [], alert_kind: int = 0, is_castle: bool = false, nations: Array = [], alert_pos: Vector3 = Vector3.ZERO, source_owner: int = -1):
 	var mobile := InputSource.use_mobile_ui()
 	var team_list: Array = _normalize_alert_teams(teams)
 	# 按设置过滤掉不关心的战报（主要是队友的建造/升级/生产）
-	if _alert_is_filtered(team_list, alert_kind, is_castle):
+	if _alert_is_filtered(team_list, alert_kind, is_castle, source_owner):
 		return
 	if _alert_stack == null:
 		_alert_stack = VBoxContainer.new()
@@ -647,7 +657,8 @@ func show_alert_message(msg: String, color: Color = ALERT_DANGER, teams = [], al
 	sb.content_margin_top = 2.0
 	sb.content_margin_bottom = 2.0
 	holder.add_theme_stylebox_override("panel", sb)
-	holder.gui_input.connect(_on_alert_gui_input)
+	holder.gui_input.connect(_on_alert_gui_input.bind(holder))
+	holder.set_meta("alert_pos", alert_pos)
 
 	# 国家名和正文要两种颜色，普通 Label 做不到
 	var row := RichTextLabel.new()
@@ -683,7 +694,7 @@ func _normalize_alert_teams(raw) -> Array:
 	return out
 
 # 战报筛选：队友国家的建造/升级/生产默认不接收，主城升级例外。
-func _alert_is_filtered(teams: Array, alert_kind: int, is_castle: bool) -> bool:
+func _alert_is_filtered(teams: Array, alert_kind: int, is_castle: bool, source_owner: int = -1) -> bool:
 	if alert_kind != GameSettings.AlertKind.BUILD \
 		and alert_kind != GameSettings.AlertKind.UPGRADE \
 		and alert_kind != GameSettings.AlertKind.PRODUCE:
@@ -691,8 +702,13 @@ func _alert_is_filtered(teams: Array, alert_kind: int, is_castle: bool) -> bool:
 	if teams.is_empty():
 		return false
 	var sender: int = int(teams[0])
-	var me: int = _alert_my_team()
-	if sender < 0 or sender == me:
+	if sender < 0:
+		return false
+	# 「自己」和「队友」要按 owner 区分：2v2/3v3 里 AI 队友与自己同队，
+	# 只看 team 会把队友的动静当成自己的而永远显示，开关也就失效了。
+	# owner 缺失（1v1 队伍级单位、旧数据）时按自己处理，保持原有行为。
+	var my_owner: int = _alert_my_owner()
+	if source_owner < 0 or (my_owner >= 0 and source_owner == my_owner):
 		return false
 	if alert_kind == GameSettings.AlertKind.UPGRADE and is_castle:
 		return false
@@ -736,6 +752,13 @@ func _alert_my_team() -> int:
 	if int(r.my_team) != -1:
 		return int(r.my_team)
 	return int(r.player_team)
+
+# 自己这个玩家的 peer_id（用于区分「自己的建筑」和「同队队友的建筑」）
+func _alert_my_owner() -> int:
+	var r = get_tree().get_first_node_in_group("client_renderer")
+	if r == null or not is_instance_valid(r):
+		return -1
+	return int(r.my_peer_id)
 
 # 队伍 → 国家名。联机端只有 ClientRenderer 知道各国的分配，
 # 拿不到映射时返回空串，调用方退化成不带前缀的纯消息。
@@ -784,12 +807,24 @@ func _clear_alert_rows() -> void:
 			holder.queue_free()
 	_alert_rows.clear()
 
-# 点任意一条战况：跳到警报位置并清空整个战况栏
-func _on_alert_gui_input(event: InputEvent) -> void:
+# 点任意一条战况：跳到该条战报对应的位置（没有位置信息时退回最新警报位置）并清空战况栏
+func _on_alert_gui_input(event: InputEvent, holder = null) -> void:
+	var clicked: bool = false
 	if event is InputEventMouseButton and event.pressed and event.button_index == MOUSE_BUTTON_LEFT:
+		clicked = true
+	elif event is InputEventScreenTouch and event.pressed:
+		clicked = true
+	if not clicked:
+		return
+	var alert_pos: Vector3 = Vector3.ZERO
+	if holder != null and is_instance_valid(holder):
+		alert_pos = holder.get_meta("alert_pos", Vector3.ZERO)
+	_clear_alert_rows()
+	if alert_pos != Vector3.ZERO:
+		_jump_to_world(alert_pos)
+	else:
 		_on_jump_to_alert()
-		_clear_alert_rows()
-		accept_event()
+	accept_event()
 
 func _ready():
 	# 与单机版一致：左上统计面板（含资源/人口/主城/经济/军队/建筑），原左下角资源 HUD 已移除
@@ -891,12 +926,12 @@ func _ready():
 			NetworkManager.client_alert_received.connect(_on_server_alert)
 
 # 收到服务器警报：直接走本地播报条
-func _on_server_alert(msg: String, color: Color, alert_id: int = 0, teams = [], alert_kind: int = 0, is_castle: bool = false, nations: Array = []) -> void:
-	show_server_alert(msg, color, alert_id, teams, alert_kind, is_castle, nations)
+func _on_server_alert(msg: String, color: Color, alert_id: int = 0, teams = [], alert_kind: int = 0, is_castle: bool = false, nations: Array = [], alert_pos: Vector3 = Vector3.ZERO, source_owner: int = -1) -> void:
+	show_server_alert(msg, color, alert_id, teams, alert_kind, is_castle, nations, alert_pos, source_owner)
 
 # 服务器警报统一入口：RPC 与快照兜底都会调用，按 id 去重；
 # 危险/警告级警报补一次客户端本地音效（服务器端 AudioManager 不会在客户端播放）。
-func show_server_alert(msg: String, color: Color, alert_id: int = 0, teams = [], alert_kind: int = 0, is_castle: bool = false, nations: Array = []) -> void:
+func show_server_alert(msg: String, color: Color, alert_id: int = 0, teams = [], alert_kind: int = 0, is_castle: bool = false, nations: Array = [], alert_pos: Vector3 = Vector3.ZERO, source_owner: int = -1) -> void:
 	if alert_id > 0:
 		if _seen_server_alert_ids.has(alert_id):
 			return
@@ -905,7 +940,7 @@ func show_server_alert(msg: String, color: Color, alert_id: int = 0, teams = [],
 		_seen_server_alert_ids[alert_id] = true
 	if color == ALERT_DANGER or color == ALERT_WARNING:
 		AudioManager.play_sfx("alert")
-	show_alert_message(msg, color, teams, alert_kind, is_castle, nations)
+	show_alert_message(msg, color, teams, alert_kind, is_castle, nations, alert_pos, source_owner)
 
 func _make_cmd_button(text: String, cb: Callable, danger: bool) -> Button:
 	var b := Button.new()

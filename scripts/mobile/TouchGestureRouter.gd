@@ -10,7 +10,7 @@ extends Node
 #   单指拖动·框选模式开 → 合成左键按下 + 拖动 + 抬起（走现有框选逻辑）
 #   单指拖动·框选模式关 → 直接平移相机
 #   单指拖动·建造模式中 → 只合成鼠标移动（预览跟随），点按由建造延迟逻辑放置
-#   双指              → 放弃单指手势，缩放交给 CameraController 的 MagnifyGesture
+#   双指              → 放弃单指手势，按两指距离变化缩放相机视野（自算，兼容 MagnifyGesture）
 
 signal box_select_mode_changed(active: bool)
 
@@ -37,6 +37,12 @@ var _last_pos: Vector2 = Vector2.ZERO
 var _start_msec: int = 0
 var _camera: Camera3D = null
 var _bm: Node = null
+# 双指捏合缩放：自己记录两个触点的 index → position。
+# Web 导出不会合成 InputEventMagnifyGesture，只能按两指距离变化算；
+# 只统计落在战场上的手指，按在面板上的触点不参与，避免误缩放。
+var _pinch_fingers: Dictionary = {}
+var _pinch_dist: float = 0.0
+const PINCH_MIN_DIST: float = 1.0   # 两指几乎重合时距离比例会爆掉，这种帧只取基准
 # 落在移动端面板上的那根手指：只负责翻译成鼠标事件，不参与手势
 var _ui_touch_index: int = -1
 var _ui_touch_down: bool = false
@@ -127,15 +133,20 @@ func _input(event: InputEvent) -> void:
 # ==================== 触摸生命周期 ====================
 
 func _handle_touch(event: InputEventScreenTouch) -> void:
-	# 第二根手指按下：作废单指手势，让双指缩放接管
-	if event.pressed and _touch_index != -1 and event.index != _touch_index:
-		_abort_gesture()
-		return
-
 	if event.pressed:
+		var on_ui: bool = _point_on_ui(event.position)
+		if not on_ui:
+			# 战场手指记进捏合表；第二指落下时距离基准归零，这一帧只取基准不缩放
+			_pinch_fingers[event.index] = event.position
+			if _pinch_fingers.size() >= 2:
+				_pinch_dist = 0.0
+		# 第二根手指按下：作废单指手势，让双指缩放接管
+		if _touch_index != -1 and event.index != _touch_index:
+			_abort_gesture()
+			return
 		if _touch_index != -1 or _ui_touch_index != -1:
 			return
-		if _point_on_ui(event.position):
+		if on_ui:
 			# 引擎的触摸→鼠标模拟已被关掉，面板上的按钮/滚动容器需要我们自己补鼠标事件
 			_ui_touch_index = event.index
 			_ui_touch_down = true
@@ -151,6 +162,9 @@ func _handle_touch(event: InputEventScreenTouch) -> void:
 		_mode = Mode.TAP_CANDIDATE
 		get_viewport().set_input_as_handled()
 	else:
+		# 抬指：先移出捏合表，剩下的手指下次落指时重新取基准
+		_pinch_fingers.erase(event.index)
+		_pinch_dist = 0.0
 		if event.index == _ui_touch_index:
 			_ui_touch_index = -1
 			_ui_touch_down = false
@@ -172,6 +186,10 @@ func _handle_touch(event: InputEventScreenTouch) -> void:
 		get_viewport().set_input_as_handled()
 
 func _handle_drag(event: InputEventScreenDrag) -> void:
+	# 双指缩放：地图手指的每次拖动都刷新两指距离（面板手指不参与）
+	if event.index != _ui_touch_index and _pinch_fingers.has(event.index):
+		_pinch_fingers[event.index] = event.position
+		_update_pinch()
 	if event.index == _ui_touch_index:
 		# 面板上的拖动：
 		#   横向（且起点落在可收起面板上）→ 面板跟着手指滑出屏幕；
@@ -217,6 +235,21 @@ func _handle_drag(event: InputEventScreenDrag) -> void:
 			_pan_camera(event.relative)
 		Mode.BOX, Mode.BUILD_PREVIEW:
 			_push_motion(pos, event.relative)
+
+# 两指距离变化 → 按比例缩放相机视野（相机内部仍走滚轮那套边界/俯角联动，手感一致）
+func _update_pinch() -> void:
+	if _pinch_fingers.size() != 2:
+		_pinch_dist = 0.0
+		return
+	var keys: Array = _pinch_fingers.keys()
+	var p1: Vector2 = _pinch_fingers[keys[0]]
+	var p2: Vector2 = _pinch_fingers[keys[1]]
+	var dist: float = p1.distance_to(p2)
+	if _pinch_dist > PINCH_MIN_DIST and dist > PINCH_MIN_DIST:
+		var cam := _get_camera()
+		if cam != null and cam.has_method("zoom_by_pinch_ratio"):
+			cam.zoom_by_pinch_ratio(dist / _pinch_dist)
+	_pinch_dist = dist
 
 func _begin_drag() -> void:
 	# 进入拖动时先补齐按下事件，让框选/建造预览等依赖 pressed 的流程就绪

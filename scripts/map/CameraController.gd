@@ -28,6 +28,14 @@ var _two_finger_last: Vector2 = Vector2.ZERO
 var _two_finger_angle: float = 0.0
 var _two_finger_dist: float = 0.0
 
+# 双指捏合缩放：Android/iOS 会由触摸合成 InputEventMagnifyGesture，Web 导出不会，
+# 所以这里按两指距离变化自己算一份。TouchGestureRouter 存在时由它统一驱动
+# （它能看到全部触摸），一旦调用过 zoom_by_pinch_ratio 就置位，避免两边重复缩放。
+var pinch_router_driven: bool = false
+# 最近一次自算捏合的时间（毫秒）：同一手势里平台合成的 MagnifyGesture 要屏蔽掉
+var _last_touch_pinch_msec: int = 0
+const MAGNIFY_DEDUP_MS: int = 300
+
 # 按住旋转状态：+1 顺时针 / -1 逆时针 / 0 停止
 var _hold_rotate: float = 0.0
 var _hold_rotate_center: Vector3 = Vector3.ZERO
@@ -192,21 +200,43 @@ func _input(event):
 			global_translate((-_view_right() * delta.x + _view_forward() * delta.y) * 0.1 * factor)
 			touch_pan_start = event.position
 		elif _fingers.size() == 2:
-			# 双指只负责缩放（捏合由 MagnifyGesture 驱动）。这里只刷新基准，
+			# 双指只负责缩放：按两指距离变化比例自己算捏合（Web 端没有 MagnifyGesture）。
 			# 拖两指/扭转都不动视角——旋转改由命令栏的「按住旋转」按钮控制，
 			# 免得想缩放却把镜头带歪。
 			var keys: Array = _fingers.keys()
 			var p1: Vector2 = _fingers[keys[0]]
 			var p2: Vector2 = _fingers[keys[1]]
+			var dist: float = p1.distance_to(p2)
+			# 没有 router 的触屏（桌面触屏本）由相机自己算；有 router 时它已经算过
+			if not pinch_router_driven and _two_finger_dist > 1.0:
+				_apply_pinch_ratio(dist / _two_finger_dist)
 			_two_finger_last = (p1 + p2) * 0.5
 			_two_finger_angle = atan2(p2.y - p1.y, p2.x - p1.x)
-			_two_finger_dist = p1.distance_to(p2)
+			_two_finger_dist = dist
 
-	# 双指捏合缩放
+	# 双指捏合缩放（平台合成的 MagnifyGesture：Android/iOS 有，Web 没有）。
+	# 同一手势已经由触点自算缩放接管时跳过，避免一次捏合被缩放两倍。
 	if event is InputEventMagnifyGesture:
-		# factor > 1 表示放大（两指分开），factor < 1 表示缩小
-		# 通常放大应减小视野大小（size），缩小应增大视野
-		_apply_zoom_to(size / event.factor)
+		if Time.get_ticks_msec() - _last_touch_pinch_msec >= MAGNIFY_DEDUP_MS:
+			# factor > 1 表示放大（两指分开），factor < 1 表示缩小
+			# 通常放大应减小视野大小（size），缩小应增大视野
+			_apply_zoom_to(size / event.factor)
+
+# 供 TouchGestureRouter 驱动触屏捏合：ratio > 1 = 两指分开（拉近），< 1 = 收拢（拉远）。
+# 只改视野大小，保持屏幕中心地面点不变，手感与滚轮缩放完全一致。
+func zoom_by_pinch_ratio(ratio: float) -> void:
+	pinch_router_driven = true
+	_apply_pinch_ratio(ratio)
+
+# 按捏合比例缩放视野（内部统一入口：自算与 router 驱动都走这里，保证去重时间戳一致）
+func _apply_pinch_ratio(ratio: float) -> void:
+	if _follow_target:
+		return
+	if not is_finite(ratio) or ratio <= 0.0:
+		return
+	_last_touch_pinch_msec = Time.get_ticks_msec()
+	# 单次比例限幅：换指/触点跳变时不至于把视野一下甩到边界
+	_apply_zoom_to(size / clampf(ratio, 0.5, 2.0))
 
 # 供手机端旋转按钮调用：绕当前屏幕中心的地面点转指定角度（正数向右转）
 func rotate_by(deg: float) -> void:

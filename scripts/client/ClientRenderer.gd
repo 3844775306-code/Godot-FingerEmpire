@@ -535,9 +535,9 @@ func _process_snapshot(data: Dictionary):
 			for alert in alerts:
 				if not (alert is Dictionary): continue
 				if hud and hud.has_method("show_server_alert"):
-					hud.show_server_alert(alert["msg"], alert.get("color", Color(1.0, 0.2, 0.1)), int(alert.get("id", 0)), alert.get("teams", []), int(alert.get("kind", 0)), bool(alert.get("castle", false)), alert.get("nations", []))
+					hud.show_server_alert(alert["msg"], alert.get("color", Color(1.0, 0.2, 0.1)), int(alert.get("id", 0)), alert.get("teams", []), int(alert.get("kind", 0)), bool(alert.get("castle", false)), alert.get("nations", []), alert.get("pos", Vector3.ZERO), int(alert.get("owner", -1)))
 				elif hud and hud.has_method("show_alert_message"):
-					hud.show_alert_message(alert["msg"], alert.get("color", Color(1.0, 0.2, 0.1)), alert.get("teams", []), int(alert.get("kind", 0)), bool(alert.get("castle", false)), alert.get("nations", []))
+					hud.show_alert_message(alert["msg"], alert.get("color", Color(1.0, 0.2, 0.1)), alert.get("teams", []), int(alert.get("kind", 0)), bool(alert.get("castle", false)), alert.get("nations", []), alert.get("pos", Vector3.ZERO), int(alert.get("owner", -1)))
 
 	if data.has("bullets"):
 		var server_ids = {}
@@ -1061,8 +1061,13 @@ func _refresh_client_level_visual(node: Node3D, info: Dictionary) -> void:
 		return
 	var lv := int(info.get("upgrade_level", 1))
 	var visible := float(info.get("build_timer", 0.0)) <= 0.0
-	if int(node.get_meta("_level_visual_level", -1)) != lv:
-		LevelVisualScript.apply(node, lv, float(info.get("body_radius", 1.0)), _get_entity_color(info), visible)
+	var team_color: Color = _get_entity_color(info)
+	# 等级变了要重建；中立废墟被占领后等级不变但队伍色变了，同样要重建，
+	# 否则旗帜/底座还是中立灰。（服务端 _capture_abandoned_site 也有一份同样的重建）
+	if int(node.get_meta("_level_visual_level", -1)) != lv \
+			or node.get_meta("_level_visual_color", Color(0, 0, 0, 0)) != team_color:
+		LevelVisualScript.apply(node, lv, float(info.get("body_radius", 1.0)), team_color, visible)
+		node.set_meta("_level_visual_color", team_color)
 	else:
 		LevelVisualScript.set_visible(node, visible)
 

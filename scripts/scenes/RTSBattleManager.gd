@@ -3583,6 +3583,29 @@ func get_local_owner_id() -> int:
 func get_local_team() -> int:
 	return get_host_team()
 
+# 建造/升级/生产这类战报是否值得生成：
+# - 自己家（人类玩家）一定要生成；
+# - 队友也要生成（2v2/3v3 的 AI 队友同队、乱斗里的 AI 盟友不同队但结盟），
+#   显不显示交给接收端的「战报筛选」开关决定；
+# - 敌方一律不生成，避免泄露视野外的动静（联机里敌方人类玩家的战报只会推给他自己那一方）。
+func is_progress_reportable(owner: int, team: int) -> bool:
+	if is_human_owned(owner, team):
+		return true
+	if team < 0 or team == RTSConfig.Team.NEUTRAL:
+		return false
+	if is_ffa and diplomacy != null and owner >= 0 and diplomacy.is_ally(player_owner_id, owner):
+		return true
+	# 联机 2v2/3v3：AI 队友是合成 peer，但它所在的队伍里有真人负责接收，
+	# 所以照样生成；推送时只会发给该队伍的真人客户端。
+	if is_online:
+		return team_has_human_player(team)
+	# 单机：AI 队友与自己同队
+	return team == get_host_team()
+
+# 该队伍里是否有真人玩家（联机由 OnlineBattleManager 覆写；单机没有这个概念）
+func team_has_human_player(_team: int) -> bool:
+	return false
+
 func is_local_player_owned(owner: int, team: int) -> bool:
 	if owner != -1:
 		return owner == get_local_owner_id()
@@ -3601,12 +3624,12 @@ func is_mobile_ui_point(pos: Vector2) -> bool:
 # 「【被攻击国】某某被打了」，而不是「【攻击国】打了某某」。
 # 无法判定时传 -1，只显示消息本体。
 # target_team：联机模式下只推给哪个阵营；-1 表示广播给双方。单机忽略这个参数。
-func _show_hud_alert(msg: String, color: Color = Color(1.0, 0.2, 0.1), source_teams = -1, target_team: int = -1, alert_kind: int = 0, is_castle: bool = false, nations: Array = []):
+func _show_hud_alert(msg: String, color: Color = Color(1.0, 0.2, 0.1), source_teams = -1, target_team: int = -1, alert_kind: int = 0, is_castle: bool = false, nations: Array = [], alert_pos: Vector3 = Vector3.ZERO, source_owner: int = -1):
 	if color == Color(1.0, 0.2, 0.1) or color == Color(1.0, 0.8, 0.1): AudioManager.play_sfx("alert")
 	if has_node("UI"):
 		var hud = $UI
 		if hud and hud.has_method("show_alert_message"):
-			hud.show_alert_message(msg, color, source_teams, alert_kind, is_castle, nations)
+			hud.show_alert_message(msg, color, source_teams, alert_kind, is_castle, nations, alert_pos, source_owner)
 
 # 队伍列表归一化：支持单个 int 与 Array，负数（未知来源）丢弃
 func _alert_team_list(raw) -> Array:
@@ -3798,6 +3821,15 @@ func _capture_abandoned_site(site: Building, army: Army) -> void:
 	var tint: Color = get_entity_color(site)
 	tint = Color(0.2 + tint.r * 0.8, 0.2 + tint.g * 0.8, 0.2 + tint.b * 0.8)
 	_apply_team_tint(site, tint)
+	# 等级旗帜/底座色环/等级徽章是按「生成时的队伍色」烘出来的，占领后必须按新国家色重建，
+	# 否则废墟会一直挂着中立灰旗（联机客户端收到新 team 的快照后会自己重刷）
+	LevelVisualScript.apply(
+		site,
+		maxi(site.upgrade_level, site.level),
+		0.0,
+		get_entity_color(site),
+		site.build_timer <= 0.0,
+	)
 	mark_entity_cache_dirty()
 	# 废弃仓库/民居从"中立"转为"己方"，仓储与人口上限要按新队伍重算
 	if site.entity_id == 22:
@@ -3806,8 +3838,10 @@ func _capture_abandoned_site(site: Building, army: Army) -> void:
 		update_population_limits()
 	var loot: Dictionary = _abandoned_loot_for(site.entity_id)
 	_grant_capture_loot(army, loot)
-	_show_hud_alert("【废弃建筑】我方占领了%s%s" % [_abandoned_label(site.entity_id), _loot_text(loot)],
-		Color(0.95, 0.85, 0.35), [team], team)
+	var who: String = "我方" if is_human_owned(owner_id, team) else "队友"
+	_show_hud_alert("【废弃建筑】%s占领了%s%s" % [who, _abandoned_label(site.entity_id), _loot_text(loot)],
+		Color(0.95, 0.85, 0.35), [team], team, GameSettings.AlertKind.MISC, false, [],
+		site.global_position, owner_id)
 	print("[废弃建筑] team=%d owner=%d 占领 %s" % [team, owner_id, _abandoned_label(site.entity_id)])
 
 # 战利品按队伍/玩家入账：自建模式走 owner 资源，单机 1v1 走队伍资源
@@ -4184,18 +4218,25 @@ func _tick_physics_rate(delta: float) -> void:
 		_set_physics_rate_low(false)
 		return
 	var ent_count: int = entities.get_child_count() if entities else 0
-	if ent_count >= 420:
+	# 180 个单位开始就可能出现“一帧补跑多个物理步”的死亡螺旋，不必等到 420。
+	# 30Hz 模拟对 RTS 的移动/战斗手感影响很小，但能把每帧物理工作量砍半。
+	if ent_count >= 180:
 		_set_physics_rate_low(true)
-	elif ent_count < 360:
+	elif ent_count < 150:
 		_set_physics_rate_low(false)
 
 func _set_physics_rate_low(low: bool) -> void:
-	if _physics_rate_low == low:
+	var ent_count: int = entities.get_child_count() if entities else 0
+	# 大兵团每渲染帧最多补跑 2 步；450 以上只补 1 步。steps 越多，低帧率时
+	# 每帧要重复跑越多遍 Army 逻辑，反而把帧率继续压低。
+	var want_steps: int = 1 if ent_count >= 450 else 2
+	if _physics_rate_low == low \
+			and (not low or Engine.max_physics_steps_per_frame == want_steps):
 		return
 	_physics_rate_low = low
 	if low:
 		Engine.physics_ticks_per_second = 30
-		Engine.max_physics_steps_per_frame = 4
+		Engine.max_physics_steps_per_frame = want_steps
 	else:
 		Engine.physics_ticks_per_second = maxi(_physics_tick_original, 30)
 		Engine.max_physics_steps_per_frame = maxi(_physics_max_steps_original, 1)

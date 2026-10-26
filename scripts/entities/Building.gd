@@ -276,7 +276,7 @@ func _finish_construction():
 			bm.update_player_population(owner_peer_id)
 
 	# 建造完成警报（仅人类玩家自己，含位置和编队）
-	if bm and bm.has_method("_show_hud_alert") and bm.is_human_owned(owner_peer_id, team):
+	if bm and bm.has_method("_show_hud_alert") and bm.is_progress_reportable(owner_peer_id, team):
 		var group_str = ""
 		var sm = bm.get_node_or_null("SelectionManager")
 		if sm and sm.has_method("get_entity_groups"):
@@ -284,7 +284,7 @@ func _finish_construction():
 			if groups.size() > 0:
 				group_str = " [T%d]" % groups[0]
 		var loc_str = "(%d,%d)" % [int(global_position.x), int(global_position.z)]
-		bm._show_hud_alert("建造完成: %s%s %s" % [display_name, group_str, loc_str], Color(0.2, 1.0, 0.3), [team], team, GameSettings.AlertKind.BUILD)
+		bm._show_hud_alert("建造完成: %s%s %s" % [display_name, group_str, loc_str], Color(0.2, 1.0, 0.3), [team], team, GameSettings.AlertKind.BUILD, false, [], global_position, owner_peer_id)
 	# 城堡建成立刻解锁民族兵种
 	if entity_id == 53 and bm and bm.has_method("get_team_nation"):
 		var nation = bm.get_team_nation(team)
@@ -661,7 +661,7 @@ func _finish_upgrade():
 	_sync_range_rings()
 
 	# 升级完成警报（仅人类玩家自己，含位置和编队）
-	if bm and bm.has_method("_show_hud_alert") and bm.is_human_owned(owner_peer_id, team):
+	if bm and bm.has_method("_show_hud_alert") and bm.is_progress_reportable(owner_peer_id, team):
 		var group_str = ""
 		var sm = bm.get_node_or_null("SelectionManager")
 		if sm and sm.has_method("get_entity_groups"):
@@ -670,7 +670,7 @@ func _finish_upgrade():
 				group_str = " [T%d]" % groups[0]
 		var loc_str = "(%d,%d)" % [int(global_position.x), int(global_position.z)]
 		# 主城（entity_id 20）升级是重要节点，标记出来让它不受队友筛选影响
-		bm._show_hud_alert("升级完成: %s%s %s" % [display_name, group_str, loc_str], Color(0.2, 1.0, 0.3), [team], team, GameSettings.AlertKind.UPGRADE, entity_id == 20)
+		bm._show_hud_alert("升级完成: %s%s %s" % [display_name, group_str, loc_str], Color(0.2, 1.0, 0.3), [team], team, GameSettings.AlertKind.UPGRADE, entity_id == 20, [], global_position, owner_peer_id)
 
 func get_prod_cooldown(unit_id: int) -> float:
 	var spd3 = 1.0
@@ -926,9 +926,9 @@ func _finish_repair() -> void:
 	BuildingConstructionVisual.finish(self)
 	AudioManager.play_sfx("upgrade_done")
 	var bm = _get_bm()
-	if bm and bm.has_method("_show_hud_alert") and bm.is_human_owned(owner_peer_id, team):
+	if bm and bm.has_method("_show_hud_alert") and bm.is_progress_reportable(owner_peer_id, team):
 		var loc_str := "(%d,%d)" % [int(global_position.x), int(global_position.z)]
-		bm._show_hud_alert("修理完成: %s %s" % [display_name, loc_str], Color(0.35, 0.95, 0.45), [team], team, GameSettings.AlertKind.UPGRADE, false)
+		bm._show_hud_alert("修理完成: %s %s" % [display_name, loc_str], Color(0.35, 0.95, 0.45), [team], team, GameSettings.AlertKind.UPGRADE, false, [], global_position, owner_peer_id)
 
 	
 	
