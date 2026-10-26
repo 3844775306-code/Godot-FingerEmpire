@@ -10,11 +10,14 @@ extends Control
 
 const AppVersion = preload("res://scripts/core/AppVersion.gd")
 const ChangelogData = preload("res://scripts/data/ChangelogData.gd")
+const ChangelogHistory = preload("res://scripts/data/ChangelogHistory.gd")
 const UpdateConfig = preload("res://scripts/core/UpdateConfig.gd")
 const UpdateChecker = preload("res://scripts/core/UpdateChecker.gd")
 
 const PANEL_W: float = 780.0
 const PANEL_H: float = 900.0
+# 底部「查看更多」每次展开的历史版本数量（每个版本约 8 条提交要点）
+const HISTORY_PAGE_SIZE: int = 12
 
 # 是否在最新一条上打 NEW（打开前读一次，打开后就标记已读）
 var _show_new: bool = false
@@ -26,6 +29,13 @@ var _update_status: Label = null
 var _update_download_btn: Button = null
 var _update_url: String = ""
 var _update_checker: UpdateChecker = null
+# 底部「查看更多」：历史版本按页展开，直到 v1.0.0（2026-07-18 初始提交）
+var _scroll: ScrollContainer = null
+var _history_box: VBoxContainer = null
+var _history_more_btn: Button = null
+var _history_status: Label = null
+var _history_entries: Array = []
+var _history_index: int = 0
 
 # 打开更新日志：已经开着就直接返回（避免叠两层）
 static func open(parent: Node) -> ChangelogPanel:
@@ -129,6 +139,7 @@ func _build() -> void:
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
 	panel.add_child(scroll)
+	_scroll = scroll
 
 	var vb := VBoxContainer.new()
 	vb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -155,11 +166,14 @@ func _build() -> void:
 	tail.add_theme_color_override("font_color", Color(UITheme.STONE.lightened(0.25)))
 	vb.add_child(tail)
 
+	# 最底部：分页展开更早的历史版本，直到 2026-07-18 的初始提交
+	_add_history_section(vb)
+
 	if _mobile:
 		UILayout.scale_widgets_for_mobile(vb)
 
 # 一条版本记录：版本徽章 + 日期 (+NEW) → 标题 → 要点列表
-func _add_entry(parent: Control, entry: Dictionary, show_new: bool) -> void:
+func _add_entry(parent: Control, entry: Dictionary, show_new: bool) -> Control:
 	var block := VBoxContainer.new()
 	block.add_theme_constant_override("separation", 6)
 	parent.add_child(block)
@@ -218,12 +232,108 @@ func _add_entry(parent: Control, entry: Dictionary, show_new: bool) -> void:
 		line.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 		line.add_theme_color_override("font_color", Color(UITheme.PARCHMENT, 0.88))
 		block.add_child(line)
+	return block
 
 func _add_separator(parent: Control) -> void:
 	var sep := ColorRect.new()
 	sep.color = Color(UITheme.GOLD, 0.22)
 	sep.custom_minimum_size = Vector2(0, 1)
 	parent.add_child(sep)
+
+# ==================== 更早的历史版本 ====================
+# 当前版本条目只保留最近几次发版；这里按版本向前分页展开，
+# 每次点「查看更多」追加 HISTORY_PAGE_SIZE 个历史版本，直到 v1.0.0。
+func _add_history_section(parent: Control) -> void:
+	_add_separator(parent)
+
+	var caption := Label.new()
+	caption.text = "更早的版本记录"
+	caption.add_theme_font_size_override("font_size", UITheme.FONT_MD)
+	caption.add_theme_color_override("font_color", Color(UITheme.GOLD, 0.9))
+	parent.add_child(caption)
+
+	_history_entries = ChangelogHistory.entries()
+	_history_index = 0
+
+	_history_box = VBoxContainer.new()
+	_history_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_history_box.add_theme_constant_override("separation", 16)
+	parent.add_child(_history_box)
+
+	_history_more_btn = Button.new()
+	_history_more_btn.text = "查看更多更早的更新日志"
+	_history_more_btn.custom_minimum_size = Vector2(
+		UILayout.dp(220.0) if _mobile else 300.0,
+		UILayout.dp(28.0) if _mobile else 38.0)
+	_history_more_btn.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
+	UITheme.apply_muted_button(_history_more_btn,
+		UILayout.font_dp(10.0) if _mobile else UITheme.FONT_SM)
+	if _mobile:
+		_history_more_btn.set_meta("mobile_dp_scaled", true)
+	_history_more_btn.pressed.connect(_on_history_more_pressed)
+	parent.add_child(_history_more_btn)
+
+	_history_status = Label.new()
+	_history_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_history_status.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_history_status.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_history_status.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	_history_status.add_theme_color_override("font_color", Color(UITheme.STONE.lightened(0.35)))
+	parent.add_child(_history_status)
+
+	_update_history_button()
+
+func _on_history_more_pressed() -> void:
+	if _history_entries.is_empty() or _history_box == null:
+		return
+	var end: int = int(min(_history_index + HISTORY_PAGE_SIZE, _history_entries.size()))
+	if end <= _history_index:
+		return
+	var first_block: Control = null
+	for i in range(_history_index, end):
+		if _history_box.get_child_count() > 0:
+			_add_separator(_history_box)
+		var block: Control = _add_entry(_history_box, _history_entries[i], false)
+		if first_block == null:
+			first_block = block
+		if _mobile:
+			# 这些条目是打开面板之后才创建的，需要单独做一次移动端 dp 缩放
+			UILayout.scale_widgets_for_mobile(block)
+	_history_index = end
+	_update_history_button()
+
+	# 等新条目完成布局后，把视口移到这一页的第一条，而不是停在底部按钮上
+	if first_block != null and _scroll != null:
+		await get_tree().process_frame
+		if is_instance_valid(first_block) and is_instance_valid(_scroll):
+			var target: int = int(
+				first_block.global_position.y - _scroll.global_position.y
+				+ float(_scroll.scroll_vertical)
+			)
+			_scroll.scroll_vertical = target
+
+func _update_history_button() -> void:
+	if _history_more_btn == null or _history_status == null:
+		return
+	var total: int = _history_entries.size()
+	var remaining: int = total - _history_index
+	if total <= 0:
+		_history_more_btn.text = "还没有历史版本记录"
+		_history_more_btn.disabled = true
+		_history_status.text = ""
+		return
+	if remaining <= 0:
+		_history_more_btn.text = "已看到 2026-07-18 的初始提交"
+		_history_more_btn.disabled = true
+		_history_status.text = "已显示全部历史版本（v1.6.44 ~ v1.0.0）"
+		return
+	_history_more_btn.disabled = false
+	_history_more_btn.text = "查看更多更早的更新日志"
+	if _history_index <= 0:
+		_history_status.text = "共 %d 个历史版本，点击「查看更多」一直翻到 2026-07-18 的初始提交" % total
+	else:
+		var shown_version: String = String(_history_entries[_history_index - 1].get("version", ""))
+		_history_status.text = "已显示到 %s · 还有 %d 个历史版本" % [shown_version, remaining]
 
 # ==================== 检查更新 ====================
 # 面板顶部一行：手动强制联网查一次，结果就地显示在右边

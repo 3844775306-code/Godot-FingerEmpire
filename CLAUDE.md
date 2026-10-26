@@ -82,6 +82,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/bump_version.ps1
   2. 把 `AppVersion.gd`、`tools/version_state.json`、`ChangelogData.gd` 一起提交（commit message 里写 `版本号更新到 vX.Y.Z`）。
 - `-DryRun` 只判断不写文件；`-Major 2` 手动指定大版本。
 - `tools/version_state.json` 里存 `major/minor/patch/pending/last_bump_commit/last_bump_date`，**不要手工改**（除非要修计数）。
+- 更新日志面板底部的「查看更多」读取 `scripts/data/ChangelogHistory.gd`（v1.6.44 → v1.0.0），每次展开 12 个历史版本；该文件由 Git 提交按版本整理，手写日志仍放 `ChangelogData.gd`。
 
 ## 自动检查更新
 

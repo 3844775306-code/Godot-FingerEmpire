@@ -4,6 +4,8 @@ extends RefCounted
 #
 # ── 版本号 ──
 # 已按全部 Git 提交从 v1.0.0 重新折算；当前版本见 AppVersion.gd。
+# 更早的历史版本（v1.6.44 → v1.0.0）由 ChangelogHistory.gd 提供，
+# 面板底部「查看更多」按页加载，直到 2026-07-18 的初始提交。
 #
 # ── 发版流程 ──
 #   1. 改 scripts/core/AppVersion.gd 的 VERSION / RELEASE_DATE；
@@ -19,7 +21,7 @@ extends RefCounted
 # 声明成 static var 方便调试/自动化测试临时指向别的路径（正常运行时不要改）。
 static var seen_path: String = "user://changelog_seen.txt"
 
-# 全部版本的更新日志（倒序）
+# 最近几个版本的更新日志（倒序）；更早的历史版本见 ChangelogHistory.gd。
 static func entries() -> Array:
 	return [
 		{
@@ -32,6 +34,7 @@ static func entries() -> Array:
 				"优化：静止单位的视野结果缓存复用，减少后期大量单位时的重复计算。",
 				"优化：农民采集距离缩短为视野的 0.7，农民不会再跑到离队伍过远的位置。",
 				"优化：AI 修建城墙改为连续铺墙，不再隔一段留一个缺口，防守更完整。",
+				"新增：更新日志底部增加「查看更多」，可以按版本一直翻到 2026-07-18 的初始提交。",
 			],
 		},
 		{
