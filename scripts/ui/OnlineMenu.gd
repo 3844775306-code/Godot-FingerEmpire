@@ -18,6 +18,11 @@ var ip_label: Label
 var map_btn: Button
 var _last_map_id: String = "classic"
 var _map_allowed: bool = true
+# 网页房：PC 主机自动开 Cloudflare 隧道，生成可分享的 wss 链接
+var _web_room_dialog: AcceptDialog = null
+var _web_room_share_url: String = ""
+var _web_room_wss_url: String = ""
+var _web_auto_join_started: bool = false
 
 # 手机端全屏滚动表单：触摸拖动直接驱动 ScrollContainer（没有战斗触摸路由器）。
 func _input(event: InputEvent) -> void:
@@ -41,6 +46,8 @@ func _ready():
 	SteamManager.lobby_member_joined.connect(_on_steam_member_joined)
 	SteamManager.lobby_member_left.connect(_on_steam_member_left)
 	SteamManager.game_starting.connect(_on_steam_game_starting)
+	WebTunnel.tunnel_ready.connect(_on_web_tunnel_ready)
+	WebTunnel.tunnel_failed.connect(_on_web_tunnel_failed)
 	# Hide old scene nodes
 	var old = get_node_or_null("Panel")
 	if old: old.visible = false
@@ -178,7 +185,7 @@ func _ready():
 	panel.add_child(host_btn)
 	# Host instructions
 	var hi = Label.new()
-	hi.text = "启动服务器并等待玩家加入。\n玩家需要你的 IP 地址才能连接。"
+	hi.text = "WebSocket 房会自动生成网页 wss 链接。\n把链接发给网页玩家即可加入；主机需保持运行。"
 	hi.position = Vector2(rx, ry + 120); hi.size = Vector2(570, 50)
 	UITheme.apply_label(hi, 14, Color(UITheme.STONE).lightened(0.25))
 	panel.add_child(hi)
@@ -405,7 +412,7 @@ func _build_mobile_ui() -> void:
 	host_btn.pressed.connect(_on_create_server_pressed)
 	vb.add_child(host_btn)
 	var host_hint := Label.new()
-	host_hint.text = "启动服务器并等待玩家加入，玩家需要你的 IP 地址才能连接。"
+	host_hint.text = "WebSocket 房会自动生成网页 wss 链接，发给网页玩家即可加入；主机需保持运行。"
 	host_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	host_hint.add_theme_font_size_override("font_size", UILayout.font_dp(8.0))
 	host_hint.add_theme_color_override("font_color", Color(UITheme.STONE).lightened(0.25))
@@ -661,7 +668,37 @@ func _apply_web_defaults() -> void:
 		ip_input.text = ""
 		ip_input.placeholder_text = "wss://你的服务器地址"
 	if status_label:
-		status_label.text = "浏览器版：请填写 wss:// 地址加入；主机请在 PC 或专用服务器上创建。"
+		status_label.text = "浏览器版：打开邀请链接会自动加入；也可以粘贴 wss:// 地址。"
+	# 主持人生成的分享链接形如：
+	# https://fingerempire.netlify.app/?server=wss%3A%2F%2Fxxxx.trycloudflare.com
+	# 网页端读 query 参数后自动填地址并尝试加入，玩家不用手抄 wss 地址。
+	var room_url := _read_web_room_param()
+	if room_url != "" and ip_input:
+		ip_input.text = NetworkManager.normalize_ws_url(room_url)
+		if status_label:
+			status_label.text = "已读取网页房邀请，正在连接..."
+		_web_auto_join_started = false
+		call_deferred("_auto_join_web_room")
+
+func _read_web_room_param() -> String:
+	var js = Engine.get_singleton("JavaScriptBridge")
+	if js == null:
+		return ""
+	var raw := String(js.eval("new URLSearchParams(location.search).get('server') || ''"))
+	return raw.strip_edges()
+
+func _auto_join_web_room() -> void:
+	if _web_auto_join_started:
+		return
+	_web_auto_join_started = true
+	# 等 UI 和自动加载的网络信号都接好，再发连接
+	await get_tree().create_timer(0.7).timeout
+	if not is_instance_valid(self):
+		return
+	if NetworkManager.mode != NetworkManager.Mode.NONE:
+		return
+	if ip_input and ip_input.text.strip_edges() != "":
+		_on_join_game_pressed()
 
 func _on_transport_changed(use_ws: bool):
 	if OS.has_feature("web"):
@@ -669,28 +706,57 @@ func _on_transport_changed(use_ws: bool):
 	NetworkManager.use_websocket = use_ws
 	enet_toggle_btn.button_pressed = not use_ws
 	ws_toggle_btn.button_pressed = use_ws
+	if OS.has_feature("web"):
+		return
 	if use_ws:
-		if not OS.has_feature("web"):
-			ip_input.text = "ws://127.0.0.1:8080"
+		if host_btn:
+			host_btn.text = "创建网页房间（自动公网）"
+		ip_input.text = "ws://127.0.0.1:8080"
+		if status_label:
+			status_label.text = "网页房会自动生成 wss 链接，网页玩家点链接即可加入。"
 	else:
+		if host_btn:
+			host_btn.text = "创建服务器"
 		ip_input.text = "127.0.0.1"
+		if status_label:
+			status_label.text = "ENet 房使用主机 IP 连接；网页玩家请切换到 WebSocket。\n"
 
 func _on_create_server_pressed():
 	if OS.has_feature("web"):
-		status_label.text = "浏览器版不能创建服务器；请在 PC/服务器端启动 WebSocket 主机后，填入 wss:// 地址加入。"
+		status_label.text = "浏览器版不能创建服务器；请在 PC/服务器端启动 WebSocket 主机后，打开邀请链接加入。"
+		return
+	# 网页房已就绪时，再次点击主机按钮只重新显示邀请链接，不重建服务器
+	if NetworkManager.use_websocket and WebTunnel.running and _web_room_share_url != "":
+		_show_web_room_dialog()
 		return
 	NetworkManager.red_ai_count = int(red_ai_spin.value)
 	NetworkManager.blue_ai_count = int(blue_ai_spin.value)
 	if NetworkManager.use_websocket:
-		NetworkManager.start_ws_server()
-		status_label.text = "WS 服务器启动中 (端口 8080)\nUPnP 映射进行中..."
+		if NetworkManager.mode != NetworkManager.Mode.SERVER:
+			if not NetworkManager.start_ws_server(false):
+				status_label.text = "WebSocket 服务器启动失败，端口 8080 可能被占用。"
+				return
+		status_label.text = "WS 服务器已启动 (端口 8080)\n正在生成网页玩家可用的 wss 链接..."
+		start_game_btn.visible = true
+		start_game_btn.text = "开始游戏 (1 名玩家)"
+		# 复用已存在的隧道；否则启动 Cloudflare Quick Tunnel
+		if WebTunnel.running and WebTunnel.wss_url != "":
+			_on_web_tunnel_ready(WebTunnel.wss_url, WebTunnel.share_url)
+		elif not WebTunnel.is_available():
+			status_label.text = "WS 服务器已启动 (仅局域网)\n缺少 cloudflared.exe，无法生成网页公网链接。"
+			_show_web_room_error("缺少 cloudflared.exe",
+				"没有找到 Cloudflare 隧道组件，网页玩家暂时无法通过公网加入。\n\n" +
+				"请重新下载完整 Windows 包，或把 cloudflared.exe 放到游戏 exe 同目录。")
+		else:
+			WebTunnel.start(NetworkManager.WS_PORT)
 	else:
 		NetworkManager.start_server()
 		status_label.text = "服务器已启动 (端口 9000)\nUPnP 映射进行中..."
-	start_game_btn.visible = true
-	start_game_btn.text = "开始游戏 (1 名玩家)"
-	# 无需等待其他人类玩家 → 自动开始
-	if NetworkManager.can_start_game():
+		start_game_btn.visible = true
+		start_game_btn.text = "开始游戏 (1 名玩家)"
+	# 网页房需要等网页玩家加入后再手动开始；不能因为 AI 填满就自动开战，
+	# 否则大厅会直接切走，主机来不及把邀请链接发给别人。
+	if not NetworkManager.use_websocket and NetworkManager.can_start_game():
 		status_label.text = "全部由AI填充，自动开始..."
 		await get_tree().create_timer(0.5).timeout
 		var reason = NetworkManager.start_game()
@@ -727,9 +793,73 @@ func _on_upnp_ready(ip: String):
 
 func _on_upnp_failed(reason: String):
 	if NetworkManager.use_websocket:
-		status_label.text = "WS 服务器已启动 (仅局域网)\n%s\n同一网络内可用 ws://局域网IP:8080 连接" % reason
+		status_label.text = "WS 服务器已启动 (仅局域网)\n%s\n网页玩家需要公网 wss 链接，请使用「创建网页房间」自动生成。" % reason
 	else:
 		status_label.text = "服务器已启动 (仅局域网)\n%s\n同一网络的玩家可通过局域网 IP 加入" % reason
+
+# ==================== 网页房（PC 主机 + Cloudflare 隧道） ====================
+func _on_web_tunnel_ready(wss_url: String, share_url: String) -> void:
+	_web_room_wss_url = wss_url
+	_web_room_share_url = share_url
+	if host_btn:
+		host_btn.text = "显示网页邀请链接"
+	DisplayServer.clipboard_set(share_url)
+	if status_label:
+		status_label.text = "网页房已就绪！邀请链接已复制到剪贴板，发给网页玩家即可。\n%s" % share_url
+		status_label.add_theme_color_override("font_color", UITheme.ALERT_INFO)
+	_show_web_room_dialog()
+
+func _on_web_tunnel_failed(reason: String) -> void:
+	_web_room_share_url = ""
+	_web_room_wss_url = ""
+	if host_btn:
+		host_btn.text = "重试创建网页房间"
+	if status_label:
+		status_label.text = "网页公网链接生成失败：%s" % reason
+		status_label.add_theme_color_override("font_color", UITheme.ALERT_WARNING)
+	_show_web_room_error("网页公网链接生成失败", reason)
+
+func _show_web_room_dialog() -> void:
+	if _web_room_dialog != null and is_instance_valid(_web_room_dialog):
+		_web_room_dialog.queue_free()
+	var dlg := AcceptDialog.new()
+	dlg.title = "网页房已创建"
+	dlg.ok_button_text = "关闭"
+	dlg.dialog_text = "把下面的邀请链接发给网页玩家，打开后会自动加入：\n\n%s\n\n主机需要保持游戏运行。\n\n网页玩家也可以手动填写：\n%s" % [
+		_web_room_share_url, _web_room_wss_url,
+	]
+	dlg.add_button("复制邀请链接", true, "copy")
+	dlg.add_button("打开网页入口", true, "open")
+	dlg.custom_action.connect(_on_web_room_dialog_action.bind(dlg))
+	dlg.get_label().autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	add_child(dlg)
+	_web_room_dialog = dlg
+	dlg.popup_centered(Vector2i(980, 430))
+
+func _on_web_room_dialog_action(action: StringName, dlg: AcceptDialog) -> void:
+	match String(action):
+		"copy":
+			DisplayServer.clipboard_set(_web_room_share_url)
+			if status_label:
+				status_label.text = "邀请链接已复制，发给网页玩家即可。"
+		"open":
+			OS.shell_open(_web_room_share_url)
+	if dlg != null and is_instance_valid(dlg):
+		dlg.hide()
+
+func _show_web_room_error(title: String, message: String) -> void:
+	var dlg := AcceptDialog.new()
+	dlg.title = title
+	dlg.ok_button_text = "关闭"
+	dlg.dialog_text = message
+	dlg.add_button("打开 cloudflared 下载页", true, "download")
+	dlg.custom_action.connect(func(action: StringName):
+		if String(action) == "download":
+			OS.shell_open(WebTunnel.download_url())
+	)
+	dlg.get_label().autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	add_child(dlg)
+	dlg.popup_centered(Vector2i(860, 360))
 
 # Steam lobby vars
 var steam_lobby_list: ItemList
@@ -877,7 +1007,7 @@ func _on_player_count_changed():
 		start_game_btn.visible = true
 		start_game_btn.text = "开始游戏 (%d/%d 名玩家)" % [count, need]
 		start_game_btn.disabled = not ready
-	if ready and not NetworkManager.game_started:
+	if ready and not NetworkManager.game_started and not NetworkManager.use_websocket:
 		status_label.text = "所有玩家到齐，自动开始..."
 		start_game_btn.disabled = true  # 防止重复点击
 		await get_tree().create_timer(0.5).timeout
@@ -898,4 +1028,9 @@ func _on_steam_game_starting():
 		RTSConfig.MAP_SIZE = 150 if NetworkManager.selected_mode != NetworkManager.GameMode.ONEvONE else 100
 		tree.change_scene_to_file("res://scenes/rts_battle_client.tscn")
 
-func _on_return_pressed(): var _t = get_tree(); if _t: _t.change_scene_to_file("res://scenes/main_menu.tscn")
+func _on_return_pressed():
+	if NetworkManager.mode == NetworkManager.Mode.SERVER and NetworkManager.use_websocket:
+		WebTunnel.stop()
+		NetworkManager.stop_server()
+	var _t = get_tree()
+	if _t: _t.change_scene_to_file("res://scenes/main_menu.tscn")
