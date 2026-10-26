@@ -30,8 +30,8 @@ var local_visible_grid: Array = []
 
 # ==================== 血条池 ====================
 var unit_bars: Dictionary = {}
-# 血条文字开关（L 键切换）：关闭后只保留血条色条，隐藏名称/血量/生产/升级文字
-var show_unit_text: bool = true
+# 血条文字开关（默认关闭，只显示血条色条；在设置里手动开启，L 键可临时切换）
+var show_unit_text: bool = false
 
 # ==================== 缓存数据 ====================
 var last_resources: Dictionary = {}
@@ -110,7 +110,8 @@ func set_player_info(peer_id: int, team: int, slot: int, color: Color):
 # ==================== 初始化 ====================
 func _ready():
 	add_to_group("client_renderer")
-		# 快照时间显示标签
+	show_unit_text = GameSettings.show_unit_text
+	# 快照时间显示标签
 	_snap_time_label = Label.new()
 	_snap_time_label.name = "SnapTimeLabel"
 	_snap_time_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -331,6 +332,7 @@ func _input(event):
 	elif event is InputEventKey and event.pressed and event.keycode == KEY_L:
 		# L：切换血条文字显示（隐藏后画面上只剩血条色条）
 		show_unit_text = not show_unit_text
+		GameSettings.show_unit_text = show_unit_text
 		var hud = get_tree().get_first_node_in_group("client_hud")
 		if hud and hud.has_method("show_alert_message"):
 			hud.show_alert_message("单位血条文字：%s" % ("显示" if show_unit_text else "隐藏"), UITheme.ALERT_INFO)

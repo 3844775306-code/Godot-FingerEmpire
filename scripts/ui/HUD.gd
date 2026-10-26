@@ -16,8 +16,8 @@ var stone_label: Label
 var food_label: Label
 var oil_label: Label
 var unit_bars: Dictionary = {}
-# 血条文字开关（L 键切换）：关闭后只保留血条色条，隐藏名称/血量/生产/升级文字
-var show_unit_text: bool = true
+# 血条文字开关（默认关闭，只显示血条色条；在设置里手动开启，L 键可临时切换）
+var show_unit_text: bool = false
 var res_bars: Dictionary = {}
 var pop_bar: ProgressBar = null
 var pop_label: Label
@@ -600,6 +600,7 @@ func _input(event):
 # L 键：切换血条文字显示（隐藏后画面上只剩血条色条）
 func _toggle_unit_text():
 	show_unit_text = not show_unit_text
+	GameSettings.show_unit_text = show_unit_text
 	show_alert_message("单位血条文字：%s" % ("显示" if show_unit_text else "隐藏"), ALERT_INFO)
 
 func _on_space_pressed():
@@ -745,6 +746,9 @@ func _open_game_settings() -> void:
 	panel.call("setup", false, false)
 
 func _ready():
+	# 血条文字默认关闭；设置面板/上一局状态由 GameSettings 统一保存。
+	show_unit_text = GameSettings.show_unit_text
+	add_to_group("game_hud")
 	# 电脑版左下角的虚拟摇杆用不上：隐藏并停掉它的输入处理，避免抢占鼠标
 	if not InputSource.use_mobile_ui():
 		var stick := get_node_or_null("VirtualStick")

@@ -34,7 +34,7 @@ var command_mode: int = CommandMode.CONTINUOUS  # 单次/连续命令模式（_r
 var mobile_batch_produce: bool = false     # 批量生产：点生产按钮 = 电脑端 Ctrl+生产（同类型建筑一起产）
 var mobile_continuous_build: bool = false  # 连续建造：放置完不退出建造模式 = 电脑端 Shift 连续建造
 var mobile_gyro_rotate: bool = false       # 倾斜手机旋转视角：命令栏的开关已改为「双指手势模式」，
-                                           # 没有 UI 能关掉它，所以默认关闭（旋转改用双指手势），需要时可在这里打开
+										   # 没有 UI 能关掉它，所以默认关闭（旋转改用双指手势），需要时可在这里打开
 
 # 双指手势模式：手机端双指不再「又缩放又旋转」，由命令栏按钮二选一。
 # 缩放模式只认捏合，旋转模式只认扭转/拖动，切换后相机下一次输入就按新模式走。
@@ -53,6 +53,20 @@ enum AlertKind { COMBAT = 0, BUILD = 1, UPGRADE = 2, PRODUCE = 3, DIPLOMACY = 4,
 var alert_friendly_build: bool = false
 var alert_friendly_upgrade: bool = false
 var alert_friendly_produce: bool = false
+
+# 单位血条文字：默认关闭，只保留血条色条；需要在设置面板手动打开。
+# 单机 HUD 和联机 ClientRenderer 都读取这个开关。
+var show_unit_text: bool = false
+
+# 立即把血条文字开关同步到当前对局界面（设置面板勾选后无需重开）。
+func set_unit_text_enabled(on: bool) -> void:
+	show_unit_text = on
+	for node in get_tree().get_nodes_in_group("game_hud"):
+		if "show_unit_text" in node:
+			node.set("show_unit_text", on)
+	for node in get_tree().get_nodes_in_group("client_renderer"):
+		if "show_unit_text" in node:
+			node.set("show_unit_text", on)
 
 func _ready() -> void:
 	# 调试构建支持命令行指定地图与模式：godot ... -- --map=ford --mode=2v2（导出包不生效）

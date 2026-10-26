@@ -133,6 +133,11 @@ func _build() -> void:
 	vb.add_child(_make_volume_row("音乐", AudioManager._music_volume, func(v: float): AudioManager.set_music_volume(v)))
 	vb.add_child(_make_volume_row("音效", AudioManager._sfx_volume, func(v: float): AudioManager.set_sfx_volume(v)))
 
+	# 单位血条文字：默认关闭，避免满屏名称/血量文字遮挡战场；需要时手动打开
+	vb.add_child(_make_label("🩸 血条文字", UITheme.GOLD))
+	vb.add_child(_make_check_row("显示单位名称/血量/生产/升级文字（默认关闭）", GameSettings.show_unit_text,
+		func(on: bool): GameSettings.set_unit_text_enabled(on)))
+
 	# 战报筛选：队友国家的建造/升级/生产默认不接收，避免刷掉自己关心的战斗消息
 	vb.add_child(_make_label("📢 战报筛选（队友国家）", UITheme.GOLD))
 	vb.add_child(_make_check_row("建造完成", GameSettings.alert_friendly_build,
