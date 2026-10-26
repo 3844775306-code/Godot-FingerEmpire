@@ -33,13 +33,11 @@ var command_mode: int = CommandMode.CONTINUOUS  # 单次/连续命令模式（_r
 # 手机端专用开关：没有键盘修饰键，用命令栏里的开关代替
 var mobile_batch_produce: bool = false     # 批量生产：点生产按钮 = 电脑端 Ctrl+生产（同类型建筑一起产）
 var mobile_continuous_build: bool = false  # 连续建造：放置完不退出建造模式 = 电脑端 Shift 连续建造
-var mobile_gyro_rotate: bool = false       # 倾斜手机旋转视角：命令栏的开关已改为「双指手势模式」，
-										   # 没有 UI 能关掉它，所以默认关闭（旋转改用双指手势），需要时可在这里打开
+var mobile_gyro_rotate: bool = false       # 倾斜手机旋转视角（旧开关已移除），默认关闭；
+										   # 现在手机端旋转视角用命令栏的「↻ 按住旋转」按钮
 
-# 双指手势模式：手机端双指不再「又缩放又旋转」，由命令栏按钮二选一。
-# 缩放模式只认捏合，旋转模式只认扭转/拖动，切换后相机下一次输入就按新模式走。
-enum TwoFingerMode { ZOOM = 0, ROTATE = 1 }
-var mobile_two_finger_mode: int = TwoFingerMode.ZOOM  # 默认缩放：捏合缩放是手机端最常用的手势
+# 手机端双指手势固定为「缩放」：捏合缩放，拖动/扭转都不动视角。
+# 旋转视角改由命令栏的「↻ 按住旋转」按钮控制（按住缓慢顺时针转，松手停）。
 
 var post_game_data: Dictionary = {}  # {power_history, player_is_blue} for results screen
 

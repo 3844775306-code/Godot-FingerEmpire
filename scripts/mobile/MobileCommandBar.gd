@@ -1,7 +1,7 @@
 class_name MobileCommandBar
 extends Control
 
-# 右下角指令区：框选模式开关 + 双指手势模式开关 + 五个全局指令（与电脑端按钮一一对应）。
+# 右下角指令区：框选模式开关 + 按住旋转按钮 + 五个全局指令（与电脑端按钮一一对应）。
 # 所有动作都转发给桌面 HUD 的既有函数，不新增任何玩法逻辑。
 
 const WIDTH_DP: float = 152.0        # 原 190dp 的 80%，给战场多让出一点空间
@@ -10,7 +10,7 @@ const WIDTH_DP: float = 152.0        # 原 190dp 的 80%，给战场多让出一
 const BTN_H_DP: float = 30.0
 const GAP_DP: float = 3.0
 const PAD_DP: float = 4.0
-const ROW_COUNT: int = 5             # 框选/双指、两个全选、两个撤退、自动进攻/设置、批量/连续
+const ROW_COUNT: int = 5             # 框选/旋转、两个全选、两个撤退、自动进攻/设置、批量/连续
 # 面板高度按内容自适应：5 行按钮 + 4 条行间距 + 上下内边距
 const PANEL_H_DP: float = ROW_COUNT * BTN_H_DP + (ROW_COUNT - 1) * GAP_DP + PAD_DP * 2.0
 
@@ -18,7 +18,7 @@ var hud: Node = null
 var router: TouchGestureRouter = null
 
 var _box_mode_btn: Button = null
-var _two_finger_btn: Button = null
+var _rotate_btn: Button = null
 var _auto_btn: Button = null
 var _batch_produce_btn: Button = null
 var _cont_build_btn: Button = null
@@ -51,20 +51,19 @@ func _build() -> void:
 	vb.add_theme_constant_override("separation", int(UILayout.dp(GAP_DP)))
 	add_child(vb)
 
-	# 框选开关与双指手势模式开关并排
+	# 框选开关与「按住旋转」按钮并排
 	var row0 := _make_row()
 	_box_mode_btn = _make_button("框选：关", UILayout.font_dp(9.5))
 	_box_mode_btn.toggle_mode = true
 	_box_mode_btn.toggled.connect(_on_box_mode_toggled)
 	row0.add_child(_box_mode_btn)
 
-	# 双指手势模式开关：按下 = 旋转模式，弹起 = 缩放模式（默认）
-	_two_finger_btn = _make_button("双指：缩放", UILayout.font_dp(9.5))
-	_two_finger_btn.toggle_mode = true
-	_two_finger_btn.button_pressed = GameSettings.mobile_two_finger_mode == GameSettings.TwoFingerMode.ROTATE
-	_two_finger_btn.toggled.connect(_on_two_finger_mode_toggled)
-	row0.add_child(_two_finger_btn)
-	_sync_two_finger_btn()
+	# 按住 = 顺时针缓慢旋转视角，松手即停（按住约 11 秒转一整圈）。
+	# 替代原来的「双指：缩放 / 双指：旋转」开关：双指现在固定只管缩放。
+	_rotate_btn = _make_button("↻ 按住旋转", UILayout.font_dp(9.5))
+	_rotate_btn.button_down.connect(_on_rotate_down)
+	_rotate_btn.button_up.connect(_on_rotate_up)
+	row0.add_child(_rotate_btn)
 	vb.add_child(row0)
 
 	var row1 := _make_row()
@@ -104,18 +103,52 @@ func _on_settings_pressed() -> void:
 	if hud and hud.has_method("_open_game_settings"):
 		hud.call("_open_game_settings")
 
-# 双指手势模式开关：按下（绿色）= 旋转模式，弹起 = 缩放模式（默认）。
-# 写回 GameSettings 后立刻生效，CameraController 每个手势事件都会重新读取模式。
-func _on_two_finger_mode_toggled(pressed: bool) -> void:
-	GameSettings.mobile_two_finger_mode = GameSettings.TwoFingerMode.ROTATE if pressed else GameSettings.TwoFingerMode.ZOOM
-	_sync_two_finger_btn()
+# 按住旋转：按下开始顺时针缓慢转视角，松手立刻停。
+# 按钮被隐藏/面板关掉时也要收尾，否则手指还按着就切界面会一直转个不停。
+func _on_rotate_down() -> void:
+	_set_hold_rotate(1.0)
+	_rotate_btn.add_theme_color_override("font_color", Color(0.55, 0.95, 0.55))
 
-func _sync_two_finger_btn() -> void:
-	if _two_finger_btn == null:
-		return
-	var rotate_mode: bool = GameSettings.mobile_two_finger_mode == GameSettings.TwoFingerMode.ROTATE
-	_two_finger_btn.text = "双指：旋转" if rotate_mode else "双指：缩放"
-	_two_finger_btn.add_theme_color_override("font_color", Color(0.55, 0.95, 0.55) if rotate_mode else Color(0.9, 0.9, 0.9))
+func _on_rotate_up() -> void:
+	_set_hold_rotate(0.0)
+	_rotate_btn.add_theme_color_override("font_color", Color(0.9, 0.9, 0.9))
+
+func _set_hold_rotate(dir: float) -> void:
+	var cam := _find_camera()
+	if cam != null:
+		cam.set_hold_rotate(dir)
+
+func _exit_tree() -> void:
+	# 场景切换/面板销毁时兜底停止，避免相机一直转
+	_set_hold_rotate(0.0)
+
+# 面板被隐藏（打开设置等）时也要松手，否则旋转会一直持续
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_VISIBILITY_CHANGED and not visible:
+		_set_hold_rotate(0.0)
+
+# 场景约定：相机为场景根的直接子节点 Camera3D（与 VirtualStick 一致），
+# 拿不到就退回整棵树里搜挂载了 CameraController 的相机。
+func _find_camera() -> Camera3D:
+	var tree := get_tree()
+	if tree == null:
+		return null
+	var scene := tree.current_scene
+	if scene == null:
+		return null
+	var direct := scene.get_node_or_null("Camera3D")
+	if direct != null and direct.has_method("set_hold_rotate"):
+		return direct as Camera3D
+	return _search_camera(scene)
+
+func _search_camera(n: Node) -> Camera3D:
+	for c in n.get_children():
+		if c.has_method("set_hold_rotate"):
+			return c as Camera3D
+		var hit := _search_camera(c)
+		if hit != null:
+			return hit
+	return null
 
 func _make_row() -> HBoxContainer:
 	var row := HBoxContainer.new()

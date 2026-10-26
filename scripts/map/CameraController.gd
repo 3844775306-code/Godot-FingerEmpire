@@ -19,18 +19,18 @@ var is_rotating: bool = false
 var rotate_center: Vector3 = Vector3.ZERO
 var yaw_deg: float = 0.0
 const ROTATE_SENSITIVITY: float = 0.30   # 每像素对应的旋转角度（度），PC 用
-# 触屏双指旋转：手指位移的分辨率低、屏幕又小，同样的位移必须给更大的角度才跟手
-const ROTATE_SENSITIVITY_TOUCH: float = 0.62
-# 双指扭转（两指绕彼此转）比横向拖动更符合"转动视角"的直觉，这里给它的权重
-const ROTATE_TWIST_WEIGHT: float = 0.85
-# 旋转模式下：两指间距变化超过这个像素数，说明是在捏合而不是扭转，跳过这一帧的旋转
-const TOUCH_PINCH_GUARD: float = 3.0
+# 手机端「按住旋转」按钮：按住期间每帧绕固定焦点匀速转动，松手即停
+const HOLD_ROTATE_SPEED: float = 32.0    # 度/秒，慢速微调；按住约 11 秒转一整圈
 
-# 触屏多指：记录每个触点位置，双指拖动用来旋转视角
+# 触屏多指：记录每个触点位置（双指只用来捏合缩放，旋转交给命令栏按钮）
 var _fingers: Dictionary = {}
 var _two_finger_last: Vector2 = Vector2.ZERO
 var _two_finger_angle: float = 0.0
 var _two_finger_dist: float = 0.0
+
+# 按住旋转状态：+1 顺时针 / -1 逆时针 / 0 停止
+var _hold_rotate: float = 0.0
+var _hold_rotate_center: Vector3 = Vector3.ZERO
 
 # 触摸拖拽相关
 var _touch_count: int = 0           # 当前触摸点数
@@ -85,10 +85,18 @@ func _apply_initial_sun_yaw() -> void:
 	yaw_deg = rad_to_deg(atan2(-to_sun.x, -to_sun.z))
 	_rig_over_center(_screen_center_ground())
 
-# 当前双指手势模式：由手机命令栏的「双指：缩放 / 双指：旋转」按钮写进 GameSettings。
-# 每个手势事件都现读一次，所以切换模式后立刻生效，不需要重启对局。
-func _is_two_finger_rotate_mode() -> bool:
-	return GameSettings.mobile_two_finger_mode == GameSettings.TwoFingerMode.ROTATE
+# 手机端「按住旋转」：命令栏按钮按下 → 传入 +1（顺时针）/-1（逆时针），松开传 0。
+# 每个事件都现读，所以松手立刻停住，不需要额外信号。
+func set_hold_rotate(dir: float) -> void:
+	if _follow_target:
+		return
+	if absf(dir) < 0.001:
+		_hold_rotate = 0.0
+		return
+	# 按下瞬间定住旋转轴：之后每帧只是绕这个地面点转，镜头不会边转边漂
+	if _hold_rotate == 0.0:
+		_hold_rotate_center = _screen_center_ground()
+	_hold_rotate = 1.0 if dir > 0.0 else -1.0
 
 func _input(event):
 	# 跟随视角模式：禁用平移/缩放输入，画面完全由跟随逻辑控制
@@ -158,48 +166,21 @@ func _input(event):
 			global_translate((-_view_right() * delta.x + _view_forward() * delta.y) * 0.1 * factor)
 			touch_pan_start = event.position
 		elif _fingers.size() == 2:
-			# 双指手势按模式二选一：缩放模式只捏合缩放，旋转模式只扭转/拖动转视角，
-			# 不再让两种手势同时生效（同时生效时缩放会把视角带歪、扭转又会误缩放）。
+			# 双指只负责缩放（捏合由 MagnifyGesture 驱动）。这里只刷新基准，
+			# 拖两指/扭转都不动视角——旋转改由命令栏的「按住旋转」按钮控制，
+			# 免得想缩放却把镜头带歪。
 			var keys: Array = _fingers.keys()
 			var p1: Vector2 = _fingers[keys[0]]
 			var p2: Vector2 = _fingers[keys[1]]
-			var avg: Vector2 = (p1 + p2) * 0.5
-			var ang: float = atan2(p2.y - p1.y, p2.x - p1.x)
-			var dist: float = p1.distance_to(p2)
-			if _two_finger_last == Vector2.ZERO:
-				# 双指刚凑齐：记录基准，并按当前屏幕中心定好旋转轴
-				_two_finger_last = avg
-				_two_finger_angle = ang
-				_two_finger_dist = dist
-				rotate_center = _screen_center_ground()
-			elif _is_two_finger_rotate_mode():
-				# 旋转模式：水平位移和两指连线扭转都能转视角。
-				# 单靠横向拖动在手机上要拖非常远才转得动，加扭转后手感接近地图 App。
-				# 明显在捏合的那几帧不参与旋转，否则捏合会把视角一起带歪。
-				var d_dist: float = absf(dist - _two_finger_dist)
-				if d_dist <= TOUCH_PINCH_GUARD:
-					var fdx: float = avg.x - _two_finger_last.x
-					var twist: float = rad_to_deg(angle_difference(_two_finger_angle, ang))
-					var total: float = twist * ROTATE_TWIST_WEIGHT + fdx * ROTATE_SENSITIVITY_TOUCH
-					if absf(total) > 0.05:
-						yaw_deg = fposmod(yaw_deg + total, 360.0)
-						_rig_over_center(rotate_center)
-				_two_finger_last = avg
-				_two_finger_angle = ang
-				_two_finger_dist = dist
-			else:
-				# 缩放模式：双指只负责缩放（捏合由 MagnifyGesture 驱动），
-				# 拖两指或扭转都不动视角，只刷新基准，避免切到旋转模式后残留旧角度
-				_two_finger_last = avg
-				_two_finger_angle = ang
-				_two_finger_dist = dist
+			_two_finger_last = (p1 + p2) * 0.5
+			_two_finger_angle = atan2(p2.y - p1.y, p2.x - p1.x)
+			_two_finger_dist = p1.distance_to(p2)
 
-	# 双指捏合缩放：仅缩放模式生效；旋转模式下捏合不改变视野大小
+	# 双指捏合缩放
 	if event is InputEventMagnifyGesture:
 		# factor > 1 表示放大（两指分开），factor < 1 表示缩小
 		# 通常放大应减小视野大小（size），缩小应增大视野
-		if not _is_two_finger_rotate_mode():
-			_apply_zoom_to(size / event.factor)
+		_apply_zoom_to(size / event.factor)
 
 # 供手机端旋转按钮调用：绕当前屏幕中心的地面点转指定角度（正数向右转）
 func rotate_by(deg: float) -> void:
@@ -252,6 +233,10 @@ func _update_shake(delta: float) -> void:
 
 func _process(delta):
 	_update_shake(delta)
+	# 按住旋转按钮：绕按下瞬间锁定的地面焦点匀速转，松开即停
+	if _hold_rotate != 0.0:
+		yaw_deg = fposmod(yaw_deg + _hold_rotate * HOLD_ROTATE_SPEED * delta, 360.0)
+		_rig_over_center(_hold_rotate_center)
 	# 跟随视角模式：相机位置/朝向由跟随目标决定，禁用键盘移动
 	if _follow_target:
 		_update_follow()
