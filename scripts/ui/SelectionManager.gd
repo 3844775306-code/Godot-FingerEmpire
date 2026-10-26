@@ -244,6 +244,12 @@ func _input(event):
 						bm._command_selected_units(event.position)
 					return
 			var now = Time.get_ticks_msec() / 1000.0
+			# 已选中己方部队时，左键点敌方/中立目标优先执行攻击/采集/移动命令，
+			# 不再把目标替换成当前选择；只有空手（或只选中建筑/队友）时才允许查看。
+			if clicked_entity and _is_inspect_only(clicked_entity) and _selection_has_local_army():
+				if bm:
+					bm._command_selected_units(event.position)
+				return
 			if clicked_entity and _can_inspect(clicked_entity):
 				# Official garrison: if selected is official and clicked is building, send garrison command
 				if clicked_entity is Building and Input.is_key_pressed(KEY_ALT) and _is_local_owned(clicked_entity) and _selection_all_local():
@@ -490,6 +496,14 @@ func _selection_all_local() -> bool:
 		if not _is_local_owned(e):
 			return false
 	return true
+
+# 当前是否选中了可指挥的己方陆军。用于区分“点敌人/中立=下达命令”和
+# “空手点敌人/中立=查看信息”：有己方部队时左键优先当作攻击/采集命令。
+func _selection_has_local_army() -> bool:
+	for e in selected_entities:
+		if e is Army and _is_local_owned(e):
+			return true
+	return false
 
 # ---------- 选择列表操作 ----------
 func _add_to_selection(entity):

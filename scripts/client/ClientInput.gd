@@ -485,6 +485,12 @@ func _input(event):
 					_send_left_click(event)  # 非己方/队友/敌方/中立（或迷雾中的敌人）→ 命令
 					return
 
+				# 已选中己方部队时，左键点敌方/中立目标优先执行攻击/采集/移动命令，
+				# 不再把目标替换成当前选择；只有空手（或只选中建筑/队友）时才允许查看。
+				if (is_enemy or is_neutral) and _selection_has_local_army():
+					_send_left_click(event)
+					return
+
 				if info["health"] <= 0: return
 
 				# 双击全选同类
@@ -776,6 +782,16 @@ func _selection_has_enemy() -> bool:
 func _selection_has_neutral() -> bool:
 	for sid in client_selected_ids:
 		if _is_neutral_info(sid): return true
+	return false
+
+# 当前是否选中了可指挥的己方陆军。用于区分“点敌人/中立=下达命令”和
+# “空手点敌人/中立=查看信息”：有己方部队时左键优先当作攻击/采集命令。
+func _selection_has_local_army() -> bool:
+	for sid in client_selected_ids:
+		var info = _get_entity_info(sid)
+		if info.is_empty(): continue
+		if int(info.get("type", -1)) == 2 and _is_own_id(sid):
+			return true
 	return false
 
 func _notify_readonly():

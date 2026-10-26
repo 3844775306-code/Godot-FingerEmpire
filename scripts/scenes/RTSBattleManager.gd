@@ -2986,6 +2986,11 @@ func _command_selected_units(screen_pos: Vector2):
 						u.gather_at(target)
 					else:
 						u.attack_move_to(target.global_position)
+				elif target is Army and str(target.get("_animal_type")) != "" \
+						and u.has_method("_can_attack_target") and u._can_attack_target(target):
+					# 中立动物不是敌对阵营，is_hostile_to 会返回 false；但玩家手动
+					# 点动物时应按“狩猎”处理，否则军队只会走到动物旁边不动。
+					u.attack_target(target)
 				elif is_hostile_to(u.team, u.owner_peer_id, target):
 					# 攻击过滤：不可攻击目标（同国/盟友/中立）改为移动；
 					# 农民/商队等平民不响应攻击指令，避免混合编队里被顺手拉去送死。
