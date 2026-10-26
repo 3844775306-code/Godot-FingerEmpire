@@ -35,6 +35,7 @@ GameSettings="*res://scripts/core/GameSettings.gd"
 AudioManager="*res://scripts/core/AudioManager.gd"
 Profiler="*res://scripts/core/Profiler.gd"
 SteamManager="*res://scripts/core/SteamManager.gd"
+WebTunnel="*res://scripts/core/WebTunnel.gd"
 
 [display]
 

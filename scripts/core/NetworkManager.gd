@@ -215,22 +215,24 @@ func start_server():
 	print("服务器已启动，等待连接...")
 	_upnp_setup()
 
-func start_ws_server():
+func start_ws_server(enable_upnp: bool = true) -> bool:
 	if OS.has_feature("web"):
 		emit_signal("connection_failed", "浏览器版不能创建服务器，请使用 PC 或专用服务器")
-		return
+		return false
 	use_websocket = true
 	max_players = get_max_players()
 	ws_peer = WebSocketMultiplayerPeer.new()
 	var err = ws_peer.create_server(WS_PORT)
 	if err != OK:
 		emit_signal("connection_failed", "WS服务器创建失败: " + str(err))
-		return
+		return false
 	multiplayer.multiplayer_peer = ws_peer
 	mode = Mode.SERVER
 	game_started = false
 	print("WebSocket 服务器已启动，端口: ", WS_PORT)
-	_upnp_setup()
+	if enable_upnp:
+		_upnp_setup()
+	return true
 
 func start_ws_client(url: String = "ws://127.0.0.1:8080"):
 	use_websocket = true

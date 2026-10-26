@@ -25,11 +25,26 @@ func _ready():
 	# 那样游戏会永远卡在闲置帧率上。
 	_window_focused = DisplayServer.window_is_focused()
 	_apply_fps(FPS_GAMEPLAY)
+	# 网页邀请链接 / ?server=wss://...：启动后直接进联机大厅，省掉一次主菜单点击。
+	if OS.has_feature("web") and _has_web_room_param():
+		call_deferred("_open_web_room_lobby")
+		return
 	# 客户端模式下不自动切换场景
 	if NetworkManager.mode == NetworkManager.Mode.CLIENT:
 		return
 	# 延迟到下一帧切换，避免场景树忙
 	call_deferred("change_state", GameState.MENU)
+
+func _has_web_room_param() -> bool:
+	var js = Engine.get_singleton("JavaScriptBridge")
+	if js == null:
+		return false
+	return String(js.eval("new URLSearchParams(location.search).get('server') || ''")).strip_edges() != ""
+
+func _open_web_room_lobby() -> void:
+	await get_tree().create_timer(0.1).timeout
+	if is_inside_tree():
+		get_tree().change_scene_to_file("res://scenes/online_menu.tscn")
 
 func _process(delta: float) -> void:
 	# 每 0.5 秒核对一次窗口焦点，作为通知机制之外的兜底
