@@ -348,61 +348,123 @@ func _select_all_of_same_type(target):
 		_add_to_selection(target)
 
 # ---------- 射线检测 ----------
-# 屏幕空间兜底半径（像素）：单位碰撞球只覆盖脚底，靠射线找单位本来就吃力
-const PICK_FALLBACK_PX: float = 26.0
-# 建筑视觉体积远大于单位，允许更大的兜底半径
-const PICK_FALLBACK_BUILDING_PX: float = 58.0
+# 单位碰撞球只覆盖脚底（半径 body_radius*0.6），点身体中上部时射线多半打不到单位，
+# 而是继续穿过去命中旁边建筑的碰撞盒 —— 表现就是「点建筑旁边的单位却选中建筑」。
+# 所以射线之外再叠一层屏幕空间轮廓判定：把实体近似成「脚底→模型顶」的竖直胶囊，
+# 点在胶囊内或贴着胶囊就算点中；射线打到建筑但点击落在单位轮廓上时以单位为准。
+const PICK_ARMY_MARGIN_PX: float = 9.0      # 单位轮廓外允许的容差
+const PICK_BUILDING_MARGIN_PX: float = 14.0  # 建筑轮廓外允许的容差
+const PICK_SCAN_RADIUS_PX: float = 160.0     # 轮廓判定前的粗筛半径
 
 func _get_entity_under_mouse(screen_pos: Vector2) -> GameEntity:
-	var cam = get_viewport().get_camera_3d()
+	var cam := get_viewport().get_camera_3d()
 	if not cam:
 		return null
-	var from = cam.project_ray_origin(screen_pos)
-	var to = from + cam.project_ray_normal(screen_pos) * 2000
-	var space_state = get_viewport().get_world_3d().direct_space_state
-	var query = PhysicsRayQueryParameters3D.create(from, to)
+	var ray := _raycast_pick(screen_pos)
+	var ray_entity: GameEntity = ray.get("entity")
+	var ray_pos: Vector3 = ray.get("position", Vector3.ZERO)
+	var screen_entity := _pick_by_silhouette(cam, screen_pos)
+	# 点击落在单位轮廓上（且单位没被射线打到的建筑挡在后面）→ 单位优先。
+	# 单位的碰撞球只有脚底一小颗，建筑碰撞盒横向却比模型宽，两者重叠时
+	# 射线永远先打中建筑，必须靠这条把单位捞回来。
+	if screen_entity is Army and _silhouette_gap(cam, screen_entity, screen_pos) <= PICK_ARMY_MARGIN_PX:
+		if ray_pos == Vector3.ZERO:
+			return screen_entity
+		# 单位站在命中实体的碰撞盒里（贴着/嵌进建筑底座）→ 玩家点的就是这个单位
+		if _point_inside_pick_volume(ray_entity, screen_entity.global_position):
+			return screen_entity
+		# 否则只有单位在命中点前面才优先，避免选到建筑背后的单位
+		if not _is_farther_than_ray(cam, screen_entity, ray_pos):
+			return screen_entity
+	if ray_entity != null:
+		return ray_entity
+	return screen_entity
+
+# 单纯的射线拾取（不含任何兜底），返回 {"entity": GameEntity, "position": Vector3}
+func _raycast_pick(screen_pos: Vector2) -> Dictionary:
+	var cam := get_viewport().get_camera_3d()
+	if not cam:
+		return {}
+	var from := cam.project_ray_origin(screen_pos)
+	var to := from + cam.project_ray_normal(screen_pos) * 2000
+	var query := PhysicsRayQueryParameters3D.create(from, to)
 	query.collision_mask = 1   # 只检测单位/建筑所在层
 	query.collide_with_areas = false
 	query.collide_with_bodies = true
-	var result = space_state.intersect_ray(query)
+	var result := get_viewport().get_world_3d().direct_space_state.intersect_ray(query)
 	if result and result.collider is GameEntity:
-		return result.collider
-	# 射线没打中实体：单位的物理球很小又贴在脚底，相机一俯就完全打不到身体，
-	# 点半天选不中或者在建筑边上反复选错。这里退化成逐帧投影的屏幕空间最近判定，
-	# 投影像素是当帧算出来的，所以天然跟得上视角旋转和俯仰变化。
-	return _nearest_entity_on_screen(cam, screen_pos)
+		return {"entity": result.collider, "position": result.position}
+	return {}
 
-# 找屏幕上离点击点最近的实体。单位和建筑用不同阈值，避免建筑把旁边的单位挤掉。
-func _nearest_entity_on_screen(cam: Camera3D, screen_pos: Vector2) -> GameEntity:
+# 世界坐标是否落在实体的拾取碰撞盒里（用于判断单位是不是贴着建筑站）
+func _point_inside_pick_volume(entity, world_pos: Vector3) -> bool:
+	if entity == null or not is_instance_valid(entity):
+		return false
+	var col := entity.get_node_or_null("CollisionShape3D") as CollisionShape3D
+	if col == null or col.shape == null:
+		return false
+	var local: Vector3 = col.global_transform.affine_inverse() * world_pos
+	var shape := col.shape
+	if shape is BoxShape3D:
+		var half: Vector3 = shape.size * 0.5
+		return absf(local.x) <= half.x and absf(local.y) <= half.y and absf(local.z) <= half.z
+	if shape is SphereShape3D:
+		return local.length() <= shape.radius
+	return false
+
+# 实体是否比射线命中点更远（被前面的东西挡住），用于避免选到建筑背后的单位
+func _is_farther_than_ray(cam: Camera3D, entity, hit_pos: Vector3) -> bool:
+	var cam_pos: Vector3 = cam.global_position
+	return (cam_pos - entity.global_position).length() > (cam_pos - hit_pos).length() + 0.5
+
+# 实体在屏幕上的竖直轮廓：底=脚底，顶=模型最高点（模型按 2*body_radius 缩放）
+func _silhouette(cam: Camera3D, entity) -> Dictionary:
+	var height: float = maxf(0.6, entity.body_radius * 2.0)
+	var feet: Vector3 = entity.global_position
+	var top: Vector3 = feet + Vector3.UP * height
+	if cam.is_position_behind(feet) or cam.is_position_behind(top):
+		return {}
+	var feet_px := cam.unproject_position(feet)
+	var top_px := cam.unproject_position(top)
+	# 模型宽度约为高度的一半，再给一个下限，缩小/远景时不至于变成一条线
+	var half_w: float = clampf(feet_px.distance_to(top_px) * 0.3, 6.0, 60.0)
+	return {"a": feet_px, "b": top_px, "w": half_w}
+
+# 点到实体轮廓的像素距离：轮廓内返回 0，轮廓外返回离轮廓边缘的距离
+func _silhouette_gap(cam: Camera3D, entity, screen_pos: Vector2) -> float:
+	var s := _silhouette(cam, entity)
+	if s.is_empty():
+		return INF
+	var seg_d: float = _point_segment_distance(screen_pos, s["a"], s["b"])
+	return maxf(0.0, seg_d - float(s["w"]))
+
+# 屏幕空间最近的可选中实体（单位优先于建筑）
+func _pick_by_silhouette(cam: Camera3D, screen_pos: Vector2) -> GameEntity:
 	var best: GameEntity = null
-	var best_px: float = INF
+	var best_score: float = INF
 	for entity in get_tree().get_nodes_in_group("entities"):
 		if not (entity is GameEntity) or entity.health <= 0:
 			continue
 		if not _can_inspect(entity):
 			continue
-		# 用模型中部做锚点：脚底投影在俯角小时会明显偏后，点身体会选不中
-		var anchor: Vector3 = entity.global_position + Vector3.UP * _pick_anchor_height(entity)
+		var anchor: Vector3 = entity.global_position + Vector3.UP * (entity.body_radius * 1.2)
 		if cam.is_position_behind(anchor):
 			continue
-		var limit: float = PICK_FALLBACK_PX
-		if entity is Building:
-			limit = PICK_FALLBACK_BUILDING_PX
-		var d: float = cam.unproject_position(anchor).distance_to(screen_pos)
-		if d > limit:
+		# 粗筛：投影锚点离点击点太远的不做轮廓计算
+		if cam.unproject_position(anchor).distance_to(screen_pos) > PICK_SCAN_RADIUS_PX:
 			continue
-		# 同等距离下单位优先：建筑判定块本来就大，不该抢走单位
-		if entity is Army:
-			d *= 0.75
-		if d < best_px:
-			best_px = d
+		var gap := _silhouette_gap(cam, entity, screen_pos)
+		var margin: float = PICK_BUILDING_MARGIN_PX if entity is Building else PICK_ARMY_MARGIN_PX
+		if gap > margin:
+			continue
+		# 单位优先：贴合程度相同时选单位，避免建筑把旁边的单位挤掉
+		var score: float = gap - (3.0 if entity is Army else 0.0)
+		if score < best_score:
+			best_score = score
 			best = entity
 	return best
 
-# 锚点取模型腰部：用脚底投影在俯角小时会明显偏后，点身体中部反而选不中
-func _pick_anchor_height(entity) -> float:
-	return entity.body_radius * 1.2
-
+# 屏幕坐标 → 地面命中点（射线打到的位置，打不到返回 ZERO）
 func _get_ground_pos(screen_pos: Vector2) -> Vector3:
 	var cam = get_viewport().get_camera_3d()
 	if not cam: return Vector3.ZERO
@@ -410,6 +472,15 @@ func _get_ground_pos(screen_pos: Vector2) -> Vector3:
 	var to = from + cam.project_ray_normal(screen_pos) * 2000
 	var res = get_viewport().get_world_3d().direct_space_state.intersect_ray(PhysicsRayQueryParameters3D.create(from, to))
 	return res.position if res else Vector3.ZERO
+
+# 点到线段的距离（2D）
+static func _point_segment_distance(p: Vector2, a: Vector2, b: Vector2) -> float:
+	var ab := b - a
+	var len_sq := ab.length_squared()
+	if len_sq <= 0.0001:
+		return p.distance_to(a)
+	var t: float = clampf((p - a).dot(ab) / len_sq, 0.0, 1.0)
+	return p.distance_to(a + ab * t)
 
 # 是否属于本地玩家（2v2/3v3 必须按 owner 判断，不能只看 team）
 func _is_local_owned(entity) -> bool:
