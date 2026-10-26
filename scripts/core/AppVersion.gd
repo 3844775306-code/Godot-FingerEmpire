@@ -6,7 +6,7 @@ extends RefCounted
 #
 # 项目没有用 git tag，导出后也读不到 git 信息（git_describe 插件只在编辑器里可用），
 # 所以版本号用常量维护；版本历史按 tools/bump_version.ps1 的规则从 1.0.0 折算。
-const VERSION: String = "v1.6.49"
+const VERSION: String = "v1.6.50"
 const RELEASE_DATE: String = "2026-10-26"
 
 # 面板标题、入口按钮上显示用："v1.6.49 (2026-10-26)"
