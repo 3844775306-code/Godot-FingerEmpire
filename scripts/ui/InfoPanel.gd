@@ -45,6 +45,7 @@ func _get_res() -> Dictionary:
 
 # 移动端字号：设计空间 2400x1400 直接写 14 号字在手机上只有约 4dp。
 var repair_btn: Button = null
+var cancel_build_btn: Button = null
 # 注意 RichTextLabel 的字号主题项是 normal_font_size，只设 font_size 不会生效。
 func _is_mobile() -> bool:
 	return InputSource.use_mobile_ui()
@@ -120,6 +121,16 @@ func _ready():
 	repair_btn.pressed.connect(_on_repair_pressed)
 	UITheme.apply_primary_button(repair_btn, UITheme.FONT_SM)
 	_vb.add_child(repair_btn)
+
+	# 取消建造：地基刚放下、农民还没动工时可以全额退款取消
+	cancel_build_btn = Button.new()
+	cancel_build_btn.name = "CancelBuildBtn"
+	cancel_build_btn.text = "❌ 取消建造（全额退款）"
+	cancel_build_btn.custom_minimum_size = Vector2(180, 36)
+	cancel_build_btn.visible = false
+	cancel_build_btn.pressed.connect(_on_cancel_build_pressed)
+	UITheme.apply_danger_button(cancel_build_btn, UITheme.FONT_SM)
+	_vb.add_child(cancel_build_btn)
 
 	set_process(true)
 	if _is_mobile():
@@ -589,11 +600,23 @@ func update_info(entity):
 		UITheme.hex_str(UITheme.STONE), entity.shield_armor]
 	t += "\n🎯 [color=%s]RANGE[/color]:  [color=white]%.1f[/color]" % [UITheme.hex_str(UITheme.GOLD), entity.attack_range]
 	t += "\n👟 [color=%s]SPEED[/color]:  [color=white]%.1f[/color]" % [UITheme.hex_str(UITheme.EMERALD), entity.speed]
+	if entity is Building:
+		if entity.build_timer > 0.0:
+			var bp := clampf(1.0 - entity.build_timer / maxf(entity.max_build_time, 0.001), 0.0, 1.0)
+			if entity.awaiting_builder and entity.builder_count_cache == 0:
+				t += "\n🔨 [color=%s]等待农民[/color]:  右键工地可手动派农民" % UITheme.hex_str(UITheme.ALERT_WARNING)
+			elif entity.awaiting_builder:
+				t += "\n🔨 [color=%s]农民赶路中[/color]:  %d 人" % [UITheme.hex_str(UITheme.ALERT_WARNING), entity.builder_count_cache]
+			else:
+				t += "\n🔨 [color=%s]建造中[/color]:  [color=white]%d%%[/color]  农民:%d" % [
+					UITheme.hex_str(UITheme.BUILD_PROGRESS), int(bp * 100.0), entity.builder_count_cache]
 	if entity is Building and entity.has_method("repair_damage_ratio"):
-		if entity.is_under_repair() and entity.max_repair_time > 0.0:
+		if entity.repair_pending:
+			t += "\n🔧 [color=%s]等待农民修理[/color]" % UITheme.hex_str(UITheme.REPAIR_PROGRESS)
+		elif entity.is_under_repair() and entity.max_repair_time > 0.0:
 			var rep_pct := clampf(1.0 - entity.repair_timer / entity.max_repair_time, 0.0, 1.0)
-			t += "\n🔧 [color=%s]修理中[/color]:  [color=white]%d%%[/color]" % [
-				UITheme.hex_str(UITheme.REPAIR_PROGRESS), int(rep_pct * 100.0)]
+			t += "\n🔧 [color=%s]修理中[/color]:  [color=white]%d%%[/color]  农民:%d" % [
+				UITheme.hex_str(UITheme.REPAIR_PROGRESS), int(rep_pct * 100.0), entity.builder_count_cache]
 		elif entity.repair_damage_ratio() > 0.001:
 			t += "\n🔧 [color=%s]已损[/color]:  [color=white]%d%%[/color]" % [
 				UITheme.hex_str(UITheme.ALERT_WARNING), int(entity.repair_damage_ratio() * 100.0)]
@@ -612,6 +635,12 @@ func update_info(entity):
 		if demolish_btn:
 			demolish_btn.visible = (entity.entity_id != 20) and not readonly
 		_update_repair_ui(entity, readonly)
+		if cancel_build_btn:
+			var can_cancel := false
+			if entity.build_timer > 0.0 and not readonly:
+				var bp2 := clampf(1.0 - entity.build_timer / maxf(entity.max_build_time, 0.001), 0.0, 1.0)
+				can_cancel = bp2 <= 0.001 and entity.entity_id not in [20, 53]
+			cancel_build_btn.visible = can_cancel
 		if entity.can_upgrade() and not readonly:
 			upgrade_btn.visible = true; upgrade_btn.text = "升级"
 			if upgrade_btn.pressed.is_connected(_on_upgrade_pressed):
@@ -712,6 +741,7 @@ func update_info(entity):
 			_board_box.visible = false
 		if demolish_btn: demolish_btn.visible = false
 		if repair_btn: repair_btn.visible = false
+		if cancel_build_btn: cancel_build_btn.visible = false
 	hp_bar.visible = true
 	_apply_detail_mode()
 
@@ -735,6 +765,7 @@ func _update_repair_ui(entity: Building, readonly: bool) -> void:
 		return
 	var dmg: float = entity.repair_damage_ratio()
 	var under: bool = entity.is_under_repair() if entity.has_method("is_under_repair") else false
+	var pending: bool = entity.repair_pending if entity is Building else false
 	var busy: bool = entity.build_timer > 0.0 or entity.upgrade_timer > 0.0
 	if busy or (dmg <= 0.001 and not under):
 		return
@@ -747,16 +778,20 @@ func _update_repair_ui(entity: Building, readonly: bool) -> void:
 			can_click = battle.can_repair_building(entity)
 		else:
 			can_click = entity.can_repair()
-	repair_btn.disabled = not can_click
-	if under and entity.max_repair_time > 0.0:
+	repair_btn.disabled = under or not can_click
+	if pending and entity.repair_timer <= 0.0:
+		repair_btn.text = "🔧 等待农民修理"
+	elif under and entity.max_repair_time > 0.0:
 		var pct: float = clampf(1.0 - entity.repair_timer / entity.max_repair_time, 0.0, 1.0)
 		repair_btn.text = "🔧 修理中 %d%%" % int(pct * 100.0)
 	else:
 		repair_btn.text = "🔧 修理 %s" % _repair_cost_text(cost)
-	var tip := "修理残破建筑：修完回复到满血（主城不可修理）"
+	var tip := "修理残破建筑：需要农民到场施工，修完回复到满血（主城不可修理）"
 	tip += "\n费用：%s" % (_repair_cost_text(cost) if not cost.is_empty() else "免费")
 	tip += "\n耗时：%.1f 秒" % maxf(time_total, 0.0)
-	if under:
+	if pending:
+		tip += "\n状态：已扣费，等待农民到场"
+	elif under:
 		tip += "\n状态：修理中"
 	elif dmg <= 0.001:
 		tip += "\n状态：建筑完好"
@@ -1071,6 +1106,7 @@ func show_multi_selection(entities: Array):
 	upgrade_btn.visible = false
 	if demolish_btn: demolish_btn.visible = false
 	if repair_btn: repair_btn.visible = false
+	if cancel_build_btn: cancel_build_btn.visible = false
 	produce_vbox.visible = true
 	hp_bar.visible = false
 	if hp_bar_bg: hp_bar_bg.visible = false
@@ -1177,6 +1213,21 @@ func _input(event):
 			_pending_multi_entities.clear()
 			_pending_multi_btns.clear()
 
+
+func _on_cancel_build_pressed():
+	if not observed_entity or not is_instance_valid(observed_entity):
+		return
+	if not (observed_entity is Building):
+		return
+	if not _is_local_owned_entity(observed_entity):
+		return
+	var bm = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
+	if bm and bm.has_method("cancel_construction"):
+		bm.cancel_construction(observed_entity)
+	if cancel_build_btn:
+		cancel_build_btn.visible = false
+	observed_entity = null
+	visible = false
 
 func _on_demolish_pressed():
 	if not observed_entity or not is_instance_valid(observed_entity):

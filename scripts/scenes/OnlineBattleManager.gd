@@ -6,8 +6,8 @@ var game_mode: int = NetworkManager.GameMode.ONEvONE
 
 # Compact entity array indices (no string keys = faster + smaller)
 enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ATTACK_SPEED, MELEE_ARMOR, SHIELD_ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH, GARRISONED, NATION, IN_ACTION_RANGE, ATTACK_SEQ }
-enum EB { UPGRADE=0, MAX_UPGRADE, CAN_UPGRADE, BUILD_TIMER, MAX_BUILD, PROD_CURRENT, PROD_PROGRESS, PROD_QSIZE, UPGRADE_TIMER, MAX_UPGRADE_TIME, GARRISON_COUNT, REPAIR_TIMER, MAX_REPAIR, CAN_REPAIR }
-const SNAP_VERSION = 8  # 8 = added EB.REPAIR_TIMER/MAX_REPAIR/CAN_REPAIR (building repair)
+enum EB { UPGRADE=0, MAX_UPGRADE, CAN_UPGRADE, BUILD_TIMER, MAX_BUILD, PROD_CURRENT, PROD_PROGRESS, PROD_QSIZE, UPGRADE_TIMER, MAX_UPGRADE_TIME, GARRISON_COUNT, REPAIR_TIMER, MAX_REPAIR, CAN_REPAIR, REPAIR_PENDING, BUILDER_COUNT, AWAITING_BUILDER }
+const SNAP_VERSION = 9  # 9 = 建筑施工/修理增加农民登记状态（等待农民/赶路中）
 
 # 1v1 专用
 var player_teams: Dictionary = {}         # peer_id -> team
@@ -815,6 +815,8 @@ func _process_1v1_command(peer_id: int, data: Dictionary):
 		"ungarrison_soldiers": _ungarrison_soldiers_1v1(team, data)
 		"toggle_auto_attack": _1v1_set_auto_attack(team, bool(data.get("enabled", false)))
 		"repair": _1v1_repair(team, data)
+		"assign_builder": _1v1_assign_builder(team, data)
+		"cancel_construction": _1v1_cancel_construction(team, data)
 
 func _process_2v2_command(peer_id: int, data: Dictionary):
 	if not player_info.has(peer_id) or not player_info[peer_id].alive: return
@@ -834,6 +836,8 @@ func _process_2v2_command(peer_id: int, data: Dictionary):
 		"ungarrison_soldiers": _ungarrison_soldiers_2v2(peer_id, data)
 		"toggle_auto_attack": _2v2_set_auto_attack(peer_id, bool(data.get("enabled", false)))
 		"repair": _2v2_repair(peer_id, data)
+		"assign_builder": _2v2_assign_builder(peer_id, data)
+		"cancel_construction": _2v2_cancel_construction(peer_id, data)
 
 # ---------- 1v1 命令实现 ----------
 func _1v1_right_click(team: int, data: Dictionary):
@@ -905,6 +909,31 @@ func _1v1_build(team: int, data: Dictionary):
 	var b = spawn_entity(cfg, team, pos)
 	if b:
 		b.start_construction(5.0, cfg)
+		request_construction(b, data.get("builder_ids", []))
+
+func _1v1_assign_builder(team: int, data: Dictionary):
+	var building_id = int(data.get("building_id", -1))
+	var ids: Array = data.get("builder_ids", [])
+	var b: Building = null
+	for entity in entities.get_children():
+		if entity is Building and entity.team == team and entity.get_instance_id() == building_id:
+			b = entity
+			break
+	if b == null:
+		return
+	if b.build_timer > 0.0:
+		request_construction(b, ids)
+	elif b.repair_pending or b.repair_timer > 0.0:
+		assign_builders(b, ids)
+	elif b.can_repair():
+		request_repair(b, ids)
+
+func _1v1_cancel_construction(team: int, data: Dictionary):
+	var building_id = int(data.get("building_id", -1))
+	for entity in entities.get_children():
+		if entity is Building and entity.team == team and entity.get_instance_id() == building_id:
+			cancel_construction(entity)
+			break
 
 func _1v1_upgrade(team: int, data: Dictionary):
 	var building_id = data["building_id"]
@@ -923,7 +952,7 @@ func _1v1_repair(team: int, data: Dictionary):
 	for entity in entities.get_children():
 		if entity is Building and entity.team == team and entity.get_instance_id() == building_id:
 			for _i in range(n):
-				if not entity.can_repair() or not entity.perform_repair(self): break
+				if not entity.can_repair() or not request_repair(entity, data.get("builder_ids", [])): break
 			break
 
 func _1v1_produce(team: int, data: Dictionary):
@@ -1020,16 +1049,41 @@ func _2v2_build(peer_id: int, data: Dictionary):
 	var b = spawn_entity(cfg, player_info[peer_id].team, pos, 1)
 	if b:
 		b.start_construction(5.0, cfg)
+		request_construction(b, data.get("builder_ids", []))
 		if is_defense:
 			increase_player_population(peer_id, 1)
 		update_player_limits(peer_id)
 		update_player_population(peer_id)
 
+func _2v2_assign_builder(peer_id: int, data: Dictionary):
+	var building_id = int(data.get("building_id", -1))
+	var ids: Array = data.get("builder_ids", [])
+	var b: Building = null
+	for entity in entities.get_children():
+		if entity is Building and entity.owner_peer_id == peer_id and entity.get_instance_id() == building_id:
+			b = entity
+			break
+	if b == null:
+		return
+	if b.build_timer > 0.0:
+		request_construction(b, ids)
+	elif b.repair_pending or b.repair_timer > 0.0:
+		assign_builders(b, ids)
+	elif b.can_repair():
+		request_repair(b, ids)
+
+func _2v2_cancel_construction(peer_id: int, data: Dictionary):
+	var building_id = int(data.get("building_id", -1))
+	for entity in entities.get_children():
+		if entity is Building and entity.owner_peer_id == peer_id and entity.get_instance_id() == building_id:
+			cancel_construction(entity)
+			break
+
 func _2v2_repair(peer_id: int, data: Dictionary):
 	var building_id = data["building_id"]
 	for entity in entities.get_children():
 		if entity is Building and entity.get_instance_id() == building_id and entity.owner_peer_id == peer_id:
-			entity.perform_repair(self)
+			request_repair(entity, data.get("builder_ids", []))
 			break
 
 func _2v2_upgrade(peer_id: int, data: Dictionary):
@@ -1773,7 +1827,10 @@ func _serialize_entity_compact(entity: GameEntity, snapshot_key: String) -> Arra
 		# 修理状态：客户端据此画修理进度条 + 施工外观
 		ba[EB.REPAIR_TIMER] = entity.repair_timer
 		ba[EB.MAX_REPAIR] = entity.max_repair_time
-		ba[EB.CAN_REPAIR] = 1 if entity.can_repair() else 0
+		ba[EB.CAN_REPAIR] = 1 if can_repair_building(entity) else 0
+		ba[EB.REPAIR_PENDING] = 1 if entity.repair_pending else 0
+		ba[EB.BUILDER_COUNT] = entity.builder_count()
+		ba[EB.AWAITING_BUILDER] = 1 if entity.awaiting_builder else 0
 		a.append(ba)
 	else:
 		a.append([])
@@ -1866,7 +1923,10 @@ func _serialize_entity(entity: GameEntity) -> Dictionary:
 		else:
 			data["repair_timer"] = 0
 			data["max_repair_time"] = 0
-		data["can_repair"] = 1 if entity.can_repair() else 0
+		data["can_repair"] = 1 if can_repair_building(entity) else 0
+		data["repair_pending"] = 1 if entity.repair_pending else 0
+		data["builder_count"] = entity.builder_count()
+		data["awaiting_builder"] = 1 if entity.awaiting_builder else 0
 
 	return data
 

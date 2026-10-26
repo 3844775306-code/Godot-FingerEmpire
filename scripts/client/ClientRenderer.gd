@@ -8,7 +8,7 @@ const LevelVisualScript = preload("res://scripts/effects/BuildingLevelVisual.gd"
 const TreeFallEffect = preload("res://scripts/effects/TreeFallEffect.gd")
 const EntityDamageVisual = preload("res://scripts/effects/EntityDamageVisual.gd")
 enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ATTACK_SPEED, MELEE_ARMOR, SHIELD_ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH, GARRISONED, NATION, IN_ACTION_RANGE, ATTACK_SEQ }
-enum EB { UPGRADE=0, MAX_UPGRADE, CAN_UPGRADE, BUILD_TIMER, MAX_BUILD, PROD_CURRENT, PROD_PROGRESS, PROD_QSIZE, UPGRADE_TIMER, MAX_UPGRADE_TIME, GARRISON_COUNT, REPAIR_TIMER, MAX_REPAIR, CAN_REPAIR }
+enum EB { UPGRADE=0, MAX_UPGRADE, CAN_UPGRADE, BUILD_TIMER, MAX_BUILD, PROD_CURRENT, PROD_PROGRESS, PROD_QSIZE, UPGRADE_TIMER, MAX_UPGRADE_TIME, GARRISON_COUNT, REPAIR_TIMER, MAX_REPAIR, CAN_REPAIR, REPAIR_PENDING, BUILDER_COUNT, AWAITING_BUILDER }
 # 与 RTSBattleManager.get_nation_name() 保持一致；客户端不跑服务端脚本，血条文字单独查表
 const NATION_LABELS := ["维京", "英格兰", "法兰西", "中国", "匈牙利", "日本", "拜占庭", "蒙古", "波斯", "西班牙"]
 var last_applied_seq = -1
@@ -694,6 +694,9 @@ func _update_single_entity(info):
 				info["repair_timer"] = ba[EB.REPAIR_TIMER] if ba.size() > EB.REPAIR_TIMER else 0.0
 				info["max_repair_time"] = ba[EB.MAX_REPAIR] if ba.size() > EB.MAX_REPAIR else 0.0
 				info["can_repair"] = ba[EB.CAN_REPAIR] if ba.size() > EB.CAN_REPAIR else 0
+				info["repair_pending"] = ba[EB.REPAIR_PENDING] if ba.size() > EB.REPAIR_PENDING else 0
+				info["builder_count"] = ba[EB.BUILDER_COUNT] if ba.size() > EB.BUILDER_COUNT else 0
+				info["awaiting_builder"] = ba[EB.AWAITING_BUILDER] if ba.size() > EB.AWAITING_BUILDER else 0
 		_rebuild_building_info(info)
 	if not info.has("id") or not info.has("x") or not info.has("z"):
 		return
@@ -945,6 +948,9 @@ func _update_entity_animation(node: Node3D, info: Dictionary):
 			anim = "attack-melee-left" if ord == "gather" else AnimationHelper.attack_anim_for(entity_id)
 		else:
 			anim = "walk"
+	elif ord == "build":
+		# 建造/修理：到工地前走路，站定后挥动工具
+		anim = "attack-melee-left" if int(info.get("in_action_range", 0)) == 1 else "walk"
 	elif ord in ["move", "deliver"]:
 		anim = "walk"
 	else:
@@ -1043,11 +1049,13 @@ func _refresh_client_construction_visual(node: Node3D, info: Dictionary) -> void
 		var progress := clampf(1.0 - build_timer / max_build, 0.0, 1.0)
 		BuildingConstructionVisual.update(node, progress)
 		return
-	# 修理中：同样用脚手架 + 扬尘那套施工外观，但模型保持完整（repair 模式）
+	# 修理中：同样用脚手架 + 扬尘那套施工外观，但模型保持完整（repair 模式）。
+	# repair_pending 表示已经扣费、农民还在路上，也先把脚手架支起来。
 	var repair_timer := float(info.get("repair_timer", 0.0))
-	if repair_timer > 0.0:
+	var repair_pending := int(info.get("repair_pending", 0)) == 1
+	if repair_timer > 0.0 or repair_pending:
 		var max_repair := maxf(float(info.get("max_repair_time", 0.0)), 0.001)
-		var rprogress := clampf(1.0 - repair_timer / max_repair, 0.0, 1.0)
+		var rprogress := clampf(1.0 - repair_timer / max_repair, 0.0, 1.0) if repair_timer > 0.0 else 0.0
 		if not BuildingConstructionVisual.is_repairing(node):
 			BuildingConstructionVisual.begin(node, null, true)
 		BuildingConstructionVisual.update(node, rprogress)
@@ -2031,7 +2039,14 @@ func _update_health_bars():
 			bar.value = bp
 			var nm2 = info["name"]
 			var _gpfx3 = _get_entity_group_prefix(info["id"])
-			lab.text = _gpfx3 + _get_entity_nation_prefix(info) + "%s (建造中 %d%%)" % [nm2, int(bp * 100.0)]
+			var _waiting := int(info.get("awaiting_builder", 0)) == 1 and int(info.get("builder_count", 0)) == 0
+			var _travelling := int(info.get("awaiting_builder", 0)) == 1 and int(info.get("builder_count", 0)) > 0
+			if _waiting:
+				lab.text = _gpfx3 + _get_entity_nation_prefix(info) + "%s (等待农民)" % nm2
+			elif _travelling:
+				lab.text = _gpfx3 + _get_entity_nation_prefix(info) + "%s (农民赶路中 · %d)" % [nm2, int(info.get("builder_count", 0))]
+			else:
+				lab.text = _gpfx3 + _get_entity_nation_prefix(info) + "%s (建造中 %d%% · 农民%d)" % [nm2, int(bp * 100.0), int(info.get("builder_count", 0))]
 			var _lbc3 = _get_entity_label_color(info)
 			lab.add_theme_color_override("font_color", _lbc3)
 			_apply_label_nation_outline(lab, info)
@@ -2068,18 +2083,21 @@ func _update_health_bars():
 			_hide_upgrade_bars(id)
 
 		# 修理中（联机）：位置压在升级条下方，样式与建造条一致
-		if type == 1 and float(info.get("repair_timer", 0.0)) > 0.0:
+		if type == 1 and (float(info.get("repair_timer", 0.0)) > 0.0 or int(info.get("repair_pending", 0)) == 1):
 			if Engine.get_process_frames() % 40 == 0:
 				AudioManager.play_sfx_3d("build_loop", node.global_position, _get_cam_pos())
 			var rbar = _get_or_create_repair_bar(id)
 			var rlab = _get_or_create_repair_label(id)
 			var rt := maxf(float(info.get("max_repair_time", 0.0)), 0.001)
-			var rp := clampf(1.0 - float(info["repair_timer"]) / rt, 0.0, 1.0)
+			var rp := clampf(1.0 - float(info.get("repair_timer", 0.0)) / rt, 0.0, 1.0)
 			rbar.visible = true; rlab.visible = show_unit_text
 			rbar.value = rp
 			var nm3 = info["name"]
 			var _gpfx4 = _get_entity_group_prefix(info["id"])
-			rlab.text = _gpfx4 + "%s (修理中 %d%%)" % [nm3, int(rp * 100.0)]
+			if int(info.get("repair_pending", 0)) == 1 and float(info.get("repair_timer", 0.0)) <= 0.0:
+				rlab.text = _gpfx4 + "%s (等待农民修理)" % nm3
+			else:
+				rlab.text = _gpfx4 + "%s (修理中 %d%%)" % [nm3, int(rp * 100.0)]
 			var _lbc4 = _get_entity_label_color(info)
 			rlab.add_theme_color_override("font_color", _lbc4)
 			_apply_label_nation_outline(rlab, info)

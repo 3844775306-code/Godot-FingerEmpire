@@ -687,6 +687,22 @@ func _send_left_click(event):
 				var oy = (row - (cols / 2.0)) * spacing
 				formation_offsets.append(Vector3(ox, 0, oy))
 
+	# 选中农民 + 右键自家在建/破损建筑：派去施工/修理
+	if target_id != -1 and _is_own_id(target_id):
+		var tinfo := _get_entity_info(target_id)
+		if int(tinfo.get("type", -1)) == 1:
+			var needs_work: bool = float(tinfo.get("build_timer", 0.0)) > 0.0 \
+					or int(tinfo.get("repair_pending", 0)) == 1 \
+					or float(tinfo.get("health", 0)) < float(tinfo.get("max_health", 0))
+			var peasant_ids := _selected_peasant_ids()
+			if needs_work and not peasant_ids.is_empty():
+				NetworkManager.send_command.rpc_id(1, {
+					"action": "assign_builder",
+					"building_id": target_id,
+					"builder_ids": peasant_ids,
+				})
+				return
+
 	var cmd = {
 		"action": "right_click",
 		"selected_ids": client_selected_ids.duplicate(),
@@ -875,6 +891,16 @@ func _selection_all_local() -> bool:
 	for sid in client_selected_ids:
 		if not _is_own_id(sid): return false
 	return true
+
+func _selected_peasant_ids() -> Array:
+	var out: Array = []
+	for sid in client_selected_ids:
+		var info := _get_entity_info(sid)
+		if info.is_empty() or not _is_own_id(sid):
+			continue
+		if int(info.get("entity_id", -1)) == 10 and float(info.get("health", 0)) > 0:
+			out.append(sid)
+	return out
 
 func _selection_has_teammate() -> bool:
 	for sid in client_selected_ids:
@@ -1266,7 +1292,8 @@ func _confirm_placement():
 	var cmd = {
 		"action": "build",
 		"building_id": renderer.placement_building_id,
-		"pos_x": pos.x, "pos_y": pos.y, "pos_z": pos.z
+		"pos_x": pos.x, "pos_y": pos.y, "pos_z": pos.z,
+		"builder_ids": _selected_peasant_ids(),
 	}
 	NetworkManager.send_command.rpc_id(1, cmd)
 	var keep_building := Input.is_key_pressed(KEY_SHIFT)

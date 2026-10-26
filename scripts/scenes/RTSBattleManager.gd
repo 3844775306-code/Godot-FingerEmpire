@@ -11,6 +11,10 @@ const MUZZLE_ATTACK_IDS = [25, 26, 64]
 const WALL_TOP_HEIGHT: float = 1.31
 # 放置炮台时向最近城墙吸附的水平半径（米）
 const WALL_CANNON_SNAP: float = 6.0
+# 建造/修理自动派工：每隔一段时间给没人施工的工地找最近的空闲农民
+const BUILDER_SEARCH_RADIUS: float = 45.0
+const BUILDER_DISPATCH_INTERVAL: float = 0.6
+var _builder_dispatch_timer: float = 0.0
 const BattleStatsPanelScript = preload("res://scripts/ui/BattleStatsPanel.gd")
 const MapPresets = preload("res://scripts/map/MapPresets.gd")
 const TutorialHintScript = preload("res://scripts/ui/TutorialHint.gd")
@@ -2311,6 +2315,9 @@ func _update_entity_animation(entity: GameEntity):
 			anim = AnimationHelper.attack_anim_for(army.entity_id) if _is_entity_in_action_range(army) else ("walk" if _moving_now else "idle")
 		elif army._order_in([army.UnitState.MOVING, army.UnitState.DELIVERING]):
 			anim = "walk" if _moving_now else "idle"
+		elif army._order_is(army.UnitState.BUILDING):
+			# 建造/修理：到工地前走路，站定后挥动工具
+			anim = "attack-melee-left" if army._at_work_site else ("walk" if _moving_now else "idle")
 		else:
 			anim = "idle"
 	else:
@@ -2349,6 +2356,8 @@ func _is_entity_in_action_range(entity: Army) -> bool:
 	var dist: float = Vector2(dx, dz).length() - entity.body_radius - target.body_radius
 	if entity._order_is(entity.UnitState.GATHERING):
 		return dist <= 0.5
+	if entity._order_is(entity.UnitState.BUILDING):
+		return bool(entity._at_work_site)
 	if entity._order_in([entity.UnitState.ATTACKING, entity.UnitState.ATTACK_MOVING]):
 		return dist <= entity.attack_range + 0.05
 	return false
@@ -2857,6 +2866,7 @@ func _place_building_at(pos: Vector3):
 						b.rotation.y = e.rotation.y
 						break
 		b.start_construction(5.0, cfg)
+		request_construction(b)
 		AudioManager.play_sfx("build_place")
 		notify_path_recalc(pos)
 	# 注意：如果仍需要支持鼠标（PC调试），可以同时保留原鼠标处理
@@ -3026,6 +3036,24 @@ func _command_selected_units(screen_pos: Vector2):
 		elif res.collider.has_meta("entity_root"):
 			target = res.collider.get_meta("entity_root")
 	var pos = res.position if res else _ray_plane_intersection(from,to,Vector3.ZERO,Vector3.UP)
+
+	# 选中农民 + 右键自家在建/破损建筑：优先派去施工/修理
+	if target is Building and target.team == get_host_team():
+		var bt: Building = target as Building
+		var builder_ids: Array = []
+		for u in selection.selected_entities:
+			if u is Army and u.entity_id == 10 and u.health > 0:
+				builder_ids.append(u.get_instance_id())
+		if not builder_ids.is_empty() and (bt.build_timer > 0.0 or bt.repair_pending or bt.repair_timer > 0.0 or bt.can_repair()):
+			if bt.build_timer > 0.0:
+				if request_construction(bt, builder_ids) > 0:
+					return
+			elif bt.repair_pending or bt.repair_timer > 0.0:
+				if assign_builders(bt, builder_ids) > 0:
+					return
+			else:
+				if request_repair(bt, builder_ids):
+					return
 
 	# 点单位下达攻击/采集时也会先打到旁边建筑的碰撞盒：用选择器的轮廓拾取纠正。
 	# 只纠正敌方/中立单位，避免把「点单位旁边空地移动」误判成攻击自家单位。
@@ -3310,6 +3338,7 @@ func _place_building():
 	var b = spawn_entity(cfg, get_host_team(), pos) as Building
 	if b:
 		b.start_construction(5.0, cfg)
+		request_construction(b)
 		AudioManager.play_sfx("build_place")
 		notify_path_recalc(pos)
 
@@ -3962,6 +3991,7 @@ func _process(delta):
 				if not Input.is_key_pressed(KEY_SHIFT):
 					_exit_build_mode()
 	game_time += delta
+	_tick_builder_dispatch(delta)
 	_tick_abandoned_sites(delta)
 	_focus_camera_on_player_castle_once()
 	if battle_stats:
@@ -4643,19 +4673,190 @@ func upgrade_building(b: Building):
 	if b.has_method("start_upgrade"): b.start_upgrade()
 
 # 修理残破建筑（单机/主机路径）。规则与扣费都在 Building 内实现，
-# 这里只做入口，联机时同名逻辑走 OnlineBattleManager 的 repair 命令。
+# 这里负责先找农民、再登记工程；联机时同名逻辑走 OnlineBattleManager 的 repair 命令。
 func repair_building(b: Building) -> bool:
 	if b == null or not is_instance_valid(b) or not (b is Building):
 		return false
-	if not b.has_method("perform_repair"):
+	if not b.has_method("begin_repair"):
 		return false
-	return bool(b.perform_repair(self))
+	return request_repair(b, [])
+
+# ==================== 建造/修理派工 ====================
+func _same_owner(a, b) -> bool:
+	if a == null or b == null or not is_instance_valid(a) or not is_instance_valid(b):
+		return false
+	if a.team != b.team:
+		return false
+	var ao: int = int(a.owner_peer_id)
+	var bo: int = int(b.owner_peer_id)
+	if ao == -1 or bo == -1:
+		return true
+	return ao == bo
+
+func _is_available_builder(a) -> bool:
+	if a == null or not is_instance_valid(a) or not (a is Army):
+		return false
+	if a.entity_id != 10 or a.health <= 0 or not a.can_move:
+		return false
+	if int(a._work_target_id) != -1 or String(a.current_order) == "build":
+		return false
+	# 空闲农民优先；没有空闲的再临时抽调采集中（哪怕背着货）的农民，
+	# 否则开局三个农民一直在采集，玩家放下民房会永远等不到人。
+	return String(a.current_order) in ["", "idle", "gather"]
+
+func find_nearest_idle_builder(team: int, owner_id: int, from_pos: Vector3, max_dist: float = BUILDER_SEARCH_RADIUS):
+	_ensure_cache_fresh()
+	var best = null
+	var best_d: float = max_dist * max_dist
+	var best_priority: int = 99
+	for a in _armies:
+		if a == null or not is_instance_valid(a) or a.health <= 0:
+			continue
+		if a.team != team:
+			continue
+		if owner_id != -1 and int(a.owner_peer_id) != -1 and int(a.owner_peer_id) != owner_id:
+			continue
+		if not _is_available_builder(a):
+			continue
+		var d: float = from_pos.distance_squared_to(a.global_position)
+		if d > max_dist * max_dist:
+			continue
+		# 空闲农民优先；没有空闲的才抽调采集中（哪怕背着货）的农民。
+		var priority: int = 0 if String(a.current_order) in ["", "idle"] else 1
+		if priority < best_priority or (priority == best_priority and d < best_d):
+			best_priority = priority
+			best_d = d
+			best = a
+	return best
+
+func _resolve_entity_by_id(eid: int):
+	_ensure_cache_fresh()
+	return _entity_lookup.get(eid, null)
+
+# 返回实际登记的农民数（0~3）。builder_ids 为空时自动找最近的农民。
+func assign_builders(b: Building, builder_ids: Array = []) -> int:
+	if b == null or not is_instance_valid(b) or not (b is Building) or b.health <= 0:
+		return 0
+	var count: int = 0
+	if builder_ids.is_empty():
+		var u = find_nearest_idle_builder(b.team, b.owner_peer_id, b.global_position)
+		if u != null and u.work_on_building(b):
+			count += 1
+		return count
+	for eid in builder_ids:
+		var u = _resolve_entity_by_id(int(eid))
+		if u == null or not (u is Army):
+			continue
+		if not _same_owner(u, b):
+			continue
+		if u.work_on_building(b):
+			count += 1
+	return count
+
+# 工地/修理点没人时自动补派最近的农民（玩家和 AI 共用）
+func _tick_builder_dispatch(delta: float) -> void:
+	_builder_dispatch_timer -= delta
+	if _builder_dispatch_timer > 0.0:
+		return
+	_builder_dispatch_timer = BUILDER_DISPATCH_INTERVAL
+	_ensure_cache_fresh()
+	for b in _buildings:
+		if b == null or not is_instance_valid(b) or b.health <= 0:
+			continue
+		var needs_worker: bool = b.build_timer > 0.0 or b.repair_pending or b.repair_timer > 0.0
+		if not needs_worker:
+			continue
+		if b.builder_count() > 0:
+			continue
+		var u = find_nearest_idle_builder(b.team, b.owner_peer_id, b.global_position)
+		if u != null:
+			u.work_on_building(b)
+
+# 放置建筑后调用：开始建造并自动派最近农民
+func request_construction(b: Building, builder_ids: Array = []) -> int:
+	if b == null or not is_instance_valid(b) or not (b is Building):
+		return 0
+	if b.build_timer <= 0.0:
+		return 0
+	b.awaiting_builder = true
+	return assign_builders(b, builder_ids)
+
+func _refund_building_cost(b: Building, cost: Dictionary) -> void:
+	if cost.is_empty():
+		return
+	if b.owner_peer_id != -1 and has_method("add_resource_for"):
+		for k in cost:
+			add_resource_for(b.owner_peer_id, k, int(cost[k]))
+	else:
+		var res := get_team_resources(b.team)
+		for k in cost:
+			if res.has(k):
+				res[k] = min(int(res[k]) + int(cost[k]), int(get_team_resource_limits(b.team).get(k, 99999)))
+
+# 先扣费再登记修理；没有可用农民时不扣费。
+func request_repair(b: Building, builder_ids: Array = []) -> bool:
+	if b == null or not is_instance_valid(b) or not (b is Building):
+		return false
+	if not b.has_method("begin_repair") or not b.can_repair():
+		return false
+	var candidates: Array = []
+	if builder_ids.is_empty():
+		var u = find_nearest_idle_builder(b.team, b.owner_peer_id, b.global_position)
+		if u != null:
+			candidates.append(u)
+	else:
+		for eid in builder_ids:
+			var u = _resolve_entity_by_id(int(eid))
+			if u != null and (u is Army) and _same_owner(u, b):
+				candidates.append(u)
+	if candidates.is_empty():
+		return false
+	var cost: Dictionary = b.repair_cost()
+	if not b.begin_repair(self):
+		return false
+	var assigned: int = 0
+	for u in candidates:
+		if u.work_on_building(b):
+			assigned += 1
+	if assigned == 0:
+		# 登记失败（例如已经有 3 个农民）时把已扣的修理费退回
+		_refund_building_cost(b, cost)
+		b.repair_pending = false
+		b.max_repair_time = 0.0
+		if b.has_method("cancel_repair_visual"):
+			b.cancel_repair_visual()
+		return false
+	return true
+
+# 开工前（进度还是 0）允许取消并全额退款；已经动工则不允许。
+func cancel_construction(b: Building) -> bool:
+	if b == null or not is_instance_valid(b) or not (b is Building):
+		return false
+	if b.build_timer <= 0.0 or b.entity_id in [20, 53]:
+		return false
+	var total: float = maxf(b.max_build_time, 0.001)
+	var progress: float = clampf(1.0 - b.build_timer / total, 0.0, 1.0)
+	if progress > 0.001:
+		return false
+	var cost: Dictionary = b.building_data.get("cost", {}) if b.building_data is Dictionary else {}
+	_refund_building_cost(b, cost)
+	b.build_timer = 0.0
+	b.awaiting_builder = false
+	if b.has_method("_release_builders"):
+		b._release_builders()
+	if b.has_method("die"):
+		b.health = 0
+		b.queue_free()
+	return true
 
 # 给 UI 用：能不能修（含资源是否够），不动状态
 func can_repair_building(b: Building) -> bool:
 	if b == null or not is_instance_valid(b) or not (b is Building):
 		return false
 	if not b.has_method("can_repair") or not b.can_repair():
+		return false
+	# 没有可派出的农民时不能点修理（避免先扣费再失败）
+	if find_nearest_idle_builder(b.team, b.owner_peer_id, b.global_position) == null:
 		return false
 	var cost: Dictionary = b.repair_cost() if b.has_method("repair_cost") else {}
 	if cost.is_empty():

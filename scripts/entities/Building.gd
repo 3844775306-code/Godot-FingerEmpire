@@ -9,6 +9,14 @@ var max_upgrade_level: int = 5
 var building_data: Dictionary = {}   # 保存原始配置
 var build_timer: float = 0.0
 var max_build_time: float = 0.0
+# ── 建造/修理需要农民到场 ──
+# builders 存 WeakRef：农民死亡或改派后由 _prune_builders() 自动剔除。
+var builders: Array = []
+var awaiting_builder: bool = false          # 已开工但还没有农民到达现场
+var repair_pending: bool = false            # 已扣修理费、等待农民到场
+var builder_count_cache: int = 0            # 当前登记的农民数（含赶路中）
+var active_builder_count_cache: int = 0     # 已到现场、正在施工的农民数
+var _builder_cache_timer: float = 0.0
 var upgrade_timer: float = 0.0
 var max_upgrade_time: float = 0.0
 var assigned_merchants: int = 0                    # 集市分配的商人数量（仅entity_id==52时使用）
@@ -35,6 +43,13 @@ func _owner_is_ai() -> bool:
 
 func start_construction(time: float, data: Dictionary):
 	building_data = data
+	_release_builders()
+	repair_pending = false
+	repair_timer = 0.0
+	max_repair_time = 0.0
+	awaiting_builder = true
+	builder_count_cache = 0
+	active_builder_count_cache = 0
 	var spd = 1.0
 	if GameSettings.fast_mode: spd = 2.0
 	if _owner_is_ai() and GameSettings.ai_difficulty >= GameSettings.AIDifficulty.HELL: spd *= 1.2
@@ -90,14 +105,20 @@ func _process(delta):
 		elif has_x_neg or has_x_pos: rotation.y = deg_to_rad(90)
 		else: rotation.y = 0
 
-	# 建造计时
+	# 建造计时：必须有农民站在旁边才会推进；没人到场时进度暂停并保持脚手架
 	if build_timer > 0.0:
+		_refresh_builder_cache(delta)
 		var build_progress := clampf(1.0 - build_timer / maxf(max_build_time, 0.001), 0.0, 1.0)
 		BuildingConstructionVisual.update(self, build_progress)
-		build_timer -= delta
-		if Engine.get_process_frames() % 40 == 0: AudioManager.play_sfx("build_loop")
-		if build_timer <= 0.0:
-			_finish_construction()
+		if active_builder_count_cache > 0:
+			awaiting_builder = false
+			var speed_mult: float = BUILDER_SPEED_MULT[clampi(active_builder_count_cache - 1, 0, BUILDER_SPEED_MULT.size() - 1)]
+			build_timer -= delta * speed_mult
+			if Engine.get_process_frames() % 40 == 0: AudioManager.play_sfx("build_loop")
+			if build_timer <= 0.0:
+				_finish_construction()
+		else:
+			awaiting_builder = true
 
 	# 升级计时
 	if upgrade_timer > 0.0:
@@ -108,7 +129,7 @@ func _process(delta):
 
 	# 修理计时 + 附近敌人扫描（扫描每 0.5 秒一次，避免每次快照都做空间查询）
 	_tick_repair_scan(delta)
-	if repair_timer > 0.0:
+	if repair_pending or repair_timer > 0.0:
 		_tick_repair(delta)
 
 	# 生产计时
@@ -237,6 +258,8 @@ func _reload_wall_model(bm, path):
 func _finish_construction():
 	BuildingConstructionVisual.finish(self)
 	build_timer = 0.0
+	awaiting_builder = false
+	_release_builders()
 	AudioManager.play_sfx("build_done")
 	# Set base stats first
 	max_health = building_data["max_health"]
@@ -305,6 +328,154 @@ func refresh_level_visual() -> void:
 	
 func is_under_construction() -> bool:
 	return build_timer > 0.0
+
+# ==================== 建造/修理农民系统 ====================
+# 每座建筑最多登记 3 个农民；只有已经站在建筑旁边的农民才算「正在施工」。
+func register_builder(u) -> int:
+	if u == null or not is_instance_valid(u) or not (u is Army):
+		return -1
+	if u.entity_id != 10 or u.health <= 0:
+		return -1
+	_prune_builders()
+	var uid: int = u.get_instance_id()
+	for i in range(builders.size()):
+		var ref = builders[i]
+		var old = ref.get_ref() if ref is WeakRef else null
+		if old != null and is_instance_valid(old) and old.get_instance_id() == uid:
+			return i
+	if builders.size() >= MAX_BUILDERS:
+		return -1
+	builders.append(weakref(u))
+	builder_count_cache = builders.size()
+	return builders.size() - 1
+
+func _prune_builders() -> void:
+	var kept: Array = []
+	for ref in builders:
+		if not (ref is WeakRef):
+			continue
+		var u = ref.get_ref()
+		if u != null and is_instance_valid(u) and u is Army and u.health > 0:
+			kept.append(ref)
+	builders = kept
+
+func remove_builder(u) -> void:
+	if u == null or not is_instance_valid(u):
+		return
+	var uid: int = u.get_instance_id()
+	var kept: Array = []
+	for ref in builders:
+		if not (ref is WeakRef):
+			continue
+		var old = ref.get_ref()
+		if old != null and is_instance_valid(old) and old.get_instance_id() == uid:
+			continue
+		kept.append(ref)
+	builders = kept
+	builder_count_cache = builders.size()
+	active_builder_count_cache = active_builder_count()
+
+func _release_builders() -> void:
+	var old := builders.duplicate()
+	builders.clear()
+	builder_count_cache = 0
+	active_builder_count_cache = 0
+	for ref in old:
+		if not (ref is WeakRef):
+			continue
+		var u = ref.get_ref()
+		if u != null and is_instance_valid(u) and u.health > 0 and u.has_method("stop_working_for"):
+			u.stop_working_for(self)
+
+func builder_count() -> int:
+	_prune_builders()
+	builder_count_cache = builders.size()
+	return builder_count_cache
+
+func _builder_reach() -> float:
+	return body_radius + BUILDER_ARRIVE_PAD
+
+func active_builder_count() -> int:
+	_prune_builders()
+	var n: int = 0
+	for ref in builders:
+		var u = ref.get_ref() if ref is WeakRef else null
+		if u == null or not is_instance_valid(u) or u.health <= 0:
+			continue
+		if String(u.current_order) != "build":
+			continue
+		if int(u._work_target_id) != get_instance_id():
+			continue
+		# _at_work_site 由 Army 在真正走到施工位（1 米内）时置位，
+		# 比每帧重算到建筑中心的距离更准确，也避免施工位在外圈时误判。
+		if bool(u._at_work_site):
+			n += 1
+	return n
+
+func _refresh_builder_cache(delta: float) -> void:
+	_builder_cache_timer -= delta
+	if _builder_cache_timer > 0.0:
+		return
+	_builder_cache_timer = 0.25
+	builder_count_cache = builder_count()
+	active_builder_count_cache = active_builder_count()
+
+# 施工站位：普通建筑沿外缘，桥/梯子/城墙炮台向外多找几圈陆地，
+# 保证农民能站在桥边、墙边施工，而不是被要求站到建筑中心。
+func get_builder_slot(index: int) -> Vector3:
+	var bm = _get_bm()
+	if bm == null:
+		return global_position
+	var base_angle: float = rotation.y + TAU * float(index % MAX_BUILDERS) / float(MAX_BUILDERS)
+	var max_r: float = body_radius + (4.5 if entity_id == 7 else 3.2)
+	var r: float = maxf(body_radius + 1.1, 1.5)
+	while r <= max_r:
+		for k in range(12):
+			var ang: float = base_angle + TAU * float(k) / 12.0
+			var p: Vector3 = global_position + Vector3(cos(ang), 0.0, sin(ang)) * r
+			var g: Vector2i = bm.world_to_grid(p)
+			if not _is_builder_tile_valid(bm, g.x, g.y):
+				continue
+			var wp: Vector3 = bm.grid_to_world(g.x, g.y)
+			wp.y = bm.get_height_at_grid(g.x, g.y)
+			return wp
+		r += 0.6
+	return global_position
+
+func _is_builder_tile_valid(bm, gx: int, gy: int) -> bool:
+	if gx < 0 or gy < 0 or gx >= RTSConfig.MAP_SIZE or gy >= RTSConfig.MAP_SIZE:
+		return false
+	var terrain: int = bm.get_terrain_at_grid(gx, gy)
+	if terrain == 2:
+		# 桥可以从岸边或已有桥面上继续往前修，施工位允许站在已有桥上
+		if entity_id == 7 and bm.get_overlay_at_grid(gx, gy) == 3:
+			pass
+		else:
+			return false
+	if terrain == 1 and bm.has_method("is_blocked_mountain_tile") and bm.is_blocked_mountain_tile(gx, gy):
+		return false
+	# 普通建筑：别把施工位选到别的建筑里（否则农民永远走不进去，工地会卡在等待）
+	if entity_id in [7, 8, 64]:
+		return true
+	if not bm.has_method("get_nearby_entities"):
+		return true
+	var wp: Vector3 = bm.grid_to_world(gx, gy)
+	for e in bm.get_nearby_entities(wp, 2.0):
+		if e == self or not (e is Building) or e.health <= 0:
+			continue
+		var d: float = Vector2(e.global_position.x - wp.x, e.global_position.z - wp.z).length()
+		if d < maxf(0.8, e.body_radius * 0.75):
+			return false
+	return true
+
+func is_waiting_for_builder() -> bool:
+	return (build_timer > 0.0 and awaiting_builder) or repair_pending
+
+func cancel_repair_visual() -> void:
+	repair_pending = false
+	repair_timer = 0.0
+	max_repair_time = 0.0
+	BuildingConstructionVisual.cancel(self)
 
 func _ready():
 	super._ready()
@@ -789,6 +960,9 @@ func _set_range_rings_visible(on: bool) -> void:
 const REPAIR_BLOCK_RADIUS: float = 10.0        # 这个半径内有敌方部队就不能修
 const REPAIR_SCAN_INTERVAL: float = 0.5        # 附近敌人扫描频率（秒）
 const BUILD_TIME_PER_HP: float = 75.0          # 与 start_construction 一致：满血建造耗时 = max_health / 75
+const MAX_BUILDERS: int = 3                    # 单座建筑最多登记 3 个农民
+const BUILDER_ARRIVE_PAD: float = 2.2          # 到建筑外缘多近才算「站在旁边」
+const BUILDER_SPEED_MULT: Array = [1.0, 1.5, 2.0]  # 1/2/3 个农民同时到场时的施工速度
 
 var repair_timer: float = 0.0                  # >0 表示正在修理
 var max_repair_time: float = 0.0
@@ -798,7 +972,7 @@ var _repair_enemy_near: bool = false
 var _repair_scan_timer: float = randf_range(0.0, REPAIR_SCAN_INTERVAL)
 
 func is_under_repair() -> bool:
-	return repair_timer > 0.0
+	return repair_pending or repair_timer > 0.0
 
 func _repair_forbidden() -> bool:
 	# 主城（20）和主城系（53）关系整局胜负，不允许修理
@@ -870,14 +1044,15 @@ func can_repair() -> bool:
 	if health <= 0:
 		return false
 	# 建造中/升级中/已经在修：都不允许再开一个工程
-	if build_timer > 0.0 or upgrade_timer > 0.0 or repair_timer > 0.0:
+	if build_timer > 0.0 or upgrade_timer > 0.0 or repair_timer > 0.0 or repair_pending:
 		return false
 	if health >= _model_health_max():
 		return false
 	return not _repair_enemy_near
 
-# 扣除修理费并开始修理计时。联机时只在服务端调用（客户端 UI 只做同样的置灰提示）。
-func perform_repair(bm) -> bool:
+# 扣除修理费并登记为「等待农民」。真正开始计时由 _tick_repair 在农民到场后推进。
+# 联机时只在服务端调用（客户端 UI 只做同样的置灰提示）。
+func begin_repair(bm) -> bool:
 	if not can_repair():
 		return false
 	if bm == null:
@@ -894,10 +1069,15 @@ func perform_repair(bm) -> bool:
 	_repair_from_health = health
 	_repair_to_health = _model_health_max()
 	max_repair_time = repair_time_total()
-	repair_timer = max_repair_time
+	repair_timer = 0.0
+	repair_pending = true
 	# 建造那套脚手架 + 扬尘，但模型保持完整（repair=true 时不缩模型）
 	BuildingConstructionVisual.begin(self, null, true)
 	return true
+
+# 兼容旧调用：现在只登记工程，等农民到场才真正开始计时。
+func perform_repair(bm) -> bool:
+	return begin_repair(bm)
 
 func _tick_repair(delta: float) -> void:
 	if health <= 0:
@@ -905,8 +1085,23 @@ func _tick_repair(delta: float) -> void:
 		BuildingConstructionVisual.cancel(self)
 		repair_timer = 0.0
 		max_repair_time = 0.0
+		repair_pending = false
+		_release_builders()
 		return
-	repair_timer -= delta
+	_refresh_builder_cache(delta)
+	if repair_pending:
+		if active_builder_count_cache <= 0:
+			# 已扣费但农民还在路上：保持等待，不推进进度
+			return
+		repair_pending = false
+		repair_timer = max_repair_time
+	if repair_timer <= 0.0:
+		return
+	# 农民中途离开/死亡：暂停计时，保留已修好的血量
+	if active_builder_count_cache <= 0:
+		return
+	var speed_mult: float = BUILDER_SPEED_MULT[clampi(active_builder_count_cache - 1, 0, BUILDER_SPEED_MULT.size() - 1)]
+	repair_timer -= delta * speed_mult
 	var total := maxf(max_repair_time, 0.001)
 	var progress := clampf(1.0 - repair_timer / total, 0.0, 1.0)
 	BuildingConstructionVisual.update(self, progress)
@@ -922,8 +1117,10 @@ func _tick_repair(delta: float) -> void:
 func _finish_repair() -> void:
 	repair_timer = 0.0
 	max_repair_time = 0.0
+	repair_pending = false
 	health = clampi(maxi(health, _repair_to_health), 1, _model_health_max())
 	BuildingConstructionVisual.finish(self)
+	_release_builders()
 	AudioManager.play_sfx("upgrade_done")
 	var bm = _get_bm()
 	if bm and bm.has_method("_show_hud_alert") and bm.is_progress_reportable(owner_peer_id, team):
@@ -1047,10 +1244,12 @@ func die():
 	# 先释放所有进驻单位，再执行死亡逻辑
 	release_all_garrisoned()
 	# 修理中被打掉：清掉施工脚手架，别让残骸挂着木头架子
-	if repair_timer > 0.0:
+	if repair_timer > 0.0 or repair_pending:
 		repair_timer = 0.0
 		max_repair_time = 0.0
+		repair_pending = false
 		BuildingConstructionVisual.cancel(self)
+	_release_builders()
 	# 脚下的土色脱离建筑独立淡出，不会跟着模型一起瞬间消失
 	_fade_ground_patch()
 	super.die()

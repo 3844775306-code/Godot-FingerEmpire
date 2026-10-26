@@ -1,8 +1,8 @@
 class_name Army
 extends GameEntity
 
-enum UnitState { IDLE, MOVING, ATTACKING, GATHERING, DELIVERING, ATTACK_MOVING }
-const _STATE_NAMES = {UnitState.IDLE: "", UnitState.MOVING: "move", UnitState.ATTACKING: "attack", UnitState.GATHERING: "gather", UnitState.DELIVERING: "deliver", UnitState.ATTACK_MOVING: "attack_move"}
+enum UnitState { IDLE, MOVING, ATTACKING, GATHERING, DELIVERING, ATTACK_MOVING, BUILDING }
+const _STATE_NAMES = {UnitState.IDLE: "", UnitState.MOVING: "move", UnitState.ATTACKING: "attack", UnitState.GATHERING: "gather", UnitState.DELIVERING: "deliver", UnitState.ATTACK_MOVING: "attack_move", UnitState.BUILDING: "build"}
 
 # 军事单位的五状态战斗模型。UnitState 继续负责采集/交付/进驻等非战斗任务，
 # current_order 仍保留旧字符串用于联机快照和客户端动画兼容。
@@ -68,6 +68,11 @@ var _deliver_retry_count: int = 0
 # 交付时"距离是否在缩短"的检测（卡住时强制重算 A* 路径）
 var _deliver_check_timer: float = 0.0
 var _deliver_last_dist: float = -1.0
+# 建造/修理：农民走到建筑旁边的指定站位后开始施工。
+var _work_target_id: int = -1
+var _work_slot: int = 0
+var _at_work_site: bool = false
+var _work_repath_timer: float = 0.0
 var _deliver_total_time: float = 0.0
 # 连续交付失败的主城/仓库暂时不再选，避免一直往同一个不可达点跑
 var _delivery_failed_targets: Dictionary = {}
@@ -790,6 +795,9 @@ func _set_order(state: UnitState):
 	var new_order: String = _STATE_NAMES.get(state, "")
 	if current_order == new_order:
 		return
+	# 离开施工状态时把登记从建筑上摘掉，避免建筑一直以为还有农民在赶路
+	if state != UnitState.BUILDING and _work_target_id != -1:
+		_detach_from_building()
 	current_order = new_order
 	# 主机端也即时切换动画，避免只靠每 30 帧轮询导致走/停/攻击动作延迟半秒
 	if not is_inside_tree():
@@ -804,6 +812,107 @@ func _order_in(states: Array) -> bool:
 		if _order_is(s): return true
 	return false
 
+# ==================== 建造/修理工作 ====================
+# 玩家或 AI 把农民派到某座建筑：先走到建筑旁边的施工位，到了才真正干活。
+func work_on_building(b) -> bool:
+	if b == null or not is_instance_valid(b) or not (b is Building):
+		return false
+	if b.health <= 0 or entity_id != 10:
+		return false
+	if _order_is(UnitState.BUILDING) and _work_target_id == b.get_instance_id():
+		return true
+	_detach_from_building()
+	var slot: int = b.register_builder(self)
+	if slot < 0:
+		return false
+	_clear_command_queue()
+	current_target = null
+	delivery_target = null
+	last_resource_target = null
+	is_attack_moving = false
+	combat_destination = Vector3.ZERO
+	combat_resume_destination = Vector3.ZERO
+	if _uses_combat_state():
+		combat_state = CombatState.IDLE
+	_work_target_id = b.get_instance_id()
+	_work_slot = slot
+	_at_work_site = false
+	_work_repath_timer = 0.0
+	_set_order(UnitState.BUILDING)
+	_movement.set_move_target(b.get_builder_slot(slot), 0.25)
+	return true
+
+func _get_work_building() -> Building:
+	if _work_target_id == -1:
+		return null
+	var bm = _get_bm()
+	if bm == null:
+		return null
+	var node = bm._entity_lookup.get(_work_target_id, null) if bm.get("_entity_lookup") != null else null
+	if node != null and is_instance_valid(node) and node is Building:
+		return node
+	# 缓存还没刷新时直接扫一场，避免刚下达的工作因 lookup 为空被误取消
+	if bm.has_method("_ensure_cache_fresh"):
+		bm._ensure_cache_fresh()
+		node = bm._entity_lookup.get(_work_target_id, null) if bm.get("_entity_lookup") != null else null
+		if node != null and is_instance_valid(node) and node is Building:
+			return node
+	return null
+
+func is_working_on(b) -> bool:
+	return b != null and _work_target_id == b.get_instance_id() and _order_is(UnitState.BUILDING)
+
+func _has_cargo() -> bool:
+	for v in cargo.values():
+		if int(v) > 0:
+			return true
+	return false
+
+func _detach_from_building() -> void:
+	if _work_target_id == -1:
+		return
+	var b := _get_work_building()
+	if b != null and b.has_method("remove_builder"):
+		b.remove_builder(self)
+	_work_target_id = -1
+	_work_slot = 0
+	_at_work_site = false
+	_work_repath_timer = 0.0
+
+func stop_working_for(b) -> void:
+	if b == null or _work_target_id != b.get_instance_id():
+		return
+	_work_target_id = -1
+	_work_slot = 0
+	_at_work_site = false
+	_work_repath_timer = 0.0
+	if _movement:
+		_movement.stop()
+	_set_order(UnitState.IDLE)
+	# 施工结束后回到原来的经济循环：有货先送，没货继续找最近的资源点
+	if _has_cargo():
+		if not _return_to_deliver():
+			_set_order(UnitState.IDLE)
+	elif target_type == 0:
+		_find_nearest_resource()
+
+func _finish_work() -> void:
+	var b := _get_work_building()
+	if b != null and b.has_method("remove_builder"):
+		b.remove_builder(self)
+	_work_target_id = -1
+	_work_slot = 0
+	_at_work_site = false
+	_work_repath_timer = 0.0
+	if _movement:
+		_movement.stop()
+	_set_order(UnitState.IDLE)
+	if _has_cargo():
+		if not _return_to_deliver():
+			_set_order(UnitState.IDLE)
+	elif target_type == 0:
+		_find_nearest_resource()
+
 # 顶部诊断：单位是否处于“需要移动、但当前没有 A* 路径”的状态。
 # 包括普通移动、采集/交付、行军、攻击移动和追击；已经进入攻击射程的单位不算。
 # pending 也计入“没有路径”：这些单位还停在原地等 A* 预算。
@@ -814,6 +923,9 @@ func needs_move_without_path() -> bool:
 		return false
 	if _movement == null or not _movement.astar_path.is_empty():
 		return false
+	# 施工中已经站在建筑旁边：不需要路径
+	if _order_is(UnitState.BUILDING):
+		return not _at_work_site
 	# 采集/交付已经到接触距离：原地工作，不需要路径
 	if _order_is(UnitState.GATHERING) and current_target is WorldResource:
 		if _combat_edge_distance(current_target) <= 0.6:
@@ -2302,6 +2414,10 @@ func _find_combat_enemy(radius: float, attack_only: bool) -> GameEntity:
 
 # 目标分数：普通单位一律越近越优先；攻城单位仍保留“建筑优先”的兵种特性。
 func _combat_target_score(target, dist: float, self_prefers_buildings: bool) -> float:
+	# 城墙的优先级低于所有目标：不管是不是攻城单位，都先打别的，
+	# 只有视野里只剩城墙时才会去拆墙（否则 AI 会围着城墙啃一整局）。
+	if target is Building and int(target.entity_id) == 27:
+		return -5000.0 - dist * 0.01
 	if target is Building:
 		return (-dist) if self_prefers_buildings else (-1000.0 - dist * 0.01)
 	return (-1000.0 - dist * 0.01) if self_prefers_buildings else (-dist)
@@ -2313,7 +2429,59 @@ func _prefers_buildings() -> bool:
 	return entity_id in SIEGE_UNIT_IDS
 
 # ----------------- ÐÐÎª´¦Àí -----------------
+# 农民施工帧逻辑：目标建筑失效/完工就退出；否则走到站位、站定后朝建筑。
+func _tick_building_action(delta: float, bm) -> void:
+	var b := _get_work_building()
+	if b == null or b.health <= 0:
+		_finish_work()
+		return
+	var still_needs_work: bool = b.build_timer > 0.0 or b.repair_pending or b.repair_timer > 0.0
+	if not still_needs_work:
+		_finish_work()
+		return
+	var slot: Vector3 = b.get_builder_slot(_work_slot)
+	var dx: float = slot.x - global_position.x
+	var dz: float = slot.z - global_position.z
+	var dist: float = sqrt(dx * dx + dz * dz)
+	# 农民要真正走到建筑外缘的施工位旁边才算到场；以前按“到施工位还有
+	# 一个建筑半径+2.2m”就停下，实际离建筑还有 5~6 米，建筑却开始推进。
+	var reach: float = 1.0
+	if not _at_work_site:
+		if dist <= reach:
+			_at_work_site = true
+			if _movement:
+				_movement.stop()
+			velocity = Vector3.ZERO
+		else:
+			_work_repath_timer -= delta
+			var need_repath: bool = _work_repath_timer <= 0.0
+			if _movement:
+				if _movement.astar_target.distance_to(slot) > 0.75:
+					need_repath = true
+				if need_repath:
+					_work_repath_timer = 0.6
+					_movement.set_move_target(slot, 0.25)
+	else:
+		if dist > reach + 1.2:
+			# 被挤开/建筑移动：重新走过去
+			_at_work_site = false
+			_work_repath_timer = 0.0
+		else:
+			velocity = Vector3.ZERO
+			if _movement:
+				_movement.stop()
+			# 面向建筑，施工动作才朝向正确
+			var face_dir: Vector3 = b.global_position - global_position
+			face_dir.y = 0.0
+			if face_dir.length() > 0.05:
+				var target_yaw: float = atan2(-face_dir.x, -face_dir.z)
+				rotation.y = lerp_angle(rotation.y, target_yaw, clampf(delta * 8.0, 0.0, 1.0))
+
 func _process_action(delta, bm):
+	# 建造/修理：走到建筑外缘的施工位，到了才让建筑推进进度
+	if _order_is(UnitState.BUILDING):
+		_tick_building_action(delta, bm)
+		return
 	# ½»¸¶×´Ì¬
 	if _order_is(UnitState.DELIVERING):
 		if delivery_target == null or not is_instance_valid(delivery_target):
@@ -2770,6 +2938,11 @@ func _think_combat_next_command() -> void:
 func _think(delta, bm):
 	if _uses_combat_state():
 		_think_combat(delta, bm)
+		return
+	# 施工中的农民不自动采集/索敌；目标建筑失效时由 _process_action 收尾。
+	if _order_is(UnitState.BUILDING):
+		if _work_target_id == -1:
+			_finish_work()
 		return
 	if current_target != null and not is_instance_valid(current_target):
 		current_target = null

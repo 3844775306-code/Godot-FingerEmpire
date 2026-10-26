@@ -1303,7 +1303,10 @@ func _update_health_bars():
 			repair_label.add_theme_font_size_override("font_size", font_size)
 			repair_label.visible = show_unit_text
 			if refresh_text_now:
-				repair_label.text = "修理中 %d%%" % int(repair_pct * 100.0)
+				if entity.repair_pending and entity.repair_timer <= 0.0:
+					repair_label.text = "等待农民修理"
+				else:
+					repair_label.text = "修理中 %d%% · 农民%d" % [int(repair_pct * 100.0), entity.builder_count_cache]
 			repair_label.position = repair_bar.position + Vector2(0, -22)
 		else:
 			_hide_repair_bar(entity)
@@ -1325,7 +1328,12 @@ func _update_health_bars():
 			bar.visible = false
 			label.visible = show_unit_text
 			if refresh_text_now:
-				label.text = "%s (建造中 %d%%)" % [entity.display_name, int(build_pct * 100.0)]
+				if entity.awaiting_builder and entity.builder_count_cache == 0:
+					label.text = "%s (等待农民)" % entity.display_name
+				elif entity.awaiting_builder:
+					label.text = "%s (农民赶路中 · %d)" % [entity.display_name, entity.builder_count_cache]
+				else:
+					label.text = "%s (建造中 %d%% · 农民%d)" % [entity.display_name, int(build_pct * 100.0), entity.builder_count_cache]
 				# Color label
 				var _hlc2 = _get_hud_label_color(entity)
 				label.add_theme_color_override("font_color", _hlc2)

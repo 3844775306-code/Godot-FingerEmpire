@@ -316,7 +316,7 @@ func get_current_target() -> Vector3:
 		return _army.current_target.global_position
 	if _army.is_attack_moving:
 		return _army.attack_move_target
-	if _army._order_is(_army.UnitState.MOVING):
+	if _army._order_is(_army.UnitState.MOVING) or _army._order_is(_army.UnitState.BUILDING):
 		return astar_target
 	return Vector3.ZERO
 

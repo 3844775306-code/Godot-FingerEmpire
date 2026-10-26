@@ -785,6 +785,11 @@ func build_building(building_id: int, pos: Vector3, facing: Vector3 = Vector3.ZE
 			return false  # cannot build outside vision
 	if not _can_place_ai_building(building_id, pos):
 		return false
+	# 建造必须有农民到场：先找一个能派过去的农民，找不到就不扣资源、不拍地基
+	var builder = battle.find_nearest_idle_builder(my_team, my_peer_id, pos, 60.0) \
+			if battle.has_method("find_nearest_idle_builder") else null
+	if builder == null:
+		return false
 	var cost = cfg.get("cost", {})
 	if not _deduct_resources(cost): return false
 	cfg["owner_peer_id"] = my_peer_id
@@ -803,6 +808,8 @@ func build_building(building_id: int, pos: Vector3, facing: Vector3 = Vector3.ZE
 			var face_target: Vector3 = b.global_position + Vector3(facing.x, 0.0, facing.z).normalized()
 			b.look_at(face_target, Vector3.UP)
 		b.start_construction(5.0, cfg)
+		if builder != null and is_instance_valid(builder):
+			battle.assign_builders(b, [builder.get_instance_id()])
 	return b != null
 
 func upgrade_building(building_id: int):
@@ -856,7 +863,11 @@ func _tick_building_repair() -> void:
 		# 双保险：BattleManager 按 owner/team 取资源判断，口径与 AI 自己的查询保持一致
 		if battle.has_method("can_repair_building") and not battle.can_repair_building(b):
 			continue
-		if b.perform_repair(battle):
+		var builder = battle.find_nearest_idle_builder(my_team, my_peer_id, b.global_position, 60.0) \
+				if battle.has_method("find_nearest_idle_builder") else null
+		if builder == null:
+			continue
+		if battle.request_repair(b, [builder.get_instance_id()]):
 			started += 1
 
 # 单座建筑优先级 = 重要度 × (0.4 + 0.6 × 已损比例)

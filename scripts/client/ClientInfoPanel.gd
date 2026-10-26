@@ -15,6 +15,7 @@ var observed_entity_id: int = -1
 var renderer: ClientRenderer = null
 var demolish_btn: Button = null
 var repair_btn: Button = null
+var cancel_build_btn: Button = null
 var resources: Dictionary = {}
 var limits: Dictionary = {}
 var population: Dictionary = {}
@@ -94,6 +95,16 @@ func _ready():
 	repair_btn.pressed.connect(_on_repair_pressed)
 	UITheme.apply_primary_button(repair_btn, UITheme.FONT_SM)
 	_vb.add_child(repair_btn)
+
+	cancel_build_btn = Button.new()
+	cancel_build_btn.name = "CancelBuildBtn"
+	cancel_build_btn.text = "❌ 取消建造（全额退款）"
+	cancel_build_btn.custom_minimum_size = Vector2(UILayout.dp(160.0) if _is_mobile() else 180.0,
+		UILayout.dp(30.0) if _is_mobile() else 36.0)
+	cancel_build_btn.visible = false
+	cancel_build_btn.pressed.connect(_on_cancel_build_pressed)
+	UITheme.apply_danger_button(cancel_build_btn, UITheme.FONT_SM)
+	_vb.add_child(cancel_build_btn)
 
 	set_process(true)
 	renderer = get_tree().get_first_node_in_group("client_renderer")
@@ -374,6 +385,9 @@ func _repair_status_str(info: Dictionary) -> String:
 	var ratio := _repair_damage_ratio(info)
 	var rt := float(info.get("repair_timer", 0.0))
 	var mrt := float(info.get("max_repair_time", 0.0))
+	var pending := int(info.get("repair_pending", 0)) == 1
+	if pending and rt <= 0.0:
+		return "\n🔧 [color=%s]等待农民修理[/color]   已损: %.0f%%" % [UITheme.hex_str(UITheme.REPAIR_PROGRESS), 100.0 * ratio]
 	if rt > 0.0 and mrt > 0.0:
 		var pct := clampf(1.0 - rt / mrt, 0.0, 1.0)
 		return "\n🔧 [color=%s]修理中[/color]:  %.0f%%   已损: %.0f%%" % [UITheme.hex_str(UITheme.REPAIR_PROGRESS), 100.0 * pct, 100.0 * ratio]
@@ -441,7 +455,15 @@ func update_info(entity_id: int):
 	var mbt = info.get("max_build_time", 0.0)
 	var bt_str = ""
 	if bt > 0 and mbt > 0:
-		bt_str = "\n🔨 [color=orange]建造中[/color]:  %.0f%%" % (100.0 * (1.0 - bt / mbt))
+		var bc := int(info.get("builder_count", 0))
+		if int(info.get("awaiting_builder", 0)) == 1 and bc == 0:
+			bt_str = "\n🔨 [color=orange]等待农民[/color]:  右键工地可手动派农民"
+		elif int(info.get("awaiting_builder", 0)) == 1:
+			bt_str = "\n🔨 [color=orange]农民赶路中[/color]:  %d 人" % bc
+		elif bc > 0:
+			bt_str = "\n🔨 [color=orange]建造中[/color]:  %.0f%%  农民:%d" % [100.0 * (1.0 - bt / mbt), bc]
+		else:
+			bt_str = "\n🔨 [color=orange]建造中[/color]:  %.0f%%" % (100.0 * (1.0 - bt / mbt))
 	var ut = info.get("upgrade_timer", 0.0)
 	var mut = info.get("max_upgrade_time", 0.0)
 	if ut > 0 and mut > 0:
@@ -470,6 +492,12 @@ func update_info(entity_id: int):
 		if demolish_btn:
 			demolish_btn.visible = (info.get("entity_id", 0) != 20) and not readonly
 		_update_repair_ui(info, readonly)
+		if cancel_build_btn:
+			var btl := float(info.get("build_timer", 0.0))
+			var mbtl := maxf(float(info.get("max_build_time", 0.0)), 0.001)
+			var can_cancel := btl > 0.0 and not readonly and int(info.get("entity_id", 0)) not in [20, 53] \
+					and (1.0 - btl / mbtl) <= 0.001
+			cancel_build_btn.visible = can_cancel
 		if info.get("can_upgrade", false) and not readonly:
 
 			upgrade_btn.visible = true; upgrade_btn.text = "升级"
@@ -541,6 +569,7 @@ func update_info(entity_id: int):
 		upgrade_btn.visible = false; produce_vbox.visible = false
 		if demolish_btn: demolish_btn.visible = false
 		if repair_btn: repair_btn.visible = false
+		if cancel_build_btn: cancel_build_btn.visible = false
 		hp_bar.visible = false
 	_apply_detail_mode()
 
@@ -552,7 +581,8 @@ func _update_repair_ui(info: Dictionary, readonly: bool) -> void:
 	if readonly or eid in [20, 53]:
 		return
 	var ratio := _repair_damage_ratio(info)
-	var under := float(info.get("repair_timer", 0.0)) > 0.0
+	var pending := int(info.get("repair_pending", 0)) == 1
+	var under := float(info.get("repair_timer", 0.0)) > 0.0 or pending
 	var busy := float(info.get("build_timer", 0.0)) > 0.0 or float(info.get("upgrade_timer", 0.0)) > 0.0
 	if busy or (ratio <= 0.001 and not under):
 		return
@@ -565,18 +595,22 @@ func _update_repair_ui(info: Dictionary, readonly: bool) -> void:
 				can_click = false
 				break
 	repair_btn.disabled = under or not can_click
-	if under:
+	if pending and float(info.get("repair_timer", 0.0)) <= 0.0:
+		repair_btn.text = "🔧 等待农民修理"
+	elif under:
 		var mrt := maxf(float(info.get("max_repair_time", 0.0)), 0.001)
 		var pct := clampf(1.0 - float(info.get("repair_timer", 0.0)) / mrt, 0.0, 1.0)
 		repair_btn.text = "🔧 修理中 %d%%" % int(pct * 100.0)
 	else:
 		repair_btn.text = "🔧 修理 %s" % _repair_cost_text(cost)
 	var ctime := float(info.get("repair_time_total", 0.0))
-	var tip := "修理残破建筑：修完回复到满血（主城不可修理）"
+	var tip := "修理残破建筑：需要农民到场施工，修完回复到满血（主城不可修理）"
 	tip += "\n费用：%s" % (_repair_cost_text(cost) if not cost.is_empty() else "免费")
 	if ctime > 0.0:
 		tip += "\n耗时：%.1f 秒" % ctime
-	if under:
+	if pending:
+		tip += "\n状态：已扣费，等待农民到场"
+	elif under:
 		tip += "\n状态：修理中"
 	elif not can_click:
 		tip += "\n状态：资源不足或附近有敌军，暂不可修"
@@ -589,6 +623,18 @@ func _repair_cost_text(cost: Dictionary) -> String:
 		if need > 0:
 			parts.append("%s%d" % [UITheme.RESOURCE_ICONS.get(res, ""), need])
 	return " ".join(parts) if not parts.is_empty() else "免费"
+
+func _on_cancel_build_pressed():
+	if observed_entity_id == -1:
+		return
+	if not _is_local_owned_info(renderer.get_entity_info(observed_entity_id)):
+		return
+	NetworkManager.send_command.rpc_id(1, {
+		"action": "cancel_construction",
+		"building_id": observed_entity_id,
+	})
+	if cancel_build_btn:
+		cancel_build_btn.visible = false
 
 func _on_repair_pressed():
 	if observed_entity_id == -1:
@@ -677,6 +723,7 @@ func show_multi_selection(ids: Array):
 	upgrade_btn.visible = false
 	if demolish_btn: demolish_btn.visible = false
 	if repair_btn: repair_btn.visible = false
+	if cancel_build_btn: cancel_build_btn.visible = false
 	produce_vbox.visible = true
 	hp_bar.visible = false
 	if hp_bar_bg: hp_bar_bg.visible = false
