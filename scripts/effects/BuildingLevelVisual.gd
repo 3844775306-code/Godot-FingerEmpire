@@ -41,6 +41,9 @@ const FLAG_PIVOT_NAME := "FlagPolePivot"
 const FLAG_TOP_MARGIN := 0.45
 const FLAG_POLE_MIN := 1.35
 const FLAG_POLE_MAX := 6.0
+# 旗杆露出屋顶的可见段再缩短为原来的 2/3；杆脚仍在底座色环上，
+# 旗面随杆顶下降，但仍保留足够高度露出屋顶。
+const FLAG_EXPOSED_SCALE := 2.0 / 3.0
 static var _MATERIAL_CACHE: Dictionary = {}
 
 static func apply(building: Node3D, level: int, fallback_radius: float = 0.0, team_color: Color = Color.WHITE, visible: bool = true) -> void:
@@ -133,6 +136,10 @@ static func _add_flags(root: Node3D, radius: float, top: float, team_color: Colo
 	# 旗杆底部 y 与环面平齐；杆顶只需越过屋顶一小段，旗帜就能被看到。
 	var flag_base_y := 0.10
 	var pole_h := clampf(top + FLAG_TOP_MARGIN, FLAG_POLE_MIN, FLAG_POLE_MAX)
+	# 只压缩屋顶以上的可见段：若直接乘总高度，旗面会埋进建筑内部。
+	# 极端高建筑本来就被 FLAG_POLE_MAX 截断，保持原高度，避免反而把杆子拉长。
+	if pole_h > top:
+		pole_h = top + (pole_h - top) * FLAG_EXPOSED_SCALE
 	var cloth_color := team_color.lerp(Color.WHITE, 0.12)
 	var pole_mat := _mat("level_flag_pole", Color(0.25, 0.19, 0.13), 0.0, 0.6)
 	var cloth_mat := _mat("level_flag_cloth_%s" % cloth_color.to_html(), cloth_color, 0.0, 0.75)
