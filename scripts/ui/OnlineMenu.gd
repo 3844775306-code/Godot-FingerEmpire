@@ -43,6 +43,11 @@ func _ready():
 	var old = get_node_or_null("Panel")
 	if old: old.visible = false
 
+	# 场景根节点在 online_menu.tscn 里没有设尺寸（默认 0×0）。
+	# 桌面版内容全是绝对坐标，看不出问题；手机端布局全用 anchor（背景/滚动区分半屏），
+	# 根节点 0×0 会把整屏压成空白。这里先把根节点铺满视口，窗口旋转/缩放也会跟着变。
+	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+
 	# 手机端：桌面版 2400×1400 绝对布局在 393dp 屏上只有 4~14dp 字，
 	# 直接改用竖排滚动布局；桌面路径完全不动。
 	if InputSource.use_mobile_ui():
