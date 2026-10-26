@@ -778,6 +778,8 @@ func _jump_camera_to_group(g: int):
 
 # ---------- 选择环 ----------
 var selection_rings: Dictionary = {}
+# 已经上了边缘描边的实体节点（id -> Node），改选/取消选中时按这份表清掉
+var selection_outlined: Dictionary = {}
 
 # 联机范围圈：选中「单个己方单位」时，在脚下贴地画出视野（细线）与作用范围（粗线）。
 # 视觉类在 scripts/effects/GroundRangeRing.gd：网格按局部空间建、每 0.12 秒重采样地形，
@@ -797,6 +799,8 @@ func _update_selection_visuals():
 		if is_instance_valid(selection_rings[rid]):
 			selection_rings[rid].queue_free()
 	selection_rings.clear()
+	# 边缘描边也要跟着选择一起清：取消选中/改选另一个单位时不能留下上一份残留
+	_clear_selection_outlines()
 	# 范围圈跟着选择一起清：取消选中/改选另一个单位时不能留下上一圈的残留
 	_clear_range_rings()
 	for id in client_selected_ids:
@@ -826,48 +830,27 @@ func _create_ring_for_entity(id):
 	if not node.has_meta("snapshot_info"): return
 	var info = node.get_meta("snapshot_info")
 	if not info: return
-	var radius: float = info.get("body_radius", 0.5)
-	var kind: int = int(info.get("type", 0))   # 0=军队 1=建筑 2=资源
-	# 建筑用模型实际水平半径：快照里的 body_radius 是按模型「最大边」算的，
-	# 高瘦的塔类建筑水平方向明显更窄，直接用会让选择环大出一圈。
-	if kind == 1:
-		var horiz: float = _model_horizontal_radius(node, radius)
-		if horiz > 0.0:
-			radius = horiz
-	var ring = MeshInstance3D.new()
-	ring.name = "ClientSelectionRing"
-	ring.mesh = TorusMesh.new()
-	# 与单机版保持完全一致：军队/建筑/资源三种半径与贴地高度分别对齐
-	match kind:
-		1:
-			ring.mesh.inner_radius = radius + 0.12
-			ring.mesh.outer_radius = radius + 0.22
-			ring.position = Vector3(0, radius * 1.2 + 0.1, 0)
-		2:
-			ring.mesh.inner_radius = radius + 0.1
-			ring.mesh.outer_radius = radius + 0.2
-			ring.position = Vector3(0, 0.1, 0)
-		_:
-			ring.mesh.inner_radius = radius + 0.1
-			ring.mesh.outer_radius = radius + 0.15
-			ring.position = Vector3(0, radius * 2.5 + 0.1, 0)
-	ring.material_override = StandardMaterial3D.new()
-	# 单机版选中的都是自己的单位（绿色）；联机按"自己队伍"判断，队友也绿色，敌方红色
+	# 选中指示改成「模型边缘发光」：与单机版一致，不再挂脚下的选中环。
+	# 己方亮绿、敌方亮红（原来环的颜色语义原样保留）。
 	var ring_team: int = int(info.get("team", -1))
 	var own_team: int = -1
 	if renderer and renderer.get("player_team") != null:
 		own_team = int(renderer.player_team)
-	if own_team == -1:
-		ring.material_override.albedo_color = Color.GREEN
-	elif ring_team == own_team:
-		ring.material_override.albedo_color = Color.GREEN
-	else:
-		ring.material_override.albedo_color = Color.RED
-	ring.material_override.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	node.add_child(ring)
-	selection_rings[id] = ring
-	# 紧挨着选择环再加贴地的视野/作用范围圈（只在单选且是自己单位时才会真正创建）
+	var outline_color: Color = Color.GREEN
+	if own_team != -1 and ring_team != own_team:
+		outline_color = Color.RED
+	SelectionOutline.apply(node, true, outline_color)
+	selection_outlined[id] = node
+	# 贴地的视野/作用范围圈照旧（只在单选且是自己单位时才会真正创建）
 	_create_range_rings_for_entity(int(id))
+
+# 清掉所有已经上过的描边（改选/取消选中时调用）
+func _clear_selection_outlines() -> void:
+	for id in selection_outlined.keys():
+		var node = selection_outlined[id]
+		if is_instance_valid(node):
+			SelectionOutline.apply(node, false)
+	selection_outlined.clear()
 
 func _process_selection_rings():
 	# 每帧更新选择环的位置（跟随目标移动）

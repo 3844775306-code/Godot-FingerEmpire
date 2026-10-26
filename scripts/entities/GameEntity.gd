@@ -533,14 +533,30 @@ func _load_banner(pos: Vector3) -> Node3D:
 const GROUP_COLORS = [Color.RED, Color.BLUE, Color.GREEN, Color.YELLOW, Color.ORANGE, Color.PURPLE, Color.CYAN, Color.MAGENTA, Color.WHITE, Color.GRAY]
 
 func set_selected(selected: bool):
+	# 选中指示改成「模型边缘发光」（反向外壳描边），脚下的绿色选中环不再显示：
+	# 环贴在地面上，单位一跑就露馅；描边挂在模型表面，跟着骨骼动画一起动，
+	# 与战场融合得更好。环节点保留（模型里可能已经建好），只是永远隐藏。
 	if has_node("SelectionRing"):
-		$SelectionRing.visible = selected
+		$SelectionRing.visible = false
+	SelectionOutline.apply(self, selected, _selection_outline_color())
 	# 驻扎标记
 	if selected:
 		if "garrison_point" in self and self.garrison_point != Vector3.ZERO:
 			_show_garrison_marker()
 	else:
 		_hide_garrison_marker()
+
+# 描边颜色：己方亮绿、其它亮红，和原来选中环的语义一致。
+# 单机里 player_team 由 battle_manager 提供（联机按自己的队伍），拿不到时退回 team 0。
+func _selection_outline_color() -> Color:
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if bm != null and "player_team" in bm:
+		if team == int(bm.get("player_team")):
+			return SelectionOutline.DEFAULT_COLOR
+		return Color(1.00, 0.55, 0.50, 0.88)
+	if team == int(RTSConfig.Team.RED):
+		return SelectionOutline.DEFAULT_COLOR
+	return Color(1.00, 0.55, 0.50, 0.88)
 
 func _spawn_produced_unit():
 	AudioManager.play_sfx("produce")
