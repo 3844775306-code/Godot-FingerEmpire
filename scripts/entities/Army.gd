@@ -592,9 +592,18 @@ func get_range_ring_specs() -> Array:
 	var specs: Array = []
 	if health <= 0:
 		return specs
-	# 视野：细线，表示「这个单位能看多远」，所有单位都有
-	if vision_range >= RANGE_RING_MIN_ATTACK:
-		specs.append({"kind": GroundRangeRing.Kind.VISION, "radius": float(vision_range)})
+	# 视野：细线，表示「这个单位能看多远」，所有单位都有；半径走有效视野，
+	# 轮廓由头顶视线采样生成，森林/山脊挡住的方向会凹进去。
+	var eff_vision: float = vision_range
+	var bm = _get_bm()
+	if bm != null and bm.has_method("get_effective_vision"):
+		eff_vision = float(bm.get_effective_vision(self))
+	if eff_vision >= RANGE_RING_MIN_ATTACK:
+		specs.append({
+			"kind": GroundRangeRing.Kind.VISION,
+			"radius": eff_vision,
+			"outline": Callable(self, "_vision_outline"),
+		})
 	# 射程：粗线；只有远程单位画（近战射程太短，围一圈会糊在脚下）
 	if attack_range >= RANGE_RING_MIN_ATTACK:
 		specs.append({"kind": GroundRangeRing.Kind.ACTION, "radius": attack_range})
@@ -603,6 +612,17 @@ func get_range_ring_specs() -> Array:
 	if aura_r >= RANGE_RING_MIN_ATTACK:
 		specs.append({"kind": GroundRangeRing.Kind.ACTION, "radius": aura_r, "tint": RANGE_RING_AURA_TINT})
 	return specs
+
+# GroundRangeRing 的视野轮廓回调：返回世界坐标的可见边界点。
+func _vision_outline(center: Vector3, radius: float) -> Array:
+	var bm = _get_bm()
+	var map = VisionSystem.resolve_map(bm) if bm != null else null
+	if map == null:
+		return GroundStripMesh.circle_points(center, radius)
+	var live_radius: float = radius
+	if bm != null and bm.has_method("get_effective_vision"):
+		live_radius = float(bm.get_effective_vision(self))
+	return VisionSystem.compute_visibility_outline(map, get_vision_origin(), live_radius, 80)
 
 # 是否允许显示：必须被选中，并且要么 SelectionManager 显式同步过「单选」，
 # 要么自己问选择管理器确认是唯一选中（兜底那些没走 _refresh_selection_rings 的旧路径）
@@ -647,7 +667,8 @@ func _rebuild_range_rings(specs: Array) -> void:
 		_range_ring_height_fn = GroundStripMesh.height_fn_for(_get_bm())
 	for spec in specs:
 		var tint: Color = spec.get("tint", Color(0, 0, 0, 0))
-		var ring = GroundRangeRing.create(int(spec["kind"]), float(spec["radius"]), _range_ring_height_fn, tint)
+		var outline: Callable = spec.get("outline", Callable())
+		var ring = GroundRangeRing.create(int(spec["kind"]), float(spec["radius"]), _range_ring_height_fn, tint, outline)
 		# 网格建在节点局部空间，直接挂到单位下面就会跟着单位移动/转身，不需要每帧同步位置
 		ring.visible = false
 		add_child(ring)
@@ -1678,11 +1699,13 @@ func _drop_current_attack_target() -> void:
 func _find_attack_fallback_building(bm: RTSBattleManager) -> Building:
 	if bm == null:
 		return null
-	var candidates: Array = bm.get_nearby_enemies(global_position, vision_range, team, owner_peer_id)
+	var candidates: Array = bm.get_nearby_enemies(global_position, vision_range, team, owner_peer_id, true)
 	var best: Building = null
 	var best_dist: float = INF
 	for e in candidates:
 		if not is_instance_valid(e) or e.health <= 0:
+			continue
+		if not bm.is_target_visible_from(self, e):
 			continue
 		if not (e is Building) or e == current_target:
 			continue
@@ -2239,12 +2262,14 @@ func _process_wall_guard_action(delta, bm) -> void:
 func _find_combat_enemy(radius: float, attack_only: bool) -> GameEntity:
 	var bm = _get_bm()
 	var self_prefers_buildings: bool = _prefers_buildings()
-	var candidates: Array = bm.get_nearby_enemies(global_position, radius, team, owner_peer_id) if bm \
+	var candidates: Array = bm.get_nearby_enemies(global_position, radius, team, owner_peer_id, true) if bm \
 		else get_tree().get_nodes_in_group("entities")
 	var best: GameEntity = null
 	var best_score: float = -INF
 	for entity in candidates:
 		if entity == self or not is_instance_valid(entity) or entity.health <= 0:
+			continue
+		if bm != null and bm.has_method("is_target_visible_from") and not bm.is_target_visible_from(self, entity):
 			continue
 		if entity is WorldResource:
 			continue
@@ -3451,11 +3476,12 @@ func _find_nearest_entity(search_range: float, filter_func: Callable, use_cache:
 	var bm = _get_bm()
 	var candidates: Array = []
 	if bm and use_cache:
-		candidates = bm.get_nearby_enemies(global_position, search_range, team, owner_peer_id)
+		candidates = bm.get_nearby_enemies(global_position, search_range, team, owner_peer_id, true)
 	else:
 		candidates = get_tree().get_nodes_in_group("entities")
 	for entity in candidates:
 		if entity == self or not is_instance_valid(entity) or entity.health <= 0: continue
+		if bm != null and bm.has_method("is_target_visible_from") and not bm.is_target_visible_from(self, entity): continue
 		if not filter_func.call(entity): continue
 		var h_diff = Vector2(entity.global_position.x - global_position.x, entity.global_position.z - global_position.z)
 		var dist = h_diff.length() - body_radius - entity.body_radius
@@ -4610,9 +4636,10 @@ func _find_nearest_enemy_near(center: Vector3, radius: float):
 	# 驻扎/守军单位空闲时每 0.3s 都会调用此函数。后期几十上百个守军若每个
 	# 都全量扫描 entities，会形成 O(n²) 的主线程热点；优先走空间索引。
 	var bm = _get_bm()
-	var candidates: Array = bm.get_nearby_enemies(center, radius, team, owner_peer_id) if bm else get_tree().get_nodes_in_group("entities")
+	var candidates: Array = bm.get_nearby_enemies(center, radius, team, owner_peer_id, true) if bm else get_tree().get_nodes_in_group("entities")
 	for entity in candidates:
 		if entity == self or not is_instance_valid(entity) or entity.health <= 0: continue
+		if bm != null and bm.has_method("is_target_visible_from") and not bm.is_target_visible_from(self, entity): continue
 		if not (entity is GameEntity): continue
 		if entity is WorldResource: continue
 		if not _is_hostile_to(entity): continue

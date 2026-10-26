@@ -663,6 +663,15 @@ func _send_left_click(event):
 		if info:
 			target_id = info["id"]
 			pos = root.global_position
+	# 点单位下达攻击时可能先命中旁边建筑的碰撞盒：用轮廓拾取纠正成那个单位
+	if target_id != -1:
+		var picked_id: int = _get_entity_id_under_mouse(event.position)
+		if picked_id != -1 and picked_id != target_id:
+			var picked_info := _get_entity_info(picked_id)
+			if int(picked_info.get("type", -1)) == 0 and not _is_own_id(picked_id) and not _is_teammate_id(picked_id):
+				target_id = picked_id
+				var picked_node = renderer.entity_nodes.get(picked_id)
+				if picked_node: pos = picked_node.global_position
 	else:
 		pos = _get_ground_position(event.position)
 		if pos == Vector3.ZERO: return
@@ -689,9 +698,34 @@ func _send_left_click(event):
 	NetworkManager.send_command.rpc_id(1, cmd)
 
 # ---------- 工具函数 ----------
+# 联机端也有「点建筑旁边的单位却选中建筑」的问题：客户端单位的碰撞球只有脚底一小颗，
+# 而建筑的碰撞盒横向比模型宽，射线会先命中建筑。这里和单机 SelectionManager 用同一套
+# 规则兜底：把实体近似成「脚底→模型顶」的竖直胶囊，点在轮廓上就算点中，单位优先。
 func _get_entity_id_under_mouse(screen_pos: Vector2) -> int:
 	var cam = get_viewport().get_camera_3d()
-	if not cam: return -1
+	if not cam or not renderer: return -1
+	var ray := _raycast_client_pick(screen_pos)
+	var ray_id: int = int(ray.get("id", -1))
+	var ray_node = ray.get("node", null)
+	var best := _pick_client_by_silhouette(cam, screen_pos)
+	if best.is_empty():
+		return ray_id
+	var best_id: int = int(best.get("id", -1))
+	if ray_id == -1 or best_id == ray_id:
+		return ray_id if ray_id != -1 else best_id
+	var best_node = best.get("node")
+	# 点击落在单位轮廓上：单位优先，别让旁边建筑的碰撞盒抢走
+	if _client_node_is_army(best_node) and float(best.get("gap", INF)) <= SelectionManager.PICK_ARMY_MARGIN_PX:
+		if _client_point_inside_volume(ray_node, best_node.global_position):
+			return best_id
+		if not _client_node_farther_than(cam, best_node, ray.get("position", Vector3.ZERO)):
+			return best_id
+	return ray_id
+
+# 单纯的射线拾取，返回 {"id": int, "node": Node3D, "position": Vector3}
+func _raycast_client_pick(screen_pos: Vector2) -> Dictionary:
+	var cam = get_viewport().get_camera_3d()
+	if not cam: return {}
 	var from = cam.project_ray_origin(screen_pos)
 	var to = from + cam.project_ray_normal(screen_pos) * 2000
 	var space_state = get_viewport().get_world_3d().direct_space_state
@@ -702,8 +736,84 @@ func _get_entity_id_under_mouse(screen_pos: Vector2) -> int:
 	if result and result.collider.has_meta("entity_root"):
 		var root = result.collider.get_meta("entity_root")
 		var info = root.get_meta("snapshot_info", null)
-		if info: return info["id"]
-	return -1
+		if info:
+			return {"id": int(info["id"]), "node": root, "position": result.position}
+	return {}
+
+func _client_node_radius(node) -> float:
+	if node == null: return 0.5
+	return float(node.get_meta("_body_radius", 0.5))
+
+func _client_node_is_army(node) -> bool:
+	if node == null or not node.has_meta("snapshot_info"): return false
+	var info: Dictionary = node.get_meta("snapshot_info")
+	return int(info.get("type", -1)) == 0
+
+# 实体在屏幕上的竖直轮廓（底=脚底，顶=模型最高点，模型按 2*body_radius 缩放）
+func _client_silhouette(cam: Camera3D, node) -> Dictionary:
+	var height: float = maxf(0.6, _client_node_radius(node) * 2.0)
+	var feet: Vector3 = node.global_position
+	var top: Vector3 = feet + Vector3.UP * height
+	if cam.is_position_behind(feet) or cam.is_position_behind(top):
+		return {}
+	var a: Vector2 = cam.unproject_position(feet)
+	var b: Vector2 = cam.unproject_position(top)
+	return {"a": a, "b": b, "w": clampf(a.distance_to(b) * 0.3, 6.0, 60.0)}
+
+func _client_silhouette_gap(cam: Camera3D, node, screen_pos: Vector2) -> float:
+	var s := _client_silhouette(cam, node)
+	if s.is_empty(): return INF
+	var seg_d: float = SelectionManager._point_segment_distance(screen_pos, s["a"], s["b"])
+	return maxf(0.0, seg_d - float(s["w"]))
+
+# 屏幕空间最近的可选中实体，返回 {"node", "id", "gap"}
+func _pick_client_by_silhouette(cam: Camera3D, screen_pos: Vector2) -> Dictionary:
+	var best := {}
+	var best_score := INF
+	for node in renderer.entity_nodes.values():
+		if node == null or not is_instance_valid(node) or not node.has_meta("snapshot_info"):
+			continue
+		if not node.visible:
+			continue
+		var info: Dictionary = node.get_meta("snapshot_info")
+		if float(info.get("health", 1.0)) <= 0.0:
+			continue
+		var anchor: Vector3 = node.global_position + Vector3.UP * (_client_node_radius(node) * 1.2)
+		if cam.is_position_behind(anchor):
+			continue
+		if cam.unproject_position(anchor).distance_to(screen_pos) > SelectionManager.PICK_SCAN_RADIUS_PX:
+			continue
+		var gap: float = _client_silhouette_gap(cam, node, screen_pos)
+		var is_army: bool = _client_node_is_army(node)
+		var margin: float = SelectionManager.PICK_ARMY_MARGIN_PX if is_army else SelectionManager.PICK_BUILDING_MARGIN_PX
+		if gap > margin:
+			continue
+		var score: float = gap - (3.0 if is_army else 0.0)
+		if score < best_score:
+			best_score = score
+			best = {"node": node, "id": int(info["id"]), "gap": gap}
+	return best
+
+# 世界坐标是否落在客户端实体的拾取碰撞盒里
+func _client_point_inside_volume(node, world_pos: Vector3) -> bool:
+	if node == null or not is_instance_valid(node): return false
+	var body = node.get_node_or_null("ClickableBody")
+	if body == null: return false
+	for child in body.get_children():
+		if child is CollisionShape3D and child.shape != null:
+			var local: Vector3 = child.global_transform.affine_inverse() * world_pos
+			var shape = child.shape
+			if shape is BoxShape3D:
+				var half: Vector3 = shape.size * 0.5
+				return absf(local.x) <= half.x and absf(local.y) <= half.y and absf(local.z) <= half.z
+			if shape is SphereShape3D:
+				return local.length() <= shape.radius
+	return false
+
+# 实体是否比射线命中点更远（被前面的东西挡住）
+func _client_node_farther_than(cam: Camera3D, node, hit_pos: Vector3) -> bool:
+	if hit_pos == Vector3.ZERO: return false
+	return (cam.global_position - node.global_position).length() > (cam.global_position - hit_pos).length() + 0.5
 
 func _get_entity_info(id: int) -> Dictionary:
 	if not renderer: return {}
@@ -986,6 +1096,8 @@ func _process_selection_rings():
 			continue
 		var info: Dictionary = owner_node.get_meta("snapshot_info")
 		var vision: float = float(info.get("vision_range", 0.0))
+		if renderer != null and renderer.has_method("_effective_vision"):
+			vision = float(renderer._effective_vision(info))
 		for ring in range_rings[id]:
 			if not is_instance_valid(ring):
 				continue
@@ -1030,7 +1142,11 @@ func _create_range_rings_for_entity(id: int) -> void:
 		var kind: int = int(s.get("kind", 0))
 		var radius: float = float(s.get("radius", 0.0))
 		var tint: Color = s.get("tint", Color(0, 0, 0, 0))
-		var ring: GroundRangeRing = GroundRangeRing.create(kind, radius, height_fn, tint)
+		var outline: Callable = Callable()
+		if kind == GroundRangeRing.Kind.VISION and renderer.has_method("get_vision_outline_for"):
+			outline = func(c: Vector3, r: float) -> Array:
+				return renderer.get_vision_outline_for(node, info, c, r)
+		var ring: GroundRangeRing = GroundRangeRing.create(kind, radius, height_fn, tint, outline)
 		# 顶点 y 由 GroundRangeRing 自己换算成「相对节点」的局部高度，
 		# 直接挂在站在地面上的实体节点下即可，不需要再抵掉实体高度。
 		ring.set_meta("_ring_kind", kind)
@@ -1053,7 +1169,10 @@ func _get_range_ring_specs(info: Dictionary) -> Array:
 	if vision <= 0.0:
 		vision = float(cfg.get("vision_range", 0.0))
 	if vision > 0.5:
-		specs.append({"kind": GroundRangeRing.Kind.VISION, "radius": vision})
+		var eff_vision: float = vision
+		if renderer.has_method("_effective_vision"):
+			eff_vision = float(renderer._effective_vision(info))
+		specs.append({"kind": GroundRangeRing.Kind.VISION, "radius": eff_vision})
 	var attack_range: float = float(cfg.get("attack_range", 0.0))
 	if attack_range >= CLIENT_MIN_ACTION_RING:
 		specs.append({"kind": GroundRangeRing.Kind.ACTION, "radius": attack_range})

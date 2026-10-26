@@ -33,6 +33,8 @@ var body_radius: float = 0.5
 var mass: float = 0.0
 var can_move: bool = false
 var vision_range: float = 10.0
+# 模型顶部高度缓存：视野起点 = 脚底 + 这个高度。模型换装/升级后要重置。
+var _vision_head_height: float = -1.0
 
 var gather_amount: float = 0.0
 var regeneration_rate: float = 0.0
@@ -86,6 +88,29 @@ func _exit_tree() -> void:
 func _get_cam_pos() -> Vector3:
 	var cam = get_viewport().get_camera_3d()
 	return cam.global_position if cam else Vector3.ZERO
+
+# ==================== 视野 ====================
+# 实际模型顶部高度（单位/建筑统一）。模型还没挂上时按体型兜底，但不写缓存，
+# 等模型就绪后再算一次真实高度。
+func get_vision_head_height() -> float:
+	if _vision_head_height > 0.05:
+		return _vision_head_height
+	var h: float = VisionSystem.node_head_height(self)
+	if h > 0.05:
+		_vision_head_height = h
+		return h
+	return maxf(1.2, body_radius * 2.0)
+
+func reset_vision_head_height() -> void:
+	_vision_head_height = -1.0
+
+# 视野判定起点：脚底 + 头顶高度，不是脚底。
+func get_vision_origin() -> Vector3:
+	return global_position + Vector3.UP * get_vision_head_height()
+
+# 目标是否在头顶 1.5 米以内：先做便宜的高度过滤，再做地形/森林视线。
+func can_see_target_height(target_pos: Vector3) -> bool:
+	return target_pos.y <= get_vision_origin().y + VisionSystem.HEAD_CLEARANCE
 
 # 仅在玩家视野内播放音效
 func _play_sfx_if_visible(key: String, pitch: float = 1.0):

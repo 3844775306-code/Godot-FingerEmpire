@@ -77,6 +77,12 @@ var map_modifiers: Dictionary = {}   # 当前地图的规则修正（视野/高�
 var _fog_cover: Array = []
 var _fog_sources: Dictionary = {}    # instance_id -> {"x","y","r"}
 var _fog_host_team: int = -999
+# 每个视野源缓存的可见格集合：height/半径不变就不重算，队伍视野掩码只做并集。
+var _vision_cells_cache: Dictionary = {}
+# 每个队伍的可见格掩码（PackedByteArray，gx*MAP_SIZE+gy），AI/联机快照/建造预览共用。
+var _team_vis_cache: Dictionary = {}
+const TEAM_VIS_CACHE_MS: int = 350
+const VISION_CELLS_CACHE_MAX: int = 900
 
 # ==================== 游戏状态 ====================
 var _pending_left_click: bool = false
@@ -662,7 +668,7 @@ func is_hostile_to(my_team: int, my_owner: int, entity) -> bool:
 
 # 获取范围内敌军实体（仅搜索敌对实体）— 空间索引加速。
 # 直接在桶内过滤，避免先把整片候选复制到临时数组再二次循环。
-func get_nearby_enemies(from_pos: Vector3, search_range: float, my_team: int, my_owner: int = -1) -> Array:
+func get_nearby_enemies(from_pos: Vector3, search_range: float, my_team: int, my_owner: int = -1, only_visible: bool = false) -> Array:
 	_ensure_cache_fresh()
 	var result: Array = []
 	var csize = _SPATIAL_CELL_SIZE
@@ -683,8 +689,12 @@ func get_nearby_enemies(from_pos: Vector3, search_range: float, my_team: int, my
 					continue
 				var dist = from_pos.distance_squared_to(entity.global_position)
 				var max_dist = search_range + entity.body_radius + 1.0
-				if dist <= max_dist * max_dist:
-					result.append(entity)
+				if dist > max_dist * max_dist:
+					continue
+				# 索敌/开火判断用“真实可见”，子弹溅射等纯几何查询保持默认 false。
+				if only_visible and not is_position_visible_to_team(my_team, entity.global_position):
+					continue
+				result.append(entity)
 	return result
 
 # 获取最近资源 — 空间索引加速
@@ -2069,6 +2079,8 @@ func _apply_entity_model(entity: GameEntity) -> bool:
 	model_instance.set_meta("entity_model", true)
 	entity.add_child(model_instance)
 	_ensure_model_shadows(model_instance)
+	# 模型换了，头顶高度缓存要重算，否则视野起点还停在旧模型高度
+	entity.reset_vision_head_height()
 	# 特殊朝向调整
 	if entity.entity_id == 16: model_instance.rotation.y = deg_to_rad(180)
 	elif entity.entity_id == 17: model_instance.rotation.y = deg_to_rad(90)
@@ -2960,6 +2972,15 @@ func _command_selected_units(screen_pos: Vector2):
 			target = res.collider.get_meta("entity_root")
 	var pos = res.position if res else _ray_plane_intersection(from,to,Vector3.ZERO,Vector3.UP)
 
+	# 点单位下达攻击/采集时也会先打到旁边建筑的碰撞盒：用选择器的轮廓拾取纠正。
+	# 只纠正敌方/中立单位，避免把「点单位旁边空地移动」误判成攻击自家单位。
+	if selection and selection.has_method("_get_entity_under_mouse"):
+		var picked = selection._get_entity_under_mouse(screen_pos)
+		if picked is Army and picked != target and selection.has_method("_is_inspect_only") \
+				and selection._is_inspect_only(picked):
+			target = picked
+			pos = picked.global_position
+
 	# Formation spread for multi-unit move commands (no target clicked)
 	var formation_offsets = []
 	if not target:
@@ -3030,14 +3051,6 @@ func _set_rally_point_by_click(screen_pos: Vector2):
 	var res = get_world_3d().direct_space_state.intersect_ray(PhysicsRayQueryParameters3D.create(from,to))
 	if res:
 		execute_rally(res.position)
-
-func is_position_in_player_vision(world_pos: Vector3) -> bool:
-	if not entities: return false
-	for e in entities.get_children():
-		if e is GameEntity and e.team == get_host_team() and e.health>0:
-			if e.global_position.distance_to(world_pos) <= e.vision_range:
-				return true
-	return false
 
 # ==================== 建造系统 ====================
 func _process_build_mode(event):
@@ -3375,6 +3388,8 @@ func _init_fog_grid():
 	visible_grid.clear()
 	_fog_cover.clear()
 	_fog_sources.clear()
+	_vision_cells_cache.clear()
+	_team_vis_cache.clear()
 	for x in range(RTSConfig.MAP_SIZE):
 		var col_exp = []
 		var col_vis = []
@@ -3412,40 +3427,109 @@ func _fog_apply_circle(gx: int, gy: int, r: int, delta: int) -> void:
 				vis_row[ny] = false
 
 func _update_fog_visibility():
-	if visible_grid.is_empty() or _fog_cover.is_empty():
+	if visible_grid.is_empty() or explored_grid.is_empty():
 		_init_fog_grid()
 	var host_team := get_host_team()
 	if host_team != _fog_host_team:
-		# 换阵营/重开一局时清空一次，之后只做增量覆盖
+		# 换阵营/重开一局时清空一次，之后每轮直接按队伍可见掩码覆盖。
 		_init_fog_grid()
 		_fog_host_team = host_team
-	var current: Dictionary = {}
-	for e in get_tree().get_nodes_in_group("vision_providers"):
-		if not is_instance_valid(e) or e.health <= 0 or e.team != host_team:
+	var mask: PackedByteArray = get_team_visible_mask(host_team)
+	var ms: int = RTSConfig.MAP_SIZE
+	for x in range(ms):
+		var vis_row: Array = visible_grid[x]
+		var exp_row: Array = explored_grid[x]
+		for y in range(ms):
+			var on: bool = mask[x * ms + y] == 1
+			vis_row[y] = on
+			if on:
+				exp_row[y] = true
+
+# 某个视野源当前能看见的格子（带缓存；只在移动/高度/半径变化时重算）。
+func _get_source_vision_cells(e, r: int) -> PackedInt32Array:
+	if e == null or not is_instance_valid(e) or r <= 0:
+		return PackedInt32Array()
+	if not e.has_method("get_vision_origin"):
+		return PackedInt32Array()
+	var map_node = $Map
+	if map_node == null or not is_instance_valid(map_node):
+		return PackedInt32Array()
+	var g: Vector2i = world_to_grid(e.global_position)
+	var origin: Vector3 = e.get_vision_origin()
+	var id: int = e.get_instance_id()
+	var cached = _vision_cells_cache.get(id)
+	if cached != null:
+		if int(cached.get("gx", -999)) == g.x and int(cached.get("gy", -999)) == g.y \
+			and int(cached.get("r", -1)) == r \
+			and absf(float(cached.get("head", -999.0)) - origin.y) < 0.08:
+			return cached.get("cells", PackedInt32Array())
+	var cells: PackedInt32Array = VisionSystem.compute_visible_cells(map_node, origin, float(r))
+	_vision_cells_cache[id] = {"gx": g.x, "gy": g.y, "head": origin.y, "r": r, "cells": cells}
+	# 死亡/移除的单位不少，缓存偶尔清一次，避免 instance_id 长期堆积
+	if _vision_cells_cache.size() > VISION_CELLS_CACHE_MAX:
+		for key in _vision_cells_cache.keys():
+			var ent = instance_from_id(int(key))
+			if ent == null or not is_instance_valid(ent) or ent.health <= 0:
+				_vision_cells_cache.erase(key)
+	return cells
+
+# 队伍可见掩码：AI 索敌、联机快照裁剪、建造预览、主机迷雾全部共用。
+func get_team_visible_mask(team: int) -> PackedByteArray:
+	var ms: int = RTSConfig.MAP_SIZE
+	var now: int = Time.get_ticks_msec()
+	var cached = _team_vis_cache.get(team)
+	if cached != null and now - int(cached.get("time", 0)) < TEAM_VIS_CACHE_MS:
+		return cached.get("mask", PackedByteArray())
+	var tree := get_tree()
+	if tree == null:
+		return PackedByteArray()
+	var mask: PackedByteArray = PackedByteArray()
+	mask.resize(ms * ms)
+	mask.fill(0)
+	for e in tree.get_nodes_in_group("vision_providers"):
+		if not is_instance_valid(e) or e.health <= 0 or int(e.team) != team:
 			continue
-		var g = world_to_grid(e.global_position)
-		current[e.get_instance_id()] = {
-			"x": g.x,
-			"y": g.y,
-			"r": get_effective_vision(e),
-		}
-	# 移除已经死亡/离开视野组的单位，先扣掉它原来的覆盖
-	for id in _fog_sources.keys():
-		if current.has(id):
+		var r: int = get_effective_vision(e)
+		if r <= 0:
 			continue
-		var old: Dictionary = _fog_sources[id]
-		_fog_apply_circle(int(old["x"]), int(old["y"]), int(old["r"]), -1)
-		_fog_sources.erase(id)
-	# 只更新移动过或视野范围变化的单位；静止单位不再每 0.5s 重画视野圆
-	for id in current.keys():
-		var val: Dictionary = current[id]
-		if _fog_sources.has(id):
-			var old2: Dictionary = _fog_sources[id]
-			if int(old2["x"]) == int(val["x"]) and int(old2["y"]) == int(val["y"]) and int(old2["r"]) == int(val["r"]):
-				continue
-			_fog_apply_circle(int(old2["x"]), int(old2["y"]), int(old2["r"]), -1)
-		_fog_apply_circle(int(val["x"]), int(val["y"]), int(val["r"]), 1)
-		_fog_sources[id] = val
+		var cells: PackedInt32Array = _get_source_vision_cells(e, r)
+		for idx in cells:
+			if idx >= 0 and idx < mask.size():
+				mask[idx] = 1
+	_team_vis_cache[team] = {"time": now, "mask": mask}
+	return mask
+
+func is_position_visible_to_team(team: int, world_pos: Vector3) -> bool:
+	if team < 0:
+		return false
+	var g: Vector2i = world_to_grid(world_pos)
+	var mask: PackedByteArray = get_team_visible_mask(team)
+	var idx: int = g.x * RTSConfig.MAP_SIZE + g.y
+	return idx >= 0 and idx < mask.size() and mask[idx] == 1
+
+# 单个单位到目标的真实视线：自动索敌用这个，避免“队友在山上看见”就让
+# 山脚单位隔山开火。除了地形/森林，也会按该单位自己的有效视野半径收口。
+func is_target_visible_from(viewer, target) -> bool:
+	if viewer == null or not is_instance_valid(viewer) or target == null or not is_instance_valid(target):
+		return false
+	if not viewer.has_method("get_vision_origin"):
+		return true
+	if viewer.get("vision_range") != null:
+		var eff: int = get_effective_vision(viewer)
+		if eff > 0:
+			var flat_d: float = Vector2(
+				target.global_position.x - viewer.global_position.x,
+				target.global_position.z - viewer.global_position.z
+			).length()
+			if flat_d > float(eff) + float(target.get("body_radius") if target.get("body_radius") != null else 0.5):
+				return false
+	if not $Map:
+		return true
+	return VisionSystem.has_line_of_sight($Map, viewer.get_vision_origin(), target.global_position)
+
+# 兼容旧接口：判断某个位置是否在玩家（主机队伍）当前视野内。
+func is_position_in_player_vision(world_pos: Vector3) -> bool:
+	return is_position_visible_to_team(get_host_team(), world_pos)
 
 func _apply_fog():
 	if $Map and $Map.has_method("apply_fog"):
@@ -4280,18 +4364,11 @@ func get_overlay_at_grid(gx: int, gy: int) -> int:
 func get_effective_vision(e) -> int:
 	if not e:
 		return 0
-	var r := float(e.vision_range)
-	if r <= 0.0:
-		return 0
-	r *= float(map_modifiers.get("vision", 1.0))
-	var g := world_to_grid(e.global_position)
-	var ov := get_overlay_at_grid(g.x, g.y)
-	if ov == 1:
-		r *= 0.55
-	var hg := float(map_modifiers.get("high_ground_vision", 0.0))
-	if hg > 0.0 and get_height_at_grid(g.x, g.y) >= float(map_modifiers.get("high_ground_min", 1.0)):
-		r *= 1.0 + hg
-	return maxi(1, int(round(r)))
+	if not $Map:
+		return maxi(0, int(round(float(e.vision_range) * float(map_modifiers.get("vision", 1.0)))))
+	return VisionSystem.effective_radius(
+		$Map, e.global_position, float(e.vision_range), map_modifiers
+	)
 # 将网格坐标 (gx, gy) 转换为世界坐标 (以地图中心为原点)
 func grid_to_world(gx: int, gy: int) -> Vector3:
 	return Vector3(gx - RTSConfig.MAP_SIZE / 2.0, 0, gy - RTSConfig.MAP_SIZE / 2.0)

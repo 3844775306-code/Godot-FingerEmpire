@@ -1630,14 +1630,24 @@ func _process_fog_batch() -> bool:
 		var gx = int(info["x"] + RTSConfig.MAP_SIZE / 2)
 		var gz = int(info["z"] + RTSConfig.MAP_SIZE / 2)
 		var vision = _effective_vision(info)
-		for dx in range(-vision, vision + 1):
-			for dz in range(-vision, vision + 1):
-				if dx*dx + dz*dz > vision*vision: continue
-				var nx = gx + dx
-				var nz = gz + dz
-				if nx >= 0 and nx < RTSConfig.MAP_SIZE and nz >= 0 and nz < RTSConfig.MAP_SIZE:
-					local_visible_grid[nx][nz] = true
-					local_explored_grid[nx][nz] = true
+		var map = get_node_or_null("Map")
+		if map != null and map.has_method("get_height_at_grid"):
+			var cells: PackedInt32Array = VisionSystem.compute_visible_cells(map, get_vision_origin_for(node, info), float(vision))
+			for idx in cells:
+				var nx: int = int(idx / RTSConfig.MAP_SIZE)
+				var nz: int = idx % RTSConfig.MAP_SIZE
+				local_visible_grid[nx][nz] = true
+				local_explored_grid[nx][nz] = true
+		else:
+			# 地形还没加载时退回圆形，等下一轮迷雾再按视线重算。
+			for dx in range(-vision, vision + 1):
+				for dz in range(-vision, vision + 1):
+					if dx*dx + dz*dz > vision*vision: continue
+					var nx = gx + dx
+					var nz = gz + dz
+					if nx >= 0 and nx < RTSConfig.MAP_SIZE and nz >= 0 and nz < RTSConfig.MAP_SIZE:
+						local_visible_grid[nx][nz] = true
+						local_explored_grid[nx][nz] = true
 		processed += 1
 
 	if fog_units_queue.size() == 0:
@@ -2324,6 +2334,12 @@ func _collect_entity_snapshots() -> Array:
 const MAX_DELTA_PER_FRAME = 15
 # ==================== 地形与视野工具 ====================
 func is_in_player_vision(world_pos: Vector3) -> bool:
+	var ms: int = RTSConfig.MAP_SIZE
+	if local_visible_grid.size() == ms and local_visible_grid[0].size() == ms:
+		var gx: int = clampi(roundi(world_pos.x + ms * 0.5), 0, ms - 1)
+		var gz: int = clampi(roundi(world_pos.z + ms * 0.5), 0, ms - 1)
+		return bool(local_visible_grid[gx][gz])
+	# 迷雾还没算完时退回旧的圆判定，至少不会把全部音效和建造预览都判成不可见。
 	for node in entity_nodes.values():
 		var info = node.get_meta("snapshot_info", null)
 		if info and info["team"] == player_team and info["health"] > 0:
@@ -2336,17 +2352,22 @@ func _effective_vision(info: Dictionary) -> int:
 	var v := float(info.get("vision_range", 12))
 	if v <= 0.0:
 		return 0
-	v *= float(map_modifiers.get("vision", 1.0))
 	var map = get_node_or_null("Map")
-	if map and map.has_method("get_overlay"):
-		var gx := int(float(info.get("x", 0.0)) + RTSConfig.MAP_SIZE / 2.0)
-		var gz := int(float(info.get("z", 0.0)) + RTSConfig.MAP_SIZE / 2.0)
-		if map.get_overlay(gx, gz) == 1:
-			v *= 0.55
-		var hg := float(map_modifiers.get("high_ground_vision", 0.0))
-		if hg > 0.0 and map.has_method("get_height_at_grid") and map.get_height_at_grid(gx, gz) >= float(map_modifiers.get("high_ground_min", 1.0)):
-			v *= 1.0 + hg
-	return maxi(1, int(round(v)))
+	if map == null:
+		return maxi(0, int(round(v * float(map_modifiers.get("vision", 1.0)))))
+	return VisionSystem.effective_radius(map, Vector3(float(info.get("x", 0.0)), 0.0, float(info.get("z", 0.0))), v, map_modifiers)
+
+# 客户端实体的视野起点（模型顶部），与服务器 GameEntity.get_vision_origin 同口径。
+func get_vision_origin_for(node: Node3D, info: Dictionary = {}) -> Vector3:
+	return VisionSystem.node_vision_origin(node, info)
+
+# 联机选中圈使用：从实体头顶向四周采样，返回世界坐标的可见边界。
+func get_vision_outline_for(node: Node3D, info: Dictionary, _center: Vector3, radius: float) -> Array:
+	var map = get_node_or_null("Map")
+	if map == null:
+		return GroundStripMesh.circle_points(_center, radius)
+	var live_radius: float = maxf(0.4, float(_effective_vision(info)))
+	return VisionSystem.compute_visibility_outline(map, get_vision_origin_for(node, info), live_radius, 80)
 
 func get_terrain_at(pos: Vector3) -> int:
 	var map = get_node_or_null("Map")

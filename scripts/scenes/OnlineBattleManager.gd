@@ -1568,20 +1568,11 @@ func build_snapshot_for_team(team: int) -> Dictionary:
 	var snapshot_key = "team_%d" % team
 	var is_full = _is_full_snapshot(snapshot_key)
 
-	# Build visibility grid using cached team entities (skips neutral/resource entities)
-	_snap_vis_version = (_snap_vis_version + 1) & 0xFF
-	if _snap_vis_version == 0: _snap_vis_version = 1
-	var ver = _snap_vis_version
+	# 视野裁剪与客户端迷雾/AI 共用同一套高度+地形+森林视线判定
+	var vis_mask: PackedByteArray = get_team_visible_mask(team)
 	var _ms = RTSConfig.MAP_SIZE
-	var team_units = _entities_by_team.get(team, [])
-	for entity in team_units:
-		if is_instance_valid(entity) and entity.health > 0 and entity.vision_range > 0:
-			var g = world_to_grid(entity.global_position)
-			var r = entity.vision_range
-			var offsets = _get_vis_offsets(int(r)); for off in offsets:
-					var nx = g.x + int(off.x); var ny = g.y + int(off.y)
-					if nx >= 0 and nx < _ms and ny >= 0 and ny < _ms:
-						_snap_vis_grid[nx * _ms + ny] = ver
+	if vis_mask.size() < _ms * _ms:
+		vis_mask.resize(_ms * _ms)
 
 	var current_entities = {}
 	var delta = []
@@ -1615,7 +1606,7 @@ func build_snapshot_for_team(team: int) -> Dictionary:
 		var id = entity.get_instance_id()
 		current_entities[id] = true
 		var g = world_to_grid(entity.global_position)
-		if _snap_vis_grid[g.x * _ms + g.y] == ver:
+		if vis_mask[g.x * _ms + g.y] == 1:
 			# 视野内也只发变化：静止单位靠每 25 次(~1s)强制重发兜底
 			var h_foe := _compute_entity_hash(entity)
 			var force_foe := _track_transition_state(entity) or _path_changed(entity, snapshot_key)
@@ -1637,7 +1628,7 @@ func build_snapshot_for_team(team: int) -> Dictionary:
 		var id = entity.get_instance_id()
 		var g = world_to_grid(entity.global_position)
 		var idx = g.x * _ms + g.y
-		var in_vision: bool = _snap_vis_grid[idx] == ver 			or (g.x > 0 and _snap_vis_grid[idx - _ms] == ver) 			or (g.x < _ms - 1 and _snap_vis_grid[idx + _ms] == ver) 			or (g.y > 0 and _snap_vis_grid[idx - 1] == ver) 			or (g.y < _ms - 1 and _snap_vis_grid[idx + 1] == ver)
+		var in_vision: bool = vis_mask[idx] == 1 			or (g.x > 0 and vis_mask[idx - _ms] == 1) 			or (g.x < _ms - 1 and vis_mask[idx + _ms] == 1) 			or (g.y > 0 and vis_mask[idx - 1] == 1) 			or (g.y < _ms - 1 and vis_mask[idx + 1] == 1)
 		if in_vision:
 			current_entities[id] = true
 			var h_vis := _compute_entity_hash(entity)
@@ -1964,21 +1955,11 @@ func build_snapshot_for_player(peer_id: int) -> Dictionary:
 	var is_full = _is_full_snapshot(snapshot_key)
 	var _t0 = Time.get_ticks_usec()
 
-	# Build visibility grid using cached team entities
-	_snap_vis_version = (_snap_vis_version + 1) & 0xFF
-	if _snap_vis_version == 0: _snap_vis_version = 1
-	var ver = _snap_vis_version
+	# 视野裁剪与客户端迷雾/AI 共用同一套高度+地形+森林视线判定
+	var vis_mask: PackedByteArray = get_team_visible_mask(team)
 	var _ms = RTSConfig.MAP_SIZE
-	var team_units = _entities_by_team.get(team, [])
-	for entity in team_units:
-		if not entity: continue
-		if is_instance_valid(entity) and entity.health > 0 and entity.vision_range > 0:
-			var g = world_to_grid(entity.global_position)
-			var r = entity.vision_range
-			var offsets = _get_vis_offsets(int(r)); for off in offsets:
-					var nx = g.x + int(off.x); var ny = g.y + int(off.y)
-					if nx >= 0 and nx < _ms and ny >= 0 and ny < _ms:
-						_snap_vis_grid[nx * _ms + ny] = ver
+	if vis_mask.size() < _ms * _ms:
+		vis_mask.resize(_ms * _ms)
 	var _t_vis = (Time.get_ticks_usec() - _t0) / 1000.0
 
 	var delta = []
@@ -2015,7 +1996,7 @@ func build_snapshot_for_player(peer_id: int) -> Dictionary:
 		var id = entity.get_instance_id()
 		current_all_ids[id] = true
 		var g = world_to_grid(entity.global_position)
-		if _snap_vis_grid[g.x * _ms + g.y] == ver:
+		if vis_mask[g.x * _ms + g.y] == 1:
 			delta.append(_serialize_entity_compact(entity, snapshot_key))
 	var _t_enemy = (Time.get_ticks_usec() - _t0) / 1000.0
 
@@ -2031,7 +2012,7 @@ func build_snapshot_for_player(peer_id: int) -> Dictionary:
 		current_all_ids[id] = true
 		var g = world_to_grid(entity.global_position)
 		var idx = g.x * _ms + g.y
-		if _snap_vis_grid[idx] == ver 			or (g.x > 0 and _snap_vis_grid[idx - _ms] == ver) 			or (g.x < _ms - 1 and _snap_vis_grid[idx + _ms] == ver) 			or (g.y > 0 and _snap_vis_grid[idx - 1] == ver) 			or (g.y < _ms - 1 and _snap_vis_grid[idx + 1] == ver):
+		if vis_mask[idx] == 1 			or (g.x > 0 and vis_mask[idx - _ms] == 1) 			or (g.x < _ms - 1 and vis_mask[idx + _ms] == 1) 			or (g.y > 0 and vis_mask[idx - 1] == 1) 			or (g.y < _ms - 1 and vis_mask[idx + 1] == 1):
 			delta.append(_serialize_entity_compact(entity, snapshot_key))
 		elif entity is WorldResource:
 			if not team_explored_resources.has(team):

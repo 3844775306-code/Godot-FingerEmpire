@@ -341,6 +341,8 @@ func count_military_by_team(tm: int) -> int:
 	return total
 # Check if any AI unit can see this entity
 func _is_visible_to_ai(target: GameEntity) -> bool:
+	if battle != null and battle.has_method("is_position_visible_to_team"):
+		return battle.is_position_visible_to_team(my_team, target.global_position)
 	for e in battle.entities.get_children():
 		if e is GameEntity and e.health > 0:
 			if my_peer_id != -1 and e.owner_peer_id != my_peer_id: continue
@@ -392,7 +394,7 @@ func _refresh_visibility():
 	if battle.has_method("get_nearby_enemies"):
 		var seen: Dictionary = {}
 		for s in sources:
-			for e in battle.get_nearby_enemies(s[0], float(s[1]), my_team, my_peer_id):
+			for e in battle.get_nearby_enemies(s[0], float(s[1]), my_team, my_peer_id, true):
 				if not (e is GameEntity) or e.health <= 0: continue
 				if entity_belongs_to_me(e): continue
 				if e is WorldResource: continue
@@ -1617,7 +1619,7 @@ func find_best_resource_for_worker(worker: Army, priority_score: Dictionary) -> 
 					threat_penalty = 0.0
 					var nearby: Array = []
 					if battle.has_method("get_nearby_enemies"):
-						nearby = battle.get_nearby_enemies(entity.global_position, WORKER_THREAT_RADIUS, worker.team, worker.owner_peer_id)
+						nearby = battle.get_nearby_enemies(entity.global_position, WORKER_THREAT_RADIUS, worker.team, worker.owner_peer_id, true)
 					else:
 						nearby = battle.entities.get_children()
 					for e in nearby:

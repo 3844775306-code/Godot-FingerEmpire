@@ -160,9 +160,10 @@ func _find_enemy_in_range():
 	var best = null
 	var best_dist = attack_range + 1
 	var bm = _get_bm()
-	var candidates = bm.get_nearby_enemies(global_position, attack_range, team, owner_peer_id) if bm else get_tree().get_nodes_in_group("entities")
+	var candidates = bm.get_nearby_enemies(global_position, attack_range, team, owner_peer_id, true) if bm else get_tree().get_nodes_in_group("entities")
 	for entity in candidates:
 		if not (entity is Army) or entity.health <= 0: continue
+		if bm != null and bm.has_method("is_target_visible_from") and not bm.is_target_visible_from(self, entity): continue
 		# 无外交管理器（非乱斗）→ 退化为纯队伍过滤；乱斗已由 get_nearby_enemies 按 owner 过滤
 		if not bm:
 			if entity.team == team: continue
@@ -719,10 +720,31 @@ func get_range_ring_specs() -> Array:
 	if health <= 0:
 		return specs
 	if vision_range >= RANGE_RING_MIN_ATTACK:
-		specs.append({"kind": GroundRangeRing.Kind.VISION, "radius": float(vision_range)})
+		var eff_vision: float = vision_range
+		var bm = _get_bm()
+		if bm != null and bm.has_method("get_effective_vision"):
+			eff_vision = float(bm.get_effective_vision(self))
+		if eff_vision >= RANGE_RING_MIN_ATTACK:
+			specs.append({
+				"kind": GroundRangeRing.Kind.VISION,
+				"radius": eff_vision,
+				"outline": Callable(self, "_vision_outline"),
+			})
 	if attack_range >= RANGE_RING_MIN_ATTACK:
 		specs.append({"kind": GroundRangeRing.Kind.ACTION, "radius": attack_range})
 	return specs
+
+# 视野轮廓回调：建筑也从模型顶部（烟囱/屋顶）向下看，山脊和森林挡住的
+# 方向会按真实视线缩回来。
+func _vision_outline(center: Vector3, radius: float) -> Array:
+	var bm = _get_bm()
+	var map = VisionSystem.resolve_map(bm) if bm != null else null
+	if map == null:
+		return GroundStripMesh.circle_points(center, radius)
+	var live_radius: float = radius
+	if bm != null and bm.has_method("get_effective_vision"):
+		live_radius = float(bm.get_effective_vision(self))
+	return VisionSystem.compute_visibility_outline(map, get_vision_origin(), live_radius, 80)
 
 func _range_ring_layout_changed(specs: Array) -> bool:
 	if _range_rings.size() != specs.size():
@@ -742,7 +764,8 @@ func _rebuild_range_rings(specs: Array) -> void:
 	if not _range_ring_height_fn.is_valid():
 		_range_ring_height_fn = GroundStripMesh.height_fn_for(_get_bm())
 	for spec in specs:
-		var ring = GroundRangeRing.create(int(spec["kind"]), float(spec["radius"]), _range_ring_height_fn)
+		var outline: Callable = spec.get("outline", Callable())
+		var ring = GroundRangeRing.create(int(spec["kind"]), float(spec["radius"]), _range_ring_height_fn, Color(0, 0, 0, 0), outline)
 		ring.visible = false
 		add_child(ring)
 		_range_rings.append(ring)
@@ -825,7 +848,7 @@ func _has_enemy_near_repair() -> bool:
 	if bm == null or not bm.has_method("get_nearby_enemies"):
 		return false
 	var radius := REPAIR_BLOCK_RADIUS + body_radius
-	var found = bm.get_nearby_enemies(global_position, radius, team, owner_peer_id)
+	var found = bm.get_nearby_enemies(global_position, radius, team, owner_peer_id, true)
 	if found == null:
 		return false
 	for e in found:

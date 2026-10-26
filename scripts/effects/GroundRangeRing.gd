@@ -38,6 +38,7 @@ var radius: float = 0.0
 
 var _tint: Color = Color.WHITE
 var _height_fn: Callable
+var _outline_fn: Callable
 var _last_center: Vector3 = Vector3(INF, INF, INF)
 var _rebuild_timer: float = 0.0
 var _pulse_t: float = 0.0
@@ -46,15 +47,16 @@ var _mat: ShaderMaterial
 var _last_cam_dist: float = 0.0
 
 # kind 决定线宽与配色的默认组合；tint 不传（alpha=0）时按 kind 取默认色
-static func create(p_kind: int, p_radius: float, p_height_fn: Callable, p_tint: Color = Color(0, 0, 0, 0)) -> GroundRangeRing:
+static func create(p_kind: int, p_radius: float, p_height_fn: Callable, p_tint: Color = Color(0, 0, 0, 0), p_outline_fn: Callable = Callable()) -> GroundRangeRing:
 	var ring := GroundRangeRing.new()
 	ring.name = "GroundRangeRing"
-	ring._init_ring(p_kind, p_radius, p_height_fn, p_tint)
+	ring._init_ring(p_kind, p_radius, p_height_fn, p_tint, p_outline_fn)
 	return ring
 
-func _init_ring(p_kind: int, p_radius: float, p_height_fn: Callable, p_tint: Color) -> void:
+func _init_ring(p_kind: int, p_radius: float, p_height_fn: Callable, p_tint: Color, p_outline_fn: Callable = Callable()) -> void:
 	kind = p_kind
 	radius = maxf(p_radius, 0.4)
+	_outline_fn = p_outline_fn
 	# 某些调用方（例如快速重载脚本、或还没拿到地形管理器的客户端）可能传入
 	# 空的 Callable；这里先退回「保持原 y」的采样器，避免 _rebuild 里空调用崩溃。
 	_height_fn = p_height_fn if p_height_fn.is_valid() else _flat_height_fn()
@@ -178,11 +180,16 @@ func _rebuild(force: bool) -> void:
 	var center: Vector3 = global_position
 	# 网格建在本地空间：本地原点就是节点原点，所以要把世界坐标减回去。
 	# top_level 之后自身不继承父节点的旋转/缩放，本地轴就是世界轴。
-	var centerline: Array = GroundStripMesh.circle_points(Vector3.ZERO, radius)
-	var local_center := Vector3(0.0, 0.0, 0.0)
 	var pts: Array = []
-	for p in centerline:
-		pts.append(p + local_center)
+	if _outline_fn.is_valid():
+		var world_pts = _outline_fn.call(center, radius)
+		if world_pts is Array and (world_pts as Array).size() >= 8:
+			for p in world_pts:
+				var wp: Vector3 = p
+				pts.append(Vector3(wp.x - center.x, 0.0, wp.z - center.z))
+	if pts.size() < 8:
+		# 视野边界算不出来（地形未就绪/射线全被挡）时退回圆，避免直接没有圈。
+		pts = GroundStripMesh.circle_points(Vector3.ZERO, radius)
 	# 线宽取「固定米数」和「至少 N 个像素」的较大者：近看重观感，远看保证能看见
 	var base_w: float = VISION_WIDTH if kind == Kind.VISION else ACTION_WIDTH
 	var min_px: float = VISION_MIN_PIXELS if kind == Kind.VISION else ACTION_MIN_PIXELS
