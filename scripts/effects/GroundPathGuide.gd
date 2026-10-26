@@ -13,14 +13,19 @@ extends Node3D
 #
 # 一个单位最多一条指引带；框选大部队时只给第一个选中单位画（和原来一致）。
 
-const DASH_COLOR: Color = Color(0.60, 0.96, 0.88, 0.42)   # 青白，和草地/土地都能叠
-const DASH_WIDTH: float = 0.30                             # 虚线带宽（米）
+const DASH_COLOR: Color = Color(0.60, 0.96, 0.88, 0.55)   # 青白，和草地/土地都能叠
+const DASH_WIDTH: float = 0.32                             # 虚线带宽（米）
+const DASH_MIN_PIXELS: float = 3.2                         # 屏幕上至少占几个像素
 const DASH_PER_METER: float = 0.85                         # 每米几个虚线周期（约 1.2 米一段）
 const FLOW_SPEED: float = 0.55                             # 虚线滚动速度（周期/秒）
-const END_COLOR: Color = Color(0.98, 0.86, 0.52, 0.50)     # 落点暖黄
+const END_COLOR: Color = Color(0.98, 0.86, 0.52, 0.62)     # 落点暖黄
 const END_RADIUS: float = 0.85
-const END_WIDTH: float = 0.20
+const END_WIDTH: float = 0.22
+const END_MIN_PIXELS: float = 2.6
 const END_PULSE_SPEED: float = 2.1
+# 相机距离变化超过这个比例就重算线宽
+const CAMERA_DIST_REL: float = 0.12
+const CAMERA_REBUILD_INTERVAL: float = 0.15
 
 var points: Array = []
 var _height_fn: Callable
@@ -30,6 +35,8 @@ var _end_node: MeshInstance3D
 var _flow: float = 0.0
 var _pulse_t: float = 0.0
 var _pending_build: bool = false
+var _last_cam_dist: float = 0.0
+var _cam_timer: float = 0.0
 
 static func create(p_points: Array, p_height_fn: Callable, tint: Color = Color(0, 0, 0, 0)) -> GroundPathGuide:
 	var guide := GroundPathGuide.new()
@@ -39,7 +46,7 @@ static func create(p_points: Array, p_height_fn: Callable, tint: Color = Color(0
 
 func _init_guide(p_points: Array, p_height_fn: Callable, tint: Color) -> void:
 	_height_fn = p_height_fn
-	_dash_mat = GroundStripMesh.make_material(tint if tint.a > 0.001 else DASH_COLOR, 0.46, DASH_PER_METER, 0.25, 1.0)
+	_dash_mat = GroundStripMesh.make_material(tint if tint.a > 0.001 else DASH_COLOR, 0.34, DASH_PER_METER, 0.22, 1.0)
 	var ribbon := MeshInstance3D.new()
 	ribbon.name = "GuideRibbon"
 	ribbon.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -50,7 +57,7 @@ func _init_guide(p_points: Array, p_height_fn: Callable, tint: Color) -> void:
 	_end_node.name = "GuideEnd"
 	_end_node.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_end_node.gi_mode = GeometryInstance3D.GI_MODE_DISABLED
-	_end_mat = GroundStripMesh.make_material(END_COLOR, 0.40, 0.0, 0.18, 0.0)
+	_end_mat = GroundStripMesh.make_material(END_COLOR, 0.30, 0.0, 0.16, 0.0)
 	_end_node.material_override = _end_mat
 	add_child(_end_node)
 	points = _sanitize(p_points)
@@ -102,6 +109,7 @@ func _rebuild() -> void:
 		if _end_node != null:
 			_end_node.mesh = null
 		return
+	_last_cam_dist = _camera_distance()
 	# 中心线在本地空间：节点自身放在世界原点（挂在 entities_container 下）
 	var origin: Vector3 = global_position
 	var local: Array = []
@@ -109,9 +117,18 @@ func _rebuild() -> void:
 		local.append(Vector3(p.x - origin.x, 0.0, p.z - origin.z))
 	# 路径点可能被抽样得很稀，先加密到 1.1 米一段，贴地带才不会斜插进地形
 	local = GroundStripMesh.densify(local, 1.1)
+	# 若指引带挂在会旋转的父节点下，本地偏移也要先按基向量转到世界方向，
+	# 否则顶点采到的高度和它实际所在的位置错开，陆地上会埋进地里。
+	var basis: Basis = global_transform.basis
+	var denom: float = basis.y.y
+	if absf(denom) < 0.0001:
+		denom = 1.0
 	var to_local_y := func(lp: Vector3) -> float:
-		return float(_height_fn.call(origin + Vector3(lp.x, 0.0, lp.z))) - origin.y
-	ribbon.mesh = GroundStripMesh.build_strip(local, DASH_WIDTH * 0.5, to_local_y, false)
+		var off: Vector3 = basis * Vector3(lp.x, 0.0, lp.z)
+		return (float(_height_fn.call(origin + Vector3(off.x, 0.0, off.z))) - origin.y) / denom
+	# 线宽取「固定米数」和「至少 N 个像素」的较大者：远景下细虚线会彻底消失
+	var dash_w: float = maxf(DASH_WIDTH, _min_world_width(DASH_MIN_PIXELS))
+	ribbon.mesh = GroundStripMesh.build_strip(local, dash_w * 0.5, to_local_y, false)
 	# 落点环
 	var last_world: Vector3 = points[points.size() - 1]
 	var circle: Array = GroundStripMesh.circle_points(Vector3.ZERO, END_RADIUS)
@@ -119,7 +136,34 @@ func _rebuild() -> void:
 	var end_local: Array = []
 	for p in circle:
 		end_local.append(p + last_local)
-	_end_node.mesh = GroundStripMesh.build_strip(end_local, END_WIDTH * 0.5, to_local_y, true)
+	var end_w: float = maxf(END_WIDTH, _min_world_width(END_MIN_PIXELS))
+	_end_node.mesh = GroundStripMesh.build_strip(end_local, end_w * 0.5, to_local_y, true)
+
+# 相机到指引带起点的距离
+func _camera_distance() -> float:
+	var vp := get_viewport()
+	if vp == null:
+		return 0.0
+	var cam := vp.get_camera_3d()
+	if cam == null:
+		return 0.0
+	return cam.global_position.distance_to(global_position)
+
+# 「至少 N 个像素」换算成距相机 d 处的世界宽度
+func _min_world_width(min_pixels: float) -> float:
+	var vp := get_viewport()
+	if vp == null:
+		return 0.0
+	var cam := vp.get_camera_3d()
+	if cam == null:
+		return 0.0
+	var screen_h: float = vp.get_visible_rect().size.y
+	if screen_h <= 1.0:
+		return 0.0
+	var d: float = _camera_distance()
+	if d <= 0.01:
+		return 0.0
+	return min_pixels * (2.0 * d * tan(deg_to_rad(cam.fov) * 0.5)) / screen_h
 
 func _process(delta: float) -> void:
 	# 虚线沿线滚动 = 前进方向；静止时不更新，避免空转
@@ -131,3 +175,10 @@ func _process(delta: float) -> void:
 		var c: Color = END_COLOR
 		c.a = clampf(END_COLOR.a * (1.0 + 0.20 * sin(_pulse_t * END_PULSE_SPEED)), 0.0, 1.0)
 		_end_mat.set_shader_parameter("tint", c)
+	# 相机推近/拉远时重算线宽，否则拉远后虚线会细到看不见
+	_cam_timer -= delta
+	if _cam_timer <= 0.0:
+		_cam_timer = CAMERA_REBUILD_INTERVAL
+		var d: float = _camera_distance()
+		if _last_cam_dist > 0.001 and absf(d - _last_cam_dist) > maxf(_last_cam_dist * CAMERA_DIST_REL, 2.0):
+			_rebuild()

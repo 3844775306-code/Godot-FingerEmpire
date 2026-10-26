@@ -42,8 +42,36 @@ static func densify(points: Array, max_step: float) -> Array:
 static func height_fn_for(bm) -> Callable:
 	# bm 可以是 RTSBattleManager，也可以是 ClientRenderer 这类能拿到地形高度的对象；
 	# 拿不到就退回点的原始 y，至少不会把整条带子压到 0 高度。
-	if bm == null:
-		return func(p: Vector3) -> float: return p.y
+	#
+	# 关键：地形表必须在每次采样时重新确认，不能在这里一次性抓死。
+	# 开局时地形会先建一遍，随后还可能再算一次（放城堡/资源、应用地图数据），
+	# Ground.vertex_grid 会被换成一张全新的表。闭包如果抓着旧表不放，
+	# 之后生成的圈就永远按旧地形摆放：陆地上一半埋进土里、一半浮在空中，
+	# 而水面高度前后都是 -1 没有变化，所以「只有水面上的圈看着正常」。
+	var cache: Dictionary = {"map": null, "grid": null, "n": 0, "size": 0.0}
+	return func(p: Vector3) -> float:
+		var map = cache["map"]
+		if map == null or not is_instance_valid(map):
+			map = _resolve_map(bm)
+			cache["map"] = map
+		if map == null:
+			return p.y
+		var grid = map.get("vertex_grid")
+		var usable: bool = grid is Array and grid.size() > 1 and (grid[0] as Array).size() > 1
+		if not usable:
+			if map.has_method("get_height_at"):
+				return float(map.get_height_at(p))
+			return p.y
+		if cache["grid"] == null or not is_same(cache["grid"], grid) or int(cache["n"]) != grid.size() - 1:
+			cache["grid"] = grid
+			cache["n"] = grid.size() - 1
+			cache["size"] = float(map._get_map_size()) if map.has_method("_get_map_size") else float(grid.size() - 1)
+		return _sample_terrain_grid(grid, int(cache["n"]), float(cache["size"]), p.x, p.z)
+
+# 从战场管理器（或它自己）身上找出真正的地形节点
+static func _resolve_map(bm):
+	if bm == null or not (bm is Node):
+		return null
 	var map = null
 	if bm.has_method("get_map_node"):
 		map = bm.get_map_node()
@@ -52,21 +80,7 @@ static func height_fn_for(bm) -> Callable:
 	# 传进来的对象本身可能就是地形节点（测试/探针里常见）
 	if map == null and bm.get("vertex_grid") != null:
 		map = bm
-	if map == null:
-		return func(p: Vector3) -> float: return p.y
-	# 地形网格的高度表：Ground 里叫 vertex_grid（每个网格顶点的高度）。
-	# 优先用它做「和渲染网格完全一致」的插值，原因见 _sample_terrain_grid() 的注释。
-	var grid = map.get("vertex_grid")
-	if grid is Array and grid.size() > 1 and (grid[0] as Array).size() > 1:
-		var n: int = grid.size() - 1
-		var map_size: float = float(n)
-		if map.has_method("_get_map_size"):
-			map_size = float(map._get_map_size())
-		return func(p: Vector3) -> float:
-			return _sample_terrain_grid(grid, n, map_size, p.x, p.z)
-	if map.has_method("get_height_at"):
-		return func(p: Vector3) -> float: return float(map.get_height_at(p))
-	return func(p: Vector3) -> float: return p.y
+	return map
 
 # 按地形网格的三角剖分做精确插值，保证采样值 == 屏幕上看到的地面高度。
 #
