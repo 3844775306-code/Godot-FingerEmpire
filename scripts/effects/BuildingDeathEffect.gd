@@ -3,6 +3,8 @@
 # 单机与联机主机由 GameEntity.die() 调用，联机客户端由 ClientRenderer 的 dead_ids 分支调用。
 extends RefCounted
 
+const LevelVisualScript = preload("res://scripts/effects/BuildingLevelVisual.gd")
+
 const TIER_WALL := 0
 const TIER_BUILDING := 1
 const TIER_CASTLE := 2
@@ -55,6 +57,8 @@ static func play(host: Node3D, entity_id: int, body_radius: float, model_overrid
 
 	_spawn_debris(host, radius, tier)
 	_spawn_dust(host, radius, tier)
+	# 建筑主体倾斜下沉的同时，等级旗帜的旗杆逐根向外倒伏。
+	LevelVisualScript.play_collapse(host, collapse_time)
 
 	# 倒塌完成后隐藏模型，短暂保留尘土，然后释放整个实体。
 	var collapse_timer := Timer.new()
@@ -151,6 +155,9 @@ static func _on_collapsed(host: Node3D, visual: Node3D) -> void:
 		return
 	if is_instance_valid(visual):
 		visual.visible = false
+	# 主体已经倒下并隐藏，底座色环、等级徽章和倒伏的旗杆也一并收掉，
+	# 避免尘土消散前留下悬空的装饰。
+	LevelVisualScript.set_visible(host, false)
 
 static func _spawn_debris(host: Node3D, radius: float, tier: int) -> void:
 	var particles := CPUParticles3D.new()

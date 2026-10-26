@@ -34,6 +34,13 @@ const FLAG_SLOTS := [
 
 const FLAG_CLOTH_SIZE := Vector2(0.40, 0.25)
 const FLAG_POLE_RADIUS := 0.035
+const FLAG_ROOT_NAME := "FlagRoot"
+const FLAG_PIVOT_NAME := "FlagPolePivot"
+# 旗杆顶端只比屋顶高出一小段：之前 top+0.9 在低矮建筑上像一根长杆，
+# 压低到 0.45 后旗面仍然完整露出屋顶，但整体不会显得头重脚轻。
+const FLAG_TOP_MARGIN := 0.45
+const FLAG_POLE_MIN := 1.35
+const FLAG_POLE_MAX := 6.0
 static var _MATERIAL_CACHE: Dictionary = {}
 
 static func apply(building: Node3D, level: int, fallback_radius: float = 0.0, team_color: Color = Color.WHITE, visible: bool = true) -> void:
@@ -123,9 +130,9 @@ static func _collect_bounds(node: Node3D, parent_xf: Transform3D, box: AABB) -> 
 static func _add_flags(root: Node3D, radius: float, top: float, team_color: Color, level: int) -> void:
 	var slots: Array = FLAG_SLOTS[level - 1]
 	# 旗杆必须真正插在底座色环上：底座色环的半径就是这里的 radius，
-	# 旗杆底部 y 与环面平齐；杆顶越过屋顶，后排旗帜才不会被主体挡住。
+	# 旗杆底部 y 与环面平齐；杆顶只需越过屋顶一小段，旗帜就能被看到。
 	var flag_base_y := 0.10
-	var pole_h := clampf(top + 0.90, 1.6, 7.0)
+	var pole_h := clampf(top + FLAG_TOP_MARGIN, FLAG_POLE_MIN, FLAG_POLE_MAX)
 	var cloth_color := team_color.lerp(Color.WHITE, 0.12)
 	var pole_mat := _mat("level_flag_pole", Color(0.25, 0.19, 0.13), 0.0, 0.6)
 	var cloth_mat := _mat("level_flag_cloth_%s" % cloth_color.to_html(), cloth_color, 0.0, 0.75)
@@ -135,10 +142,11 @@ static func _add_flags(root: Node3D, radius: float, top: float, team_color: Colo
 	cloth_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
 	cloth_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 
-	for slot in slots:
-		var slot_vec: Vector2 = slot
-		var xz := Vector2(slot_vec.x * radius, slot_vec.y * radius)
+	for slot_index in range(slots.size()):
+		var slot: Vector2 = slots[slot_index]
+		var xz := Vector2(slot.x * radius, slot.y * radius)
 		var flag_root := Node3D.new()
+		flag_root.name = "%s%d" % [FLAG_ROOT_NAME, slot_index + 1]
 		flag_root.position = Vector3(xz.x, flag_base_y, xz.y)
 		# 让旗帜的 +X 方向朝外，避免旗帜穿进建筑主体。
 		flag_root.rotation.y = atan2(-xz.y, xz.x)
@@ -157,6 +165,11 @@ static func _add_flags(root: Node3D, radius: float, top: float, team_color: Colo
 		foot.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		flag_root.add_child(foot)
 
+		# 杆身和旗面放在同一个枢轴上：倒伏时绕杆脚旋转，脚座仍留在色环上。
+		var pole_pivot := Node3D.new()
+		pole_pivot.name = FLAG_PIVOT_NAME
+		flag_root.add_child(pole_pivot)
+
 		var pole := MeshInstance3D.new()
 		var pole_mesh := CylinderMesh.new()
 		pole_mesh.top_radius = FLAG_POLE_RADIUS
@@ -168,7 +181,7 @@ static func _add_flags(root: Node3D, radius: float, top: float, team_color: Colo
 		pole.position.y = pole_h * 0.5
 		pole.material_override = pole_mat
 		pole.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-		flag_root.add_child(pole)
+		pole_pivot.add_child(pole)
 
 		var cloth := MeshInstance3D.new()
 		var cloth_mesh := QuadMesh.new()
@@ -178,7 +191,35 @@ static func _add_flags(root: Node3D, radius: float, top: float, team_color: Colo
 		cloth.position = Vector3(FLAG_CLOTH_SIZE.x * 0.5 + 0.02, pole_h - FLAG_CLOTH_SIZE.y * 0.55, 0.0)
 		cloth.material_override = cloth_mat
 		cloth.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
-		flag_root.add_child(cloth)
+		pole_pivot.add_child(cloth)
+
+# 建筑倒塌时让每根旗杆朝建筑外侧倒伏。杆脚位置不动，只旋转杆身枢轴；
+# 延迟逐根增加，避免所有旗帜像一块板一样同时拍下去。
+static func play_collapse(building: Node3D, duration: float) -> void:
+	if building == null or not is_instance_valid(building):
+		return
+	var level_root := building.get_node_or_null(NODE_NAME) as Node3D
+	if level_root == null:
+		return
+	var fall_time := maxf(duration, 0.2) * 0.72
+	var flag_index := 0
+	for child in level_root.get_children():
+		if not (child is Node3D):
+			continue
+		if not String(child.name).begins_with(FLAG_ROOT_NAME):
+			continue
+		var pivot := child.get_node_or_null(FLAG_PIVOT_NAME) as Node3D
+		if pivot == null:
+			continue
+		var target_rot := pivot.rotation
+		# 本地 +X 是建筑外侧；绕本地 Z 负向旋转，杆顶就会向外倒下。
+		target_rot.z -= deg_to_rad(randf_range(72.0, 88.0))
+		target_rot.x += deg_to_rad(randf_range(-8.0, 8.0))
+		var tween := pivot.create_tween()
+		tween.tween_interval(0.035 * flag_index + randf_range(0.0, 0.05))
+		var fall_tw := tween.tween_property(pivot, "rotation", target_rot, fall_time)
+		fall_tw.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
+		flag_index += 1
 
 static func _add_base_ring(root: Node3D, radius: float, color: Color, level: int) -> void:
 	var ring := MeshInstance3D.new()
