@@ -77,8 +77,16 @@ if ($LASTEXITCODE -ne 0) {
 if ($Notes -eq "") {
 	$Notes = "FingerEmpire $version"
 }
-& $gh.Source release view $version 2>$null | Out-Null
-if ($LASTEXITCODE -ne 0) {
+
+$releaseTagsRaw = & $gh.Source release list --limit 100 --json tagName 2>$null
+$releaseExists = $false
+try {
+	$releaseTags = @(($releaseTagsRaw | Out-String) | ConvertFrom-Json)
+	$releaseExists = @($releaseTags | Where-Object { $_.tagName -eq $version }).Count -gt 0
+} catch {
+	$releaseExists = $false
+}
+if (-not $releaseExists) {
 	Write-Host "创建 GitHub Release $version" -ForegroundColor Cyan
 	& $gh.Source release create $version --title "FingerEmpire $version" --notes $Notes
 	if ($LASTEXITCODE -ne 0) {
@@ -92,4 +100,5 @@ if ($LASTEXITCODE -ne 0) {
 	throw "上传安装包失败，退出码 $LASTEXITCODE"
 }
 Write-Host "上传完成：$version" -ForegroundColor Green
-Write-Host "现在运行 tools/deploy_web.ps1 重新生成 update.json 并发布。"
+Write-Host "Release 地址：https://github.com/3844775306-code/Godot-FingerEmpire/releases/tag/$version"
+Write-Host "如果版本号或下载链接有变化，再运行 tools/deploy_web.ps1 重新生成 update.json。"
