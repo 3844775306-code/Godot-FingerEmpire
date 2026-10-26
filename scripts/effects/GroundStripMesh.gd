@@ -12,7 +12,7 @@ extends RefCounted
 
 # 抬离地面一点点：地形是三角形面片，带子贴着面片画会有深度打架（闪烁），
 # 配合着色器里 6 厘米的朝相机推移，这里只要很小的抬升就够，不会看出浮空。
-const SURFACE_LIFT: float = 0.10
+const SURFACE_LIFT: float = 0.30
 # 带子抬高时额外做的法线偏移上限，纯平地用不到，陡坡上能减少穿插
 const MAX_SEGMENT_LEN: float = 1.2
 
@@ -168,6 +168,11 @@ void fragment() {
 static func make_material(tint: Color, soft_edge: float, dash_scale: float, grain: float, head_fade: float) -> ShaderMaterial:
 	var mat := ShaderMaterial.new()
 	mat.shader = shader()
+	# 关键：地面用的是 blend_mix 的透明材质（terrain_noise.gdshader），和贴地带同在透明队列里。
+	# 地面是一整块覆盖全图的网格，按物体距离排序时经常排在带子后面，于是「地面盖住线」——
+	# 陆地上几乎看不到，水面因为带子浮在水面之上才显出来。给带子一个更高的渲染优先级，
+	# 保证它一定在地面/水面之后绘制。
+	mat.render_priority = 12
 	mat.set_shader_parameter("tint", tint)
 	mat.set_shader_parameter("soft_edge", soft_edge)
 	mat.set_shader_parameter("dash_scale", dash_scale)

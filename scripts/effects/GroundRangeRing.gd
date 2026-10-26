@@ -21,8 +21,8 @@ const ACTION_WIDTH: float = 0.40
 # 屏幕上至少要占几个像素，否则细线在远处等于画在空气里
 const VISION_MIN_PIXELS: float = 2.6
 const ACTION_MIN_PIXELS: float = 4.4
-const VISION_TINT: Color = Color(0.80, 0.92, 1.00, 0.42)
-const ACTION_TINT: Color = Color(1.00, 0.84, 0.50, 0.52)
+const VISION_TINT: Color = Color(0.80, 0.92, 1.00, 0.46)
+const ACTION_TINT: Color = Color(1.00, 0.84, 0.50, 0.56)
 
 # 移动后重建网格的阈值：太小会每帧重建，太大会看到线跟不上地形
 const REBUILD_DISTANCE: float = 0.10
