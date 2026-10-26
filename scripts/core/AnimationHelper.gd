@@ -11,62 +11,30 @@ const LOOPED_ANIMATIONS := [
 ]
 
 # 人物系兵种的出手动作。以前所有人物统一播 attack-melee-left（左勾拳），
-# 僧侣/长老/宗师这类法术单位和弓箭手挥拳完全不像。character 模型自带 32 个
-# 动作，这里按兵种挑对应的姿态；表里没有的仍回落到近战挥击。
+# 僧侣/长老/宗师这类法术单位和弓箭手挥拳完全不像。character / archer / soldier
+# 模型分别自带 32 / 32 / 25 个原生动作，这里按兵种直接挑模型原生的姿态，
+# 一律原样播放，不再改写任何动画关键帧；表里没有的仍回落到近战挥击。
+#
+# 弓箭手系（12 弓箭手 / 31 长弓兵 / 37 重装弓箭手）的模型里没有专门叫
+# attack-shoot 的远程攻击动作：attack-melee-*、attack-kick-* 都是徒手勾拳/踢腿，
+# 拿弓的单位播这些会变成用弓砸人。真正贴切的原始射击动作是 holding-left-shoot
+# ——左手持弓、射击瞬间躯干与持弓臂的原生后坐（0.2 秒）。它就是这个模型自带的
+# “攻击动画”，所以直接用它，不做旋转放大之类的改帧。
+# 33 诸葛连弩 / 58 连弩 用的是 ballista 模型，GLB 里根本没有 AnimationPlayer，
+# 映射只是保持原状（不会播骨骼动作），开火表现靠箭矢/音效。
 const ATTACK_ANIM_BY_ID := {
 	55: "interact-right",       # 僧侣：单手上抬抚出，像在引导法术
 	56: "holding-both-shoot",   # 长老：双手前送
 	57: "attack-melee-right",   # 宗师：右掌直击（与农民左勾拳区分开）
-	12: "holding-left-shoot",   # 弓箭手：拉弓
-	31: "holding-left-shoot",   # 长弓兵
-	37: "holding-left-shoot",   # 重装弓箭手
-	33: "holding-both-shoot",   # 诸葛连弩：双手连射
-	58: "holding-both-shoot",   # 连弩
+	12: "holding-left-shoot",   # 弓箭手：模型原生拉弓射击动作
+	31: "holding-left-shoot",   # 长弓兵（soldier 模型，同一套射击动作）
+	37: "holding-left-shoot",   # 重装弓箭手（soldier 模型）
+	33: "holding-both-shoot",   # 诸葛连弩：ballista 模型无 AnimationPlayer，实际不播
+	58: "holding-both-shoot",   # 连弩：weapon-ballista 模型无 AnimationPlayer
 }
-
-# GLB 自带的拉弓动作只有 0.2 秒、骨骼摆幅很小，远看像没动。
-# 这里把关键帧相对“起手姿态”的旋转角度放大，保留原动作节奏和首尾姿态，
-# 只让拉弓/送臂的弧线更明显。所有弓箭手共用同一个 Animation 资源，
-# 用 metadata 保证只放大一次，避免每个实例重复乘。
-const ARCHER_ATTACK_ANIM := "holding-left-shoot"
-const ARCHER_ARM_AMPLIFY := 2.4
-const ARCHER_BODY_AMPLIFY := 1.7
 
 static func attack_anim_for(entity_id: int) -> String:
 	return String(ATTACK_ANIM_BY_ID.get(entity_id, "attack-melee-left"))
-
-# 放大弓箭手拉弓动作的旋转幅度。每个旋转轨道以第 0 帧为基准姿态，
-# 只放大第 1 帧之后相对基准的旋转，结束时自然回到原姿态。
-static func amplify_archer_attack(ap: AnimationPlayer) -> void:
-	if ap == null or not ap.has_animation(ARCHER_ATTACK_ANIM):
-		return
-	var anim := ap.get_animation(ARCHER_ATTACK_ANIM)
-	if anim == null or anim.has_meta("_archer_amplified"):
-		return
-	anim.set_meta("_archer_amplified", true)
-	for t in range(anim.get_track_count()):
-		if anim.track_get_type(t) != Animation.TYPE_ROTATION_3D:
-			continue
-		var key_count: int = anim.track_get_key_count(t)
-		if key_count < 2:
-			continue
-		var path := String(anim.track_get_path(t))
-		var factor: float = ARCHER_ARM_AMPLIFY if path.contains("arm") else ARCHER_BODY_AMPLIFY
-		var first_q: Quaternion = anim.track_get_key_value(t, 0)
-		first_q = first_q.normalized()
-		for k in range(1, key_count):
-			var q: Quaternion = anim.track_get_key_value(t, k)
-			q = q.normalized()
-			var delta: Quaternion = q * first_q.inverse()
-			# 四元数 q 与 -q 表示同一旋转；统一取 w>=0 的半球，
-			# 否则 get_angle() 会得到 300° 这种大角，放大后直接扭断。
-			if delta.w < 0.0:
-				delta = Quaternion(-delta.x, -delta.y, -delta.z, -delta.w)
-			var angle: float = delta.get_angle()
-			if angle < 0.001:
-				continue
-			var amplified := Quaternion(delta.get_axis(), clampf(angle * factor, 0.0, PI * 0.98))
-			anim.track_set_key_value(t, k, (amplified * first_q).normalized())
 
 static func find_player(root: Node) -> AnimationPlayer:
 	if root == null:
@@ -81,6 +49,7 @@ static func find_player(root: Node) -> AnimationPlayer:
 
 # 返回模型里的 AnimationPlayer，并确保循环动作已标记为循环。
 # Animation 资源来自 GLB 导入缓存，同一模型的所有实例共享；重复调用无副作用。
+# 这里只改 loop_mode（播放方式），不动任何关键帧数值。
 static func configure_loops(root: Node) -> AnimationPlayer:
 	var ap := find_player(root)
 	if ap == null:
@@ -91,11 +60,13 @@ static func configure_loops(root: Node) -> AnimationPlayer:
 		var anim := ap.get_animation(anim_name)
 		if anim != null and anim.loop_mode == Animation.LOOP_NONE:
 			anim.loop_mode = Animation.LOOP_LINEAR
-	amplify_archer_attack(ap)
 	return ap
 
 # 攻击动作一个循环 ≈ 一次攻击冷却；否则攻击间隔慢的单位反而播放得飞快，
 # 攻击间隔快的单位又会长时间停在最后一帧。
+# 顺带解决 GLB 里射击动作只有 0.2 秒、一闪而过看不清的问题：按冷却把播放速率
+# 压慢（12 弓箭手 ≈ 0.29 倍 / 0.69 秒，31 长弓兵 ≈ 0.2 倍 / 1 秒，
+# 37 重装弓箭手受 0.1 倍下限保护 ≈ 2 秒），既不改关键帧又能把原版动作看全。
 static func attack_speed_scale(ap: AnimationPlayer, anim_name: String, cooldown: float) -> float:
 	if ap == null or not ap.has_animation(anim_name):
 		return 1.0
