@@ -20,6 +20,18 @@ static var seen_path: String = "user://changelog_seen.txt"
 static func entries() -> Array:
 	return [
 		{
+			"version": "v1.0.2",
+			"date": "2026-10-26",
+			"title": "自动更新与下载入口",
+			"items": [
+				"优化：APK、Web、EXE 启动时会自动检查新版本，主菜单直接显示对应平台的最新下载或刷新入口。",
+				"优化：Web 版发现新版本后点击即可刷新到最新页面，不需要重新拖拽部署文件。",
+				"优化：Windows 和 Android 安装包会自动带上站点更新地址，玩家不用手动填写。",
+				"修复：更新检查在网络较慢时会静默跳过，不会卡住主菜单启动。",
+				"优化：更新日志面板里的「检查更新」会强制刷新，忽略本地缓存。",
+			],
+		},
+		{
 			"version": "v1.0.1",
 			"date": "2026-10-26",
 			"title": "真实视野、新国家与遮挡",

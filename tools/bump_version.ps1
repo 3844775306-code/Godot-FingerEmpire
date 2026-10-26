@@ -114,10 +114,11 @@ $todayText = $today.ToString("yyyy-MM-dd")
 if ($changed) {
 	if (-not $DryRun) {
 		# 改写 AppVersion.gd：只替换两行常量，其余内容原样保留
-		$content = Get-Content -LiteralPath $versionScript -Raw
+		$content = [System.IO.File]::ReadAllText($versionScript, [System.Text.Encoding]::UTF8)
 		$content = [regex]::Replace($content, 'const VERSION: String = "[^"]*"', "const VERSION: String = `"$newVersion`"")
 		$content = [regex]::Replace($content, 'const RELEASE_DATE: String = "[^"]*"', "const RELEASE_DATE: String = `"$todayText`"")
-		Set-Content -LiteralPath $versionScript -Value $content -NoNewline -Encoding UTF8
+		$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
+		[System.IO.File]::WriteAllText($versionScript, $content, $utf8NoBom)
 
 		$state.major = $newMajor
 		$state.minor = $newMinor
