@@ -559,7 +559,6 @@ func _selection_outline_color() -> Color:
 	return Color(1.00, 0.55, 0.50, 0.88)
 
 func _spawn_produced_unit():
-	AudioManager.play_sfx("produce")
 	if production_queue.is_empty():
 		return
 
@@ -581,11 +580,25 @@ func _spawn_produced_unit():
 	else:
 		spawn_pos = _find_land_spawn_pos(spawn_margin)
 	if spawn_pos == Vector3.ZERO:
-		# 最后的兜底坐标也必须夹在地图内，避免贴着地图边缘的建筑把单位刷到地图外
-		spawn_pos = _clamp_spawn_to_map(global_position + Vector3(randf_range(-2,2), 0, randf_range(-2,2)), spawn_margin)
+		# 没有安全落点时不要把单位刷到未校验的随机坐标（那里可能是山腰/水里）。
+		# 把队列推回队首，稍后重试；资源已扣，但绝不会生成在非法地形上。
+		production_queue.push_front(unit_id)
+		production_timer = 1.0
+		return
 	spawn_pos = _clamp_spawn_to_map(spawn_pos, spawn_margin)
+	# 最后再校验一次：防止未来改动/兜底分支把单位放到山腰或深水
+	if not _is_safe_production_spawn(bm, spawn_pos, is_water_unit):
+		production_queue.push_front(unit_id)
+		production_timer = 1.0
+		return
 	config["owner_peer_id"] = self.owner_peer_id  # 继承建筑所有权
 	var entity = bm.spawn_entity(config, team, spawn_pos, self.level)
+	if entity == null:
+		# 生成失败同样重试，避免资源已扣却静默丢兵
+		production_queue.push_front(unit_id)
+		production_timer = 1.0
+		return
+	AudioManager.play_sfx("produce")
 	if entity:
 		entity.owner_peer_id = self.owner_peer_id   # 继承建筑所有权
 		if bm.battle_stats:
@@ -655,6 +668,8 @@ func _find_nearest_spawn_tile(center: Vector3, want_water: bool, margin: float) 
 				var world_pos := Vector3(tile.x - half, 0.0, tile.y - half)
 				if not want_water and not _is_flat_spawn_pos(bm, world_pos):
 					continue
+				if not want_water and _spawn_pos_blocked(world_pos):
+					continue
 				return _clamp_spawn_to_map(world_pos, margin)
 		if r > 0:
 			for dy in range(-r + 1, r):
@@ -678,6 +693,8 @@ func _find_nearest_spawn_tile(center: Vector3, want_water: bool, margin: float) 
 					var world_pos := Vector3(tile.x - half, 0.0, tile.y - half)
 					if not want_water and not _is_flat_spawn_pos(bm, world_pos):
 						continue
+					if not want_water and _spawn_pos_blocked(world_pos):
+						continue
 					return _clamp_spawn_to_map(world_pos, margin)
 	return Vector3.ZERO
 
@@ -685,6 +702,22 @@ func _find_nearest_spawn_tile(center: Vector3, want_water: bool, margin: float) 
 # 即使山上有缓坡/台地，也不在坡面或台地上刷兵，避免部队卡在窄坡或孤岛台地。
 func _is_spawn_blocked_terrain(terrain: int) -> bool:
 	return terrain < 0 or terrain == 1 or terrain == 2
+
+# 生产落点的最终校验：陆地单位不能在山/水/斜坡/半山腰，也不能压在已有实体上。
+# 水面单位只要求是水域；具体深浅由海军寻路/移动再判断。
+func _is_safe_production_spawn(bm: RTSBattleManager, pos: Vector3, is_water_unit: bool) -> bool:
+	if bm == null:
+		return true
+	var terrain: int = bm.get_terrain_at(pos)
+	if is_water_unit:
+		return terrain == 2
+	if _is_spawn_blocked_terrain(terrain):
+		return false
+	if not _is_flat_spawn_pos(bm, pos):
+		return false
+	if _spawn_pos_blocked(pos):
+		return false
+	return true
 
 # 生产单位落点要检查一小片地面的高差，避免刷在坡面/台地边缘。
 # 半径覆盖单位脚底，至少检查相邻一格；水面单位不适用。
