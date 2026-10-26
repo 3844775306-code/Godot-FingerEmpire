@@ -82,6 +82,10 @@ var _vision_cells_cache: Dictionary = {}
 # 每个队伍的可见格掩码（PackedByteArray，gx*MAP_SIZE+gy），AI/联机快照/建造预览共用。
 var _team_vis_cache: Dictionary = {}
 const TEAM_VIS_CACHE_MS: int = 350
+# 视野源没有变化时，队伍掩码不需要每 350ms 重新并集一次。几百个静止单位时
+# 这一步会占掉几十毫秒；最多 2 秒兜底刷新一次，避免死亡单位残留视野。
+var _vision_dirty: bool = true
+const TEAM_VIS_IDLE_MS: int = 2000
 const VISION_CELLS_CACHE_MAX: int = 900
 
 # ==================== 游戏状态 ====================
@@ -2544,6 +2548,10 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 	if not entity.tree_exiting.is_connected(mark_entity_cache_dirty):
 		entity.tree_exiting.connect(mark_entity_cache_dirty)
 	entity.setup(cfg)
+	# 错开索敌相位：所有单位的 think_timer 默认都是 0，同一批生产/刷出的
+	# 几百个单位会在同一物理帧一起做可见性射线和目标搜索，形成周期性大卡顿。
+	if entity is Army:
+		entity.think_timer = randf_range(0.0, 0.75)
 	# 尝试加载3D模型
 	var model_loaded = _apply_entity_model(entity)
 	# 国家色着色：非资源、非中立实体。颜色与阵营解耦，按国家统一。
@@ -3393,6 +3401,7 @@ func _init_fog_grid():
 	_fog_sources.clear()
 	_vision_cells_cache.clear()
 	_team_vis_cache.clear()
+	_vision_dirty = true
 	for x in range(RTSConfig.MAP_SIZE):
 		var col_exp = []
 		var col_vis = []
@@ -3468,12 +3477,14 @@ func _get_source_vision_cells(e, r: int) -> PackedInt32Array:
 			return cached.get("cells", PackedInt32Array())
 	var cells: PackedInt32Array = VisionSystem.compute_visible_cells(map_node, origin, float(r))
 	_vision_cells_cache[id] = {"gx": g.x, "gy": g.y, "head": origin.y, "r": r, "cells": cells}
+	_vision_dirty = true
 	# 死亡/移除的单位不少，缓存偶尔清一次，避免 instance_id 长期堆积
 	if _vision_cells_cache.size() > VISION_CELLS_CACHE_MAX:
 		for key in _vision_cells_cache.keys():
 			var ent = instance_from_id(int(key))
 			if ent == null or not is_instance_valid(ent) or ent.health <= 0:
 				_vision_cells_cache.erase(key)
+				_vision_dirty = true
 	return cells
 
 # 队伍可见掩码：AI 索敌、联机快照裁剪、建造预览、主机迷雾全部共用。
@@ -3481,7 +3492,8 @@ func get_team_visible_mask(team: int) -> PackedByteArray:
 	var ms: int = RTSConfig.MAP_SIZE
 	var now: int = Time.get_ticks_msec()
 	var cached = _team_vis_cache.get(team)
-	if cached != null and now - int(cached.get("time", 0)) < TEAM_VIS_CACHE_MS:
+	var max_age: int = TEAM_VIS_CACHE_MS if _vision_dirty else TEAM_VIS_IDLE_MS
+	if cached != null and now - int(cached.get("time", 0)) < max_age:
 		return cached.get("mask", PackedByteArray())
 	var tree := get_tree()
 	if tree == null:
@@ -3500,6 +3512,7 @@ func get_team_visible_mask(team: int) -> PackedByteArray:
 			if idx >= 0 and idx < mask.size():
 				mask[idx] = 1
 	_team_vis_cache[team] = {"time": now, "mask": mask}
+	_vision_dirty = false
 	return mask
 
 func is_position_visible_to_team(team: int, world_pos: Vector3) -> bool:
@@ -4218,11 +4231,11 @@ func _tick_physics_rate(delta: float) -> void:
 		_set_physics_rate_low(false)
 		return
 	var ent_count: int = entities.get_child_count() if entities else 0
-	# 180 个单位开始就可能出现“一帧补跑多个物理步”的死亡螺旋，不必等到 420。
+	# 240 个单位开始就可能出现“一帧补跑多个物理步”的死亡螺旋，不必等到 420。
 	# 30Hz 模拟对 RTS 的移动/战斗手感影响很小，但能把每帧物理工作量砍半。
-	if ent_count >= 180:
+	if ent_count >= 240:
 		_set_physics_rate_low(true)
-	elif ent_count < 150:
+	elif ent_count < 200:
 		_set_physics_rate_low(false)
 
 func _set_physics_rate_low(low: bool) -> void:

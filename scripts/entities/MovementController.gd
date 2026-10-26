@@ -78,6 +78,10 @@ const COLLISION_INTERVAL: float = 0.15
 const SLOPE_BASE_COST: float = 1.35
 const PLATEAU_BASE_COST: float = 1.1
 var _last_recalc_frame: int = -99  # prevent recalc spam
+# A* 预算按“渲染帧”计数，但一个渲染帧里可能补跑多个物理步。低帧率时如果每个
+# 物理步都重试 pending 请求，几百个单位会把直路检测和预算查询重复做 4~8 次，
+# 反而让帧率继续下跌。这里保证每个单位每渲染帧最多重试一次。
+var _last_pending_frame: int = -1
 var _path_cache: Dictionary = {}  # Vector2i(world_x, world_z) -> path_array, cleared on building placement
 # 攻击移动群体路线：同目的地的大部队共用一个 A* 结果，避免几十个单位
 # 同时展开上千节点把 A* 预算吃光。单位从最近航点并入缓存路线。
@@ -373,14 +377,19 @@ func process_move(delta, bm: RTSBattleManager):
 			_pending_path = false
 			_pending_since_ms = 0
 		else:
-			var pending_age_ms: int = Time.get_ticks_msec() - _pending_since_ms
-			if pending_age_ms >= PENDING_PATH_URGENT_MS:
-				# 排队过久：强制放行一次（每帧限额），不能再等普通配额。
-				# 这样即使队列一直被新请求插队，队尾单位也一定能拿到一次真正的寻路结果：
-				# 有路就继续走，无路就由 _apply_path 写失败标记交给 Army 兜底。
-				_try_compute_pending_path(bm, true)
-			else:
-				_try_compute_pending_path(bm)
+			var frame: int = Engine.get_process_frames()
+			# 同一渲染帧内只重试一次。物理帧会在一帧里补跑多次，而 A* 预算
+			# 是每渲染帧重置的；重复重试只会在预算耗尽后反复做直路扫描。
+			if frame != _last_pending_frame:
+				_last_pending_frame = frame
+				var pending_age_ms: int = Time.get_ticks_msec() - _pending_since_ms
+				if pending_age_ms >= PENDING_PATH_URGENT_MS:
+					# 排队过久：强制放行一次（每帧限额），不能再等普通配额。
+					# 这样即使队列一直被新请求插队，队尾单位也一定能拿到一次真正的寻路结果：
+					# 有路就继续走，无路就由 _apply_path 写失败标记交给 Army 兜底。
+					_try_compute_pending_path(bm, true)
+				else:
+					_try_compute_pending_path(bm)
 			if _pending_path:
 				# 攻击移动即使新路径还没算完，也可以先沿现有路径继续推进；
 				# 普通攻击/普通移动没有可用新路径时先停住，等下一帧重试。
