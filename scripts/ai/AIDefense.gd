@@ -308,7 +308,7 @@ func _cell_blocks_land(gx: int, gz: int) -> bool:
 		return true
 	if terrain == 2 and ai.battle.get_overlay_at_grid(gx, gz) != 3:
 		return true
-	# 山地不再按类型视为墙；只有超过最大可走坡度的陡坎才是天然屏障。
+	# 普通山地是天然墙；只有缓坡/台地（is_cliff_tile 返回 false）才算可通行地形。
 	return ai.battle.is_cliff_tile(gx, gz)
 
 func _is_ford_cell(gx: int, gz: int) -> bool:
@@ -975,21 +975,14 @@ func _manage_home_guard(castle, delta: float) -> void:
 		if is_defending and _skip_near_castle_active(u, castle):
 			# 家门口正在交战的部队保留当前目标；驻扎点已在前面统一解除
 			continue
-		# 非危急状态不抢正在行军/推进/交战/排队的部队，主攻不能每 60 秒被守军调度打散。
-		# 已经在主城守卫名单里的单位允许刷新集结点。
-		var has_active_task: bool = (
-			(u.current_target != null and is_instance_valid(u.current_target))
-			or u.is_attack_moving or u.current_order != "" or not u.command_queue.is_empty()
-		)
-		if has_active_task and threat_level < 3 and not _home_guard_ids.has(uid):
+		# 守卫主城只给没有任务的部队下达指令：正在交战、攻击移动、采集/交付、
+		# 排队执行命令或已经驻扎的部队继续做自己的事，不能被守军调度打断。
+		if _unit_has_existing_task(u):
 			continue
 		# 城墙优先保留远程兵；已经在守军名单里的单位不受影响。
 		# 紧急回防（_force_guard_until）期间不再保留，所有能回的单位都要回主城。
 		if not _home_guard_ids.has(uid) and threat_level < 2 and now >= _force_guard_until \
 				and _reserve_ranged_for_wall(u, walls_exist):
-			continue
-		# 已经在执行主攻的单位不能再被拉回主城驻扎；否则 attack_move 会被守军调度覆盖
-		if threat_level < 2 and (u.is_attack_moving or u.current_order == "attack_move"):
 			continue
 		var special: bool = u.has_meta("ai_resource_guard") or u.has_meta("ai_harass")
 		if special and threat_level < 3 and now >= _force_guard_until:
@@ -1048,9 +1041,8 @@ func _quick_fill_home_guard(castle, delta: float) -> void:
 			break
 		if u.has_meta("ai_home_guard") or u.has_meta("ai_wall_guard"):
 			continue
-		if u.current_target != null or u.is_attack_moving or u.current_order != "":
-			continue
-		if not u.command_queue.is_empty() or u.garrison_point != Vector3.ZERO:
+		# 补员同样只挑没有任务的部队，避免把正在交战/行军/采集/排队的部队拉回主城。
+		if _unit_has_existing_task(u):
 			continue
 		if _is_local_building_defender(u, float(ai.battle.game_time)):
 			continue
@@ -1093,6 +1085,9 @@ func _assign_home_guard(castle, force: bool) -> void:
 		if not is_instance_valid(u) or u.health <= 0:
 			continue
 		if _is_local_building_defender(u, float(ai.battle.game_time)):
+			continue
+		# 强制回防也只动没有任务的部队；正在执行任务的主力继续自己的行动。
+		if _unit_has_existing_task(u):
 			continue
 		if is_defending and _skip_near_castle_active(u, castle):
 			continue
