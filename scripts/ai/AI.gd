@@ -3347,6 +3347,7 @@ var _body_scroll: ScrollContainer = null   # 内容滚动区，避免建筑统�
 var _panel_collapsed: bool = false         # 面板是否已收起为标题条
 var _panel_bg_style: StyleBoxFlat = null   # 面板底板样式（按友方/敌方着色）
 var _last_relation: int = -2               # 上次计算的敌我关系，避免每帧重设样式
+var _last_panel_nation: Color = Color(-1, -1, -1, -1)  # 上次使用的国家底色，用于检测 nation 延迟写入
 # 狩猎：固定派几个农民持续打猎，农民总数超过阈值才开始（避免前期断经济）
 const HUNT_PEASANT_COUNT: int = 5
 const HUNT_MIN_PEASANTS: int = 15
@@ -3381,10 +3382,16 @@ func _relation_tag() -> String:
 		-1: return "[color=#ff6b5a]⚔ 敌方[/color] "
 		_: return ""
 
-# AI 所属国家的颜色：面板底色用它，一眼能看出是哪个国家在指挥
+# AI 所属国家的颜色：面板底色用它，一眼能看出是哪个国家在指挥。
+# 不能用 team_nations：2v2/3v3 同队 AI 可能来自不同国家，按队伍取色会让
+# 同一队的所有面板变成同一个颜色。优先按 owner peer（my_peer_id）取国家。
 func _nation_color() -> Color:
+	var nn: int = _my_nation_index()
+	if nn >= 0:
+		return RTSConfig.get_nation_color(nn)
+	# 旧存档/数据尚未就绪时退回队伍国家，至少不显示成灰色
 	if battle != null and battle.has_method("get_team_nation"):
-		var nn: int = int(battle.get_team_nation(my_team))
+		nn = int(battle.get_team_nation(my_team))
 		if nn >= 0:
 			return RTSConfig.get_nation_color(nn)
 	return Color(0.7, 0.7, 0.7)
@@ -3393,17 +3400,27 @@ func _nation_color() -> Color:
 func _apply_panel_relation() -> void:
 	if _panel_bg_style == null: return
 	var rel = _relation_to_player()
-	if rel == _last_relation: return
+	var nc := _nation_color()
+	# 关系或国家颜色变化时才重建样式；AI 的 nation 可能在面板创建后才写入，
+	# 所以不能只看 relation，否则会永远停在灰色兜底色。
+	if rel == _last_relation and nc == _last_panel_nation:
+		return
 	_last_relation = rel
+	_last_panel_nation = nc
 	var c = _relation_color()
 	_panel_bg_style.border_color = Color(c.r, c.g, c.b, 0.7)
 	_panel_bg_style.border_width_left = 6
 	_panel_bg_style.border_width_right = 2
 	_panel_bg_style.border_width_top = 2
 	_panel_bg_style.border_width_bottom = 2
-	# 底色取 AI 所属国家的颜色并压暗，敌我关系靠边框颜色区分，不影响文字可读性
-	var nc := _nation_color()
-	_panel_bg_style.bg_color = Color(nc.r * 0.22, nc.g * 0.22, nc.b * 0.22, 0.93)
+	# 底色直接使用 AI 所属国家的颜色，再压暗到能保证文字可读的亮度；
+	# 敌我关系继续由边框颜色表达，不再占据底色。
+	_panel_bg_style.bg_color = Color(
+		nc.r * 0.45 + 0.03,
+		nc.g * 0.45 + 0.03,
+		nc.b * 0.45 + 0.04,
+		0.93
+	)
 
 func _create_debug_panel():
 	debug_panel = Control.new(); debug_panel.name = "AIDebugPanel"; debug_panel.z_index = 100
