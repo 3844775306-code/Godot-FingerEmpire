@@ -17,6 +17,13 @@ var map_btn: Button
 var _last_map_id: String = "classic"
 var _map_allowed: bool = true
 
+# 手机端全屏滚动表单：触摸拖动直接驱动 ScrollContainer（没有战斗触摸路由器）。
+func _input(event: InputEvent) -> void:
+	if not InputSource.use_mobile_ui():
+		return
+	if event is InputEventScreenDrag:
+		UILayout.scroll_at(self, event.position, event.relative.y)
+
 func _ready():
 	NetworkManager.connection_success.connect(_on_connected)
 	NetworkManager.connection_failed.connect(_on_failed)
@@ -35,6 +42,12 @@ func _ready():
 	# Hide old scene nodes
 	var old = get_node_or_null("Panel")
 	if old: old.visible = false
+
+	# 手机端：桌面版 2400×1400 绝对布局在 393dp 屏上只有 4~14dp 字，
+	# 直接改用竖排滚动布局；桌面路径完全不动。
+	if InputSource.use_mobile_ui():
+		_build_mobile_ui()
+		return
 
 	# 全屏暖黑背景（羊皮纸皇庭底色）
 	var bg = ColorRect.new(); bg.color = Color(0.10, 0.08, 0.06)
@@ -236,6 +249,260 @@ func _ready():
 	add_child(ret_btn)
 
 	UITheme.fade_in(panel, 0.35)
+
+# ==================== 手机端竖排布局 ====================
+# 桌面版的绝对坐标布局在手机上会整体缩成 1/3 大小；这里按 dp 重建一套可滚动表单，
+# 控件字段与桌面版共用，因此所有连接/回调逻辑无需分叉。
+func _build_mobile_ui() -> void:
+	var bg := ColorRect.new()
+	bg.color = Color(0.10, 0.08, 0.06)
+	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	add_child(bg)
+
+	var top_bar := ColorRect.new()
+	top_bar.color = Color(UITheme.GOLD)
+	top_bar.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
+	top_bar.offset_bottom = UILayout.dp(2.0)
+	add_child(top_bar)
+
+	var title := Label.new()
+	title.text = "👑 联机对战 👑"
+	title.set_anchors_and_offsets_preset(Control.PRESET_TOP_WIDE)
+	title.offset_top = UILayout.dp(5.0)
+	title.offset_bottom = UILayout.dp(23.0)
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", UILayout.font_dp(15.0))
+	title.add_theme_color_override("font_color", UITheme.GOLD.lightened(0.15))
+	title.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.9))
+	title.add_theme_constant_override("shadow_offset_x", 2)
+	title.add_theme_constant_override("shadow_offset_y", 2)
+	add_child(title)
+
+	var back := Button.new()
+	back.text = "← 返回"
+	back.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
+	back.offset_left = -UILayout.dp(72.0)
+	back.offset_right = -UILayout.dp(6.0)
+	back.offset_top = UILayout.dp(5.0)
+	back.offset_bottom = UILayout.dp(25.0)
+	UITheme.apply_muted_button(back, UILayout.font_dp(10.0))
+	back.pressed.connect(_on_return_pressed)
+	add_child(back)
+
+	var scroll := ScrollContainer.new()
+	scroll.name = "MobileScroll"
+	scroll.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	scroll.offset_left = UILayout.dp(8.0)
+	scroll.offset_right = -UILayout.dp(8.0)
+	scroll.offset_top = UILayout.dp(29.0)
+	scroll.offset_bottom = -UILayout.dp(6.0)
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	# 手机触摸事件由 ScrollContainer 自己处理（此界面没有战斗触摸路由器）。
+	scroll.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(scroll)
+
+	var vb := VBoxContainer.new()
+	vb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	vb.add_theme_constant_override("separation", int(UILayout.dp(5.0)))
+	scroll.add_child(vb)
+
+	var fs_section: int = UILayout.font_dp(11.0)
+	var fs_body: int = UILayout.font_dp(10.0)
+	var btn_h: float = UILayout.dp(36.0)
+
+	var sec := func(txt: String) -> void:
+		var l := UITheme.make_section_title(txt, UITheme.GOLD, fs_section)
+		vb.add_child(l)
+
+	sec.call("⚔️ 游戏模式")
+	var mode_row := HBoxContainer.new()
+	mode_row.add_theme_constant_override("separation", int(UILayout.dp(4.0)))
+	vb.add_child(mode_row)
+	mode_1v1_btn = _mobile_btn("1V1", NetworkManager.GameMode.ONEvONE, mode_row, btn_h, fs_body)
+	mode_1v1_btn.toggle_mode = true
+	mode_1v1_btn.button_pressed = true
+	mode_2v2_btn = _mobile_btn("2V2", NetworkManager.GameMode.TWOVTWO, mode_row, btn_h, fs_body)
+	mode_2v2_btn.toggle_mode = true
+	mode_3v3_btn = _mobile_btn("3V3", NetworkManager.GameMode.THREEvTHREE, mode_row, btn_h, fs_body)
+	mode_3v3_btn.toggle_mode = true
+
+	sec.call("🤖 AI 玩家")
+	red_ai_spin = SpinBox.new()
+	red_ai_spin.min_value = 0; red_ai_spin.max_value = 2; red_ai_spin.value = 0
+	red_ai_spin.prefix = "红方 AI:   "
+	red_ai_spin.custom_minimum_size = Vector2(0, btn_h)
+	_style_spin_mobile(red_ai_spin, fs_body)
+	vb.add_child(red_ai_spin)
+	blue_ai_spin = SpinBox.new()
+	blue_ai_spin.min_value = 0; blue_ai_spin.max_value = 2; blue_ai_spin.value = 0
+	blue_ai_spin.prefix = "蓝方 AI:  "
+	blue_ai_spin.custom_minimum_size = Vector2(0, btn_h)
+	_style_spin_mobile(blue_ai_spin, fs_body)
+	vb.add_child(blue_ai_spin)
+
+	sec.call("🏳️ 选择国家")
+	nation_select = OptionButton.new()
+	for item in ["  维京    +25%生命  +10%速度", "  英格兰  +15%攻击  +20%视野  采木+10%",
+			"  法兰西  +25护甲  城堡2级起始", "  中国    食物+20%  黄金+10%  人口+10",
+			"  匈牙利  +15护甲  石材+15%  黄金+10%  人口+5", "  日本    +15%攻速  +10%攻击",
+			"  拜占庭  +2双护甲  黄金+10%"]:
+		nation_select.add_item(item)
+	nation_select.custom_minimum_size = Vector2(0, btn_h)
+	_style_option(nation_select, fs_body)
+	vb.add_child(nation_select)
+
+	sec.call("🗺️ 战场地形（房主）")
+	map_btn = Button.new()
+	map_btn.custom_minimum_size = Vector2(0, btn_h)
+	map_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UITheme.apply_muted_button(map_btn, fs_body)
+	map_btn.pressed.connect(_open_map_dialog)
+	vb.add_child(map_btn)
+	_refresh_map_button()
+	_update_map_availability(true)
+
+	sec.call("📡 传输方式")
+	var trans_row := HBoxContainer.new()
+	trans_row.add_theme_constant_override("separation", int(UILayout.dp(4.0)))
+	vb.add_child(trans_row)
+	enet_toggle_btn = Button.new()
+	enet_toggle_btn.text = "ENet (UDP)"
+	enet_toggle_btn.toggle_mode = true
+	enet_toggle_btn.button_pressed = true
+	enet_toggle_btn.custom_minimum_size = Vector2(0, UILayout.dp(32.0))
+	enet_toggle_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UITheme.apply_primary_button(enet_toggle_btn, fs_body)
+	enet_toggle_btn.pressed.connect(func(): _on_transport_changed(false))
+	trans_row.add_child(enet_toggle_btn)
+	ws_toggle_btn = Button.new()
+	ws_toggle_btn.text = "WebSocket (TCP)"
+	ws_toggle_btn.toggle_mode = true
+	ws_toggle_btn.custom_minimum_size = Vector2(0, UILayout.dp(32.0))
+	ws_toggle_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UITheme.apply_muted_button(ws_toggle_btn, fs_body)
+	ws_toggle_btn.pressed.connect(func(): _on_transport_changed(true))
+	trans_row.add_child(ws_toggle_btn)
+
+	sec.call("🏰 创建主机")
+	var host_btn := Button.new()
+	host_btn.text = "创建服务器"
+	host_btn.custom_minimum_size = Vector2(0, btn_h + UILayout.dp(4.0))
+	UITheme.apply_primary_button(host_btn, fs_body + 1)
+	host_btn.pressed.connect(_on_create_server_pressed)
+	vb.add_child(host_btn)
+	var host_hint := Label.new()
+	host_hint.text = "启动服务器并等待玩家加入，玩家需要你的 IP 地址才能连接。"
+	host_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	host_hint.add_theme_font_size_override("font_size", UILayout.font_dp(8.0))
+	host_hint.add_theme_color_override("font_color", Color(UITheme.STONE).lightened(0.25))
+	vb.add_child(host_hint)
+
+	sec.call("📡 加入游戏")
+	var ip_lbl := Label.new()
+	ip_lbl.text = "服务器 IP 地址:"
+	ip_lbl.add_theme_font_size_override("font_size", fs_body)
+	ip_lbl.add_theme_color_override("font_color", UITheme.PARCHMENT)
+	vb.add_child(ip_lbl)
+	ip_input = LineEdit.new()
+	ip_input.text = "127.0.0.1"
+	ip_input.custom_minimum_size = Vector2(0, btn_h)
+	_style_line_edit(ip_input, fs_body)
+	vb.add_child(ip_input)
+	var join_btn := Button.new()
+	join_btn.text = "加入服务器"
+	join_btn.custom_minimum_size = Vector2(0, btn_h + UILayout.dp(4.0))
+	UITheme.apply_primary_button(join_btn, fs_body + 1)
+	join_btn.pressed.connect(_on_join_game_pressed)
+	vb.add_child(join_btn)
+
+	status_label = Label.new()
+	status_label.text = ""
+	status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	status_label.add_theme_font_size_override("font_size", UILayout.font_dp(9.0))
+	status_label.add_theme_color_override("font_color", UITheme.ALERT_INFO)
+	status_label.custom_minimum_size = Vector2(0, UILayout.dp(24.0))
+	vb.add_child(status_label)
+
+	sec.call("🎮 Steam 房间")
+	steam_status = Label.new()
+	steam_status.text = "Steam: 初始化中..."
+	steam_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	steam_status.add_theme_font_size_override("font_size", UILayout.font_dp(8.5))
+	steam_status.add_theme_color_override("font_color", Color(UITheme.STONE).lightened(0.25))
+	vb.add_child(steam_status)
+	steam_lobby_list = ItemList.new()
+	steam_lobby_list.custom_minimum_size = Vector2(0, UILayout.dp(80.0))
+	steam_lobby_list.add_theme_font_size_override("font_size", fs_body)
+	steam_lobby_list.add_theme_color_override("font_color", UITheme.PARCHMENT)
+	steam_lobby_list.add_theme_color_override("font_selected_color", UITheme.INK)
+	steam_lobby_list.item_selected.connect(_on_steam_lobby_selected)
+	vb.add_child(steam_lobby_list)
+	var steam_row := HBoxContainer.new()
+	steam_row.add_theme_constant_override("separation", int(UILayout.dp(4.0)))
+	vb.add_child(steam_row)
+	var create_btn := Button.new()
+	create_btn.text = "创建房间"
+	create_btn.custom_minimum_size = Vector2(0, UILayout.dp(32.0))
+	create_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UITheme.apply_muted_button(create_btn, fs_body)
+	create_btn.pressed.connect(_on_steam_create_lobby)
+	steam_row.add_child(create_btn)
+	var search_btn := Button.new()
+	search_btn.text = "搜索房间"
+	search_btn.custom_minimum_size = Vector2(0, UILayout.dp(32.0))
+	search_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UITheme.apply_muted_button(search_btn, fs_body)
+	search_btn.pressed.connect(_on_steam_search_lobbies)
+	steam_row.add_child(search_btn)
+	steam_join_btn = Button.new()
+	steam_join_btn.text = "加入房间"
+	steam_join_btn.custom_minimum_size = Vector2(0, UILayout.dp(32.0))
+	steam_join_btn.disabled = true
+	UITheme.apply_primary_button(steam_join_btn, fs_body)
+	steam_join_btn.pressed.connect(_on_steam_join_lobby)
+	vb.add_child(steam_join_btn)
+	steam_leave_btn = Button.new()
+	steam_leave_btn.text = "离开房间"
+	steam_leave_btn.custom_minimum_size = Vector2(0, UILayout.dp(32.0))
+	steam_leave_btn.visible = false
+	UITheme.apply_danger_button(steam_leave_btn, fs_body)
+	steam_leave_btn.pressed.connect(_on_steam_leave_lobby)
+	vb.add_child(steam_leave_btn)
+	start_game_btn = Button.new()
+	start_game_btn.text = "开始游戏"
+	start_game_btn.custom_minimum_size = Vector2(0, UILayout.dp(40.0))
+	start_game_btn.disabled = true
+	start_game_btn.visible = false
+	UITheme.apply_primary_button(start_game_btn, fs_body + 1)
+	start_game_btn.pressed.connect(_on_start_game_pressed)
+	vb.add_child(start_game_btn)
+
+	if SteamManager.steam_initialized:
+		_on_steam_ready()
+	elif not Engine.has_singleton("Steam"):
+		_on_steam_failed("Steam SDK 未加载，缺少 steam_api64.dll")
+	elif SteamManager.steam_initialized == false:
+		_on_steam_failed("Steam 初始化失败 - 请确认 Steam 客户端正在运行")
+	if not NetworkManager.player_count_updated.is_connected(_on_player_count_changed):
+		NetworkManager.player_count_updated.connect(_on_player_count_changed)
+
+func _mobile_btn(text: String, mode: int, parent: Node, height: float, font_size: int) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.custom_minimum_size = Vector2(0, height)
+	b.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UITheme.apply_primary_button(b, font_size)
+	b.pressed.connect(func(): _select_mode(mode))
+	parent.add_child(b)
+	return b
+
+func _style_spin_mobile(sp: SpinBox, font_size: int) -> void:
+	var le := sp.get_line_edit()
+	le.add_theme_font_size_override("font_size", font_size)
+	le.add_theme_color_override("font_color", UITheme.PARCHMENT)
+	le.add_theme_color_override("caret_color", UITheme.GOLD)
+	le.add_theme_color_override("font_hover_color", UITheme.GOLD)
 
 ## 主题化 OptionButton（含弹出列表）
 func _style_option(o: OptionButton, font_size: int) -> void:

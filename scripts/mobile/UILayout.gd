@@ -129,6 +129,55 @@ static func font_title() -> int:
 static func font_small() -> int:
 	return font_dp(11.0)
 
+# 桌面字号 → 手机可读字号。用于复用桌面控件、又不想重写整套布局的界面。
+static func mobile_font(base_size: int) -> int:
+	if not InputSource.use_mobile_ui():
+		return base_size
+	if base_size <= 0:
+		return base_size
+	return font_dp(float(base_size))
+
+# 把一棵「桌面控件树」整体放大到手机可读尺寸。
+# 只处理字号、最小尺寸和容器间距，不碰绝对坐标；调用方仍需为面板准备滚动容器。
+# 已经用 dp 换算过的控件（字号 > 28）不会被二次放大。
+static func scale_widgets_for_mobile(root: Node, recursive: bool = true) -> void:
+	if not InputSource.use_mobile_ui() or root == null:
+		return
+	var stack: Array = [root]
+	while not stack.is_empty():
+		var node: Node = stack.pop_back()
+		if recursive:
+			for child in node.get_children():
+				stack.append(child)
+		if not (node is Control):
+			continue
+		var ctrl := node as Control
+		if ctrl.has_meta("mobile_dp_scaled"):
+			continue
+		if ctrl is Label or ctrl is Button or ctrl is CheckBox or ctrl is LineEdit or ctrl is OptionButton:
+			var fs: int = ctrl.get_theme_font_size("font_size")
+			if fs > 0 and fs <= 28:
+				ctrl.add_theme_font_size_override("font_size", font_dp(float(fs)))
+			# 按钮/输入框的图标（复选框勾、下拉箭头）也跟着放大
+			if ctrl is Button or ctrl is CheckBox:
+				ctrl.add_theme_constant_override("icon_max_width", int(dp(18.0)))
+			var ms := ctrl.custom_minimum_size
+			ctrl.custom_minimum_size = Vector2(
+				ms.x * DP_RATIO if ms.x > 0.0 else 0.0,
+				ms.y * DP_RATIO if ms.y > 0.0 else 0.0)
+		elif ctrl is RichTextLabel:
+			for key in ["normal_font_size", "bold_font_size", "italics_font_size", "bold_italics_font_size", "mono_font_size"]:
+				var fs: int = ctrl.get_theme_font_size(key)
+				if fs > 0 and fs <= 28:
+					ctrl.add_theme_font_size_override(key, font_dp(float(fs)))
+		if ctrl is BoxContainer or ctrl is GridContainer or ctrl is ScrollContainer:
+			var keys: Array = ["separation"] if ctrl is BoxContainer else ["h_separation", "v_separation"]
+			for key in keys:
+				var sep: int = ctrl.get_theme_constant(key)
+				if sep > 0 and sep <= 28:
+					ctrl.add_theme_constant_override(key, int(dp(float(sep))))
+		ctrl.set_meta("mobile_dp_scaled", true)
+
 # 手机端 ScrollContainer 不响应转发进来的鼠标拖动（只认触摸拖动与滚轮），
 # 统一由这里按触摸位置找到最上层的滚动容器，直接驱动它的滚动值。
 static func scroll_at(root_node: Node, pos: Vector2, delta_y: float) -> bool:

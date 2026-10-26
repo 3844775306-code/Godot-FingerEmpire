@@ -19,6 +19,7 @@ var _quality_level: int = 2
 var _quality_btns: Array = []
 var _pause_btn: Button = null
 var _hint_label: Label = null
+var _mobile: bool = false
 
 func setup(is_online: bool, is_client: bool) -> void:
 	_is_online = is_online
@@ -28,6 +29,10 @@ func setup(is_online: bool, is_client: bool) -> void:
 # ==================== 界面构建 ====================
 func _build() -> void:
 	name = "GameSettingsPanel"
+	_mobile = InputSource.use_mobile_ui()
+	# 触屏路由器只把落在已登记面板上的触摸翻译成 UI 事件；设置面板是全屏模态，
+	# 不登记的话手机上连按钮都点不到，更别说滚动。
+	add_to_group("mobile_modal_ui")
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	# 暂停时本面板仍要能被点击
@@ -41,13 +46,20 @@ func _build() -> void:
 	add_child(dim)
 
 	var panel := Panel.new()
-	panel.custom_minimum_size = Vector2(PANEL_W, PANEL_H)
-	panel.size = Vector2(PANEL_W, PANEL_H)
+	var vp := get_viewport().get_visible_rect().size
+	var panel_w: float = PANEL_W
+	var panel_h: float = PANEL_H
+	if _mobile:
+		# 手机屏高约 393dp：面板铺满可用高度，内部滚动，避免内容被裁掉。
+		panel_w = minf(UILayout.dp(360.0), vp.x - UILayout.dp(12.0))
+		panel_h = vp.y - UILayout.dp(16.0)
+	panel.custom_minimum_size = Vector2(panel_w, panel_h)
+	panel.size = Vector2(panel_w, panel_h)
 	panel.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
-	panel.offset_left = -PANEL_W * 0.5
-	panel.offset_right = PANEL_W * 0.5
-	panel.offset_top = -PANEL_H * 0.5
-	panel.offset_bottom = PANEL_H * 0.5
+	panel.offset_left = -panel_w * 0.5
+	panel.offset_right = panel_w * 0.5
+	panel.offset_top = -panel_h * 0.5
+	panel.offset_bottom = panel_h * 0.5
 	var st := StyleBoxFlat.new()
 	st.bg_color = Color(UITheme.INK, 0.97)
 	st.set_corner_radius_all(10)
@@ -56,14 +68,32 @@ func _build() -> void:
 	panel.add_theme_stylebox_override("panel", st)
 	add_child(panel)
 
+	var content_parent: Control = panel
+	if _mobile:
+		var scroll := ScrollContainer.new()
+		scroll.name = "SettingsScroll"
+		scroll.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		scroll.offset_left = UILayout.dp(5.0)
+		scroll.offset_right = -UILayout.dp(5.0)
+		scroll.offset_top = UILayout.dp(5.0)
+		scroll.offset_bottom = -UILayout.dp(5.0)
+		scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+		scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+		panel.add_child(scroll)
+		content_parent = scroll
+
 	var vb := VBoxContainer.new()
-	vb.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	vb.offset_left = 20
-	vb.offset_right = -20
-	vb.offset_top = 14
-	vb.offset_bottom = -14
-	vb.add_theme_constant_override("separation", 10)
-	panel.add_child(vb)
+	if _mobile:
+		vb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		vb.add_theme_constant_override("separation", int(UILayout.dp(7.0)))
+	else:
+		vb.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		vb.offset_left = 20
+		vb.offset_right = -20
+		vb.offset_top = 14
+		vb.offset_bottom = -14
+		vb.add_theme_constant_override("separation", 10)
+	content_parent.add_child(vb)
 
 	# 标题行
 	var title_row := HBoxContainer.new()
@@ -136,6 +166,12 @@ func _build() -> void:
 	quit_btn.pressed.connect(_on_quit_pressed)
 	bottom.add_child(quit_btn)
 
+	if _mobile:
+		# 保留桌面控件的结构，只把字号/触控高度/容器间距放大；面板本身可滚动。
+		UILayout.scale_widgets_for_mobile(vb)
+		if _hint_label:
+			_hint_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+
 # ==================== 画质 ====================
 func _on_quality_pressed(level: int) -> void:
 	_quality_level = level
@@ -206,7 +242,7 @@ func _make_volume_row(label_text: String, value: float, setter: Callable) -> HBo
 	slider.step = 1
 	slider.value = clampf(value, 0.0, 1.0) * 100.0
 	slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	slider.custom_minimum_size = Vector2(0, 28)
+	slider.custom_minimum_size = Vector2(0, UILayout.dp(26.0) if _mobile else 28)
 	row.add_child(slider)
 	var pct := Label.new()
 	pct.text = "%d%%" % int(slider.value)

@@ -199,9 +199,11 @@ var _current_ids: Array = []
 var _row_data: Dictionary = {}       # id -> {"btn":..., "name":...}
 var _cfg: Dictionary = {}            # id -> 配置副本
 var _producers: Dictionary = {}      # 被生产/解锁单位 id -> [ {name, kind, note} ]
+var _mobile := false
 
 
 func _ready() -> void:
+	_mobile = InputSource.use_mobile_ui()
 	_build_canvas()
 	_prepare_data()
 	_build_tabs()
@@ -210,6 +212,13 @@ func _ready() -> void:
 	_switch_tab("all")
 	if _current_ids.size() > 0:
 		_select(_current_ids[0])
+
+# 手机端：列表与详情上下分了左右两栏，触摸拖动直接驱动 ScrollContainer。
+func _input(event: InputEvent) -> void:
+	if not _mobile:
+		return
+	if event is InputEventScreenDrag:
+		UILayout.scroll_at(self, event.position, event.relative.y)
 
 
 # ═══════════ 数据准备 ═══════════
@@ -272,8 +281,9 @@ func _build_canvas() -> void:
 	)
 	_canvas.add_child(bg_panel)
 
-	# 适配比例（同主菜单）
-	_build_scale_fit()
+	# 适配比例（同主菜单）；手机端不再整体缩放，直接按 dp 排版
+	if not _mobile:
+		_build_scale_fit()
 
 	# 顶部标题与返回按钮（放在缩放容器里）
 	_make_header()
@@ -292,6 +302,24 @@ func _build_scale_fit() -> void:
 
 
 func _make_header() -> void:
+	if _mobile:
+		var m_title := UITheme.make_section_title("📖 单位图鉴", UITheme.GOLD, UILayout.font_dp(15.0))
+		m_title.position = Vector2(UILayout.dp(6.0), UILayout.dp(4.0))
+		m_title.size = Vector2(UILayout.dp(260.0), UILayout.dp(22.0))
+		_canvas.add_child(m_title)
+
+		var m_back := Button.new()
+		m_back.text = "← 返回"
+		m_back.position = Vector2(get_viewport().get_visible_rect().size.x - UILayout.dp(76.0), UILayout.dp(4.0))
+		m_back.size = Vector2(UILayout.dp(70.0), UILayout.dp(22.0))
+		UITheme.apply_muted_button(m_back, UILayout.font_dp(10.0))
+		m_back.focus_mode = Control.FOCUS_NONE
+		m_back.pressed.connect(func():
+			get_tree().change_scene_to_file("res://scenes/main_menu.tscn")
+		)
+		_canvas.add_child(m_back)
+		return
+
 	var title := UITheme.make_section_title("📖 单位图鉴 · 中世纪兵种百科", UITheme.GOLD, 40)
 	title.position = Vector2(70, 46)
 	title.size = Vector2(900, 60)
@@ -318,6 +346,29 @@ func _make_header() -> void:
 
 # ═══════════ 分类标签页 ═══════════
 func _build_tabs() -> void:
+	if _mobile:
+		var grid := GridContainer.new()
+		grid.columns = 6
+		grid.position = Vector2(UILayout.dp(6.0), UILayout.dp(29.0))
+		grid.add_theme_constant_override("h_separation", int(UILayout.dp(2.0)))
+		grid.add_theme_constant_override("v_separation", int(UILayout.dp(2.0)))
+		_canvas.add_child(grid)
+		for tab in TAB_ORDER:
+			var key: String = tab[0]
+			var label: String = tab[1]
+			var emoji := _tab_icon(key)
+			var btn := Button.new()
+			btn.text = "%s %s" % [emoji, label]
+			btn.custom_minimum_size = Vector2(UILayout.dp(52.0), UILayout.dp(24.0))
+			btn.size = btn.custom_minimum_size
+			btn.focus_mode = Control.FOCUS_NONE
+			btn.set_meta("tab", key)
+			btn.pressed.connect(_on_tab_pressed.bind(key))
+			grid.add_child(btn)
+			_tab_buttons.append(btn)
+			_tab_to_btn[key] = btn
+		return
+
 	var w := 196.0
 	var gap := 12.0
 	var total := float(TAB_ORDER.size()) * w + float(TAB_ORDER.size() - 1) * gap
@@ -378,7 +429,7 @@ func _style_tab(btn: Button, selected: bool) -> void:
 	btn.add_theme_stylebox_override("hover", st.duplicate())
 	btn.add_theme_stylebox_override("pressed", st.duplicate())
 	btn.add_theme_stylebox_override("disabled", st.duplicate())
-	btn.add_theme_font_size_override("font_size", 20)
+	btn.add_theme_font_size_override("font_size", UILayout.font_dp(8.5) if _mobile else 20)
 
 
 func _switch_tab(key: String) -> void:
@@ -409,27 +460,44 @@ var _list_rows: VBoxContainer
 
 func _build_list_panel() -> void:
 	_list_panel = Panel.new()
-	_list_panel.position = Vector2(66, 266)
-	_list_panel.size = Vector2(880, 1056)
+	if _mobile:
+		var vp := get_viewport().get_visible_rect().size
+		var y := UILayout.dp(84.0)
+		var list_w := UILayout.dp(228.0)
+		_list_panel.position = Vector2(UILayout.dp(4.0), y)
+		_list_panel.size = Vector2(list_w, vp.y - y - UILayout.dp(4.0))
+	else:
+		_list_panel.position = Vector2(66, 266)
+		_list_panel.size = Vector2(880, 1056)
 	_list_panel.add_theme_stylebox_override("panel", UITheme.panel_style(16, 2, 0.9))
 	_canvas.add_child(_list_panel)
 
 	_list_head = Label.new()
-	UITheme.apply_label(_list_head, 22, UITheme.GOLD)
-	_list_head.position = Vector2(28, 24)
-	_list_head.size = Vector2(820, 34)
+	if _mobile:
+		UITheme.apply_label(_list_head, UILayout.font_dp(10.0), UITheme.GOLD)
+		_list_head.position = Vector2(UILayout.dp(5.0), UILayout.dp(4.0))
+		_list_head.size = Vector2(_list_panel.size.x - UILayout.dp(10.0), UILayout.dp(18.0))
+	else:
+		UITheme.apply_label(_list_head, 22, UITheme.GOLD)
+		_list_head.position = Vector2(28, 24)
+		_list_head.size = Vector2(820, 34)
 	_list_panel.add_child(_list_head)
 
 	var scroll := ScrollContainer.new()
-	scroll.position = Vector2(18, 78)
-	scroll.size = Vector2(846, 952)
+	if _mobile:
+		scroll.position = Vector2(UILayout.dp(3.0), UILayout.dp(24.0))
+		scroll.size = Vector2(_list_panel.size.x - UILayout.dp(6.0), _list_panel.size.y - UILayout.dp(28.0))
+		scroll.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	else:
+		scroll.position = Vector2(18, 78)
+		scroll.size = Vector2(846, 952)
 	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
 	_list_panel.add_child(scroll)
 	_list_scroll = scroll
 
 	var rows := VBoxContainer.new()
 	rows.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	rows.add_theme_constant_override("separation", 8)
+	rows.add_theme_constant_override("separation", int(UILayout.dp(3.0)) if _mobile else 8)
 	scroll.add_child(rows)
 	_list_rows = rows
 
@@ -450,7 +518,10 @@ func _add_row(id: int) -> void:
 	if cfg.is_empty():
 		return
 	var btn := Button.new()
-	btn.custom_minimum_size = Vector2(0, 68)
+	if _mobile:
+		btn.custom_minimum_size = Vector2(0, UILayout.dp(34.0))
+	else:
+		btn.custom_minimum_size = Vector2(0, 68)
 	btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	btn.focus_mode = Control.FOCUS_NONE
 	btn.text = ""
@@ -458,9 +529,14 @@ func _add_row(id: int) -> void:
 
 	var icon := Label.new()
 	icon.text = _icon_for(id)
-	UITheme.apply_label(icon, 26, UITheme.PARCHMENT)
-	icon.position = Vector2(14, 0)
-	icon.size = Vector2(60, 68)
+	if _mobile:
+		UITheme.apply_label(icon, UILayout.font_dp(14.0), UITheme.PARCHMENT)
+		icon.position = Vector2(UILayout.dp(2.0), 0)
+		icon.size = Vector2(UILayout.dp(24.0), UILayout.dp(34.0))
+	else:
+		UITheme.apply_label(icon, 26, UITheme.PARCHMENT)
+		icon.position = Vector2(14, 0)
+		icon.size = Vector2(60, 68)
 	icon.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	icon.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -468,25 +544,33 @@ func _add_row(id: int) -> void:
 
 	var name_l := Label.new()
 	name_l.text = str(cfg.get("name", "?"))
-	UITheme.apply_label(name_l, 23, UITheme.PARCHMENT)
-	name_l.position = Vector2(92, 0)
-	name_l.size = Vector2(470, 68)
+	if _mobile:
+		UITheme.apply_label(name_l, UILayout.font_dp(10.0), UITheme.PARCHMENT)
+		name_l.position = Vector2(UILayout.dp(28.0), 0)
+		name_l.size = Vector2(_list_panel.size.x - UILayout.dp(32.0), UILayout.dp(34.0))
+	else:
+		UITheme.apply_label(name_l, 23, UITheme.PARCHMENT)
+		name_l.position = Vector2(92, 0)
+		name_l.size = Vector2(470, 68)
 	name_l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	name_l.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	btn.add_child(name_l)
 
-	var info := Label.new()
-	info.text = _row_summary(cfg)
-	UITheme.apply_label(info, 15, Color(UITheme.STONE).lightened(0.25))
-	info.position = Vector2(548, 0)
-	info.size = Vector2(300, 68)
-	info.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	info.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	info.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	btn.add_child(info)
+	if not _mobile:
+		var info := Label.new()
+		info.text = _row_summary(cfg)
+		UITheme.apply_label(info, 15, Color(UITheme.STONE).lightened(0.25))
+		info.position = Vector2(548, 0)
+		info.size = Vector2(300, 68)
+		info.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		info.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		info.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		btn.add_child(info)
+		_row_data[id] = { "btn": btn, "name": name_l, "info": info }
+	else:
+		_row_data[id] = { "btn": btn, "name": name_l, "info": null }
 
 	btn.pressed.connect(_select.bind(id))
-	_row_data[id] = { "btn": btn, "name": name_l, "info": info }
 	_refresh_row_style(id, false)
 
 
@@ -530,16 +614,34 @@ var _detail_body: VBoxContainer
 
 func _build_detail_panel() -> void:
 	_detail_panel = Panel.new()
-	_detail_panel.position = Vector2(974, 266)
-	_detail_panel.size = Vector2(1360, 1056)
+	if _mobile:
+		var vp := get_viewport().get_visible_rect().size
+		var y := UILayout.dp(84.0)
+		var x := UILayout.dp(228.0) + UILayout.dp(8.0)
+		_detail_panel.position = Vector2(x, y)
+		_detail_panel.size = Vector2(vp.x - x - UILayout.dp(4.0), vp.y - y - UILayout.dp(4.0))
+	else:
+		_detail_panel.position = Vector2(974, 266)
+		_detail_panel.size = Vector2(1360, 1056)
 	_detail_panel.add_theme_stylebox_override("panel", UITheme.card_style(UITheme.GOLD))
 	_canvas.add_child(_detail_panel)
 
 	var body := VBoxContainer.new()
-	body.position = Vector2(40, 36)
-	body.size = Vector2(1280, 984)
-	body.add_theme_constant_override("separation", 8)
-	_detail_panel.add_child(body)
+	if _mobile:
+		var scroll := ScrollContainer.new()
+		scroll.position = Vector2(UILayout.dp(3.0), UILayout.dp(3.0))
+		scroll.size = Vector2(_detail_panel.size.x - UILayout.dp(6.0), _detail_panel.size.y - UILayout.dp(6.0))
+		scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+		scroll.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		_detail_panel.add_child(scroll)
+		body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		body.add_theme_constant_override("separation", int(UILayout.dp(2.0)))
+		scroll.add_child(body)
+	else:
+		body.position = Vector2(40, 36)
+		body.size = Vector2(1280, 984)
+		body.add_theme_constant_override("separation", 8)
+		_detail_panel.add_child(body)
 	_detail_body = body
 
 
@@ -570,19 +672,27 @@ func _render_detail(id: int) -> void:
 
 	# ── 标题行：图标 + 名称 + 徽标 ──
 	var head := HBoxContainer.new()
-	head.add_theme_constant_override("separation", 16)
+	head.add_theme_constant_override("separation", int(UILayout.dp(4.0)) if _mobile else 16)
 	_detail_body.add_child(head)
 
 	var emoji := Label.new()
 	emoji.text = _icon_for(id)
-	UITheme.apply_label(emoji, 44, UITheme.PARCHMENT)
-	emoji.custom_minimum_size = Vector2(72, 72)
+	if _mobile:
+		UITheme.apply_label(emoji, UILayout.font_dp(16.0), UITheme.PARCHMENT)
+		emoji.custom_minimum_size = Vector2(UILayout.dp(22.0), UILayout.dp(24.0))
+	else:
+		UITheme.apply_label(emoji, 44, UITheme.PARCHMENT)
+		emoji.custom_minimum_size = Vector2(72, 72)
 	head.add_child(emoji)
 
 	var name_l := Label.new()
 	name_l.text = str(cfg.get("name", "?"))
-	UITheme.apply_label(name_l, 42, UITheme.GOLD)
-	name_l.custom_minimum_size = Vector2(620, 72)
+	if _mobile:
+		UITheme.apply_label(name_l, UILayout.font_dp(13.0), UITheme.GOLD)
+		name_l.custom_minimum_size = Vector2(0, UILayout.dp(24.0))
+	else:
+		UITheme.apply_label(name_l, 42, UITheme.GOLD)
+		name_l.custom_minimum_size = Vector2(620, 72)
 	name_l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	head.add_child(name_l)
 
@@ -590,8 +700,12 @@ func _render_detail(id: int) -> void:
 	if nation != "":
 		var tag := Label.new()
 		tag.text = nation
-		UITheme.apply_label(tag, 17, UITheme.PARCHMENT)
-		tag.custom_minimum_size = Vector2(0, 72)
+		if _mobile:
+			UITheme.apply_label(tag, UILayout.font_dp(9.0), UITheme.PARCHMENT)
+			tag.custom_minimum_size = Vector2(0, UILayout.dp(24.0))
+		else:
+			UITheme.apply_label(tag, 17, UITheme.PARCHMENT)
+			tag.custom_minimum_size = Vector2(0, 72)
 		tag.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		head.add_child(tag)
 
@@ -599,8 +713,13 @@ func _render_detail(id: int) -> void:
 	var ident := _identity_line(cfg, id)
 	var ident_l := Label.new()
 	ident_l.text = ident
-	UITheme.apply_label(ident_l, 17, Color(UITheme.PARCHMENT).darkened(0.12))
-	ident_l.custom_minimum_size = Vector2(0, 30)
+	if _mobile:
+		UITheme.apply_label(ident_l, UILayout.font_dp(9.0), Color(UITheme.PARCHMENT).darkened(0.12))
+		ident_l.custom_minimum_size = Vector2(0, UILayout.dp(15.0))
+		ident_l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	else:
+		UITheme.apply_label(ident_l, 17, Color(UITheme.PARCHMENT).darkened(0.12))
+		ident_l.custom_minimum_size = Vector2(0, 30)
 	_detail_body.add_child(ident_l)
 
 	# ── 生产 / 建造价格 ──
@@ -718,7 +837,7 @@ func _cost_string(cfg: Dictionary) -> String:
 # ── 详情辅助 ──
 func _add_rule() -> void:
 	var r := ColorRect.new()
-	r.custom_minimum_size = Vector2(0, 2)
+	r.custom_minimum_size = Vector2(0, UILayout.dp(1.0) if _mobile else 2)
 	r.color = Color(UITheme.GOLD, 0.35)
 	_detail_body.add_child(r)
 
@@ -726,16 +845,21 @@ func _add_rule() -> void:
 func _add_line(text: String, color: Color, fs: int = 20, min_h: int = 40) -> void:
 	var l := Label.new()
 	l.text = text
-	UITheme.apply_label(l, fs, color)
+	if _mobile:
+		var mfs := UILayout.font_dp(9.5) if fs >= 20 else UILayout.font_dp(9.0)
+		UITheme.apply_label(l, mfs, color)
+		l.custom_minimum_size = Vector2(0, UILayout.dp(14.0))
+	else:
+		UITheme.apply_label(l, fs, color)
+		l.custom_minimum_size = Vector2(0, min_h)
 	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	l.custom_minimum_size = Vector2(0, min_h)
 	l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_detail_body.add_child(l)
 
 
 func _add_pair(title: String, value: String) -> void:
 	var l := Label.new()
-	UITheme.apply_label(l, 18, UITheme.PARCHMENT)
+	UITheme.apply_label(l, UILayout.font_dp(9.5) if _mobile else 18, UITheme.PARCHMENT)
 	var icon = ATTR_ICONS.get(title, "")
 	if icon != "":
 		l.text = "%s %s：%s" % [icon, title, value]
@@ -743,7 +867,7 @@ func _add_pair(title: String, value: String) -> void:
 		l.text = "%s：%s" % [title, value]
 	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	l.custom_minimum_size = Vector2(0, 32)
+	l.custom_minimum_size = Vector2(0, UILayout.dp(12.0) if _mobile else 32)
 	_detail_body.add_child(l)
 
 
@@ -897,8 +1021,12 @@ func _add_building_lines(cfg: Dictionary, id: int) -> void:
 func _add_info_header(text: String) -> Label:
 	var l := Label.new()
 	l.text = text
-	UITheme.apply_label(l, 19, UITheme.GOLD)
-	l.custom_minimum_size = Vector2(0, 30)
+	if _mobile:
+		UITheme.apply_label(l, UILayout.font_dp(10.0), UITheme.GOLD)
+		l.custom_minimum_size = Vector2(0, UILayout.dp(15.0))
+	else:
+		UITheme.apply_label(l, 19, UITheme.GOLD)
+		l.custom_minimum_size = Vector2(0, 30)
 	return l
 
 

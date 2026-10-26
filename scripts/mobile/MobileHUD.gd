@@ -192,7 +192,8 @@ func _scale_shared_fonts(root: Control) -> void:
 			stack.append(child)
 			if child is Label or child is Button:
 				var cur: int = int(child.get_theme_font_size("font_size"))
-				if cur > 0:
+				# 已经用 dp 换算过的控件（例如「详细」切换按钮）不再二次放大。
+				if cur > 0 and cur <= 28:
 					child.add_theme_font_size_override("font_size", int(round(cur * UILayout.DP_RATIO)))
 
 # ==================== 面板横向滑动收起 ====================
@@ -359,6 +360,10 @@ func is_point_over_panel(pos: Vector2) -> bool:
 		return true
 	if build_overlay and build_overlay.visible and build_overlay.is_point_inside(pos):
 		return true
+	# 对局内设置等全屏模态：整个面板都要拦住触摸，否则按钮点不到、列表也滚不动。
+	for modal in get_tree().get_nodes_in_group("mobile_modal_ui"):
+		if modal is Control and modal.visible and modal.get_global_rect().has_point(pos):
+			return true
 	if _point_over_build_menu(pos):
 		return true
 	for ctrl in [capsule, command_bar]:

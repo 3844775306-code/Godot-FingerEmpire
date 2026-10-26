@@ -1,9 +1,11 @@
 class_name ClientInfoPanel
 extends Panel
 
-@onready var upgrade_btn = $VBox/UpgradeBtn
-@onready var produce_vbox = $VBox/ProduceVBox
+@onready var upgrade_btn = get_node("VBox/UpgradeBtn")
+@onready var produce_vbox = get_node("VBox/ProduceVBox")
 @onready var close_btn = $CloseBtn
+
+var _vb: VBoxContainer = null
 
 var name_rtl: RichTextLabel
 var stats_rtl: RichTextLabel
@@ -31,22 +33,30 @@ const RC = {"wood": "green", "stone": "gray", "gold": "gold", "food": "orange", 
 
 func _ready():
 	visible = false
+	_vb = get_node("VBox")
 	# 与单机版信息面板同一套皇庭皮肤：暖黑底 + 金边
 	add_theme_stylebox_override("panel", UITheme.panel_style(UITheme.RADIUS_LG, UITheme.BORDER_MED))
-	custom_minimum_size = Vector2(200, 0)
+	custom_minimum_size = Vector2(UILayout.dp(182.0) if _is_mobile() else 200.0, 0)
 
 	_swap_rtl("NameLabel"); _swap_rtl("StatsLabel")
-	name_rtl = $VBox.get_node("NameLabel")
-	stats_rtl = $VBox.get_node("StatsLabel")
+	name_rtl = _vb.get_node("NameLabel")
+	stats_rtl = _vb.get_node("StatsLabel")
 	name_rtl.add_theme_font_size_override("font_size", UITheme.FONT_XL)
 	name_rtl.add_theme_color_override("default_color", UITheme.PARCHMENT)
 	name_rtl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	stats_rtl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	stats_rtl.add_theme_color_override("default_color", UITheme.PARCHMENT)
+	if _is_mobile():
+		# 联机信息面板和单机版一样是桌面节点：RichTextLabel 不会走 MobileHUD
+		# 的 Label/Button 放大逻辑，这里必须自己按 dp 设置。
+		_set_rtl_font(name_rtl, UILayout.font_dp(15.0))
+		_set_rtl_font(stats_rtl, UILayout.font_dp(12.0))
+		name_rtl.custom_minimum_size = Vector2(0, UILayout.font_dp(15.0) + UILayout.dp(3.0))
+		_vb.add_theme_constant_override("separation", int(UILayout.dp(3.0)))
 
 	# 血条：黑色背景条 + 锚点前景（宽度 = 血量比例），与单机版一致
 	hp_bar_bg = ColorRect.new(); hp_bar_bg.name = "HPBarBg"
-	hp_bar_bg.custom_minimum_size = Vector2(1, 16)
+	hp_bar_bg.custom_minimum_size = Vector2(1, int(UILayout.dp(5.0)) if _is_mobile() else 16)
 	hp_bar_bg.color = Color(0, 0, 0, 0.55)
 	hp_bar_bg.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	hp_bar = ColorRect.new(); hp_bar.name = "HPBar"
@@ -54,40 +64,85 @@ func _ready():
 	hp_bar.anchor_top = 0; hp_bar.anchor_bottom = 1
 	hp_bar.anchor_left = 0; hp_bar.anchor_right = 1
 	hp_bar_bg.add_child(hp_bar)
-	var vb = $VBox; vb.add_child(hp_bar_bg); vb.move_child(hp_bar_bg, 1)
+	var vb = _vb; vb.add_child(hp_bar_bg); vb.move_child(hp_bar_bg, 1)
 	close_btn.pressed.connect(_on_close_pressed)
 	close_btn.text = "✕ 关闭"
 	UITheme.apply_muted_button(close_btn, UITheme.FONT_SM)
 	UITheme.apply_primary_button(upgrade_btn, UITheme.FONT_MD)
+	if _is_mobile():
+		close_btn.custom_minimum_size = Vector2(UILayout.dp(46.0), UILayout.dp(18.0))
+		upgrade_btn.custom_minimum_size = Vector2(0, UILayout.dp(30.0))
 
 	# 拆除按钮 — 危险红
 	demolish_btn = Button.new()
 	demolish_btn.name = "DemolishBtn"
 	demolish_btn.text = "💥 拆除建筑"
-	demolish_btn.custom_minimum_size = Vector2(180, 36)
+	demolish_btn.custom_minimum_size = Vector2(UILayout.dp(160.0) if _is_mobile() else 180.0,
+		UILayout.dp(30.0) if _is_mobile() else 36.0)
 	demolish_btn.visible = false
 	demolish_btn.pressed.connect(_on_demolish_pressed)
 	UITheme.apply_danger_button(demolish_btn, UITheme.FONT_SM)
-	$VBox.add_child(demolish_btn)
+	_vb.add_child(demolish_btn)
 
 	# 修理按钮 — 建筑掉血后才出现；主城不可修，逻辑与命令卡一致。
 	repair_btn = Button.new()
 	repair_btn.name = "RepairBtn"
 	repair_btn.text = "🔧 修理建筑"
-	repair_btn.custom_minimum_size = Vector2(180, 36)
+	repair_btn.custom_minimum_size = Vector2(UILayout.dp(160.0) if _is_mobile() else 180.0,
+		UILayout.dp(30.0) if _is_mobile() else 36.0)
 	repair_btn.visible = false
 	repair_btn.pressed.connect(_on_repair_pressed)
 	UITheme.apply_primary_button(repair_btn, UITheme.FONT_SM)
-	$VBox.add_child(repair_btn)
+	_vb.add_child(repair_btn)
 
 	set_process(true)
 	renderer = get_tree().get_first_node_in_group("client_renderer")
-	$VBox.offset_top = _detail_top_offset()
+	if _is_mobile():
+		_build_mobile_scroll()
+	else:
+		_vb.offset_top = _detail_top_offset()
 	_build_detail_view()
 	_build_detail_toggle()
 
 func _is_mobile() -> bool:
 	return InputSource.use_mobile_ui()
+
+func _set_rtl_font(rtl: RichTextLabel, size: int) -> void:
+	rtl.add_theme_font_size_override("normal_font_size", size)
+	rtl.add_theme_font_size_override("bold_font_size", size)
+	rtl.add_theme_font_size_override("italics_font_size", size)
+	rtl.add_theme_font_size_override("bold_italics_font_size", size)
+	rtl.add_theme_font_size_override("mono_font_size", size)
+
+# 手机端信息面板只有 182×200dp，内容和单机版一样需要滚动，否则生产按钮会超出屏幕。
+func _build_mobile_scroll() -> void:
+	close_btn.anchor_left = 1.0
+	close_btn.anchor_right = 1.0
+	close_btn.offset_left = -UILayout.dp(54.0)
+	close_btn.offset_right = -UILayout.dp(5.0)
+	close_btn.offset_top = UILayout.dp(4.0)
+	close_btn.offset_bottom = UILayout.dp(21.0)
+
+	var sc := ScrollContainer.new()
+	sc.name = "PanelScroll"
+	sc.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	sc.offset_left = UILayout.dp(4.0)
+	sc.offset_right = -UILayout.dp(4.0)
+	sc.offset_top = UILayout.dp(24.0)
+	sc.offset_bottom = -UILayout.dp(4.0)
+	sc.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	sc.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	# 滚动由 MobileHUD 的手势路由驱动；容器自己不吃触摸，避免和战场拖动抢事件。
+	sc.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(sc)
+	move_child(sc, 0)
+
+	if _vb.get_parent():
+		_vb.get_parent().remove_child(_vb)
+	sc.add_child(_vb)
+	_vb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_vb.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_vb.offset_top = 0.0
 
 func _detail_top_offset() -> float:
 	return UILayout.dp(24.0) if _is_mobile() else 36.0
@@ -173,7 +228,7 @@ func _apply_detail_mode(force_reset: bool = false) -> void:
 	var show_detail: bool = _detail_mode and has_single
 	if _detail_view != null:
 		_detail_view.visible = show_detail
-	$VBox.visible = not show_detail
+	_vb.visible = not show_detail
 	if show_detail:
 		var reset: bool = force_reset or observed_entity_id != _detail_last_id
 		if reset:
@@ -205,7 +260,7 @@ func _reset_detail_scroll_deferred() -> void:
 		_detail_scroll.scroll_vertical = 0
 
 func _swap_rtl(nm: String):
-	var old = $VBox.get_node_or_null(nm)
+	var old = _vb.get_node_or_null(nm)
 	if not old: return
 	var p = old.get_parent(); var i = old.get_index()
 	p.remove_child(old); old.queue_free()
@@ -222,7 +277,8 @@ func _hc(pct: float) -> String:
 
 func _make_rtl_label() -> RichTextLabel:
 	var l = RichTextLabel.new(); l.bbcode_enabled = true; l.fit_content = true; l.autowrap_mode = TextServer.AUTOWRAP_OFF
-	l.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	var fs: int = UILayout.font_dp(9.5) if _is_mobile() else UITheme.FONT_XS
+	_set_rtl_font(l, fs)
 	l.add_theme_color_override("default_color", UITheme.PARCHMENT)
 	return l
 
@@ -349,9 +405,9 @@ func update_info(entity_id: int):
 	stats_rtl.text = t
 
 	# Always detach old upgrade box first (avoid deferred-deletion residue)
-	var old_box = $VBox.get_node_or_null("UpgradeInfoBox")
+	var old_box = _vb.get_node_or_null("UpgradeInfoBox")
 	if old_box:
-		$VBox.remove_child(old_box)
+		_vb.remove_child(old_box)
 		old_box.queue_free()
 	if info["type"] == 1:
 		# 拆除按钮（城堡不可拆；队友建筑只读）
@@ -365,7 +421,7 @@ func update_info(entity_id: int):
 				upgrade_btn.pressed.disconnect(_on_upgrade_pressed)
 			upgrade_btn.pressed.connect(_on_upgrade_pressed)
 
-			var box = VBoxContainer.new(); box.name = "UpgradeInfoBox"; $VBox.add_child(box)
+			var box = VBoxContainer.new(); box.name = "UpgradeInfoBox"; _vb.add_child(box)
 
 			var cost = info.get("get_upgrade_cost", {})
 			for res in ["wood", "stone", "gold", "oil"]:
@@ -393,7 +449,11 @@ func update_info(entity_id: int):
 			for prod in pl:
 				var uc = EntityDatabase.get_config(prod["unit_id"])
 				if not uc: continue
-				var btn = Button.new(); btn.text = ""; UITheme.apply_button(btn, UITheme.FONT_SM); btn.custom_minimum_size = Vector2(200, 40); btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				var btn = Button.new(); btn.text = ""
+				var pfont: int = UILayout.font_dp(10.0) if _is_mobile() else UITheme.FONT_SM
+				UITheme.apply_button(btn, pfont)
+				btn.custom_minimum_size = Vector2(UILayout.dp(160.0), UILayout.dp(30.0)) if _is_mobile() else Vector2(200, 40)
+				btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 				var ok = population.get("current", 0) < population.get("max", 0); var cs = []
 				var cost = prod.get("current_cost", uc.get("cost", {}))
 				for res in cost:
@@ -409,7 +469,7 @@ func update_info(entity_id: int):
 				rtl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 				rtl.anchor_left = 0; rtl.anchor_right = 1; rtl.anchor_top = 0; rtl.anchor_bottom = 1
 				rtl.add_theme_color_override("default_color", UITheme.PARCHMENT)
-				rtl.add_theme_font_size_override("normal_font_size", UITheme.FONT_SM)
+				rtl.add_theme_font_size_override("normal_font_size", pfont if _is_mobile() else UITheme.FONT_SM)
 				var ct = ""
 				for ci in cs:
 					var rc = RC.get(ci.res, "white")
@@ -564,9 +624,9 @@ func show_multi_selection(ids: Array):
 	produce_vbox.visible = true
 	hp_bar.visible = false
 	if hp_bar_bg: hp_bar_bg.visible = false
-	var old_box = $VBox.get_node_or_null("UpgradeInfoBox")
+	var old_box = _vb.get_node_or_null("UpgradeInfoBox")
 	if old_box:
-		$VBox.remove_child(old_box)
+		_vb.remove_child(old_box)
 		old_box.queue_free()
 	name_rtl.text = "[color=%s]⚔️ 选中 %d 个单位[/color]" % [UITheme.hex_str(UITheme.GOLD), ids.size()]
 	stats_rtl.text = ""
@@ -600,9 +660,11 @@ func show_multi_selection(ids: Array):
 		var row_color = ROW_COLORS[i % ROW_COLORS.size()]
 
 		var btn = Button.new()
-		btn.custom_minimum_size = Vector2(200, 40)
+		btn.custom_minimum_size = Vector2(UILayout.dp(160.0), UILayout.dp(30.0)) if _is_mobile() else Vector2(200, 40)
 		btn.toggle_mode = true
 		UITheme.apply_row_button(btn, row_color)
+		if _is_mobile():
+			btn.add_theme_font_size_override("font_size", UILayout.font_dp(10.0))
 
 		var lvl_text = " Lv.%d" % g["min_level"] if g["min_level"] == g["max_level"] else " Lv.%d~%d" % [g["min_level"], g["max_level"]]
 		btn.text = "%s %d x %s%s" % [UITheme.entity_emoji(g["entity_id"], 2), g["count"], g["name"], lvl_text]
