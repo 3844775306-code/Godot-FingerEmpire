@@ -17,6 +17,16 @@ var resources: Dictionary = {}
 var limits: Dictionary = {}
 var population: Dictionary = {}
 
+# ==================== 简略 / 详细 ====================
+var detail_toggle: Button = null
+var _detail_mode: bool = false
+var _detail_view: Control = null
+var _detail_scroll: ScrollContainer = null
+var _detail_rtl: RichTextLabel = null
+var _detail_content: VBoxContainer = null
+var _detail_last_id: int = -1
+var _detail_last_text: String = ""
+
 const RC = {"wood": "green", "stone": "gray", "gold": "gold", "food": "orange", "oil": "saddlebrown"}
 
 func _ready():
@@ -72,6 +82,127 @@ func _ready():
 
 	set_process(true)
 	renderer = get_tree().get_first_node_in_group("client_renderer")
+	$VBox.offset_top = _detail_top_offset()
+	_build_detail_view()
+	_build_detail_toggle()
+
+func _is_mobile() -> bool:
+	return InputSource.use_mobile_ui()
+
+func _detail_top_offset() -> float:
+	return UILayout.dp(24.0) if _is_mobile() else 36.0
+
+func _build_detail_toggle() -> void:
+	detail_toggle = Button.new()
+	detail_toggle.name = "DetailToggle"
+	detail_toggle.text = "详细" if _is_mobile() else "📖 详细"
+	detail_toggle.focus_mode = Control.FOCUS_NONE
+	detail_toggle.anchor_left = 0.0
+	detail_toggle.anchor_right = 0.0
+	detail_toggle.anchor_top = 0.0
+	detail_toggle.anchor_bottom = 0.0
+	if _is_mobile():
+		detail_toggle.offset_left = UILayout.dp(5.0)
+		detail_toggle.offset_top = UILayout.dp(4.0)
+		detail_toggle.offset_right = UILayout.dp(59.0)
+		detail_toggle.offset_bottom = UILayout.dp(22.0)
+		detail_toggle.custom_minimum_size = Vector2(UILayout.dp(54.0), UILayout.dp(18.0))
+		UITheme.apply_muted_button(detail_toggle, UILayout.font_dp(10.0))
+	else:
+		detail_toggle.offset_left = 14.0
+		detail_toggle.offset_top = 2.0
+		detail_toggle.offset_right = 108.0
+		detail_toggle.offset_bottom = 30.0
+		detail_toggle.custom_minimum_size = Vector2(94, 28)
+		UITheme.apply_muted_button(detail_toggle, UITheme.FONT_XS)
+	detail_toggle.z_index = 3
+	detail_toggle.visible = false
+	detail_toggle.pressed.connect(_on_detail_toggle_pressed)
+	add_child(detail_toggle)
+
+func _build_detail_view() -> void:
+	_detail_view = Control.new()
+	_detail_view.name = "DetailView"
+	_detail_view.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_detail_view.offset_left = 8.0
+	_detail_view.offset_top = _detail_top_offset()
+	_detail_view.offset_right = -8.0
+	_detail_view.offset_bottom = -8.0
+	_detail_view.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_detail_view)
+
+	_detail_scroll = ScrollContainer.new()
+	_detail_scroll.name = "DetailScroll"
+	_detail_scroll.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_detail_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_detail_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	_detail_scroll.mouse_filter = Control.MOUSE_FILTER_IGNORE if _is_mobile() else Control.MOUSE_FILTER_STOP
+	_detail_view.add_child(_detail_scroll)
+
+	_detail_content = VBoxContainer.new()
+	_detail_content.name = "DetailContent"
+	_detail_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_detail_content.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_detail_content.add_theme_constant_override("separation", 4)
+	_detail_scroll.add_child(_detail_content)
+
+	_detail_rtl = RichTextLabel.new()
+	_detail_rtl.name = "DetailLabel"
+	_detail_rtl.bbcode_enabled = true
+	_detail_rtl.fit_content = true
+	_detail_rtl.scroll_active = false
+	_detail_rtl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_detail_rtl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_detail_rtl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_detail_rtl.add_theme_color_override("default_color", UITheme.PARCHMENT)
+	var font_size: int = UILayout.font_dp(12.0) if _is_mobile() else UITheme.FONT_SM
+	for key in ["normal_font_size", "bold_font_size", "italics_font_size", "bold_italics_font_size", "mono_font_size"]:
+		_detail_rtl.add_theme_font_size_override(key, font_size)
+	_detail_content.add_child(_detail_rtl)
+	_detail_view.visible = false
+
+func _on_detail_toggle_pressed() -> void:
+	_detail_mode = not _detail_mode
+	_apply_detail_mode(true)
+
+func _apply_detail_mode(force_reset: bool = false) -> void:
+	var has_single: bool = observed_entity_id != -1
+	if detail_toggle != null:
+		detail_toggle.visible = has_single
+		detail_toggle.text = ("简略" if _detail_mode else "详细") if _is_mobile() else ("📄 简略" if _detail_mode else "📖 详细")
+	var show_detail: bool = _detail_mode and has_single
+	if _detail_view != null:
+		_detail_view.visible = show_detail
+	$VBox.visible = not show_detail
+	if show_detail:
+		var reset: bool = force_reset or observed_entity_id != _detail_last_id
+		if reset:
+			_detail_last_id = observed_entity_id
+		_refresh_detail_text(reset)
+
+func _refresh_detail_text(reset_scroll: bool) -> void:
+	if _detail_rtl == null or not is_instance_valid(_detail_rtl):
+		return
+	if observed_entity_id == -1:
+		return
+	if renderer == null:
+		renderer = get_tree().get_first_node_in_group("client_renderer")
+	if renderer == null:
+		return
+	var info: Dictionary = renderer.get_entity_info(observed_entity_id)
+	if info.is_empty():
+		return
+	var text: String = EntityInfoText.detailed(int(info.get("entity_id", -1)), info)
+	if text != _detail_last_text:
+		_detail_last_text = text
+		_detail_rtl.text = text
+	if reset_scroll:
+		_detail_scroll.scroll_vertical = 0
+		_reset_detail_scroll_deferred()
+
+func _reset_detail_scroll_deferred() -> void:
+	if _detail_scroll != null and is_instance_valid(_detail_scroll):
+		_detail_scroll.scroll_vertical = 0
 
 func _swap_rtl(nm: String):
 	var old = $VBox.get_node_or_null(nm)
@@ -226,6 +357,7 @@ func update_info(entity_id: int):
 		# 拆除按钮（城堡不可拆；队友建筑只读）
 		if demolish_btn:
 			demolish_btn.visible = (info.get("entity_id", 0) != 20) and not readonly
+		_update_repair_ui(info, readonly)
 		if info.get("can_upgrade", false) and not readonly:
 
 			upgrade_btn.visible = true; upgrade_btn.text = "升级"
@@ -292,7 +424,71 @@ func update_info(entity_id: int):
 	else:
 		upgrade_btn.visible = false; produce_vbox.visible = false
 		if demolish_btn: demolish_btn.visible = false
+		if repair_btn: repair_btn.visible = false
 		hp_bar.visible = false
+	_apply_detail_mode()
+
+func _update_repair_ui(info: Dictionary, readonly: bool) -> void:
+	if repair_btn == null:
+		return
+	repair_btn.visible = false
+	var eid := int(info.get("entity_id", -1))
+	if readonly or eid in [20, 53]:
+		return
+	var ratio := _repair_damage_ratio(info)
+	var under := float(info.get("repair_timer", 0.0)) > 0.0
+	var busy := float(info.get("build_timer", 0.0)) > 0.0 or float(info.get("upgrade_timer", 0.0)) > 0.0
+	if busy or (ratio <= 0.001 and not under):
+		return
+	repair_btn.visible = true
+	var cost := _repair_cost_from_info(info, ratio)
+	var can_click := bool(int(info.get("can_repair", 1))) if info.has("can_repair") else true
+	if can_click and not under:
+		for k in cost:
+			if int(resources.get(k, 0)) < int(cost[k]):
+				can_click = false
+				break
+	repair_btn.disabled = under or not can_click
+	if under:
+		var mrt := maxf(float(info.get("max_repair_time", 0.0)), 0.001)
+		var pct := clampf(1.0 - float(info.get("repair_timer", 0.0)) / mrt, 0.0, 1.0)
+		repair_btn.text = "🔧 修理中 %d%%" % int(pct * 100.0)
+	else:
+		repair_btn.text = "🔧 修理 %s" % _repair_cost_text(cost)
+	var ctime := float(info.get("repair_time_total", 0.0))
+	var tip := "修理残破建筑：修完回复到满血（主城不可修理）"
+	tip += "\n费用：%s" % (_repair_cost_text(cost) if not cost.is_empty() else "免费")
+	if ctime > 0.0:
+		tip += "\n耗时：%.1f 秒" % ctime
+	if under:
+		tip += "\n状态：修理中"
+	elif not can_click:
+		tip += "\n状态：资源不足或附近有敌军，暂不可修"
+	repair_btn.tooltip_text = tip
+
+func _repair_cost_text(cost: Dictionary) -> String:
+	var parts: Array[String] = []
+	for res in ["wood", "stone", "gold", "oil"]:
+		var need := int(cost.get(res, 0))
+		if need > 0:
+			parts.append("%s%d" % [UITheme.RESOURCE_ICONS.get(res, ""), need])
+	return " ".join(parts) if not parts.is_empty() else "免费"
+
+func _on_repair_pressed():
+	if observed_entity_id == -1:
+		return
+	if not _is_local_owned_info(renderer.get_entity_info(observed_entity_id)):
+		return
+	NetworkManager.send_command.rpc_id(1, {
+		"action": "repair",
+		"building_id": observed_entity_id,
+		"shift_held": Input.is_key_pressed(KEY_SHIFT),
+	})
+	# 快照回来前先本地置灰，避免连点重复下单
+	if repair_btn:
+		repair_btn.disabled = true
+		repair_btn.text = "🔧 修理中…"
+		repair_btn.tooltip_text = "修理已提交，等待服务端确认"
 
 func _on_upgrade_pressed():
 	if observed_entity_id == -1: return
@@ -357,7 +553,6 @@ const ROW_COLORS = [
 
 var _multi_vbox: VBoxContainer = null
 var _pending_multi_ids: Array = []         # IDs being accumulated via Ctrl+click
-		_update_repair_ui(info, readonly)
 var _pending_multi_btns: Dictionary = {}   # btn -> true for tracking pressed state
 
 func show_multi_selection(ids: Array):
@@ -365,6 +560,7 @@ func show_multi_selection(ids: Array):
 	observed_entity_id = -1
 	upgrade_btn.visible = false
 	if demolish_btn: demolish_btn.visible = false
+	if repair_btn: repair_btn.visible = false
 	produce_vbox.visible = true
 	hp_bar.visible = false
 	if hp_bar_bg: hp_bar_bg.visible = false
@@ -424,71 +620,7 @@ func show_multi_selection(ids: Array):
 								_pending_multi_ids.append(rid)
 						_pending_multi_btns[btn] = true
 				else:
-		if repair_btn: repair_btn.visible = false
 					for rid in row_ids:
-	_apply_detail_mode()
-
-func _update_repair_ui(info: Dictionary, readonly: bool) -> void:
-	if repair_btn == null:
-		return
-	repair_btn.visible = false
-	var eid := int(info.get("entity_id", -1))
-	if readonly or eid in [20, 53]:
-		return
-	var ratio := _repair_damage_ratio(info)
-	var under := float(info.get("repair_timer", 0.0)) > 0.0
-	var busy := float(info.get("build_timer", 0.0)) > 0.0 or float(info.get("upgrade_timer", 0.0)) > 0.0
-	if busy or (ratio <= 0.001 and not under):
-		return
-	repair_btn.visible = true
-	var cost := _repair_cost_from_info(info, ratio)
-	var can_click := bool(int(info.get("can_repair", 1))) if info.has("can_repair") else true
-	if can_click and not under:
-		for k in cost:
-			if int(resources.get(k, 0)) < int(cost[k]):
-				can_click = false
-				break
-	repair_btn.disabled = under or not can_click
-	if under:
-		var mrt := maxf(float(info.get("max_repair_time", 0.0)), 0.001)
-		var pct := clampf(1.0 - float(info.get("repair_timer", 0.0)) / mrt, 0.0, 1.0)
-		repair_btn.text = "🔧 修理中 %d%%" % int(pct * 100.0)
-	else:
-		repair_btn.text = "🔧 修理 %s" % _repair_cost_text(cost)
-	var ctime := float(info.get("repair_time_total", 0.0))
-	var tip := "修理残破建筑：修完回复到满血（主城不可修理）"
-	tip += "\n费用：%s" % (_repair_cost_text(cost) if not cost.is_empty() else "免费")
-	if ctime > 0.0:
-		tip += "\n耗时：%.1f 秒" % ctime
-	if under:
-		tip += "\n状态：修理中"
-	elif not can_click:
-		tip += "\n状态：资源不足或附近有敌军，暂不可修"
-	repair_btn.tooltip_text = tip
-
-func _repair_cost_text(cost: Dictionary) -> String:
-	var parts: Array[String] = []
-	for res in ["wood", "stone", "gold", "oil"]:
-		var need := int(cost.get(res, 0))
-		if need > 0:
-			parts.append("%s%d" % [UITheme.RESOURCE_ICONS.get(res, ""), need])
-	return " ".join(parts) if not parts.is_empty() else "免费"
-
-func _on_repair_pressed():
-	if observed_entity_id == -1:
-		return
-	if not _is_local_owned_info(renderer.get_entity_info(observed_entity_id)):
-		return
-	NetworkManager.send_command.rpc_id(1, {
-		"action": "repair",
-		"building_id": observed_entity_id,
-		"shift_held": Input.is_key_pressed(KEY_SHIFT),
-	})
-	# 快照回来前先本地置灰，避免连点重复下单
-	if repair_btn:
-		repair_btn.disabled = true
-		repair_btn.text = "🔧 修理中…"
-		repair_btn.tooltip_text = "修理已提交，等待服务端确认"
 						_pending_multi_ids.erase(rid)
 					_pending_multi_btns.erase(btn)
 			else:
@@ -502,6 +634,7 @@ func _on_repair_pressed():
 
 	# Start monitoring Ctrl key release
 	set_process_input(true)
+	_apply_detail_mode()
 # Detect Ctrl release to commit pending multi-selection
 func _input(event):
 	if event is InputEventKey and not event.pressed:
@@ -539,4 +672,3 @@ func _on_close_pressed():
 		ci.client_selected_ids.clear()
 		ci._update_selection_visuals()
 		ci.emit_signal("selection_changed", [])
-	if repair_btn: repair_btn.visible = false

@@ -7,6 +7,16 @@ var produce_vbox: VBoxContainer = null
 var _vb: VBoxContainer = null
 var _panel_scroll: ScrollContainer = null
 
+# ==================== 简略 / 详细 ====================
+var detail_toggle: Button = null
+var _detail_mode: bool = false
+var _detail_view: Control = null
+var _detail_scroll: ScrollContainer = null
+var _detail_rtl: RichTextLabel = null
+var _detail_content: VBoxContainer = null
+var _detail_last_id: int = -1
+var _detail_last_text: String = ""
+
 # ==================== 运载船：上/下船 ====================
 const BOARD_RANGE: float = 5.0  # 只有船周围 5 米内的陆地单位才能上船
 
@@ -114,6 +124,11 @@ func _ready():
 	set_process(true)
 	if _is_mobile():
 		_build_mobile_scroll()
+	else:
+		# 顶部给「简略 / 详细」切换按钮留一行，避免按钮压住单位名。
+		_vb.offset_top = 36.0
+	_build_detail_view()
+	_build_detail_toggle()
 
 # 手机端面板只有 260×200dp，建筑生产按钮一多就会超出屏幕底部；
 # 把内容包进滚动容器，触摸拖动由手势路由调用 UILayout.scroll_at 驱动。
@@ -147,6 +162,130 @@ func _build_mobile_scroll() -> void:
 	_vb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_vb.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	_panel_scroll = sc
+
+func _detail_top_offset() -> float:
+	return UILayout.dp(24.0) if _is_mobile() else 36.0
+
+func _build_detail_toggle() -> void:
+	detail_toggle = Button.new()
+	detail_toggle.name = "DetailToggle"
+	detail_toggle.text = "详细" if _is_mobile() else "📖 详细"
+	detail_toggle.focus_mode = Control.FOCUS_NONE
+	detail_toggle.anchor_left = 0.0
+	detail_toggle.anchor_right = 0.0
+	detail_toggle.anchor_top = 0.0
+	detail_toggle.anchor_bottom = 0.0
+	if _is_mobile():
+		detail_toggle.offset_left = UILayout.dp(5.0)
+		detail_toggle.offset_top = UILayout.dp(4.0)
+		detail_toggle.offset_right = UILayout.dp(59.0)
+		detail_toggle.offset_bottom = UILayout.dp(22.0)
+		detail_toggle.custom_minimum_size = Vector2(UILayout.dp(54.0), UILayout.dp(18.0))
+		UITheme.apply_muted_button(detail_toggle, UILayout.font_dp(10.0))
+	else:
+		detail_toggle.offset_left = 14.0
+		detail_toggle.offset_top = 2.0
+		detail_toggle.offset_right = 108.0
+		detail_toggle.offset_bottom = 30.0
+		detail_toggle.custom_minimum_size = Vector2(94, 28)
+		UITheme.apply_muted_button(detail_toggle, UITheme.FONT_XS)
+	detail_toggle.z_index = 3
+	detail_toggle.visible = false
+	detail_toggle.pressed.connect(_on_detail_toggle_pressed)
+	add_child(detail_toggle)
+
+func _build_detail_view() -> void:
+	_detail_view = Control.new()
+	_detail_view.name = "DetailView"
+	_detail_view.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_detail_view.offset_left = 8.0
+	_detail_view.offset_top = _detail_top_offset()
+	_detail_view.offset_right = -8.0
+	_detail_view.offset_bottom = -8.0
+	_detail_view.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	add_child(_detail_view)
+
+	_detail_scroll = ScrollContainer.new()
+	_detail_scroll.name = "DetailScroll"
+	_detail_scroll.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_detail_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_detail_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	# 手机端交给 TouchGestureRouter / UILayout.scroll_at 驱动，避免和面板横滑手势抢事件。
+	_detail_scroll.mouse_filter = Control.MOUSE_FILTER_IGNORE if _is_mobile() else Control.MOUSE_FILTER_STOP
+	_detail_view.add_child(_detail_scroll)
+
+	_detail_content = VBoxContainer.new()
+	_detail_content.name = "DetailContent"
+	_detail_content.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_detail_content.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_detail_content.add_theme_constant_override("separation", 4)
+	_detail_scroll.add_child(_detail_content)
+
+	_detail_rtl = RichTextLabel.new()
+	_detail_rtl.name = "DetailLabel"
+	_detail_rtl.bbcode_enabled = true
+	_detail_rtl.fit_content = true
+	_detail_rtl.scroll_active = false
+	_detail_rtl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_detail_rtl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_detail_rtl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_detail_rtl.add_theme_color_override("default_color", UITheme.PARCHMENT)
+	_set_rtl_font(_detail_rtl, _mobile_font(UITheme.FONT_SM))
+	_detail_content.add_child(_detail_rtl)
+	_detail_view.visible = false
+
+func _on_detail_toggle_pressed() -> void:
+	_detail_mode = not _detail_mode
+	_apply_detail_mode(true)
+
+func _apply_detail_mode(force_reset: bool = false) -> void:
+	var has_single: bool = observed_entity != null and is_instance_valid(observed_entity)
+	if detail_toggle != null:
+		detail_toggle.visible = has_single
+		detail_toggle.text = ("简略" if _detail_mode else "详细") if _is_mobile() else ("📄 简略" if _detail_mode else "📖 详细")
+	var show_detail: bool = _detail_mode and has_single
+	if _detail_view != null:
+		_detail_view.visible = show_detail
+	if _vb != null:
+		_vb.visible = not show_detail
+	if _panel_scroll != null:
+		_panel_scroll.visible = not show_detail
+	if show_detail:
+		var key: int = observed_entity.get_instance_id()
+		var reset: bool = force_reset or key != _detail_last_id
+		if reset:
+			_detail_last_id = key
+		_refresh_detail_text(reset)
+
+func _entity_detail_state(entity) -> Dictionary:
+	var d := {
+		"health": entity.health,
+		"max_health": entity.max_health,
+		"attack": entity.attack,
+		"attack_range": entity.attack_range,
+		"speed": entity.speed,
+		"level": entity.level,
+	}
+	if entity is Army:
+		d["task"] = _army_task_text(entity)
+	return d
+
+func _refresh_detail_text(reset_scroll: bool) -> void:
+	if _detail_rtl == null or not is_instance_valid(_detail_rtl):
+		return
+	if observed_entity == null or not is_instance_valid(observed_entity):
+		return
+	var text: String = EntityInfoText.detailed(int(observed_entity.entity_id), _entity_detail_state(observed_entity))
+	if text != _detail_last_text:
+		_detail_last_text = text
+		_detail_rtl.text = text
+	if reset_scroll:
+		_detail_scroll.scroll_vertical = 0
+		_reset_detail_scroll_deferred()
+
+func _reset_detail_scroll_deferred() -> void:
+	if _detail_scroll != null and is_instance_valid(_detail_scroll):
+		_detail_scroll.scroll_vertical = 0
 
 func _swap_rtl(nm: String):
 	var old = _vb.get_node_or_null(nm)
@@ -382,6 +521,14 @@ func update_info(entity):
 		UITheme.hex_str(UITheme.STONE), entity.shield_armor]
 	t += "\n🎯 [color=%s]RANGE[/color]:  [color=white]%.1f[/color]" % [UITheme.hex_str(UITheme.GOLD), entity.attack_range]
 	t += "\n👟 [color=%s]SPEED[/color]:  [color=white]%.1f[/color]" % [UITheme.hex_str(UITheme.EMERALD), entity.speed]
+	if entity is Building and entity.has_method("repair_damage_ratio"):
+		if entity.is_under_repair() and entity.max_repair_time > 0.0:
+			var rep_pct := clampf(1.0 - entity.repair_timer / entity.max_repair_time, 0.0, 1.0)
+			t += "\n🔧 [color=%s]修理中[/color]:  [color=white]%d%%[/color]" % [
+				UITheme.hex_str(UITheme.REPAIR_PROGRESS), int(rep_pct * 100.0)]
+		elif entity.repair_damage_ratio() > 0.001:
+			t += "\n🔧 [color=%s]已损[/color]:  [color=white]%d%%[/color]" % [
+				UITheme.hex_str(UITheme.ALERT_WARNING), int(entity.repair_damage_ratio() * 100.0)]
 	if entity is Army:
 		t += "\n🧭 [color=%s]任务[/color]:  [color=white]%s[/color]" % [
 			UITheme.hex_str(UITheme.SAPPHIRE), _army_task_text(entity)]
@@ -396,6 +543,7 @@ func update_info(entity):
 		# 拆除按钮（城堡不可拆；队友建筑只读）
 		if demolish_btn:
 			demolish_btn.visible = (entity.entity_id != 20) and not readonly
+		_update_repair_ui(entity, readonly)
 		if entity.can_upgrade() and not readonly:
 			upgrade_btn.visible = true; upgrade_btn.text = "升级"
 			if upgrade_btn.pressed.is_connected(_on_upgrade_pressed):
@@ -495,7 +643,9 @@ func update_info(entity):
 		elif _board_box != null and is_instance_valid(_board_box):
 			_board_box.visible = false
 		if demolish_btn: demolish_btn.visible = false
+		if repair_btn: repair_btn.visible = false
 	hp_bar.visible = true
+	_apply_detail_mode()
 
 func _on_upgrade_pressed():
 	if not observed_entity or not is_instance_valid(observed_entity): return
@@ -504,6 +654,67 @@ func _on_upgrade_pressed():
 	# 升级已全局生效，只需升级当前建筑即可
 	for _i in range(n):
 		if not observed_entity.can_upgrade() or not observed_entity.perform_upgrade(battle): break
+
+# 信息面板里的修理入口：只在「掉血且不是主城」时出现，和命令卡规则保持一致。
+# 建造/升级中不显示；资源不足或附近有敌军时保留按钮但置灰，tooltip 说明原因。
+func _update_repair_ui(entity: Building, readonly: bool) -> void:
+	if repair_btn == null:
+		return
+	repair_btn.visible = false
+	if readonly or entity.entity_id in [20, 53]:
+		return
+	if not entity.has_method("repair_damage_ratio") or not entity.has_method("can_repair"):
+		return
+	var dmg: float = entity.repair_damage_ratio()
+	var under: bool = entity.is_under_repair() if entity.has_method("is_under_repair") else false
+	var busy: bool = entity.build_timer > 0.0 or entity.upgrade_timer > 0.0
+	if busy or (dmg <= 0.001 and not under):
+		return
+	repair_btn.visible = true
+	var cost: Dictionary = entity.repair_cost() if entity.has_method("repair_cost") else {}
+	var time_total: float = entity.repair_time_total() if entity.has_method("repair_time_total") else 0.0
+	var can_click := false
+	if not under:
+		if battle and battle.has_method("can_repair_building"):
+			can_click = battle.can_repair_building(entity)
+		else:
+			can_click = entity.can_repair()
+	repair_btn.disabled = not can_click
+	if under and entity.max_repair_time > 0.0:
+		var pct: float = clampf(1.0 - entity.repair_timer / entity.max_repair_time, 0.0, 1.0)
+		repair_btn.text = "🔧 修理中 %d%%" % int(pct * 100.0)
+	else:
+		repair_btn.text = "🔧 修理 %s" % _repair_cost_text(cost)
+	var tip := "修理残破建筑：修完回复到满血（主城不可修理）"
+	tip += "\n费用：%s" % (_repair_cost_text(cost) if not cost.is_empty() else "免费")
+	tip += "\n耗时：%.1f 秒" % maxf(time_total, 0.0)
+	if under:
+		tip += "\n状态：修理中"
+	elif dmg <= 0.001:
+		tip += "\n状态：建筑完好"
+	elif not can_click:
+		tip += "\n状态：资源不足或附近有敌军，暂不可修"
+	repair_btn.tooltip_text = tip
+
+func _repair_cost_text(cost: Dictionary) -> String:
+	var parts: Array[String] = []
+	for res in ["wood", "stone", "gold", "oil"]:
+		var need := int(cost.get(res, 0))
+		if need > 0:
+			parts.append("%s%d" % [UITheme.RESOURCE_ICONS.get(res, ""), need])
+	return " ".join(parts) if not parts.is_empty() else "免费"
+
+func _on_repair_pressed():
+	if not observed_entity or not is_instance_valid(observed_entity):
+		return
+	if not (observed_entity is Building):
+		return
+	if not _is_local_owned_entity(observed_entity):
+		return
+	var bm = battle if battle else get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
+	if bm and bm.has_method("repair_building"):
+		bm.repair_building(observed_entity)
+	update_info(observed_entity)
 
 func _on_produce_pressed(unit_id: int):
 	if not observed_entity or not is_instance_valid(observed_entity): return
@@ -521,14 +732,6 @@ func _ensure_board_box() -> void:
 		return
 	_board_box = VBoxContainer.new()
 	_board_box.name = "BoardBox"
-	if entity is Building and entity.has_method("repair_damage_ratio"):
-		if entity.is_under_repair() and entity.max_repair_time > 0.0:
-			var rep_pct := clampf(1.0 - entity.repair_timer / entity.max_repair_time, 0.0, 1.0)
-			t += "\n🔧 [color=%s]修理中[/color]:  [color=white]%d%%[/color]" % [
-				UITheme.hex_str(UITheme.REPAIR_PROGRESS), int(rep_pct * 100.0)]
-		elif entity.repair_damage_ratio() > 0.001:
-			t += "\n🔧 [color=%s]已损[/color]:  [color=white]%d%%[/color]" % [
-				UITheme.hex_str(UITheme.ALERT_WARNING), int(entity.repair_damage_ratio() * 100.0)]
 	_board_box.add_theme_constant_override("separation", 2)
 	_vb.add_child(_board_box)
 
@@ -543,7 +746,6 @@ func _ensure_board_box() -> void:
 	_board_up_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	if _is_mobile():
 		_board_up_btn.custom_minimum_size = Vector2(0, UILayout.dp(40.0))
-		_update_repair_ui(entity, readonly)
 		UITheme.apply_primary_button(_board_up_btn, UILayout.font_dp(12.0))
 	else:
 		_board_up_btn.custom_minimum_size = Vector2(90, 32)
@@ -643,7 +845,6 @@ func _on_board_down_pressed() -> void:
 	update_info(ship)
 
 var _refresh_timer: float = 0.0
-		if repair_btn: repair_btn.visible = false
 
 func _process(delta):
 	# 多选时 observed_entity 是空的，下面会早退，所以登船按钮的可用性要在这里单独刷新：
@@ -655,67 +856,6 @@ func _process(delta):
 			if visible:
 				_refresh_multi_board_btn()
 	if not visible or observed_entity == null or not is_instance_valid(observed_entity) or observed_entity.health <= 0:
-# 信息面板里的修理入口：只在「掉血且不是主城」时出现，和命令卡规则保持一致。
-# 建造/升级中不显示；资源不足或附近有敌军时保留按钮但置灰，tooltip 说明原因。
-func _update_repair_ui(entity: Building, readonly: bool) -> void:
-	if repair_btn == null:
-		return
-	repair_btn.visible = false
-	if readonly or entity.entity_id in [20, 53]:
-		return
-	if not entity.has_method("repair_damage_ratio") or not entity.has_method("can_repair"):
-		return
-	var dmg: float = entity.repair_damage_ratio()
-	var under: bool = entity.is_under_repair() if entity.has_method("is_under_repair") else false
-	var busy: bool = entity.build_timer > 0.0 or entity.upgrade_timer > 0.0
-	if busy or (dmg <= 0.001 and not under):
-		return
-	repair_btn.visible = true
-	var cost: Dictionary = entity.repair_cost() if entity.has_method("repair_cost") else {}
-	var time_total: float = entity.repair_time_total() if entity.has_method("repair_time_total") else 0.0
-	var can_click := false
-	if not under:
-		if battle and battle.has_method("can_repair_building"):
-			can_click = battle.can_repair_building(entity)
-		else:
-			can_click = entity.can_repair()
-	repair_btn.disabled = not can_click
-	if under and entity.max_repair_time > 0.0:
-		var pct: float = clampf(1.0 - entity.repair_timer / entity.max_repair_time, 0.0, 1.0)
-		repair_btn.text = "🔧 修理中 %d%%" % int(pct * 100.0)
-	else:
-		repair_btn.text = "🔧 修理 %s" % _repair_cost_text(cost)
-	var tip := "修理残破建筑：修完回复到满血（主城不可修理）"
-	tip += "\n费用：%s" % (_repair_cost_text(cost) if not cost.is_empty() else "免费")
-	tip += "\n耗时：%.1f 秒" % maxf(time_total, 0.0)
-	if under:
-		tip += "\n状态：修理中"
-	elif dmg <= 0.001:
-		tip += "\n状态：建筑完好"
-	elif not can_click:
-		tip += "\n状态：资源不足或附近有敌军，暂不可修"
-	repair_btn.tooltip_text = tip
-
-func _repair_cost_text(cost: Dictionary) -> String:
-	var parts: Array[String] = []
-	for res in ["wood", "stone", "gold", "oil"]:
-		var need := int(cost.get(res, 0))
-		if need > 0:
-			parts.append("%s%d" % [UITheme.RESOURCE_ICONS.get(res, ""), need])
-	return " ".join(parts) if not parts.is_empty() else "免费"
-
-func _on_repair_pressed():
-	if not observed_entity or not is_instance_valid(observed_entity):
-		return
-	if not (observed_entity is Building):
-		return
-	if not _is_local_owned_entity(observed_entity):
-		return
-	var bm = battle if battle else get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
-	if bm and bm.has_method("repair_building"):
-		bm.repair_building(observed_entity)
-	update_info(observed_entity)
-
 		return
 	_refresh_timer -= delta
 	if _refresh_timer <= 0:
@@ -862,6 +1002,7 @@ func show_multi_selection(entities: Array):
 	observed_entity = null
 	upgrade_btn.visible = false
 	if demolish_btn: demolish_btn.visible = false
+	if repair_btn: repair_btn.visible = false
 	produce_vbox.visible = true
 	hp_bar.visible = false
 	if hp_bar_bg: hp_bar_bg.visible = false
@@ -945,6 +1086,7 @@ func show_multi_selection(entities: Array):
 	# 框选面板底部：一键让选中的陆地单位上附近的运载船
 	_multi_entities = entities.duplicate()
 	_refresh_multi_board_btn()
+	_apply_detail_mode()
 
 # Detect Ctrl release to commit pending multi-selection
 func _input(event):
@@ -988,4 +1130,3 @@ func _on_close_pressed():
 		var sel = bm.get_node_or_null("SelectionManager")
 		if sel and sel.has_method("_clear_selection"):
 			sel._clear_selection()
-	if repair_btn: repair_btn.visible = false
