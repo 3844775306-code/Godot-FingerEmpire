@@ -281,7 +281,7 @@ func _ready():
 	tip_box.alignment = BoxContainer.ALIGNMENT_CENTER
 	bot_panel.add_child(tip_box)
 
-	_add_tip_line(tip_box, "🖱️ 鼠标：左键 选择·框选·移动·攻击·采集 · 右键 建造菜单 / 取消选择 · 中键拖拽平移 · Ctrl+中键拖拽旋转视角 · 滚轮缩放 · 新手先看 📘 操作指南 / 🎓 新手教程",
+	_add_tip_line(tip_box, "🖱️ 鼠标：左键 选择·框选·移动·攻击·采集 · 未选中时右键空地 建造菜单 · 选中时右键空地 取消选择 · 中键拖拽平移 · Ctrl+中键拖拽旋转视角 · 滚轮缩放 · 新手先看 📘 操作指南 / 🎓 新手教程",
 		16, UITheme.PARCHMENT)
 	_add_tip_line(tip_box, "⌨️ 键盘：Ctrl+1~9 编队 · 1~9 选编队 · F1 全选军队 · F2 自动进攻 · F3 撤退 · L 血条文字 · Tab 跟随 · Alt+左键 设驻扎点",
 		16, UITheme.PARCHMENT)
