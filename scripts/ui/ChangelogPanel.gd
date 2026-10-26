@@ -10,6 +10,7 @@ extends Control
 
 const AppVersion = preload("res://scripts/core/AppVersion.gd")
 const ChangelogData = preload("res://scripts/data/ChangelogData.gd")
+const UpdateConfig = preload("res://scripts/core/UpdateConfig.gd")
 const UpdateChecker = preload("res://scripts/core/UpdateChecker.gd")
 
 const PANEL_W: float = 780.0
@@ -136,6 +137,7 @@ func _build() -> void:
 
 	# 顶部：手动检查更新，放在所有版本条目之前，打开面板第一眼就能看到
 	_add_update_row(vb)
+	_add_latest_links(vb)
 	_add_separator(vb)
 
 	var list: Array = ChangelogData.entries()
@@ -254,6 +256,36 @@ func _add_update_row(parent: Control) -> void:
 	_update_status.add_theme_color_override("font_color", Color(UITheme.STONE.lightened(0.35)))
 	_update_row.add_child(_update_status)
 
+# 检查更新下方：直接给出 Web / Android / Windows 三个最新版入口
+func _add_latest_links(parent: Control) -> void:
+	var box := VBoxContainer.new()
+	box.add_theme_constant_override("separation", 1)
+	parent.add_child(box)
+
+	var caption := Label.new()
+	caption.text = "最新版本下载"
+	caption.add_theme_font_size_override("font_size",
+		UILayout.font_dp(9.0) if _mobile else UITheme.FONT_XS)
+	caption.add_theme_color_override("font_color", Color(UITheme.GOLD, 0.85))
+	box.add_child(caption)
+
+	for item in UpdateConfig.latest_links():
+		var url := String(item.get("url", "")).strip_edges()
+		if url == "":
+			continue
+		var link := LinkButton.new()
+		link.text = "• " + String(item.get("label", ""))
+		link.tooltip_text = url
+		link.size_flags_horizontal = Control.SIZE_SHRINK_BEGIN
+		link.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND
+		link.add_theme_font_size_override("font_size",
+			UILayout.font_dp(10.0) if _mobile else UITheme.FONT_SM)
+		link.add_theme_color_override("font_color", Color(UITheme.PARCHMENT, 0.9))
+		link.add_theme_color_override("font_hover_color", UITheme.GOLD_TEXT)
+		link.add_theme_color_override("font_pressed_color", UITheme.GOLD)
+		link.pressed.connect(_open_url.bind(url))
+		box.add_child(link)
+
 func _on_check_update_pressed() -> void:
 	if _update_checker == null:
 		_update_checker = UpdateChecker.new()
@@ -294,14 +326,19 @@ func _on_update_result(ok: bool, has_update: bool, remote_version: String, downl
 		_update_download_btn.visible = true
 
 func _on_download_pressed() -> void:
-	if _update_url.strip_edges() == "":
+	_open_url(_update_url)
+
+# 打开链接：Web 直接跳转当前页，APK/EXE 交给系统浏览器
+func _open_url(url: String) -> void:
+	var target := url.strip_edges()
+	if target == "":
 		return
 	if OS.has_feature("web"):
 		var js = Engine.get_singleton("JavaScriptBridge")
 		if js != null:
-			js.eval("window.location.href = %s;" % JSON.stringify(_update_url))
+			js.eval("window.location.href = %s;" % JSON.stringify(target))
 			return
-	OS.shell_open(_update_url)
+	OS.shell_open(target)
 
 # ==================== 关闭 ====================
 func _on_dim_input(event: InputEvent) -> void:

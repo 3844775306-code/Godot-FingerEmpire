@@ -26,6 +26,11 @@ const ENABLED: bool = true
 # 站点根地址（不带结尾 /）。部署后运行 deploy 脚本会自动替换成真实地址。
 const SITE_URL: String = "https://fingerempire.netlify.app"
 
+# 最新版安装包地址：GitHub Releases 的 latest 链接，和 update.json 里保持一致。
+const GITHUB_REPO_URL: String = "https://github.com/3844775306-code/Godot-FingerEmpire"
+const LATEST_APK_URL: String = GITHUB_REPO_URL + "/releases/latest/download/FingerEmpire.apk"
+const LATEST_WINDOWS_URL: String = GITHUB_REPO_URL + "/releases/latest/download/FingerEmpire-win.zip"
+
 const MANIFEST_FILE: String = "update.json"
 
 # 单次请求超时（秒）：超时视为没网，静默失败
@@ -59,3 +64,17 @@ static func manifest_url() -> String:
 	if not is_configured():
 		return ""
 	return normalized_site_url() + "/" + MANIFEST_FILE
+
+# 最新 Web 版地址（更新日志面板里的下载入口用）
+static func latest_web_url() -> String:
+	if is_configured():
+		return normalized_site_url() + "/"
+	return ""
+
+# 更新日志面板底部展示的三个最新版本入口
+static func latest_links() -> Array:
+	return [
+		{"label": "Web 版", "url": latest_web_url()},
+		{"label": "Android APK", "url": LATEST_APK_URL},
+		{"label": "Windows EXE", "url": LATEST_WINDOWS_URL},
+	]

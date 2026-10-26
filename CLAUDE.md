@@ -94,7 +94,7 @@ APK / Web / EXE 启动后（主菜单）都会拉一次 `update.json`，远端�
 - Android：显示「点此下载」，打开 APK 下载地址；
 - Windows：显示「点此下载」，打开 Windows 压缩包地址。
 
-更新日志面板顶部也有「🔍 检查更新」按钮可手动强制刷新。
+更新日志面板顶部也有「🔍 检查更新」按钮可手动强制刷新；按钮下方直接列出 Web / Android APK / Windows EXE 三个最新版本下载入口。
 
 - 站点地址配置在 `scripts/core/UpdateConfig.gd` 的 `SITE_URL`（不带结尾 `/`）；
 - Web 会自动使用当前网页的 `location.origin`，所以 Web 构建不依赖写死域名；
