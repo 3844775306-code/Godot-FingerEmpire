@@ -55,6 +55,55 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 Co-Authored-By: Claude <noreply@anthropic.com>
 ```
 
+## 版本号规则（自动递增）
+
+版本号唯一来源是 `scripts/core/AppVersion.gd` 的 `VERSION` / `RELEASE_DATE`，**不要手改散落在别处的版本字符串**（主菜单、更新日志面板、底部版本行都读它）。
+
+规则（玩家定的）：
+
+| 条件 | 动作 | 例子 |
+|------|------|------|
+| 每累计 10 次 git 提交 | 小版本 +1，余数保留到下次 | v1.0.0 → v1.0.1 |
+| 距上次版本号发布日 ≥ 3 天且有提交 | 中版本 +1，小版本归零 | v1.0.8 → v1.1.0 |
+| 玩家口头指定（如「把版本更新到 2.0.0」） | `-Major N` 手动升，中/小归零 | → v2.0.0 |
+
+**每次任务提交后必须跑一次**（这一步由执行任务的人负责，没有 git hook）：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/bump_version.ps1
+```
+
+- 输出 `VERSION_SAME v1.0.x (...)` = 不需要升版（计数已记录在 `tools/version_state.json`）；
+- 输出 `VERSION_BUMPED v1.0.x -> v1.0.y (...)` = 已改写 `AppVersion.gd`，**接着要做两件事**：
+  1. 在 `scripts/data/ChangelogData.gd` 的 `entries()` 顶部补一条该版本记录（玩家向要点，5~8 条，前缀「新增/优化/修复」）；
+  2. 把 `AppVersion.gd`、`tools/version_state.json`、`ChangelogData.gd` 一起提交（commit message 里写 `版本号更新到 vX.Y.Z`）。
+- `-DryRun` 只判断不写文件；`-Major 2` 手动指定大版本。
+- `tools/version_state.json` 里存 `major/minor/patch/pending/last_bump_commit/last_bump_date`，**不要手工改**（除非要修计数）。
+
+## 自动检查更新
+
+游戏启动后（主菜单）会拉一次静态 JSON 清单，远端版本比本地高就在主菜单显示「发现新版本 · 点此下载」，点击用系统浏览器打开下载页；更新日志面板底部也有「🔍 检查更新」按钮手动查。
+
+- 清单地址配置在 `scripts/core/UpdateConfig.gd` 的 `MANIFEST_URL`（留空 = 不检查，静默跳过）；
+- 清单格式（UTF-8 JSON，可放 Netlify / 静态服务器 / GitHub raw）：
+
+```json
+{
+  "version": "v1.1.0",
+  "date": "2026-11-02",
+  "notes": "本轮更新一句话说明",
+  "downloads": {
+    "windows": "https://example.com/FingerEmpire-win.zip",
+    "android": "https://example.com/FingerEmpire.apk",
+    "web": "https://example.com/",
+    "default": "https://example.com/download"
+  }
+}
+```
+
+- 发版时把清单里的 `version` / `date` / 下载链接一起改掉，玩家下次启动（24 小时内会读缓存）就能看到提示；
+- 相关代码：`scripts/core/UpdateChecker.gd`（比对版本、解析清单、24h 缓存）、`scripts/core/UpdateConfig.gd`（地址、超时、缓存时长）。
+
 ## Project Overview
 
 **FingerEmpire** — a server-authoritative medieval RTS built in Godot 4.7 (Forward Plus). Features 7 nations (Viking, England, France, China, Hungary, Japan, Byzantine), resource economy, fog of war, A* pathfinding, and online multiplayer via ENet / WebSocket / Steam P2P. Supports singleplayer 1v1, 2v2, 3v3 and 3–5 nation FFA, plus online 1v1/2v2/3v3 with AI filling empty slots.

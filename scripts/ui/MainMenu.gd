@@ -5,11 +5,18 @@ const MapSelectDialog = preload("res://scripts/ui/MapSelectDialog.gd")
 const AppVersion = preload("res://scripts/core/AppVersion.gd")
 const ChangelogData = preload("res://scripts/data/ChangelogData.gd")
 const ChangelogPanel = preload("res://scripts/ui/ChangelogPanel.gd")
+const UpdateConfig = preload("res://scripts/core/UpdateConfig.gd")
+const UpdateChecker = preload("res://scripts/core/UpdateChecker.gd")
 
 var nation_select: OptionButton
 var _map_button: Button = null
 # 带 NEW 未读标记的更新日志按钮（打开日志后清掉标记）
 var _changelog_btn: Button = null
+# 更新检查（有新版时底部弹出下载按钮）
+var _update_checker: UpdateChecker = null
+var _update_banner: Button = null
+# 手机端滚动列表：有新版时把下载按钮插到最上面
+var _mobile_vb: VBoxContainer = null
 
 # 主菜单场景没有战斗内的 TouchGestureRouter：触摸拖动直接驱动 ScrollContainer 滚动
 # （手机点击仍由引擎模拟鼠标完成，这里只管滑动）。
@@ -34,6 +41,7 @@ func _ready():
 		# 根 Control 默认 size 为 0，anchors 布局会整体塌成 0 高，必须先给设计尺寸
 		size = Vector2(2400, 1400)
 		_build_mobile_layout()
+		_setup_update_check()
 		return
 	# 隐藏旧的场景节点，全部用代码重建
 	var old_box = get_node_or_null("VBoxContainer")
@@ -262,13 +270,16 @@ func _ready():
 
 	# 底部版本号
 	var version = Label.new()
-	version.text = "v1.0 - Godot 4.7"
+	version.text = "%s - Godot 4.7" % AppVersion.display()
 	version.position = Vector2(0, 1340)
 	version.size = Vector2(2400, 30)
 	version.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	UITheme.apply_label(version, 18, Color(UITheme.STONE).lightened(0.2))
 	add_child(version)
 	UITheme.fade_in(version, 0.6)
+
+	# 联网检查有没有新版本（有就底部弹出下载按钮，没网静默跳过）
+	_setup_update_check()
 
 ## 主题化 OptionButton（含弹出列表）
 func _style_option(o: OptionButton, font_size: int) -> void:
@@ -457,6 +468,54 @@ func _attach_new_badge_mobile(btn: Button) -> void:
 	badge.offset_top = UILayout.dp(3.0)
 	badge.offset_bottom = UILayout.dp(19.0)
 	btn.add_child(badge)
+
+# ==================== 更新检查 ====================
+# 主菜单启动后拉一次版本清单：有新版就在底部（手机在列表最上面）弹出下载按钮。
+func _setup_update_check() -> void:
+	if not UpdateConfig.ENABLED:
+		return
+	_update_checker = UpdateChecker.new()
+	_update_checker.name = "UpdateChecker"
+	add_child(_update_checker)
+	_update_checker.finished.connect(_on_update_checked)
+	_update_checker.check(false)
+
+func _on_update_checked(ok: bool, has_update: bool, remote_version: String, download_url: String, notes: String) -> void:
+	if not ok or not has_update or download_url == "":
+		return
+	_show_update_banner(remote_version, download_url, notes)
+
+# 有新版本：底部一个金色下载按钮（桌面绝对定位 / 手机插到滚动列表最上面）
+func _show_update_banner(remote_version: String, download_url: String, notes: String) -> void:
+	if _update_banner != null and is_instance_valid(_update_banner):
+		return
+	var btn := Button.new()
+	btn.name = "UpdateBanner"
+	btn.text = "🆕 发现新版本 %s · 点此下载" % remote_version
+	btn.tooltip_text = notes
+	btn.pressed.connect(_open_download.bind(download_url))
+	if InputSource.use_mobile_ui():
+		btn.custom_minimum_size = Vector2(0, UILayout.dp(42.0))
+		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_mobile_style_button(btn, "primary", UILayout.font_dp(12.0))
+		if _mobile_vb != null and is_instance_valid(_mobile_vb):
+			_mobile_vb.add_child(btn)
+			_mobile_vb.move_child(btn, 0)
+		else:
+			add_child(btn)
+	else:
+		btn.position = Vector2(900, 1288)
+		btn.size = Vector2(600, 46)
+		UITheme.apply_primary_button(btn, UITheme.FONT_MD + 2)
+		add_child(btn)
+		UITheme.pulse(btn, 1.02, 1.1)
+	_update_banner = btn
+
+# 用系统浏览器/商店打开下载页（安装包和网页版都走这里）
+func _open_download(url: String) -> void:
+	if url.strip_edges() == "":
+		return
+	OS.shell_open(url)
 
 func _on_settings_pressed():
 	# Toggle settings panel
@@ -752,7 +811,8 @@ func _build_mobile_layout() -> void:
 	tip.add_theme_color_override("font_color", Color(UITheme.STONE).lightened(0.25))
 	vb.add_child(tip)
 
-	vb.add_child(_mobile_section("v1.0 - Godot 4.7", Color(UITheme.STONE).lightened(0.2)))
+	vb.add_child(_mobile_section("%s - Godot 4.7" % AppVersion.display(), Color(UITheme.STONE).lightened(0.2)))
+	_mobile_vb = vb
 
 func _mobile_section(text: String, color: Color) -> Label:
 	var lbl := Label.new()

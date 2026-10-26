@@ -10,6 +10,7 @@ extends Control
 
 const AppVersion = preload("res://scripts/core/AppVersion.gd")
 const ChangelogData = preload("res://scripts/data/ChangelogData.gd")
+const UpdateChecker = preload("res://scripts/core/UpdateChecker.gd")
 
 const PANEL_W: float = 780.0
 const PANEL_H: float = 900.0
@@ -17,6 +18,13 @@ const PANEL_H: float = 900.0
 # 是否在最新一条上打 NEW（打开前读一次，打开后就标记已读）
 var _show_new: bool = false
 var _mobile: bool = false
+# 底部「检查更新」一行（手动强制查一次，就地显示结果）
+var _update_row: HBoxContainer = null
+var _update_btn: Button = null
+var _update_status: Label = null
+var _update_download_btn: Button = null
+var _update_url: String = ""
+var _update_checker: UpdateChecker = null
 
 # 打开更新日志：已经开着就直接返回（避免叠两层）
 static func open(parent: Node) -> ChangelogPanel:
@@ -87,7 +95,7 @@ func _build() -> void:
 	panel.add_child(header)
 
 	var title := UITheme.make_section_title("📜 更新日志", UITheme.GOLD,
-		UILayout.font_dp(13.0) if _mobile else UITheme.FONT_XL)
+		UILayout.font_dp(16.0) if _mobile else UITheme.FONT_XL)
 	title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	header.add_child(title)
 
@@ -95,17 +103,17 @@ func _build() -> void:
 	ver.text = AppVersion.display()
 	ver.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	ver.add_theme_font_size_override("font_size",
-		UILayout.font_dp(9.5) if _mobile else UITheme.FONT_SM)
+		UILayout.font_dp(10.5) if _mobile else UITheme.FONT_SM)
 	ver.add_theme_color_override("font_color", UITheme.PARCHMENT)
 	header.add_child(ver)
 
 	var close_btn := Button.new()
 	close_btn.text = "✕"
 	close_btn.custom_minimum_size = Vector2(
-		UILayout.dp(30.0) if _mobile else 40.0,
-		UILayout.dp(22.0) if _mobile else 34.0)
+		UILayout.dp(34.0) if _mobile else 40.0,
+		UILayout.dp(26.0) if _mobile else 34.0)
 	UITheme.apply_muted_button(close_btn,
-		UILayout.font_dp(10.0) if _mobile else UITheme.FONT_MD)
+		UILayout.font_dp(12.0) if _mobile else UITheme.FONT_MD)
 	close_btn.pressed.connect(_close)
 	header.add_child(close_btn)
 
@@ -123,7 +131,7 @@ func _build() -> void:
 
 	var vb := VBoxContainer.new()
 	vb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	vb.add_theme_constant_override("separation", int(UILayout.dp(9.0)) if _mobile else 16)
+	vb.add_theme_constant_override("separation", 16)
 	scroll.add_child(vb)
 
 	var list: Array = ChangelogData.entries()
@@ -132,13 +140,16 @@ func _build() -> void:
 		if i < list.size() - 1:
 			_add_separator(vb)
 
+	# 底部：手动检查更新（有新版时这里会多出一个下载按钮）
+	_add_update_row(vb)
+	_add_separator(vb)
+
 	# 末尾补一行：怎么反馈问题
 	var tail := Label.new()
 	tail.text = "更多细节可以在游戏内实际体验，遇到问题欢迎反馈给作者。"
 	tail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	tail.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	tail.add_theme_font_size_override("font_size",
-		UILayout.font_dp(8.5) if _mobile else UITheme.FONT_XS)
+	tail.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	tail.add_theme_color_override("font_color", Color(UITheme.STONE.lightened(0.25)))
 	vb.add_child(tail)
 
@@ -148,33 +159,31 @@ func _build() -> void:
 # 一条版本记录：版本徽章 + 日期 (+NEW) → 标题 → 要点列表
 func _add_entry(parent: Control, entry: Dictionary, show_new: bool) -> void:
 	var block := VBoxContainer.new()
-	block.add_theme_constant_override("separation", int(UILayout.dp(3.0)) if _mobile else 6)
+	block.add_theme_constant_override("separation", 6)
 	parent.add_child(block)
 
 	var top_row := HBoxContainer.new()
-	top_row.add_theme_constant_override("separation", int(UILayout.dp(5.0)) if _mobile else 8)
+	top_row.add_theme_constant_override("separation", 8)
 	block.add_child(top_row)
 
 	var chip := Label.new()
 	chip.text = String(entry.get("version", ""))
 	chip.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	chip.add_theme_font_size_override("font_size",
-		UILayout.font_dp(9.5) if _mobile else UITheme.FONT_SM)
+	chip.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	chip.add_theme_color_override("font_color", UITheme.GOLD)
 	var chip_style := StyleBoxFlat.new()
 	chip_style.bg_color = Color(UITheme.GOLD, 0.14)
 	chip_style.border_color = Color(UITheme.GOLD, 0.65)
 	chip_style.set_border_width_all(1)
 	chip_style.set_corner_radius_all(4)
-	chip_style.set_content_margin_all(4)
+	chip_style.set_content_margin_all(int(UILayout.dp(2.0)) if _mobile else 4)
 	chip.add_theme_stylebox_override("normal", chip_style)
 	top_row.add_child(chip)
 
 	var date := Label.new()
 	date.text = String(entry.get("date", ""))
 	date.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	date.add_theme_font_size_override("font_size",
-		UILayout.font_dp(9.0) if _mobile else UITheme.FONT_XS)
+	date.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 	date.add_theme_color_override("font_color", Color(UITheme.STONE.lightened(0.3)))
 	top_row.add_child(date)
 
@@ -182,8 +191,7 @@ func _add_entry(parent: Control, entry: Dictionary, show_new: bool) -> void:
 		var new_chip := Label.new()
 		new_chip.text = "NEW"
 		new_chip.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-		new_chip.add_theme_font_size_override("font_size",
-			UILayout.font_dp(8.5) if _mobile else UITheme.FONT_XS)
+		new_chip.add_theme_font_size_override("font_size", UITheme.FONT_XS)
 		new_chip.add_theme_color_override("font_color", UITheme.GOLD_TEXT)
 		var new_style := StyleBoxFlat.new()
 		new_style.bg_color = UITheme.GOLD
@@ -196,8 +204,7 @@ func _add_entry(parent: Control, entry: Dictionary, show_new: bool) -> void:
 	ttl.text = String(entry.get("title", ""))
 	ttl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	ttl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	ttl.add_theme_font_size_override("font_size",
-		UILayout.font_dp(10.5) if _mobile else UITheme.FONT_MD)
+	ttl.add_theme_font_size_override("font_size", UITheme.FONT_MD)
 	ttl.add_theme_color_override("font_color", UITheme.PARCHMENT)
 	block.add_child(ttl)
 
@@ -206,8 +213,7 @@ func _add_entry(parent: Control, entry: Dictionary, show_new: bool) -> void:
 		line.text = "• " + String(item)
 		line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 		line.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		line.add_theme_font_size_override("font_size",
-			UILayout.font_dp(9.5) if _mobile else UITheme.FONT_SM)
+		line.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 		line.add_theme_color_override("font_color", Color(UITheme.PARCHMENT, 0.88))
 		block.add_child(line)
 
@@ -216,6 +222,74 @@ func _add_separator(parent: Control) -> void:
 	sep.color = Color(UITheme.GOLD, 0.22)
 	sep.custom_minimum_size = Vector2(0, 1)
 	parent.add_child(sep)
+
+# ==================== 检查更新 ====================
+# 面板底部一行：手动强制联网查一次，结果就地显示在右边
+func _add_update_row(parent: Control) -> void:
+	_update_row = HBoxContainer.new()
+	_update_row.add_theme_constant_override("separation", 10)
+	parent.add_child(_update_row)
+
+	_update_btn = Button.new()
+	_update_btn.text = "🔍 检查更新"
+	_update_btn.custom_minimum_size = Vector2(
+		UILayout.dp(96.0) if _mobile else 130.0,
+		UILayout.dp(26.0) if _mobile else 34.0)
+	UITheme.apply_muted_button(_update_btn,
+		UILayout.font_dp(11.0) if _mobile else UITheme.FONT_SM)
+	_update_btn.pressed.connect(_on_check_update_pressed)
+	_update_row.add_child(_update_btn)
+
+	_update_status = Label.new()
+	_update_status.text = "点右侧按钮查询有没有新版本"
+	_update_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_update_status.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_update_status.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_update_status.add_theme_font_size_override("font_size",
+		UILayout.font_dp(10.0) if _mobile else UITheme.FONT_SM)
+	_update_status.add_theme_color_override("font_color", Color(UITheme.STONE.lightened(0.35)))
+	_update_row.add_child(_update_status)
+
+func _on_check_update_pressed() -> void:
+	if _update_checker == null:
+		_update_checker = UpdateChecker.new()
+		_update_checker.name = "UpdateChecker"
+		add_child(_update_checker)
+		_update_checker.finished.connect(_on_update_result)
+	_update_btn.disabled = true
+	_update_status.text = "正在检查…"
+	_update_checker.check(true)
+
+func _on_update_result(ok: bool, has_update: bool, remote_version: String, download_url: String, notes: String) -> void:
+	if _update_btn != null and is_instance_valid(_update_btn):
+		_update_btn.disabled = false
+	if _update_status == null or not is_instance_valid(_update_status):
+		return
+	if not ok:
+		_update_status.text = notes
+		return
+	if not has_update:
+		_update_status.text = "已是最新版本（%s）" % AppVersion.display()
+		return
+	_update_status.text = "发现新版本 %s%s" % [remote_version, ("：" + notes) if notes != "" else ""]
+	if download_url != "":
+		_update_url = download_url
+		if _update_download_btn == null:
+			_update_download_btn = Button.new()
+			_update_download_btn.text = "⬇ 下载"
+			_update_download_btn.custom_minimum_size = Vector2(
+				UILayout.dp(76.0) if _mobile else 96.0,
+				UILayout.dp(26.0) if _mobile else 34.0)
+			UITheme.apply_primary_button(_update_download_btn,
+				UILayout.font_dp(11.0) if _mobile else UITheme.FONT_SM)
+			_update_download_btn.pressed.connect(_on_download_pressed)
+			_update_row.add_child(_update_download_btn)
+		_update_download_btn.text = "⬇ 下载 %s" % remote_version
+		_update_download_btn.visible = true
+
+func _on_download_pressed() -> void:
+	if _update_url.strip_edges() != "":
+		OS.shell_open(_update_url)
 
 # ==================== 关闭 ====================
 func _on_dim_input(event: InputEvent) -> void:
