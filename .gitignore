@@ -39,6 +39,9 @@ desktop.ini
 /steam-multiplayer-peer.*.dll
 /steam_api64.dll
 
+# 网页房公网隧道组件（由 tools/get_cloudflared.ps1 下载，随发布 zip 分发）
+/cloudflared.exe
+
 # 手机远程控制台运行时数据
 tools/mobile_console/queue.json
 tools/mobile_console/token.txt
