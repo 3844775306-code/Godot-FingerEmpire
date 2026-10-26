@@ -22,6 +22,7 @@ var _quality_btns: Array = []
 var _pause_btn: Button = null
 var _hint_label: Label = null
 var _mobile: bool = false
+var _panel: Panel = null
 
 func setup(is_online: bool, is_client: bool) -> void:
 	_is_online = is_online
@@ -45,9 +46,12 @@ func _build() -> void:
 	dim.color = Color(0, 0, 0, 0.62)
 	dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	# 面板外的暗色遮罩就是“周围任意处”：点这里直接关闭设置，不再要求必须点右上角 ✕。
+	dim.gui_input.connect(_on_dim_gui_input)
 	add_child(dim)
 
 	var panel := Panel.new()
+	_panel = panel
 	var vp := get_viewport().get_visible_rect().size
 	var panel_w: float = PANEL_W
 	var panel_h: float = PANEL_H
@@ -317,6 +321,24 @@ func _refresh_pause_text() -> void:
 	if _pause_btn == null:
 		return
 	_pause_btn.text = "▶ 继续游戏" if get_tree().paused else "⏸ 暂停游戏"
+
+# 点击面板外的暗色区域关闭设置；面板内部仍由 Panel/按钮自己消费事件，
+# 所以拖动滑条、点复选框、滚动内容都不会误触关闭。
+func _on_dim_gui_input(event: InputEvent) -> void:
+	# 暗色遮罩和面板有重叠区域时，落在面板矩形内的点击仍然只归面板，
+	# 防止事件冒泡/触屏路由把面板内操作误当成“点外面”。
+	if _panel != null and is_instance_valid(_panel) and _panel.get_global_rect().has_point(event.position):
+		return
+	if event is InputEventMouseButton:
+		var mb := event as InputEventMouseButton
+		if mb.pressed and mb.button_index == MOUSE_BUTTON_LEFT:
+			accept_event()
+			_on_close_pressed()
+	elif event is InputEventScreenTouch:
+		var st := event as InputEventScreenTouch
+		if st.pressed:
+			accept_event()
+			_on_close_pressed()
 
 func _on_close_pressed() -> void:
 	# 关闭面板时如果正暂停，顺手恢复游戏
