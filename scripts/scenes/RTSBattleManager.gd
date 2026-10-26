@@ -14,6 +14,7 @@ const WALL_CANNON_SNAP: float = 6.0
 const BattleStatsPanelScript = preload("res://scripts/ui/BattleStatsPanel.gd")
 const MapPresets = preload("res://scripts/map/MapPresets.gd")
 const TutorialHintScript = preload("res://scripts/ui/TutorialHint.gd")
+const CampaignDirectorScript = preload("res://scripts/scenes/CampaignDirector.gd")
 const LevelVisualScript = preload("res://scripts/effects/BuildingLevelVisual.gd")
 var previous_emulate_mouse: bool
 # ==================== 资源 ====================
@@ -1191,8 +1192,19 @@ func _on_castle_died(team: int):
 
 	_show_battle_stats()
 
+# 战役模式：team -> 固定人口上限（空 = 按主城/民居计算）
+var campaign_pop_caps: Dictionary = {}
+
 # ==================== 人口上限更新 ====================
 func update_population_limits():
+	# 闯关模式人口上限由关卡直接指定：没有主城的关卡按建筑算会变成 0，
+	# 那样连初始军队都超编（生产按钮全灰），任务就没法玩了。
+	if GameSettings.campaign_mode and not campaign_pop_caps.is_empty():
+		player_max_pop = int(campaign_pop_caps.get(get_host_team(), 0)) \
+			+ NationBonuses.get_population_bonus(team_nations.get(get_host_team(), -1))
+		enemy_max_pop = int(campaign_pop_caps.get(get_enemy_team(), 0)) \
+			+ NationBonuses.get_population_bonus(team_nations.get(get_enemy_team(), -1))
+		return
 	var p_max = 0
 	var e_max = 0
 	for entity in get_tree().get_nodes_in_group("pop_buildings"):
@@ -1239,7 +1251,7 @@ func _ready():
 			map_modifiers = preset.get("modifiers", {})
 	_init_building_defs()
 	battle_stats = BattleStatsScript.new(self)
-	if not is_online and not GameSettings.is_ffa:
+	if not is_online and not GameSettings.is_ffa and not GameSettings.campaign_mode:
 		# 单机版每局随机分配红/蓝阵营（1v1/2v2/3v3 的出生侧与颜色一起交换）。
 		# 乱斗模式玩家固定蓝方（其余国家使用独立 team 3..），不参与红蓝对调。
 		if randi() % 2 == 1:
@@ -1254,7 +1266,17 @@ func _ready():
 		if static_ai:
 			static_ai.my_team = enemy_team
 	if not is_online:
-		if GameSettings.is_ffa:
+		if GameSettings.campaign_mode:
+			# 闯关模式：固定玩家蓝方、敌国红方，开局生成与胜负全部交给战役导演
+			player_team = RTSConfig.Team.BLUE
+			enemy_team = RTSConfig.Team.RED
+			var campaign_ai = get_node_or_null("AIController")
+			if campaign_ai:
+				campaign_ai.my_team = enemy_team
+			var director = CampaignDirectorScript.new()
+			director.name = "CampaignDirector"
+			add_child(director)
+		elif GameSettings.is_ffa:
 			_init_ffa_single(GameSettings.ffa_nation_count)
 		elif game_mode_2v2:
 			_init_2v2_single()

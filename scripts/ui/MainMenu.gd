@@ -238,17 +238,24 @@ func _ready():
 			_attach_new_badge(btn, UITheme.FONT_SM)
 
 	# 帮助入口：操作指南（蓝书）+ 新手教程（金色 CTA），并排放在主按钮下方。
-	var guide_btn := _make_menu_button("📘 操作指南", Vector2(760, center_y + 620), "book")
-	guide_btn.size = Vector2(420, 52)
+	var guide_btn := _make_menu_button("📘 操作指南", Vector2(660, center_y + 620), "book")
+	guide_btn.size = Vector2(340, 52)
 	guide_btn.pressed.connect(_on_guide_pressed)
 	add_child(guide_btn)
 	UITheme.hover_scale(guide_btn)
 
-	var tutorial_btn := _make_menu_button("🎓 新手教程", Vector2(1200, center_y + 620), "primary")
-	tutorial_btn.size = Vector2(420, 52)
+	var tutorial_btn := _make_menu_button("🎓 新手教程", Vector2(1030, center_y + 620), "primary")
+	tutorial_btn.size = Vector2(340, 52)
 	tutorial_btn.pressed.connect(_on_tutorial_pressed)
 	add_child(tutorial_btn)
 	UITheme.hover_scale(tutorial_btn)
+
+	# 闯关模式（战役）：固定地图 + 任务目标，独立的选关界面
+	var campaign_btn := _make_menu_button("⚔ 战役闯关", Vector2(1400, center_y + 620), "primary")
+	campaign_btn.size = Vector2(340, 52)
+	campaign_btn.pressed.connect(_on_campaign_pressed)
+	add_child(campaign_btn)
+	UITheme.hover_scale(campaign_btn)
 
 	# 菜单底部再写一行当前版本，玩家不进日志也能看到
 	var version_hint := Label.new()
@@ -396,6 +403,8 @@ func _find_ui(node_name: String) -> Node:
 
 func _on_play_pressed():
 	GameSettings.tutorial_mode = false
+	GameSettings.campaign_mode = false
+	GameSettings.campaign_level_id = ""
 	GameSettings.player_nation = nation_select.selected
 	# 单机敌国避开玩家国家：国家色是主要识别手段，同国会撞色。
 	var enemy_nation = randi() % (RTSConfig.Nation.size() - 1)
@@ -421,6 +430,8 @@ func _on_play_pressed():
 
 func _on_multiplayer_pressed():
 	GameSettings.tutorial_mode = false
+	GameSettings.campaign_mode = false
+	GameSettings.campaign_level_id = ""
 	var ds = _find_ui("DiffSelect")
 	if ds: GameSettings.ai_difficulty = ds.selected
 	GameSettings.ai_mode = 1   # 联机模式不使用单机模式
@@ -452,6 +463,8 @@ func _start_tutorial_battle() -> void:
 	if player_nation < 0 or player_nation >= RTSConfig.Nation.size():
 		player_nation = RTSConfig.Nation.VIKING
 	GameSettings.tutorial_mode = true
+	GameSettings.campaign_mode = false
+	GameSettings.campaign_level_id = ""
 	GameSettings.player_nation = player_nation
 	GameSettings.enemy_nation = (player_nation + 1) % RTSConfig.Nation.size()
 	GameSettings.ai_difficulty = GameSettings.AIDifficulty.EASY
@@ -461,6 +474,13 @@ func _start_tutorial_battle() -> void:
 	GameSettings.map_id = "classic"
 	GameSettings.map_seed = 0
 	get_tree().change_scene_to_file("res://scenes/rts_battle.tscn")
+
+# 闯关模式：打开选关界面（关卡数据在 scripts/data/CampaignData.gd）
+func _on_campaign_pressed() -> void:
+	GameSettings.tutorial_mode = false
+	GameSettings.campaign_mode = true
+	GameSettings.campaign_level_id = ""
+	get_tree().change_scene_to_file("res://scenes/campaign_menu.tscn")
 
 # 打开更新日志面板（已打开则关掉，形成"按钮开关"）
 func _on_changelog_pressed() -> void:
@@ -862,6 +882,7 @@ func _build_mobile_layout() -> void:
 		["📖 单位图鉴", _on_units_pressed, "book"],
 		["📘 操作指南", _on_guide_pressed, "book"],
 		["🎓 新手教程", _on_tutorial_pressed, "primary"],
+		["⚔️ 战役闯关", _on_campaign_pressed, "primary"],
 		["⚙️ 设  置", _on_settings_pressed, "muted"],
 		["📜 更新日志（%s）" % AppVersion.version(), _on_changelog_pressed, "muted"],
 		["🚪 退出游戏", _on_quit_pressed, "danger"],
