@@ -877,8 +877,10 @@ func cancel_combat_orders() -> void:
 
 func set_combat_advance_enabled(enabled: bool) -> void:
 	if not _uses_combat_state():
-		# 非战斗单位同样不能在没有攻击移动目的地时留下 ATTACK_MOVING 状态。
-		is_attack_moving = enabled and attack_move_target != Vector3.ZERO
+		# 非战斗单位没有攻击移动能力；历史上这里会把 is_attack_moving 置 true，
+		# 让农民/商队在 enable 后卡在 ATTACK_MOVING 状态并顺手攻击附近敌人。
+		is_attack_moving = false
+		attack_move_target = Vector3.ZERO
 		return
 	if enabled:
 		# 没有攻击移动目的地时不能只把 is_attack_moving 置 true：
@@ -3402,6 +3404,10 @@ func _find_wounded_ally() -> void:
 		_movement.set_move_target(best.global_position, attack_range)
 
 func _find_enemy_in_range():
+	# 农民/商队/官员等非战斗单位没有战斗 AI，不能自动索敌；
+	# 它们唯一的攻击入口是猎杀动物（AI 狩猎或玩家手动点动物）。
+	if target_type <= 0:
+		return
 	# 僧侣/官员不索敌，继续由各自的任务 AI 处理。
 	if _is_healer() or entity_id in [46, 47, 48, 50]:
 		return
@@ -3473,6 +3479,9 @@ func _execute_command(cmd: Dictionary):
 		"attack":
 			var attack_cmd_target = cmd.get("target")
 			if not _is_valid_command_target(attack_cmd_target):
+				return
+			# 平民不执行攻击命令（狩猎动物除外），防止混合编队/网络旧命令把农民带去送死。
+			if target_type <= 0 and not _is_animal_unit(attack_cmd_target):
 				return
 			# 命令入队到执行之间目标可能已被招降/上墙/上船，执行时再校验一次
 			if not _is_target_attackable_now(attack_cmd_target):
@@ -3652,6 +3661,14 @@ func gather_at(source):
 	_queue_command({"type": "gather", "target": source})
 
 func attack_move_to(pos: Vector3):
+	# 平民没有战斗能力：攻击移动对它们退化成普通移动，避免被 AI/全局进攻
+	# 直接拉去敌方主城前排队送死。
+	if target_type <= 0:
+		if is_attack_moving:
+			is_attack_moving = false
+			attack_move_target = Vector3.ZERO
+		move_to(pos)
+		return
 	_queue_command({"type": "attack_move", "pos": pos})
 # ----------------- ¹¥»÷¡¢²É¼¯¡¢Ñ°µÐµÈ£¨±£³Ö²»±ä£¬ÂÔ£© -----------------
 # ÏÂÃæÊÇÄãÔ­ÓÐµÄ _attack, _gather, find_delivery_point, _find_nearest_resource, _find_enemy_in_range µÈº¯Êý
@@ -4364,8 +4381,18 @@ func _is_naval_chase_target_blocked(target) -> bool:
 func _is_protected_army(target) -> bool:
 	return target is Army and target.is_immune_to_damage()
 
+func _is_animal_unit(target) -> bool:
+	if target == null or not is_instance_valid(target):
+		return false
+	var animal_type = target.get("_animal_type")
+	return animal_type != null and str(animal_type) != ""
+
 func _can_attack_target(target: GameEntity) -> bool:
 	if not is_instance_valid(target) or target.health <= 0: return false
+	# 平民单位（target_type<=0：农民、商队、官员、运输船等）没有战斗能力，
+	# 不能手动/自动攻击敌方军队或建筑；狩猎动物是唯一例外。
+	if target_type <= 0 and not _is_animal_unit(target):
+		return false
 	# 在运载船/城墙保护下的单位不能直接攻击，必须先把船或城墙打掉
 	if _is_protected_army(target):
 		return false

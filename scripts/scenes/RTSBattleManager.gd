@@ -2985,10 +2985,11 @@ func _command_selected_units(screen_pos: Vector2):
 					else:
 						u.attack_move_to(target.global_position)
 				elif is_hostile_to(u.team, u.owner_peer_id, target):
-					# 攻击过滤：不可攻击目标（同国/盟友/中立）改为移动
+					# 攻击过滤：不可攻击目标（同国/盟友/中立）改为移动；
+					# 农民/商队等平民不响应攻击指令，避免混合编队里被顺手拉去送死。
 					if u.has_method("_can_attack_target") and u._can_attack_target(target):
 						u.attack_target(target)
-					elif not (u.has_method("_is_naval_chase_target_blocked") and u._is_naval_chase_target_blocked(target)):
+					elif int(u.target_type) > 0 and not (u.has_method("_is_naval_chase_target_blocked") and u._is_naval_chase_target_blocked(target)):
 						u.move_to(target.global_position)
 				elif u.entity_id >= 46 and u.entity_id <= 50 and target is Building:
 					u.command_garrison(target)
@@ -4448,7 +4449,10 @@ func global_attack():
 	var castle = get_enemy_castle_pos()
 	if castle == Vector3.ZERO: return
 	for e in selection.selected_entities:
-		if is_instance_valid(e) and e is Army: e.attack_move_to(castle)
+		# 全局进攻只调度战斗单位；农民/商队/官员留在原地继续干活，
+		# 不能被“全选+进攻”顺手拉去敌方主城。
+		if is_instance_valid(e) and e is Army and e.target_type > 0:
+			e.attack_move_to(castle)
 
 func global_retreat():
 	var castle = get_host_castle_pos()
