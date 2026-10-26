@@ -637,6 +637,8 @@ func _find_nearest_spawn_tile(center: Vector3, want_water: bool, margin: float) 
 				elif bm.is_cliff_tile(tile.x, tile.y):
 					continue
 				var world_pos := Vector3(tile.x - half, 0.0, tile.y - half)
+				if not want_water and not _is_flat_spawn_pos(bm, world_pos):
+					continue
 				return _clamp_spawn_to_map(world_pos, margin)
 		if r > 0:
 			for dy in range(-r + 1, r):
@@ -658,6 +660,8 @@ func _find_nearest_spawn_tile(center: Vector3, want_water: bool, margin: float) 
 					elif bm.is_cliff_tile(tile.x, tile.y):
 						continue
 					var world_pos := Vector3(tile.x - half, 0.0, tile.y - half)
+					if not want_water and not _is_flat_spawn_pos(bm, world_pos):
+						continue
 					return _clamp_spawn_to_map(world_pos, margin)
 	return Vector3.ZERO
 
@@ -665,6 +669,16 @@ func _find_nearest_spawn_tile(center: Vector3, want_water: bool, margin: float) 
 # 即使山上有缓坡/台地，也不在坡面或台地上刷兵，避免部队卡在窄坡或孤岛台地。
 func _is_spawn_blocked_terrain(terrain: int) -> bool:
 	return terrain < 0 or terrain == 1 or terrain == 2
+
+# 生产单位落点要检查一小片地面的高差，避免刷在坡面/台地边缘。
+# 半径覆盖单位脚底，至少检查相邻一格；水面单位不适用。
+func _spawn_flat_radius() -> float:
+	return maxf(1.0, body_radius + 0.5)
+
+func _is_flat_spawn_pos(bm: RTSBattleManager, pos: Vector3) -> bool:
+	if bm == null:
+		return true
+	return bm._is_terrain_flat(pos, _spawn_flat_radius())
 
 # 建筑自身的净空半径。建筑模型按 2 倍缩放，实际轮廓比配置里的 body_radius
 # 大一倍多，只按 body_radius 算会让单位生成在建筑模型内部。
@@ -702,6 +716,9 @@ func _find_land_spawn_pos(margin: float = 1.2) -> Vector3:
 		var test_pos = _clamp_spawn_to_map(global_position + Vector3(cos(angle) * dist, 0, sin(angle) * dist), margin)
 		# 地形：山和水都不能用来出生
 		if bm and _is_spawn_blocked_terrain(bm.get_terrain_at(test_pos)):
+			attempts += 1; continue
+		# 落点周围必须是平地，避免单位卡在斜坡上
+		if bm and not _is_flat_spawn_pos(bm, test_pos):
 			attempts += 1; continue
 		# 和已有实体（含自己这栋建筑）保持体积间距
 		if _spawn_pos_blocked(test_pos):

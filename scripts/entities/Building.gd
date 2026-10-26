@@ -285,6 +285,8 @@ func _finish_construction():
 		var nation = bm.get_team_nation(team)
 		if nation >= 0:
 			_unlock_nation_units(nation)
+	# 建造期间视野为 0，完成后恢复；若建筑正被选中，立即补上视野/射程圈
+	_sync_range_rings()
 
 	
 func is_under_construction() -> bool:
@@ -640,6 +642,8 @@ func _finish_upgrade():
 	var bm = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
 	if bm and bm.has_method("upgrade_building_type"):
 		bm.upgrade_building_type(team, entity_id, self)
+	# 升级可能改变视野/攻击力，若建筑正被选中，范围圈同步刷新
+	_sync_range_rings()
 
 	# 升级完成警报（仅人类玩家自己，含位置和编队）
 	if bm and bm.has_method("_show_hud_alert") and bm.is_human_owned(owner_peer_id, team):
@@ -661,6 +665,85 @@ func get_prod_cooldown(unit_id: int) -> float:
 		if prod.unit_id == unit_id:
 			return prod.cooldown / spd3
 	return 1.0
+
+# ==================== 贴地范围圈（视野 / 射程） ====================
+# 单选建筑时和单位一样画两圈：视野细线、攻击射程粗线。建筑不能移动，
+# 圈直接挂在建筑节点下即可；地形逐顶点采样由 GroundRangeRing 负责。
+var _range_rings: Array = []
+var _range_rings_selected: bool = false
+var _range_rings_flag: int = -1
+var _range_ring_height_fn: Callable
+const RANGE_RING_MIN_ATTACK: float = 1.5
+
+func set_selected(selected: bool) -> void:
+	super.set_selected(selected)
+	_range_rings_selected = selected
+	_sync_range_rings()
+
+# SelectionManager 在单选/多选/取消选中时显式同步；多选时不画，避免地面糊成一片
+func set_range_rings_enabled(enabled: bool) -> void:
+	_range_rings_flag = 1 if enabled else 0
+	_sync_range_rings()
+
+func _sync_range_rings() -> void:
+	if not _range_rings_selected or _range_rings_flag == 0:
+		_set_range_rings_visible(false)
+		return
+	var specs: Array = get_range_ring_specs()
+	if specs.is_empty():
+		_set_range_rings_visible(false)
+		return
+	if _range_ring_layout_changed(specs):
+		_rebuild_range_rings(specs)
+	else:
+		for i in range(specs.size()):
+			_range_rings[i].set_radius(float(specs[i]["radius"]))
+	_set_range_rings_visible(true)
+
+func get_range_ring_specs() -> Array:
+	var specs: Array = []
+	if health <= 0:
+		return specs
+	if vision_range >= RANGE_RING_MIN_ATTACK:
+		specs.append({"kind": GroundRangeRing.Kind.VISION, "radius": float(vision_range)})
+	if attack_range >= RANGE_RING_MIN_ATTACK:
+		specs.append({"kind": GroundRangeRing.Kind.ACTION, "radius": attack_range})
+	return specs
+
+func _range_ring_layout_changed(specs: Array) -> bool:
+	if _range_rings.size() != specs.size():
+		return true
+	for i in range(specs.size()):
+		var ring = _range_rings[i]
+		if not is_instance_valid(ring):
+			return true
+		if int(ring.kind) != int(specs[i]["kind"]):
+			return true
+	return false
+
+func _rebuild_range_rings(specs: Array) -> void:
+	_clear_range_rings()
+	if not is_inside_tree():
+		return
+	if not _range_ring_height_fn.is_valid():
+		_range_ring_height_fn = GroundStripMesh.height_fn_for(_get_bm())
+	for spec in specs:
+		var ring = GroundRangeRing.create(int(spec["kind"]), float(spec["radius"]), _range_ring_height_fn)
+		ring.visible = false
+		add_child(ring)
+		_range_rings.append(ring)
+
+func _clear_range_rings() -> void:
+	for ring in _range_rings:
+		if is_instance_valid(ring):
+			ring.set_ring_visible(false)
+			ring.queue_free()
+	_range_rings.clear()
+
+func _set_range_rings_visible(on: bool) -> void:
+	for ring in _range_rings:
+		if is_instance_valid(ring):
+			ring.set_ring_visible(on)
 
 # ==================== 修理 ====================
 # 规则：残破建筑可以在「附近 10 米内没有敌人」时修理（主城除外）。
