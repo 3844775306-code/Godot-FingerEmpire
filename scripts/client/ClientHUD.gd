@@ -66,6 +66,9 @@ func _get_nation_name(nation: int) -> String:
 		RTSConfig.Nation.HUNGARY: return "匈牙利"
 		RTSConfig.Nation.JAPAN: return "日本"
 		RTSConfig.Nation.BYZANTINE: return "拜占庭"
+		RTSConfig.Nation.MONGOL: return "蒙古"
+		RTSConfig.Nation.PERSIA: return "波斯"
+		RTSConfig.Nation.SPAIN: return "西班牙"
 		_: return "未知"
 
 
@@ -413,7 +416,8 @@ func _update_unit_stats():
 		43: "油商", 44: "木商", 45: "石商", 51: "食商",
 		46: "县吏", 47: "上校", 48: "尚书", 49: "统帅", 50: "丞相",
 		55: "僧侣", 56: "长老", 57: "宗师", 58: "连弩", 59: "巨型投石机",
-		65: "日本武士", 66: "甲胄骑兵"
+		65: "日本武士", 66: "甲胄骑兵",
+		67: "蒙古弓骑", 68: "长生军", 69: "方阵兵"
 	}
 	var building_names = {
 		7: "桥", 8: "梯子",
@@ -476,7 +480,7 @@ func _update_unit_stats():
 			_stats_castle_label.text = "🏰 主城 已失守"
 
 	# 军用 ID 与展示列表共用同一组，保证总数与明细一致
-	var military_ids = [11, 12, 13, 15, 16, 17, 18, 19, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 55, 56, 57, 58, 59, 65, 66]
+	var military_ids = [11, 12, 13, 15, 16, 17, 18, 19, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 55, 56, 57, 58, 59, 65, 66, 67, 68, 69]
 	var military_total := 0
 	for uid in military_ids:
 		military_total += int(unit_counts.get(uid, 0))

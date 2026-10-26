@@ -129,6 +129,9 @@ func _ready():
 	nation_select.add_item("  匈牙利  +15护甲  石材+15%  黄金+10%  人口+5")
 	nation_select.add_item("  日本    +15%攻速  +10%攻击")
 	nation_select.add_item("  拜占庭  +2双护甲  黄金+10%")
+	nation_select.add_item("  蒙古    速度+20%  攻速+10%  视野+20%")
+	nation_select.add_item("  波斯    生命+15%  盾甲+1  黄金+15%  人口+5")
+	nation_select.add_item("  西班牙  攻击+10%  铠甲+1  黄金+15%")
 	nation_select.position = Vector2(750, 296)
 	nation_select.size = Vector2(900, 50)
 	_style_option(nation_select, 20)
@@ -268,8 +271,8 @@ func _ready():
 		16, UITheme.PARCHMENT)
 	_add_tip_line(tip_box, "✨ 本版 %s：设置里可调「相机放大倍数」· 选中单位改为贴边发光描边 · 建筑血条按阵营上色 · 手机端「↻ 按住旋转」· 点「📜 更新日志」看全部改动" % AppVersion.version(),
 		15, Color(UITheme.GOLD, 0.95))
-	_add_tip_line(tip_box, "国家加成：维京 +25%HP +10%速 · 英格兰 +15%攻 +20%视野 · 法兰西 +25护甲 城堡2级 · 中国 食物+20% 金+10% 人口+10 · 匈牙利 +15护甲 石+15% 金+10% · 日本 +15%攻速 +10%攻 · 拜占庭 +2护甲 金+10%",
-		15, Color(UITheme.STONE).lightened(0.3))
+	_add_tip_line(tip_box, "国家加成：维京 +25%HP +10%速 · 英格兰 +15%攻 +20%视野 · 法兰西 +25护甲 城堡2级 · 中国 食物+20% 金+10% 人口+10 · 匈牙利 +15护甲 石+15% 金+10% · 日本 +15%攻速 +10%攻 · 拜占庭 +2护甲 金+10% · 蒙古 速度+20% 攻速+10% 视野+20% · 波斯 生命+15% 盾甲+1 金+15% 人口+5 · 西班牙 攻击+10% 铠甲+1 金+15%",
+		14, Color(UITheme.STONE).lightened(0.3))
 
 	# 底部版本号
 	var version = Label.new()
@@ -749,6 +752,9 @@ func _build_mobile_layout() -> void:
 	nation_select.add_item("  匈牙利  +15护甲  石材+15%  黄金+10%  人口+5")
 	nation_select.add_item("  日本    +15%攻速  +10%攻击")
 	nation_select.add_item("  拜占庭  +2双护甲  黄金+10%")
+	nation_select.add_item("  蒙古    速度+20%  攻速+10%  视野+20%")
+	nation_select.add_item("  波斯    生命+15%  盾甲+1  黄金+15%  人口+5")
+	nation_select.add_item("  西班牙  攻击+10%  铠甲+1  黄金+15%")
 	nation_select.custom_minimum_size = Vector2(0, UILayout.dp(38.0))
 	nation_select.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_style_option(nation_select, UILayout.font_dp(10.0))

@@ -22,7 +22,7 @@ static func is_cliff_slope(dh: float, run_distance: float) -> bool:
 	var run: float = maxf(run_distance, 0.001)
 	return absf(dh) / run > MAX_WALK_SLOPE
 enum Team { BLUE = 1, RED = 0, NEUTRAL = 2 }
-enum Nation { VIKING, ENGLAND, FRANCE, CHINA, HUNGARY, JAPAN, BYZANTINE }
+enum Nation { VIKING, ENGLAND, FRANCE, CHINA, HUNGARY, JAPAN, BYZANTINE, MONGOL, PERSIA, SPAIN }
 const MAX_PLAYERS = 6
 
 enum PlayerSlot { SLOT_0 = 0, SLOT_1 = 1, SLOT_2 = 2 }
@@ -34,7 +34,10 @@ const COLOR_POOL = [
 	Color(0.5, 0.3, 0.9),
 	Color(0.2, 0.85, 0.4),
 	Color(1.0, 0.45, 0.75),
-	Color(0.0, 0.85, 0.85),   # 青，补足 7 国所需的 7 个不重复颜色
+	Color(0.0, 0.85, 0.85),   # 青
+	Color(0.95, 0.85, 0.2),   # 明黄，蒙古
+	Color(0.45, 0.85, 0.25),  # 草绿，波斯
+	Color(0.85, 0.2, 0.85),   # 品红，西班牙
 ]
 
 # 国家颜色不再绑定 Nation 枚举，而是每局开始时随机打乱颜色池后分配。
@@ -142,6 +145,9 @@ const ENTITY_MODELS = {
 	38: "res://models/arena/soldier.glb",
 	65: "res://models/arena/soldier.glb",
 	66: "res://models/arena/soldier.glb",
+	67: "res://models/forest/archer.glb",
+	68: "res://models/arena/soldier.glb",
+	69: "res://models/arena/soldier.glb",
 	39: "res://models/pirate/ship-large.glb",
 	9: "res://models/pirate/ship-wreck.glb",
 	40: "res://models/pirate/ship-small.glb",

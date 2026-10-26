@@ -7,7 +7,7 @@ extends RefCounted
 const UV = preload("res://scripts/ui/UnitView.gd")
 
 const TYPE_NAMES := { 0: "资源", 1: "建筑", 2: "单位" }
-const NATION_NAMES := ["维京", "英格兰", "法兰西", "中国", "匈牙利", "日本", "拜占庭"]
+const NATION_NAMES := ["维京", "英格兰", "法兰西", "中国", "匈牙利", "日本", "拜占庭", "蒙古", "波斯", "西班牙"]
 const CLASS_CN := {
 	"military": "军事单位",
 	"siege": "攻城单位",

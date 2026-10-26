@@ -18,7 +18,7 @@ const METRICS: Array = [
 	{ "id": "vision", "label": "视野面积实时总量", "short": "视野实时", "unit": "格", "cumulative": false },
 ]
 
-const NATION_NAMES: Array = ["维京", "英格兰", "法兰西", "中国", "匈牙利", "日本", "拜占庭"]
+const NATION_NAMES: Array = ["维京", "英格兰", "法兰西", "中国", "匈牙利", "日本", "拜占庭", "蒙古", "波斯", "西班牙"]
 
 var battle = null
 var samples: Array = []

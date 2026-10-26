@@ -37,6 +37,21 @@ static var BONUSES: Dictionary = {
 		"description": "拜占庭",
 		"unit_mult_all": { "melee_armor": 2, "shield_armor": 2 },          # 所有单位 +2 双护甲
 		"gather_mult": { "gold": 1.1 }                    # 黄金采集 +10%
+	},
+	RTSConfig.Nation.MONGOL: {
+		"description": "蒙古",
+		"unit_mult_all": { "speed": 1.2, "attack_speed": 1.1, "vision_range": 1.2 }
+	},
+	RTSConfig.Nation.PERSIA: {
+		"description": "波斯",
+		"unit_mult_all": { "health": 1.15, "shield_armor": 1 },
+		"gather_mult": { "gold": 1.15 },
+		"population_bonus": 5
+	},
+	RTSConfig.Nation.SPAIN: {
+		"description": "西班牙",
+		"unit_mult_all": { "attack": 1.1, "melee_armor": 1 },
+		"gather_mult": { "gold": 1.15 }
 	}
 }
 
@@ -112,6 +127,9 @@ static func get_trait_short(nation: int) -> String:
 		RTSConfig.Nation.HUNGARY: return "护甲+15 石+15% 金+10% 人口+5"
 		RTSConfig.Nation.JAPAN: return "攻速+15% 攻击+10%"
 		RTSConfig.Nation.BYZANTINE: return "双护甲+2 黄金+10%"
+		RTSConfig.Nation.MONGOL: return "速度+20% 攻速+10% 视野+20%"
+		RTSConfig.Nation.PERSIA: return "生命+15% 盾甲+1 金+15% 人口+5"
+		RTSConfig.Nation.SPAIN: return "攻击+10% 铠甲+1 金+15%"
 		_: return ""
 
 # 国家特色完整描述（面板副标题用）
@@ -124,4 +142,7 @@ static func get_trait_full(nation: int) -> String:
 		RTSConfig.Nation.HUNGARY: return "护甲 +15，石材 +15%、黄金 +10%，人口上限 +5。"
 		RTSConfig.Nation.JAPAN: return "攻速 +15%、攻击 +10%，近战爆发更强。"
 		RTSConfig.Nation.BYZANTINE: return "双护甲 +2，黄金 +10%，防御体系稳固。"
+		RTSConfig.Nation.MONGOL: return "全军速度 +20%、攻速 +10%、视野 +20%，擅骑射骚扰与快速包抄。"
+		RTSConfig.Nation.PERSIA: return "全军生命 +15%、盾甲 +1，黄金 +15%，人口上限 +5。"
+		RTSConfig.Nation.SPAIN: return "全军攻击 +10%、铠甲 +1，黄金 +15%，方阵枪兵克制骑兵。"
 		_: return ""

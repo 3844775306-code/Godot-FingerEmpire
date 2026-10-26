@@ -352,4 +352,7 @@ func nation_display_name(nation: int) -> String:
 		RTSConfig.Nation.HUNGARY: return "匈牙利"
 		RTSConfig.Nation.JAPAN: return "日本"
 		RTSConfig.Nation.BYZANTINE: return "拜占庭"
+		RTSConfig.Nation.MONGOL: return "蒙古"
+		RTSConfig.Nation.PERSIA: return "波斯"
+		RTSConfig.Nation.SPAIN: return "西班牙"
 		_: return "未知"

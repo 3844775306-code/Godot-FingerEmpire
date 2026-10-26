@@ -68,7 +68,7 @@ var _cmd_panel: Panel = null
 const ALERT_MAX_ROWS: int = 3
 const ALERT_LIFE: float = 3.4
 # 与 RTSConfig.Nation 枚举顺序一致
-const ALERT_NATION_NAMES: Array = ["维京", "英格兰", "法兰西", "中国", "匈牙利", "日本", "拜占庭"]
+const ALERT_NATION_NAMES: Array = ["维京", "英格兰", "法兰西", "中国", "匈牙利", "日本", "拜占庭", "蒙古", "波斯", "西班牙"]
 var _alert_stack: VBoxContainer = null
 var _alert_rows: Array = []      # [{ "rtl": RichTextLabel, "life": float }]
 var _unit_stats_timer: float = 1.0
@@ -96,6 +96,9 @@ func _get_nation_name(nation: int) -> String:
 		RTSConfig.Nation.HUNGARY: return "匈牙利"
 		RTSConfig.Nation.JAPAN: return "日本"
 		RTSConfig.Nation.BYZANTINE: return "拜占庭"
+		RTSConfig.Nation.MONGOL: return "蒙古"
+		RTSConfig.Nation.PERSIA: return "波斯"
+		RTSConfig.Nation.SPAIN: return "西班牙"
 		_: return "未知"
 
 # 国家特色：标题用短描述，下面一行用完整描述
@@ -492,7 +495,8 @@ func _update_unit_stats():
 		43: "油商", 44: "木商", 45: "石商", 51: "食商",
 		46: "县吏", 47: "上校", 48: "尚书", 49: "统帅", 50: "丞相",
 		55: "僧侣", 56: "长老", 57: "宗师", 58: "连弩", 59: "巨型投石机",
-		65: "日本武士", 66: "甲胄骑兵"
+		65: "日本武士", 66: "甲胄骑兵",
+		67: "蒙古弓骑", 68: "长生军", 69: "方阵兵"
 	}
 	var building_names = {
 		7: "桥", 8: "梯子",
@@ -525,7 +529,7 @@ func _update_unit_stats():
 				building_levels[entity.entity_id] = lv
 
 	# 军队统计（与下方展示列表使用同一组 ID，保证总数与明细一致）
-	var military_ids = [11, 12, 13, 15, 16, 17, 18, 19, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 55, 56, 57, 58, 59, 65, 66]
+	var military_ids = [11, 12, 13, 15, 16, 17, 18, 19, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 55, 56, 57, 58, 59, 65, 66, 67, 68, 69]
 	var military_total = 0
 	for uid in military_ids:
 		military_total += unit_counts.get(uid, 0)

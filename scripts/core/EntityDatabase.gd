@@ -327,6 +327,31 @@ func _init_data():
 			"vision_range": 10.5, "attack_range": 0.5, "damage_radius": 1.5, "target_type": 2,
 			"body_radius": 0.7, "melee_armor": 4, "shield_armor": 4, "can_move": true
 		},
+		# ==================== 蒙古弓骑 (ID 67) ====================
+		{
+			"id": 67, "type": 2, "name": "蒙古弓骑", "team": 0,
+			"cost": {"food": 80, "gold": 40},
+			"max_health": 90, "attack": 9, "attack_speed": 0.8, "speed": 2.6,
+			"vision_range": 14, "attack_range": 5.5, "damage_radius": 0, "target_type": 3,
+			"body_radius": 0.45, "melee_armor": 0, "shield_armor": 2, "can_move": true
+		},
+		# ==================== 波斯长生军 (ID 68) ====================
+		{
+			"id": 68, "type": 2, "name": "长生军", "team": 0,
+			"cost": {"food": 100, "gold": 50},
+			"max_health": 210, "attack": 17, "attack_speed": 1.3, "speed": 1.7,
+			"vision_range": 10, "attack_range": 0.9, "damage_radius": 1.0, "target_type": 2,
+			"body_radius": 0.5, "melee_armor": 3, "shield_armor": 4, "can_move": true
+		},
+		# ==================== 西班牙方阵兵 (ID 69) ====================
+		{
+			"id": 69, "type": 2, "name": "方阵兵", "team": 0,
+			"cost": {"food": 80, "wood": 30, "gold": 30},
+			"max_health": 180, "attack": 14, "attack_speed": 1.5, "speed": 1.8,
+			"vision_range": 9.8, "attack_range": 1.2, "damage_radius": 1.0, "target_type": 2,
+			"body_radius": 0.45, "melee_armor": 3, "shield_armor": 1, "can_move": true,
+			"ignore_armor": true, "piercing": true
+		},
 	# ==================== 重装武器厂 (ID 29) ====================
 		{
 			"id": 29, "type": 1, "name": "重装武器厂", "team": 0,

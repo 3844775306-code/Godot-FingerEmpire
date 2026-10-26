@@ -36,5 +36,17 @@ static func _static_init():
 		6: [ # BYZANTINE
 			{ "unit_id": 10, "cooldown": 3.0, "queue_limit": 10 },
 			{ "unit_id": 66, "cooldown": 8.0, "queue_limit": 5 }
+		],
+		7: [ # MONGOL
+			{ "unit_id": 10, "cooldown": 3.0, "queue_limit": 10 },
+			{ "unit_id": 67, "cooldown": 6.0, "queue_limit": 6 }
+		],
+		8: [ # PERSIA
+			{ "unit_id": 10, "cooldown": 3.0, "queue_limit": 10 },
+			{ "unit_id": 68, "cooldown": 8.0, "queue_limit": 5 }
+		],
+		9: [ # SPAIN
+			{ "unit_id": 10, "cooldown": 3.0, "queue_limit": 10 },
+			{ "unit_id": 69, "cooldown": 6.0, "queue_limit": 6 }
 		]
 	}

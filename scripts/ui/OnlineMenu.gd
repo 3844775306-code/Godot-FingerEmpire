@@ -140,6 +140,9 @@ func _ready():
 	nation_select.add_item("  匈牙利  +15护甲  石材+15%  黄金+10%  人口+5")
 	nation_select.add_item("  日本    +15%攻速  +10%攻击")
 	nation_select.add_item("  拜占庭  +2双护甲  黄金+10%")
+	nation_select.add_item("  蒙古    速度+20%  攻速+10%  视野+20%")
+	nation_select.add_item("  波斯    生命+15%  盾甲+1  黄金+15%  人口+5")
+	nation_select.add_item("  西班牙  攻击+10%  铠甲+1  黄金+15%")
 	nation_select.position = Vector2(x0, y + 38); nation_select.size = Vector2(500, 44)
 	_style_option(nation_select, 16)
 	panel.add_child(nation_select)
@@ -355,7 +358,8 @@ func _build_mobile_ui() -> void:
 	for item in ["  维京    +25%生命  +10%速度", "  英格兰  +15%攻击  +20%视野  采木+10%",
 			"  法兰西  +25护甲  城堡2级起始", "  中国    食物+20%  黄金+10%  人口+10",
 			"  匈牙利  +15护甲  石材+15%  黄金+10%  人口+5", "  日本    +15%攻速  +10%攻击",
-			"  拜占庭  +2双护甲  黄金+10%"]:
+			"  拜占庭  +2双护甲  黄金+10%", "  蒙古    速度+20%  攻速+10%  视野+20%",
+			"  波斯    生命+15%  盾甲+1  黄金+15%  人口+5", "  西班牙  攻击+10%  铠甲+1  黄金+15%"]:
 		nation_select.add_item(item)
 	nation_select.custom_minimum_size = Vector2(0, btn_h)
 	_style_option(nation_select, fs_body)

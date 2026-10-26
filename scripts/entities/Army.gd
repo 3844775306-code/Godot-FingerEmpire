@@ -277,7 +277,8 @@ func _apply_nation_bonus():
 	if mults.has("attack_range"):
 		attack_range *= mults["attack_range"]
 	if mults.has("vision_range"):
-		vision_range *= int(mults["vision_range"])
+		# 视野倍率是浮点数；之前取 int 会把 +20% 截成 1 倍，加成完全不生效。
+		vision_range *= float(mults["vision_range"])
 		# 国家加成改视野后，采集搜索半径同步取新视野
 		gather_search_range = float(vision_range)
 		if entity_id == 14:
@@ -725,11 +726,11 @@ func set_animation_lod(disable: bool) -> void:
 func _add_weapon():
 	var wpath = ""
 	# Bow: archers only
-	if entity_id in [12, 31, 37]: wpath = "res://models/forest/weapon-bow.glb"
+	if entity_id in [12, 31, 37, 67]: wpath = "res://models/forest/weapon-bow.glb"
 	# Spear
-	elif entity_id == 35: wpath = "res://models/arena/weapon-spear.glb"
+	elif entity_id in [35, 69]: wpath = "res://models/arena/weapon-spear.glb"
 	# Sword: all infantry + cavalry + specials
-	elif entity_id in [11, 15, 19, 30, 32, 34, 36, 38, 65, 66]:
+	elif entity_id in [11, 15, 19, 30, 32, 34, 36, 38, 65, 66, 68]:
 		wpath = "res://models/arena/weapon-sword.glb"
 	if wpath != "" and ResourceLoader.exists(wpath):
 		var ws = load(wpath)
@@ -738,13 +739,13 @@ func _add_weapon():
 			if w:
 				w.position = Vector3(body_radius * 1.2, body_radius * 0.4, 0)
 				w.scale = Vector3.ONE 
-				if entity_id in [12, 31, 37]: w.rotation_degrees = Vector3(0, 180, 0)
+				if entity_id in [12, 31, 37, 67]: w.rotation_degrees = Vector3(0, 180, 0)
 				add_child(w)
-	if entity_id in [36, 37, 38] and ResourceLoader.exists("res://models/arena/shield-round.glb"):
+	if entity_id in [36, 37, 38, 68, 69] and ResourceLoader.exists("res://models/arena/shield-round.glb"):
 		var sh = load("res://models/arena/shield-round.glb")
 		if sh: var s = sh.instantiate(); if s: s.position = Vector3(-0.3, body_radius * 0.6, 0); s.scale = Vector3.ONE * 0.8; add_child(s)
 	var mpath = ""
-	if entity_id in [15, 19, 38, 66]: mpath = "res://models/pets/animal-dog.glb"
+	if entity_id in [15, 19, 38, 66, 67]: mpath = "res://models/pets/animal-dog.glb"
 
 	elif entity_id == 34: mpath = "res://models/pets/animal-elephant.glb"
 	if mpath != "" and ResourceLoader.exists(mpath):

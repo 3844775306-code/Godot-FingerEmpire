@@ -10,7 +10,7 @@ const EntityDamageVisual = preload("res://scripts/effects/EntityDamageVisual.gd"
 enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ATTACK_SPEED, MELEE_ARMOR, SHIELD_ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH, GARRISONED, NATION, IN_ACTION_RANGE, ATTACK_SEQ }
 enum EB { UPGRADE=0, MAX_UPGRADE, CAN_UPGRADE, BUILD_TIMER, MAX_BUILD, PROD_CURRENT, PROD_PROGRESS, PROD_QSIZE, UPGRADE_TIMER, MAX_UPGRADE_TIME, GARRISON_COUNT, REPAIR_TIMER, MAX_REPAIR, CAN_REPAIR }
 # 与 RTSBattleManager.get_nation_name() 保持一致；客户端不跑服务端脚本，血条文字单独查表
-const NATION_LABELS := ["维京", "英格兰", "法兰西", "中国", "匈牙利", "日本", "拜占庭"]
+const NATION_LABELS := ["维京", "英格兰", "法兰西", "中国", "匈牙利", "日本", "拜占庭", "蒙古", "波斯", "西班牙"]
 var last_applied_seq = -1
 # ==================== 玩家信息 ====================
 var player_team: int = -1          # 1v1 模式队伍 (BLUE=0, RED=1)
@@ -553,7 +553,7 @@ func _process_snapshot(data: Dictionary):
 				if _is_audible(bpos):
 					var eid = b.get("entity_id", -1)
 					var cam = _get_cam_pos()
-					if eid == 12 or eid == 31 or eid == 37:
+					if eid == 12 or eid == 31 or eid == 37 or eid == 67:
 						AudioManager.play_sfx_3d("arrow_shoot", bpos, cam)
 					elif eid == 16 or eid == 39 or eid == 13:
 						AudioManager.play_sfx_3d("cannon_fire", bpos, cam)
@@ -1416,20 +1416,20 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 		# Weapons and mounts (match server Army._add_weapon)
 		var eid2 = info.get("entity_id", 0)
 		var br = info.get("body_radius", 0.5)
-		if eid2 in [12, 31, 37] and ResourceLoader.exists("res://models/forest/weapon-bow.glb"):
+		if eid2 in [12, 31, 37, 67] and ResourceLoader.exists("res://models/forest/weapon-bow.glb"):
 			var ws = load("res://models/forest/weapon-bow.glb")
 			if ws: var w = ws.instantiate(); if w: w.position = Vector3(br*1.2, br*0.4, 0); w.scale = Vector3.ONE; w.rotation_degrees = Vector3(0, 180, 0); entity.add_child(w)
-		if eid2 == 35 and ResourceLoader.exists("res://models/arena/weapon-spear.glb"):
+		if eid2 in [35, 69] and ResourceLoader.exists("res://models/arena/weapon-spear.glb"):
 			var ws = load("res://models/arena/weapon-spear.glb")
 			if ws: var w = ws.instantiate(); if w: w.position = Vector3(br*1.2, br*0.4, 0); entity.add_child(w)
-		if eid2 in [11, 15, 19, 30, 32, 34, 36, 38, 65, 66] and ResourceLoader.exists("res://models/arena/weapon-sword.glb"):
+		if eid2 in [11, 15, 19, 30, 32, 34, 36, 38, 65, 66, 68] and ResourceLoader.exists("res://models/arena/weapon-sword.glb"):
 			var ws = load("res://models/arena/weapon-sword.glb")
 			if ws: var w = ws.instantiate(); if w: w.position = Vector3(br*1.2, br*0.4, 0); w.scale = Vector3.ONE; entity.add_child(w)
-		if eid2 in [36, 37, 38] and ResourceLoader.exists("res://models/arena/shield-round.glb"):
+		if eid2 in [36, 37, 38, 68, 69] and ResourceLoader.exists("res://models/arena/shield-round.glb"):
 			var sh = load("res://models/arena/shield-round.glb")
 			if sh: var s = sh.instantiate(); if s: s.position = Vector3(-0.3, br*0.6, 0); s.scale = Vector3.ONE*0.8; entity.add_child(s)
 		var mpath = ""
-		if eid2 in [15, 19, 38, 66]: mpath = "res://models/pets/animal-dog.glb"
+		if eid2 in [15, 19, 38, 66, 67]: mpath = "res://models/pets/animal-dog.glb"
 		elif eid2 == 34: mpath = "res://models/pets/animal-elephant.glb"
 		if mpath != "" and ResourceLoader.exists(mpath):
 			var ms = load(mpath)
