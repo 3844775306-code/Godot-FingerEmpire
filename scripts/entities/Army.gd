@@ -197,6 +197,10 @@ const DELIVER_CONTACT_SLACK: float = 1.2
 const BOAT_GATHER_SEARCH_RANGE: float = 32.0
 # 农民自动搜索资源点的半径 = 视野 × 该系数；采集船用上面的固定半径，不吃这个系数
 const FARMER_GATHER_SEARCH_SCALE: float = 0.7
+# 采集停靠间距：农民采集时身体边缘到资源碰撞边缘的距离（米）。
+# 这个值同时用于“开始采集”的判定和移动层的最终接近（MovementController 引用它），
+# 改这里就能一次调整“农民站多远采集”。
+const GATHER_STANDOFF_GAP: float = 0.5
 
 # Åö×²·ÖÀë½ÚÁ÷
 
@@ -2541,7 +2545,7 @@ func _process_action(delta, bm):
 		var h_dist = h_diff.length() - body_radius - target_radius
 
 		if current_target is WorldResource:
-			if h_dist <= 0.5:
+			if h_dist <= GATHER_STANDOFF_GAP:
 				_clear_resource_unreachable(current_target)
 				_gather_approach_time = 0.0
 				_gather_last_distance = -1.0
@@ -2574,7 +2578,10 @@ func _process_action(delta, bm):
 					_set_order(UnitState.IDLE)
 					_movement.stop()
 					return
-				_movement.set_move_target(current_target.global_position)
+				# 寻路终点用「资源边缘外 GATHER_STANDOFF_GAP 米」的站位点，而不是资源中心：
+				# 资源格本身是 A* 阻挡格，直接寻路到中心会停在旁边几米处，
+				# 单位于是站在远处“假采集”（资源血量不掉），采集停靠间距也就不受控。
+				_movement.set_move_target(_gather_standoff_position(current_target))
 		elif _order_is(UnitState.GATHERING):
 			# 采集状态却锁着非资源目标（命令误给/资源点被替换）：清掉回空闲，避免永久假采集
 			current_target = null
@@ -3308,6 +3315,21 @@ func _spawn_effect_marker(target, color: Color):
 	var t = Timer.new(); t.one_shot = true; t.wait_time = 1.0
 	t.timeout.connect(marker.queue_free)
 	marker.add_child(t); t.start()
+
+# 采集站位点：资源碰撞边缘外 GATHER_STANDOFF_GAP 米，方向取「资源 → 农民」。
+# 寻路终点落在资源旁边的可走格上（资源中心格是 A* 阻挡格），
+# 这样单位才会真的走到 0.5 米的采集停靠间距，而不是停在两米开外。
+func _gather_standoff_position(res) -> Vector3:
+	var target_radius: float = 0.0
+	if res is GameEntity:
+		target_radius = float(res.body_radius)
+	var dir := Vector3(global_position.x - res.global_position.x, 0.0, global_position.z - res.global_position.z)
+	if dir.length() < 0.001:
+		dir = Vector3(1.0, 0.0, 0.0)
+	# 站位点比阈值再靠近 0.05 米，避免浮点误差导致“差一点点不算到”而原地微调
+	var dist: float = maxf(float(body_radius) + target_radius + GATHER_STANDOFF_GAP - 0.05, 0.1)
+	return Vector3(res.global_position.x, global_position.y, res.global_position.z) + dir.normalized() * dist
+
 
 func _gather(resource_node, delta):
 	if resource_node == null or not is_instance_valid(resource_node) or resource_node.health <= 0:

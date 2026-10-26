@@ -413,7 +413,7 @@ func process_move(delta, bm: RTSBattleManager):
 		var h_diff = Vector2(_army.global_position.x - _army.current_target.global_position.x,
 			_army.global_position.z - _army.current_target.global_position.z)
 		var h_dist = h_diff.length() - _army.body_radius - target_radius
-		if _army.current_target is WorldResource and h_dist <= 0.5:
+		if _army.current_target is WorldResource and h_dist <= Army.GATHER_STANDOFF_GAP:
 			_stop_velocity()
 			return
 		elif _army.current_target is GameEntity and h_dist <= _army.attack_range:
@@ -430,14 +430,20 @@ func process_move(delta, bm: RTSBattleManager):
 	# No A* path = no movement, unless close to target (final approach)
 	if astar_path.size() == 0:
 		if astar_target.distance_squared_to(_army.global_position) > 3.0:
-			# 没有路径但目标仍远：先让状态层补发请求，避免个别漏发请求的单位
-			# 永久停在“移动中但无路径”。失败/排队状态不在这里处理。
-			_try_reissue_missing_path(target_pos)
-			_stop_velocity()
-			return  # too far, no path → stay put until the request is served
+			# 采集目标所在的格子本身是 A* 阻挡格，寻路终点常常停在离资源 1~3 米处。
+			# 普通移动在 1.7 米外就原地等待重算，农民于是站在远处“假采集”（资源血量不掉）。
+			# 对采集目标放行最后几米的直线接近，终点取资源边缘外 0.5 米的站位点，
+			# 不直接撞进资源模型（撞进去会被碰撞滑动挤开，站位会抖）。
+			var standoff := _gather_standoff_point(target_pos)
+			if standoff != Vector3.ZERO:
+				move_target = standoff
+			else:
+				_try_reissue_missing_path(target_pos)
+				_stop_velocity()
+				return  # too far, no path → stay put until the request is served
 		# 无路径的最终接近也不能跨悬崖：目标就在脚下另一侧时，
 		# 直接插值过去会让单位从台地边缘滑下陡坡。
-		if bm != null and _is_cliff_between_positions(bm, _army.global_position, target_pos):
+		if bm != null and _is_cliff_between_positions(bm, _army.global_position, move_target):
 			_stop_velocity()
 			return
 		# Close enough: allow final approach to exact target
@@ -1301,3 +1307,50 @@ func _has_adjacent_ladder(bm: RTSBattleManager, wall_tile: Vector2i, my_team: in
 			if ladder_b and ladder_b.health > 0 and ladder_b.team == my_team:
 				return true
 	return false
+
+# ── 采集最终接近 ──
+# 资源点占用的 A* 格子是阻挡格，寻路终点往往停在离资源 1~3 米的地方。
+# 普通移动在「目标 1.7 米外且无路径」时会原地等待重算，农民就会站在远处假采集。
+# 这里对采集目标单独放行最后几米的直线接近：终点取资源边缘外 GATHER_STANDOFF_GAP 米的站位点，
+# 让「采集停靠间距」真的等于 Army.GATHER_STANDOFF_GAP（0.5 米）。
+const GATHER_FINAL_APPROACH_RANGE: float = 4.0
+const GATHER_FINAL_APPROACH_STEP: float = 0.5
+
+
+# 返回采集站位点；不是采集目标 / 太远 / 中间隔山隔水时返回 Vector3.ZERO（表示不放行）
+func _gather_standoff_point(target_pos: Vector3) -> Vector3:
+	if _army == null or not is_instance_valid(_army.current_target):
+		return Vector3.ZERO
+	if not (_army.current_target is WorldResource):
+		return Vector3.ZERO
+	if String(_army.current_order) != "gather":
+		return Vector3.ZERO
+	var target_radius: float = 0.0
+	if _army.current_target is GameEntity:
+		target_radius = float(_army.current_target.body_radius)
+	var flat: float = Vector2(target_pos.x - _army.global_position.x, target_pos.z - _army.global_position.z).length()
+	var stand_dist: float = float(_army.body_radius) + target_radius + Army.GATHER_STANDOFF_GAP
+	# 已经站在站位点内侧（贴上了）就不用再插值，交给 Army 的采集判定
+	if flat <= stand_dist + 0.01:
+		return Vector3.ZERO
+	# 只放行最后几米：更远的距离说明寻路真的没走到，继续等 A* 重算
+	if flat - stand_dist > GATHER_FINAL_APPROACH_RANGE:
+		return Vector3.ZERO
+	var bm = _get_bm()
+	if bm != null:
+		# 中间不能隔山/隔水：逐段采样地形，陆地单位只走平原
+		var steps: int = int(flat / GATHER_FINAL_APPROACH_STEP) + 1
+		for i in range(1, steps + 1):
+			var t: float = float(i) / float(steps)
+			var p: Vector3 = _army.global_position.lerp(target_pos, t)
+			var terr: int = int(bm.get_terrain_at(p))
+			if terr == 1:
+				return Vector3.ZERO
+			if terr == 2 and not _army.water_capable:
+				return Vector3.ZERO
+	var dir := Vector3(_army.global_position.x - target_pos.x, 0.0, _army.global_position.z - target_pos.z)
+	if dir.length() < 0.001:
+		return Vector3.ZERO
+	# 站位点比阈值再往里 0.05 米，避免浮点误差导致“差一点点不算到”而反复微调
+	var aim: float = maxf(stand_dist - 0.05, 0.0)
+	return Vector3(target_pos.x, _army.global_position.y, target_pos.z) + dir.normalized() * aim
