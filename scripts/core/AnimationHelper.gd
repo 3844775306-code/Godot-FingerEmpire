@@ -15,20 +15,15 @@ const LOOPED_ANIMATIONS := [
 # 模型分别自带 32 / 32 / 25 个原生动作，这里按兵种直接挑模型原生的姿态，
 # 一律原样播放，不再改写任何动画关键帧；表里没有的仍回落到近战挥击。
 #
-# 弓箭手系（12 弓箭手 / 31 长弓兵 / 37 重装弓箭手）的模型里没有专门叫
-# attack-shoot 的远程攻击动作：attack-melee-*、attack-kick-* 都是徒手勾拳/踢腿，
-# 拿弓的单位播这些会变成用弓砸人。真正贴切的原始射击动作是 holding-left-shoot
-# ——左手持弓、射击瞬间躯干与持弓臂的原生后坐（0.2 秒）。它就是这个模型自带的
-# “攻击动画”，所以直接用它，不做旋转放大之类的改帧。
+# 弓箭手系（12 弓箭手 / 31 长弓兵 / 37 重装弓箭手）按玩家要求改回近战挥击动作
+# attack-melee-left：holding-left-shoot 虽然是模型原生的拉弓动作，但看着像「举弓不动」，
+# 出手瞬间没有力度，实战里不如挥击读得出来。所以不再单独映射，直接走下面的默认值。
 # 33 诸葛连弩 / 58 连弩 用的是 ballista 模型，GLB 里根本没有 AnimationPlayer，
 # 映射只是保持原状（不会播骨骼动作），开火表现靠箭矢/音效。
 const ATTACK_ANIM_BY_ID := {
 	55: "interact-right",       # 僧侣：单手上抬抚出，像在引导法术
 	56: "holding-both-shoot",   # 长老：双手前送
 	57: "attack-melee-right",   # 宗师：右掌直击（与农民左勾拳区分开）
-	12: "holding-left-shoot",   # 弓箭手：模型原生拉弓射击动作
-	31: "holding-left-shoot",   # 长弓兵（soldier 模型，同一套射击动作）
-	37: "holding-left-shoot",   # 重装弓箭手（soldier 模型）
 	33: "holding-both-shoot",   # 诸葛连弩：ballista 模型无 AnimationPlayer，实际不播
 	58: "holding-both-shoot",   # 连弩：weapon-ballista 模型无 AnimationPlayer
 }
@@ -64,9 +59,8 @@ static func configure_loops(root: Node) -> AnimationPlayer:
 
 # 攻击动作一个循环 ≈ 一次攻击冷却；否则攻击间隔慢的单位反而播放得飞快，
 # 攻击间隔快的单位又会长时间停在最后一帧。
-# 顺带解决 GLB 里射击动作只有 0.2 秒、一闪而过看不清的问题：按冷却把播放速率
-# 压慢（12 弓箭手 ≈ 0.29 倍 / 0.69 秒，31 长弓兵 ≈ 0.2 倍 / 1 秒，
-# 37 重装弓箭手受 0.1 倍下限保护 ≈ 2 秒），既不改关键帧又能把原版动作看全。
+# 弓箭手改回 attack-melee-left 后，原始动作长 0.42 秒，按各自的冷却换算播放速率
+# 就能正好填满一次出手间隔，既不改关键帧又能把原版动作看全。
 static func attack_speed_scale(ap: AnimationPlayer, anim_name: String, cooldown: float) -> float:
 	if ap == null or not ap.has_animation(anim_name):
 		return 1.0
