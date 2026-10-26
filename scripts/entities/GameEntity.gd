@@ -661,10 +661,10 @@ func _find_nearest_spawn_tile(center: Vector3, want_water: bool, margin: float) 
 					return _clamp_spawn_to_map(world_pos, margin)
 	return Vector3.ZERO
 
-# 出生点地形判定：水域只有水军能待，其余可通行性交给统一坡度规则。
-# 山地本身不再被一刀切禁止，只有悬崖格/陡坎格会被下面的 is_cliff_tile 挡掉。
+# 出生点地形判定：山（1）是陆军不能直接上去的高地形，水（2）只有水军能待。
+# 即使山上有缓坡/台地，也不在坡面或台地上刷兵，避免部队卡在窄坡或孤岛台地。
 func _is_spawn_blocked_terrain(terrain: int) -> bool:
-	return terrain < 0 or terrain == 2
+	return terrain < 0 or terrain == 1 or terrain == 2
 
 # 建筑自身的净空半径。建筑模型按 2 倍缩放，实际轮廓比配置里的 body_radius
 # 大一倍多，只按 body_radius 算会让单位生成在建筑模型内部。

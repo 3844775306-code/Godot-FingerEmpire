@@ -70,9 +70,12 @@ var collision_timer: float = 0.0
 # 单位实际会顶在墙上原地踏步；Army 用它改打这面挡路的墙。
 var blocking_building: Building = null
 const COLLISION_INTERVAL: float = 0.15
-# 统一坡度通行：坡度(高差/水平距离)决定速度与 A* 时间成本，公式在 RTSConfig。
-# 超过 RTSConfig.MAX_WALK_SLOPE 的台阶视为悬崖，上、下都不允许通过。
-# 不再按 overlay=4/5 或 terrain=1 判断山体是否可走。
+# 山地通行：普通山体(terrain=1)对陆军封闭，只有显式标记的缓坡(overlay=4)
+# 与山顶台地(overlay=5)能走。坡度只负责在这些可走坡面上调整速度与 A* 成本，
+# 不再作为“能不能上山”的唯一依据。
+# 缓坡/台地基础成本高于平原，避免部队为了抄近路随意翻山。
+const SLOPE_BASE_COST: float = 1.35
+const PLATEAU_BASE_COST: float = 1.1
 var _last_recalc_frame: int = -99  # prevent recalc spam
 var _path_cache: Dictionary = {}  # Vector2i(world_x, world_z) -> path_array, cleared on building placement
 var _blacklist: Dictionary = {}  # Vector2i -> 过期时间戳，暂时跳过不可达目标
@@ -531,12 +534,39 @@ func _is_cliff_between_positions(bm: RTSBattleManager, from_pos: Vector3, to_pos
 	return _is_cliff_between_tiles(bm, from_tile, to_tile)
 
 func _is_cliff_between_tiles(bm: RTSBattleManager, from_tile: Vector2i, to_tile: Vector2i) -> bool:
+	# 普通山壁整格封闭：哪怕高差看起来不大，也不允许直接踏上山体。
+	if _is_blocked_mountain_tile(bm, from_tile) or _is_blocked_mountain_tile(bm, to_tile):
+		return true
+	# 山顶台地(5)只能从缓坡(4)或另一块台地进入；山脚/平地不能直接踏上台地边缘。
+	if _is_plateau_transition_blocked(bm, from_tile, to_tile):
+		return true
 	var step_len := sqrt(float((to_tile.x - from_tile.x) * (to_tile.x - from_tile.x)
 		+ (to_tile.y - from_tile.y) * (to_tile.y - from_tile.y)))
 	if step_len < 0.001:
 		return false
 	var dh: float = _get_tile_height(to_tile, bm) - _get_tile_height(from_tile, bm)
 	return RTSConfig.is_cliff_slope(dh, step_len)
+
+# terrain=1 且没有缓坡(4)/台地(5)标记的格子就是不可通行的山壁。
+func _is_blocked_mountain_tile(bm: RTSBattleManager, tile: Vector2i) -> bool:
+	if bm == null:
+		return false
+	if bm.get_terrain_at_grid(tile.x, tile.y) != 1:
+		return false
+	var ov: int = bm.get_overlay_at_grid(tile.x, tile.y)
+	return ov != 4 and ov != 5
+
+# 台地边缘只允许接缓坡或另一块台地；平地/水面直接贴着台地会被当成悬崖。
+func _is_plateau_transition_blocked(bm: RTSBattleManager, from_tile: Vector2i, to_tile: Vector2i) -> bool:
+	if bm == null:
+		return false
+	var from_ov: int = bm.get_overlay_at_grid(from_tile.x, from_tile.y)
+	var to_ov: int = bm.get_overlay_at_grid(to_tile.x, to_tile.y)
+	if from_ov != 5 and to_ov != 5:
+		return false
+	var from_high := from_ov == 4 or from_ov == 5
+	var to_high := to_ov == 4 or to_ov == 5
+	return not from_high or not to_high
 
 # ==================== Collision separation ====================
 
@@ -594,6 +624,11 @@ func _can_push_to(pos: Vector3, bm: RTSBattleManager) -> bool:
 		# 海军只能待在可航行水域；桥面虽然是水格，但船不能开上去。
 		return terrain == 2 and not _bridge_set.has(g)
 	if terrain != 2:
+		# 普通山壁不能靠推挤挤上山；缓坡/台地仍按坡度检查。
+		if terrain == 1:
+			var ov: int = bm.get_overlay_at_grid(g.x, g.y)
+			if ov != 4 and ov != 5:
+				return false
 		# 推挤也不能把陆军挤下悬崖/陡坎；否则密集阵型会在台地边缘互相推落。
 		if _is_cliff_between_positions(bm, _army.global_position, pos):
 			return false
@@ -1035,8 +1070,11 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 				# Single terrain cost lookup (merged passability + cost, was 2-3 calls)
 				var terrain_cost = _get_terrain_cost(neighbor, bm, wall_cache)
 				if terrain_cost >= 999.0: continue
+				# 台地边缘必须接缓坡/台地；平地不能直接斜着踏上台地。
+				if _is_plateau_transition_blocked(bm, cur_tile, neighbor): continue
 
 				# 统一坡度：悬崖/陡坎上下都不允许通过；普通坡提高时间成本。
+				# 普通山壁已在 _get_terrain_cost 里按 999 阻断，只有缓坡/台地能进入这里。
 				var neighbor_h = _get_tile_height(neighbor, bm)
 				var step_len := sqrt(float(dx * dx + dy * dy))
 				var dh: float = neighbor_h - from_height
@@ -1080,9 +1118,13 @@ func _get_terrain_cost(tile: Vector2i, bm: RTSBattleManager, wall_cache: Diction
 		# 水军无法通过桥
 		cost = 999.0 if _bridge_set.has(tile) else (0.8 if terrain == 2 else 999.0)
 	else:
-		# 山地不再按 terrain=1 直接封死：可通行性只由 RTSConfig 的坡度规则决定。
-		# 森林/沼泽/浅滩的权重也取实际基础速度的倒数，保证 A* 时间成本、实际移速一致。
-		if ov == 3:
+		# 山地：普通山壁不可通行；只有缓坡(4)与山顶台地(5)能走。
+		# 森林/沼泽/浅滩的权重取实际基础速度的倒数，保证 A* 时间成本、实际移速一致。
+		if ov == 4:
+			cost = SLOPE_BASE_COST
+		elif ov == 5:
+			cost = PLATEAU_BASE_COST
+		elif ov == 3:
 			cost = 1.0 / maxf(float(bm.map_modifiers.get("ford_speed", 0.55)), 0.1)
 		elif ov == 2:
 			cost = 1.0 / maxf(float(bm.map_modifiers.get("marsh_speed", 0.6)), 0.1)
@@ -1090,7 +1132,8 @@ func _get_terrain_cost(tile: Vector2i, bm: RTSBattleManager, wall_cache: Diction
 			cost = 1.0 / 0.9
 		else:
 			match terrain:
-				0, 1: cost = 1.0
+				0: cost = 1.0
+				1: cost = 999.0
 				2: cost = 1.5 if _bridge_set.has(tile) or _transport_water.has(tile) else 999.0
 				_: cost = 999.0
 	return cost

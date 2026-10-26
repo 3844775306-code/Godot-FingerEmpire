@@ -770,7 +770,7 @@ func _ship_shore_point(ship) -> Vector3:
 	if bm == null:
 		return Vector3.ZERO
 	var base: Vector3 = ship.global_position
-	# 山地本身也可以作为登陆点，但船到落点之间的台阶不能是悬崖/陡坎。
+	# 普通山地不可作为登陆点；缓坡/台地与浅滩是合格落点。
 	# 浅滩（overlay==3）陆军能走，算合格落点。
 	for r in [1.5, 2.5, 3.5, 5.0, 6.5, 8.0]:
 		for i in 16:

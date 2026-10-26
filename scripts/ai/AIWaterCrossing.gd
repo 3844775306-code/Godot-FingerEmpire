@@ -1181,7 +1181,7 @@ func _find_land_near(pos: Vector3) -> Vector3:
 				var gy: int = center.y + dy
 				if gx < 0 or gx >= RTSConfig.MAP_SIZE or gy < 0 or gy >= RTSConfig.MAP_SIZE:
 					continue
-				# 山地本身不再一律不可登陆；只排除真正的悬崖/陡坎格。
+				# 普通山地不可登陆；只有缓坡/台地(4/5)能让陆军上岸。
 				# 浅滩（overlay==3）陆军能走，算合格。
 				var terrain: int = int(battle.get_terrain_at_grid(gx, gy))
 				if terrain < 0:

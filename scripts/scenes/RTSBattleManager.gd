@@ -3070,8 +3070,10 @@ func _is_valid_build_position(pos: Vector3) -> bool:
 			if e.global_position.distance_to(pos) < 10.0:
 				return false
 	var t = get_terrain_at(pos)
-	# 山体不再按 terrain 或 overlay 禁止建造：是否平整由下面的 _is_terrain_flat 判断。
-	# 这样可走的缓坡/台地与陡崖都统一用高度坡度规则处理。
+	# 陆军不能直接上山，建筑也不能落在普通山体或缓坡/台地上：
+	# 否则会造出工人和援军都走不到的孤岛建筑。
+	if t == 1:
+		return false
 	# 桥：只能在水上建造
 	if selected_building_id == 7:
 		return is_valid_bridge_position(pos)
@@ -4202,8 +4204,8 @@ func get_water_distance_at(pos: Vector3) -> float:
 		return 9999.0
 	return float(dist)
 
-# 覆盖层：0=无 1=森林 2=沼泽 3=浅滩（只影响移速/视野，不改地形判定）
-# 山体的可通行性不再依赖覆盖层，统一由高度坡度规则决定。
+# 覆盖层：0=无 1=森林 2=沼泽 3=浅滩 4=缓坡 5=山顶台地
+# 山地只有 4/5 可通行，普通山壁由 is_blocked_mountain_tile 判定为不可通行。
 func get_overlay_at_grid(gx: int, gy: int) -> int:
 	if not $Map or not $Map.has_method("get_overlay"):
 		return 0
@@ -4234,9 +4236,45 @@ func get_height_at_grid(gx: int, gy: int) -> float:
 			return 0.0
 		return $Map.get_height_at_grid(gx, gy)
 
-# 某格是否存在超过最大可走坡度的邻接台阶。用于出生点、登陆点、AI 防线等
-# “能不能站/能不能过去”的判定；真正的寻路仍由 MovementController 逐边计算。
+# 普通山壁：terrain=1 且没有缓坡(4)/台地(5)标记。陆军不能直接上山，
+# 这类格子在出生、登陆、AI 防线判断里都按“悬崖”处理。
+func is_blocked_mountain_tile(gx: int, gy: int) -> bool:
+	if get_terrain_at_grid(gx, gy) != 1:
+		return false
+	var ov: int = get_overlay_at_grid(gx, gy)
+	return ov != 4 and ov != 5
+
+func is_highland_tile(gx: int, gy: int) -> bool:
+	var ov: int = get_overlay_at_grid(gx, gy)
+	return ov == 4 or ov == 5
+
+func is_plateau_tile(gx: int, gy: int) -> bool:
+	return get_overlay_at_grid(gx, gy) == 5
+
+# 台地边缘只允许接缓坡或另一块台地；平地/水面直接贴台地按悬崖处理。
+func is_plateau_transition_blocked(a: Vector2i, b: Vector2i) -> bool:
+	var oa: int = get_overlay_at_grid(a.x, a.y)
+	var ob: int = get_overlay_at_grid(b.x, b.y)
+	if oa != 5 and ob != 5:
+		return false
+	var a_high := oa == 4 or oa == 5
+	var b_high := ob == 4 or ob == 5
+	return not a_high or not b_high
+
+# 某格是否存在超过最大可走坡度的邻接台阶，或本身就是不可通行的山壁。
+# 用于出生点、登陆点、AI 防线等“能不能站/能不能过去”的判定；
+# 真正的寻路仍由 MovementController 逐边计算。
 func is_cliff_tile(gx: int, gy: int) -> bool:
+	if is_blocked_mountain_tile(gx, gy):
+		return true
+	if is_plateau_tile(gx, gy):
+		for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var px: int = gx + d.x
+			var py: int = gy + d.y
+			if px < 0 or py < 0 or px >= RTSConfig.MAP_SIZE or py >= RTSConfig.MAP_SIZE:
+				continue
+			if not is_highland_tile(px, py):
+				return true
 	var h: float = get_height_at_grid(gx, gy)
 	for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
 		var nx: int = gx + d.x
@@ -4247,13 +4285,19 @@ func is_cliff_tile(gx: int, gy: int) -> bool:
 			return true
 	return false
 
-# 两个世界坐标所在格之间是否是悬崖台阶。注意这不是完整路径校验，
+# 两个世界坐标所在格之间是否是悬崖台阶或不可通行的山壁。注意这不是完整路径校验，
 # 只用于判断“当前点到下一落脚点”这种相邻格移动。
 func is_cliff_between_world(from_pos: Vector3, to_pos: Vector3) -> bool:
 	var a: Vector2i = world_to_grid(from_pos)
 	var b: Vector2i = world_to_grid(to_pos)
 	if a == b:
 		return false
+	# 目标或当前格是普通山壁时直接拒绝；缓坡(4)/台地(5)仍按坡度判断。
+	if is_blocked_mountain_tile(a.x, a.y) or is_blocked_mountain_tile(b.x, b.y):
+		return true
+	# 台地边缘不能和平地/水面直接相邻通过，必须经过缓坡。
+	if is_plateau_transition_blocked(a, b):
+		return true
 	var run: float = Vector2(float(b.x - a.x), float(b.y - a.y)).length()
 	if run < 0.001:
 		return false

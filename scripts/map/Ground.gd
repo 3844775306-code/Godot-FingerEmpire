@@ -15,8 +15,9 @@ func _get_map_size() -> int:
 # 地形数据 0=平原, 1=山地, 2=水域
 var terrain_grid: Array = []
 var height_grid: Array = []            # per-tile height values
-# 覆盖层 0=无, 1=森林, 2=沼泽, 3=浅滩。只影响移速/视野/观感与 A* 通行，
-# 不改变地形类型判定。山体不再需要缓坡/台地等专用覆盖层，通行性统一由高度坡度决定。
+# 覆盖层 0=无, 1=森林, 2=沼泽, 3=浅滩, 4=缓坡, 5=山顶台地。
+# 山地(1)默认不可通行；只有写了 4/5 的坡道与台地才允许陆军上下山。
+# 这样普通山壁不会因为高度噪声刚好平缓就被部队直接爬上去。
 var overlay_grid: Array = []
 # 人工山墙（迷宫/台地/环形山/峡谷）的墙高：必须明显高于最大可走坡度对应的单格高差，
 # 否则部队会顺着缓坡直接翻墙；4.4 也为噪声起伏留出余量。
@@ -1014,8 +1015,8 @@ func _op_terrace(size: int, params: Dictionary) -> void:
 	_pass_centers.append(Vector2i(size / 2, size / 2))
 
 # 太行八陉：一条横向山脊横贯全图，山脊顶部是可站立的高地台地。
-# 这里只生成高度场，不再写 overlay=4/5 之类的“可走坡/台地”标记：
-# 通行性由 RTSConfig 的统一坡度规则从高度自动推导。
+# 台地(5)与坡道(4)必须显式写入 overlay：普通山壁仍是不可通行的山体，
+# 只有标记过的缓坡能上下山，避免部队从任意缓坡直接翻上山顶。
 func _op_mountain_slopes(size: int, params: Dictionary) -> void:
 	var ridge_half := maxi(4, int(round(float(params.get("ridge_half_frac", 0.085)) * float(size))))
 	var ramp_len := maxi(6, int(round(float(params.get("ramp_len_frac", 0.11)) * float(size))))
@@ -1031,14 +1032,14 @@ func _op_mountain_slopes(size: int, params: Dictionary) -> void:
 	var ridge_top := maxi(1, cy - ridge_half)
 	var ridge_bottom := mini(size - 2, cy + ridge_half)
 
-	# 山脊顶部整片抬升为可站立的高地台地。台地外沿的陡坎由坡度规则自动判定为悬崖。
+	# 山脊顶部整片抬升为可站立的高地台地；台地外沿仍是不可通行的山壁。
 	for x in range(size):
 		for y in range(ridge_top, ridge_bottom + 1):
 			terrain_grid[x][y] = 1
 			height_grid[x][y] = plateau_h + noise.get_noise_2d(x, y) * 0.12
-			overlay_grid[x][y] = 0
+			overlay_grid[x][y] = 5
 
-	# 缓坡：从山脚（平地高度）平滑抬升到台地边缘。
+	# 缓坡：从山脚（平地高度）平滑抬升到台地边缘，坡面标记 overlay=4。
 	# 南北两侧各生成一条，保证 1v1 双方都能从自己的半场上山。
 	for c in centers:
 		var cx := clampi(int(round(float(c) * float(size))), slope_half + 1, size - slope_half - 2)
@@ -1056,7 +1057,7 @@ func _op_mountain_slopes(size: int, params: Dictionary) -> void:
 					t = smoothstep(0.0, 1.0, t)
 					terrain_grid[x][y] = 1
 					height_grid[x][y] = lerpf(foot_h, plateau_h, t)
-					overlay_grid[x][y] = 0
+					overlay_grid[x][y] = 4
 		# 记录坡道入口，供资源/预览等需要"争议点"的逻辑使用
 		_pass_centers.append(Vector2i(cx, ridge_top - ramp_len))
 		_pass_centers.append(Vector2i(cx, ridge_bottom + ramp_len))
@@ -1065,7 +1066,7 @@ func _op_mountain_slopes(size: int, params: Dictionary) -> void:
 # 平顶台地群：若干座独立平顶山，山顶平坦、普通台缘是绝壁，
 # 每座台地只通过指定方向的缓坡与地面相连。参数 mesas 格式：
 # [中心x比例, 中心y比例, 半径比例, 山顶高度, [坡道角度...]]
-# 坡度越陡移速越慢，台缘无法直接上下，适合围绕高地视野与坡道做攻防。
+# 山顶写 overlay=5、坡道写 overlay=4；没有坡道的台地无法被陆军登上。
 func _op_mesa_field(size: int, params: Dictionary) -> void:
 	var mesas: Array = params.get("mesas", [])
 	var ramp_width := maxi(2, int(params.get("ramp_width", 3)))
@@ -1099,7 +1100,7 @@ func _op_mesa_field(size: int, params: Dictionary) -> void:
 				if r <= radius:
 					terrain_grid[x][y] = 1
 					height_grid[x][y] = top_h + noise.get_noise_2d(x, y) * 0.05
-					overlay_grid[x][y] = 0
+					overlay_grid[x][y] = 5
 
 		for ang in dirs:
 			var a := deg_to_rad(float(ang))
@@ -1116,7 +1117,7 @@ func _op_mesa_field(size: int, params: Dictionary) -> void:
 						continue
 					terrain_grid[wx][wy] = 1
 					height_grid[wx][wy] = h + noise.get_noise_2d(wx, wy) * 0.015
-					overlay_grid[wx][wy] = 0
+					overlay_grid[wx][wy] = 4
 			var foot := Vector2i(
 				int(round(float(cx) + dir.x * float(radius + ramp_len))),
 				int(round(float(cy) + dir.y * float(radius + ramp_len))))
@@ -1125,8 +1126,8 @@ func _op_mesa_field(size: int, params: Dictionary) -> void:
 		_pass_centers.append(Vector2i(cx, cy))
 
 # 盘山道：中央三重台地，台缘是绝壁，只有指定角度上的长坡能缓慢上山。
-# 坡面从山脚连续抬升到山顶，跨越所有台层；普通台层之间高差超过可走坡度，
-# 因此想上高地只能走坡道，适合做高地争夺与绕后截断。
+# 坡面从山脚连续抬升到山顶，跨越所有台层；山顶写 overlay=5、坡道写 overlay=4。
+# 普通台层保持为不可通行的山体，因此想上高地只能走坡道，适合做高地争夺与绕后截断。
 func _op_switchback(size: int, params: Dictionary) -> void:
 	var center_x := float(params.get("center_x", 0.5))
 	var center_y := float(params.get("center_y", 0.5))
@@ -1160,9 +1161,11 @@ func _op_switchback(size: int, params: Dictionary) -> void:
 				continue
 			var h := 0.0
 			var terrain := 0
+			var overlay := 0
 			if r <= top_r:
 				h = top_h
 				terrain = 1
+				overlay = 5
 			elif r <= outer_r:
 				var t := clampf((outer_r - r) / maxf(outer_r - top_r, 1.0), 0.0, 1.0)
 				var tier := clampi(int(ceil(t * float(tiers))), 1, tiers)
@@ -1176,10 +1179,11 @@ func _op_switchback(size: int, params: Dictionary) -> void:
 					var t := clampf((outer_r - r) / maxf(outer_r - top_r, 1.0), 0.0, 1.0)
 					h = top_h * t
 					terrain = 1
+					overlay = 4
 					break
 			terrain_grid[x][y] = terrain
 			height_grid[x][y] = h + noise.get_noise_2d(x, y) * 0.02 if terrain == 1 else 0.0
-			overlay_grid[x][y] = 0
+			overlay_grid[x][y] = overlay
 	_pass_centers.append(Vector2i(int(round(cx)), int(round(cy))))
 	for ang in ramp_angles:
 		var a := deg_to_rad(float(ang))
@@ -1188,7 +1192,8 @@ func _op_switchback(size: int, params: Dictionary) -> void:
 			int(round(cy + sin(a) * outer_r))))
 
 # 盆地：外圈是缓坡高地，内圈是低洼平地（不是水）；高地和盆底之间是绝壁，
-# 只有指定角度上的坡口能下到盆底。外围缓坡全周可上，盆底只靠坡口进出。
+# 只有指定角度上的坡口能下到盆底。外围缓坡(4)全周可上，内圈台地写 5，
+# 盆底只靠坡口(4)进出。
 func _op_basin(size: int, params: Dictionary) -> void:
 	var center_x := float(params.get("center_x", 0.5))
 	var center_y := float(params.get("center_y", 0.5))
@@ -1228,17 +1233,17 @@ func _op_basin(size: int, params: Dictionary) -> void:
 				height_grid[x][y] = floor_h + noise.get_noise_2d(x, y) * 0.025
 				overlay_grid[x][y] = 0
 			elif r <= outer_r:
-				# 高地内圈：普通台缘是直上直下的绝壁。
+				# 高地内圈：可站立的台地，写 overlay=5；普通台缘仍是不可通行的山壁。
 				terrain_grid[x][y] = 1
 				height_grid[x][y] = rim_h + noise.get_noise_2d(x + 19, y + 7) * 0.05
-				overlay_grid[x][y] = 0
+				overlay_grid[x][y] = 5
 			elif r <= outer_r + slope_w:
-				# 高地外圈：全周缓坡，外面可以爬上高地；里侧仍要靠坡口下盆地。
+				# 高地外圈：全周缓坡(4)，外面可以爬上高地；里侧仍要靠坡口下盆地。
 				var t := (r - outer_r) / maxf(slope_w, 1.0)
 				terrain_grid[x][y] = 1
 				height_grid[x][y] = lerpf(rim_h, 0.0, clampf(t, 0.0, 1.0)) + noise.get_noise_2d(x, y) * 0.02
-				overlay_grid[x][y] = 0
-			# 坡口：穿过高地内圈的一整条缓坡，从盆底连续升到高地顶面。
+				overlay_grid[x][y] = 4
+			# 坡口：穿过高地内圈的一整条缓坡(4)，从盆底连续升到高地顶面。
 			for ang in gates:
 				var a := deg_to_rad(float(ang))
 				var perp := absf(-sin(a) * dx + cos(a) * dy)
@@ -1249,7 +1254,7 @@ func _op_basin(size: int, params: Dictionary) -> void:
 				var t := (r - floor_r) / maxf(outer_r - floor_r, 1.0)
 				terrain_grid[x][y] = 1
 				height_grid[x][y] = lerpf(floor_h, rim_h, clampf(t, 0.0, 1.0)) + noise.get_noise_2d(x + 31, y + 23) * 0.02
-				overlay_grid[x][y] = 0
+				overlay_grid[x][y] = 4
 				break
 	# 坡口内侧记作隘口，金矿会集中到这里；盆底中心也记一处，作为低地争夺点。
 	for ang in gates:
@@ -1594,7 +1599,7 @@ func _terrain_color_for(terrain_type: int, h: float, gx: int, gy: int, overlay: 
 				_pal_color(pal, "mountain_high", Color(0.64, 0.62, 0.58)),
 				clamp(h / (height_scale * 5.0), 0.0, 1.0))
 			# 坡度着色：坡度越缓越像可走的草甸/土坡，越陡越像裸露岩壁。
-			# 这样移除 overlay=4/5 后，玩家仍能一眼看出哪条坡能上山。
+			# 具体能否上山仍以 overlay=4/5 为准，这里只做视觉提示。
 			var local_slope := _local_height_slope(gx, gy)
 			if local_slope <= RTSConfig.MAX_WALK_SLOPE:
 				var walk := 1.0 - local_slope / RTSConfig.MAX_WALK_SLOPE
@@ -1630,6 +1635,16 @@ func _terrain_color_for(terrain_type: int, h: float, gx: int, gy: int, overlay: 
 		elif hv > 0.94:
 			sand = Color(0.38, 0.52, 0.50)     # 偶发水色
 		color = color.lerp(sand, 0.82)
+	elif overlay == 4:
+		# 缓坡：踩实的土石路面，比山体更亮，远看能辨认上山通道
+		var sh := float(absi(hash(Vector2i(gx, gy))) % 1000) / 1000.0
+		var path_color := Color(0.56, 0.48, 0.33).lerp(Color(0.70, 0.62, 0.44), sh)
+		color = color.lerp(path_color, 0.62)
+	elif overlay == 5:
+		# 山顶台地：高山草甸/碎石混合，和陡峭山壁拉开层次
+		var ph := float(absi(hash(Vector2i(gx, gy))) % 1000) / 1000.0
+		var top_color := Color(0.44, 0.46, 0.30).lerp(Color(0.58, 0.55, 0.38), ph)
+		color = color.lerp(top_color, 0.48)
 	# 高频细节噪声：明暗微扰打散整片纯色，远看是自然纹理而不是塑料色块
 	var d := _get_detail_noise().get_noise_2d(float(gx), float(gy))
 	if d > 0.0:
@@ -2370,10 +2385,20 @@ func _drop_unreachable_resources(size: int, castles: Array) -> void:
 			if reach.has(n):
 				continue
 			var t: int = terrain_grid[n.x][n.y]
-			if t == 2 and get_overlay(n.x, n.y) != 3:
+			var ov: int = get_overlay(n.x, n.y)
+			if t == 2 and ov != 3:
+				continue
+			# 山地只有缓坡(4)/台地(5)能走；普通山壁对陆军完全封闭。
+			if t == 1 and ov != 4 and ov != 5:
+				continue
+			# 台地边缘只能接缓坡/台地；平地不能直接贴着台地边缘进入。
+			var cur_ov: int = get_overlay(cur.x, cur.y)
+			var cur_high := cur_ov == 4 or cur_ov == 5
+			var next_high := ov == 4 or ov == 5
+			if (ov == 5 or cur_ov == 5) and (not cur_high or not next_high):
 				continue
 			# 与 A* 完全相同的坡度规则：过陡的台阶上下都不能走。
-			# 不能用地形类型判断，否则可走的坡地和不可走的绝壁会被混在一起。
+			# 缓坡/台地仍要满足单步高差，避免把陡坎误当成坡道。
 			var dh := float(height_grid[n.x][n.y]) - float(height_grid[cur.x][cur.y])
 			if RTSConfig.is_cliff_slope(dh, 1.0):
 				continue
