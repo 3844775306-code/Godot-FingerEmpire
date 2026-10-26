@@ -45,7 +45,10 @@ static func create(p_points: Array, p_height_fn: Callable, tint: Color = Color(0
 	return guide
 
 func _init_guide(p_points: Array, p_height_fn: Callable, tint: Color) -> void:
-	_height_fn = p_height_fn
+	# 调用方可能传入空/失效的 Callable（客户端地形未就绪、脚本热重载、管理器已释放），
+	# 直接 call() 会抛 "Attempt to call function 'null::null (Callable)' on a null instance."
+	# 这里和 GroundRangeRing 一样先兜底成「保持原 y」的采样器。
+	_height_fn = p_height_fn if p_height_fn.is_valid() else _flat_height_fn()
 	_dash_mat = GroundStripMesh.make_material(tint if tint.a > 0.001 else DASH_COLOR, 0.34, DASH_PER_METER, 0.22, 1.0)
 	var ribbon := MeshInstance3D.new()
 	ribbon.name = "GuideRibbon"
@@ -110,6 +113,11 @@ func _rebuild() -> void:
 			_end_node.mesh = null
 		return
 	_last_cam_dist = _camera_distance()
+	# 运行中高度采样器也可能失效（地形管理器被释放），每次重建前再校验一次
+	var height_fn: Callable = _height_fn
+	if not height_fn.is_valid():
+		height_fn = _flat_height_fn()
+		_height_fn = height_fn
 	# 中心线在本地空间：节点自身放在世界原点（挂在 entities_container 下）
 	var origin: Vector3 = global_position
 	var local: Array = []
@@ -125,7 +133,7 @@ func _rebuild() -> void:
 		denom = 1.0
 	var to_local_y := func(lp: Vector3) -> float:
 		var off: Vector3 = basis * Vector3(lp.x, 0.0, lp.z)
-		return (float(_height_fn.call(origin + Vector3(off.x, 0.0, off.z))) - origin.y) / denom
+		return (float(height_fn.call(origin + Vector3(off.x, 0.0, off.z))) - origin.y) / denom
 	# 线宽取「固定米数」和「至少 N 个像素」的较大者：远景下细虚线会彻底消失
 	var dash_w: float = maxf(DASH_WIDTH, _min_world_width(DASH_MIN_PIXELS))
 	ribbon.mesh = GroundStripMesh.build_strip(local, dash_w * 0.5, to_local_y, false)
@@ -148,6 +156,11 @@ func _camera_distance() -> float:
 	if cam == null:
 		return 0.0
 	return cam.global_position.distance_to(global_position)
+
+# 空 Callable / 地形管理器已释放时的兜底高度：不改顶点 y，至少不会报错。
+static func _flat_height_fn() -> Callable:
+	return func(p: Vector3) -> float:
+		return p.y
 
 # 「至少 N 个像素」换算成距相机 d 处的世界宽度
 func _min_world_width(min_pixels: float) -> float:
