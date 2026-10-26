@@ -18,7 +18,7 @@ const PANEL_H: float = 900.0
 # 是否在最新一条上打 NEW（打开前读一次，打开后就标记已读）
 var _show_new: bool = false
 var _mobile: bool = false
-# 底部「检查更新」一行（手动强制查一次，就地显示结果）
+# 顶部「检查更新」一行（手动强制查一次，就地显示结果）
 var _update_row: HBoxContainer = null
 var _update_btn: Button = null
 var _update_status: Label = null
