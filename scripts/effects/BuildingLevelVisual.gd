@@ -68,7 +68,7 @@ static func apply(building: Node3D, level: int, fallback_radius: float = 0.0, te
 	building.add_child(root)
 
 	_add_base_ring(root, radius, color, level)
-	_add_flags(root, radius, team_color, level)
+	_add_flags(root, radius, top, team_color, level)
 	_add_level_badge(root, center, top, color, level)
 	if level >= 5:
 		_add_max_level_glow(root, radius, color)
@@ -120,20 +120,23 @@ static func _collect_bounds(node: Node3D, parent_xf: Transform3D, box: AABB) -> 
 			out = _collect_bounds(child as Node3D, xf, out)
 	return out
 
-static func _add_flags(root: Node3D, radius: float, team_color: Color, level: int) -> void:
+static func _add_flags(root: Node3D, radius: float, top: float, team_color: Color, level: int) -> void:
 	var slots: Array = FLAG_SLOTS[level - 1]
-	var pole_h := clampf(radius * 0.78, 0.85, 2.1)
+	# 旗杆插在屋顶边缘而不是地面上：城墙/城堡等高大建筑如果只到腰高，
+	# 后排旗帜会被建筑主体完全挡住，等级数量就看不出来了。
+	var flag_base_y := maxf(top - 0.35, 0.0)
+	var pole_h := clampf(0.62 + top * 0.28, 0.9, 2.4)
 	var cloth_color := team_color.lerp(Color.WHITE, 0.12)
 	var pole_mat := _mat("level_flag_pole", Color(0.25, 0.19, 0.13), 0.0, 0.6)
 	var cloth_mat := _mat("level_flag_cloth_%s" % cloth_color.to_html(), cloth_color, 0.0, 0.75)
 
 	for slot in slots:
 		var slot_vec: Vector2 = slot
-		var pos := Vector3(slot_vec.x * radius, 0.0, slot_vec.y * radius)
+		var xz := Vector2(slot_vec.x * radius, slot_vec.y * radius)
 		var flag_root := Node3D.new()
-		flag_root.position = pos
+		flag_root.position = Vector3(xz.x, flag_base_y, xz.y)
 		# 让旗帜的 +X 方向朝外，避免旗帜穿进建筑主体。
-		flag_root.rotation.y = atan2(-pos.z, pos.x)
+		flag_root.rotation.y = atan2(-xz.y, xz.x)
 		root.add_child(flag_root)
 
 		var pole := MeshInstance3D.new()
