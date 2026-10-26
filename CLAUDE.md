@@ -82,10 +82,21 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/bump_version.ps1
 
 ## 自动检查更新
 
-游戏启动后（主菜单）会拉一次静态 JSON 清单，远端版本比本地高就在主菜单显示「发现新版本 · 点此下载」，点击用系统浏览器打开下载页；更新日志面板底部也有「🔍 检查更新」按钮手动查。
+APK / Web / EXE 启动后（主菜单）都会拉一次 `update.json`，远端版本比本地高时，主菜单显示对应平台的入口：
 
-- 清单地址配置在 `scripts/core/UpdateConfig.gd` 的 `MANIFEST_URL`（留空 = 不检查，静默跳过）；
-- 清单格式（UTF-8 JSON，可放 Netlify / 静态服务器 / GitHub raw）：
+- Web：显示「点此刷新」，直接跳转到新网页；
+- Android：显示「点此下载」，打开 APK 下载地址；
+- Windows：显示「点此下载」，打开 Windows 压缩包地址。
+
+更新日志面板底部也有「🔍 检查更新」按钮可手动强制刷新。
+
+- 站点地址配置在 `scripts/core/UpdateConfig.gd` 的 `SITE_URL`（不带结尾 `/`）；
+- Web 会自动使用当前网页的 `location.origin`，所以 Web 构建不依赖写死域名；
+- APK / EXE 没有网页来源，必须配置 `SITE_URL`；运行 `tools/deploy_web.ps1` 时脚本会从 Netlify 读取真实地址并自动写回；
+- `tools/build_web.ps1` 会根据 `AppVersion.gd` 自动生成 `build/web/update.json`；
+- 安装包默认放 GitHub Releases（Netlify 单文件上限放不下 APK/EXE），地址使用 `releases/latest/download/FingerEmpire.apk` 和 `FingerEmpire-win.zip`。
+
+清单格式（构建脚本自动生成，不要手改线上文件）：
 
 ```json
 {
@@ -93,16 +104,22 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/bump_version.ps1
   "date": "2026-11-02",
   "notes": "本轮更新一句话说明",
   "downloads": {
-    "windows": "https://example.com/FingerEmpire-win.zip",
-    "android": "https://example.com/FingerEmpire.apk",
-    "web": "https://example.com/",
-    "default": "https://example.com/download"
+    "windows": "https://github.com/OWNER/REPO/releases/latest/download/FingerEmpire-win.zip",
+    "android": "https://github.com/OWNER/REPO/releases/latest/download/FingerEmpire.apk",
+    "web": "https://你的站点.netlify.app/",
+    "default": "https://你的站点.netlify.app/"
   }
 }
 ```
 
-- 发版时把清单里的 `version` / `date` / 下载链接一起改掉，玩家下次启动（24 小时内会读缓存）就能看到提示；
-- 相关代码：`scripts/core/UpdateChecker.gd`（比对版本、解析清单、24h 缓存）、`scripts/core/UpdateConfig.gd`（地址、超时、缓存时长）。
+**发版流程：**
+
+1. 修改 `AppVersion.gd` 的版本号，并在 `ChangelogData.gd` 补更新日志；
+2. 用 Godot 导出新的 `FingerEmpire.apk`、`FingerEmpire.exe` / `.pck`；
+3. 上传安装包：`powershell -NoProfile -ExecutionPolicy Bypass -File tools/publish_release.ps1 -Notes "本次更新说明"`（需要先 `gh auth login`，仓库必须公开）；
+4. 发布网页和清单：`powershell -NoProfile -ExecutionPolicy Bypass -File tools/deploy_web.ps1 -Godot "<Godot.exe 路径>"`。
+
+相关代码：`scripts/core/UpdateChecker.gd`（比对版本、解析清单、30 分钟缓存）、`scripts/core/UpdateConfig.gd`（站点地址、超时、缓存时长）。
 
 ## Project Overview
 

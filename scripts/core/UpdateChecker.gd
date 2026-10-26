@@ -7,8 +7,9 @@ extends Node
 #   var checker := UpdateChecker.new()
 #   add_child(checker)
 #   checker.finished.connect(_on_update_checked)
-#   checker.check()          # 24 小时内优先用缓存，不重复联网
+#   checker.check()          # 30 分钟内优先用缓存，不重复联网
 #   checker.check(true)      # 强制联网（手动点「检查更新」时用）
+#   checker.check(true, url) # 官方接口；测试或特殊部署时可临时指定清单地址
 #
 # 信号参数：ok（有没有成功拿到清单）、has_update、远端版本号、下载链接、更新说明
 #
@@ -23,8 +24,14 @@ const CACHE_PATH: String = "user://update_cache.json"
 
 var _http: HTTPRequest = null
 var _busy: bool = false
+var _manifest_url: String = ""
 
 func _ready() -> void:
+	_ensure_http()
+
+func _ensure_http() -> void:
+	if _http != null:
+		return
 	_http = HTTPRequest.new()
 	_http.name = "Http"
 	_http.timeout = UpdateConfig.TIMEOUT_SEC
@@ -35,23 +42,35 @@ func _exit_tree() -> void:
 	_busy = false
 
 # ==================== 对外接口 ====================
-func check(force: bool = false) -> void:
+func check(force: bool = false, url_override: String = "") -> void:
 	if not UpdateConfig.ENABLED:
 		finished.emit(false, false, "", "", "更新检查已关闭")
 		return
-	if String(UpdateConfig.MANIFEST_URL).strip_edges() == "":
-		# 还没配置清单地址：静默跳过，不影响启动
+	var manifest_url: String = url_override.strip_edges()
+	if manifest_url == "":
+		manifest_url = UpdateConfig.manifest_url()
+	if manifest_url == "":
+		# 还没配置站点地址：静默跳过，不影响启动
 		finished.emit(false, false, "", "", "未配置更新清单地址")
 		return
 	if _busy:
 		return
+	_manifest_url = manifest_url
 	if not force:
 		var cached := _read_cache()
 		if not cached.is_empty():
 			_emit_from_manifest(cached)
 			return
+	_ensure_http()
 	_busy = true
-	var err: int = _http.request(UpdateConfig.MANIFEST_URL)
+	_start_request.call_deferred(manifest_url)
+
+func _start_request(manifest_url: String) -> void:
+	if _http == null:
+		_busy = false
+		finished.emit(false, false, "", "", "无法发起网络请求")
+		return
+	var err: int = _http.request(manifest_url)
 	if err != OK:
 		_busy = false
 		finished.emit(false, false, "", "", "无法发起网络请求")
@@ -72,9 +91,34 @@ func _on_request_completed(result: int, response_code: int, _headers: PackedStri
 func _emit_from_manifest(manifest: Dictionary) -> void:
 	var remote_version: String = String(manifest.get("version", ""))
 	var has_update: bool = is_newer(remote_version, AppVersion.version())
-	var url: String = download_url_for(manifest)
+	var url: String = download_url_for(manifest, _manifest_url)
 	var notes: String = String(manifest.get("notes", ""))
 	finished.emit(true, has_update, remote_version, url, notes)
+
+# 把清单里的相对链接补成完整地址；清单和下载文件可以放在同一站点。
+static func resolve_url(base_url: String, link: String) -> String:
+	var target: String = String(link).strip_edges()
+	if target == "":
+		return ""
+	var lower: String = target.to_lower()
+	if lower.begins_with("http://") or lower.begins_with("https://"):
+		return target
+	var base: String = String(base_url).strip_edges()
+	if base == "":
+		return target
+	if target.begins_with("//"):
+		return ("http:" if base.begins_with("http://") else "https:") + target
+	var scheme_end: int = base.find("://")
+	if scheme_end < 0:
+		return target
+	if target.begins_with("/"):
+		var host_end: int = base.find("/", scheme_end + 3)
+		var origin: String = base.substr(0, host_end) if host_end >= 0 else base
+		return origin + target
+	var slash: int = base.rfind("/")
+	if slash < 0:
+		return target
+	return base.substr(0, slash + 1) + target
 
 # ==================== 版本号比较 ====================
 # "v1.2.3" / "1.2.3" / "v1.2" → [1, 2, 3]，非法片段按 0 处理
@@ -135,15 +179,15 @@ static func platform_key() -> String:
 		return "linux"
 	return "default"
 
-# 按平台取下载链接，取不到就退回 default
-static func download_url_for(manifest: Dictionary) -> String:
+# 按平台取下载链接，取不到就退回 default；相对链接按清单地址补全
+static func download_url_for(manifest: Dictionary, base_url: String = "") -> String:
 	var downloads = manifest.get("downloads", {})
 	if typeof(downloads) != TYPE_DICTIONARY:
 		return ""
 	for key in [platform_key(), "default"]:
 		var url: String = String(downloads.get(key, "")).strip_edges()
 		if url != "":
-			return url
+			return resolve_url(base_url, url)
 	return ""
 
 # ==================== 缓存 ====================

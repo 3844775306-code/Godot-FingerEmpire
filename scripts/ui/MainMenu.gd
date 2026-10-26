@@ -503,7 +503,8 @@ func _show_update_banner(remote_version: String, download_url: String, notes: St
 		return
 	var btn := Button.new()
 	btn.name = "UpdateBanner"
-	btn.text = "🆕 发现新版本 %s · 点此下载" % remote_version
+	var action := "点此刷新" if OS.has_feature("web") else "点此下载"
+	btn.text = "🆕 发现新版本 %s · %s" % [remote_version, action]
 	btn.tooltip_text = notes
 	btn.pressed.connect(_open_download.bind(download_url))
 	if InputSource.use_mobile_ui():
@@ -523,8 +524,17 @@ func _show_update_banner(remote_version: String, download_url: String, notes: St
 		UITheme.pulse(btn, 1.02, 1.1)
 	_update_banner = btn
 
-# 用系统浏览器/商店打开下载页（安装包和网页版都走这里）
+# 用系统浏览器/商店打开下载页；Web 版直接跳到新地址，避免停留在旧页面。
 func _open_download(url: String) -> void:
+	if OS.has_feature("web"):
+		var js = Engine.get_singleton("JavaScriptBridge")
+		if js != null:
+			var target := url.strip_edges()
+			if target == "":
+				js.eval("window.location.reload();")
+			else:
+				js.eval("window.location.href = %s;" % JSON.stringify(target))
+			return
 	if url.strip_edges() == "":
 		return
 	OS.shell_open(url)

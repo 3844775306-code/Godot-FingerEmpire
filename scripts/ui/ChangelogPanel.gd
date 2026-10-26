@@ -284,12 +284,18 @@ func _on_update_result(ok: bool, has_update: bool, remote_version: String, downl
 				UILayout.font_dp(11.0) if _mobile else UITheme.FONT_SM)
 			_update_download_btn.pressed.connect(_on_download_pressed)
 			_update_row.add_child(_update_download_btn)
-		_update_download_btn.text = "⬇ 下载 %s" % remote_version
+		_update_download_btn.text = ("🔄 刷新 %s" if OS.has_feature("web") else "⬇ 下载 %s") % remote_version
 		_update_download_btn.visible = true
 
 func _on_download_pressed() -> void:
-	if _update_url.strip_edges() != "":
-		OS.shell_open(_update_url)
+	if _update_url.strip_edges() == "":
+		return
+	if OS.has_feature("web"):
+		var js = Engine.get_singleton("JavaScriptBridge")
+		if js != null:
+			js.eval("window.location.href = %s;" % JSON.stringify(_update_url))
+			return
+	OS.shell_open(_update_url)
 
 # ==================== 关闭 ====================
 func _on_dim_input(event: InputEvent) -> void:

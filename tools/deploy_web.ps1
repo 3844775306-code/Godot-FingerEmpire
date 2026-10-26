@@ -2,8 +2,10 @@
 	[string]$Godot = "godot",
 	[switch]$SkipBuild,
 	[string]$SiteId = "",
+	[string]$SiteUrl = "",
 	[string]$AuthToken = "",
 	[string]$Message = "",
+	[string]$Notes = "",
 	[switch]$DryRun
 )
 
@@ -68,9 +70,42 @@ if ($SiteId -eq "" -and -not $status.linked) {
 	exit 2
 }
 
+# 用站点真实地址配置 update.json；Web 版本身也会用 location.origin 自动识别。
+if ($SiteUrl -eq "" -and $null -ne $status.siteData) {
+	foreach ($prop in @("custom_domain", "ssl_url", "url")) {
+		$candidate = [string]$status.siteData.$prop
+		if ($candidate.Trim() -ne "") {
+			$SiteUrl = $candidate.Trim()
+			break
+		}
+	}
+}
+if ($SiteUrl -ne "") {
+	if ($SiteUrl -notmatch '^https?://') {
+		$SiteUrl = "https://" + $SiteUrl
+	}
+	while ($SiteUrl.EndsWith("/")) {
+		$SiteUrl = $SiteUrl.Substring(0, $SiteUrl.Length - 1)
+	}
+	Write-Host "站点地址: $SiteUrl" -ForegroundColor Cyan
+	if (-not $DryRun) {
+		& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "configure_update_url.ps1") -SiteUrl $SiteUrl
+		if ($LASTEXITCODE -ne 0) {
+			throw "写入 UpdateConfig.SITE_URL 失败，退出码 $LASTEXITCODE"
+		}
+	}
+}
+
 if (-not $SkipBuild) {
 	Write-Host "==> 构建 Web 版" -ForegroundColor Cyan
-	& powershell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $PSScriptRoot "build_web.ps1") -Godot $Godot
+	$buildArgs = @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", (Join-Path $PSScriptRoot "build_web.ps1"), "-Godot", $Godot)
+	if ($SiteUrl -ne "") {
+		$buildArgs += @("-SiteUrl", $SiteUrl)
+	}
+	if ($Notes -ne "") {
+		$buildArgs += @("-Notes", $Notes)
+	}
+	& powershell @buildArgs
 	if ($LASTEXITCODE -ne 0) {
 		throw "Web 构建失败，退出码 $LASTEXITCODE"
 	}
