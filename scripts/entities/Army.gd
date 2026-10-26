@@ -4961,6 +4961,14 @@ func _process_transport(delta):
 	if not bm: return
 	# 移动逻辑
 	_movement.process_move(delta, bm)
+	# 运载船此前在这里直接 return，跳过了 _process 后半段的碰撞分离，
+	# 所以它自己从不被周围单位/船只推开，表现为可以硬穿船队。
+	# 运载船也要走同一套推挤；船体大、转向慢，移动频率比普通单位稍低。
+	var moving: bool = velocity.length_squared() > 0.04
+	_movement.collision_timer -= delta
+	if _movement.collision_timer <= 0.0:
+		_movement.collision_timer = 0.15 if moving else 0.35
+		_movement.apply_collision(delta)
 	# 更新登船单位位置
 	for u in _boarded_units:
 		if is_instance_valid(u):
