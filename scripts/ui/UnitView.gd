@@ -9,6 +9,15 @@ const DESIGN_H := 1400
 # 类型中文名（type: 0=资源 1=建筑 2=单位）
 const TYPE_NAMES := { 0: "资源", 1: "建筑", 2: "单位" }
 
+# 等级成长规则（数值跟服务端实现一一对应，改平衡时两边要同时改）
+const ANIMAL_GROW_INTERVAL := 20.0      # 牲畜每 20 秒自动长一级，最高 5 级
+const ANIMAL_HP_STEP := 0.25            # 每级生命 +基础值的 25%
+const ANIMAL_ATK_STEP := 1.25           # 每级攻击 ×1.25
+const ANIMAL_SPEED_STEP := 1.1          # 每级移速 ×1.1
+const ANIMAL_SPEED_CAP := 3.0           # 牲畜移速上限
+const ANIMAL_BREED_INTERVAL := 180.0    # 5 级后每 180 秒繁殖一只
+const ANIMAL_BREED_CAP := 8             # 同种牲畜上限
+
 # 详情属性行图标：标题 → emoji（在 _add_pair 输出时自动前置，便于扫读）
 const ATTR_ICONS := {
 	"耐久 / 生命": "❤️",
@@ -38,6 +47,8 @@ const ATTR_ICONS := {
 	"战斗标签": "🏷️",
 	"索敌倾向": "🎯",
 	"特性": "⚜️",
+	"等级成长": "📊",
+	"升级成本": "🪙",
 }
 
 # 分类 → 成员 ID（分类用线性数组 + 查表，稳定且一目了然）
@@ -642,10 +653,16 @@ func _build_detail_panel() -> void:
 		body.add_theme_constant_override("separation", int(UILayout.dp(2.0)))
 		scroll.add_child(body)
 	else:
-		body.position = Vector2(40, 36)
-		body.size = Vector2(1280, 984)
+		# 详情内容加长（等级成长 + 升级成本）后，桌面端也套一层滚动，
+		# 保证任何建筑/兵种的所有行都能看全
+		var scroll_d := ScrollContainer.new()
+		scroll_d.position = Vector2(36, 30)
+		scroll_d.size = Vector2(1288, 996)
+		scroll_d.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+		_detail_panel.add_child(scroll_d)
+		body.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		body.add_theme_constant_override("separation", 8)
-		_detail_panel.add_child(body)
+		scroll_d.add_child(body)
 	_detail_body = body
 
 
@@ -928,6 +945,97 @@ func _num(v) -> String:
 	return s
 
 
+# ── 等级成长（箭头式属性链 + 升级成本）──
+# 建筑升级是「同类型统一等级」：升任意一座，同类建筑一起变强，之后新建的也按该等级出场。
+func _add_building_growth(cfg: Dictionary) -> void:
+	var ups: Array = cfg.get("upgrades", [])
+	if ups.is_empty():
+		_add_growth_line("📊 等级成长：该建筑没有升级项，只有 Lv.1 基础属性。")
+		return
+	var hp_chain: Array[String] = []
+	var ma_chain: Array[String] = []
+	var sa_chain: Array[String] = []
+	var atk_chain: Array[String] = []
+	var dps_chain: Array[String] = []
+	var hp := float(cfg.get("max_health", 0))
+	var ma := float(cfg.get("melee_armor", cfg.get("armor", 0)))
+	var sa := float(cfg.get("shield_armor", cfg.get("armor", 0)))
+	var atk := float(cfg.get("attack", 0))
+	var asp := float(cfg.get("attack_speed", 0.0))
+	for i in range(ups.size() + 1):
+		hp_chain.append(_num(hp))
+		ma_chain.append(_num(ma))
+		sa_chain.append(_num(sa))
+		atk_chain.append(_num(atk))
+		if asp > 0.0:
+			dps_chain.append("%.1f" % (atk / asp))
+		if i >= ups.size():
+			break
+		var ug: Dictionary = ups[i]
+		hp += float(ug.get("health_bonus", 0))
+		ma += float(ug.get("melee_armor_bonus", ug.get("armor_bonus", 0)))
+		sa += float(ug.get("shield_armor_bonus", ug.get("armor_bonus", 0)))
+		atk += float(ug.get("attack_bonus", 0))
+	var head := _add_info_header("📊 等级成长（Lv.1 → Lv.%d）" % (ups.size() + 1))
+	_detail_body.add_child(head)
+	_add_growth_line("❤️ 生命：%s" % " → ".join(hp_chain))
+	if _chain_changed(ma_chain):
+		_add_growth_line("🛡️ 近战护甲：%s" % " → ".join(ma_chain))
+	if _chain_changed(sa_chain):
+		_add_growth_line("🛡️ 远程护甲：%s" % " → ".join(sa_chain))
+	if _chain_changed(atk_chain):
+		_add_growth_line("⚔️ 攻击：%s" % " → ".join(atk_chain))
+	if dps_chain.size() > 0 and _chain_changed(dps_chain):
+		_add_growth_line("💥 秒伤 DPS：%s" % " → ".join(dps_chain))
+	# 升级成本逐级标注：建筑升级要花多少石头/金/油必须写清楚
+	var cost_parts: Array[String] = []
+	for i in range(ups.size()):
+		var cs := _cost_string({"cost": ups[i].get("cost", {})})
+		cost_parts.append("Lv.%d %s" % [i + 2, (cs if cs != "" else "免费")])
+	_add_growth_line("🪙 升级成本：%s" % " ｜ ".join(cost_parts))
+	_add_growth_line("↗ 升级为「同类建筑统一等级」：升任意一座，同类建筑一起变强，之后新建的也按该等级出场。")
+
+# 牲畜成长：与服务端 _process_animal 的公式逐级推演，保证图鉴数值和实际一致
+func _add_animal_growth(cfg: Dictionary) -> void:
+	var cur_hp := int(cfg.get("max_health", 0))
+	var cur_atk := int(cfg.get("attack", 0))
+	var cur_spd := float(cfg.get("speed", 0.0))
+	var hp_chain: Array[String] = []
+	var atk_chain: Array[String] = []
+	var spd_chain: Array[String] = []
+	for lv in range(1, 6):
+		hp_chain.append(_num(cur_hp))
+		atk_chain.append(_num(cur_atk))
+		spd_chain.append(_num(cur_spd))
+		if lv >= 5:
+			break
+		# 升级瞬间：生命按基础值 +25% 折算、攻击 ×1.25、移速 ×1.1（封顶）
+		cur_hp = int(cur_hp * (1.0 + float(lv) * ANIMAL_HP_STEP) / (1.0 + float(lv - 1) * ANIMAL_HP_STEP))
+		cur_atk = int(cur_atk * ANIMAL_ATK_STEP)
+		cur_spd = minf(cur_spd * ANIMAL_SPEED_STEP, ANIMAL_SPEED_CAP)
+	var head := _add_info_header("📊 成长（Lv.1 → Lv.5，每 %d 秒长一级）" % int(ANIMAL_GROW_INTERVAL))
+	_detail_body.add_child(head)
+	_add_growth_line("❤️ 生命：%s" % " → ".join(hp_chain))
+	_add_growth_line("⚔️ 攻击：%s" % " → ".join(atk_chain))
+	_add_growth_line("👣 移动速度：%s" % " → ".join(spd_chain))
+	_add_growth_line("🐄 5 级后每 %d 秒繁殖一只，同种上限 %d 只；成长不消耗资源。" % [int(ANIMAL_BREED_INTERVAL), ANIMAL_BREED_CAP])
+
+# 箭头链里所有值都一样就说明这条属性不随等级变化，不占版面
+func _chain_changed(chain: Array[String]) -> bool:
+	for i in range(1, chain.size()):
+		if chain[i] != chain[0]:
+			return true
+	return false
+
+func _add_growth_line(text: String) -> void:
+	var l := Label.new()
+	l.text = text
+	UITheme.apply_label(l, UILayout.font_dp(9.0) if _mobile else 17, Color(UITheme.PARCHMENT).lightened(0.06))
+	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	l.custom_minimum_size = Vector2(0, UILayout.dp(11.0) if _mobile else 28)
+	_detail_body.add_child(l)
+
 # ── 详细文字块 ──
 func _add_detail_lines(cfg: Dictionary, id: int) -> void:
 	var t: int = cfg.get("type", 2)
@@ -1010,11 +1118,8 @@ func _add_building_lines(cfg: Dictionary, id: int) -> void:
 			var uc: Dictionary = _cfg.get(uid2, {})
 			var unm := str(uc.get("name", "单位 %d" % uid2))
 			_add_pair("  · Lv.%s %s" % [item["level"], _icon_for(uid2)], unm)
-	elif prods.size() == 0 and ups.size() > 0:
-		# 无新增兵种的建筑：仅提示可升级强化
-		var l3 := _add_info_header("📈 可升级 %d 级（强化）" % ups.size())
-		_detail_body.add_child(l3)
-		_add_line("逐级强化耐久、护甲与攻击。", Color(UITheme.STONE).lightened(0.2), 16, 32)
+	# 等级成长 + 每一级的升级成本
+	_add_building_growth(cfg)
 
 	# 其它被动
 	var passive := _building_passives(cfg)
@@ -1054,6 +1159,12 @@ func _add_unit_lines(cfg: Dictionary, id: int) -> void:
 	var src := _unit_produce_note(cfg, id)
 	if src != "":
 		_add_pair("训练来源", src)
+
+	# 等级成长：本作只有牲畜会随等级变强，其它兵种属性固定
+	if cfg.get("animal_type", "") != "":
+		_add_animal_growth(cfg)
+	else:
+		_add_growth_line("📊 等级成长：该兵种属性固定，不随等级变化。")
 
 	# 经济角色
 	if cfg.get("animal_type", "") != "":
