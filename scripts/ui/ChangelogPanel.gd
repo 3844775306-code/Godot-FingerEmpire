@@ -134,15 +134,15 @@ func _build() -> void:
 	vb.add_theme_constant_override("separation", 16)
 	scroll.add_child(vb)
 
+	# 顶部：手动检查更新，放在所有版本条目之前，打开面板第一眼就能看到
+	_add_update_row(vb)
+	_add_separator(vb)
+
 	var list: Array = ChangelogData.entries()
 	for i in list.size():
 		_add_entry(vb, list[i], i == 0 and _show_new)
 		if i < list.size() - 1:
 			_add_separator(vb)
-
-	# 底部：手动检查更新（有新版时这里会多出一个下载按钮）
-	_add_update_row(vb)
-	_add_separator(vb)
 
 	# 末尾补一行：怎么反馈问题
 	var tail := Label.new()
@@ -224,7 +224,7 @@ func _add_separator(parent: Control) -> void:
 	parent.add_child(sep)
 
 # ==================== 检查更新 ====================
-# 面板底部一行：手动强制联网查一次，结果就地显示在右边
+# 面板顶部一行：手动强制联网查一次，结果就地显示在右边
 func _add_update_row(parent: Control) -> void:
 	_update_row = HBoxContainer.new()
 	_update_row.add_theme_constant_override("separation", 10)
@@ -233,15 +233,19 @@ func _add_update_row(parent: Control) -> void:
 	_update_btn = Button.new()
 	_update_btn.text = "🔍 检查更新"
 	_update_btn.custom_minimum_size = Vector2(
-		UILayout.dp(96.0) if _mobile else 130.0,
-		UILayout.dp(26.0) if _mobile else 34.0)
+		UILayout.dp(82.0) if _mobile else 130.0,
+		UILayout.dp(24.0) if _mobile else 34.0)
 	UITheme.apply_muted_button(_update_btn,
-		UILayout.font_dp(11.0) if _mobile else UITheme.FONT_SM)
+		UILayout.font_dp(10.0) if _mobile else UITheme.FONT_SM)
+	# 尺寸和字号已经是 dp，不能再被 scale_widgets_for_mobile 乘一次，
+	# 否则手机端按钮会变成两倍大。
+	if _mobile:
+		_update_btn.set_meta("mobile_dp_scaled", true)
 	_update_btn.pressed.connect(_on_check_update_pressed)
 	_update_row.add_child(_update_btn)
 
 	_update_status = Label.new()
-	_update_status.text = "点右侧按钮查询有没有新版本"
+	_update_status.text = "点「检查更新」查询有没有新版本"
 	_update_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_update_status.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_update_status.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
@@ -278,10 +282,12 @@ func _on_update_result(ok: bool, has_update: bool, remote_version: String, downl
 			_update_download_btn = Button.new()
 			_update_download_btn.text = "⬇ 下载"
 			_update_download_btn.custom_minimum_size = Vector2(
-				UILayout.dp(76.0) if _mobile else 96.0,
-				UILayout.dp(26.0) if _mobile else 34.0)
+				UILayout.dp(82.0) if _mobile else 96.0,
+				UILayout.dp(24.0) if _mobile else 34.0)
 			UITheme.apply_primary_button(_update_download_btn,
-				UILayout.font_dp(11.0) if _mobile else UITheme.FONT_SM)
+				UILayout.font_dp(10.0) if _mobile else UITheme.FONT_SM)
+			if _mobile:
+				_update_download_btn.set_meta("mobile_dp_scaled", true)
 			_update_download_btn.pressed.connect(_on_download_pressed)
 			_update_row.add_child(_update_download_btn)
 		_update_download_btn.text = ("🔄 刷新 %s" if OS.has_feature("web") else "⬇ 下载 %s") % remote_version

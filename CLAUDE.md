@@ -82,13 +82,19 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/bump_version.ps1
 
 ## 自动检查更新
 
+> **发布铁律：每个新版本都必须自动可更新。**
+>
+> 不允许只上传安装包或只换网页而不更新 `update.json`。每个版本发布时都必须让三种入口同时生效：Web 刷新、Android 下载 APK、Windows 下载 zip。发布顺序固定为「改版本 → 导出安装包 → 上传 Release → 部署 Web 和清单」，避免玩家点更新却拿到旧包。
+>
+> 每次发布后必须验证：线上 `update.json` 的 `version` 等于 `AppVersion.VERSION`，并且两个 Release 下载链接都返回 200。
+
 APK / Web / EXE 启动后（主菜单）都会拉一次 `update.json`，远端版本比本地高时，主菜单显示对应平台的入口：
 
 - Web：显示「点此刷新」，直接跳转到新网页；
 - Android：显示「点此下载」，打开 APK 下载地址；
 - Windows：显示「点此下载」，打开 Windows 压缩包地址。
 
-更新日志面板底部也有「🔍 检查更新」按钮可手动强制刷新。
+更新日志面板顶部也有「🔍 检查更新」按钮可手动强制刷新。
 
 - 站点地址配置在 `scripts/core/UpdateConfig.gd` 的 `SITE_URL`（不带结尾 `/`）；
 - Web 会自动使用当前网页的 `location.origin`，所以 Web 构建不依赖写死域名；
