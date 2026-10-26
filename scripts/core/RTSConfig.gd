@@ -85,6 +85,15 @@ static func get_team_member_color(team: int, slot: int, team_size: int = 2) -> C
 	var v: float = clampf(base.v * (0.8 + 0.2 * t), 0.25, 1.0)
 	return Color.from_hsv(h, base.s, v, 1.0)
 
+# 阵营色（信息面板血条用）：常规对局只看红蓝两方，混战模式每一方各占一个国家，
+# 就改用国家色区分，否则五六方混战时血条全是一个红一个蓝，根本分不清谁打谁。
+# 中立 / 未知队伍仍退回灰色。
+static func faction_color(team: int, nation: int = -1, ffa: bool = false) -> Color:
+	var base: Color = TEAM_BASE_COLORS.get(team, Color(0.7, 0.7, 0.7))
+	if ffa and nation >= 0:
+		return get_nation_color(nation, base)
+	return base
+
 static func get_player_color(peer_id: int) -> Color:
 	return COLOR_POOL[peer_id % COLOR_POOL.size()]
 

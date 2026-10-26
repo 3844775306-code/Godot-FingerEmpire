@@ -269,8 +269,12 @@ func _swap_rtl(nm: String):
 	r.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	p.add_child(r); p.move_child(r, i)
 
-func _bc(pct: float) -> Color:
-	return UITheme.health_bar_color(pct)
+# 血条颜色 = 阵营色（红/蓝），和单机信息面板保持一致：
+# 联机只有 1v1 / 2v2 / 3v3 三种队伍制对局，同一队多国也统一用队伍色，
+# 避免「2v2 里队友和敌人血条颜色不同」看不出敌我。
+# 血量高低改由 HP 数字的颜色体现，血条只负责标识归属。
+func _faction_color(info: Dictionary) -> Color:
+	return RTSConfig.faction_color(int(info.get("team", -1)), int(info.get("nation", -1)), false)
 
 func _hc(pct: float) -> String:
 	return UITheme.hex_str(UITheme.health_bar_color(pct))
@@ -385,7 +389,7 @@ func update_info(entity_id: int):
 	name_rtl.text = nm
 
 	var pct = float(info["health"]) / max(float(info["max_health"]), 1.0)
-	hp_bar.color = _bc(pct)
+	hp_bar.color = _faction_color(info)
 	hp_bar.anchor_right = pct
 	if hp_bar_bg: hp_bar_bg.visible = true
 	hp_bar.visible = true

@@ -297,8 +297,20 @@ func _swap_rtl(nm: String):
 	r.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	p.add_child(r); p.move_child(r, i)
 
-func _bc(pct: float) -> Color:
-	return UITheme.health_bar_color(pct)
+# 血条颜色 = 阵营色：常规对局红/蓝两种，混战模式改用国家色（每国一色）。
+# 血量高低不再靠血条颜色表达，改由旁边 HP 数字的颜色体现——血条要负责「这是谁的单位」。
+func _faction_color(entity) -> Color:
+	if entity == null or not is_instance_valid(entity):
+		return Color(0.7, 0.7, 0.7)
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	var ffa: bool = GameSettings.is_ffa
+	var nation: int = -1
+	if bm != null:
+		if "is_ffa" in bm:
+			ffa = bool(bm.get("is_ffa"))
+		if bm.has_method("get_entity_nation"):
+			nation = int(bm.get_entity_nation(entity))
+	return RTSConfig.faction_color(int(entity.team), nation, ffa)
 
 func _hc(pct: float) -> String:
 	return UITheme.hex_str(UITheme.health_bar_color(pct))
@@ -515,7 +527,7 @@ func update_info(entity):
 	name_rtl.text = nm
 
 	var pct = float(entity.health) / max(float(entity.max_health), 1.0)
-	hp_bar.color = _bc(pct)
+	hp_bar.color = _faction_color(entity)
 	hp_bar.anchor_right = pct
 	if hp_bar_bg: hp_bar_bg.visible = true
 	hp_bar.visible = true
