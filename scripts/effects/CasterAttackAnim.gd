@@ -1,15 +1,15 @@
 class_name CasterAttackAnim
 extends Node3D
 
-# 僧侣(55)/长老(56)/宗师(57) 的法术波攻击。
+# 僧侣(55)/长老(56)/宗师(57) 的法术弹攻击。
 #
-# 这三个单位没有实体子弹，但也不应该“隔空结算”：施法时从法杖/身前放出一道
-# 带兵种颜色的法术波，飞到目标身上再结算治疗/伤害/降攻，命中点同时播放
-# 对应的法术特效。伤害结算仍在 Army 里，通过 on_impact 回调完成，所以视觉
-# 飞行时间和实际生效时间一致，不会出现“目标已经掉血，法术波还在半路”。
+# 这三个单位没有实体子弹，但也不应该“隔空结算”：施法时从法杖/身前射出一枚
+# 带兵种颜色、弹头指向目标的法术弹，飞到目标身上再结算治疗/伤害/降攻，
+# 命中点同时播放对应的法术特效。伤害结算仍在 Army 里，通过 on_impact 回调完成，
+# 所以视觉飞行时间和实际生效时间一致，不会出现“目标已经掉血，法术弹还在半路”。
 #
-# 三种命中特效：
-#   僧侣：绿色加号从目标周围升起，配合治疗光环；
+# 三种命中特效都从目标身高一半处（胸口/腰腹）展开，不再贴着脚底：
+#   僧侣：绿色加号环绕治疗，配合半身高度的治疗光环；
 #   长老：紫色灵魂法阵 + 上升的晶片/灵魂光柱，表现“抽离生命”；
 #   宗师：赤金王印 + 降下的锁链/王冠，表现“压制与招降”。
 
@@ -22,9 +22,7 @@ const CASTER_COLOR := {
 	57: Color(1.00, 0.36, 0.12),
 }
 
-const WAVE_SPEED: float = 15.0
-const MIN_TRAVEL_TIME: float = 0.16
-const MAX_TRAVEL_TIME: float = 0.75
+const BOLT_SPEED: float = 15.0
 const IMPACT_DISTANCE: float = 0.38
 
 var _entity_id: int = 55
@@ -34,10 +32,10 @@ var _on_impact: Callable = Callable()
 var _root: Node3D = null
 var _color: Color = Color.WHITE
 var _last_target_pos: Vector3 = Vector3.ZERO
-var _last_ground_pos: Vector3 = Vector3.ZERO
+var _last_impact_pos: Vector3 = Vector3.ZERO
 var _visual: Node3D = null
 var _core: MeshInstance3D = null
-var _rings: Array[MeshInstance3D] = []
+var _tail_fins: Array[MeshInstance3D] = []
 var _rune_holder: Node3D = null
 var _elapsed: float = 0.0
 var _done: bool = false
@@ -48,7 +46,7 @@ static func is_caster(entity_id: int) -> bool:
 static func color_for(entity_id: int) -> Color:
 	return CASTER_COLOR.get(entity_id, Color(1.0, 0.86, 0.38))
 
-# 从 source 向 target 发射法术波；到达后调用 on_impact()，并播放命中特效。
+# 从 source 向 target 发射法术弹；到达后调用 on_impact()，并播放命中特效。
 # on_impact 返回 Dictionary 时可带 "converted": true，用于播放宗师招降的额外金光。
 static func cast(entity_id: int, source: Node3D, target: Node3D, on_impact: Callable) -> bool:
 	if not is_caster(entity_id) or not _valid(source) or not _valid(target):
@@ -60,22 +58,22 @@ static func cast(entity_id: int, source: Node3D, target: Node3D, on_impact: Call
 	if root == null or not is_instance_valid(root):
 		return false
 
-	var wave := CasterAttackAnim.new()
-	wave.name = "CasterSpellWave"
-	wave._entity_id = entity_id
-	wave._source = source
-	wave._target = target
-	wave._on_impact = on_impact
-	wave._root = root
-	wave._color = color_for(entity_id)
-	wave._last_ground_pos = target.global_position
-	wave._last_target_pos = _chest_position(target)
-	wave._build_visual()
-	root.add_child(wave)
-	wave.global_position = _muzzle_position(source)
+	var bolt := CasterAttackAnim.new()
+	bolt.name = "CasterSpellBolt"
+	bolt._entity_id = entity_id
+	bolt._source = source
+	bolt._target = target
+	bolt._on_impact = on_impact
+	bolt._root = root
+	bolt._color = color_for(entity_id)
+	bolt._last_impact_pos = _body_center(target)
+	bolt._last_target_pos = _body_center(target)
+	bolt._build_visual()
+	root.add_child(bolt)
+	bolt.global_position = _muzzle_position(source)
 	return true
 
-# 联机客户端没有真实目标引用，只能按朝向和射程放一道视觉法术波。
+# 联机客户端没有真实目标引用，只能按朝向和射程放一枚视觉法术弹。
 # 落点用临时 Node3D 代理，命中后自动释放，不参与任何伤害结算。
 static func cast_point(entity_id: int, source: Node3D, end_pos: Vector3) -> bool:
 	if not is_caster(entity_id) or not _valid(source):
@@ -98,7 +96,8 @@ static func cast_point(entity_id: int, source: Node3D, end_pos: Vector3) -> bool
 		proxy.queue_free()
 	return ok
 
-static func _chest_position(target: Node3D) -> Vector3:
+# 目标身高一半附近（胸口/腰腹）。所有命中特效都从这里展开，不能贴脚底。
+static func _body_center(target: Node3D) -> Vector3:
 	var radius: float = 0.4
 	if target is GameEntity:
 		radius = (target as GameEntity).body_radius
@@ -116,39 +115,65 @@ static func _muzzle_position(source: Node3D) -> Vector3:
 
 func _build_visual() -> void:
 	_visual = Node3D.new()
-	_visual.name = "WaveVisual"
+	_visual.name = "BoltVisual"
 	add_child(_visual)
 
-	var glow_mat := _make_material(_color, 0.92, 3.8)
+	var glow_mat := _make_material(_color, 0.95, 4.6)
 	var core_mesh := SphereMesh.new()
-	core_mesh.radius = 0.14
-	core_mesh.height = 0.28
+	core_mesh.radius = 0.155
+	core_mesh.height = 0.31
 	core_mesh.radial_segments = 12
 	core_mesh.rings = 6
 	_core = MeshInstance3D.new()
 	_core.mesh = core_mesh
 	_core.material_override = glow_mat
+	_core.position = Vector3(0.0, 0.0, 0.02)
 	_core.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_visual.add_child(_core)
 
-	# 三道同心的发光环叠成一道“波”，朝目标方向推进；环面垂直于飞行方向。
-	for i in range(3):
-		var ring := MeshInstance3D.new()
-		var torus := TorusMesh.new()
-		torus.inner_radius = 0.17 + i * 0.045
-		torus.outer_radius = 0.23 + i * 0.045
-		torus.rings = 28
-		torus.ring_segments = 6
-		ring.mesh = torus
-		ring.material_override = glow_mat
-		ring.rotation.x = PI * 0.5
-		ring.position = Vector3(0.0, 0.0, -0.08 - i * 0.09)
-		ring.scale = Vector3.ONE * (1.0 - i * 0.11)
-		ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-		_visual.add_child(ring)
-		_rings.append(ring)
+	# 弹头：细长光锥指向正前方（-Z），look_at 后正好指着目标。
+	var tip := MeshInstance3D.new()
+	var cone := CylinderMesh.new()
+	cone.top_radius = 0.0
+	cone.bottom_radius = 0.105
+	cone.height = 0.30
+	cone.radial_segments = 10
+	tip.mesh = cone
+	tip.material_override = _make_material(_color.lightened(0.18), 0.95, 4.2)
+	tip.rotation.x = -PI * 0.5
+	tip.position = Vector3(0.0, 0.0, -0.19)
+	tip.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_visual.add_child(tip)
 
-	# 长老用绕飞的菱形符文，宗师用方形王印框；僧侣保持纯净的生命环。
+	# 尾部四片小尾翼 + 一圈尾焰：让弹体有明确的飞行朝向，而不是一团光。
+	for i in range(4):
+		var fin := MeshInstance3D.new()
+		var fin_box := BoxMesh.new()
+		fin_box.size = Vector3(0.035, 0.22, 0.13)
+		fin.mesh = fin_box
+		fin.material_override = _make_material(_color, 0.82, 2.8)
+		var ang: float = TAU * float(i) / 4.0
+		fin.position = Vector3(cos(ang) * 0.10, sin(ang) * 0.10, 0.17)
+		fin.rotation.z = ang + PI * 0.5
+		fin.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		_visual.add_child(fin)
+		_tail_fins.append(fin)
+
+	var tail_ring := MeshInstance3D.new()
+	var tail_torus := TorusMesh.new()
+	tail_torus.inner_radius = 0.10
+	tail_torus.outer_radius = 0.15
+	tail_torus.rings = 20
+	tail_torus.ring_segments = 5
+	tail_ring.mesh = tail_torus
+	tail_ring.material_override = _make_material(_color, 0.55, 3.0)
+	tail_ring.rotation.x = PI * 0.5
+	tail_ring.position = Vector3(0.0, 0.0, 0.24)
+	tail_ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_visual.add_child(tail_ring)
+	_tail_fins.append(tail_ring)
+
+	# 长老用绕飞的菱形符文，宗师用方形王印框；僧侣保持纯净的弹体。
 	if _entity_id == 56:
 		_rune_holder = Node3D.new()
 		_rune_holder.name = "ElderRunes"
@@ -161,7 +186,7 @@ func _build_visual() -> void:
 			rune.material_override = glow_mat
 			rune.rotation.z = PI * 0.25
 			var ang: float = TAU * float(i) / 3.0
-			rune.position = Vector3(cos(ang) * 0.36, sin(ang) * 0.36, 0.02)
+			rune.position = Vector3(cos(ang) * 0.34, sin(ang) * 0.34, 0.02)
 			rune.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 			_rune_holder.add_child(rune)
 	elif _entity_id == 57:
@@ -171,11 +196,11 @@ func _build_visual() -> void:
 		for i in range(4):
 			var bar := MeshInstance3D.new()
 			var box := BoxMesh.new()
-			box.size = Vector3(0.38, 0.055, 0.035)
+			box.size = Vector3(0.36, 0.055, 0.035)
 			bar.mesh = box
 			bar.material_override = glow_mat
 			var ang: float = TAU * float(i) / 4.0
-			bar.position = Vector3(cos(ang) * 0.30, sin(ang) * 0.30, 0.0)
+			bar.position = Vector3(cos(ang) * 0.28, sin(ang) * 0.28, 0.0)
 			bar.rotation.z = ang + PI * 0.5
 			bar.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 			_rune_holder.add_child(bar)
@@ -185,20 +210,22 @@ func _build_visual() -> void:
 func _attach_trail() -> void:
 	var trail := CPUParticles3D.new()
 	trail.name = "SpellTrail"
-	trail.amount = 14
-	trail.lifetime = 0.3
-	trail.local_coords = false
+	trail.amount = 18
+	trail.lifetime = 0.28
+	# 粒子跟着弹体局部坐标向后喷，弹体转向时尾迹也跟着转向。
+	trail.local_coords = true
 	trail.emitting = true
-	trail.spread = 180.0
-	trail.initial_velocity_min = 0.0
-	trail.initial_velocity_max = 0.25
+	trail.direction = Vector3(0.0, 0.0, 1.0)
+	trail.spread = 28.0
+	trail.initial_velocity_min = 0.8
+	trail.initial_velocity_max = 1.6
 	trail.gravity = Vector3.ZERO
 	trail.scale_amount_min = 0.4
-	trail.scale_amount_max = 0.85
+	trail.scale_amount_max = 0.8
 	trail.visibility_aabb = AABB(Vector3(-3.0, -3.0, -3.0), Vector3(6.0, 6.0, 6.0))
 	var quad := QuadMesh.new()
-	quad.size = Vector2(0.17, 0.17)
-	var mat := _make_material(_color, 0.9, 2.8)
+	quad.size = Vector2(0.14, 0.14)
+	var mat := _make_material(_color, 0.9, 3.0)
 	mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
 	quad.material = mat
 	trail.mesh = quad
@@ -213,12 +240,12 @@ func _process(delta: float) -> void:
 		return
 	_elapsed += delta
 	if is_instance_valid(_target):
-		_last_ground_pos = _target.global_position
-		_last_target_pos = _chest_position(_target)
+		_last_impact_pos = _body_center(_target)
+		_last_target_pos = _last_impact_pos
 
 	var to_target: Vector3 = _last_target_pos - global_position
 	var dist: float = to_target.length()
-	var step: float = WAVE_SPEED * delta
+	var step: float = BOLT_SPEED * delta
 	if dist <= maxf(IMPACT_DISTANCE, step):
 		global_position = _last_target_pos
 		_finish()
@@ -230,16 +257,21 @@ func _process(delta: float) -> void:
 	var dir: Vector3 = to_target / dist
 	global_position += dir * step
 	if dir.length_squared() > 0.0001:
-		look_at(global_position + dir, Vector3.UP)
+		# 弹头始终指向飞行方向；目标在正上方/正下方时用 FORWARD 当临时 up，
+		# 避免 look_at 的 up 与 forward 平行导致朝向失效。
+		var look_up := Vector3.UP
+		if absf(dir.normalized().dot(look_up)) > 0.98:
+			look_up = Vector3.FORWARD
+		look_at(global_position + dir, look_up)
 
-	# 飞行途中让法环轻微搏动、符文反向旋转，避免看起来像一颗死弹丸。
+	# 飞行途中让核心轻微搏动、尾环轻微呼吸，避免看起来像一颗死弹丸。
 	if _core != null and is_instance_valid(_core):
-		var pulse: float = 1.0 + sin(_elapsed * 18.0) * 0.16
+		var pulse: float = 1.0 + sin(_elapsed * 18.0) * 0.14
 		_core.scale = Vector3.ONE * pulse
-	for i in range(_rings.size()):
-		var ring: MeshInstance3D = _rings[i]
-		if ring != null and is_instance_valid(ring):
-			ring.scale = Vector3.ONE * (1.0 - i * 0.11) * (1.0 + sin(_elapsed * 13.0 + i) * 0.07)
+	for i in range(_tail_fins.size()):
+		var fin: MeshInstance3D = _tail_fins[i]
+		if fin != null and is_instance_valid(fin) and i == _tail_fins.size() - 1:
+			fin.scale = Vector3.ONE * (1.0 + sin(_elapsed * 13.0) * 0.12)
 	if _rune_holder != null and is_instance_valid(_rune_holder):
 		_rune_holder.rotation.z = -_elapsed * 7.0
 
@@ -258,18 +290,19 @@ func _finish() -> void:
 func _spawn_impact(result: Dictionary) -> void:
 	if _root == null or not is_instance_valid(_root):
 		return
-	var ground: Vector3 = _last_ground_pos
+	# 命中特效统一从目标身高一半处展开，而不是脚底。
+	var center: Vector3 = _last_impact_pos
 	match _entity_id:
 		55:
-			_impact_monk(ground)
+			_impact_monk(center)
 		56:
-			_impact_elder(ground)
+			_impact_elder(center)
 		57:
-			_impact_grandmaster(ground, bool(result.get("converted", false)))
+			_impact_grandmaster(center, bool(result.get("converted", false)))
 
 # ── 僧侣：绿色治疗加号 ─────────────────────────────────────────────
-func _impact_monk(ground: Vector3) -> void:
-	var ring := _make_ground_ring(ground, _color, 0.72, 0.11)
+func _impact_monk(center: Vector3) -> void:
+	var ring := _make_ring(center, _color, 0.72, 0.11)
 	var ring_mat := ring.material_override as StandardMaterial3D
 	var ring_tw := _root.create_tween()
 	ring_tw.set_parallel(true)
@@ -278,13 +311,13 @@ func _impact_monk(ground: Vector3) -> void:
 	ring_tw.tween_property(ring_mat, "albedo_color", _alpha(_color, 0.0), 0.65)
 	ring_tw.chain().tween_callback(ring.queue_free)
 
-	# 六枚绿色加号从目标脚边升起，大小错开，形成“治疗弹开”的层次。
+	# 六枚绿色加号围绕目标半身高处展开，大小错开，形成“治疗弹开”的层次。
 	for i in range(6):
 		var ang: float = TAU * float(i) / 6.0 + 0.25
 		var radius: float = 0.62 + float(i % 3) * 0.16
 		var plus := _make_plus_mark(_color)
 		var mat: StandardMaterial3D = plus.get_meta("mat")
-		plus.position = ground + Vector3(cos(ang) * radius, 0.20, sin(ang) * radius)
+		plus.position = center + Vector3(cos(ang) * radius, 0.06 + float(i % 3) * 0.10, sin(ang) * radius)
 		plus.scale = Vector3.ONE * 0.12
 		_root.add_child(plus)
 
@@ -292,16 +325,16 @@ func _impact_monk(ground: Vector3) -> void:
 		tw.set_parallel(true)
 		tw.tween_property(plus, "scale", Vector3.ONE * (0.85 + float(i % 2) * 0.22), 0.20) \
 			.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
-		tw.tween_property(plus, "position", plus.position + Vector3.UP * (0.55 + float(i % 3) * 0.16), 0.72) \
+		tw.tween_property(plus, "position", plus.position + Vector3.UP * (0.45 + float(i % 3) * 0.14), 0.72) \
 			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 		tw.tween_property(mat, "albedo_color", _alpha(_color, 0.0), 0.72)
 		tw.chain().tween_callback(plus.queue_free)
 
-	_spawn_sparkles(_root, ground + Vector3.UP * 0.8, _color, 12, 0.65, 1.2, 2.6)
+	_spawn_sparkles(_root, center + Vector3.UP * 0.05, _color, 12, 0.65, 1.2, 2.6)
 
 # ── 长老：紫色灵魂法阵、晶片与回流灵魂 ───────────────────────────────
-func _impact_elder(ground: Vector3) -> void:
-	var ring := _make_ground_ring(ground, _color, 0.82, 0.10)
+func _impact_elder(center: Vector3) -> void:
+	var ring := _make_ring(center, _color, 0.82, 0.10)
 	var ring_mat := ring.material_override as StandardMaterial3D
 	var ring_tw := _root.create_tween()
 	ring_tw.set_parallel(true)
@@ -318,14 +351,14 @@ func _impact_elder(ground: Vector3) -> void:
 		box.size = Vector3(0.52, 0.025, 0.035)
 		bar.mesh = box
 		bar.material_override = _make_material(_color, 0.85, 2.2)
-		bar.position = ground + Vector3(cos(ang) * 0.72, 0.07, sin(ang) * 0.72)
+		bar.position = center + Vector3(cos(ang) * 0.72, 0.04, sin(ang) * 0.72)
 		bar.rotation.y = -ang
 		bar.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		_root.add_child(bar)
 		var bar_mat := bar.material_override as StandardMaterial3D
 		var tw := _root.create_tween()
 		tw.set_parallel(true)
-		tw.tween_property(bar, "position", ground + Vector3(cos(ang) * 0.34, 0.07, sin(ang) * 0.34), 0.55) \
+		tw.tween_property(bar, "position", center + Vector3(cos(ang) * 0.34, 0.04, sin(ang) * 0.34), 0.55) \
 			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 		tw.tween_property(bar_mat, "albedo_color", _alpha(_color, 0.0), 0.55)
 		tw.chain().tween_callback(bar.queue_free)
@@ -339,7 +372,7 @@ func _impact_elder(ground: Vector3) -> void:
 	cylinder.radial_segments = 10
 	pillar.mesh = cylinder
 	pillar.material_override = _make_material(_color, 0.20, 1.6)
-	pillar.position = ground + Vector3.UP * 1.2
+	pillar.position = center + Vector3.UP * 1.2
 	pillar.scale = Vector3(1.0, 0.05, 1.0)
 	pillar.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_root.add_child(pillar)
@@ -362,14 +395,14 @@ func _impact_elder(ground: Vector3) -> void:
 		gem.rings = 2
 		shard.mesh = gem
 		shard.material_override = _make_material(_color, 0.9, 3.0)
-		shard.position = ground + Vector3(cos(ang) * 0.95, 0.12, sin(ang) * 0.95)
+		shard.position = center + Vector3(cos(ang) * 0.95, 0.04, sin(ang) * 0.95)
 		shard.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		_root.add_child(shard)
 		var shard_mat := shard.material_override as StandardMaterial3D
 		var tw := _root.create_tween()
 		tw.set_parallel(true)
 		tw.tween_property(shard, "position",
-			ground + Vector3(cos(ang) * 0.30, 0.75 + float(i % 3) * 0.28, sin(ang) * 0.30), 0.55) \
+			center + Vector3(cos(ang) * 0.30, 0.45 + float(i % 3) * 0.22, sin(ang) * 0.30), 0.55) \
 			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_OUT)
 		tw.tween_property(shard, "scale", Vector3(0.2, 0.2, 0.2), 0.55)
 		tw.tween_property(shard_mat, "albedo_color", _alpha(_color, 0.0), 0.55)
@@ -384,22 +417,22 @@ func _impact_elder(ground: Vector3) -> void:
 			sphere.height = 0.12
 			orb.mesh = sphere
 			orb.material_override = _make_material(_color.lightened(0.25), 0.95, 3.8)
-			orb.position = ground + Vector3(0.0, 1.0 + float(i) * 0.15, 0.0)
+			orb.position = center + Vector3(0.0, 0.10 + float(i) * 0.12, 0.0)
 			orb.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 			_root.add_child(orb)
 			var orb_mat := orb.material_override as StandardMaterial3D
 			var tw := _root.create_tween()
 			tw.set_parallel(true)
-			tw.tween_property(orb, "position", _chest_position(_source), 0.38 + float(i) * 0.06) \
+			tw.tween_property(orb, "position", _body_center(_source), 0.38 + float(i) * 0.06) \
 				.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 			tw.tween_property(orb_mat, "albedo_color", _alpha(_color, 0.0), 0.42 + float(i) * 0.06)
 			tw.chain().tween_callback(orb.queue_free)
 
-	_spawn_sparkles(_root, ground + Vector3.UP * 1.0, _color, 10, 0.7, 0.5, 1.5)
+	_spawn_sparkles(_root, center + Vector3.UP * 0.2, _color, 10, 0.7, 0.5, 1.5)
 
 # ── 宗师：赤金王印、锁链与招降王冠 ──────────────────────────────────
-func _impact_grandmaster(ground: Vector3, converted: bool) -> void:
-	var ring := _make_ground_ring(ground, _color, 0.90, 0.11)
+func _impact_grandmaster(center: Vector3, converted: bool) -> void:
+	var ring := _make_ring(center, _color, 0.90, 0.11)
 	var ring_mat := ring.material_override as StandardMaterial3D
 	var ring_tw := _root.create_tween()
 	ring_tw.set_parallel(true)
@@ -408,7 +441,7 @@ func _impact_grandmaster(ground: Vector3, converted: bool) -> void:
 	ring_tw.tween_property(ring_mat, "albedo_color", _alpha(_color, 0.0), 0.55)
 	ring_tw.chain().tween_callback(ring.queue_free)
 
-	# 四道锁链从头顶压下，落到目标周围；用细长金柱表现“压制”。
+	# 四道锁链从半身高度上方向下压到目标周围；用细长金柱表现“压制”。
 	for i in range(4):
 		var ang: float = TAU * float(i) / 4.0 + PI * 0.25
 		var chain := MeshInstance3D.new()
@@ -416,14 +449,14 @@ func _impact_grandmaster(ground: Vector3, converted: bool) -> void:
 		box.size = Vector3(0.075, 2.1, 0.075)
 		chain.mesh = box
 		chain.material_override = _make_material(_color.lightened(0.18), 0.9, 2.8)
-		chain.position = ground + Vector3(cos(ang) * 0.86, 3.1, sin(ang) * 0.86)
+		chain.position = center + Vector3(cos(ang) * 0.86, 2.2, sin(ang) * 0.86)
 		chain.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		_root.add_child(chain)
 		var chain_mat := chain.material_override as StandardMaterial3D
 		var tw := _root.create_tween()
 		tw.set_parallel(true)
 		tw.tween_property(chain, "position",
-			ground + Vector3(cos(ang) * 0.78, 0.25, sin(ang) * 0.78), 0.20) \
+			center + Vector3(cos(ang) * 0.78, 0.10, sin(ang) * 0.78), 0.20) \
 			.set_trans(Tween.TRANS_QUAD).set_ease(Tween.EASE_IN)
 		tw.tween_property(chain_mat, "albedo_color", _alpha(_color, 0.0), 0.58) \
 			.set_delay(0.16)
@@ -455,12 +488,12 @@ func _impact_grandmaster(ground: Vector3, converted: bool) -> void:
 		prong.rotation.z = -ang
 		prong.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 		crown.add_child(prong)
-	crown.position = ground + Vector3.UP * 2.55
+	crown.position = center + Vector3.UP * 1.55
 	crown.scale = Vector3.ONE * 0.25
 	_root.add_child(crown)
 	var crown_tw := _root.create_tween()
 	crown_tw.set_parallel(true)
-	crown_tw.tween_property(crown, "position", ground + Vector3.UP * 1.85, 0.28) \
+	crown_tw.tween_property(crown, "position", center + Vector3.UP * 0.85, 0.28) \
 		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
 	crown_tw.tween_property(crown, "scale", Vector3.ONE * 1.0, 0.28) \
 		.set_trans(Tween.TRANS_BACK).set_ease(Tween.EASE_OUT)
@@ -470,7 +503,7 @@ func _impact_grandmaster(ground: Vector3, converted: bool) -> void:
 
 	# 招降成功时再加一圈金色扩散和更密的粒子，和普通降攻区分开。
 	if converted:
-		var convert_ring := _make_ground_ring(ground, Color(1.0, 0.88, 0.35), 1.05, 0.08)
+		var convert_ring := _make_ring(center, Color(1.0, 0.88, 0.35), 1.05, 0.08)
 		var cmat := convert_ring.material_override as StandardMaterial3D
 		var ctw := _root.create_tween()
 		ctw.set_parallel(true)
@@ -478,12 +511,12 @@ func _impact_grandmaster(ground: Vector3, converted: bool) -> void:
 			.set_trans(Tween.TRANS_QUART).set_ease(Tween.EASE_OUT)
 		ctw.tween_property(cmat, "albedo_color", _alpha(Color(1.0, 0.88, 0.35), 0.0), 0.7)
 		ctw.chain().tween_callback(convert_ring.queue_free)
-		_spawn_sparkles(_root, ground + Vector3.UP * 1.2, Color(1.0, 0.82, 0.30), 22, 0.85, 1.8, 4.2)
+		_spawn_sparkles(_root, center + Vector3.UP * 0.10, Color(1.0, 0.82, 0.30), 22, 0.85, 1.8, 4.2)
 	else:
-		_spawn_sparkles(_root, ground + Vector3.UP * 1.1, _color, 12, 0.65, 1.0, 2.6)
+		_spawn_sparkles(_root, center + Vector3.UP * 0.05, _color, 12, 0.65, 1.0, 2.6)
 
 # ── 通用特效工具 ────────────────────────────────────────────────────
-func _make_ground_ring(ground: Vector3, color: Color, radius: float, tube: float) -> MeshInstance3D:
+func _make_ring(center: Vector3, color: Color, radius: float, tube: float) -> MeshInstance3D:
 	var ring := MeshInstance3D.new()
 	var torus := TorusMesh.new()
 	torus.inner_radius = radius - tube
@@ -492,7 +525,8 @@ func _make_ground_ring(ground: Vector3, color: Color, radius: float, tube: float
 	torus.ring_segments = 5
 	ring.mesh = torus
 	ring.material_override = _make_material(color, 0.9, 2.6)
-	ring.position = ground + Vector3.UP * 0.06
+	# 环面保持水平，但中心抬到目标半身高处。
+	ring.position = center
 	ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	_root.add_child(ring)
 	return ring

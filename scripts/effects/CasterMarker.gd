@@ -13,7 +13,7 @@ extends Node3D
 
 const CASTER_IDS: Array[int] = [55, 56, 57]
 
-# 与 CasterAttackAnim.CASTER_COLOR 同色系，法术波和标识颜色对得上
+# 与 CasterAttackAnim.CASTER_COLOR 同色系，法术弹和标识颜色对得上
 const CASTER_COLOR := {
 	55: Color(0.30, 1.00, 0.45),  # 僧侣：治疗绿
 	56: Color(0.58, 0.32, 1.00),  # 长老：紫

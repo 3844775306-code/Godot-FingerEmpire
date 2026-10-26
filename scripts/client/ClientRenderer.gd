@@ -960,7 +960,7 @@ func _update_entity_animation(node: Node3D, info: Dictionary):
 		_update_client_caster_attack(node, info)
 
 # 联机客户端没有 Army/真实目标引用，只能根据 attack_seq 按朝向和射程
-# 放一道视觉法术波；伤害/治疗仍由服务端在命中时结算，客户端只负责表现。
+# 放一枚视觉法术弹；伤害/治疗仍由服务端在命中时结算，客户端只负责表现。
 func _update_client_caster_attack(node: Node3D, info: Dictionary) -> void:
 	var model = node.get_meta("_model_instance", null) as Node3D
 	if model == null:

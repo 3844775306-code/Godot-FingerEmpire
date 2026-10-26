@@ -2855,7 +2855,7 @@ func _attack(target, delta):
 		return
 
 	# 特殊攻击类型：僧侣治疗 / 长老百分比伤害 / 宗师降攻招降。
-	# 三个法术单位都先发射法术波，命中目标后才结算，视觉与生效时间一致。
+	# 三个法术单位都先发射法术弹，命中目标后才结算，视觉与生效时间一致。
 	if entity_id in [55, 56, 57]:
 		_caster_attack(target, delta)
 		return
@@ -2950,7 +2950,7 @@ func _play_attack_feedback() -> void:
 		AudioManager.play_sfx_3d(_sfx, global_position, _get_cam_pos())
 	# 真正出手时刷新一次动画：单位可能刚进入攻击距离，不能只等 30 帧轮询
 	# 才从走路切到攻击；这里每次攻击只调用一次，不会形成每帧音效/动画刷新。
-	# 攻城六件套和法术单位需要联机端按“真实出手次数”播放动画/法术波；
+	# 攻城六件套和法术单位需要联机端按“真实出手次数”播放动画/法术弹；
 	# 其他兵种不递增，避免每次普攻都改变快照哈希、平白增加同步带宽。
 	if SiegeAttackAnim.is_siege(entity_id) or CasterAttackAnim.is_caster(entity_id):
 		attack_seq += 1
@@ -2964,8 +2964,8 @@ func _play_attack_feedback() -> void:
 			bm._update_entity_animation(self)
 
 # ==================== 特殊攻击 ====================
-# 僧侣/长老/宗师统一施法流程：先选目标，再发射带颜色的法术波；
-# 命中回调里才结算治疗/伤害/降攻，保证“波到了才生效”。
+# 僧侣/长老/宗师统一施法流程：先选目标，再发射带颜色的法术弹；
+# 命中回调里才结算治疗/伤害/降攻，保证“弹到了才生效”。
 func _caster_attack(target, delta):
 	if attack_timer > 0:
 		attack_timer -= delta
@@ -3039,7 +3039,7 @@ func _find_monk_heal_target():
 			best = entity
 	return best
 
-# 法术波命中后的实际结算。返回 Dictionary 供命中特效区分普通降攻和招降。
+# 法术弹命中后的实际结算。返回 Dictionary 供命中特效区分普通降攻和招降。
 func _apply_caster_hit(target) -> Dictionary:
 	var result := {}
 	if not is_instance_valid(target) or target.health <= 0:

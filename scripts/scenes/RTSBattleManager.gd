@@ -2227,7 +2227,7 @@ func _play_entity_attack_anim(entity: Army, model: Node3D) -> void:
 			"right": entity.global_transform.basis.x,
 		})
 		return
-	# 僧侣/长老/宗师的法术波由 Army._caster_attack() 直接发射，
+	# 僧侣/长老/宗师的法术弹由 Army._caster_attack() 直接发射，
 	# 因为命中时还要结算治疗/伤害，不能只在这里做纯视觉播放。
 	# 开火瞬间在炮口位置喷一小团亮色烟尘：车身位移在远景里容易看漏，
 	# 这个一闪而过的火光才是最容易被眼睛捕捉到的信号。0.5 秒节流避免重复刷。
