@@ -13,6 +13,7 @@ const WALL_TOP_HEIGHT: float = 1.31
 const WALL_CANNON_SNAP: float = 6.0
 const BattleStatsPanelScript = preload("res://scripts/ui/BattleStatsPanel.gd")
 const MapPresets = preload("res://scripts/map/MapPresets.gd")
+const LevelVisualScript = preload("res://scripts/effects/BuildingLevelVisual.gd")
 var previous_emulate_mouse: bool
 # ==================== 资源 ====================
 var player_resources: Dictionary = {"gold": 100, "wood": 100, "stone": 100 ,"food": 100, "oil": 0}
@@ -1868,6 +1869,8 @@ func upgrade_building_type(team: int, building_id: int, from_building: Building)
 			e.attack += upgrade.get("attack_bonus", 0)
 			# 按 unlock_level / 当前等级同步生产列表，支持同一级解锁多个单位
 			e._sync_production_unlocks()
+			# 等级外观随全局升级同步刷新（同类型所有建筑一起升）
+			e.refresh_level_visual()
 			# 兼容不在 produces 中、只通过升级解锁的特殊单位（如集市商人）
 			var unlock_ids: Array = []
 			if upgrade.has("unlocks_units") and upgrade["unlocks_units"] is Array:
@@ -2519,6 +2522,15 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 					var bmin: float = _model_local_min_y(bmi)
 					if absf(bmin) > 0.005:
 						bmi.position.y -= bmin
+		# 等级旗帜/底座色环/等级徽章。放在模型和整体放大之后，尺寸才与最终模型一致；
+		# 建造中的建筑由 Building.start_construction() 再隐藏。
+		LevelVisualScript.apply(
+			entity as Building,
+			maxi(entity.upgrade_level, entity.level),
+			0.0,
+			get_entity_color(entity),
+			entity.build_timer <= 0.0,
+		)
 	# 船只模型已通过 ENTITY_MODEL_SCALE 放大，推挤/碰撞半径同步补偿；
 	# 只改 push_radius，不改 body_radius，避免攻击距离等战斗数值一起变化。
 	if entity is Army:

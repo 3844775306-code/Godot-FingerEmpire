@@ -4,6 +4,7 @@ const StatsScript = preload("res://scripts/core/BattleStats.gd")
 const StatsPanelScript = preload("res://scripts/ui/BattleStatsPanel.gd")
 const BuildingDeathEffect = preload("res://scripts/effects/BuildingDeathEffect.gd")
 const BuildingConstructionVisual = preload("res://scripts/effects/BuildingConstructionVisual.gd")
+const LevelVisualScript = preload("res://scripts/effects/BuildingLevelVisual.gd")
 const TreeFallEffect = preload("res://scripts/effects/TreeFallEffect.gd")
 const EntityDamageVisual = preload("res://scripts/effects/EntityDamageVisual.gd")
 enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ATTACK_SPEED, MELEE_ARMOR, SHIELD_ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH, GARRISONED, NATION, IN_ACTION_RANGE, ATTACK_SEQ }
@@ -728,6 +729,7 @@ func _update_single_entity(info):
 		_update_client_ground_trail(node, info)
 	node.set_meta("snapshot_info", info)
 	_refresh_client_construction_visual(node, info)
+	_refresh_client_level_visual(node, info)
 	_refresh_client_damage_visual(node, info)
 	# Client-side sound effects (detect state transitions, visible entities only)
 	var prev_info = node.get_meta("_prev_info") if node.has_meta("_prev_info") else {}
@@ -1040,6 +1042,18 @@ func _refresh_client_construction_visual(node: Node3D, info: Dictionary) -> void
 		BuildingConstructionVisual.update(node, rprogress)
 		return
 	BuildingConstructionVisual.finish(node)
+
+func _refresh_client_level_visual(node: Node3D, info: Dictionary) -> void:
+	if int(info.get("type", -1)) != 1:
+		return
+	if int(info.get("entity_id", -1)) in LevelVisualScript.EXCLUDE_IDS:
+		return
+	var lv := int(info.get("upgrade_level", 1))
+	var visible := float(info.get("build_timer", 0.0)) <= 0.0
+	if int(node.get_meta("_level_visual_level", -1)) != lv:
+		LevelVisualScript.apply(node, lv, float(info.get("body_radius", 1.0)), _get_entity_color(info), visible)
+	else:
+		LevelVisualScript.set_visible(node, visible)
 
 func _refresh_client_damage_visual(node: Node3D, info: Dictionary) -> void:
 	var max_hp := float(info.get("max_health", 0.0))
@@ -1470,6 +1484,15 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 	_attach_ground_patch(entity, info)
 	# 资源脚下同样铺一层软边地皮，消除模型与地表的生硬切边
 	_attach_resource_ground_patch(entity, info)
+	# 建筑等级外观：旗帜数量、底座色环、等级徽章，与服务端共用同一套生成逻辑。
+	if int(info.get("type", -1)) == 1:
+		LevelVisualScript.apply(
+			entity,
+			int(info.get("upgrade_level", 1)),
+			float(info.get("body_radius", 1.0)),
+			entity_color,
+			float(info.get("build_timer", 0.0)) <= 0.0,
+		)
 	return entity
 
 # ---------- 替换原有的 _create_bullet_node ----------
