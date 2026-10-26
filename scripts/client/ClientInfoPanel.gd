@@ -276,6 +276,28 @@ func _swap_rtl(nm: String):
 func _faction_color(info: Dictionary) -> Color:
 	return RTSConfig.faction_color(int(info.get("team", -1)), int(info.get("nation", -1)), false)
 
+# 快照里的 nation 是服务端 get_entity_nation 的结果；老快照/特殊实体缺失时
+# 再按队伍查一次，避免面板上国家行偶发消失。
+func _entity_nation(info: Dictionary) -> int:
+	var nation := int(info.get("nation", -1))
+	if nation < 0 and renderer != null:
+		nation = renderer.get_team_nation(int(info.get("team", -1)))
+	return nation
+
+# 左侧信息面板的“国家”行。中立单位没有国家，返回空串不占行。
+func _nation_display(info: Dictionary) -> String:
+	var nation: int = _entity_nation(info)
+	if nation < 0:
+		return ""
+	var nation_name := ""
+	if nation < ClientRenderer.NATION_LABELS.size():
+		nation_name = String(ClientRenderer.NATION_LABELS[nation])
+	if nation_name.is_empty():
+		nation_name = "未知"
+	var nc: Color = RTSConfig.get_nation_color(nation) if RTSConfig.has_nation_color(nation) else UITheme.GOLD
+	return "🌍 [color=%s]国家[/color]:  [color=%s]%s[/color]" % [
+		UITheme.hex_str(UITheme.PARCHMENT), UITheme.hex_str(nc), nation_name]
+
 func _hc(pct: float) -> String:
 	return UITheme.hex_str(UITheme.health_bar_color(pct))
 
@@ -427,7 +449,10 @@ func update_info(entity_id: int):
 	# 修理状态只在建筑上展示（已损 / 修理中进度 / 修理费）
 	if int(info.get("type", -1)) == 1:
 		bt_str += _repair_status_str(info)
-	var t = "❤️ [color=%s]HP[/color]:  [color=white]%d / %d[/color]%s\n" % [hc, info["health"], info["max_health"], bt_str]
+	var t = _nation_display(info)
+	if t != "":
+		t += "\n"
+	t += "❤️ [color=%s]HP[/color]:  [color=white]%d / %d[/color]%s\n" % [hc, info["health"], info["max_health"], bt_str]
 	t += "⚔️ [color=%s]ATK[/color]:  [color=white]%d[/color]" % [UITheme.hex_str(UITheme.GOLD), info["attack"]]
 	if info.get("melee_armor", 0) > 0 or info.get("shield_armor", 0) > 0:
 		t += "\n⛓️ [color=%s]铠甲[/color]:  [color=white]%d[/color]  🛡️ [color=%s]盾牌[/color]:  [color=white]%d[/color]" % [UITheme.hex_str(UITheme.SAPPHIRE), info.get("melee_armor", 0), UITheme.hex_str(UITheme.STONE), info.get("shield_armor", 0)]

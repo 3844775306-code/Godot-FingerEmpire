@@ -7,6 +7,7 @@ extends RefCounted
 const UV = preload("res://scripts/ui/UnitView.gd")
 
 const TYPE_NAMES := { 0: "资源", 1: "建筑", 2: "单位" }
+const NATION_NAMES := ["维京", "英格兰", "法兰西", "中国", "匈牙利", "日本", "拜占庭"]
 const CLASS_CN := {
 	"military": "军事单位",
 	"siege": "攻城单位",
@@ -37,6 +38,9 @@ static func detailed(entity_id: int, current: Dictionary = {}) -> String:
 
 	lines.append(_header("📖 实体档案"))
 	lines.append(_pair("名称", str(cfg.get("name", "未知"))))
+	var owner_nation := int(current.get("nation", -1))
+	if owner_nation >= 0:
+		lines.append(_pair("所属国家", _nation_name(owner_nation)))
 	lines.append(_pair("编号", "ID %d · %s" % [entity_id, TYPE_NAMES.get(type_id, "实体")]))
 	lines.append(_pair("分类", _class_label(entity_id, type_id)))
 	var role := _role_hint(cfg)
@@ -347,6 +351,11 @@ static func _cost_string(cfg: Dictionary) -> String:
 			continue
 		parts.append("%s %s" % [str(UITheme.RESOURCE_ICONS.get(key, "·")), _num(cost[key])])
 	return "　".join(parts)
+
+static func _nation_name(nation: int) -> String:
+	if nation >= 0 and nation < NATION_NAMES.size():
+		return String(NATION_NAMES[nation])
+	return "未知"
 
 static func _num(v) -> String:
 	var f := float(v)

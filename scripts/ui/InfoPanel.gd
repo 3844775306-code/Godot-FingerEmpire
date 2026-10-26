@@ -265,6 +265,7 @@ func _entity_detail_state(entity) -> Dictionary:
 		"attack_range": entity.attack_range,
 		"speed": entity.speed,
 		"level": entity.level,
+		"nation": _entity_nation(entity),
 	}
 	if entity is Army:
 		d["task"] = _army_task_text(entity)
@@ -311,6 +312,30 @@ func _faction_color(entity) -> Color:
 		if bm.has_method("get_entity_nation"):
 			nation = int(bm.get_entity_nation(entity))
 	return RTSConfig.faction_color(int(entity.team), nation, ffa)
+
+# 单位所属国家：优先按 owner_peer_id 解析，无法解析时由 battle_manager 按队伍兜底。
+func _entity_nation(entity) -> int:
+	if entity == null or not is_instance_valid(entity):
+		return -1
+	var bm = battle if battle else get_tree().get_first_node_in_group("battle_manager")
+	if bm != null and bm.has_method("get_entity_nation"):
+		return int(bm.get_entity_nation(entity))
+	return -1
+
+# 左侧信息面板的“国家”行。中立单位没有国家，返回空串不占行。
+func _nation_display(entity) -> String:
+	var nation: int = _entity_nation(entity)
+	if nation < 0:
+		return ""
+	var bm = battle if battle else get_tree().get_first_node_in_group("battle_manager")
+	var nation_name := ""
+	if bm != null and bm.has_method("get_nation_name"):
+		nation_name = str(bm.get_nation_name(nation))
+	if nation_name.is_empty():
+		nation_name = "未知"
+	var nc: Color = RTSConfig.get_nation_color(nation) if RTSConfig.has_nation_color(nation) else UITheme.GOLD
+	return "🌍 [color=%s]国家[/color]:  [color=%s]%s[/color]" % [
+		UITheme.hex_str(UITheme.PARCHMENT), UITheme.hex_str(nc), nation_name]
 
 func _hc(pct: float) -> String:
 	return UITheme.hex_str(UITheme.health_bar_color(pct))
@@ -552,7 +577,10 @@ func update_info(entity):
 	hp_bar.visible = true
 
 	var hc = _hc(pct)
-	var t = "❤️ [color=%s]HP[/color]:  [color=white]%d / %d[/color]\n" % [hc, entity.health, entity.max_health]
+	var t := _nation_display(entity)
+	if t != "":
+		t += "\n"
+	t += "❤️ [color=%s]HP[/color]:  [color=white]%d / %d[/color]\n" % [hc, entity.health, entity.max_health]
 	t += "⚔️ [color=%s]ATK[/color]:  [color=white]%d[/color]" % [UITheme.hex_str(UITheme.GOLD), entity.attack]
 	if entity.melee_armor > 0 or entity.shield_armor > 0:
 		t += "
