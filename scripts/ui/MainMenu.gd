@@ -5,6 +5,7 @@ const MapSelectDialog = preload("res://scripts/ui/MapSelectDialog.gd")
 const AppVersion = preload("res://scripts/core/AppVersion.gd")
 const ChangelogData = preload("res://scripts/data/ChangelogData.gd")
 const ChangelogPanel = preload("res://scripts/ui/ChangelogPanel.gd")
+const GuidePanel = preload("res://scripts/ui/GuidePanel.gd")
 const UpdateConfig = preload("res://scripts/core/UpdateConfig.gd")
 const UpdateChecker = preload("res://scripts/core/UpdateChecker.gd")
 
@@ -98,10 +99,11 @@ func _ready():
 	UITheme.apply_label(subtitle, 34, UITheme.PARCHMENT)
 	add_child(subtitle)
 
-	# 中央皇庭面板（高度留到 780：按钮从 5 个变 6 个后，最后一个按钮下沿到 948）
+	# 中央皇庭面板：主按钮 6 个 + 底部「操作指南 / 新手教程」双按钮，
+	# 面板加高到 850（205..1055），底部提示面板随之下移，避免帮助入口压住提示。
 	var panel = Panel.new()
 	panel.position = Vector2(620, 205)
-	panel.size = Vector2(1160, 780)
+	panel.size = Vector2(1160, 850)
 	panel.add_theme_stylebox_override("panel", UITheme.card_style(UITheme.GOLD))
 	add_child(panel)
 
@@ -212,15 +214,15 @@ func _ready():
 	add_child(fast_check)
 
 	# 按钮（金主 CTA / 蓝书图鉴 / 石次 / 朱红危险）
-	# 6 个按钮：行距从 74 压到 68、整组上移到 center_y+196，
-	# 最后一个「退出游戏」下沿 948，正好落在加高后的面板（205..985）里。
+	# 6 个主按钮行距 64、高度 58，最后一个「退出游戏」下沿 924；
+	# 下方 970~1022 放「操作指南 / 新手教程」双按钮，整体仍在 205..1055 的面板内。
 	var btn_data = [
 		["单人游戏", Vector2(900, center_y + 196), _on_play_pressed, "primary"],
-		["联机对战", Vector2(900, center_y + 264), _on_multiplayer_pressed, "primary"],
-		["📖 单位图鉴", Vector2(900, center_y + 332), _on_units_pressed, "book"],
-		["设  置", Vector2(900, center_y + 400), _on_settings_pressed, "muted"],
-		["📜 更新日志", Vector2(900, center_y + 468), _on_changelog_pressed, "muted"],
-		["退出游戏", Vector2(900, center_y + 536), _on_quit_pressed, "danger"],
+		["联机对战", Vector2(900, center_y + 260), _on_multiplayer_pressed, "primary"],
+		["📖 单位图鉴", Vector2(900, center_y + 324), _on_units_pressed, "book"],
+		["设  置", Vector2(900, center_y + 388), _on_settings_pressed, "muted"],
+		["📜 更新日志", Vector2(900, center_y + 452), _on_changelog_pressed, "muted"],
+		["退出游戏", Vector2(900, center_y + 516), _on_quit_pressed, "danger"],
 	]
 
 	for data in btn_data:
@@ -234,10 +236,24 @@ func _ready():
 		if data[0] == "📜 更新日志":
 			_changelog_btn = btn
 			_attach_new_badge(btn, UITheme.FONT_SM)
+
+	# 帮助入口：操作指南（蓝书）+ 新手教程（金色 CTA），并排放在主按钮下方。
+	var guide_btn := _make_menu_button("📘 操作指南", Vector2(760, center_y + 620), "book")
+	guide_btn.size = Vector2(420, 52)
+	guide_btn.pressed.connect(_on_guide_pressed)
+	add_child(guide_btn)
+	UITheme.hover_scale(guide_btn)
+
+	var tutorial_btn := _make_menu_button("🎓 新手教程", Vector2(1200, center_y + 620), "primary")
+	tutorial_btn.size = Vector2(420, 52)
+	tutorial_btn.pressed.connect(_on_tutorial_pressed)
+	add_child(tutorial_btn)
+	UITheme.hover_scale(tutorial_btn)
+
 	# 菜单底部再写一行当前版本，玩家不进日志也能看到
 	var version_hint := Label.new()
 	version_hint.text = AppVersion.display()
-	version_hint.position = Vector2(900, center_y + 606)
+	version_hint.position = Vector2(900, center_y + 582)
 	version_hint.size = Vector2(600, 24)
 	version_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	version_hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
@@ -249,8 +265,8 @@ func _ready():
 
 	# 底部提示面板：操作说明跟着版本走（鼠标 / 键盘 / 本版贴士 / 国家加成）
 	var bot_panel = Panel.new()
-	bot_panel.position = Vector2(300, 1020)
-	bot_panel.size = Vector2(1800, 250)
+	bot_panel.position = Vector2(300, 1075)
+	bot_panel.size = Vector2(1800, 230)
 	bot_panel.add_theme_stylebox_override("panel", UITheme.card_style(UITheme.GOLD))
 	add_child(bot_panel)
 	UITheme.fade_in(bot_panel, 0.5)
@@ -265,7 +281,7 @@ func _ready():
 	tip_box.alignment = BoxContainer.ALIGNMENT_CENTER
 	bot_panel.add_child(tip_box)
 
-	_add_tip_line(tip_box, "🖱️ 鼠标：左键 选择·框选·移动·攻击·采集 · 右键 建造菜单 / 取消选择 · 中键拖拽平移 · Ctrl+中键拖拽旋转视角 · 滚轮缩放",
+	_add_tip_line(tip_box, "🖱️ 鼠标：左键 选择·框选·移动·攻击·采集 · 右键 建造菜单 / 取消选择 · 中键拖拽平移 · Ctrl+中键拖拽旋转视角 · 滚轮缩放 · 新手先看 📘 操作指南 / 🎓 新手教程",
 		16, UITheme.PARCHMENT)
 	_add_tip_line(tip_box, "⌨️ 键盘：Ctrl+1~9 编队 · 1~9 选编队 · F1 全选军队 · F2 自动进攻 · F3 撤退 · L 血条文字 · Tab 跟随 · Alt+左键 设驻扎点",
 		16, UITheme.PARCHMENT)
@@ -302,7 +318,7 @@ func _make_menu_button(text: String, pos: Vector2, kind: String) -> Button:
 	var btn = Button.new()
 	btn.text = text
 	btn.position = pos
-	btn.size = Vector2(600, 62)
+	btn.size = Vector2(600, 58)
 	match kind:
 		"primary": UITheme.apply_primary_button(btn, UITheme.FONT_XXL)
 		"danger": UITheme.apply_danger_button(btn, UITheme.FONT_XXL)
@@ -379,6 +395,7 @@ func _find_ui(node_name: String) -> Node:
 	return get_node_or_null(node_name)
 
 func _on_play_pressed():
+	GameSettings.tutorial_mode = false
 	GameSettings.player_nation = nation_select.selected
 	# 单机敌国避开玩家国家：国家色是主要识别手段，同国会撞色。
 	var enemy_nation = randi() % (RTSConfig.Nation.size() - 1)
@@ -403,6 +420,7 @@ func _on_play_pressed():
 	get_tree().change_scene_to_file("res://scenes/rts_battle.tscn")
 
 func _on_multiplayer_pressed():
+	GameSettings.tutorial_mode = false
 	var ds = _find_ui("DiffSelect")
 	if ds: GameSettings.ai_difficulty = ds.selected
 	GameSettings.ai_mode = 1   # 联机模式不使用单机模式
@@ -415,6 +433,34 @@ func _on_multiplayer_pressed():
 func _on_units_pressed():
 	# 打开单位图鉴页面
 	get_tree().change_scene_to_file("res://scenes/unit_view.tscn")
+
+# 操作指南：完整按键 / 经济 / 战斗说明，可滚动阅读
+func _on_guide_pressed() -> void:
+	GuidePanel.open(self, GuidePanel.Mode.GUIDE)
+
+# 新手教程：五步上手 + 一键开始简单 1v1（进局后左上角继续显示动态目标）
+func _on_tutorial_pressed() -> void:
+	var panel := GuidePanel.open(self, GuidePanel.Mode.TUTORIAL)
+	if panel == null:
+		return
+	panel.tutorial_start_requested.connect(_start_tutorial_battle)
+	panel.guide_requested.connect(func():
+		GuidePanel.open(self, GuidePanel.Mode.GUIDE))
+
+func _start_tutorial_battle() -> void:
+	var player_nation: int = nation_select.selected if nation_select != null else 0
+	if player_nation < 0 or player_nation >= RTSConfig.Nation.size():
+		player_nation = RTSConfig.Nation.VIKING
+	GameSettings.tutorial_mode = true
+	GameSettings.player_nation = player_nation
+	GameSettings.enemy_nation = (player_nation + 1) % RTSConfig.Nation.size()
+	GameSettings.ai_difficulty = GameSettings.AIDifficulty.EASY
+	GameSettings.ai_mode = 1
+	GameSettings.is_ffa = false
+	GameSettings.fast_mode = true
+	GameSettings.map_id = "classic"
+	GameSettings.map_seed = 0
+	get_tree().change_scene_to_file("res://scenes/rts_battle.tscn")
 
 # 打开更新日志面板（已打开则关掉，形成"按钮开关"）
 func _on_changelog_pressed() -> void:
@@ -814,6 +860,8 @@ func _build_mobile_layout() -> void:
 		["⚔️ 单人游戏", _on_play_pressed, "primary"],
 		["🌐 联机对战", _on_multiplayer_pressed, "primary"],
 		["📖 单位图鉴", _on_units_pressed, "book"],
+		["📘 操作指南", _on_guide_pressed, "book"],
+		["🎓 新手教程", _on_tutorial_pressed, "primary"],
 		["⚙️ 设  置", _on_settings_pressed, "muted"],
 		["📜 更新日志（%s）" % AppVersion.version(), _on_changelog_pressed, "muted"],
 		["🚪 退出游戏", _on_quit_pressed, "danger"],

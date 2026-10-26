@@ -13,6 +13,7 @@ const WALL_TOP_HEIGHT: float = 1.31
 const WALL_CANNON_SNAP: float = 6.0
 const BattleStatsPanelScript = preload("res://scripts/ui/BattleStatsPanel.gd")
 const MapPresets = preload("res://scripts/map/MapPresets.gd")
+const TutorialHintScript = preload("res://scripts/ui/TutorialHint.gd")
 const LevelVisualScript = preload("res://scripts/effects/BuildingLevelVisual.gd")
 var previous_emulate_mouse: bool
 # ==================== 资源 ====================
@@ -1264,6 +1265,18 @@ func _ready():
 	set_process(true)
 	# 默认画质固定为“极致”，不进入后期自动降档逻辑。
 	_apply_default_quality()
+	# 新手教程对局：等实体初始化后显示左上角动态目标卡（仅单机）
+	if GameSettings.tutorial_mode and not is_online:
+		call_deferred("_spawn_tutorial_hint")
+
+func _spawn_tutorial_hint() -> void:
+	if not GameSettings.tutorial_mode or is_online:
+		return
+	if get_node_or_null("TutorialHint") != null:
+		return
+	var hint = TutorialHintScript.new()
+	hint.name = "TutorialHint"
+	add_child(hint)
 
 # ==================== 乱斗模式（FFA） ====================
 # 开局：N 国环绕布局，各国独立 team/owner/颜色/国家加成/AI控制器。
