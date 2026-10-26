@@ -13,6 +13,8 @@ var status_label: Label
 var ip_input: LineEdit
 var enet_toggle_btn: Button
 var ws_toggle_btn: Button
+var host_btn: Button
+var ip_label: Label
 var map_btn: Button
 var _last_map_id: String = "classic"
 var _map_allowed: bool = true
@@ -52,6 +54,7 @@ func _ready():
 	# 直接改用竖排滚动布局；桌面路径完全不动。
 	if InputSource.use_mobile_ui():
 		_build_mobile_ui()
+		_apply_web_defaults()
 		return
 
 	# 全屏暖黑背景（羊皮纸皇庭底色）
@@ -167,7 +170,7 @@ func _ready():
 		panel.add_child(l)
 
 	_lb2.call("🏰 创建主机", ry)
-	var host_btn = _make_btn("创建服务器", Color(0.15, 0.5, 0.2), Vector2(rx, ry + 45), Vector2(570, 65), "primary")
+	host_btn = _make_btn("创建服务器", Color(0.15, 0.5, 0.2), Vector2(rx, ry + 45), Vector2(570, 65), "primary")
 	host_btn.pressed.connect(_on_create_server_pressed)
 	panel.add_child(host_btn)
 	# Host instructions
@@ -179,11 +182,11 @@ func _ready():
 
 	ry += 190
 	_lb2.call("📡 加入游戏", ry)
-	var ip_lbl = Label.new()
-	ip_lbl.text = "服务器 IP 地址:"
-	ip_lbl.position = Vector2(rx, ry + 40); ip_lbl.size = Vector2(570, 24)
-	UITheme.apply_label(ip_lbl, 16, UITheme.PARCHMENT)
-	panel.add_child(ip_lbl)
+	ip_label = Label.new()
+	ip_label.text = "服务器 IP 地址:"
+	ip_label.position = Vector2(rx, ry + 40); ip_label.size = Vector2(570, 24)
+	UITheme.apply_label(ip_label, 16, UITheme.PARCHMENT)
+	panel.add_child(ip_label)
 	ip_input = LineEdit.new()
 	ip_input.text = "127.0.0.1"; ip_input.position = Vector2(rx, ry + 70); ip_input.size = Vector2(570, 48)
 	_style_line_edit(ip_input, 20)
@@ -254,6 +257,7 @@ func _ready():
 	add_child(ret_btn)
 
 	UITheme.fade_in(panel, 0.35)
+	_apply_web_defaults()
 
 # ==================== 手机端竖排布局 ====================
 # 桌面版的绝对坐标布局在手机上会整体缩成 1/3 大小；这里按 dp 重建一套可滚动表单，
@@ -390,7 +394,7 @@ func _build_mobile_ui() -> void:
 	trans_row.add_child(ws_toggle_btn)
 
 	sec.call("🏰 创建主机")
-	var host_btn := Button.new()
+	host_btn = Button.new()
 	host_btn.text = "创建服务器"
 	host_btn.custom_minimum_size = Vector2(0, btn_h + UILayout.dp(4.0))
 	UITheme.apply_primary_button(host_btn, fs_body + 1)
@@ -404,11 +408,11 @@ func _build_mobile_ui() -> void:
 	vb.add_child(host_hint)
 
 	sec.call("📡 加入游戏")
-	var ip_lbl := Label.new()
-	ip_lbl.text = "服务器 IP 地址:"
-	ip_lbl.add_theme_font_size_override("font_size", fs_body)
-	ip_lbl.add_theme_color_override("font_color", UITheme.PARCHMENT)
-	vb.add_child(ip_lbl)
+	ip_label = Label.new()
+	ip_label.text = "服务器 IP 地址:"
+	ip_label.add_theme_font_size_override("font_size", fs_body)
+	ip_label.add_theme_color_override("font_color", UITheme.PARCHMENT)
+	vb.add_child(ip_label)
 	ip_input = LineEdit.new()
 	ip_input.text = "127.0.0.1"
 	ip_input.custom_minimum_size = Vector2(0, btn_h)
@@ -638,16 +642,39 @@ func _update_map_availability(allow: bool) -> void:
 	map_btn.disabled = not allow
 	_refresh_map_button()
 
+func _apply_web_defaults() -> void:
+	if not OS.has_feature("web"):
+		return
+	if enet_toggle_btn:
+		enet_toggle_btn.disabled = true
+	if host_btn:
+		host_btn.disabled = true
+		host_btn.text = "浏览器版不能创建主机"
+	if ip_label:
+		ip_label.text = "服务器 WebSocket 地址:"
+	_on_transport_changed(true)
+	if ip_input:
+		ip_input.text = ""
+		ip_input.placeholder_text = "wss://你的服务器地址"
+	if status_label:
+		status_label.text = "浏览器版：请填写 wss:// 地址加入；主机请在 PC 或专用服务器上创建。"
+
 func _on_transport_changed(use_ws: bool):
+	if OS.has_feature("web"):
+		use_ws = true
 	NetworkManager.use_websocket = use_ws
 	enet_toggle_btn.button_pressed = not use_ws
 	ws_toggle_btn.button_pressed = use_ws
 	if use_ws:
-		ip_input.text = "ws://127.0.0.1:8080"
+		if not OS.has_feature("web"):
+			ip_input.text = "ws://127.0.0.1:8080"
 	else:
 		ip_input.text = "127.0.0.1"
 
 func _on_create_server_pressed():
+	if OS.has_feature("web"):
+		status_label.text = "浏览器版不能创建服务器；请在 PC/服务器端启动 WebSocket 主机后，填入 wss:// 地址加入。"
+		return
 	NetworkManager.red_ai_count = int(red_ai_spin.value)
 	NetworkManager.blue_ai_count = int(blue_ai_spin.value)
 	if NetworkManager.use_websocket:
@@ -668,8 +695,16 @@ func _on_create_server_pressed():
 			status_label.add_theme_color_override("font_color", UITheme.ALERT_WARNING)
 
 func _on_join_game_pressed():
-	var default_addr = "ws://127.0.0.1:8080" if NetworkManager.use_websocket else "127.0.0.1"
-	var addr = ip_input.text if ip_input.text != "" else default_addr
+	var addr := ip_input.text.strip_edges()
+	if NetworkManager.use_websocket:
+		if addr == "":
+			if OS.has_feature("web"):
+				status_label.text = "请先填写 wss:// 服务器地址"
+				return
+			addr = "ws://127.0.0.1:8080"
+	else:
+		if addr == "":
+			addr = "127.0.0.1"
 	GameSettings.player_nation = nation_select.selected
 	if NetworkManager.use_websocket:
 		NetworkManager.start_ws_client(addr)

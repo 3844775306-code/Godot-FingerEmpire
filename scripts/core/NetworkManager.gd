@@ -11,6 +11,29 @@ var ws_peer: WebSocketMultiplayerPeer = null
 const PORT = 9000
 const WS_PORT = 8080
 
+# Web 页面为 HTTPS 时，浏览器禁止 ws://，必须使用 WSS 反向代理。
+func _web_page_is_https() -> bool:
+	if not OS.has_feature("web"):
+		return false
+	var js = Engine.get_singleton("JavaScriptBridge")
+	if js == null:
+		return false
+	return String(js.eval("location.protocol")) == "https:"
+
+func normalize_ws_url(url: String) -> String:
+	var u := url.strip_edges()
+	if u == "":
+		return u
+	if u.begins_with("https://"):
+		u = "wss://" + u.substr(8)
+	elif u.begins_with("http://"):
+		u = "ws://" + u.substr(7)
+	elif not u.begins_with("ws://") and not u.begins_with("wss://"):
+		u = ("wss://" if _web_page_is_https() else "ws://") + u
+	if _web_page_is_https() and u.begins_with("ws://"):
+		u = "wss://" + u.substr(5)
+	return u
+
 enum GameMode { ONEvONE, TWOVTWO, THREEvTHREE }
 static var selected_mode: int = GameMode.ONEvONE
 
@@ -178,6 +201,9 @@ func _p2p_error_string(err: int) -> String:
 		_: return "unknown"
 
 func start_server():
+	if OS.has_feature("web"):
+		emit_signal("connection_failed", "浏览器版不能创建服务器，请使用 PC 或专用服务器")
+		return
 	max_players = get_max_players()
 	var err = peer.create_server(PORT, max_players)
 	if err != OK:
@@ -190,6 +216,9 @@ func start_server():
 	_upnp_setup()
 
 func start_ws_server():
+	if OS.has_feature("web"):
+		emit_signal("connection_failed", "浏览器版不能创建服务器，请使用 PC 或专用服务器")
+		return
 	use_websocket = true
 	max_players = get_max_players()
 	ws_peer = WebSocketMultiplayerPeer.new()
@@ -205,6 +234,10 @@ func start_ws_server():
 
 func start_ws_client(url: String = "ws://127.0.0.1:8080"):
 	use_websocket = true
+	if url.strip_edges() == "":
+		emit_signal("connection_failed", "请填写 WebSocket 服务器地址")
+		return
+	url = normalize_ws_url(url)
 	print("[NetworkManager] WebSocket 客户端连接: ", url)
 	ws_peer = WebSocketMultiplayerPeer.new()
 	var err = ws_peer.create_client(url)
@@ -258,6 +291,9 @@ func _upnp_setup():
 	emit_signal("upnp_ready", _public_ip)
 
 func start_client(address: String = "127.0.0.1"):
+	if OS.has_feature("web"):
+		emit_signal("connection_failed", "Web 版不支持 ENet，请选择 WebSocket")
+		return
 	print("[NetworkManager] start_client connecting to ", address, ":", PORT)
 	var err = peer.create_client(address, PORT)
 	if err != OK:
