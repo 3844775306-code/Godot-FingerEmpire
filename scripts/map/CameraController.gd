@@ -23,7 +23,7 @@ const ROTATE_SENSITIVITY: float = 0.30   # 每像素对应的旋转角度（度�
 const ROTATE_SENSITIVITY_TOUCH: float = 0.62
 # 双指扭转（两指绕彼此转）比横向拖动更符合"转动视角"的直觉，这里给它的权重
 const ROTATE_TWIST_WEIGHT: float = 0.85
-# 两指间距变化超过这个像素数，就认为玩家在捏合缩放而不是旋转
+# 旋转模式下：两指间距变化超过这个像素数，说明是在捏合而不是扭转，跳过这一帧的旋转
 const TOUCH_PINCH_GUARD: float = 3.0
 
 # 触屏多指：记录每个触点位置，双指拖动用来旋转视角
@@ -84,6 +84,11 @@ func _apply_initial_sun_yaw() -> void:
 	# 相机水平视线 fwd = (-sin(yaw), 0, -cos(yaw))，令其等于 to_sun 反解 yaw
 	yaw_deg = rad_to_deg(atan2(-to_sun.x, -to_sun.z))
 	_rig_over_center(_screen_center_ground())
+
+# 当前双指手势模式：由手机命令栏的「双指：缩放 / 双指：旋转」按钮写进 GameSettings。
+# 每个手势事件都现读一次，所以切换模式后立刻生效，不需要重启对局。
+func _is_two_finger_rotate_mode() -> bool:
+	return GameSettings.mobile_two_finger_mode == GameSettings.TwoFingerMode.ROTATE
 
 func _input(event):
 	# 跟随视角模式：禁用平移/缩放输入，画面完全由跟随逻辑控制
@@ -153,8 +158,8 @@ func _input(event):
 			global_translate((-_view_right() * delta.x + _view_forward() * delta.y) * 0.1 * factor)
 			touch_pan_start = event.position
 		elif _fingers.size() == 2:
-			# 双指旋转：水平位移和两指连线扭转都能转视角。
-			# 单靠横向拖动在手机上要拖非常远才转得动，加扭转后手感接近地图 App。
+			# 双指手势按模式二选一：缩放模式只捏合缩放，旋转模式只扭转/拖动转视角，
+			# 不再让两种手势同时生效（同时生效时缩放会把视角带歪、扭转又会误缩放）。
 			var keys: Array = _fingers.keys()
 			var p1: Vector2 = _fingers[keys[0]]
 			var p2: Vector2 = _fingers[keys[1]]
@@ -162,33 +167,39 @@ func _input(event):
 			var ang: float = atan2(p2.y - p1.y, p2.x - p1.x)
 			var dist: float = p1.distance_to(p2)
 			if _two_finger_last == Vector2.ZERO:
+				# 双指刚凑齐：记录基准，并按当前屏幕中心定好旋转轴
 				_two_finger_last = avg
 				_two_finger_angle = ang
 				_two_finger_dist = dist
 				rotate_center = _screen_center_ground()
-			else:
-				# 明显在捏合缩放的那几帧不参与旋转，否则缩放会把视角一起带歪
+			elif _is_two_finger_rotate_mode():
+				# 旋转模式：水平位移和两指连线扭转都能转视角。
+				# 单靠横向拖动在手机上要拖非常远才转得动，加扭转后手感接近地图 App。
+				# 明显在捏合的那几帧不参与旋转，否则捏合会把视角一起带歪。
 				var d_dist: float = absf(dist - _two_finger_dist)
-				if d_dist > TOUCH_PINCH_GUARD:
-					_two_finger_last = avg
-					_two_finger_angle = ang
-					_two_finger_dist = dist
-					return
-				var fdx: float = avg.x - _two_finger_last.x
-				var twist: float = rad_to_deg(angle_difference(_two_finger_angle, ang))
-				var total: float = twist * ROTATE_TWIST_WEIGHT + fdx * ROTATE_SENSITIVITY_TOUCH
-				if absf(total) > 0.05:
-					yaw_deg = fposmod(yaw_deg + total, 360.0)
-					_rig_over_center(rotate_center)
+				if d_dist <= TOUCH_PINCH_GUARD:
+					var fdx: float = avg.x - _two_finger_last.x
+					var twist: float = rad_to_deg(angle_difference(_two_finger_angle, ang))
+					var total: float = twist * ROTATE_TWIST_WEIGHT + fdx * ROTATE_SENSITIVITY_TOUCH
+					if absf(total) > 0.05:
+						yaw_deg = fposmod(yaw_deg + total, 360.0)
+						_rig_over_center(rotate_center)
+				_two_finger_last = avg
+				_two_finger_angle = ang
+				_two_finger_dist = dist
+			else:
+				# 缩放模式：双指只负责缩放（捏合由 MagnifyGesture 驱动），
+				# 拖两指或扭转都不动视角，只刷新基准，避免切到旋转模式后残留旧角度
 				_two_finger_last = avg
 				_two_finger_angle = ang
 				_two_finger_dist = dist
 
-	# 双指捏合缩放
+	# 双指捏合缩放：仅缩放模式生效；旋转模式下捏合不改变视野大小
 	if event is InputEventMagnifyGesture:
 		# factor > 1 表示放大（两指分开），factor < 1 表示缩小
 		# 通常放大应减小视野大小（size），缩小应增大视野
-		_apply_zoom_to(size / event.factor)
+		if not _is_two_finger_rotate_mode():
+			_apply_zoom_to(size / event.factor)
 
 # 供手机端旋转按钮调用：绕当前屏幕中心的地面点转指定角度（正数向右转）
 func rotate_by(deg: float) -> void:

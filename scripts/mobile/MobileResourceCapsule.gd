@@ -13,8 +13,9 @@ const RES_KEYS: Array = ["gold", "wood", "stone", "food", "oil"]
 const ROW_H_DP: float = 42.0
 const EXPANDED_H_DP: float = 72.0
 const WIDTH_DP: float = 344.0
-# 资源胶囊往左上角再贴一点，把右侧让给顶部信息面板
-const MARGIN_DP: float = 6.0
+# 资源胶囊贴到屏幕最左上角（边距 2dp），把右侧那条高度带让给顶部两行信息面板：
+# 面板从胶囊右边缘 + 8dp 开始，正好落在小地图（右上角 154dp）左边，互不遮挡。
+const MARGIN_DP: float = 2.0
 
 var expanded: bool = false
 

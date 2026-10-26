@@ -315,19 +315,16 @@ func _get_bm() -> Node:
 		_bm = get_tree().get_first_node_in_group("battle_manager")
 	return _bm
 
-# 手机端小地图放大到原来的 2 倍（77 → 154dp），挪到右上角。
+# 手机端小地图放大到原来的 2 倍（77 → 154dp），贴在屏幕右上角。
 # 必须清掉 Minimap 内部写死的 custom_minimum_size=400，否则控件会被撑回原尺寸、
-# 直接铺出屏幕外。顶部那条留给资源胶囊与顶部信息面板，所以整体下移 52dp。
+# 直接铺出屏幕外。指令栏已经压矮到 ~170dp（上缘在设计空间 y≈750），
+# 小地图占 y 64..613，所以两者不再重叠，不需要再为顶部信息面板让位。
 const MINIMAP_DP: float = 154.0
-const MINIMAP_TOP_GAP_DP: float = 52.0
 
 func _apply_minimap_layout(minimap: Control) -> void:
 	minimap.custom_minimum_size = Vector2.ZERO
 	minimap.size = Vector2(UILayout.dp(MINIMAP_DP), UILayout.dp(MINIMAP_DP))
 	UILayout.place_dp(minimap, "tr", MINIMAP_DP, MINIMAP_DP, 6.0)
-	var gap: float = UILayout.dp(MINIMAP_TOP_GAP_DP)
-	minimap.offset_top += gap
-	minimap.offset_bottom += gap
 	minimap.mouse_filter = Control.MOUSE_FILTER_STOP
 	_minimap_sized = true
 

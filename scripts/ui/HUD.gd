@@ -813,9 +813,10 @@ func show_alert_message(msg: String, color: Color = ALERT_DANGER, teams = [], al
 		_alert_stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_alert_stack.add_theme_constant_override("separation", 2 if mobile else 4)
 		if mobile:
-			# 手机端按 dp 居中，压在资源胶囊下方，宽度收窄以免挡住战场
+			# 手机端按 dp 居中，放在原顶部信息面板的位置（y≈76dp）：
+			# 信息面板已经挪到资源胶囊右侧那条高度带，这里原来是空的，正好给警报。
 			var w: float = UILayout.dp(310.0)
-			var top_y: float = UILayout.dp(114.0)
+			var top_y: float = UILayout.dp(76.0)
 			_alert_stack.anchor_left = 0.5; _alert_stack.anchor_right = 0.5
 			_alert_stack.anchor_top = 0.0; _alert_stack.anchor_bottom = 0.0
 			_alert_stack.offset_left = -w * 0.5; _alert_stack.offset_right = w * 0.5

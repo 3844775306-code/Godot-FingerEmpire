@@ -336,6 +336,8 @@ var _snap_rate_label: Label = null
 var _diag_bg: Panel = null
 var _diag_top_y: float = 6.0
 var _diag_line_h: float = 34.0
+# 手机端顶部信息面板改成左对齐（贴在资源胶囊右侧），底板宽度固定不发散
+var _diag_left_aligned: bool = false
 
 # ==================== 后期自动画质 ====================
 # 后期实体数量上来后，大量单位模型 + 实时阴影会把 GPU 压到 30~40 FPS。
@@ -369,15 +371,19 @@ var _physics_max_steps_original: int = 8
 var _physics_rate_low: bool = false
 
 func _create_diag_label():
-	# 顶部中央偏右的两行大字：第一行性能（帧率/画质/实体），第二行对局信息（AI/地图/时间）
-	# 桌面端放偏右（0.675）避开左侧那排全局指令按钮，右侧也不压小地图；手机端顶部没有按钮，保持居中
+	# 顶部两行信息：第一行性能（帧率/画质/实体），第二行对局信息（AI/地图/时间）
+	# 桌面端放偏右（0.675）避开左侧那排全局指令按钮，右侧也不压小地图；
+	# 手机端改成「紧贴资源胶囊右侧、与胶囊同一条高度带」：
+	#   胶囊左边距 2dp、宽 344dp → 面板左边缘 = 安全边距 + 2 + 344 + 8dp，
+	#   宽度 146dp，右边缘刚好停在小地图（右上角 154dp）左边，三者互不遮挡。
 	var mobile := InputSource.use_mobile_ui()
-	var center_anchor: float = 0.5 if mobile else 0.675
-	var f1: int = UILayout.font_dp(12.0) if mobile else 24
-	var f2: int = UILayout.font_dp(11.0) if mobile else 22
-	var y1: float = UILayout.dp(76.0) if mobile else 6.0
+	var center_anchor: float = 0.0 if mobile else 0.675
+	var f1: int = UILayout.font_dp(10.5) if mobile else 24
+	var f2: int = UILayout.font_dp(9.5) if mobile else 22
+	var y1: float = UILayout.dp(18.0) if mobile else 6.0
 	var line_h: float = UILayout.dp(18.0) if mobile else 34.0
-	var half_w: float = UILayout.dp(330.0) if mobile else 520.0
+	var half_w: float = UILayout.dp(146.0) if mobile else 520.0
+	_diag_left_aligned = mobile
 	_diag_top_y = y1
 	_diag_line_h = line_h
 	_diag_bg = Panel.new()
@@ -403,7 +409,8 @@ func _create_diag_label():
 	add_child(canvas)
 	_update_diag_bg(y1, line_h)
 
-# 半透明底板按两行文字的实际宽度自适应，文字换长（实体数变大）时也不会露在外面
+# 半透明底板按两行文字的实际宽度自适应，文字换长（实体数变大）时也不会露在外面。
+# 手机端是左对齐的固定宽度块（贴在资源胶囊右侧），不再按文字宽度左右居中。
 func _update_diag_bg(top_y: float, line_h: float) -> void:
 	if _diag_bg == null or not is_instance_valid(_diag_bg) or _fps_label == null:
 		return
@@ -415,10 +422,21 @@ func _update_diag_bg(top_y: float, line_h: float) -> void:
 	var w: float = text_w + pad_x * 2.0
 	var h: float = line_h * 2.0 + pad_y * 2.0
 	var bg_top: float = maxf(top_y - pad_y, 0.0)
+	if _diag_left_aligned:
+		var left: float = _diag_mobile_left()
+		_diag_bg.offset_left = left - pad_x
+		_diag_bg.offset_right = left + UILayout.dp(146.0) + pad_x
+		_diag_bg.offset_top = bg_top
+		_diag_bg.offset_bottom = bg_top + h
+		return
 	_diag_bg.offset_left = -w * 0.5
 	_diag_bg.offset_right = w * 0.5
 	_diag_bg.offset_top = bg_top
 	_diag_bg.offset_bottom = bg_top + h
+
+# 手机端顶部信息面板的左边缘：安全边距 + 胶囊左边距(2dp) + 胶囊宽(344dp) + 间隙(8dp)
+func _diag_mobile_left() -> float:
+	return UILayout.safe_insets().x + UILayout.dp(2.0 + 344.0 + 8.0)
 
 # 顶部中央的一行信息（带黑描边，浅色地面也看得清）
 func _make_top_label(node_name: String, top_y: float, line_h: float, font_size: int, half_w: float, center_anchor: float, color: Color) -> Label:
@@ -426,12 +444,23 @@ func _make_top_label(node_name: String, top_y: float, line_h: float, font_size: 
 	lb.name = node_name
 	lb.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	lb.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	lb.anchor_left = center_anchor
-	lb.anchor_right = center_anchor
+	if _diag_left_aligned:
+		# 手机端：左对齐贴在资源胶囊右侧，极长文本按省略号截断，避免压到小地图
+		lb.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+		lb.clip_text = true
+		lb.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
+		lb.anchor_left = 0.0
+		lb.anchor_right = 0.0
+		var left: float = _diag_mobile_left()
+		lb.offset_left = left
+		lb.offset_right = left + half_w
+	else:
+		lb.anchor_left = center_anchor
+		lb.anchor_right = center_anchor
+		lb.offset_left = -half_w
+		lb.offset_right = half_w
 	lb.anchor_top = 0.0
 	lb.anchor_bottom = 0.0
-	lb.offset_left = -half_w
-	lb.offset_right = half_w
 	lb.offset_top = top_y
 	lb.offset_bottom = top_y + line_h
 	lb.add_theme_font_size_override("font_size", font_size)
