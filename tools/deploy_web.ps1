@@ -72,11 +72,18 @@ if ($SiteId -eq "" -and -not $status.linked) {
 
 # 用站点真实地址配置 update.json；Web 版本身也会用 location.origin 自动识别。
 if ($SiteUrl -eq "" -and $null -ne $status.siteData) {
-	foreach ($prop in @("custom_domain", "ssl_url", "url")) {
+	foreach ($prop in @("custom_domain", "ssl_url", "url", "site-url")) {
 		$candidate = [string]$status.siteData.$prop
 		if ($candidate.Trim() -ne "") {
 			$SiteUrl = $candidate.Trim()
 			break
+		}
+	}
+	# 新版 Netlify CLI 的 status --json 只给 site-name / site-url，这里再兜底一次。
+	if ($SiteUrl -eq "") {
+		$siteName = [string]$status.siteData."site-name"
+		if ($siteName.Trim() -ne "") {
+			$SiteUrl = "https://" + $siteName.Trim() + ".netlify.app"
 		}
 	}
 }

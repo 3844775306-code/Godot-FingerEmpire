@@ -24,7 +24,7 @@ extends RefCounted
 const ENABLED: bool = true
 
 # 站点根地址（不带结尾 /）。部署后运行 deploy 脚本会自动替换成真实地址。
-const SITE_URL: String = "https://YOUR-SITE.netlify.app"
+const SITE_URL: String = "https://fingerempire.netlify.app"
 
 const MANIFEST_FILE: String = "update.json"
 
