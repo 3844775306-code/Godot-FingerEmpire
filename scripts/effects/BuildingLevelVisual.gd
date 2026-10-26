@@ -122,10 +122,10 @@ static func _collect_bounds(node: Node3D, parent_xf: Transform3D, box: AABB) -> 
 
 static func _add_flags(root: Node3D, radius: float, top: float, team_color: Color, level: int) -> void:
 	var slots: Array = FLAG_SLOTS[level - 1]
-	# 旗杆插在屋顶边缘而不是地面上：城墙/城堡等高大建筑如果只到腰高，
-	# 后排旗帜会被建筑主体完全挡住，等级数量就看不出来了。
-	var flag_base_y := maxf(top - 0.35, 0.0)
-	var pole_h := clampf(0.62 + top * 0.28, 0.9, 2.4)
+	# 旗杆必须真正插在底座色环上：底座色环的半径就是这里的 radius，
+	# 旗杆底部 y 与环面平齐；杆顶越过屋顶，后排旗帜才不会被主体挡住。
+	var flag_base_y := 0.10
+	var pole_h := clampf(top + 0.90, 1.6, 7.0)
 	var cloth_color := team_color.lerp(Color.WHITE, 0.12)
 	var pole_mat := _mat("level_flag_pole", Color(0.25, 0.19, 0.13), 0.0, 0.6)
 	var cloth_mat := _mat("level_flag_cloth_%s" % cloth_color.to_html(), cloth_color, 0.0, 0.75)
@@ -144,6 +144,19 @@ static func _add_flags(root: Node3D, radius: float, top: float, team_color: Colo
 		flag_root.rotation.y = atan2(-xz.y, xz.x)
 		root.add_child(flag_root)
 
+		# 旗杆脚座：把杆子和色环的接触面做实，避免看起来悬空。
+		var foot := MeshInstance3D.new()
+		var foot_mesh := CylinderMesh.new()
+		foot_mesh.top_radius = 0.10
+		foot_mesh.bottom_radius = 0.13
+		foot_mesh.height = 0.05
+		foot_mesh.radial_segments = 8
+		foot.mesh = foot_mesh
+		foot.position.y = 0.025
+		foot.material_override = pole_mat
+		foot.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		flag_root.add_child(foot)
+
 		var pole := MeshInstance3D.new()
 		var pole_mesh := CylinderMesh.new()
 		pole_mesh.top_radius = FLAG_POLE_RADIUS
@@ -154,7 +167,7 @@ static func _add_flags(root: Node3D, radius: float, top: float, team_color: Colo
 		pole.mesh = pole_mesh
 		pole.position.y = pole_h * 0.5
 		pole.material_override = pole_mat
-		pole.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		pole.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 		flag_root.add_child(pole)
 
 		var cloth := MeshInstance3D.new()
@@ -164,7 +177,7 @@ static func _add_flags(root: Node3D, radius: float, top: float, team_color: Colo
 		cloth.mesh = cloth_mesh
 		cloth.position = Vector3(FLAG_CLOTH_SIZE.x * 0.5 + 0.02, pole_h - FLAG_CLOTH_SIZE.y * 0.55, 0.0)
 		cloth.material_override = cloth_mat
-		cloth.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+		cloth.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 		flag_root.add_child(cloth)
 
 static func _add_base_ring(root: Node3D, radius: float, color: Color, level: int) -> void:
