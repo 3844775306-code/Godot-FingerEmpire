@@ -70,7 +70,7 @@ static func height_fn_for(bm) -> Callable:
 
 # 从战场管理器（或它自己）身上找出真正的地形节点
 static func _resolve_map(bm):
-	if bm == null or not (bm is Node):
+	if bm == null or not is_instance_valid(bm) or not (bm is Node):
 		return null
 	var map = null
 	if bm.has_method("get_map_node"):

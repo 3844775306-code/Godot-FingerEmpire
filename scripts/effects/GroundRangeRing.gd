@@ -55,7 +55,9 @@ static func create(p_kind: int, p_radius: float, p_height_fn: Callable, p_tint: 
 func _init_ring(p_kind: int, p_radius: float, p_height_fn: Callable, p_tint: Color) -> void:
 	kind = p_kind
 	radius = maxf(p_radius, 0.4)
-	_height_fn = p_height_fn
+	# 某些调用方（例如快速重载脚本、或还没拿到地形管理器的客户端）可能传入
+	# 空的 Callable；这里先退回「保持原 y」的采样器，避免 _rebuild 里空调用崩溃。
+	_height_fn = p_height_fn if p_height_fn.is_valid() else _flat_height_fn()
 	_tint = p_tint if p_tint.a > 0.001 else (VISION_TINT if kind == Kind.VISION else ACTION_TINT)
 	_base_alpha = _tint.a
 	cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
@@ -63,6 +65,11 @@ func _init_ring(p_kind: int, p_radius: float, p_height_fn: Callable, p_tint: Col
 	_mat = GroundStripMesh.make_material(_tint, 0.26, 0.0, 0.20, 0.0)
 	material_override = _mat
 	# 真正建网格要等在树上（要用 global_position 采样地形），_ready 里会补上
+
+# 空 Callable / 地形管理器已释放时的兜底高度：不改顶点 y，至少不会报错。
+static func _flat_height_fn() -> Callable:
+	return func(p: Vector3) -> float:
+		return p.y
 
 func set_radius(p_radius: float) -> void:
 	p_radius = maxf(p_radius, 0.4)
@@ -184,7 +191,10 @@ func _rebuild(force: bool) -> void:
 	# 高度采样要在世界空间做：把本地圆心还原成世界坐标再去问地形。
 	# 返回值必须再减掉圆心自身的高度——网格顶点是局部坐标，
 	# 不减的话「节点自身高度 + 地形高度」会叠两次，圈就浮在半空。
+	var height_fn: Callable = _height_fn
+	if not height_fn.is_valid():
+		height_fn = _flat_height_fn()
 	var to_local_y := func(local_p: Vector3) -> float:
 		var w: Vector3 = center + Vector3(local_p.x, 0.0, local_p.z)
-		return float(_height_fn.call(w)) - center.y
+		return float(height_fn.call(w)) - center.y
 	mesh = GroundStripMesh.build_strip(pts, half_width, to_local_y, true)

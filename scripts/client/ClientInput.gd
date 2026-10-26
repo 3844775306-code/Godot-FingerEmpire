@@ -913,6 +913,10 @@ func _create_range_rings_for_entity(id: int) -> void:
 		height_fn = renderer.get_ground_height_fn()
 	else:
 		height_fn = GroundStripMesh.height_fn_for(renderer)
+	# 客户端地形节点可能还没就绪，或脚本热重载后旧 Callable 失效；
+	# 用会退回原始 y 的采样器兜底，避免范围圈重建时调用空 Callable 报错。
+	if not height_fn.is_valid():
+		height_fn = GroundStripMesh.height_fn_for(null)
 	var rings: Array = []
 	for s in specs:
 		var kind: int = int(s.get("kind", 0))
