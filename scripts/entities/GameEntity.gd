@@ -642,7 +642,7 @@ func _spawn_produced_unit():
 				if groups.size() > 0:
 					group_str = " [T%d]" % groups[0]
 			var loc_str = "(%d,%d)" % [int(global_position.x), int(global_position.z)]
-			bm._show_hud_alert("训练完成: %s%s %s" % [unit_name, group_str, loc_str], Color(0.2, 1.0, 0.3), [team], team, GameSettings.AlertKind.PRODUCE, false, [], global_position, owner_peer_id)
+			bm._show_hud_alert("训练完成: %s%s %s" % [unit_name, group_str, loc_str], Color(0.2, 1.0, 0.3), [team], team, GameSettings.AlertKind.PRODUCE, false, bm.get_alert_nations(self), global_position, owner_peer_id)
 	# 继承建筑的驻扎点
 	if self is Building and self.garrison_point != Vector3.ZERO:
 		if entity is Army and entity.has_method("_is_military") and entity._is_military():

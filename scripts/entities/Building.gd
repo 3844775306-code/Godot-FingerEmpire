@@ -284,7 +284,7 @@ func _finish_construction():
 			if groups.size() > 0:
 				group_str = " [T%d]" % groups[0]
 		var loc_str = "(%d,%d)" % [int(global_position.x), int(global_position.z)]
-		bm._show_hud_alert("建造完成: %s%s %s" % [display_name, group_str, loc_str], Color(0.2, 1.0, 0.3), [team], team, GameSettings.AlertKind.BUILD, false, [], global_position, owner_peer_id)
+		bm._show_hud_alert("建造完成: %s%s %s" % [display_name, group_str, loc_str], Color(0.2, 1.0, 0.3), [team], team, GameSettings.AlertKind.BUILD, false, bm.get_alert_nations(self), global_position, owner_peer_id)
 	# 城堡建成立刻解锁民族兵种
 	if entity_id == 53 and bm and bm.has_method("get_team_nation"):
 		var nation = bm.get_team_nation(team)
@@ -670,7 +670,7 @@ func _finish_upgrade():
 				group_str = " [T%d]" % groups[0]
 		var loc_str = "(%d,%d)" % [int(global_position.x), int(global_position.z)]
 		# 主城（entity_id 20）升级是重要节点，标记出来让它不受队友筛选影响
-		bm._show_hud_alert("升级完成: %s%s %s" % [display_name, group_str, loc_str], Color(0.2, 1.0, 0.3), [team], team, GameSettings.AlertKind.UPGRADE, entity_id == 20, [], global_position, owner_peer_id)
+		bm._show_hud_alert("升级完成: %s%s %s" % [display_name, group_str, loc_str], Color(0.2, 1.0, 0.3), [team], team, GameSettings.AlertKind.UPGRADE, entity_id == 20, bm.get_alert_nations(self), global_position, owner_peer_id)
 
 func get_prod_cooldown(unit_id: int) -> float:
 	var spd3 = 1.0
@@ -928,7 +928,7 @@ func _finish_repair() -> void:
 	var bm = _get_bm()
 	if bm and bm.has_method("_show_hud_alert") and bm.is_progress_reportable(owner_peer_id, team):
 		var loc_str := "(%d,%d)" % [int(global_position.x), int(global_position.z)]
-		bm._show_hud_alert("修理完成: %s %s" % [display_name, loc_str], Color(0.35, 0.95, 0.45), [team], team, GameSettings.AlertKind.UPGRADE, false, [], global_position, owner_peer_id)
+		bm._show_hud_alert("修理完成: %s %s" % [display_name, loc_str], Color(0.35, 0.95, 0.45), [team], team, GameSettings.AlertKind.UPGRADE, false, bm.get_alert_nations(self), global_position, owner_peer_id)
 
 	
 	

@@ -827,6 +827,15 @@ func get_entity_nation(entity) -> int:
 		return -1
 	return get_team_nation(entity.team)
 
+
+# 战报头部要用的国家索引数组（与 source_teams 一一对应）。
+# 建造/升级/生产完成这类战报原来只带队伍，2v2/乱斗里队友与自己同队不同国时，
+# 只按 team 查国家会把「队友的主城升级完成」写成自己（或队里第一个国家）；
+# 这里改成按实体 owner 取国家，HUD 拿到 -1 时才会退回按队伍查。
+func get_alert_nations(entity) -> Array:
+	return [get_entity_nation(entity)]
+
+
 # 返回实体所属国家的颜色（血条、模型、小地图统一着色）。
 # 国家颜色优先于阵营/玩家颜色，这样同队不同国家的部队也能一眼区分。
 func get_entity_color(entity) -> Color:
