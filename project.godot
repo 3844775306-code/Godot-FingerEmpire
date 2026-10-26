@@ -54,7 +54,7 @@ enabled=PackedStringArray("res://addons/git_describe/plugin.cfg", "res://addons/
 
 [gui]
 
-theme/custom_font="uid://jwk0s1rui3xe"
+theme/custom_font="res://resources/FingerEmpireFont.tres"
 
 [input]
 

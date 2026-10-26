@@ -24,6 +24,11 @@ if (-not (Test-Path -LiteralPath $outPath)) {
 Get-ChildItem $outDir -File -Include *.import,*.tmp -ErrorAction SilentlyContinue | Remove-Item -Force
 # Static hosts (Netlify Drop/GitHub Pages) expect the entry page at /index.html.
 Copy-Item -LiteralPath $outPath -Destination (Join-Path $outDir "index.html") -Force
+# Font licenses must travel with the Web build.
+$fontLicense = Join-Path $root "resources/fonts/OFL.txt"
+if (Test-Path -LiteralPath $fontLicense) {
+	Copy-Item -LiteralPath $fontLicense -Destination (Join-Path $outDir "FONT-LICENSE.txt") -Force
+}
 $total = (Get-ChildItem $outDir -File | Measure-Object Length -Sum).Sum
 Write-Host ("Web build ready: {0} ({1:N1} MB)" -f $outDir, ($total / 1MB))
 Write-Host "Run: node tools/serve_web.mjs build/web 8090"

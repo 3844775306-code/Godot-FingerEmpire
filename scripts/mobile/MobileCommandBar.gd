@@ -60,7 +60,7 @@ func _build() -> void:
 
 	# 按住 = 顺时针缓慢旋转视角，松手即停（按住约 11 秒转一整圈）。
 	# 替代原来的「双指：缩放 / 双指：旋转」开关：双指现在固定只管缩放。
-	_rotate_btn = _make_button("↻ 按住旋转", UILayout.font_dp(9.5))
+	_rotate_btn = _make_button("🔄 按住旋转", UILayout.font_dp(9.5))
 	_rotate_btn.button_down.connect(_on_rotate_down)
 	_rotate_btn.button_up.connect(_on_rotate_up)
 	row0.add_child(_rotate_btn)
