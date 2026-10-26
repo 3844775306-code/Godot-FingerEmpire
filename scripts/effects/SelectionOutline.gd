@@ -21,12 +21,12 @@ extends RefCounted
 const ENABLED: bool = true
 # 选中色：亮薄荷绿，草地/雪地/水面上都能读出来，又不至于像红色那样抢眼
 const DEFAULT_COLOR := Color(0.60, 1.00, 0.70, 0.92)
-# 目标描边宽度（3D 渲染缓冲像素）：小兵约 4.5px，体积大的建筑最多 6px。
-# 项目开了 3D 缩放，缓冲比屏幕小，所以这个数值大约对应屏幕上 8~11 像素。
-# 觉得太粗/太细就只改这两个常量。
-const PX_BASE: float = 4.5
-const PX_PER_METER: float = 0.10
-const PX_MAX: float = 6.0
+# 目标描边宽度（3D 渲染缓冲像素）：小兵约 9px，体积大的建筑最多 12px。
+# 项目开了 3D 缩放，缓冲比屏幕小，所以这个数值大约对应屏幕上 17~23 像素。
+# 调参只看这两个常量：PX_BASE 决定最小粗细（小兵），PX_MAX 决定建筑的上限。
+const PX_BASE: float = 9.0
+const PX_PER_METER: float = 0.20
+const PX_MAX: float = 12.0
 # 米为单位的兜底夹取，避免相机没准备好时算出 0 或大得离谱
 const WIDTH_MIN: float = 0.01
 const WIDTH_MAX: float = 0.60
