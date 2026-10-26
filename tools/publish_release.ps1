@@ -59,6 +59,14 @@ if (Test-Path -LiteralPath $steamAppId) {
 } else {
 	Write-Warning "未找到 steam_appid.txt；从 Steam 客户端启动仍可运行，但独立启动可能无法初始化 Steam。"
 }
+# 网页房依赖 cloudflared 生成公网 wss 链接；放在 exe 同目录即可。
+$cloudflared = Join-Path $root "cloudflared.exe"
+$hasCloudflared = Test-Path -LiteralPath $cloudflared
+if ($hasCloudflared) {
+	$winFiles += $cloudflared
+} else {
+	Write-Warning "未找到 cloudflared.exe；Windows 包将无法创建网页房公网链接。可先运行 tools/get_cloudflared.ps1。"
+}
 if (Test-Path -LiteralPath $pck) {
 	$winFiles += $pck
 }
@@ -85,6 +93,9 @@ if (-not $DryRun) {
 		"libgodotsteam.windows.template_release.x86_64.dll",
 		"steam-multiplayer-peer.windows.template_release.x86_64.dll"
 	)
+	if ($hasCloudflared) {
+		$requiredWinFiles += "cloudflared.exe"
+	}
 	$missingWinFiles = @($requiredWinFiles | Where-Object { $zipNames -notcontains $_ })
 	if ($missingWinFiles.Count -gt 0) {
 		throw "Windows 包缺少文件：$($missingWinFiles -join ', ')"
