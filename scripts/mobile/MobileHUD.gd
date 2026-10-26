@@ -388,7 +388,7 @@ func _point_over_build_menu(pos: Vector2) -> bool:
 	var bm := _get_bm()
 	if bm != null:
 		var menu = bm.get("current_build_menu")
-		if menu is Control and is_instance_valid(menu) and menu.visible:
+		if is_instance_valid(menu) and menu is Control and menu.visible:
 			return menu.get_global_rect().has_point(pos)
 	# 联机客户端没有 battle_manager，建造菜单挂在 ClientRenderer/UI 下
 	var renderer := get_tree().get_first_node_in_group("client_renderer")

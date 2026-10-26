@@ -311,7 +311,7 @@ func _add_animal_contact() -> void:
 	var model: Node3D = null
 	if has_meta("_model_instance"):
 		var mi = get_meta("_model_instance")
-		if mi is Node3D and is_instance_valid(mi):
+		if is_instance_valid(mi) and mi is Node3D:
 			model = mi
 	add_child(GroundContact.create(GroundContact.half_size_for(body_radius, model)))
 

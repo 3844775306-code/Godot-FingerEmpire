@@ -27,7 +27,7 @@ static func play(entity_id: int, model: Node3D, opts: Dictionary = {}) -> bool:
 	if entity_id in [13, 39]:
 		ship_side = float(opts.get("side", 1 if model.get_instance_id() % 2 == 0 else -1))
 		var target = opts.get("target")
-		if not opts.has("side") and target is Node3D and is_instance_valid(target):
+		if not opts.has("side") and is_instance_valid(target) and target is Node3D:
 			var right: Vector3 = model.global_transform.basis.x
 			if right.dot((target as Node3D).global_position - model.global_position) < 0.0:
 				ship_side = -1.0
@@ -295,12 +295,21 @@ static func _restore(model: Node3D) -> void:
 	var data = model.get_meta(META_BASE, {})
 	if not (data is Dictionary):
 		return
+	var kept: Dictionary = {}
 	for node in data.keys():
-		if node is Node3D and is_instance_valid(node):
-			var d: Dictionary = data[node]
-			(node as Node3D).position = d.get("p", (node as Node3D).position)
-			(node as Node3D).rotation = d.get("r", (node as Node3D).rotation)
-			(node as Node3D).scale = d.get("s", (node as Node3D).scale)
+		# 必须先 is_instance_valid 再 is Node3D：基线表的键是节点引用，动作播放期间
+		# 模型可能被换掉/删掉一部分子节点，对已释放实例做类型判断会抛
+		# "Left operand of 'is' is a previously freed instance."。
+		if not is_instance_valid(node) or not (node is Node3D):
+			continue
+		kept[node] = data[node]
+		var d: Dictionary = data[node]
+		(node as Node3D).position = d.get("p", (node as Node3D).position)
+		(node as Node3D).rotation = d.get("r", (node as Node3D).rotation)
+		(node as Node3D).scale = d.get("s", (node as Node3D).scale)
+	# 失效节点顺手从基线表里剔掉，避免每次复位都重新踩一遍
+	if kept.size() != data.size():
+		model.set_meta(META_BASE, kept)
 
 static func _remember(model: Node3D, tw: Tween) -> void:
 	var list = model.get_meta(META_TWEENS, [])

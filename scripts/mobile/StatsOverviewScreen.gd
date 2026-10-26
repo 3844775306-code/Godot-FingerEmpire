@@ -461,7 +461,7 @@ func _attach_diplo(on: bool) -> void:
 		return
 	if on:
 		var panel = hud.get("_diplo_panel")
-		if panel is Control and is_instance_valid(panel):
+		if is_instance_valid(panel) and panel is Control:
 			_diplo_panel = panel
 			_diplo_original_parent = panel.get_parent()
 			panel.reparent(_diplo_host)

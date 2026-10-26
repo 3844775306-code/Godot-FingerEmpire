@@ -4372,7 +4372,7 @@ func stop_all_gather():
 	if gather_paused:
 		# 暂停所有己方农民和采集船
 		for entity in entities.get_children():
-			if entity is Army and is_instance_valid(entity) and entity.team == get_host_team() and entity.health > 0:
+			if is_instance_valid(entity) and entity is Army and entity.team == get_host_team() and entity.health > 0:
 				if entity.entity_id == 10 or entity.entity_id == 14:
 					entity.current_target = null
 					entity.current_order = ""
@@ -4381,7 +4381,7 @@ func stop_all_gather():
 	else:
 		# 恢复：让空闲农民重新寻找资源
 		for entity in entities.get_children():
-			if entity is Army and is_instance_valid(entity) and entity.team == get_host_team() and entity.health > 0:
+			if is_instance_valid(entity) and entity is Army and entity.team == get_host_team() and entity.health > 0:
 				if (entity.entity_id == 10 or entity.entity_id == 14) and entity.current_order == "":
 					entity._find_nearest_resource()
 

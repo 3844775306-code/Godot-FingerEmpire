@@ -110,7 +110,7 @@ static func _entity_id_of(building: Node3D) -> int:
 # 联机客户端在 _create_entity_node 里调用时，节点还没加入场景树。
 static func _visual_bounds(building: Node3D) -> AABB:
 	var model = building.get_meta("_model_instance", null) if building.has_meta("_model_instance") else null
-	if model is Node3D and is_instance_valid(model):
+	if is_instance_valid(model) and model is Node3D:
 		var bounds := _collect_bounds(model as Node3D, Transform3D.IDENTITY, AABB(Vector3.ZERO, Vector3.ZERO))
 		if bounds.size.x >= 0.0 and bounds.size.y >= 0.0 and bounds.size.z >= 0.0:
 			return bounds

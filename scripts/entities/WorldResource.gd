@@ -113,7 +113,7 @@ func _spawn_ground_patch() -> void:
 	var model: Node3D = null
 	if has_meta("_model_instance"):
 		var mi = get_meta("_model_instance")
-		if mi is Node3D and is_instance_valid(mi):
+		if is_instance_valid(mi) and mi is Node3D:
 			model = mi
 	var half: float = ground_patch_half_size(body_radius, model)
 	var decal := Decal.new()

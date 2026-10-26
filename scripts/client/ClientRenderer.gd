@@ -1273,7 +1273,7 @@ func _attach_resource_ground_patch(node: Node3D, info: Dictionary) -> void:
 	var model: Node3D = null
 	if node.has_meta("_model_instance"):
 		var mi = node.get_meta("_model_instance")
-		if mi is Node3D and is_instance_valid(mi):
+		if is_instance_valid(mi) and mi is Node3D:
 			model = mi
 	var half: float = WorldResource.ground_patch_half_size(float(info.get("body_radius", 0.6)), model)
 	var decal := Decal.new()
@@ -1481,7 +1481,7 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 		var animal_model: Node3D = null
 		if entity.has_meta("_model_instance"):
 			var mi = entity.get_meta("_model_instance")
-			if mi is Node3D and is_instance_valid(mi):
+			if is_instance_valid(mi) and mi is Node3D:
 				animal_model = mi
 		entity.add_child(GroundContact.create(GroundContact.half_size_for(float(info.get("body_radius", 0.4)), animal_model)))
 
