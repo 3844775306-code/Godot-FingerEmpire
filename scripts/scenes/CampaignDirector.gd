@@ -46,6 +46,25 @@ var _army_wiped_time: float = 0.0
 var _hud = null
 var _result_layer: CanvasLayer = null
 
+# ── 扩展目标（护送 / 拆塔 / 采集 / 击杀）──
+var _escort_unit = null
+var _escort_unit_id: int = 0
+var _escort_zone_center: Vector3 = Vector3.ZERO
+var _escort_zone_radius: float = 8.0
+var _escort_mesh: MeshInstance3D = null
+var _target_ids: Array = []
+var _target_need: int = 0
+var _target_initial: int = 0
+var _gather_need: float = 0.0
+var _gather_total: float = 0.0
+var _gather_last_total: float = -1.0
+var _kill_need: int = 0
+var _kill_ids: Array = []
+var _enemy_kills: int = 0
+var _enemy_kills_by_id: Dictionary = {}
+var _enemy_water_spawn: Vector3 = Vector3.ZERO
+var _has_water_waves: bool = false
+
 # 开局配置解析出来的任务参数
 var _survive_need: float = -1.0
 var _destroy_castle_goal: bool = false
@@ -122,9 +141,17 @@ func _setup() -> void:
 	# 波次表（防守关：敌人没有城堡，只按时间点刷兵）
 	_waves = enemy_cfg.get("waves", []).duplicate(true)
 	_waves.sort_custom(func(a, b): return float(a.get("time", 0.0)) < float(b.get("time", 0.0)))
+	_has_water_waves = false
+	for w in _waves:
+		if bool(w.get("water", false)):
+			_has_water_waves = true
+			break
 	enemy_spawn_point = _pick_spawn_point()
 
 	_parse_objectives()
+	_spawn_escort()
+	if _has_water_waves:
+		_enemy_water_spawn = _find_water_point(player_anchor, 22.0, 60.0)
 	_create_hud()
 
 	# 相机对准玩家出生点（没有主城时也要对准军队）
@@ -168,21 +195,39 @@ func _spawn_side(cfg: Dictionary, team: int, anchor: Vector3, is_player: bool) -
 	# 单点建筑（塔 / 兵营 / 民居）
 	for b in cfg.get("buildings", []):
 		var off: Array = b.get("offset", [0.0, 0.0])
-		var pos := Vector3(anchor.x + float(off[0]), 0.0, anchor.z + float(off[1]))
-		if not _is_plain(pos):
-			continue
-		if _too_close(pos, 1.9):
+		var want := Vector3(anchor.x + float(off[0]), 0.0, anchor.z + float(off[1]))
+		# 关卡里给的坐标是理想位置：被山/水/资源占了就就近挪几米，不能直接不生成，
+		# 否则"拆 4 座塔"这类目标会因为塔没生成而永远完不成
+		var pos := _find_spot_near(want, 8.0, 1.9)
+		if pos == Vector3.ZERO:
 			continue
 		bm.spawn_entity(EntityDatabase.get_config(int(b.get("id", 25))), team, pos, int(b.get("level", 1)))
 	# 开局军队
 	var units: Array = cfg.get("units", [])
 	for u in units:
 		var count: int = int(u.get("count", 1))
+		var unit_id: int = int(u.get("id", 11))
 		for i in range(count):
 			var pos := _unit_slot(anchor, i, count)
 			if pos == Vector3.ZERO:
 				continue
-			bm.spawn_entity(EntityDatabase.get_config(int(u.get("id", 11))), team, pos, int(u.get("level", 1)))
+			var unit = bm.spawn_entity(EntityDatabase.get_config(unit_id), team, pos, int(u.get("level", 1)))
+			if team == bm.enemy_team:
+				_hook_enemy_kill(unit, unit_id)
+	# 开局海军：船只能在水面，单独走水域布点（海战关）
+	for n in cfg.get("navy", []):
+		var ncount: int = int(n.get("count", 1))
+		var nid: int = int(n.get("id", 13))
+		for i in range(ncount):
+			var npos := _find_water_point(anchor, 10.0, 46.0)
+			if npos == Vector3.ZERO:
+				continue
+			if i > 0:
+				var a: float = TAU * float(i) / float(maxi(ncount, 1))
+				npos = _find_water_point(Vector3(npos.x + cos(a) * 6.0, 0.0, npos.z + sin(a) * 6.0), 1.0, 12.0)
+			var ship = bm.spawn_entity(EntityDatabase.get_config(nid), team, npos, int(n.get("level", 1)))
+			if team == bm.enemy_team:
+				_hook_enemy_kill(ship, nid)
 
 func _spawn_castle(anchor: Vector3, team: int) -> Building:
 	var cfg = EntityDatabase.get_config(20)
@@ -281,13 +326,26 @@ func _parse_objectives() -> void:
 				_zone_hold_need = float(obj.get("hold", 120.0))
 				_zone_radius = float(zone.get("radius", 12.0))
 				var off: Array = zone.get("offset", [0.0, 0.0])
-				var map = bm.get_node_or_null("Map")
-				if map != null and map.terrain_grid.size() > 0:
-					var size: int = int(map.terrain_grid.size())
-					var center: Vector3 = map.grid_to_world(int(size / 2), int(size / 2))
-					_zone_center = _find_plain_area(
-						Vector3(center.x + float(off[0]), 0.0, center.z + float(off[1])), _zone_radius)
-				_spawn_zone_ring()
+				_zone_center = _map_center_offset(off, _zone_radius)
+				_zone_mesh = _spawn_ring(_zone_center, _zone_radius,
+					Color(0.25, 0.95, 0.45, 0.45), "CampaignZoneRing")
+			"escort":
+				_escort_unit_id = int(obj.get("unit_id", 19))
+				var ezone: Dictionary = obj.get("zone", {})
+				_escort_zone_radius = float(ezone.get("radius", 8.0))
+				var eoff: Array = ezone.get("offset", [0.0, 0.0])
+				_escort_zone_center = _map_center_offset(eoff, _escort_zone_radius)
+				_escort_mesh = _spawn_ring(_escort_zone_center, _escort_zone_radius,
+					Color(0.35, 0.7, 1.0, 0.5), "CampaignEscortRing")
+			"destroy_targets":
+				_target_ids = obj.get("building_ids", [25, 26]).duplicate()
+				_target_need = int(obj.get("count", 3))
+				_target_initial = _count_enemy_buildings(_target_ids)
+			"gather":
+				_gather_need = float(obj.get("amount", 1500.0))
+			"kill_units":
+				_kill_need = int(obj.get("count", 10))
+				_kill_ids = obj.get("unit_ids", []).duplicate()
 
 # 在地图中间找一块足够大的平地放控制区（中心点被水/山占时向外搜）
 func _find_plain_area(center: Vector3, radius: float) -> Vector3:
@@ -319,27 +377,124 @@ func _area_is_plain(center: Vector3, radius: float) -> bool:
 			return false
 	return true
 
-# 控制区在地面上的绿色光圈
-func _spawn_zone_ring() -> void:
-	if _zone_radius <= 0.0:
-		return
+# 地图中心 + 偏移（世界米）→ 找一块足够大的平地当目标区
+func _map_center_offset(off: Array, radius: float) -> Vector3:
+	var map = bm.get_node_or_null("Map")
+	var center := Vector3.ZERO
+	if map != null and map.terrain_grid.size() > 0:
+		var size: int = int(map.terrain_grid.size())
+		center = map.grid_to_world(int(size / 2), int(size / 2))
+	return _find_plain_area(Vector3(center.x + float(off[0]), 0.0, center.z + float(off[1])), radius)
+
+# 地面上画一个目标光圈（占领区绿色 / 护送点蓝色）
+func _spawn_ring(center: Vector3, radius: float, color: Color, ring_name: String) -> MeshInstance3D:
+	if radius <= 0.0:
+		return null
 	var mesh := TorusMesh.new()
-	mesh.inner_radius = maxf(_zone_radius - 0.45, 0.5)
-	mesh.outer_radius = _zone_radius + 0.45
+	mesh.inner_radius = maxf(radius - 0.45, 0.5)
+	mesh.outer_radius = radius + 0.45
 	mesh.rings = 48
 	var mat := StandardMaterial3D.new()
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
 	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.albedo_color = Color(0.25, 0.95, 0.45, 0.45)
+	mat.albedo_color = color
 	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 	mesh.material = mat
-	_zone_mesh = MeshInstance3D.new()
-	_zone_mesh.name = "CampaignZoneRing"
-	_zone_mesh.mesh = mesh
-	var y: float = float(_zone_center.y) if _zone_center.y != 0.0 else 0.15
-	_zone_mesh.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	bm.add_child(_zone_mesh)
-	_zone_mesh.global_position = Vector3(_zone_center.x, y + 0.35, _zone_center.z)
+	var ring := MeshInstance3D.new()
+	ring.name = ring_name
+	ring.mesh = mesh
+	ring.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	bm.add_child(ring)
+	var y: float = float(center.y) if center.y != 0.0 else 0.15
+	ring.global_position = Vector3(center.x, y + 0.35, center.z)
+	return ring
+
+# ==================== 护送目标 ====================
+
+# 生成被护送的信使：单独一个侦察兵，头顶挂一个显眼的蓝色标记
+func _spawn_escort() -> void:
+	if _escort_unit_id <= 0:
+		return
+	var pos := _unit_slot(player_anchor, 0, 1)
+	if pos == Vector3.ZERO:
+		pos = player_anchor
+	var unit = bm.spawn_entity(EntityDatabase.get_config(_escort_unit_id), bm.player_team, pos, 1)
+	if unit == null:
+		return
+	_escort_unit = unit
+	unit.died.connect(_on_escort_died)
+	var marker := Label3D.new()
+	marker.text = "信使"
+	marker.font_size = 48
+	marker.pixel_size = 0.012
+	marker.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	marker.no_depth_test = true
+	marker.modulate = Color(0.45, 0.85, 1.0)
+	marker.position = Vector3(0.0, 3.2, 0.0)
+	unit.add_child(marker)
+	bm._show_hud_alert("信使已出发：把他带到蓝色光圈", Color(0.45, 0.85, 1.0),
+		[bm.player_team], bm.player_team, GameSettings.AlertKind.MISC, false,
+		[bm.team_nations.get(bm.player_team, -1)], _escort_zone_center, -1)
+
+func _on_escort_died() -> void:
+	if state != State.RUNNING:
+		return
+	if _escort_unit_id > 0:
+		_finish(false)
+		return
+
+# 统计敌方指定建筑还活着几座（拆塔类目标的基线）
+func _count_enemy_buildings(ids: Array) -> int:
+	var n := 0
+	for e in bm.entities.get_children():
+		if e is Building and e.health > 0 and int(e.team) == bm.enemy_team and int(e.entity_id) in ids:
+			n += 1
+	return n
+
+# ==================== 击杀统计 ====================
+
+# 给敌方单位挂死亡回调，用于"击沉/歼灭 N 个"类目标
+func _hook_enemy_kill(unit, unit_id: int) -> void:
+	if unit == null or not is_instance_valid(unit):
+		return
+	if not unit.died.is_connected(_on_enemy_unit_died):
+		unit.died.connect(_on_enemy_unit_died.bind(unit_id))
+
+func _on_enemy_unit_died(unit_id: int) -> void:
+	_enemy_kills += 1
+	_enemy_kills_by_id[unit_id] = int(_enemy_kills_by_id.get(unit_id, 0)) + 1
+
+# ==================== 采集统计 ====================
+
+# 累计玩家"新增"的资源量：每帧对比资源总额，只累加正增量（花掉的不倒扣）
+func _update_economy() -> void:
+	var total := 0.0
+	for k in bm.player_resources:
+		total += float(bm.player_resources[k])
+	if _gather_last_total < 0.0:
+		_gather_last_total = total
+		return
+	var delta: float = total - _gather_last_total
+	if delta > 0.0:
+		_gather_total += delta
+	_gather_last_total = total
+
+# ==================== 水域刷兵（海战关）====================
+
+func _is_water(pos: Vector3) -> bool:
+	return bm.get_terrain_at(pos) == 2
+
+# 在出生点周围找一片水面（由近到远、多角度试）
+func _find_water_point(center: Vector3, min_dist: float, max_dist: float) -> Vector3:
+	var dist: float = min_dist
+	while dist <= max_dist:
+		for i in range(16):
+			var a: float = TAU * float(i) / 16.0
+			var pos := Vector3(center.x + cos(a) * dist, 0.0, center.z + sin(a) * dist)
+			if _is_water(pos):
+				return pos
+		dist += 4.0
+	return Vector3(center.x, 0.0, center.z + max_dist)
 
 # ==================== 每帧推进 ====================
 
@@ -353,6 +508,7 @@ func _process(delta: float) -> void:
 		return
 	var dt: float = _tick
 	_tick = 0.0
+	_update_economy()
 	_update_objective_states()
 	_update_zone(dt)
 	_update_warning()
@@ -371,16 +527,19 @@ func _fire_wave(wave: Dictionary, number: int) -> void:
 	var target := _player_target_position()
 	var label := String(wave.get("label", "第 %d 波" % number))
 	var units: Array = wave.get("units", [])
+	var water: bool = bool(wave.get("water", false))
 	var spawned: Array = []
 	for u in units:
 		var count: int = int(u.get("count", 1))
+		var unit_id: int = int(u.get("id", 11))
 		for i in range(count):
-			var pos := _wave_slot(i, count)
+			var pos := _water_spawn_slot(i, count) if water else _wave_slot(i, count)
 			if pos == Vector3.ZERO:
 				continue
-			var unit = bm.spawn_entity(EntityDatabase.get_config(int(u.get("id", 11))), bm.enemy_team, pos, int(u.get("level", 1)))
+			var unit = bm.spawn_entity(EntityDatabase.get_config(unit_id), bm.enemy_team, pos, int(u.get("level", 1)))
 			if unit != null:
 				spawned.append(unit)
+				_hook_enemy_kill(unit, unit_id)
 	for unit in spawned:
 		if is_instance_valid(unit) and unit.has_method("attack_move_to"):
 			unit.attack_move_to(target)
@@ -392,6 +551,21 @@ func _fire_wave(wave: Dictionary, number: int) -> void:
 	)
 
 # 一波兵在刷兵点周围铺开
+# 海战波次：在敌我之间的海面上铺开
+func _water_spawn_slot(index: int, total: int) -> Vector3:
+	var center: Vector3 = _enemy_water_spawn if _enemy_water_spawn != Vector3.ZERO else enemy_spawn_point
+	var ring: int = index / 8
+	var i_in_ring: int = index % 8
+	var radius: float = 2.0 + float(ring) * 2.5
+	var angle: float = TAU * float(i_in_ring) / 8.0 + float(ring) * 0.4
+	for attempt in range(8):
+		var pos := Vector3(
+			center.x + cos(angle + float(attempt) * 0.45) * radius, 0.0,
+			center.z + sin(angle + float(attempt) * 0.45) * radius)
+		if _is_water(pos):
+			return pos
+	return center if _is_water(center) else Vector3.ZERO
+
 func _wave_slot(index: int, total: int) -> Vector3:
 	var ring: int = index / 10
 	var i_in_ring: int = index % 10
@@ -420,7 +594,35 @@ func _update_objective_states() -> void:
 				done = _survive_need > 0.0 and elapsed >= _survive_need
 			"hold_zone":
 				done = hold_seconds >= _zone_hold_need
+			"escort":
+				done = _escort_reached()
+			"destroy_targets":
+				done = _targets_destroyed() >= _target_need
+			"gather":
+				done = _gather_total >= _gather_need
+			"kill_units":
+				done = _kill_progress() >= _kill_need
 		objective_states[i]["done"] = done
+
+# 信使是否已经走进护送点
+func _escort_reached() -> bool:
+	if _escort_unit == null or not is_instance_valid(_escort_unit) or _escort_unit.health <= 0:
+		return false
+	return _escort_unit.global_position.distance_to(_escort_zone_center) <= _escort_zone_radius
+
+# 敌方指定建筑已经倒下几座（AI 期间新建的塔不算进度，最多按基线算）
+func _targets_destroyed() -> int:
+	var alive := _count_enemy_buildings(_target_ids)
+	return clampi(_target_initial - alive, 0, _target_initial)
+
+# 击杀进度：有 unit_ids 只数这些兵种，没有就数全部
+func _kill_progress() -> int:
+	if _kill_ids.is_empty():
+		return _enemy_kills
+	var n := 0
+	for id in _kill_ids:
+		n += int(_enemy_kills_by_id.get(int(id), 0))
+	return n
 
 func _update_zone(dt: float) -> void:
 	if _zone_radius <= 0.0 or _zone_hold_need <= 0.0:
@@ -702,6 +904,20 @@ func _apply_resources(bucket: Dictionary, values: Dictionary) -> void:
 func _is_plain(pos: Vector3) -> bool:
 	return bm.get_terrain_at(pos) == 0
 
+# 在目标点附近找一个可用的空地（平地 + 不与实体重叠），最多挪 max_shift 米
+func _find_spot_near(pos: Vector3, max_shift: float, gap: float) -> Vector3:
+	if _is_plain(pos) and not _too_close(pos, gap):
+		return pos
+	var steps: int = maxi(int(max_shift / 2.0), 1)
+	for ring in range(1, steps + 1):
+		var r: float = float(ring) * 2.0
+		for i in range(10):
+			var a: float = TAU * float(i) / 10.0 + float(ring) * 0.3
+			var p := Vector3(pos.x + cos(a) * r, 0.0, pos.z + sin(a) * r)
+			if _is_plain(p) and not _too_close(p, gap):
+				return p
+	return Vector3.ZERO
+
 # 判断落点是否已经有实体（按中心距，不用碰撞半径：
 # 城墙相邻两段中心距正好等于 2 米，用半径判断会把每隔一段的墙都判成“太挤”）
 func _too_close(pos: Vector3, center_range: float) -> bool:
@@ -732,6 +948,19 @@ func _update_progress_text() -> void:
 					_fmt_time(maxf(_survive_need - elapsed, 0.0)), _fmt_time(_survive_need)])
 			"hold_zone":
 				parts.append("控制区累计 %d / %d 秒" % [int(hold_seconds), int(_zone_hold_need)])
+			"escort":
+				if _escort_unit != null and is_instance_valid(_escort_unit) and _escort_unit.health > 0:
+					var dist: float = _escort_unit.global_position.distance_to(_escort_zone_center)
+					parts.append("信使距哨站 %.0f 米（进蓝圈即送达）" % dist)
+				else:
+					parts.append("信使已阵亡")
+			"destroy_targets":
+				parts.append("已摧毁 %d / %d 座防御塔" % [_targets_destroyed(), _target_need])
+			"gather":
+				parts.append("累计采集 %d / %d 资源" % [int(_gather_total), int(_gather_need)])
+			"kill_units":
+				var verb := "已击沉敌船" if not _kill_ids.is_empty() else "已歼灭敌军"
+				parts.append("%s %d / %d" % [verb, _kill_progress(), _kill_need])
 			"destroy_castle":
 				if enemy_castle != null and is_instance_valid(enemy_castle):
 					var hp: float = float(enemy_castle.health)

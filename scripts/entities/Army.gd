@@ -34,6 +34,9 @@ var _last_grid_pos: Vector2i = Vector2i(-999, -999)
 var _cached_terrain: int = 0
 var _cached_speed_mod: float = 1.0
 # 落水伤害：陆地单位在深水、且未上桥/运载船时，每秒损失 20% 最大生命
+# 自动索敌时城墙的距离惩罚（米）：等于让城墙"看起来远 300 米"，
+# 有别的活目标就绝不选墙，只有在范围内只剩城墙时才会拆墙开路。
+const WALL_TARGET_PENALTY: float = 300.0
 const WATER_DAMAGE_INTERVAL: float = 1.0
 const WATER_DAMAGE_RATIO: float = 0.2
 var _water_damage_timer: float = WATER_DAMAGE_INTERVAL
@@ -1836,6 +1839,9 @@ func _find_attack_fallback_building(bm: RTSBattleManager) -> Building:
 		var h_diff = Vector2(e.global_position.x - global_position.x,
 							e.global_position.z - global_position.z)
 		var dist: float = h_diff.length() - body_radius - e.body_radius
+		# 兜底目标也把城墙排到最后
+		if int(e.entity_id) == 27:
+			dist += WALL_TARGET_PENALTY
 		if dist < best_dist:
 			best_dist = dist
 			best = e
@@ -4849,8 +4855,12 @@ func _find_nearest_enemy_near(center: Vector3, radius: float):
 		var dist = h_diff.length() - body_radius - entity.body_radius
 		if dist > radius:
 			continue
-		if dist < best_dist:
-			best_dist = dist
+		# 城墙在所有目标里优先级最低：自动索敌时给城墙加一个很大的距离惩罚，
+		# 部队会优先打主城/兵营/单位，只有方圆内确实没有别的目标时才拆墙，
+		# 避免"围着城墙啃一整局、主城却没人去"。
+		var wall_penalty: float = WALL_TARGET_PENALTY if (entity is Building and entity.entity_id == 27) else 0.0
+		if dist + wall_penalty < best_dist:
+			best_dist = dist + wall_penalty
 			best_target = entity
 	return best_target
 
