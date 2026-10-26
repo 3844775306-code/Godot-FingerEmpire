@@ -2,9 +2,14 @@ extends Control
 
 const MapPresets = preload("res://scripts/map/MapPresets.gd")
 const MapSelectDialog = preload("res://scripts/ui/MapSelectDialog.gd")
+const AppVersion = preload("res://scripts/core/AppVersion.gd")
+const ChangelogData = preload("res://scripts/data/ChangelogData.gd")
+const ChangelogPanel = preload("res://scripts/ui/ChangelogPanel.gd")
 
 var nation_select: OptionButton
 var _map_button: Button = null
+# 带 NEW 未读标记的更新日志按钮（打开日志后清掉标记）
+var _changelog_btn: Button = null
 
 # 主菜单场景没有战斗内的 TouchGestureRouter：触摸拖动直接驱动 ScrollContainer 滚动
 # （手机点击仍由引擎模拟鼠标完成，这里只管滑动）。
@@ -85,10 +90,10 @@ func _ready():
 	UITheme.apply_label(subtitle, 34, UITheme.PARCHMENT)
 	add_child(subtitle)
 
-	# 中央皇庭面板
+	# 中央皇庭面板（高度留到 780：按钮从 5 个变 6 个后，最后一个按钮下沿到 948）
 	var panel = Panel.new()
 	panel.position = Vector2(620, 205)
-	panel.size = Vector2(1160, 725)
+	panel.size = Vector2(1160, 780)
 	panel.add_theme_stylebox_override("panel", UITheme.card_style(UITheme.GOLD))
 	add_child(panel)
 
@@ -196,12 +201,15 @@ func _ready():
 	add_child(fast_check)
 
 	# 按钮（金主 CTA / 蓝书图鉴 / 石次 / 朱红危险）
+	# 6 个按钮：行距从 74 压到 68、整组上移到 center_y+196，
+	# 最后一个「退出游戏」下沿 948，正好落在加高后的面板（205..985）里。
 	var btn_data = [
-		["单人游戏", Vector2(900, center_y + 216), _on_play_pressed, "primary"],
-		["联机对战", Vector2(900, center_y + 290), _on_multiplayer_pressed, "primary"],
-		["📖 单位图鉴", Vector2(900, center_y + 364), _on_units_pressed, "book"],
-		["设  置", Vector2(900, center_y + 438), _on_settings_pressed, "muted"],
-		["退出游戏", Vector2(900, center_y + 512), _on_quit_pressed, "danger"],
+		["单人游戏", Vector2(900, center_y + 196), _on_play_pressed, "primary"],
+		["联机对战", Vector2(900, center_y + 264), _on_multiplayer_pressed, "primary"],
+		["📖 单位图鉴", Vector2(900, center_y + 332), _on_units_pressed, "book"],
+		["设  置", Vector2(900, center_y + 400), _on_settings_pressed, "muted"],
+		["📜 更新日志", Vector2(900, center_y + 468), _on_changelog_pressed, "muted"],
+		["退出游戏", Vector2(900, center_y + 536), _on_quit_pressed, "danger"],
 	]
 
 	for data in btn_data:
@@ -212,6 +220,18 @@ func _ready():
 			UITheme.pulse(btn, 1.03, 0.9)   # 主 CTA 呼吸高亮
 		else:
 			UITheme.hover_scale(btn)
+		if data[0] == "📜 更新日志":
+			_changelog_btn = btn
+			_attach_new_badge(btn, UITheme.FONT_SM)
+	# 菜单底部再写一行当前版本，玩家不进日志也能看到
+	var version_hint := Label.new()
+	version_hint.text = AppVersion.display()
+	version_hint.position = Vector2(900, center_y + 606)
+	version_hint.size = Vector2(600, 24)
+	version_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	version_hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	version_hint.add_theme_color_override("font_color", Color(UITheme.STONE.lightened(0.35)))
+	add_child(version_hint)
 
 	# 中央面板淡入
 	UITheme.fade_in(panel, 0.4)
@@ -378,6 +398,65 @@ func _on_multiplayer_pressed():
 func _on_units_pressed():
 	# 打开单位图鉴页面
 	get_tree().change_scene_to_file("res://scenes/unit_view.tscn")
+
+# 打开更新日志面板（已打开则关掉，形成"按钮开关"）
+func _on_changelog_pressed() -> void:
+	var existing := get_node_or_null("ChangelogPanel")
+	if existing != null:
+		existing.queue_free()
+		return
+	ChangelogPanel.open(self)
+	# 看过了就把 NEW 标记清掉
+	if _changelog_btn != null and is_instance_valid(_changelog_btn):
+		var badge := _changelog_btn.get_node_or_null("NewBadge")
+		if badge != null:
+			badge.queue_free()
+
+# 入口按钮上的「NEW」小徽章：有新版本日志没看过时才加
+func _attach_new_badge(btn: Button, font_size: int) -> void:
+	if not ChangelogData.is_unseen():
+		return
+	var badge := Label.new()
+	badge.name = "NewBadge"
+	badge.text = "NEW"
+	badge.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	badge.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	badge.add_theme_font_size_override("font_size", font_size)
+	badge.add_theme_color_override("font_color", UITheme.GOLD_TEXT)
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = UITheme.GOLD
+	sb.set_corner_radius_all(4)
+	sb.set_content_margin_all(2)
+	badge.add_theme_stylebox_override("normal", sb)
+	var badge_size := Vector2(58, 24)
+	badge.size = badge_size
+	badge.position = Vector2(btn.size.x - badge_size.x - 12, (btn.size.y - badge_size.y) * 0.5)
+	badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	btn.add_child(badge)
+
+# 手机版入口按钮整行宽：NEW 徽章用右上角锚点，窗口/字号变化都不会错位
+func _attach_new_badge_mobile(btn: Button) -> void:
+	if not ChangelogData.is_unseen():
+		return
+	var badge := Label.new()
+	badge.name = "NewBadge"
+	badge.text = "NEW"
+	badge.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	badge.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	badge.add_theme_font_size_override("font_size", UILayout.font_dp(8.5))
+	badge.add_theme_color_override("font_color", UITheme.GOLD_TEXT)
+	var sb := StyleBoxFlat.new()
+	sb.bg_color = UITheme.GOLD
+	sb.set_corner_radius_all(4)
+	sb.set_content_margin_all(2)
+	badge.add_theme_stylebox_override("normal", sb)
+	badge.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	badge.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
+	badge.offset_left = -UILayout.dp(46.0)
+	badge.offset_right = -UILayout.dp(6.0)
+	badge.offset_top = UILayout.dp(3.0)
+	badge.offset_bottom = UILayout.dp(19.0)
+	btn.add_child(badge)
 
 func _on_settings_pressed():
 	# Toggle settings panel
@@ -649,6 +728,7 @@ func _build_mobile_layout() -> void:
 		["🌐 联机对战", _on_multiplayer_pressed, "primary"],
 		["📖 单位图鉴", _on_units_pressed, "book"],
 		["⚙️ 设  置", _on_settings_pressed, "muted"],
+		["📜 更新日志（%s）" % AppVersion.version(), _on_changelog_pressed, "muted"],
 		["🚪 退出游戏", _on_quit_pressed, "danger"],
 	]
 	for data in btn_data:
@@ -657,8 +737,13 @@ func _build_mobile_layout() -> void:
 		btn.custom_minimum_size = Vector2(0, UILayout.dp(42.0))
 		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 		_mobile_style_button(btn, data[2], UILayout.font_dp(13.0))
+		# 更新日志：长按/点击都走同一个回调，NEW 徽章贴在按钮右侧
 		btn.pressed.connect(data[1])
 		vb.add_child(btn)
+		if String(data[0]).begins_with("📜 更新日志"):
+			_changelog_btn = btn
+			# 手机按钮是整行宽，NEW 徽章用锚点贴右上角
+			_attach_new_badge_mobile(btn)
 
 	var tip := Label.new()
 	tip.text = "手机操作：点按选择 / 拖动平移视角 / 双指缩放 / 长按空地呼出建造菜单 / 右上角小地图切换统计"
