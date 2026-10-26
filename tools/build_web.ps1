@@ -29,6 +29,9 @@ $fontLicense = Join-Path $root "resources/fonts/OFL.txt"
 if (Test-Path -LiteralPath $fontLicense) {
 	Copy-Item -LiteralPath $fontLicense -Destination (Join-Path $outDir "FONT-LICENSE.txt") -Force
 }
+# Netlify should revalidate the fixed-name PCK/WASM files after each deploy.
+$cacheHeaders = "/*`n  Cache-Control: public, max-age=0, must-revalidate`n"
+Set-Content -LiteralPath (Join-Path $outDir "_headers") -Value $cacheHeaders -Encoding ASCII
 $total = (Get-ChildItem $outDir -File | Measure-Object Length -Sum).Sum
 Write-Host ("Web build ready: {0} ({1:N1} MB)" -f $outDir, ($total / 1MB))
 Write-Host "Run: node tools/serve_web.mjs build/web 8090"

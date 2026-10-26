@@ -10,6 +10,9 @@ source/
 # Export/build output
 build/
 
+# Netlify CLI 本地站点关联信息
+.netlify/
+
 # Windows specific
 Thumbs.db
 desktop.ini
