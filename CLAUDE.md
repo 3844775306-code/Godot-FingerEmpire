@@ -127,6 +127,17 @@ APK / Web / EXE 启动后（主菜单）都会拉一次 `update.json`，远端�
 
 相关代码：`scripts/core/UpdateChecker.gd`（比对版本、解析清单、30 分钟缓存）、`scripts/core/UpdateConfig.gd`（站点地址、超时、缓存时长）。
 
+## Steam 版打包
+
+Steam 联机依赖原生库，**不能只发 `FingerEmpire.exe` + `FingerEmpire.pck`**。Windows 发布 zip 必须包含：
+
+- `steam_api64.dll`
+- `libgodotsteam.windows.template_release.x86_64.dll`
+- `steam-multiplayer-peer.windows.template_release.x86_64.dll`
+- `steam_appid.txt`
+
+`tools/publish_release.ps1` 会自动收集这些文件并校验 zip，不再生成只能单机的 Windows 包。当前 `steam_appid.txt` 是 `480`（Spacewar 测试 App ID）；正式上 Steam 前必须替换成真实 App ID。
+
 ## Project Overview
 
 **FingerEmpire** — a server-authoritative medieval RTS built in Godot 4.7 (Forward Plus). Features 7 nations (Viking, England, France, China, Hungary, Japan, Byzantine), resource economy, fog of war, A* pathfinding, and online multiplayer via ENet / WebSocket / Steam P2P. Supports singleplayer 1v1, 2v2, 3v3 and 3–5 nation FFA, plus online 1v1/2v2/3v3 with AI filling empty slots.
