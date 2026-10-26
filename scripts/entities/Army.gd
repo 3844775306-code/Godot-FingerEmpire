@@ -2317,7 +2317,7 @@ func _process_action(delta, bm):
 			if is_instance_valid(last_resource_target) and last_resource_target.health > 0 \
 					and not _is_target_marked_unreachable(last_resource_target):
 				gather_at(last_resource_target)
-			elif target_type == 0 and not _is_gather_paused():
+			elif target_type == 0:
 				_find_nearest_resource()
 			last_resource_target = null
 		else:
@@ -2803,8 +2803,7 @@ func _think(delta, bm):
 			# 僧侣空闲时只找伤兵治疗，不去采集
 			_find_wounded_ally()
 		elif target_type == 0:
-			if not _is_gather_paused():
-				_find_nearest_resource()
+			_find_nearest_resource()
 		else:
 			_find_enemy_in_range()
 
@@ -4300,21 +4299,6 @@ func die_official_cleanup():
 					if e is Army and e.has_meta("_clerk_bonus_%d" % my_id2):
 						e.remove_meta("_clerk_bonus_%d" % my_id2)
 						e.attack_speed /= 0.8
-
-func _is_gather_paused() -> bool:
-	var bm = get_tree().get_first_node_in_group("battle_manager")
-	if not bm: return false
-	# 联机 1v1 按阵营记录暂停状态；2v2/3v3 按 owner_peer_id 记录。
-	# 两者键空间是 0/1 与 peer_id，直接拿 team 查会在 2v2 里误读别的玩家状态。
-	if bm.has_method("get_gather_paused_for"):
-		return bm.get_gather_paused_for(owner_peer_id, team)
-	if bm.has_method("get_gather_paused"):
-		return bm.get_gather_paused(team)
-	# µ¥»ú°æ¿ÉÄÜÊÇ²¼¶ûÖµ
-	if bm.get("gather_paused") is bool:
-		return bm.gather_paused
-	return false
-
 
 # ==================== Cart System (手推车/贸易车) ====================
 

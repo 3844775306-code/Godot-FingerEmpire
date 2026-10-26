@@ -95,7 +95,6 @@ var _team_castle_count: Dictionary = {}   # 单机2v2: 每队存活城堡数
 var game_time: float = 0.0
 var game_time_label: Label = null
 var _last_clock_secs: int = -1
-var gather_paused: bool = false
 var rally_mode: bool = false
 
 # ==================== 警报系统 ====================
@@ -4368,37 +4367,6 @@ func is_cliff_between_world(from_pos: Vector3, to_pos: Vector3) -> bool:
 	if run < 0.001:
 		return false
 	return RTSConfig.is_cliff_slope(get_height_at_grid(b.x, b.y) - get_height_at_grid(a.x, a.y), run)
-
-func stop_all_gather():
-
-	
-
-	gather_paused = !gather_paused
-	if gather_paused:
-		# 暂停所有己方农民和采集船
-		for entity in entities.get_children():
-			if is_instance_valid(entity) and entity is Army and entity.team == get_host_team() and entity.health > 0:
-				if entity.entity_id == 10 or entity.entity_id == 14:
-					entity.current_target = null
-					entity.current_order = ""
-					entity._movement.astar_path.clear()
-					entity.is_attack_moving = false
-	else:
-		# 恢复：让空闲农民重新寻找资源
-		for entity in entities.get_children():
-			if is_instance_valid(entity) and entity is Army and entity.team == get_host_team() and entity.health > 0:
-				if (entity.entity_id == 10 or entity.entity_id == 14) and entity.current_order == "":
-					entity._find_nearest_resource()
-
-var hold_position_active: bool = false
-
-func toggle_hold_position():
-	hold_position_active = !hold_position_active
-	if not entities: return
-	for e in entities.get_children():
-		if e is Army and e.team == get_host_team() and e.health > 0:
-			if e.entity_id != 10 and e.entity_id != 14:
-				e.hold_position = hold_position_active
 
 func set_rally_mode(active: bool):
 	rally_mode = active

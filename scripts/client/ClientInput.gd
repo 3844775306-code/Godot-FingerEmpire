@@ -242,10 +242,7 @@ func _input(event):
 				get_viewport().set_input_as_handled()
 				return
 
-			# F4 全军驻扎  F5 统计面板
-			if key == KEY_F4:
-				NetworkManager.send_command.rpc_id(1, {"action": "toggle_hold_position"})
-				get_viewport().set_input_as_handled(); return
+			# F5 统计面板
 			if key == KEY_F5:
 				_toggle_stats_panel()
 				get_viewport().set_input_as_handled(); return

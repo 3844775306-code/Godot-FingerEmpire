@@ -42,7 +42,6 @@ var _snap_sent_rate: int = 0
 var _snap_sent_timer: float = 0.0
 var last_snapshot_cache: Dictionary = {}
 var team_explored_resources: Dictionary = {}
-var team_gather_paused: Dictionary = {}
 var _mp_shift_held: bool = false
 var _bullet_cache: Array = []       # cached bullet list, refreshed once per snap
 
@@ -735,29 +734,6 @@ func _get_team_players(team: int) -> Array:
 	return arr
 # ---------- 全局命令实现 ----------
 
-func _stop_gather(team: int):
-	var paused = team_gather_paused.get(team, false)
-	team_gather_paused[team] = !paused
-	if not paused:                         # 暂停
-		for entity in entities.get_children():
-			if entity is Army and entity.team == team and entity.health > 0:
-				if entity.entity_id == 10 or entity.entity_id == 14:
-					entity.current_target = null
-					entity.current_order = ""
-					entity._movement.astar_path.clear()
-					entity.is_attack_moving = false
-	else:                                   # 恢复
-		for entity in entities.get_children():
-			if entity is Army and entity.team == team and entity.health > 0:
-				if (entity.entity_id == 10 or entity.entity_id == 14) and entity.current_order == "":
-					entity._find_nearest_resource()
-
-func _toggle_hold_position(team: int):
-	for entity in entities.get_children():
-		if entity is Army and entity.team == team and entity.health > 0:
-			if entity.entity_id not in [10, 14]:
-				entity.hold_position = !entity.hold_position
-
 func _rally(team: int, x: float, y: float, z: float):
 	var pos = Vector3(x, y, z)
 	for entity in entities.get_children():
@@ -814,8 +790,6 @@ func _process_1v1_command(peer_id: int, data: Dictionary):
 		"produce":       _1v1_produce(team, data)
 		"global_attack": _global_attack(team)
 		"global_retreat": _global_retreat(team)
-		"stop_gather":   _stop_gather(team)
-		"toggle_hold_position": _toggle_hold_position(team)
 		"rally":         _rally(team, data["pos_x"], data["pos_y"], data["pos_z"])
 		"set_group":     _1v1_set_group(team, data)
 		"recall_group":  _1v1_recall_group(team, data)
@@ -835,8 +809,6 @@ func _process_2v2_command(peer_id: int, data: Dictionary):
 		"produce":       _2v2_produce(peer_id, data)
 		"global_attack": _2v2_global_attack(peer_id)
 		"global_retreat": _2v2_global_retreat(peer_id)
-		"stop_gather":   _2v2_stop_gather(peer_id)
-		"toggle_hold_position": _2v2_toggle_hold(peer_id)
 		"rally":         _2v2_rally(peer_id, data["pos_x"], data["pos_y"], data["pos_z"])
 		"set_group":     _2v2_set_group(peer_id, data)
 		"demolish":      _2v2_demolish(peer_id, data)
@@ -1089,25 +1061,6 @@ func _2v2_global_retreat(peer_id: int):
 	for entity in entities.get_children():
 		if entity is Army and entity.get("owner_peer_id") == peer_id and entity.target_type > 0:
 			entity.move_to(castle.global_position + Vector3(randf_range(-3,3), 0, randf_range(-3,3)))
-
-func _2v2_stop_gather(peer_id: int):
-	var paused = team_gather_paused.get(peer_id, false)
-	team_gather_paused[peer_id] = !paused
-	for entity in entities.get_children():
-		if entity is Army and entity.get("owner_peer_id") == peer_id and entity.entity_id in [10,14]:
-			if not paused:
-				entity.current_target = null
-				entity.current_order = ""
-				entity._movement.astar_path.clear()
-				entity.is_attack_moving = false
-			else:
-				if entity.current_order == "":
-					entity._find_nearest_resource()
-
-func _2v2_toggle_hold(peer_id: int):
-	for entity in entities.get_children():
-		if entity is Army and entity.get("owner_peer_id") == peer_id and entity.entity_id not in [10,14]:
-			entity.hold_position = !entity.hold_position
 
 func _2v2_rally(peer_id: int, x: float, y: float, z: float):
 	var pos = Vector3(x, y, z)
@@ -2261,17 +2214,6 @@ func _2v2_recall_group(_peer_id: int, data: Dictionary):
 	var sel = selection as SelectionManager
 	if sel:
 		sel._recall_control_group(data.get("group", 0))
-
-func get_gather_paused(team: int) -> bool:
-	return team_gather_paused.get(team, false)
-
-# Army 用这个接口查询采集暂停状态：
-# 1v1 的 team_gather_paused 按阵营（0/1）记录，2v2/3v3 的 _2v2_stop_gather
-# 按 owner_peer_id 记录；不能一律拿 team 去查，否则 peer_id 1 会和红/蓝阵营键冲突。
-func get_gather_paused_for(owner: int, team: int) -> bool:
-	if game_mode == NetworkManager.GameMode.ONEvONE or owner == -1:
-		return bool(team_gather_paused.get(team, false))
-	return bool(team_gather_paused.get(owner, false))
 
 # Override: 联机模式跳过每帧O(n^2)可见性检查（服务端不需要渲染）
 func _update_visibility():

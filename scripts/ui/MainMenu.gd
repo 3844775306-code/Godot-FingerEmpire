@@ -262,9 +262,9 @@ func _ready():
 	tip_box.alignment = BoxContainer.ALIGNMENT_CENTER
 	bot_panel.add_child(tip_box)
 
-	_add_tip_line(tip_box, "🖱️ 鼠标：左键选择 / 拖动框选 · 右键移动·攻击 · 中键拖拽平移 · Ctrl+中键拖拽旋转视角 · 滚轮缩放",
+	_add_tip_line(tip_box, "🖱️ 鼠标：左键 选择·框选·移动·攻击·采集 · 右键 建造菜单 / 取消选择 · 中键拖拽平移 · Ctrl+中键拖拽旋转视角 · 滚轮缩放",
 		16, UITheme.PARCHMENT)
-	_add_tip_line(tip_box, "⌨️ 键盘：Ctrl+1~9 编队 · 1~9 选编队 · Shift+右键 连续指令 · F1 全选军队 · F2 自动进攻 · F3 撤退 · H 暂停采集 · P 原地防守 · L 血条文字 · Tab 跟随",
+	_add_tip_line(tip_box, "⌨️ 键盘：Ctrl+1~9 编队 · 1~9 选编队 · F1 全选军队 · F2 自动进攻 · F3 撤退 · L 血条文字 · Tab 跟随 · Alt+左键 设驻扎点",
 		16, UITheme.PARCHMENT)
 	_add_tip_line(tip_box, "✨ 本版 %s：设置里可调「相机放大倍数」· 选中单位改为贴边发光描边 · 建筑血条按阵营上色 · 手机端「↻ 按住旋转」· 点「📜 更新日志」看全部改动" % AppVersion.version(),
 		15, Color(UITheme.GOLD, 0.95))
@@ -817,7 +817,7 @@ func _build_mobile_layout() -> void:
 			_attach_new_badge_mobile(btn)
 
 	var tip := Label.new()
-	tip.text = "手机操作：点按选择 / 拖动平移 / 双指缩放 / ↻ 按住旋转视角 / 长按空地建造 / 右上角小地图切换统计"
+	tip.text = "手机操作：点按选择·指挥 / 拖动平移 / 双指缩放 / ↻ 按住旋转视角 / 长按空地建造 / 右上角小地图切换统计"
 	tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	tip.add_theme_font_size_override("font_size", UILayout.font_dp(8.0))
 	tip.add_theme_color_override("font_color", Color(UITheme.STONE).lightened(0.25))

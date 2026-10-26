@@ -591,8 +591,6 @@ func _input(event):
 			KEY_F3:
 				if event.ctrl_pressed: _on_retreat_all_pressed()
 				else: _on_retreat_screen_pressed()
-			KEY_H: _on_stop_gather_pressed()
-			KEY_P: _on_hold_position_pressed()
 			KEY_DELETE: _on_demolish_selected()
 			KEY_SPACE: _on_space_pressed()
 			KEY_L: _toggle_unit_text()
@@ -1492,16 +1490,6 @@ func _on_demolish_selected():
 	sel.selected_entities.clear()
 	var panel = bm.get_node_or_null("UI/InfoPanel") as InfoPanel
 	if panel: panel.visible = false
-
-func _on_stop_gather_pressed():
-	var bm = _get_bm() as RTSBattleManager
-	if bm: bm.stop_all_gather()
-
-
-func _on_hold_position_pressed():
-	var bm = _get_bm() as RTSBattleManager
-	if bm: bm.toggle_hold_position()
-
 
 # ==================== FFA 外交部面板 ====================
 
