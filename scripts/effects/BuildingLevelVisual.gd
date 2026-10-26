@@ -33,7 +33,7 @@ const FLAG_SLOTS := [
 ]
 
 const FLAG_CLOTH_SIZE := Vector2(0.40, 0.25)
-const FLAG_POLE_RADIUS := 0.026
+const FLAG_POLE_RADIUS := 0.035
 static var _MATERIAL_CACHE: Dictionary = {}
 
 static func apply(building: Node3D, level: int, fallback_radius: float = 0.0, team_color: Color = Color.WHITE, visible: bool = true) -> void:
@@ -129,6 +129,11 @@ static func _add_flags(root: Node3D, radius: float, top: float, team_color: Colo
 	var cloth_color := team_color.lerp(Color.WHITE, 0.12)
 	var pole_mat := _mat("level_flag_pole", Color(0.25, 0.19, 0.13), 0.0, 0.6)
 	var cloth_mat := _mat("level_flag_cloth_%s" % cloth_color.to_html(), cloth_color, 0.0, 0.75)
+	# 旗帜如果固定朝外，侧面和背面看过去会变成一条线，数不出数量；
+	# 布料改成正对相机、双面不剔除，旗杆仍保持立体。
+	cloth_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	cloth_mat.billboard_mode = BaseMaterial3D.BILLBOARD_ENABLED
+	cloth_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
 
 	for slot in slots:
 		var slot_vec: Vector2 = slot
@@ -153,9 +158,9 @@ static func _add_flags(root: Node3D, radius: float, top: float, team_color: Colo
 		flag_root.add_child(pole)
 
 		var cloth := MeshInstance3D.new()
-		var cloth_mesh := PrismMesh.new()
-		cloth_mesh.size = Vector3(FLAG_CLOTH_SIZE.x, FLAG_CLOTH_SIZE.y, 0.035)
-		cloth_mesh.left_to_right = 0.42
+		var cloth_mesh := QuadMesh.new()
+		cloth_mesh.size = FLAG_CLOTH_SIZE
+		cloth_mesh.orientation = PlaneMesh.FACE_Z
 		cloth.mesh = cloth_mesh
 		cloth.position = Vector3(FLAG_CLOTH_SIZE.x * 0.5 + 0.02, pole_h - FLAG_CLOTH_SIZE.y * 0.55, 0.0)
 		cloth.material_override = cloth_mat
