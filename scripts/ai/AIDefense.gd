@@ -480,8 +480,10 @@ func _plan_anchor_defense(castle, anchor: Dictionary) -> int:
 			_add_defense_slot(26, cannon_spot, 15.0, "tower")
 
 	var wall_base: Vector3 = anchor_pos - dir * 0.8
-	var wall_count: int = clampi(int(anchor["width"]) + 4, 5, 9)
-	var spacing: float = 2.0
+	# 城墙半径 1.0（直径 2.0）：中心距必须 < 2.0 才能首尾重叠，
+	# 旧值 2.0 只是刚好相切，任何一段被微调/漏建就会露出能钻人的缝。
+	var spacing: float = 1.5
+	var wall_count: int = clampi(int(ceil(float(anchor["width"]) / spacing)) + 2, 6, 16)
 	var walls: int = 0
 	for i in range(wall_count):
 		var lateral: float = (float(i) - float(wall_count - 1) * 0.5) * spacing
@@ -543,12 +545,16 @@ func _plan_defense_line(castle) -> bool:
 	if anchor_wall_count == 0:
 		# 外墙弧线：先按空位最多的半径选弧线，再逐段微调避开树/矿
 		var wall_radius: float = _pick_wall_radius(castle, dir)
-		for i in range(9):
-			var t: float = float(i) / 8.0
+		# 弧线上每段墙的中心距也要压在 1.5 以内（旧版固定 9 段 ≈ 2.38 米，
+		# 段与段之间留着 0.38 米的缝，小兵能从缝里溜进城墙内侧）。
+		var arc_step: float = 2.0 * asin(clampf(1.5 / (2.0 * wall_radius), 0.0, 1.0))
+		var arc_walls: int = maxi(9, int(ceil(1.56 / maxf(arc_step, 0.001))) + 1)
+		for i in range(arc_walls):
+			var t: float = float(i) / float(arc_walls - 1)
 			var wa: float = lerpf(-0.78, 0.78, t)
 			var wp: Vector3 = _find_defense_spot(castle, dir, wa, wall_radius, 27, 16.0)
 			if wp != Vector3.ZERO:
-				_add_defense_slot(27, wp, 20.0 + absf(float(i) - 4.0) * 1.2, "wall")
+				_add_defense_slot(27, wp, 20.0 + absf(t - 0.5) * 6.0, "wall")
 
 	for side in [-1.0, 1.0]:
 		var ca: float = 0.34 * side

@@ -108,8 +108,10 @@ const RAID_FLANK_MAX: float = 46.0
 const RAID_WAIT_TIME: float = 5.0
 const AVOID_DEFENSE_RANGE: float = 22.0
 const RAID_UNIT: int = 15
-const WALL_COUNT: int = 12
-const WALL_SPACING: float = 1.3
+const WALL_COUNT: int = 24            # 连续墙线的段数上限（铺满整条防线比旧版多得多）
+const WALL_SPACING: float = 1.3       # 旧版直线防线间距（build_defense_line 仍在用）
+const WALL_STEP: float = 1.5          # 连续墙线的中心距：必须 < 墙直径 2.0，段段重叠才不留缝
+const WALL_MAX_HALF_SPAN: float = 11.0  # 墙线从正中向两侧各延伸的最大距离
 # 远程单位上墙：墙未破时免疫伤害，因此优先把闲置远程兵铺到墙格上；
 # 每面城墙独立选择“墙顶炮台”或“远程驻军”，赶路中的单位用 ai_wall_guard 预留墙格。
 const WALL_DEPLOY_INTERVAL: float = 10.0
@@ -709,9 +711,13 @@ func _can_place_ai_building(building_id: int, pos: Vector3) -> bool:
 			continue
 		var other_radius = maxf(0.3, float(e.body_radius))
 		var min_dist = radius + other_radius + 0.15
-		# 城墙本来就是首尾相接的连续墙段，允许墙与墙贴紧；墙和其他建筑仍按体积避让
+		# 城墙本来就是首尾相接的连续墙段，允许墙与墙贴紧；
+		# 墙也要能贴着己方的塔/建筑收口，否则每个塔位前后两格都建不起来，
+		# 整条墙线正好在塔的位置裂开，敌人从缺口直插主城。
 		if building_id == 27 and e is Building and e.entity_id == 27:
 			min_dist = 0.9
+		elif building_id == 27 and e is Building:
+			min_dist = 1.6
 		if e.global_position.distance_to(pos) < min_dist:
 			return false
 	return true
@@ -2308,15 +2314,86 @@ func _plan_defense_line() -> bool:
 		var offset = (i - 1.5) * TOWER_SPACING
 		var tp = tower_front + right_dir * offset
 		if _is_valid_build_ground(tp):
-			tower_positions.append(tp); _defense_queue.append({"id": 26, "pos": tp})
+			tower_positions.append({"id": 26, "pos": tp}); _defense_queue.append({"id": 26, "pos": tp})
 		var apos = tower_front + right_dir * (offset + 0.3)
 		if _is_valid_build_ground(apos):
-			tower_positions.append(apos); _defense_queue.append({"id": 25, "pos": apos})
-	for i in range(WALL_COUNT):
-		var bp = front_center + right_dir * ((i - WALL_COUNT / 2.0) * WALL_SPACING)
-		if _is_valid_build_ground(bp):
-			wall_positions.append(bp); _defense_queue.append({"id": 27, "pos": bp})
+			tower_positions.append({"id": 25, "pos": apos}); _defense_queue.append({"id": 25, "pos": apos})
+	_plan_wall_chain(front_center, right_dir, enemy_dir)
 	return not _defense_queue.is_empty()
+
+# 连续墙线：从防线正中向两侧逐段铺墙，中心距固定 WALL_STEP（< 墙直径 2.0），
+# 保证段与段首尾重叠、敌人钻不过去；遇到水面/峭壁就停，让地形当天然封口。
+# 旧逻辑用 _is_valid_build_ground 校验（要求离自家建筑 radius+3 米），墙与墙
+# 之间会被互相判成非法，最后只零星立起几段，中间全是大缝。
+func _plan_wall_chain(front_center: Vector3, axis: Vector3, forward: Vector3) -> void:
+	# 8 米线正好压在山上/水里是常事，先在前后几米里挑一条能连续铺墙的线，
+	# 否则整排墙位全非法，AI 一段墙都建不出来（敌人从主城正面长驱直入）。
+	front_center = _pick_wall_line_center(front_center, axis, forward)
+	var center_spot: Vector3 = _add_wall_slot(front_center, axis, forward, Vector3.ZERO)
+	if center_spot == Vector3.ZERO:
+		return
+	for side in [1.0, -1.0]:
+		var cursor: Vector3 = center_spot
+		var off: float = WALL_STEP
+		while off <= WALL_MAX_HALF_SPAN and wall_positions.size() < WALL_COUNT:
+			var nominal: Vector3 = front_center + axis * (float(side) * off)
+			var spot: Vector3 = _add_wall_slot(nominal, axis, forward, cursor)
+			if spot == Vector3.ZERO:
+				# 山/水/资源点把这一侧挡住：收边，绝不跳过留洞
+				break
+			cursor = spot
+			off += WALL_STEP
+
+# 与已规划的塔位保持 1.7 米以上：塔先落地，墙贴太近会被建造校验拒掉，
+# 正好在塔位裂开一个洞。
+func _near_planned_tower(pos: Vector3) -> bool:
+	for td in tower_positions:
+		var tp: Vector3 = td["pos"] if td is Dictionary else td
+		if pos.distance_to(tp) < 1.7:
+			return true
+	return false
+
+# 在理想墙位附近找一个能落地的点（前后/左右各 1 米内微调），
+# 并且必须紧贴上一段墙（中心距 < 墙直径），返回实际落点；找不到返回零向量。
+func _add_wall_slot(nominal: Vector3, axis: Vector3, forward: Vector3, prev: Vector3) -> Vector3:
+	var max_link: float = WALL_STEP * 1.25   # 1.875 < 2.0，保证与上一段重叠
+	for back in [0.0, 0.35, -0.35, 0.7, -0.7, 1.05, -1.05]:
+		for side in [0.0, 0.2, -0.2, 0.4, -0.4]:
+			var p: Vector3 = nominal - forward * float(back) + axis * float(side)
+			if prev != Vector3.ZERO and prev.distance_to(p) > max_link:
+				continue
+			if not _can_place_ai_building(27, p):
+				continue
+			if _near_planned_tower(p):
+				continue
+			wall_positions.append(p)
+			_defense_queue.append({"id": 27, "pos": p})
+			return p
+	return Vector3.ZERO
+
+# 在理想防线前方/后方几米内挑一条能连续铺墙的线：按整条墙线上可建造的点数打分，
+# 挑得分最高的一条，避免 8 米线正好落在山壁/水面上导致整排墙位作废。
+func _pick_wall_line_center(front_center: Vector3, axis: Vector3, forward: Vector3) -> Vector3:
+	var best: Vector3 = front_center
+	var best_len: int = -1
+	for dd in [0.0, 0.5, -0.5, 1.0, -1.0, 1.5, -1.5, 2.0, -2.0, 3.0, -3.0, 4.0, -4.0]:
+		var cand: Vector3 = front_center + forward * float(dd)
+		var run_start: int = 0
+		var run_len: int = 0
+		for k in range(-7, 8):
+			var p: Vector3 = cand + axis * (float(k) * WALL_STEP)
+			if _can_place_ai_building(27, p):
+				if run_len == 0:
+					run_start = k
+				run_len += 1
+				# 只认连续能建的一段：这样墙线不会在资源/山体处中断后留下大洞
+				if run_len > best_len:
+					best_len = run_len
+					var mid_k: float = float(run_start) + float(run_len - 1) * 0.5
+					best = cand + axis * (mid_k * WALL_STEP)
+			else:
+				run_len = 0
+	return best
 
 # 每 tick 至多尝试建造 DEFENSE_STEP_MAX 座；已建/在建的跳过，资源不足等待下轮
 func _build_defense_step():
@@ -2358,6 +2435,22 @@ func _queue_defense_gaps():
 	for td in tower_positions:
 		if not _pos_has_building(int(td["id"]), td["pos"]):
 			need.append({"id": int(td["id"]), "pos": td["pos"]})
+	# 补缝：把实际建成的墙沿墙线排序，相邻两段中心距超过墙直径就是漏洞
+	# （中间被拆/当初没建起来），直接在缺口正中补一段，敌人挤不进来。
+	var built_walls: Array = []
+	for e in battle.entities.get_children():
+		if e is Building and e.health > 0 and e.entity_id == 27 and entity_belongs_to_me(e):
+			built_walls.append(e.global_position)
+	if built_walls.size() >= 2:
+		built_walls.sort_custom(func(a, b): return a.dot(defense_wall_axis) < b.dot(defense_wall_axis))
+		for i in range(built_walls.size() - 1):
+			var wa: Vector3 = built_walls[i]
+			var wb: Vector3 = built_walls[i + 1]
+			if wa.distance_to(wb) <= WALL_STEP * 1.6:
+				continue
+			var mid: Vector3 = (wa + wb) * 0.5
+			if _can_place_ai_building(27, mid) and not _pos_has_building(27, mid):
+				need.append({"id": 27, "pos": mid})
 	for item in need:
 		if not _queue_has_item(item):
 			_defense_queue.append(item)

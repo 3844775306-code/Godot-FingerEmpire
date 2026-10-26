@@ -195,6 +195,8 @@ const DELIVER_CONTACT_SLACK: float = 1.2
 # 采集船自动搜索油井的半径：石油现在通常位于水域中央，离岸较远，
 # 需要比普通农民更大的搜索半径，否则船停在岸边找不到中心油井。
 const BOAT_GATHER_SEARCH_RANGE: float = 32.0
+# 农民自动搜索资源点的半径 = 视野 × 该系数；采集船用上面的固定半径，不吃这个系数
+const FARMER_GATHER_SEARCH_SCALE: float = 0.7
 
 # Åö×²·ÖÀë½ÚÁ÷
 
@@ -244,11 +246,12 @@ func setup(config: Dictionary):
 		target_type = 0
 	else:
 		target_type = 1
-	# 农民自动找资源点的半径：先用整段视野，保证基地附近的保底资源能被发现；
-	# 附近采空后 _find_nearest_resource 还会再扩大一档搜索。
-	gather_search_range = float(vision_range)
+	# 农民自动找资源点的半径 = 视野 × 0.7，比整段视野更贴身，采集不会散得太开；
+	# 附近采空后 _find_nearest_resource 还会再扩大一档搜索，不会原地发呆。
+	gather_search_range = float(vision_range) * FARMER_GATHER_SEARCH_SCALE
 	if entity_id == 14:
-		gather_search_range = maxf(gather_search_range, BOAT_GATHER_SEARCH_RANGE)
+		# 采集船保持原来的固定搜索半径，不受农民系数影响
+		gather_search_range = maxf(float(vision_range), BOAT_GATHER_SEARCH_RANGE)
 	_animal_type = config.get("animal_type", "")
 	_animal_food_reward = config.get("food_reward", 0)
 	call_deferred("_apply_nation_bonus")
@@ -279,10 +282,10 @@ func _apply_nation_bonus():
 	if mults.has("vision_range"):
 		# 视野倍率是浮点数；之前取 int 会把 +20% 截成 1 倍，加成完全不生效。
 		vision_range *= float(mults["vision_range"])
-		# 国家加成改视野后，采集搜索半径同步取新视野
-		gather_search_range = float(vision_range)
+		# 国家加成改视野后，采集搜索半径同步按新视野折算（采集船仍用固定半径）
+		gather_search_range = float(vision_range) * FARMER_GATHER_SEARCH_SCALE
 		if entity_id == 14:
-			gather_search_range = maxf(gather_search_range, BOAT_GATHER_SEARCH_RANGE)
+			gather_search_range = maxf(float(vision_range), BOAT_GATHER_SEARCH_RANGE)
 	# 国家加成可能改了视野/射程：若这个单位正被单选，范围圈半径跟着更新
 	_sync_range_rings()
 	  # ²»Ö÷¶¯×·»÷£¬Ö»¹¥»÷½øÈëÉä³ÌµÄµÐÈË
