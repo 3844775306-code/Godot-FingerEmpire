@@ -244,7 +244,7 @@ func _ready():
 	# 中央面板淡入
 	UITheme.fade_in(panel, 0.4)
 
-	# 底部提示面板
+	# 底部提示面板：操作说明跟着版本走（鼠标 / 键盘 / 本版贴士 / 国家加成）
 	var bot_panel = Panel.new()
 	bot_panel.position = Vector2(300, 1020)
 	bot_panel.size = Vector2(1800, 250)
@@ -252,21 +252,24 @@ func _ready():
 	add_child(bot_panel)
 	UITheme.fade_in(bot_panel, 0.5)
 
-	var tip_label = Label.new()
-	tip_label.text = "快捷键: Ctrl+[1-9] 编队  |  [1-9] 选择编队  |  Shift+右键 连续指令  |  H 暂停采集  |  P 原地防守  |  L 切换血条文字"
-	tip_label.position = Vector2(0, 30)
-	tip_label.size = Vector2(1800, 30)
-	tip_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	UITheme.apply_label(tip_label, 20, UITheme.PARCHMENT)
-	bot_panel.add_child(tip_label)
+	var tip_box = VBoxContainer.new()
+	tip_box.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	tip_box.offset_left = 30
+	tip_box.offset_right = -30
+	tip_box.offset_top = 14
+	tip_box.offset_bottom = -14
+	tip_box.add_theme_constant_override("separation", 8)
+	tip_box.alignment = BoxContainer.ALIGNMENT_CENTER
+	bot_panel.add_child(tip_box)
 
-	var tip2 = Label.new()
-	tip2.text = "维京 +25%HP +10%速 | 英格兰 +15%攻 +20%视野 | 法兰西 +25护甲 城堡2级 | 中国 食物+20% 金+10% 人口+10 | 匈牙利 +15护甲 石+15% 金+10% | 日本 +15%攻速 +10%攻 | 拜占庭 +2护甲 金+10%"
-	tip2.position = Vector2(0, 80)
-	tip2.size = Vector2(1800, 30)
-	tip2.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	UITheme.apply_label(tip2, 18, Color(UITheme.STONE).lightened(0.3))
-	bot_panel.add_child(tip2)
+	_add_tip_line(tip_box, "🖱️ 鼠标：左键选择 / 拖动框选 · 右键移动·攻击 · 中键拖拽平移 · Ctrl+中键拖拽旋转视角 · 滚轮缩放",
+		16, UITheme.PARCHMENT)
+	_add_tip_line(tip_box, "⌨️ 键盘：Ctrl+1~9 编队 · 1~9 选编队 · Shift+右键 连续指令 · F1 全选军队 · F2 自动进攻 · F3 撤退 · H 暂停采集 · P 原地防守 · L 血条文字 · Tab 跟随",
+		16, UITheme.PARCHMENT)
+	_add_tip_line(tip_box, "✨ 本版 %s：设置里可调「相机放大倍数」· 选中单位改为贴边发光描边 · 建筑血条按阵营上色 · 手机端「↻ 按住旋转」· 点「📜 更新日志」看全部改动" % AppVersion.version(),
+		15, Color(UITheme.GOLD, 0.95))
+	_add_tip_line(tip_box, "国家加成：维京 +25%HP +10%速 · 英格兰 +15%攻 +20%视野 · 法兰西 +25护甲 城堡2级 · 中国 食物+20% 金+10% 人口+10 · 匈牙利 +15护甲 石+15% 金+10% · 日本 +15%攻速 +10%攻 · 拜占庭 +2护甲 金+10%",
+		15, Color(UITheme.STONE).lightened(0.3))
 
 	# 底部版本号
 	var version = Label.new()
@@ -468,6 +471,15 @@ func _attach_new_badge_mobile(btn: Button) -> void:
 	badge.offset_top = UILayout.dp(3.0)
 	badge.offset_bottom = UILayout.dp(19.0)
 	btn.add_child(badge)
+
+# 底部说明行：居中、自动换行，字体/颜色跟随主题
+func _add_tip_line(box: VBoxContainer, text: String, font_size: int, color: Color) -> void:
+	var lbl := Label.new()
+	lbl.text = text
+	lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lbl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UITheme.apply_label(lbl, font_size, color)
+	box.add_child(lbl)
 
 # ==================== 更新检查 ====================
 # 主菜单启动后拉一次版本清单：有新版就在底部（手机在列表最上面）弹出下载按钮。
@@ -805,11 +817,19 @@ func _build_mobile_layout() -> void:
 			_attach_new_badge_mobile(btn)
 
 	var tip := Label.new()
-	tip.text = "手机操作：点按选择 / 拖动平移视角 / 双指缩放 / 长按空地呼出建造菜单 / 右上角小地图切换统计"
+	tip.text = "手机操作：点按选择 / 拖动平移 / 双指缩放 / ↻ 按住旋转视角 / 长按空地建造 / 右上角小地图切换统计"
 	tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	tip.add_theme_font_size_override("font_size", UILayout.font_dp(8.0))
 	tip.add_theme_color_override("font_color", Color(UITheme.STONE).lightened(0.25))
 	vb.add_child(tip)
+
+	# 本版贴士（和桌面版一致，提示这版新增可调项与更新日志入口）
+	var tip_ver := Label.new()
+	tip_ver.text = "本版 %s：设置里可调相机倍数 · 主菜单「📜 更新日志」看全部改动" % AppVersion.version()
+	tip_ver.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	tip_ver.add_theme_font_size_override("font_size", UILayout.font_dp(8.0))
+	tip_ver.add_theme_color_override("font_color", Color(UITheme.GOLD, 0.8))
+	vb.add_child(tip_ver)
 
 	vb.add_child(_mobile_section("%s - Godot 4.7" % AppVersion.display(), Color(UITheme.STONE).lightened(0.2)))
 	_mobile_vb = vb
