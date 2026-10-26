@@ -59,13 +59,16 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 
 版本号唯一来源是 `scripts/core/AppVersion.gd` 的 `VERSION` / `RELEASE_DATE`，**不要手改散落在别处的版本字符串**（主菜单、更新日志面板、底部版本行都读它）。
 
-规则（玩家定的）：
+规则（玩家定的，已按全部历史提交重新折算）：
 
 | 条件 | 动作 | 例子 |
 |------|------|------|
-| 每累计 10 次 git 提交 | 小版本 +1，余数保留到下次 | v1.0.0 → v1.0.1 |
-| 距上次版本号发布日 ≥ 3 天且有提交 | 中版本 +1，小版本归零 | v1.0.8 → v1.1.0 |
+| 每累计 10 次 git 提交 | 小版本 +1，余数保留到下次 | v1.6.49 → v1.6.50 |
+| 相邻两次提交间隔 ≥ 3 天 | 中版本 +1，小版本归零 | v1.5.8 → v1.6.0 |
+| 相邻两次提交间隔 ≥ 30 天（临时规则） | 大版本 +1，中/小归零 | v1.6.8 → v2.0.0 |
 | 玩家口头指定（如「把版本更新到 2.0.0」） | `-Major N` 手动升，中/小归零 | → v2.0.0 |
+
+> 历史基线：以 2026-07-18 的初始提交为 v1.0.0，按上述规则回放全部 Git 提交；当前版本为 v1.6.49（755 次提交时）。更新日志里的五个版本条目已同步折算为 v1.6.45 ~ v1.6.49。
 
 **每次任务提交后必须跑一次**（这一步由执行任务的人负责，没有 git hook）：
 
@@ -73,8 +76,8 @@ Co-Authored-By: Claude <noreply@anthropic.com>
 powershell -NoProfile -ExecutionPolicy Bypass -File tools/bump_version.ps1
 ```
 
-- 输出 `VERSION_SAME v1.0.x (...)` = 不需要升版（计数已记录在 `tools/version_state.json`）；
-- 输出 `VERSION_BUMPED v1.0.x -> v1.0.y (...)` = 已改写 `AppVersion.gd`，**接着要做两件事**：
+- 输出 `VERSION_SAME v1.6.x (...)` = 不需要升版（计数已记录在 `tools/version_state.json`）；
+- 输出 `VERSION_BUMPED v1.6.x -> v1.6.y (...)` = 已改写 `AppVersion.gd`，**接着要做两件事**：
   1. 在 `scripts/data/ChangelogData.gd` 的 `entries()` 顶部补一条该版本记录（玩家向要点，5~8 条，前缀「新增/优化/修复」）；
   2. 把 `AppVersion.gd`、`tools/version_state.json`、`ChangelogData.gd` 一起提交（commit message 里写 `版本号更新到 vX.Y.Z`）。
 - `-DryRun` 只判断不写文件；`-Major 2` 手动指定大版本。

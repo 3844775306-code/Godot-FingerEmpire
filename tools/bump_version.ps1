@@ -1,17 +1,13 @@
 ﻿# 版本号自动递进工具
 #
 # 规则（玩家定的）：
-#   1. 每累计 10 次提交 +1 个小版本，例如 v1.0.0 → v1.0.1（余数保留到下次）；
-#   2. 距「上次版本号发布日」超过 3 天且这期间有提交 → +1 个中版本，小版本归零，
-#      例如 v1.0.8 → v1.1.0；
-#   3. 大版本只能由玩家口头指定：powershell -File tools/bump_version.ps1 -Major 2
-#      （会重置中/小版本为 0，得到 2.0.0）。
+#   1. 每累计 10 次提交 +1 个小版本，例如 v1.6.49 → v1.6.50（余数保留到下次）；
+#   2. 相邻两次提交间隔 ≥ 3 天 → +1 个中版本，小版本归零，例如 v1.5.8 → v1.6.0；
+#   3. 相邻两次提交间隔 ≥ 30 天 → +1 个大版本，中/小版本归零（临时规则）；
+#   4. 大版本也可由玩家口头指定：-Major 2 → 2.0.0。
 #
-# 每次任务提交后跑一次（CLAUDE.md 里有约定）。脚本会：
-#   - 读 tools/version_state.json 里的计数与上次发布信息；
-#   - 用 git 统计上次发布以来的提交数；
-#   - 需要升版时改写 scripts/core/AppVersion.gd 的 VERSION / RELEASE_DATE；
-#   - 写回状态文件（最后一次计入的提交、剩余的 pending 次数）。
+# 每次任务提交后跑一次。脚本会从 version_state.json 的 last_bump_commit
+# 之后逐个回放提交到 HEAD，所以补算历史提交与日常递增使用同一套规则。
 #
 # 参数：
 #   -DryRun   只打印判断结果，不写任何文件（调试用）
@@ -50,17 +46,7 @@ $fromCommit = [string]$state.last_bump_commit
 if ([string]::IsNullOrWhiteSpace($fromCommit)) {
 	$fromCommit = $head
 }
-
-# 上次发布以来有多少次提交（--count 只数提交数，包含合并提交）
-$commitCount = 0
-if ($fromCommit -ne $head) {
-	$commitCount = [int]((git rev-list --count "$fromCommit..$head")).Trim()
-}
-
-# 距上次版本号发布多少天
-$today = Get-Date
-$lastDate = [datetime]::ParseExact([string]$state.last_bump_date, "yyyy-MM-dd", $null)
-$daysSinceRelease = [int]($today.Date - $lastDate.Date).Days
+$fromCommit = $fromCommit.Trim()
 
 $oldMajor = [int]$state.major
 $oldMinor = [int]$state.minor
@@ -71,8 +57,8 @@ $newMajor = $oldMajor
 $newMinor = $oldMinor
 $newPatch = $oldPatch
 $newPending = $pending
-$reason = ""
-$changed = $false
+$latestCommitDate = $null
+$reasons = New-Object System.Collections.Generic.List[string]
 
 if ($Major -ge 0) {
 	# 玩家指定的新大版本：中/小版本归零，计数清空
@@ -80,43 +66,66 @@ if ($Major -ge 0) {
 	$newMinor = 0
 	$newPatch = 0
 	$newPending = 0
-	$reason = "玩家指定大版本"
-	$changed = $true
-}
-elseif ($daysSinceRelease -ge 3 -and ($commitCount + $pending) -gt 0) {
-	# 距上次发布超过 3 天且有未计入的提交 → 中版本 +1
-	$newMinor = $oldMinor + 1
-	$newPatch = 0
-	$newPending = 0
-	$reason = "距上次发布 $daysSinceRelease 天，中版本 +1"
-	$changed = $true
-}
-else {
-	# 每累计 10 次提交 +1 个小版本，余数保留
-	$total = $pending + $commitCount
-	if ($total -ge 10) {
-		$steps = [int][math]::Floor($total / 10)
-		$newPatch = $oldPatch + $steps
-		$newPending = $total % 10
-		$reason = "累计 $total 次提交，小版本 +$steps"
-		$changed = $true
+	$reasons.Add("玩家指定大版本")
+} elseif ($fromCommit -ne $head) {
+	# 从上次计入的提交之后逐个回放，按相邻提交的日期差处理中/大版本
+	$rawCommits = @(& git log --reverse --format="%H|%cI" "$fromCommit..$head")
+	$commits = New-Object System.Collections.Generic.List[object]
+	foreach ($line in $rawCommits) {
+		if ([string]::IsNullOrWhiteSpace($line)) { continue }
+		$parts = $line -split "\|", 2
+		if ($parts.Count -lt 2) { continue }
+		$commits.Add([pscustomobject]@{
+			Hash = $parts[0].Trim()
+			Date = [datetime]::Parse($parts[1].Trim())
+		})
 	}
-	else {
-		$newPending = $total
-		$reason = "累计 $total/10 次提交，距上次发布 $daysSinceRelease 天"
+
+	if ($commits.Count -gt 0) {
+		$fromDateText = (& git show -s --format=%cI $fromCommit | Out-String).Trim()
+		$prevDate = [datetime]::Parse($fromDateText)
+
+		foreach ($commit in $commits) {
+			$gapDays = [int]($commit.Date.Date - $prevDate.Date).Days
+			if ($gapDays -ge 30) {
+				$newMajor += 1
+				$newMinor = 0
+				$newPatch = 0
+				$newPending = 0
+				$reasons.Add("提交间隔 $gapDays 天，大版本 +1")
+			} elseif ($gapDays -ge 3) {
+				$newMinor += 1
+				$newPatch = 0
+				$newPending = 0
+				$reasons.Add("提交间隔 $gapDays 天，中版本 +1")
+			} else {
+				$newPending += 1
+				if ($newPending -ge 10) {
+					$steps = [int][math]::Floor($newPending / 10)
+					$newPatch += $steps
+					$newPending = $newPending % 10
+					$reasons.Add("累计 10 次提交，小版本 +$steps")
+				}
+			}
+			$prevDate = $commit.Date
+		}
+		$latestCommitDate = $commits[$commits.Count - 1].Date
 	}
 }
 
 $oldVersion = "v$oldMajor.$oldMinor.$oldPatch"
 $newVersion = "v$newMajor.$newMinor.$newPatch"
-$todayText = $today.ToString("yyyy-MM-dd")
+$changed = $oldVersion -ne $newVersion
+$todayText = (Get-Date).ToString("yyyy-MM-dd")
+$releaseDateText = if ($latestCommitDate -ne $null) { $latestCommitDate.ToString("yyyy-MM-dd") } else { $todayText }
+$reasonText = if ($reasons.Count -gt 0) { [string]::Join("；", $reasons) } else { "累计 $newPending/10 次提交" }
 
 if ($changed) {
 	if (-not $DryRun) {
 		# 改写 AppVersion.gd：只替换两行常量，其余内容原样保留
 		$content = [System.IO.File]::ReadAllText($versionScript, [System.Text.Encoding]::UTF8)
 		$content = [regex]::Replace($content, 'const VERSION: String = "[^"]*"', "const VERSION: String = `"$newVersion`"")
-		$content = [regex]::Replace($content, 'const RELEASE_DATE: String = "[^"]*"', "const RELEASE_DATE: String = `"$todayText`"")
+		$content = [regex]::Replace($content, 'const RELEASE_DATE: String = "[^"]*"', "const RELEASE_DATE: String = `"$releaseDateText`"")
 		$utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 		[System.IO.File]::WriteAllText($versionScript, $content, $utf8NoBom)
 
@@ -125,21 +134,23 @@ if ($changed) {
 		$state.patch = $newPatch
 		$state.pending = $newPending
 		$state.last_bump_commit = $head
-		$state.last_bump_date = $todayText
+		$state.last_bump_date = $releaseDateText
 		Save-StateFile $state
 	}
-	Write-Host "VERSION_BUMPED $oldVersion -> $newVersion ($reason)"
+	Write-Host "VERSION_BUMPED $oldVersion -> $newVersion ($reasonText)"
 	if (-not $DryRun) {
 		Write-Host "已更新 scripts/core/AppVersion.gd 与 tools/version_state.json"
 		Write-Host "别忘了在 scripts/data/ChangelogData.gd 的 entries() 顶部补一条 $newVersion 的更新日志"
 	}
-}
-else {
+} else {
 	if (-not $DryRun) {
 		# 没升版也要记住这次计入的提交，避免下次重复计数
 		$state.pending = $newPending
 		$state.last_bump_commit = $head
+		if ($latestCommitDate -ne $null) {
+			$state.last_bump_date = $releaseDateText
+		}
 		Save-StateFile $state
 	}
-	Write-Host "VERSION_SAME $newVersion ($reason)"
+	Write-Host "VERSION_SAME $newVersion ($reasonText)"
 }

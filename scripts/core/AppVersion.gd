@@ -5,12 +5,11 @@ extends RefCounted
 # 不要在别处再写一份版本字符串，否则很容易和更新日志对不上。
 #
 # 项目没有用 git tag，导出后也读不到 git 信息（git_describe 插件只在编辑器里可用），
-# 所以版本号用常量维护。
-
-const VERSION: String = "v1.0.3"
+# 所以版本号用常量维护；版本历史按 tools/bump_version.ps1 的规则从 1.0.0 折算。
+const VERSION: String = "v1.6.49"
 const RELEASE_DATE: String = "2026-10-26"
 
-# 面板标题、入口按钮上显示用："v1.0.2 (2026-10-26)"
+# 面板标题、入口按钮上显示用："v1.6.49 (2026-10-26)"
 static func display() -> String:
 	return "%s (%s)" % [VERSION, RELEASE_DATE]
 
