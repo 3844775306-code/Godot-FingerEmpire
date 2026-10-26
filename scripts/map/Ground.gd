@@ -148,6 +148,8 @@ func apply_received_map(p_terrain: Array, p_height: Array, p_resources: Array, p
 			else:
 				orow[y] = 0
 		overlay_grid.append(orow)
+	# 地图网格整体换掉了，视野系统缓存的扁平地形必须失效
+	VisionSystem.invalidate_terrain_cache()
 	for x in range(size):
 		var color_col = []
 		for y in range(size):

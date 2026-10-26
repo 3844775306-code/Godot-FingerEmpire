@@ -16,9 +16,19 @@ const FOREST_MIN_RUN: int = 2            # 连续几格森林算硬遮挡
 const FOREST_IGNORE_DIST: float = 2.0    # 观察者脚下多少米内的森林不计遮挡
 const LOS_TOLERANCE: float = 0.12        # 地形高度容差，防止浮点误差误挡
 const LOS_TARGET_INSET: float = 0.8      # 目标格前多少米开始不再检查地形，避免把自己脚下当天花板
-const OUTLINE_STEP: float = 0.42         # 视野环射线采样步长
 const OUTLINE_MIN_RADIUS: float = 0.6
 const MAX_RAY_CELLS: int = 512
+# compute_visible_cells 的临时去重缓冲。这个函数只会在主线程调用；复用同一个
+# PackedByteArray 可以省掉每个视野源一次 100x100 字节的分配，后期单位多时很可观。
+static var _seen_scratch: PackedByteArray = PackedByteArray()
+# 地图地形二维 Array 在热循环里逐格查两层 Array 很慢；这里按地图实例缓存一份
+# 扁平 PackedArray，视野计算只做一次下标访问。地形在开局生成后不再变，换图时重建。
+static var _flat_map_ref: WeakRef = null
+static var _flat_map_size: int = -1
+static var _flat_height: PackedFloat32Array = PackedFloat32Array()
+static var _flat_overlay: PackedInt32Array = PackedInt32Array()
+static var _flat_has_height: bool = false
+static var _flat_has_overlay: bool = false
 
 # 找到真正的地形节点：战场管理器、ClientRenderer、或者地形节点自己都能传进来。
 static func resolve_map(owner) -> Node:
@@ -185,6 +195,11 @@ static func has_line_of_sight(map, origin: Vector3, target: Vector3, size: int =
 	var cells: Array = ray_cells(map, origin, target, ms)
 	if cells.size() <= 1:
 		return true
+	_ensure_flat_terrain(map, ms)
+	var use_hgrid: bool = _flat_has_height
+	var use_ogrid: bool = _flat_has_overlay
+	var hflat: PackedFloat32Array = _flat_height
+	var oflat: PackedInt32Array = _flat_overlay
 	var forest_run: int = 0
 	for i in range(1, cells.size()):
 		var cell: Vector2i = cells[i]
@@ -195,15 +210,17 @@ static func has_line_of_sight(map, origin: Vector3, target: Vector3, size: int =
 		)
 		var d: float = dist * t
 		var is_target_cell: bool = (i == cells.size() - 1)
+		var idx: int = cell.x * ms + cell.y
 		# 目标格自身的地形不参与遮挡；否则山坡上的目标会被自己脚前的坡挡住。
 		if not is_target_cell and d < dist - LOS_TARGET_INSET:
-			var h: float = tile_height(map, cell.x, cell.y, ms)
+			var h: float = hflat[idx] if use_hgrid else tile_height(map, cell.x, cell.y, ms)
 			var line_y: float = lerpf(origin.y, target.y, t)
 			if h > line_y + LOS_TOLERANCE:
 				return false
 		# 森林硬遮挡：连续 2 格森林挡住视线；观察者脚下 2 米内的树忽略。
 		# 目标格是森林时也计数，这样躲在密林深处的单位不会被外面看见。
-		if d >= FOREST_IGNORE_DIST and tile_overlay(map, cell.x, cell.y, ms) == 1:
+		var ov: int = oflat[idx] if use_ogrid else tile_overlay(map, cell.x, cell.y, ms)
+		if d >= FOREST_IGNORE_DIST and ov == 1:
 			forest_run += 1
 			if forest_run >= FOREST_MIN_RUN:
 				return false
@@ -225,21 +242,25 @@ static func compute_visible_cells(map, origin: Vector3, radius: float, size: int
 	if map == null or not is_instance_valid(map) or radius <= 0.0:
 		return cells
 	var ms: int = size if size > 0 else map_size(map)
-	var seen: PackedByteArray = PackedByteArray()
-	seen.resize(ms * ms)
-	seen.fill(0)
+	var need: int = ms * ms
+	if _seen_scratch.size() != need:
+		_seen_scratch.resize(need)
+	var seen: PackedByteArray = _seen_scratch
 	var origin_g: Vector2i = world_to_grid(origin, ms)
 	var origin_idx: int = origin_g.x * ms + origin_g.y
 	seen[origin_idx] = 1
 	cells.append(origin_idx)
 	# 地形数组只取一次，别在最热的循环里反复 has_method / 节点查找。
-	var height_grid = map.get("height_grid")
-	var overlay_grid = map.get("overlay_grid")
-	var use_hgrid: bool = height_grid is Array and height_grid.size() >= ms and height_grid[0] is Array
-	var use_ogrid: bool = overlay_grid is Array and overlay_grid.size() >= ms and overlay_grid[0] is Array
+	_ensure_flat_terrain(map, ms)
+	var use_hgrid: bool = _flat_has_height
+	var use_ogrid: bool = _flat_has_overlay
+	var hflat: PackedFloat32Array = _flat_height
+	var oflat: PackedInt32Array = _flat_overlay
 	var half: float = float(ms) * 0.5
-	var ray_count: int = maxi(72, int(ceil(radius * 12.0)))
-	var step: float = maxf(0.4, radius / 48.0)
+	# 射线密度和步长都跟半径走：半径 10 时 60 条/0.75m，比原来的 120 条/0.4m
+	# 少一半以上采样点，1 米格子的迷雾边缘看不出差别。
+	var ray_count: int = maxi(48, int(ceil(radius * 6.0)))
+	var step: float = maxf(0.75, radius / 32.0)
 	for i in ray_count:
 		var a: float = TAU * float(i) / float(ray_count)
 		var dir_x: float = cos(a)
@@ -260,11 +281,10 @@ static func compute_visible_cells(map, origin: Vector3, radius: float, size: int
 				var h: float
 				var ov: int = 0
 				if use_hgrid:
-					var hcol = height_grid[gx]
-					h = float(hcol[gz]) if hcol is Array and hcol.size() > gz else 0.0
+					var idx: int = gx * ms + gz
+					h = hflat[idx]
 					if use_ogrid:
-						var ocol = overlay_grid[gx]
-						ov = int(ocol[gz]) if ocol is Array and ocol.size() > gz else 0
+						ov = oflat[idx]
 				else:
 					h = tile_height(map, gx, gz, ms)
 					ov = tile_overlay(map, gx, gz, ms)
@@ -287,36 +307,124 @@ static func compute_visible_cells(map, origin: Vector3, radius: float, size: int
 						cells.append(idx)
 				max_slope = maxf(max_slope, cell_slope)
 			d += step
+	# 只清掉本函数写过的格，而不是每源扫一遍 100x100；清完缓冲可直接给下一个
+	# 视野源复用，省掉每个源一次全图 fill。
+	for idx in cells:
+		seen[idx] = 0
 	return cells
 
+# 地图数据被整体替换（联机客户端收到主机地图）时调用，丢弃扁平地形缓存。
+static func invalidate_terrain_cache() -> void:
+	_flat_map_ref = null
+	_flat_map_size = -1
+	_flat_height = PackedFloat32Array()
+	_flat_overlay = PackedInt32Array()
+	_flat_has_height = false
+	_flat_has_overlay = false
+
+# 把地图的 height_grid / overlay_grid 摊平成 PackedArray。只在首次或换图时执行。
+static func _ensure_flat_terrain(map, ms: int) -> void:
+	if _flat_map_ref != null and _flat_map_ref.get_ref() == map and _flat_map_size == ms:
+		return
+	_flat_map_ref = weakref(map)
+	_flat_map_size = ms
+	var hgrid = map.get("height_grid")
+	var ogrid = map.get("overlay_grid")
+	_flat_has_height = hgrid is Array and hgrid.size() >= ms and hgrid[0] is Array
+	_flat_has_overlay = ogrid is Array and ogrid.size() >= ms and ogrid[0] is Array
+	_flat_height = PackedFloat32Array()
+	_flat_overlay = PackedInt32Array()
+	if _flat_has_height:
+		_flat_height.resize(ms * ms)
+		for gx in ms:
+			var hrow = hgrid[gx]
+			if not (hrow is Array):
+				continue
+			var base: int = gx * ms
+			for gz in ms:
+				if gz < hrow.size():
+					_flat_height[base + gz] = float(hrow[gz])
+	if _flat_has_overlay:
+		_flat_overlay.resize(ms * ms)
+		for gx in ms:
+			var orow = ogrid[gx]
+			if not (orow is Array):
+				continue
+			var base: int = gx * ms
+			for gz in ms:
+				if gz < orow.size():
+					_flat_overlay[base + gz] = int(orow[gz])
+
 # 生成选中单位的视野边界（世界坐标），给 GroundRangeRing 画不规则轮廓。
+#
+# 旧实现每走一步都调用 has_line_of_sight()，一次要重新做一遍 DDA，96 条射线
+# 在平滑地形上约 48ms；选中单位移动时视野环每 0.08s 重建一次，直接吃掉主线程。
+# 这里改成和 compute_visible_cells 相同的一次性射线步进：沿途维护最高地形坡度和
+# 连续森林格数，不再为每个采样点重跑 DDA，计算量降一个数量级。
 static func compute_visibility_outline(map, origin: Vector3, radius: float, segments: int = 96) -> Array:
 	var pts: Array = []
 	if map == null or not is_instance_valid(map) or radius <= 0.0:
 		return pts
 	var ms: int = map_size(map)
 	var segs: int = maxi(32, segments)
-	var step: float = maxf(OUTLINE_STEP, radius / 64.0)
+	var step: float = maxf(0.55, radius / 64.0)
+	_ensure_flat_terrain(map, ms)
+	var use_hgrid: bool = _flat_has_height
+	var use_ogrid: bool = _flat_has_overlay
+	var hflat: PackedFloat32Array = _flat_height
+	var oflat: PackedInt32Array = _flat_overlay
+	var half: float = float(ms) * 0.5
 	for i in segs:
 		var a: float = TAU * float(i) / float(segs)
-		var dir: Vector2 = Vector2(cos(a), sin(a))
+		var dir_x: float = cos(a)
+		var dir_z: float = sin(a)
 		var last: float = OUTLINE_MIN_RADIUS
 		var d: float = OUTLINE_MIN_RADIUS
+		var max_slope: float = -INF
+		var forest_run: int = 0
 		var blocked: bool = false
+		var last_gx: int = -999
+		var last_gz: int = -999
 		while d <= radius:
-			var wx: float = origin.x + dir.x * d
-			var wz: float = origin.z + dir.y * d
-			var g: Vector2i = world_to_grid(Vector3(wx, 0.0, wz), ms)
-			var target: Vector3 = Vector3(wx, tile_height(map, g.x, g.y, ms), wz)
-			if not has_line_of_sight(map, origin, target, ms):
-				blocked = true
-				break
-			last = d
+			var wx: float = origin.x + dir_x * d
+			var wz: float = origin.z + dir_z * d
+			var gx: int = clampi(roundi(wx + half), 0, ms - 1)
+			var gz: int = clampi(roundi(wz + half), 0, ms - 1)
+			if gx != last_gx or gz != last_gz:
+				last_gx = gx
+				last_gz = gz
+				var h: float
+				var ov: int = 0
+				if use_hgrid:
+					var idx: int = gx * ms + gz
+					h = hflat[idx]
+					if use_ogrid:
+						ov = oflat[idx]
+				else:
+					h = tile_height(map, gx, gz, ms)
+					ov = tile_overlay(map, gx, gz, ms)
+				# 目标高过观察者头顶 1.5m：和 has_line_of_sight 的硬条件一致。
+				if h > origin.y + HEAD_CLEARANCE:
+					blocked = true
+					break
+				var cell_slope: float = (h - origin.y) / maxf(d, 0.001)
+				if cell_slope + LOS_TOLERANCE < max_slope:
+					blocked = true
+					break
+				if d >= FOREST_IGNORE_DIST and ov == 1:
+					forest_run += 1
+					if forest_run >= FOREST_MIN_RUN:
+						blocked = true
+						break
+				elif d >= FOREST_IGNORE_DIST:
+					forest_run = 0
+				max_slope = maxf(max_slope, cell_slope)
+				last = d
 			d += step
 		if not blocked:
 			last = radius
-		var fx: float = origin.x + dir.x * last
-		var fz: float = origin.z + dir.y * last
+		var fx: float = origin.x + dir_x * last
+		var fz: float = origin.z + dir_z * last
 		var fg: Vector2i = world_to_grid(Vector3(fx, 0.0, fz), ms)
 		pts.append(Vector3(fx, tile_height(map, fg.x, fg.y, ms), fz))
 	return pts

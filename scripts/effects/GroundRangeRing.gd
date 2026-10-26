@@ -29,6 +29,9 @@ const REBUILD_DISTANCE: float = 0.10
 const REBUILD_INTERVAL: float = 0.08
 # 相机距离变化超过这个比例就重算线宽（拉远时线会自动变粗，观感才一致）
 const CAMERA_DIST_REL: float = 0.12
+# 视野边界轮廓的重算距离：移动/相机变化时网格要重建，但轮廓只需在单位走出一段距离
+# 后重算。旧实现每 0.08s 重建一次轮廓，选中移动单位时是明显的主线程热点。
+const OUTLINE_REFRESH_DIST: float = 1.5
 # 呼吸动画：粗线（作用范围）轻微起伏，静止时也能看出「这是选中状态」
 const PULSE_SPEED: float = 1.7
 const PULSE_DEPTH: float = 0.16
@@ -45,6 +48,10 @@ var _pulse_t: float = 0.0
 var _base_alpha: float = 0.0
 var _mat: ShaderMaterial
 var _last_cam_dist: float = 0.0
+# 轮廓顶点按「相对圆心」缓存；地面网格仍按每个重建周期采样高度。
+var _outline_pts: Array = []
+var _outline_center: Vector3 = Vector3(INF, INF, INF)
+var _outline_radius: float = -1.0
 
 # kind 决定线宽与配色的默认组合；tint 不传（alpha=0）时按 kind 取默认色
 static func create(p_kind: int, p_radius: float, p_height_fn: Callable, p_tint: Color = Color(0, 0, 0, 0), p_outline_fn: Callable = Callable()) -> GroundRangeRing:
@@ -182,11 +189,24 @@ func _rebuild(force: bool) -> void:
 	# top_level 之后自身不继承父节点的旋转/缩放，本地轴就是世界轴。
 	var pts: Array = []
 	if _outline_fn.is_valid():
-		var world_pts = _outline_fn.call(center, radius)
-		if world_pts is Array and (world_pts as Array).size() >= 8:
-			for p in world_pts:
-				var wp: Vector3 = p
-				pts.append(Vector3(wp.x - center.x, 0.0, wp.z - center.z))
+		var need_outline: bool = _outline_pts.is_empty() \
+			or absf(radius - _outline_radius) > 0.01 \
+			or _outline_center.distance_to(center) > OUTLINE_REFRESH_DIST
+		if need_outline:
+			var world_pts = _outline_fn.call(center, radius)
+			if world_pts is Array and (world_pts as Array).size() >= 8:
+				var local_pts: Array = []
+				for p in world_pts:
+					var wp: Vector3 = p
+					local_pts.append(Vector3(wp.x - center.x, 0.0, wp.z - center.z))
+				_outline_pts = local_pts
+				_outline_center = center
+				_outline_radius = radius
+			else:
+				# 地形未就绪/射线全被挡时不要缓存失败结果，下一轮继续尝试。
+				_outline_pts.clear()
+				_outline_center = Vector3(INF, INF, INF)
+		pts = _outline_pts
 	if pts.size() < 8:
 		# 视野边界算不出来（地形未就绪/射线全被挡）时退回圆，避免直接没有圈。
 		pts = GroundStripMesh.circle_points(Vector3.ZERO, radius)
