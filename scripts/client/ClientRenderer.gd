@@ -309,6 +309,10 @@ func is_enemy_info(info: Dictionary) -> bool:
 	var team := int(info.get("team", -1))
 	return team != RTSConfig.Team.NEUTRAL and team != player_team
 
+func is_neutral_info(info: Dictionary) -> bool:
+	if info.is_empty(): return false
+	return int(info.get("team", -1)) == RTSConfig.Team.NEUTRAL
+
 func _update_command_card(cc, ids: Array):
 	# 队友单位只可查看：不显示任何生产/升级/拆除/指挥按钮
 	if not ids.is_empty():
@@ -1678,8 +1682,8 @@ func _update_waypoint_markers(node: Node3D, info: Dictionary):
 	if not is_selected:
 		_free_waypoint_markers(int(info.get("id", -1)))
 		return
-	# 敌方单位只读：路径/航点属于指挥信息，不展示
-	if is_enemy_info(info):
+	# 敌方/中立只读：路径/航点属于指挥信息，不展示
+	if is_enemy_info(info) or is_neutral_info(info):
 		_free_waypoint_markers(int(info.get("id", -1)))
 		return
 

@@ -56,8 +56,8 @@ func _sanitize_entity_refs() -> bool:
 		if not is_instance_valid(e) or (e is GameEntity and e.health <= 0):
 			selected_entities.remove_at(i)
 			changed = true
-		elif _is_enemy_owned(e) and not (e as Node3D).visible:
-			# 敌方单位走出视野后不能继续选中/查看旧信息
+		elif _is_inspect_only(e) and not (e as Node3D).visible:
+			# 敌方/中立目标离开视野后不能继续选中/查看旧信息
 			selected_entities.remove_at(i)
 			if is_instance_valid(e):
 				(e as Node3D).set_selected(false)
@@ -272,7 +272,7 @@ func _input(event):
 					_clear_selection()
 					_add_to_selection(clicked_entity)
 			else:
-				# 点击空地或非己方实体
+				# 点击空地或不可被查看的实体
 				if not selected_entities:
 					last_clicked_entity = null
 					_clear_selection()
@@ -280,9 +280,9 @@ func _input(event):
 					box_start = pos
 					box_end = pos
 				else:
-					# 有选中单位时点击敌方/空地 → 攻击/移动命令；敌方选中只读，点击空地取消查看
-					if _selection_has_teammate() or _selection_has_enemy():
-						# 队友/敌方单位无法指挥：点击空地只取消选中
+					# 有选中单位时点击敌方/中立/空地 → 攻击/移动命令；只读选中则取消查看
+					if _selection_has_teammate() or _selection_has_enemy() or _selection_has_neutral():
+						# 队友/敌方/中立单位无法指挥：点击空地只取消选中
 						_clear_selection()
 					else:
 						bm._command_selected_units(event.position)
@@ -320,8 +320,8 @@ func _on_left_mouse_released(event):
 func _select_all_of_same_type(target):
 	if target == null or not is_instance_valid(target):
 		return
-	# 敌方单位只允许单选查看，不按同类批量选中；双击也只保留当前这一个。
-	if _is_enemy_owned(target):
+	# 敌方/中立只允许单选查看，不按同类批量选中；双击也只保留当前这一个。
+	if _is_inspect_only(target):
 		_clear_selection()
 		_add_to_selection(target)
 		return
@@ -442,13 +442,25 @@ func _is_enemy_owned(entity) -> bool:
 		return false
 	return entity.team != bm.get_host_team()
 
-# 可被选中查看的实体：自己的 + 队友的 + 当前视野内可见的敌方单位。
-# 敌方单位只读，命令入口另有 _selection_all_local 防御。
+# 中立目标：资源点、动物、废弃建筑/桥等。允许选中查看信息，但同样不允许任何命令。
+func _is_neutral_owned(entity) -> bool:
+	if entity == null or not is_instance_valid(entity):
+		return false
+	if not (entity is GameEntity):
+		return false
+	return entity.team == RTSConfig.Team.NEUTRAL
+
+# 只看不指挥的目标：敌方和所有中立实体。
+func _is_inspect_only(entity) -> bool:
+	return _is_enemy_owned(entity) or _is_neutral_owned(entity)
+
+# 可被选中查看的实体：自己的 + 队友的 + 当前可见的敌方 + 已探索区域内的中立目标。
+# 敌方/中立只读，命令入口另有 _selection_all_local 防御。
 func _can_inspect(entity) -> bool:
 	if _is_local_owned(entity) or _is_teammate_owned(entity):
 		return true
-	if _is_enemy_owned(entity):
-		# 迷雾里的敌人不能通过点击碰撞体“隔雾查看”
+	if _is_enemy_owned(entity) or _is_neutral_owned(entity):
+		# 迷雾里的敌人/中立目标不能通过点击碰撞体“隔雾查看”
 		var node := entity as Node3D
 		return node != null and node.visible
 	return false
@@ -462,6 +474,12 @@ func _selection_has_teammate() -> bool:
 func _selection_has_enemy() -> bool:
 	for e in selected_entities:
 		if _is_enemy_owned(e):
+			return true
+	return false
+
+func _selection_has_neutral() -> bool:
+	for e in selected_entities:
+		if _is_neutral_owned(e):
 			return true
 	return false
 
@@ -479,11 +497,11 @@ func _add_to_selection(entity):
 		return
 	if not _can_inspect(entity):
 		return
-	# 敌方单位只允许单选查看：和己方/队友混选会让右键、热键和范围圈都变得不确定。
-	if _is_enemy_owned(entity):
+	# 敌方/中立只允许单选查看：和己方/队友混选会让右键、热键和范围圈都变得不确定。
+	if _is_inspect_only(entity):
 		if selected_entities.size() != 1 or selected_entities[0] != entity:
 			_clear_selection()
-	elif _selection_has_enemy():
+	elif _selection_has_enemy() or _selection_has_neutral():
 		_clear_selection()
 	# 不允许“自己的单位”和“队友单位”混选：否则右键/热键命令会误发给队友
 	var ally := _is_teammate_owned(entity)
@@ -495,8 +513,8 @@ func _add_to_selection(entity):
 		selected_entities.append(entity)
 		# 只给前 MAX_SELECTION_RINGS 个显示选择环，避免几百个单位各画一个环。
 		entity.set_selected(selected_entities.size() <= MAX_SELECTION_RINGS)
-		# 敌方单位的路径/航点属于不可见信息，不展示
-		if entity is Army and entity.has_method("show_waypoints") and not _is_enemy_owned(entity):
+		# 敌方/中立只读：路径/航点属于不可见信息，不展示
+		if entity is Army and entity.has_method("show_waypoints") and not _is_inspect_only(entity):
 			entity.show_waypoints()
 		_request_info_panel_refresh()
 
@@ -512,8 +530,8 @@ func _refresh_selection_rings() -> void:
 	var single: bool = selected_entities.size() == 1
 	for e in selected_entities:
 		if is_instance_valid(e) and (e is Army or e is Building) and e.has_method("set_range_rings_enabled"):
-			# 敌方只读：不展示视野/射程/光环，避免把对方参数当战术信息铺在地上
-			e.set_range_rings_enabled(single and not _is_enemy_owned(e))
+			# 敌方/中立只读：不展示视野/射程/光环，避免把对方参数当战术信息铺在地上
+			e.set_range_rings_enabled(single and not _is_inspect_only(e))
 
 func _remove_from_selection(entity):
 	if entity == null or not is_instance_valid(entity):

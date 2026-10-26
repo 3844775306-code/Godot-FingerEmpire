@@ -434,13 +434,16 @@ func _input(event):
 			var pos = event.position
 			var clicked_id = _get_entity_id_under_mouse(pos)
 
-			# 桥/运载船：已有选中单位时发送移动命令(不选中)
-			if not client_selected_ids.is_empty():
+			# 桥/运载船：已有己方选中单位时发送移动命令（中立桥改为左键查看，右键仍可过桥）
+			if _selection_all_local():
 				var bypass = false
 				if clicked_id != -1:
 					var cinfo = _get_entity_info(clicked_id)
-					if cinfo and ((cinfo.get("entity_id") == 9) or (cinfo.get("entity_id") == 7)):
-						bypass = true
+					if cinfo:
+						if cinfo.get("entity_id") == 9:
+							bypass = true
+						elif cinfo.get("entity_id") == 7 and not _is_neutral_id(clicked_id):
+							bypass = true
 				if not bypass and clicked_id == -1:
 					# 桥可能射线未命中，用grid后备检测
 					var gpos = _get_ground_position(pos)
@@ -469,7 +472,7 @@ func _input(event):
 						get_viewport().set_input_as_handled()
 						return
 
-			# 点击己方/队友实体 → 选中（队友单位只可查看，不可指挥）
+			# 点击己方/队友/敌方/中立实体 → 选中（非己方只可查看，不可指挥）
 			if clicked_id != -1:
 				var info = _get_entity_info(clicked_id)
 				if not info: return
@@ -477,8 +480,9 @@ func _input(event):
 				var is_own := _is_own_id(clicked_id)
 				var is_ally := _is_teammate_id(clicked_id)
 				var is_enemy := _is_enemy_id(clicked_id) and int(info.get("type", -1)) in [1, 2]
-				if not is_own and not is_ally and not is_enemy:
-					_send_left_click(event)  # 非己方/队友/敌方（或迷雾中的敌人）→ 命令
+				var is_neutral := _is_neutral_id(clicked_id)
+				if not is_own and not is_ally and not is_enemy and not is_neutral:
+					_send_left_click(event)  # 非己方/队友/敌方/中立（或迷雾中的敌人）→ 命令
 					return
 
 				if info["health"] <= 0: return
@@ -493,14 +497,14 @@ func _input(event):
 				last_clicked_id = clicked_id
 				last_click_time = now
 
-				# 敌方单位只允许单选查看：替换当前选择，不参与 Shift 混选、
+				# 敌方/中立只允许单选查看：替换当前选择，不参与 Shift 混选、
 				# 编队和任何命令；右键移动/攻击仍然只作用于己方选中单位。
-				if is_enemy:
+				if is_enemy or is_neutral:
 					client_selected_ids.clear()
 					client_selected_ids.append(clicked_id)
 				else:
-					# 单击：Shift追加，否则替换选择；己方、队友、敌方不混选
-					if not client_selected_ids.is_empty() and (_selection_has_enemy() or _selection_all_local() != is_own):
+					# 单击：Shift追加，否则替换选择；己方、队友、敌方、中立不混选
+					if not client_selected_ids.is_empty() and (_selection_has_enemy() or _selection_has_neutral() or _selection_all_local() != is_own):
 						client_selected_ids.clear()
 					if clicked_id in client_selected_ids:
 						if Input.is_key_pressed(KEY_SHIFT):
@@ -527,9 +531,9 @@ func _input(event):
 					box_start = pos
 					box_end = pos
 				else:
-					# 有选中单位 + 点击空地/敌方 → 攻击/移动命令
-					# 队友/敌方单位只可查看：取消选中，不发送任何命令
-					if _selection_has_teammate() or _selection_has_enemy():
+					# 有选中单位 + 点击空地/敌方/中立 → 攻击/移动命令
+					# 队友/敌方/中立单位只可查看：取消选中，不发送任何命令
+					if _selection_has_teammate() or _selection_has_enemy() or _selection_has_neutral():
 						client_selected_ids.clear()
 						_update_selection_visuals()
 						emit_signal("selection_changed", [])
@@ -575,8 +579,8 @@ func _on_left_release(_event):
 func _select_all_of_same_type(target_id: int, info: Dictionary):
 	var target_is_ally := _is_teammate_id(target_id)
 	client_selected_ids.clear()
-	# 敌方单位只允许单选查看，双击同类不批量选中敌方
-	if _is_enemy_info(target_id):
+	# 敌方/中立只允许单选查看，双击同类不批量选中
+	if _is_enemy_info(target_id) or _is_neutral_info(target_id):
 		if int(info.get("health", 0)) > 0:
 			client_selected_ids.append(target_id)
 		emit_signal("selection_changed", client_selected_ids.duplicate())
@@ -741,6 +745,18 @@ func _is_enemy_id(id: int) -> bool:
 	var node = renderer.entity_nodes.get(id) if renderer else null
 	return is_instance_valid(node) and node.visible
 
+# 中立目标：资源点、动物、废弃建筑/桥等。只允许选中查看，不允许指挥。
+func _is_neutral_info(id: int) -> bool:
+	var info = _get_entity_info(id)
+	if info.is_empty(): return false
+	return int(info.get("team", -1)) == RTSConfig.Team.NEUTRAL
+
+func _is_neutral_id(id: int) -> bool:
+	if not _is_neutral_info(id):
+		return false
+	var node = renderer.entity_nodes.get(id) if renderer else null
+	return is_instance_valid(node) and node.visible
+
 func _selection_all_local() -> bool:
 	if client_selected_ids.is_empty(): return false
 	for sid in client_selected_ids:
@@ -757,14 +773,23 @@ func _selection_has_enemy() -> bool:
 		if _is_enemy_info(sid): return true
 	return false
 
+func _selection_has_neutral() -> bool:
+	for sid in client_selected_ids:
+		if _is_neutral_info(sid): return true
+	return false
+
 func _notify_readonly():
 	var chud = _get_client_hud()
 	if chud and chud.has_method("show_alert_message"):
-		var msg := "敌方单位仅可查看，无法指挥" if _selection_has_enemy() else "队友单位仅可查看，无法指挥"
+		var msg := "敌方单位仅可查看，无法指挥"
+		if _selection_has_neutral():
+			msg = "中立目标仅可查看，无法指挥"
+		elif not _selection_has_enemy():
+			msg = "队友单位仅可查看，无法指挥"
 		chud.show_alert_message(msg, Color(1.0, 0.75, 0.2))
 
-# 敌方单位是只读选择：死亡、从快照消失或走出迷雾后立即取消选中，
-# 避免信息面板停留在旧数据上，也避免后续右键把敌方 id 当成可指挥单位。
+# 敌方/中立是只读选择：死亡、从快照消失或走出迷雾后立即取消选中，
+# 避免信息面板停留在旧数据上，也避免后续右键把只读 id 当成可指挥单位。
 func _sanitize_client_selection():
 	if client_selected_ids.is_empty() or renderer == null:
 		return
@@ -777,7 +802,7 @@ func _sanitize_client_selection():
 			client_selected_ids.remove_at(i)
 			changed = true
 			continue
-		if _is_enemy_info(sid) and not (node as Node3D).visible:
+		if (_is_enemy_info(sid) or _is_neutral_info(sid)) and not (node as Node3D).visible:
 			client_selected_ids.remove_at(i)
 			changed = true
 	if changed:

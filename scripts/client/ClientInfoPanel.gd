@@ -304,6 +304,21 @@ func _is_enemy_info(info: Dictionary) -> bool:
 	var team := int(info.get("team", -1))
 	return team != RTSConfig.Team.NEUTRAL and team != renderer.player_team
 
+func _is_neutral_info(info: Dictionary) -> bool:
+	if info.is_empty():
+		return false
+	return int(info.get("team", -1)) == RTSConfig.Team.NEUTRAL
+
+# 中立目标类型只影响只读标签，不提供任何操作入口
+func _neutral_readonly_label(info: Dictionary) -> String:
+	match int(info.get("type", -1)):
+		0:
+			return "中立资源"
+		1:
+			return "中立建筑"
+		_:
+			return "中立动物"
+
 # ==================== 修理信息 ====================
 # 已损比例：优先用快照里的权威值 repair_damage_ratio，老快照按 HP 现算
 func _repair_damage_ratio(info: Dictionary) -> float:
@@ -378,7 +393,11 @@ func update_info(entity_id: int):
 	var group_prefix = ""
 	# Client side: group display not available (needs server-side GameEntity ref)
 	var readonly := not _is_local_owned_info(info)
-	var readonly_label := "敌方" if _is_enemy_info(info) else "队友"
+	var readonly_label := "队友"
+	if _is_enemy_info(info):
+		readonly_label = "敌方"
+	elif _is_neutral_info(info):
+		readonly_label = _neutral_readonly_label(info)
 	var nm = group_prefix + "%s %s  [color=%s]Lv.%d[/color]" % [
 		UITheme.entity_emoji(info.get("entity_id", -1), info.get("type", 2)),
 		info["name"], UITheme.hex_str(UITheme.GOLD), info.get("level", 1)]
@@ -476,7 +495,7 @@ func update_info(entity_id: int):
 						cs.append({"res": res, "need": need, "have": have})
 				btn.disabled = (not ok) or readonly
 				if readonly:
-					btn.tooltip_text = "%s建筑仅可查看，无法下达生产命令" % readonly_label
+					btn.tooltip_text = "%s仅可查看，无法下达生产命令" % readonly_label
 				var rtl = RichTextLabel.new(); rtl.bbcode_enabled = true; rtl.fit_content = true; rtl.autowrap_mode = TextServer.AUTOWRAP_OFF
 				rtl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 				rtl.anchor_left = 0; rtl.anchor_right = 1; rtl.anchor_top = 0; rtl.anchor_bottom = 1

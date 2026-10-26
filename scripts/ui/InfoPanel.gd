@@ -488,6 +488,21 @@ func _is_enemy_entity(entity) -> bool:
 	if not bm: return false
 	return entity.team != RTSConfig.Team.NEUTRAL and entity.team != bm.get_host_team()
 
+func _is_neutral_entity(entity) -> bool:
+	if entity == null or not is_instance_valid(entity):
+		return false
+	return entity.team == RTSConfig.Team.NEUTRAL
+
+# 中立目标类型只影响只读标签，不提供任何操作入口
+func _neutral_readonly_label(entity) -> String:
+	if entity is WorldResource:
+		return "中立资源"
+	if entity is Army:
+		return "中立动物"
+	if entity is Building:
+		return "中立建筑"
+	return "中立"
+
 func update_info(entity):
 	if entity == null or not is_instance_valid(entity) or entity.health <= 0:
 		observed_entity = null
@@ -518,7 +533,11 @@ func update_info(entity):
 		unit_name,
 		UITheme.hex_str(UITheme.GOLD), entity.level]
 	var readonly := not _is_local_owned_entity(entity)
-	var readonly_label := "敌方" if _is_enemy_entity(entity) else "队友"
+	var readonly_label := "队友"
+	if _is_enemy_entity(entity):
+		readonly_label = "敌方"
+	elif _is_neutral_entity(entity):
+		readonly_label = _neutral_readonly_label(entity)
 	if batch_count > 1:
 		nm += "  [color=%s][Ctrl + x%d][/color]" % [UITheme.hex_str(UITheme.ALERT_WARNING), batch_count]
 	if readonly:
@@ -638,7 +657,7 @@ func update_info(entity):
 				if official_full and not readonly:
 					btn.tooltip_text = "官员总数不能超过可进驻建筑数"
 				elif readonly:
-					btn.tooltip_text = "%s建筑仅可查看，无法下达生产命令" % readonly_label
+					btn.tooltip_text = "%s仅可查看，无法下达生产命令" % readonly_label
 				var rtl = RichTextLabel.new(); rtl.bbcode_enabled = true; rtl.fit_content = true; rtl.autowrap_mode = TextServer.AUTOWRAP_OFF
 				rtl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 				rtl.anchor_left = 0; rtl.anchor_right = 1; rtl.anchor_top = 0; rtl.anchor_bottom = 1
