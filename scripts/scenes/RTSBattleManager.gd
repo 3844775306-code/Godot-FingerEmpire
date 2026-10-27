@@ -924,8 +924,13 @@ func get_player_castle_level() -> int:
 				max_lv = e.upgrade_level
 	return max_lv
 
-# 检查建筑是否已由城堡等级解锁
-func is_building_unlocked(building_id: int) -> bool:
+# 检查建筑是否已解锁。科研模式按科技；经典模式保持原主城等级规则。
+func is_building_unlocked(building_id: int, owner_peer_id: int = -1, team: int = -1) -> bool:
+	if is_research_mode():
+		if team < 0:
+			team = get_host_team()
+		var st := get_research_state(owner_peer_id, team)
+		return bool(st.get("unlocked_buildings", {}).get(building_id, false))
 	var cl = get_player_castle_level()
 	match building_id:
 		23, 25, 26, 64:  # 船坞、箭塔、炮塔、炮台 → 城堡2级
@@ -1249,6 +1254,9 @@ func update_population_limits():
 
 	player_max_pop += NationBonuses.get_population_bonus(team_nations.get(get_host_team(), -1))
 	enemy_max_pop += NationBonuses.get_population_bonus(team_nations.get(get_enemy_team(), -1))
+	if is_research_mode():
+		player_max_pop += research_pop_bonus(player_owner_id, get_host_team())
+		enemy_max_pop += research_pop_bonus(-1, get_enemy_team())
 
 func increase_population(team: int, amount: int = 1):
 	if team == get_host_team():
@@ -1268,6 +1276,9 @@ func can_train_unit(team: int) -> bool:
 	
 # ==================== 初始化 ====================
 func _ready():
+	# 新手教程/战役沿用原有成长节奏，强制经典模式，避免关卡目标与科技解锁冲突。
+	if GameSettings.tutorial_mode or GameSettings.campaign_mode:
+		GameSettings.progression_mode = GameSettings.ProgressionMode.CLASSIC
 	# 暂停时整局仍要接收建造/生产/升级/右键指令，所以管理器保持运行；
 	# 真正的单位、建筑、弹丸会在 spawn 时显式设为 PAUSABLE，由 SceneTree.paused 冻结。
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -1935,6 +1946,11 @@ func update_player_population(owner_id: int):
 			elif entity.entity_id == 28: p_max += 10
 	var nation = team_nations.get(get_host_team(), -1) if owner_id == player_owner_id else ai_players.get(owner_id, {}).get("nation", -1)
 	p_max += NationBonuses.get_population_bonus(nation)
+	if is_research_mode():
+		var team := get_team_of_owner(owner_id)
+		if team < 0 and owner_id == player_owner_id:
+			team = get_host_team()
+		p_max += research_pop_bonus(owner_id, team)
 	if owner_id == player_owner_id:
 		player_max_pop = p_max
 	else:
@@ -2859,7 +2875,7 @@ func _count_buildings_of_type(building_id: int, for_team: int) -> int:
 	return cnt
 func _place_building_at(pos: Vector3):
 	# 检查城堡等级解锁
-	if not is_building_unlocked(selected_building_id): return
+	if not is_building_unlocked(selected_building_id, player_owner_id, get_host_team()): return
 
 	var cfg = EntityDatabase.get_config(selected_building_id)
 	if not cfg:
@@ -3651,7 +3667,7 @@ func _place_building():
 	# Cannot build near enemies
 	if not _is_valid_build_position(pos): return
 	# 检查城堡等级解锁
-	if not is_building_unlocked(selected_building_id): return
+	if not is_building_unlocked(selected_building_id, player_owner_id, get_host_team()): return
 
 	var cfg = EntityDatabase.get_config(selected_building_id)
 	if not cfg: return
@@ -4341,6 +4357,7 @@ func _process(delta):
 	if get_tree().paused:
 		return
 	game_time += delta
+	_tick_research(delta)
 	_tick_builder_dispatch(delta)
 	_tick_quartermaster(delta)
 	_tick_army_officer(delta)
@@ -5860,3 +5877,585 @@ func _update_command_card_sp():
 		cc.show_construct(get_host_resources(), clv, self)
 	else:
 		cc.hide_all()
+
+# ==================== 科研模式（服务端权威） ====================
+# 状态按“玩家”保存：1v1 无 owner 时用 team，2v2/3v3/FFA 用 owner_peer_id。
+# 客户端 ClientRenderer 只镜像快照；所有开始/取消/完成都在这里校验和结算。
+var research_states: Dictionary = {}
+var _research_tax_timer: float = 0.0
+
+func is_research_mode() -> bool:
+	return GameSettings.progression_mode == GameSettings.ProgressionMode.RESEARCH
+
+func research_key(owner_peer_id: int, team: int) -> int:
+	return owner_peer_id if owner_peer_id >= 0 else team
+
+func research_team(owner_peer_id: int, team: int) -> int:
+	if team >= 0:
+		return team
+	if owner_peer_id >= 0:
+		var t := get_team_of_owner(owner_peer_id)
+		if t >= 0:
+			return t
+	return get_host_team()
+
+func research_nation(owner_peer_id: int, team: int) -> int:
+	if owner_peer_id >= 0:
+		var n := get_nation_of_owner(owner_peer_id)
+		if n >= 0:
+			return n
+		if owner_peer_id == player_owner_id:
+			return int(team_nations.get(research_team(owner_peer_id, team), -1))
+	return int(team_nations.get(research_team(owner_peer_id, team), -1))
+
+func _new_research_state(owner_peer_id: int, team: int) -> Dictionary:
+	return {
+		"age": 0,
+		"bits": 0,
+		"nation_bits": 0,
+		"nation": research_nation(owner_peer_id, team),
+		"current": {},
+		"mods": {},
+		"unlocked_units": {10: true, 11: true},
+		"unlocked_buildings": {20: true, 21: true, 22: true, 27: true, 28: true, 41: true, 8: true},
+		"tax_pool": 0.0,
+		"owner": owner_peer_id,
+		"team": team,
+	}
+
+func get_research_state(owner_peer_id: int, team: int, create: bool = true) -> Dictionary:
+	if not is_research_mode():
+		return {}
+	var key := research_key(owner_peer_id, team)
+	if not research_states.has(key):
+		if not create:
+			return {}
+		research_states[key] = _new_research_state(owner_peer_id, team)
+		research_states[key]["_key"] = key
+		_refresh_research_derived(research_states[key])
+	elif int(research_states[key].get("nation", -1)) < 0:
+		_refresh_research_derived(research_states[key])
+	return research_states[key]
+
+func get_research_state_for_entity(e) -> Dictionary:
+	if e == null or not is_instance_valid(e):
+		return {}
+	return get_research_state(int(e.owner_peer_id), int(e.team))
+
+func get_host_research_state() -> Dictionary:
+	if not is_research_mode():
+		return {}
+	return get_research_state(player_owner_id, get_local_team())
+
+func get_local_research_state() -> Dictionary:
+	return get_host_research_state()
+
+func _refresh_research_derived(st: Dictionary) -> void:
+	if st.is_empty():
+		return
+	# 国家可能在状态首次创建之后才确定（联机选国/补 AI 席位），这里惰性同步。
+	if int(st.get("nation", -1)) < 0:
+		st["nation"] = research_nation(int(st.get("owner", -1)), int(st.get("team", -1)))
+	var nation := int(st.get("nation", -1))
+	st["mods"] = TechTreeData.collect_mods(int(st.get("bits", 0)), int(st.get("nation_bits", 0)), nation)
+	st["unlocked_units"] = TechTreeData.unlocked_units(int(st.get("bits", 0)), int(st.get("nation_bits", 0)), nation)
+	st["unlocked_buildings"] = TechTreeData.unlocked_buildings(int(st.get("bits", 0)), int(st.get("nation_bits", 0)), nation)
+
+func research_resources(owner_peer_id: int, team: int) -> Dictionary:
+	if owner_peer_id >= 0:
+		return get_resources_for(owner_peer_id)
+	return get_team_resources(team)
+
+func research_pop(owner_peer_id: int, team: int) -> int:
+	if owner_peer_id >= 0:
+		return int(get_population_for(owner_peer_id).get("current", 0))
+	return player_pop if team == get_host_team() else enemy_pop
+
+func research_can_afford(owner_peer_id: int, team: int, cost: Dictionary) -> bool:
+	var res := research_resources(owner_peer_id, team)
+	for k in cost:
+		if int(res.get(k, 0)) < int(cost[k]):
+			return false
+	return true
+
+func _research_pay(owner_peer_id: int, team: int, cost: Dictionary) -> void:
+	var res := research_resources(owner_peer_id, team)
+	for k in cost:
+		res[k] = int(res.get(k, 0)) - int(cost[k])
+
+func _research_refund(owner_peer_id: int, team: int, cost: Dictionary, ratio: float) -> void:
+	var res := research_resources(owner_peer_id, team)
+	for k in cost:
+		res[k] = int(res.get(k, 0)) + int(floor(float(cost[k]) * ratio))
+
+func _research_has_completed_castle(owner_peer_id: int, team: int) -> bool:
+	_ensure_cache_fresh()
+	for b in _buildings:
+		if is_instance_valid(b) and b.health > 0 and b.build_timer <= 0.0 \
+				and b.entity_id == 20 and _same_owner_or_team(b.owner_peer_id, b.team, owner_peer_id, team):
+			return true
+	return false
+
+func _research_count_buildings(owner_peer_id: int, team: int, ids: Array) -> int:
+	_ensure_cache_fresh()
+	var n := 0
+	for b in _buildings:
+		if not is_instance_valid(b) or b.health <= 0 or b.build_timer > 0.0:
+			continue
+		if not (b.entity_id in ids):
+			continue
+		if _same_owner_or_team(b.owner_peer_id, b.team, owner_peer_id, team):
+			n += 1
+	return n
+
+func _research_distinct_building_types(owner_peer_id: int, team: int, ids: Array) -> int:
+	_ensure_cache_fresh()
+	var kinds := {}
+	for b in _buildings:
+		if not is_instance_valid(b) or b.health <= 0 or b.build_timer > 0.0:
+			continue
+		if not (b.entity_id in ids):
+			continue
+		if _same_owner_or_team(b.owner_peer_id, b.team, owner_peer_id, team):
+			kinds[b.entity_id] = true
+	return kinds.size()
+
+func _research_count_building_id(owner_peer_id: int, team: int, bid: int) -> int:
+	return _research_count_buildings(owner_peer_id, team, [bid])
+
+# 时代升级条件：返回 {ok, error}；条件只在开始研究时检查，研究中不再回滚。
+func can_research_age(owner_peer_id: int, team: int) -> Dictionary:
+	var st := get_research_state(owner_peer_id, team)
+	if st.is_empty():
+		return {"ok": false, "error": "当前不是科研模式"}
+	var age := int(st.get("age", 0))
+	if age >= 3:
+		return {"ok": false, "error": "已经是帝国时代"}
+	if not st.get("current", {}).is_empty():
+		return {"ok": false, "error": "研究队列正在忙碌"}
+	var target := age + 1
+	var pop := research_pop(owner_peer_id, team)
+	match target:
+		1:
+			if pop < 20:
+				return {"ok": false, "error": "需要人口 ≥ 20（当前 %d）" % pop}
+			if _research_count_buildings(owner_peer_id, team, [21, 41]) < 2:
+				return {"ok": false, "error": "需要 2 座已完成的黑暗时代军事建筑（兵营/瞭望塔）"}
+		2:
+			if pop < 50:
+				return {"ok": false, "error": "需要人口 ≥ 50（当前 %d）" % pop}
+			if _research_count_buildings(owner_peer_id, team, [23, 24, 25, 52, 54]) < 3 \
+					or _research_distinct_building_types(owner_peer_id, team, [23, 24, 25, 52, 54]) < 2:
+				return {"ok": false, "error": "需要 3 座封建建筑且至少 2 种（船坞/攻城车间/箭塔/集市/修道院）"}
+		3:
+			if pop < 80:
+				return {"ok": false, "error": "需要人口 ≥ 80（当前 %d）" % pop}
+			if _research_count_buildings(owner_peer_id, team, [26, 29, 42, 53, 64]) < 4 \
+					or _research_count_building_id(owner_peer_id, team, 53) < 2:
+				return {"ok": false, "error": "需要 4 座城堡建筑，其中至少 2 座城堡"}
+	var info := TechTreeData.next_age(age)
+	if not research_can_afford(owner_peer_id, team, info.get("cost", {})):
+		return {"ok": false, "error": "资源不足"}
+	return {"ok": true, "error": "", "target": target}
+
+func research_start_age(owner_peer_id: int, team: int) -> Dictionary:
+	if not is_research_mode():
+		return {"ok": false, "error": "当前不是科研模式"}
+	team = research_team(owner_peer_id, team)
+	if not _research_has_completed_castle(owner_peer_id, team):
+		return {"ok": false, "error": "需要一座已完成的主城"}
+	var check := can_research_age(owner_peer_id, team)
+	if not bool(check.get("ok", false)):
+		return check
+	var st := get_research_state(owner_peer_id, team)
+	var target := int(check.get("target", 0))
+	var info := TechTreeData.get_age(target)
+	_research_pay(owner_peer_id, team, info.get("cost", {}))
+	st["current"] = {
+		"id": "AGE_%d" % target,
+		"kind": "age",
+		"name": String(info.get("name", "")),
+		"time": float(info.get("time", 0)),
+		"total": float(info.get("time", 0)),
+		"elapsed": 0.0,
+		"cost": info.get("cost", {}).duplicate(true),
+	}
+	return {"ok": true, "error": ""}
+
+func _research_check_tech_prereq(t: Dictionary, st: Dictionary) -> String:
+	var nation := int(st.get("nation", -1))
+	for p in t.get("prereq", []):
+		var pid := String(p)
+		if pid.begins_with("N"):
+			if not TechTreeData.has_nation_bit(int(st.get("nation_bits", 0)), nation, pid):
+				return "缺少前置国家科技 %s" % pid
+		else:
+			if not TechTreeData.has_bit(int(st.get("bits", 0)), pid):
+				return "缺少前置科技 %s" % pid
+	return ""
+
+func _research_exclusion_error(st: Dictionary, tid: String) -> String:
+	var bits := int(st.get("bits", 0))
+	if tid == "I2" and TechTreeData.has_bit(bits, "I6"):
+		return "I2 与 I6 互斥（已研究 I6）"
+	if tid == "I6" and TechTreeData.has_bit(bits, "I2"):
+		return "I2 与 I6 互斥（已研究 I2）"
+	return ""
+
+func research_start_tech(owner_peer_id: int, team: int, tid: String) -> Dictionary:
+	if not is_research_mode():
+		return {"ok": false, "error": "当前不是科研模式"}
+	var st := get_research_state(owner_peer_id, team)
+	if st.is_empty():
+		return {"ok": false, "error": "当前不是科研模式"}
+	if not st.get("current", {}).is_empty():
+		return {"ok": false, "error": "研究队列正在忙碌"}
+	var t := TechTreeData.get_any(tid)
+	if t.is_empty():
+		return {"ok": false, "error": "未知科技 %s" % tid}
+	var nation := int(st.get("nation", -1))
+	var is_nation := String(t.get("kind", "")) == "nation"
+	if is_nation:
+		if int(t.get("nation", -1)) != nation:
+			return {"ok": false, "error": "只能研究本国特色科技"}
+		if TechTreeData.has_nation_bit(int(st.get("nation_bits", 0)), nation, tid):
+			return {"ok": false, "error": "该科技已完成"}
+	else:
+		if TechTreeData.has_bit(int(st.get("bits", 0)), tid):
+			return {"ok": false, "error": "该科技已完成"}
+	if int(t.get("age", 0)) > int(st.get("age", 0)):
+		return {"ok": false, "error": "需要先进入%s" % TechTreeData.age_name(int(t.get("age", 0)))}
+	var err := _research_check_tech_prereq(t, st)
+	if err != "":
+		return {"ok": false, "error": err}
+	err = _research_exclusion_error(st, tid)
+	if err != "":
+		return {"ok": false, "error": err}
+	var cost: Dictionary = t.get("cost", {})
+	if not research_can_afford(owner_peer_id, team, cost):
+		return {"ok": false, "error": "资源不足"}
+	_research_pay(owner_peer_id, team, cost)
+	st["current"] = {
+		"id": tid,
+		"kind": "nation" if is_nation else "tech",
+		"name": String(t.get("name", "")),
+		"time": float(t.get("time", 0)),
+		"total": float(t.get("time", 0)),
+		"elapsed": 0.0,
+		"cost": cost.duplicate(true),
+	}
+	return {"ok": true, "error": ""}
+
+func research_start(owner_peer_id: int, team: int, tid: String) -> Dictionary:
+	if not _research_has_completed_castle(owner_peer_id, research_team(owner_peer_id, team)):
+		return {"ok": false, "error": "需要一座已完成的主城"}
+	if TechTreeData.is_age_tech(tid):
+		return research_start_age(owner_peer_id, research_team(owner_peer_id, team))
+	return research_start_tech(owner_peer_id, research_team(owner_peer_id, team), tid)
+
+func research_cancel(owner_peer_id: int, team: int) -> Dictionary:
+	var st := get_research_state(owner_peer_id, team)
+	if st.is_empty() or st.get("current", {}).is_empty():
+		return {"ok": false, "error": "没有正在研究的项目"}
+	var cur: Dictionary = st["current"]
+	if String(cur.get("kind", "")) == "age":
+		return {"ok": false, "error": "时代升级不可取消"}
+	var ratio := 1.0 if float(cur.get("elapsed", 0.0)) <= 10.0 else 0.5
+	_research_refund(owner_peer_id, team, cur.get("cost", {}), ratio)
+	st["current"] = {}
+	return {"ok": true, "error": "", "refund_ratio": ratio}
+
+func _research_complete(st: Dictionary) -> void:
+	var cur: Dictionary = st.get("current", {})
+	if cur.is_empty():
+		return
+	var tid := String(cur.get("id", ""))
+	var kind := String(cur.get("kind", ""))
+	if kind == "age":
+		var target := int(tid.substr(4))
+		st["age"] = clampi(target, 0, 3)
+	else:
+		var nation := int(st.get("nation", -1))
+		if kind == "nation":
+			st["nation_bits"] = TechTreeData.set_nation_bit(int(st.get("nation_bits", 0)), nation, tid)
+		else:
+			st["bits"] = TechTreeData.set_bit(int(st.get("bits", 0)), tid)
+	st["current"] = {}
+	_refresh_research_derived(st)
+	if kind == "age":
+		update_population_limits()
+	_apply_research_to_owned_entities(st)
+	_refresh_research_production(st)
+	# 1v1 的 state key 是队伍号（0/1），不能当 owner 传给按 peer 统计的人口接口。
+	_update_player_population(int(st.get("owner", -1)))
+	var owner := int(st.get("owner", -1))
+	var team := int(st.get("team", get_host_team()))
+	if is_human_owned(owner, team):
+		_show_hud_alert("研究完成：%s" % String(cur.get("name", "")), Color(0.4, 0.9, 1.0), [team], team)
+
+# 遍历该玩家单位/建筑，从基础值重算科研加成（不增量叠加）。
+func _apply_research_to_owned_entities(st: Dictionary) -> void:
+	_ensure_cache_fresh()
+	for e in _all_entities:
+		if not is_instance_valid(e) or e.health <= 0:
+			continue
+		var key := research_key(int(e.owner_peer_id), int(e.team))
+		if key == int(st.get("_key", -999999)):
+			apply_research_bonuses(e)
+
+func _refresh_research_production(st: Dictionary) -> void:
+	_ensure_cache_fresh()
+	for b in _buildings:
+		if not is_instance_valid(b) or b.health <= 0 or b.build_timer > 0.0:
+			continue
+		var key := research_key(int(b.owner_peer_id), int(b.team))
+		if key != int(st.get("_key", -999999)):
+			continue
+		if b.has_method("_sync_production_unlocks"):
+			b._sync_production_unlocks()
+		if b.has_method("_unlock_nation_units") and b.entity_id == 53:
+			var bn := get_entity_nation(b)
+			if bn >= 0:
+				b._unlock_nation_units(bn)
+
+func _update_player_population(owner_key: int) -> void:
+	if owner_key >= 0:
+		update_player_population(owner_key)
+		return
+	update_population_limits()
+
+func _tick_research(delta: float) -> void:
+	if not is_research_mode():
+		return
+	# 暂停时研究也暂停（管理器本身要保持运行以接收指令）。
+	if get_tree().paused:
+		return
+	for key in research_states.keys():
+		var st: Dictionary = research_states[key]
+		st["_key"] = key
+		var cur: Dictionary = st.get("current", {})
+		if cur.is_empty():
+			continue
+		cur["elapsed"] = float(cur.get("elapsed", 0.0)) + delta
+		if float(cur["elapsed"]) >= float(cur.get("total", 1.0)):
+			_research_complete(st)
+	# I2 户税：每 10 秒按人口结算，避免逐帧浮点累加漂移。
+	_research_tax_timer += delta
+	while _research_tax_timer >= 10.0:
+		_research_tax_timer -= 10.0
+		for key in research_states.keys():
+			var st: Dictionary = research_states[key]
+			if not TechTreeData.has_bit(int(st.get("bits", 0)), "I2"):
+				continue
+			var owner := int(st.get("owner", -1))
+			var team := int(st.get("team", get_host_team()))
+			var pop := research_pop(owner, team)
+			var pool := float(st.get("tax_pool", 0.0)) + float(pop) * 0.05
+			var gain := int(floor(pool))
+			pool -= float(gain)
+			st["tax_pool"] = pool
+			if gain > 0:
+				var res := research_resources(owner, team)
+				var cap := int(get_team_resource_limits(team).get("gold", 99999))
+				res["gold"] = min(int(res.get("gold", 0)) + gain, cap)
+
+# ==================== 科研解锁查询 ====================
+func is_unit_unlocked(unit_id: int, owner_peer_id: int = -1, team: int = -1) -> bool:
+	if not is_research_mode():
+		return true
+	if team < 0:
+		team = get_host_team()
+	var st := get_research_state(owner_peer_id, team)
+	return bool(st.get("unlocked_units", {}).get(unit_id, false))
+
+func get_building_unlock_text(building_id: int, owner_peer_id: int = -1, team: int = -1) -> String:
+	if not is_research_mode():
+		return ""
+	match building_id:
+		7: return "需研究 E1 栈桥飞渡"
+		23: return "需研究 E2 渔汛舟师"
+		24: return "需研究 F1 冲车工坊"
+		25: return "需研究 B6 烽燧望楼"
+		52: return "需研究 I5 关市"
+		54: return "需研究 H1 苦修戒律"
+		53: return "需研究 A4 石城筑法（前置 A2+B6）"
+		42: return "需研究 I1 察举制"
+		26, 64: return "需研究 F10 棱堡炮位"
+		29: return "需研究 G1 重装步军"
+	return ""
+
+# ==================== 科研数值加成 ====================
+func get_research_mods(owner_peer_id: int, team: int) -> Dictionary:
+	var st := get_research_state(owner_peer_id, team)
+	return st.get("mods", {}) if not st.is_empty() else {}
+
+func research_gather_mult(owner_peer_id: int, team: int, res_type: String) -> float:
+	var mods := get_research_mods(owner_peer_id, team)
+	var pct := float(mods.get("gather_all_pct", 0.0)) + float(mods.get("gather_%s_pct" % res_type, 0.0))
+	return 1.0 + pct / 100.0
+
+func research_pop_bonus(owner_peer_id: int, team: int) -> int:
+	return int(get_research_mods(owner_peer_id, team).get("pop_bonus", 0.0))
+
+func _mod_pct(mods: Dictionary, key: String) -> float:
+	return float(mods.get(key, 0.0)) / 100.0
+
+func _mod_unit(mods: Dictionary, uid: int, prefix: String) -> float:
+	return float(mods.get("%s:%d" % [prefix, uid], 0.0)) / 100.0
+
+func _mod_class(mods: Dictionary, uid: int, prefix: String) -> float:
+	var total := 0.0
+	for cls in TechTreeData.UNIT_CLASSES.get(uid, []):
+		total += float(mods.get("%s:%s" % [prefix, cls], 0.0)) / 100.0
+	return total
+
+func _mod_class_raw(mods: Dictionary, uid: int, prefix: String) -> float:
+	var total := 0.0
+	for cls in TechTreeData.UNIT_CLASSES.get(uid, []):
+		total += float(mods.get("%s:%s" % [prefix, cls], 0.0))
+	return total
+
+func apply_research_bonuses(e) -> void:
+	if not is_research_mode() or e == null or not is_instance_valid(e):
+		return
+	if not e.has_method("_capture_research_base"):
+		return
+	var st := get_research_state_for_entity(e)
+	if st.is_empty():
+		return
+	var base: Dictionary = e._research_base_stats
+	if base.is_empty():
+		# 单位要等国家加成执行完再记录基础值，避免把国家加成刷掉或重复计算。
+		if e is Army:
+			return
+		e._capture_research_base()
+		base = e._research_base_stats
+	if base.is_empty():
+		return
+	var mods: Dictionary = st.get("mods", {})
+	var uid := int(e.entity_id)
+	var health_ratio := 1.0
+	if e.max_health > 0.0:
+		health_ratio = clampf(e.health / e.max_health, 0.0, 1.0)
+	# 先恢复基础值，保证多次刷新不会滚雪球。
+	e.max_health = float(base.get("max_health", e.max_health))
+	e.attack = float(base.get("attack", e.attack))
+	e.attack_speed = float(base.get("attack_speed", e.attack_speed))
+	e.attack_range = float(base.get("attack_range", e.attack_range))
+	e.speed = float(base.get("speed", e.speed))
+	e.vision_range = float(base.get("vision_range", e.vision_range))
+	e.melee_armor = int(base.get("melee_armor", e.melee_armor))
+	e.shield_armor = int(base.get("shield_armor", e.shield_armor))
+	e.damage_radius = float(base.get("damage_radius", e.damage_radius))
+	e.shield_pierce = 0.0
+	e.melee_pierce = 0.0
+	e.building_damage_pct = 0.0
+	e.vs_archer_pct = 0.0
+	e.vs_cavalry_pct = 0.0
+	e.vs_ship_pct = 0.0
+	e.spell_power_mult = 1.0
+	e.spell_resist = 0.0
+	e.accuracy_mult = 1.0
+	e.splash_damage_mult = 0.0
+	if e is Building:
+		var hp_pct := _mod_pct(mods, "building_hp_pct")
+		var armor_add := int(mods.get("building_armor", 0))
+		if uid == 53 or uid == 27:
+			hp_pct += _mod_pct(mods, "castle_wall_hp_pct")
+			armor_add += int(mods.get("castle_wall_armor", 0))
+		hp_pct += _mod_pct(mods, "building_hp_pct:%d" % uid)
+		if uid in [25, 26]:
+			hp_pct += _mod_pct(mods, "building_hp_pct:25")
+		e.max_health = float(base.get("max_health", e.max_health)) * (1.0 + hp_pct)
+		e.melee_armor = int(base.get("melee_armor", 0)) + armor_add
+		e.shield_armor = int(base.get("shield_armor", 0)) + armor_add
+		e.attack = float(base.get("attack", 0.0)) * (1.0 + _mod_pct(mods, "building_attack_pct:%d" % uid))
+		e.attack_range = float(base.get("attack_range", 0.0)) + float(mods.get("main_castle_range", 0.0)) if uid in [20, 53] else float(base.get("attack_range", 0.0))
+		e.attack = e.attack * (1.0 + _mod_pct(mods, "main_castle_attack_pct")) if uid in [20, 53] else e.attack
+		if uid == 20 and float(mods.get("main_city_attack", 0.0)) > 0.0:
+			e.attack = float(mods.get("main_city_attack", 15.0))
+			e.attack_range = float(mods.get("main_city_range", 6.0))
+			e.attack_speed = float(mods.get("main_city_attack_speed", 1.2))
+		if uid in [25, 26]:
+			e.attack_range += float(mods.get("tower_range", 0.0))
+			e.attack_speed = float(base.get("attack_speed", e.attack_speed)) / (1.0 + _mod_pct(mods, "tower_attack_speed_pct"))
+		if uid in TechTreeData.CANNON_UNIT_IDS:
+			e.attack *= 1.0 + _mod_pct(mods, "cannon_damage_pct")
+			e.attack_range += float(mods.get("cannon_range", 0.0))
+			if float(mods.get("cannon_splash", 0.0)) > 0.0:
+				e.splash_damage_mult = float(mods.get("cannon_splash", 0.0)) / 100.0
+		if uid in [20, 53]:
+			e.volley_count = int(mods.get("volley_count", 1))
+			e.volley_mult = float(mods.get("volley_mult", 1.0))
+		e.health = minf(e.max_health, e.max_health * health_ratio) if health_ratio > 0.0 else e.max_health
+		return
+	# 单位
+	var hp := _mod_class(mods, uid, "class_hp_pct") + _mod_unit(mods, uid, "unit_hp_pct") + _mod_pct(mods, "all_hp_pct")
+	var atk := _mod_class(mods, uid, "class_attack_pct") + _mod_unit(mods, uid, "unit_attack_pct")
+	var spd := _mod_class(mods, uid, "class_speed_pct") + _mod_unit(mods, uid, "unit_speed_pct") + _mod_pct(mods, "all_speed_pct")
+	var aspd := _mod_class(mods, uid, "class_attack_speed_pct") + _mod_unit(mods, uid, "unit_attack_speed_pct")
+	var vision := _mod_class(mods, uid, "class_vision_pct") + _mod_unit(mods, uid, "unit_vision_pct")
+	e.max_health = float(base.get("max_health", e.max_health)) * (1.0 + hp)
+	e.attack = float(base.get("attack", e.attack)) * (1.0 + atk)
+	e.speed = float(base.get("speed", e.speed)) * (1.0 + clampf(spd, -0.5, 0.4))
+	e.attack_speed = float(base.get("attack_speed", e.attack_speed)) / (1.0 + maxf(aspd, -0.8))
+	e.vision_range = float(base.get("vision_range", e.vision_range)) * (1.0 + vision)
+	e.melee_armor = int(base.get("melee_armor", 0)) + int(mods.get("class_melee_armor:%d" % uid, 0))
+	e.shield_armor = int(base.get("shield_armor", 0)) + int(mods.get("class_shield_armor:%d" % uid, 0))
+	for cls in TechTreeData.UNIT_CLASSES.get(uid, []):
+		e.melee_armor += int(mods.get("class_melee_armor:%s" % cls, 0))
+		e.shield_armor += int(mods.get("class_shield_armor:%s" % cls, 0))
+	e.melee_armor += int(mods.get("unit_melee_armor:%d" % uid, 0))
+	e.shield_armor += int(mods.get("unit_shield_armor:%d" % uid, 0))
+	e.shield_pierce = maxf(_mod_class_raw(mods, uid, "class_shield_pierce"), float(mods.get("archer_shield_pierce", 0.0)) if uid in [12, 31, 33, 37, 58] else 0.0)
+	e.melee_pierce = _mod_class_raw(mods, uid, "class_melee_pierce")
+	e.building_damage_pct = _mod_class(mods, uid, "class_building_damage_pct")
+	e.vs_archer_pct = _mod_class(mods, uid, "class_vs_archer_pct")
+	e.vs_cavalry_pct = _mod_class(mods, uid, "class_vs_cavalry_pct")
+	e.vs_ship_pct = _mod_unit(mods, uid, "unit_vs_ship_pct")
+	if uid in [12, 31, 33, 37, 58]:
+		e.attack_range = float(base.get("attack_range", e.attack_range)) + float(mods.get("archer_range", 0.0))
+	if uid in TechTreeData.CANNON_UNIT_IDS:
+		e.attack *= 1.0 + _mod_pct(mods, "cannon_damage_pct")
+		e.attack_range += float(mods.get("cannon_range", 0.0))
+		if float(mods.get("cannon_splash", 0.0)) > 0.0:
+			e.splash_damage_mult = float(mods.get("cannon_splash", 0.0)) / 100.0
+	if uid in TechTreeData.STONE_UNIT_IDS:
+		e.attack *= 1.0 + _mod_pct(mods, "stone_damage_pct")
+		e.damage_radius = float(base.get("damage_radius", 0.0)) * (1.0 + _mod_pct(mods, "stone_splash_pct"))
+		e.accuracy_mult = 1.0 + _mod_pct(mods, "treb_accuracy_pct")
+		e.accuracy_mult = clampf(e.accuracy_mult, 0.2, 2.0)
+	if uid in [55, 56, 57]:
+		e.spell_power_mult = 1.0 + _mod_pct(mods, "spell_power_pct")
+		e.spell_resist = _mod_pct(mods, "spell_resist_pct")
+	e.health = e.max_health * health_ratio
+
+# 数值变更后刷新一次可见血条；联机客户端靠快照同步，不存在客户端调用。
+func _research_refresh_entity_bars() -> void:
+	for e in get_tree().get_nodes_in_group("entities"):
+		if e is GameEntity and e.has_method("_refresh_damage_visual"):
+			e._refresh_damage_visual()
+
+func research_age_label(owner_peer_id: int = -1, team: int = -1) -> String:
+	if not is_research_mode():
+		return "经典模式"
+	if team < 0:
+		team = get_host_team()
+	var st := get_research_state(owner_peer_id, team)
+	return TechTreeData.age_name(int(st.get("age", 0))) if not st.is_empty() else "黑暗时代"
+
+# ==================== UI 统一接口（单机 battle manager / 联机 ClientRenderer 同签名） ====================
+func ui_research_state() -> Dictionary:
+	return get_host_research_state()
+
+func ui_research_start(tid: String) -> Dictionary:
+	return research_start(player_owner_id, get_host_team(), tid)
+
+func ui_research_start_age() -> Dictionary:
+	return research_start_age(player_owner_id, get_host_team())
+
+func ui_research_cancel() -> Dictionary:
+	return research_cancel(player_owner_id, get_host_team())
+
+func ui_research_available() -> bool:
+	return is_research_mode()

@@ -8,16 +8,31 @@ extends RefCounted
 const DESIGN_W: float = 2400.0
 const DESIGN_H: float = 1400.0
 
-# 1080p 手机屏高约 393dp，设计空间高 1400 → 1dp ≈ 3.56 单位。
-# 中端机 720p/20:9 时屏高同为约 360-400dp，该比例基本通用。
-const DP_RATIO: float = 1400.0 / 393.0
+# 横屏时 1080p 手机屏高约 393dp，设计空间高 1400 → 1dp ≈ 3.56 单位。
+# 竖屏时设计宽度只有 2400（高度被 expand 拉长），如果继续按高度算，
+# 整屏 UI 会缩到原来的一半；所以竖屏改成按宽度换算，保证 1dp 的物理大小不变。
+const BASE_DP_RATIO: float = 1400.0 / 393.0
+const DP_RATIO: float = BASE_DP_RATIO
 
 # 基础安全边距（dp）：无刘海时也留出视觉呼吸
 const BASE_MARGIN_DP: float = 12.0
 
+# 当前是否竖屏（设计视口高 > 宽）。旋转窗口/手机方向变化时这里会立即反映新尺寸。
+static func is_portrait() -> bool:
+	var s := view_size()
+	return s.y > s.x
+
+# 竖屏时 view_size 的高度会被 expand 拉长，用它和宽度的比例修正 dp。
+# 横屏保持原来的 3.56；竖屏约 6.3，使 1dp 在两种方向下对应的物理像素基本一致。
+static func dp_ratio() -> float:
+	var s := view_size()
+	if s.x <= 0.0 or s.y <= s.x:
+		return BASE_DP_RATIO
+	return BASE_DP_RATIO * (s.y / s.x)
+
 # dp → 设计空间单位
 static func dp(value: float) -> float:
-	return value * DP_RATIO
+	return value * dp_ratio()
 
 # 视口尺寸（设计空间；stretch canvas_items 下即 2400x1400 或按 expand 扩展后的尺寸）
 static func view_size() -> Vector2:
@@ -162,9 +177,10 @@ static func scale_widgets_for_mobile(root: Node, recursive: bool = true) -> void
 			if ctrl is Button or ctrl is CheckBox:
 				ctrl.add_theme_constant_override("icon_max_width", int(dp(18.0)))
 			var ms := ctrl.custom_minimum_size
+			var r := dp_ratio()
 			ctrl.custom_minimum_size = Vector2(
-				ms.x * DP_RATIO if ms.x > 0.0 else 0.0,
-				ms.y * DP_RATIO if ms.y > 0.0 else 0.0)
+				ms.x * r if ms.x > 0.0 else 0.0,
+				ms.y * r if ms.y > 0.0 else 0.0)
 		elif ctrl is RichTextLabel:
 			for key in ["normal_font_size", "bold_font_size", "italics_font_size", "bold_italics_font_size", "mono_font_size"]:
 				var fs: int = ctrl.get_theme_font_size(key)

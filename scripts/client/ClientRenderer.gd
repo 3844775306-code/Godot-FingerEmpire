@@ -82,6 +82,86 @@ var my_team: int = -1
 # 队伍 → 国家（RTSConfig.Nation 枚举）。服务器在快照里下发 team_nations，
 # 客户端 HUD 的战况播报要靠它显示「哪个国家发出来的」。
 var team_nations: Dictionary = {}
+# ==================== 科研模式镜像（服务端快照） ====================
+var research_state: Dictionary = {}
+var research_mods: Dictionary = {}
+var research_unlocked_units: Dictionary = {}
+var research_unlocked_buildings: Dictionary = {}
+var progression_mode: int = 0
+
+func is_research_mode() -> bool:
+	return progression_mode == GameSettings.ProgressionMode.RESEARCH
+
+func _apply_research_snapshot(r: Dictionary) -> void:
+	if not is_research_mode():
+		research_state = {}
+		research_mods = {}
+		research_unlocked_units = {}
+		research_unlocked_buildings = {}
+		return
+	research_state = r.duplicate(true)
+	var nation := int(r.get("nation", my_nation))
+	research_mods = TechTreeData.collect_mods(int(r.get("bits", 0)), int(r.get("nation_bits", 0)), nation)
+	research_unlocked_units = TechTreeData.unlocked_units(int(r.get("bits", 0)), int(r.get("nation_bits", 0)), nation)
+	research_unlocked_buildings = TechTreeData.unlocked_buildings(int(r.get("bits", 0)), int(r.get("nation_bits", 0)), nation)
+
+# 首帧快照尚未带研究数据时，先按「黑暗时代、零科技」显示默认解锁，
+# 避免建造面板短暂把所有建筑都判成锁定。
+func _ensure_research_defaults() -> void:
+	if not is_research_mode():
+		return
+	if research_unlocked_buildings.is_empty():
+		research_unlocked_buildings = TechTreeData.unlocked_buildings(0, 0, my_nation)
+	if research_unlocked_units.is_empty():
+		research_unlocked_units = TechTreeData.unlocked_units(0, 0, my_nation)
+
+func get_research_state() -> Dictionary:
+	return research_state
+
+func get_research_mods() -> Dictionary:
+	return research_mods
+
+func get_research_age() -> int:
+	return int(research_state.get("age", 0))
+
+func is_unit_unlocked(unit_id: int) -> bool:
+	if not is_research_mode():
+		return true
+	return bool(research_unlocked_units.get(unit_id, false))
+
+func research_start_local(tid: String) -> void:
+	if not is_research_mode() or NetworkManager.mode != NetworkManager.Mode.CLIENT:
+		return
+	NetworkManager.send_command.rpc_id(1, {"action": "research", "tech_id": tid})
+
+func research_start_age_local() -> void:
+	if not is_research_mode() or NetworkManager.mode != NetworkManager.Mode.CLIENT:
+		return
+	NetworkManager.send_command.rpc_id(1, {"action": "research_age"})
+
+func research_cancel_local() -> void:
+	if not is_research_mode() or NetworkManager.mode != NetworkManager.Mode.CLIENT:
+		return
+	NetworkManager.send_command.rpc_id(1, {"action": "cancel_research"})
+
+# 与单机 RTSBattleManager 保持同一套 UI 接口。
+func ui_research_state() -> Dictionary:
+	return research_state
+
+func ui_research_start(tid: String) -> Dictionary:
+	research_start_local(tid)
+	return {"ok": true, "error": ""}
+
+func ui_research_start_age() -> Dictionary:
+	research_start_age_local()
+	return {"ok": true, "error": ""}
+
+func ui_research_cancel() -> Dictionary:
+	research_cancel_local()
+	return {"ok": true, "error": ""}
+
+func ui_research_available() -> bool:
+	return is_research_mode()
 
 # 查某队伍对应的国家枚举，查不到返回 -1
 func get_team_nation(team: int) -> int:
@@ -283,6 +363,8 @@ func get_host_team() -> int:
 
 # 与 RTSBattleManager.is_building_unlocked 保持一致的城堡等级解锁表
 func is_building_unlocked(building_id: int) -> bool:
+	if is_research_mode():
+		return bool(research_unlocked_buildings.get(building_id, false))
 	var cl = get_player_castle_level()
 	match building_id:
 		23, 25, 26, 64:
@@ -294,6 +376,22 @@ func is_building_unlocked(building_id: int) -> bool:
 		53, 54:
 			return cl >= 4
 	return true
+
+func get_building_unlock_text(building_id: int) -> String:
+	if not is_research_mode():
+		return ""
+	match building_id:
+		7: return "需研究 E1 栈桥飞渡"
+		23: return "需研究 E2 渔汛舟师"
+		24: return "需研究 F1 冲车工坊"
+		25: return "需研究 B6 烽燧望楼"
+		52: return "需研究 I5 关市"
+		54: return "需研究 H1 苦修戒律"
+		53: return "需研究 A4 石城筑法"
+		42: return "需研究 I1 察举制"
+		26, 64: return "需研究 F10 棱堡炮位"
+		29: return "需研究 G1 重装步军"
+	return ""
 
 # 归属判断：联机按 owner_peer_id，单机按队伍
 func is_local_owned_info(info: Dictionary) -> bool:
@@ -404,6 +502,13 @@ func _safe_process_snapshot(data: Dictionary) -> bool:
 	return true
 
 func _process_snapshot(data: Dictionary):
+	# 科研模式：主机在快照里下发模式与研究状态；先同步再处理实体。
+	if data.has("progression_mode"):
+		progression_mode = int(data["progression_mode"])
+		GameSettings.progression_mode = progression_mode
+	if data.has("research"):
+		_apply_research_snapshot(data["research"])
+	_ensure_research_defaults()
 	# 缓存人口
 	last_population = data.get("population", last_population)
 	# Sync game time from server

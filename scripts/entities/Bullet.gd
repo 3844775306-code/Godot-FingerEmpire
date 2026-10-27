@@ -39,6 +39,8 @@ const STONE_CENTER_MULT: float = 1.0
 const STONE_EDGE_MULT: float = 0.0
 # 其它炮弹类弹丸：锁定目标承受 100%，溅射范围内其它目标只承受 30%。
 const SPLASH_DAMAGE_MULT: float = 0.3
+# 科研模式 F9 加长炮管：炮弹溅射倍率由发射者携带，0 = 沿用默认 30%。
+var splash_damage_mult: float = 0.0
 
 # 弹丸模型缓存：后期每秒会生成几十到上百发子弹，不能每发都做
 # ResourceLoader.exists + load + GLB 实例化。PackedScene 只加载一次，之后只 instantiate。
@@ -76,7 +78,7 @@ func _damage_multiplier(dist: float, is_primary: bool) -> float:
 	if source_entity_id in STONE_SOURCE_IDS:
 		var t: float = clampf(dist / maxf(damage_radius, 0.01), 0.0, 1.0)
 		return lerpf(STONE_CENTER_MULT, STONE_EDGE_MULT, t)
-	return 1.0 if is_primary else SPLASH_DAMAGE_MULT
+	return 1.0 if is_primary else (splash_damage_mult if splash_damage_mult > 0.0 else SPLASH_DAMAGE_MULT)
 
 # AOE 伤害入口：石头弹丸按距离衰减，其它炮弹的溅射目标固定 30%。
 func _deal_aoe_damage(entity: GameEntity, src: GameEntity, dist: float,
@@ -367,6 +369,7 @@ func reset_for_reuse(new_source, p_damage_radius: float, p_team: int, p_key: Str
 	else:
 		source_entity_id = -1
 	damage_radius = p_damage_radius
+	splash_damage_mult = float(new_source.get("splash_damage_mult")) if new_source != null and is_instance_valid(new_source) else 0.0
 	team = p_team
 	_pool_key = p_key
 	target = null

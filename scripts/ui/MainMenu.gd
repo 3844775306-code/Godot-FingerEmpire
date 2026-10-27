@@ -36,11 +36,18 @@ func _ready():
 	position = (vs - Vector2(2400, 1400) * s) / 2.0
 	# 手机端：桌面绝对布局在 674×393dp 的屏幕上字只有 5~7dp，改用竖排滚动布局
 	if InputSource.use_mobile_ui():
+		# 手机布局直接铺满「展开后的设计视口」：竖屏时视口会变成 2400×4267，
+		# 如果仍按 2400×1400 居中缩放，菜单只会占屏幕中间一条，上下全是黑的。
+		scale = Vector2.ONE
+		position = Vector2.ZERO
+		# 锚点铺满：即使 Web 首帧稍后才把视口从 2400×1400 扩成竖屏高度，根节点也会跟着长高。
+		set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		size = UILayout.view_size()
+		# 横竖屏切换后重建菜单：所有 dp 尺寸和滚动区高度都要按新方向重算。
+		add_child(OrientationReload.new())
 		# 场景里那套桌面节点必须一起隐藏，否则会和下面的竖排布局重叠，变成"两层 UI"
 		var old_box = get_node_or_null("VBoxContainer")
 		if old_box: old_box.visible = false
-		# 根 Control 默认 size 为 0，anchors 布局会整体塌成 0 高，必须先给设计尺寸
-		size = Vector2(2400, 1400)
 		_build_mobile_layout()
 		_setup_update_check()
 		return
@@ -212,6 +219,19 @@ func _ready():
 	fast_check.add_theme_color_override("icon_normal_color", UITheme.GOLD)
 	fast_check.add_theme_color_override("icon_hover_color", UITheme.GOLD.lightened(0.2))
 	add_child(fast_check)
+
+	# 发展模式：经典（原主城升级） / 科研（四时代科技树）
+	var research_check = CheckBox.new()
+	research_check.name = "ResearchCheck"
+	research_check.text = "科研模式（四时代·科技树）"
+	research_check.position = Vector2(150, 620)
+	research_check.add_theme_font_size_override("font_size", 18)
+	research_check.add_theme_color_override("font_color", UITheme.PARCHMENT)
+	research_check.add_theme_color_override("font_hover_color", UITheme.GOLD)
+	research_check.add_theme_color_override("icon_normal_color", UITheme.GOLD)
+	research_check.tooltip_text = "关闭为经典模式（原升级模式）；开启后通过时代与科技树解锁建筑/单位。新手教程与战役固定使用经典模式。"
+	add_child(research_check)
+	research_check.toggled.connect(func(on): GameSettings.progression_mode = GameSettings.ProgressionMode.RESEARCH if on else GameSettings.ProgressionMode.CLASSIC)
 
 	# 按钮（金主 CTA / 蓝书图鉴 / 石次 / 朱红危险）
 	# 6 个主按钮行距 64、高度 58，最后一个「退出游戏」下沿 924；
@@ -426,6 +446,8 @@ func _on_play_pressed():
 	# 战场地形对所有模式生效（包括乱斗）
 	var fc = _find_ui("FastCheck")
 	GameSettings.fast_mode = fc.button_pressed if fc else false
+	var rc = _find_ui("ResearchCheck")
+	GameSettings.progression_mode = GameSettings.ProgressionMode.RESEARCH if (rc and rc.button_pressed) else GameSettings.ProgressionMode.CLASSIC
 	get_tree().change_scene_to_file("res://scenes/rts_battle.tscn")
 
 func _on_multiplayer_pressed():
@@ -471,6 +493,7 @@ func _start_tutorial_battle() -> void:
 	GameSettings.ai_mode = 1
 	GameSettings.is_ffa = false
 	GameSettings.fast_mode = true
+	GameSettings.progression_mode = GameSettings.ProgressionMode.CLASSIC
 	GameSettings.map_id = "classic"
 	GameSettings.map_seed = 0
 	get_tree().change_scene_to_file("res://scenes/rts_battle.tscn")
@@ -872,6 +895,18 @@ func _build_mobile_layout() -> void:
 	fast_check.add_theme_color_override("font_hover_color", UITheme.GOLD)
 	fast_check.add_theme_color_override("icon_normal_color", UITheme.GOLD)
 	vb.add_child(fast_check)
+
+	var research_check := CheckBox.new()
+	research_check.name = "ResearchCheck"
+	research_check.text = "科研模式（四时代·科技树）"
+	research_check.custom_minimum_size = Vector2(0, UILayout.dp(34.0))
+	research_check.add_theme_font_size_override("font_size", UILayout.font_dp(10.0))
+	research_check.add_theme_color_override("font_color", UITheme.PARCHMENT)
+	research_check.add_theme_color_override("font_hover_color", UITheme.GOLD)
+	research_check.add_theme_color_override("icon_normal_color", UITheme.GOLD)
+	research_check.tooltip_text = "关闭为经典模式；开启后通过时代与科技树解锁建筑/单位。教程与战役固定经典模式。"
+	vb.add_child(research_check)
+	research_check.toggled.connect(func(on): GameSettings.progression_mode = GameSettings.ProgressionMode.RESEARCH if on else GameSettings.ProgressionMode.CLASSIC)
 
 	var sep := HSeparator.new()
 	vb.add_child(sep)

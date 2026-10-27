@@ -41,6 +41,12 @@ func setup(desktop_hud: Node) -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	mouse_filter = Control.MOUSE_FILTER_IGNORE
 
+	# HUD 根节点在场景里只有 40×40（桌面版全部用绝对坐标，所以平时看不出来），
+	# 但 MobileHUD 的 place_dp 依赖父节点满屏；不铺满会把右下指令栏算到屏幕外。
+	if hud is Control:
+		var hud_control := hud as Control
+		hud_control.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+
 	_hide_desktop_controls()
 	_create_router()
 	_create_components()
@@ -194,7 +200,7 @@ func _scale_shared_fonts(root: Control) -> void:
 				var cur: int = int(child.get_theme_font_size("font_size"))
 				# 已经用 dp 换算过的控件（例如「详细」切换按钮）不再二次放大。
 				if cur > 0 and cur <= 28:
-					child.add_theme_font_size_override("font_size", int(round(cur * UILayout.DP_RATIO)))
+					child.add_theme_font_size_override("font_size", int(round(cur * UILayout.dp_ratio())))
 
 # ==================== 面板横向滑动收起 ====================
 # 右下指令区与左下信息面板会挡住战场：手指横向拖动可把面板滑出屏幕，
@@ -315,16 +321,25 @@ func _get_bm() -> Node:
 		_bm = get_tree().get_first_node_in_group("battle_manager")
 	return _bm
 
-# 手机端小地图放大到原来的 2 倍（77 → 154dp），贴在屏幕右上角。
-# 必须清掉 Minimap 内部写死的 custom_minimum_size=400，否则控件会被撑回原尺寸、
-# 直接铺出屏幕外。指令栏已经压矮到 ~170dp（上缘在设计空间 y≈750），
-# 小地图占 y 64..613，所以两者不再重叠，不需要再为顶部信息面板让位。
+# 手机端小地图横屏 154dp（右上角）；竖屏缩到 100dp 并下移到资源胶囊下方，
+# 否则 344dp 宽的胶囊和 154dp 的小地图会挤在同一条顶部带里互相遮挡。
 const MINIMAP_DP: float = 154.0
+const MINIMAP_PORTRAIT_DP: float = 100.0
+const MINIMAP_PORTRAIT_TOP_DP: float = 48.0
 
 func _apply_minimap_layout(minimap: Control) -> void:
 	minimap.custom_minimum_size = Vector2.ZERO
-	minimap.size = Vector2(UILayout.dp(MINIMAP_DP), UILayout.dp(MINIMAP_DP))
-	UILayout.place_dp(minimap, "tr", MINIMAP_DP, MINIMAP_DP, 6.0)
+	if UILayout.is_portrait():
+		var size_dp := MINIMAP_PORTRAIT_DP
+		var side := UILayout.dp(size_dp)
+		var insets := UILayout.safe_insets()
+		var right := insets.z + UILayout.dp(6.0)
+		var top := insets.y + UILayout.dp(MINIMAP_PORTRAIT_TOP_DP)
+		minimap.size = Vector2(side, side)
+		UILayout.place(minimap, 1.0, 0.0, -right - side, top, -right, top + side)
+	else:
+		minimap.size = Vector2(UILayout.dp(MINIMAP_DP), UILayout.dp(MINIMAP_DP))
+		UILayout.place_dp(minimap, "tr", MINIMAP_DP, MINIMAP_DP, 6.0)
 	minimap.mouse_filter = Control.MOUSE_FILTER_STOP
 	_minimap_sized = true
 

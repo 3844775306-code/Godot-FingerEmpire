@@ -422,6 +422,9 @@ func _is_visible_enemy(entity: GameEntity) -> bool:
 
 # ═══ Economy ═══
 func _ai_can_build(building_id: int) -> bool:
+	if battle != null and battle.has_method("is_research_mode") and battle.is_research_mode():
+		if battle.has_method("is_building_unlocked"):
+			return battle.is_building_unlocked(building_id, my_peer_id, my_team)
 	var cl = 0
 	var castle = get_peer_castle(my_peer_id)
 	if castle: cl = castle.upgrade_level
@@ -616,6 +619,9 @@ func can_afford_upgrade(building_id: int) -> bool:
 
 # ═══ Production ═══
 func produce_unit(unit_id: int) -> bool:
+	if battle != null and battle.has_method("is_research_mode") and battle.is_research_mode():
+		if battle.has_method("is_unit_unlocked") and not battle.is_unit_unlocked(unit_id, my_peer_id, my_team):
+			return false
 	# 贸易车没有商人可跟就是废单位；生产时严格保证“车 < 商人”
 	if unit_id == TRADE_CART_ID and count_unit(TRADE_CART_ID) >= _count_merchants():
 		return false
@@ -1024,6 +1030,9 @@ func _process(delta):
 			interval *= 1.5
 		timer = interval
 		decide(interval)
+		if battle != null and battle.has_method("is_research_mode") and battle.is_research_mode():
+			_tick_research()
+
 	worker_allocate_timer -= delta
 	if worker_allocate_timer <= 0:
 		worker_allocate_timer = WORKER_ALLOCATE_INTERVAL
@@ -1041,6 +1050,71 @@ func _process(delta):
 		_tick_building_repair()
 	# 部队积累判定放到 decide() 的 AI 思考节流里，避免每帧全实体扫描
 
+# ═══ 科研模式 AI：按难度节奏升时代，再按优先表研究科技 ═══
+const RESEARCH_PRIORITY: Array = [
+	"A1", "B1", "C1", "D1", "I2", "I3", "B2", "C2", "D5", "D2",
+	"E1", "E2", "F1", "F3", "A2", "B6", "A4", "I5", "C3", "D4",
+	"H1", "B3", "C4", "F2", "G1", "G3", "G5", "A5", "B5", "C5",
+	"E3", "F4", "F10", "I1", "I6", "H3", "H4", "G2", "B7", "F8",
+]
+
+func _ai_age_target_seconds(target_age: int) -> float:
+	var diff := GameSettings.ai_difficulty
+	if battle is OnlineBattleManager and my_peer_id != -1:
+		diff = GameSettings.red_ai_difficulty if my_team == RTSConfig.Team.RED else GameSettings.blue_ai_difficulty
+	var table := {
+		GameSettings.AIDifficulty.EASY: [[9, 11], [15, 18], [26, 30]],
+		GameSettings.AIDifficulty.NORMAL: [[7, 9], [12, 15], [20, 24]],
+		GameSettings.AIDifficulty.HARD: [[6, 8], [10, 13], [18, 21]],
+		GameSettings.AIDifficulty.HELL: [[5, 7], [9, 11], [16, 19]],
+	}
+	var ranges: Array = table.get(diff, table[GameSettings.AIDifficulty.NORMAL])
+	var idx: int = clampi(target_age - 1, 0, 2)
+	var pair: Array = ranges[idx]
+	var lo: int = int(pair[0]) * 60
+	var hi: int = int(pair[1]) * 60
+	# 同一难度的多个 AI 错开到达时间，避免同一秒一起点时代。
+	var span: int = maxi(hi - lo, 1)
+	var offset: int = absi(my_peer_id * 37 + nation * 11) % span
+	return float(lo + offset)
+
+func _tick_research() -> void:
+	var st: Dictionary = battle.get_research_state(my_peer_id, my_team)
+	if st.is_empty():
+		return
+	if not st.get("current", {}).is_empty():
+		return
+	var age: int = int(st.get("age", 0))
+	# 1) 时代：到点且条件齐备才点，避免把资源卡在无法完成的条件上。
+	if age < 3 and battle.game_time >= _ai_age_target_seconds(age + 1):
+		var check: Dictionary = battle.can_research_age(my_peer_id, my_team)
+		if bool(check.get("ok", false)):
+			battle.research_start_age(my_peer_id, my_team)
+			return
+	# 2) 通用科技：按优先表找到第一个满足时代/前置/资源的项目。
+	var bits: int = int(st.get("bits", 0))
+	for tid in RESEARCH_PRIORITY:
+		if TechTreeData.has_bit(bits, tid):
+			continue
+		var info := TechTreeData.get_tech(tid)
+		if info.is_empty() or int(info.get("age", 0)) > age:
+			continue
+		if not battle.research_can_afford(my_peer_id, my_team, info.get("cost", {})):
+			continue
+		if bool(battle.research_start(my_peer_id, my_team, tid).get("ok", false)):
+			return
+	# 3) 国家特色科技：通用项目都点不动时，优先补本国科技。
+	var nation_techs := TechTreeData.nation_techs(nation)
+	for t in nation_techs:
+		var tid := String(t.get("id", ""))
+		if TechTreeData.has_nation_bit(int(st.get("nation_bits", 0)), nation, tid):
+			continue
+		if int(t.get("age", 0)) > age:
+			continue
+		if not battle.research_can_afford(my_peer_id, my_team, t.get("cost", {})):
+			continue
+		if bool(battle.research_start(my_peer_id, my_team, tid).get("ok", false)):
+			return
 # ═══ Decide ═══
 
 # -- SETUP: validate castle exists, transition to PRODUCTION --

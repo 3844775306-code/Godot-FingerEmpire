@@ -5,6 +5,8 @@ extends CanvasLayer
 var _bm: Node = null
 var _sm: Node = null
 var _mobile_hud = null    # 移动端界面装配器（仅触屏设备创建）
+var _last_portrait: bool = false
+var _mobile_rebuild_pending: bool = false
 
 var health_bar_timer = 0.0
 const HEALTH_BAR_UPDATE_INTERVAL: float = 0.05
@@ -65,8 +67,12 @@ var _stats_collapse_btn: Button = null
 var _stats_capsule: Panel = null
 var _capsule_pop_label: Label = null
 var _capsule_res_labels: Dictionary = {}
+var _capsule_row: HBoxContainer = null
 # 全局指令按钮底板（6 个按钮排两行）
 var _cmd_panel: Panel = null
+# 全局指令底板：6 个按钮 2 行 × 3 列
+const CMD_PANEL_W: float = 662.0
+const CMD_PANEL_H: float = 82.0
 # 战况栏：同时最多堆 3 条，新的在最下面、最亮，旧的逐级变淡
 const ALERT_MAX_ROWS: int = 3
 const ALERT_LIFE: float = 3.4
@@ -189,6 +195,10 @@ func _update_stats_capsule(res: Dictionary, lim: Dictionary, pop: int, max_pop: 
 			var cap: int = int(lim.get(rk, 0))
 			var full: bool = cap > 0 and cur >= cap
 			l.add_theme_color_override("font_color", UITheme.ALERT_DANGER if full else _res_color_for(rk))
+	# 胶囊宽度跟随内容：开局数字短时紧凑，后期四五位数也不会被截断
+	if _capsule_row != null and _stats_capsule != null:
+		var need: float = _capsule_row.get_combined_minimum_size().x + 32.0
+		_stats_capsule.size.x = maxf(580.0, need)
 
 # 折叠后的胶囊：一行显示人口与五项资源，点击展开回完整统计面板
 func _create_stats_capsule() -> void:
@@ -196,30 +206,31 @@ func _create_stats_capsule() -> void:
 	_stats_capsule.name = "StatsCapsule"
 	_stats_capsule.z_index = 100
 	_stats_capsule.position = Vector2(10, 10)
-	_stats_capsule.size = Vector2(600, 40)
+	_stats_capsule.size = Vector2(780, 52)
 	_stats_capsule.visible = false
 	_stats_capsule.mouse_filter = Control.MOUSE_FILTER_STOP
 	var st := StyleBoxFlat.new()
 	st.bg_color = Color(UITheme.INK, UITheme.ALPHA_BG)
-	st.set_corner_radius_all(8)
+	st.set_corner_radius_all(10)
 	st.set_border_width_all(2)
 	st.border_color = Color(UITheme.GOLD, UITheme.ALPHA_BORDER)
 	_stats_capsule.add_theme_stylebox_override("panel", st)
 	var row := HBoxContainer.new()
 	row.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	row.offset_left = 12
-	row.offset_right = -12
-	row.add_theme_constant_override("separation", 14)
+	row.offset_left = 16
+	row.offset_right = -16
+	row.add_theme_constant_override("separation", 18)
 	_stats_capsule.add_child(row)
+	_capsule_row = row
 	_capsule_pop_label = Label.new()
-	_capsule_pop_label.add_theme_font_size_override("font_size", 17)
+	_capsule_pop_label.add_theme_font_size_override("font_size", 21)
 	_capsule_pop_label.add_theme_color_override("font_color", Color.WHITE)
 	_capsule_pop_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_capsule_pop_label.text = "👥 0/0"
 	row.add_child(_capsule_pop_label)
 	for rk in ["gold", "wood", "stone", "food", "oil"]:
 		var l := Label.new()
-		l.add_theme_font_size_override("font_size", 16)
+		l.add_theme_font_size_override("font_size", 20)
 		l.add_theme_color_override("font_color", _res_color_for(rk))
 		l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		l.text = "0"
@@ -663,6 +674,33 @@ func _input(event):
 			KEY_DELETE: _on_demolish_selected()
 			KEY_SPACE: _on_space_pressed()
 			KEY_L: _toggle_unit_text()
+			KEY_T: _open_research_panel()
+
+func _update_research_button(bm) -> void:
+	var rbtn := get_node_or_null("ResearchButton")
+	if rbtn == null:
+		return
+	var on: bool = bm.has_method("is_research_mode") and bm.is_research_mode()
+	rbtn.visible = on
+	if not on:
+		return
+	var st: Dictionary = bm.get_host_research_state() if bm.has_method("get_host_research_state") else {}
+	var age_name := TechTreeData.age_name(int(st.get("age", 0)))
+	var cur: Dictionary = st.get("current", {})
+	if cur.is_empty():
+		rbtn.text = "🔬 %s · 科研树 (T)" % age_name
+	else:
+		var pct: int = int(clampf(float(cur.get("elapsed", 0.0)) / maxf(float(cur.get("total", 1.0)), 0.1) * 100.0, 0.0, 100.0))
+		rbtn.text = "🔬 %s · %s %d%% (T)" % [age_name, String(cur.get("name", "")), pct]
+
+# 科研树入口：经典模式不显示；联机客户端由 ClientHUD 处理。
+func _open_research_panel():
+	if not GameSettings.is_research_mode():
+		return
+	var bm = _get_bm()
+	if bm == null:
+		return
+	ResearchPanel.open(self, bm)
 
 # L 键：切换血条文字显示（隐藏后画面上只剩血条色条）
 func _toggle_unit_text():
@@ -857,11 +895,11 @@ func _ready():
 
 	_create_unit_stats_panel()
 
-	# 全局指令：6 个按钮正好排成两排（3×2），统一放在一块半透明底板里
+	# 全局指令：6 个按钮排成 2 行 × 3 列（3×2），整块底板水平居中
 	_cmd_panel = Panel.new()
 	_cmd_panel.name = "GlobalCommandPanel"
-	_cmd_panel.position = Vector2(600, 10)
-	_cmd_panel.size = Vector2(880, 86)
+	_cmd_panel.size = Vector2(CMD_PANEL_W, CMD_PANEL_H)
+	_cmd_panel.position = Vector2((get_viewport().get_visible_rect().size.x - CMD_PANEL_W) * 0.5, 10)
 	_cmd_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var cmd_style := StyleBoxFlat.new()
 	cmd_style.bg_color = Color(0.0, 0.0, 0.0, 0.38)
@@ -872,7 +910,7 @@ func _ready():
 	add_child(_cmd_panel)
 
 	var cmd_grid := GridContainer.new()
-	cmd_grid.columns = 4
+	cmd_grid.columns = 3
 	cmd_grid.position = Vector2(8, 8)
 	cmd_grid.add_theme_constant_override("h_separation", 8)
 	cmd_grid.add_theme_constant_override("v_separation", 6)
@@ -890,13 +928,66 @@ func _ready():
 	for b in [b_select_screen, b_select_all, auto_attack_btn, b_retreat_screen, b_retreat_all, b_settings]:
 		cmd_grid.add_child(b)
 
+	# 科研模式入口：固定在右上角，与资源/指令栏错开；经典模式下隐藏。
+	var research_btn := Button.new()
+	research_btn.name = "ResearchButton"
+	research_btn.text = "🔬 科研树 (T)"
+	research_btn.position = Vector2(1620, 110)
+	research_btn.size = Vector2(260, 40)
+	UITheme.apply_muted_button(research_btn, 17)
+	research_btn.pressed.connect(_open_research_panel)
+	add_child(research_btn)
+	research_btn.visible = GameSettings.is_research_mode()
+
 	set_process(true)
 
 	# 移动端：装配触屏界面（桌面端不进入此分支，零改动）
+	_last_portrait = UILayout.is_portrait()
+	if get_viewport() != null:
+		get_viewport().size_changed.connect(_on_viewport_size_changed)
 	if InputSource.use_mobile_ui():
 		_mobile_hud = MobileHUD.new()
 		add_child(_mobile_hud)
 		_mobile_hud.setup(self)
+
+func _on_viewport_size_changed() -> void:
+	if not InputSource.use_mobile_ui():
+		return
+	var now := UILayout.is_portrait()
+	if now == _last_portrait:
+		return
+	_last_portrait = now
+	if _mobile_rebuild_pending:
+		return
+	_mobile_rebuild_pending = true
+	call_deferred("_rebuild_mobile_hud_for_orientation")
+
+func _rebuild_mobile_hud_for_orientation() -> void:
+	_mobile_rebuild_pending = false
+	if not is_inside_tree():
+		return
+	if _mobile_hud != null and is_instance_valid(_mobile_hud):
+		remove_child(_mobile_hud)
+		_mobile_hud.queue_free()
+	_mobile_hud = MobileHUD.new()
+	add_child(_mobile_hud)
+	_mobile_hud.setup(self)
+	_layout_alert_stack()
+
+func _layout_alert_stack() -> void:
+	if _alert_stack == null or not is_instance_valid(_alert_stack):
+		return
+	if not InputSource.use_mobile_ui():
+		return
+	var portrait := UILayout.is_portrait()
+	var w: float = UILayout.dp(300.0 if portrait else 310.0)
+	var top_y: float = UILayout.dp(154.0 if portrait else 76.0)
+	_alert_stack.anchor_left = 0.5
+	_alert_stack.anchor_right = 0.5
+	_alert_stack.offset_left = -w * 0.5
+	_alert_stack.offset_right = w * 0.5
+	_alert_stack.offset_top = top_y
+	_alert_stack.offset_bottom = top_y
 const ALERT_DANGER = UITheme.ALERT_DANGER     # 红色 — 基地/建筑被攻击
 const ALERT_WARNING = UITheme.ALERT_WARNING   # 黄色 — 敌军来袭/资源不足
 const ALERT_INFO = UITheme.ALERT_INFO      # 绿色 — 建造/训练/升级完成
@@ -918,8 +1009,9 @@ func show_alert_message(msg: String, color: Color = ALERT_DANGER, teams = [], al
 		if mobile:
 			# 手机端按 dp 居中，放在原顶部信息面板的位置（y≈76dp）：
 			# 信息面板已经挪到资源胶囊右侧那条高度带，这里原来是空的，正好给警报。
-			var w: float = UILayout.dp(310.0)
-			var top_y: float = UILayout.dp(76.0)
+			var portrait := UILayout.is_portrait()
+			var w: float = UILayout.dp(300.0 if portrait else 310.0)
+			var top_y: float = UILayout.dp(154.0 if portrait else 76.0)
 			_alert_stack.anchor_left = 0.5; _alert_stack.anchor_right = 0.5
 			_alert_stack.anchor_top = 0.0; _alert_stack.anchor_bottom = 0.0
 			_alert_stack.offset_left = -w * 0.5; _alert_stack.offset_right = w * 0.5
@@ -1150,6 +1242,7 @@ func _process(delta):
 	var bm = _get_bm()
 	if bm == null:
 		return
+	_update_research_button(bm)
 	if bm.game_over and unit_stats_visible:
 		hide_stat_panels()
 	minimap_timer -= delta

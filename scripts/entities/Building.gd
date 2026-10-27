@@ -53,6 +53,9 @@ func start_construction(time: float, data: Dictionary):
 	var spd = 1.0
 	if GameSettings.fast_mode: spd = 2.0
 	if _owner_is_ai() and GameSettings.ai_difficulty >= GameSettings.AIDifficulty.HELL: spd *= 1.2
+	var cbm = _get_bm()
+	if cbm != null and cbm.has_method("is_research_mode") and cbm.is_research_mode():
+		spd *= 1.0 + float(cbm.get_research_mods(owner_peer_id, team).get("construction_speed_pct", 0.0)) / 100.0
 	max_build_time = data["max_health"] / 75.0 / spd
 	build_timer = max_build_time
 	max_health = 10
@@ -217,14 +220,27 @@ func _attack(target, delta):
 		var bullet = bm.acquire_bullet(self, damage_radius, team)
 		bullet.team = team
 		bullet.owner_peer_id = owner_peer_id
-		bullet.damage = attack
+		bullet.damage = attack * (volley_mult if volley_count > 1 else 1.0)
 		bullet.speed = 6.0
 		bullet.target = target
 		bullet.source = self
 		bullet.damage_radius = damage_radius
-		# acquire_bullet 已把弹丸挂到 BattleManager 下，这里只设置入树后的全局坐标
+		bullet.splash_damage_mult = splash_damage_mult
 		# 模型乘了 ENTITY_MODEL_SCALE，出手高度也要按放大后的实际尺寸算
 		bullet.global_position = global_position + Vector3(0, body_radius * RTSConfig.get_model_scale(entity_id) * 1.5, 0)
+		# B7 三矢齐发：主城/城堡一次攻击连射 3 支，每支 50% 伤害。
+		var extra_shots: int = maxi(0, volley_count - 1) if entity_id in [20, 53] else 0
+		for _i in range(extra_shots):
+			var extra = bm.acquire_bullet(self, damage_radius, team)
+			extra.team = team
+			extra.owner_peer_id = owner_peer_id
+			extra.damage = attack * volley_mult
+			extra.speed = 6.0
+			extra.target = target
+			extra.source = self
+			extra.damage_radius = damage_radius
+			extra.splash_damage_mult = splash_damage_mult
+			extra.global_position = bullet.global_position + Vector3(randf_range(-0.35, 0.35), 0, randf_range(-0.35, 0.35))
 	else:
 		target.take_damage(attack, self)
 	attack_timer = attack_speed
@@ -313,6 +329,12 @@ func _finish_construction():
 		var nation = bm.get_team_nation(team)
 		if nation >= 0:
 			_unlock_nation_units(nation)
+	# 科研模式：先记录基础数值，再套用全玩家科技加成；最后按科技解锁重排生产列表。
+	if bm and bm.has_method("is_research_mode") and bm.is_research_mode():
+		_capture_research_base()
+		if bm.has_method("apply_research_bonuses"):
+			bm.apply_research_bonuses(self)
+		_sync_production_unlocks()
 	# 建造期间视野为 0，完成后恢复；若建筑正被选中，立即补上视野/射程圈
 	_sync_range_rings()
 	# 建造完成、全局等级同步后重建一次等级外观。
@@ -664,6 +686,16 @@ func _sync_production_unlocks():
 	var full: Array = building_data.get("produces", [])
 	if full.is_empty():
 		return
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if bm and bm.has_method("is_research_mode") and bm.is_research_mode():
+		# 科研模式：生产列表完全由已研究科技决定，不再看建筑等级。
+		production_list = []
+		for i in range(full.size()):
+			var prod: Dictionary = full[i]
+			var uid: int = int(prod.get("unit_id", -1))
+			if uid >= 0 and bm.is_unit_unlocked(uid, owner_peer_id, team):
+				production_list.append(prod.duplicate())
+		return
 	for i in range(full.size()):
 		var prod: Dictionary = full[i]
 		var unlock_lv: int = int(prod.get("unlock_level", i + 1))
@@ -743,6 +775,10 @@ func _get_upgrade_castle() -> Building:
 func can_upgrade() -> bool:
 	if build_timer > 0: return false
 	if upgrade_timer > 0: return false
+	# 科研模式没有建筑等级升级；成长全部来自科技树。
+	var rbm = _get_bm()
+	if rbm != null and rbm.has_method("is_research_mode") and rbm.is_research_mode():
+		return false
 	# 修理中不开新工程：两套计时同时跑会让进度条和脚手架状态互相打架
 	if repair_timer > 0: return false
 	if upgrade_level >= max_upgrade_level: return false
@@ -998,8 +1034,13 @@ func repair_cost() -> Dictionary:
 	if ratio <= 0.0:
 		return out
 	var base := _repair_base_cost()
+	var discount := 0.0
+	var rbm = _get_bm()
+	if rbm != null and rbm.has_method("is_research_mode") and rbm.is_research_mode():
+		var mods: Dictionary = rbm.get_research_mods(owner_peer_id, team)
+		discount = float(mods.get("repair_cost_pct", 0.0)) / 100.0
 	for k in base:
-		var v: int = int(ceil(float(base[k]) * ratio))
+		var v: int = int(ceil(float(base[k]) * ratio * (1.0 + discount)))
 		if v > 0:
 			out[k] = v
 	return out
@@ -1039,6 +1080,11 @@ func _tick_repair_scan(delta: float) -> void:
 	_repair_enemy_near = _has_enemy_near_repair()
 
 func can_repair() -> bool:
+	var rbm = _get_bm()
+	if rbm != null and rbm.has_method("is_research_mode") and rbm.is_research_mode():
+		var rs = rbm.get_research_state(owner_peer_id, team)
+		if not bool(rs.get("mods", {}).get("repair_enabled", 0.0) > 0.0):
+			return false
 	if _repair_forbidden():
 		return false
 	if health <= 0:
@@ -1134,10 +1180,15 @@ func _finish_repair() -> void:
 func _unlock_nation_units(nation: int):
 	# 确保 NationData 已初始化
 	NationData._static_init()
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	var research := bm != null and bm.has_method("is_research_mode") and bm.is_research_mode()
 	var units = NationData.NATION_UNITS.get(nation, [])
 	for u in units:
 		# 跳过农民（id 10），因为城堡本来就能生产
 		if u["unit_id"] == 10:
+			continue
+		# 科研模式：特色兵种由对应通用科技解锁，城堡只负责提供生产建筑。
+		if research and not bm.is_unit_unlocked(int(u["unit_id"]), owner_peer_id, team):
 			continue
 		# 检查是否已存在
 		var exists = false

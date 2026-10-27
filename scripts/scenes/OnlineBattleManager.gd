@@ -15,7 +15,6 @@ var auto_attack_teams: Dictionary = {}    # 1v1: team -> bool
 var auto_attack_peers: Dictionary = {}    # 2v2/3v3: peer_id -> bool
 var quartermaster_teams: Dictionary = {}  # 1v1: team -> bool
 var quartermaster_peers: Dictionary = {}  # 2v2/3v3: peer_id -> bool
-
 # 智能军队官：开关与阈值都由客户端命令上报，服务端按玩家存下来
 var army_officer_teams: Dictionary = {}   # 1v1: team -> bool
 var army_officer_peers: Dictionary = {}   # 2v2/3v3: peer_id -> bool
@@ -852,6 +851,9 @@ func _process_1v1_command(peer_id: int, data: Dictionary):
 		"repair": _1v1_repair(team, data)
 		"assign_builder": _1v1_assign_builder(team, data)
 		"cancel_construction": _1v1_cancel_construction(team, data)
+		"research": _research_cmd(-1, team, String(data.get("tech_id", "")))
+		"research_age": _research_cmd(-1, team, "AGE")
+		"cancel_research": research_cancel(-1, team)
 
 func _process_2v2_command(peer_id: int, data: Dictionary):
 	if not player_info.has(peer_id) or not player_info[peer_id].alive: return
@@ -875,6 +877,14 @@ func _process_2v2_command(peer_id: int, data: Dictionary):
 		"repair": _2v2_repair(peer_id, data)
 		"assign_builder": _2v2_assign_builder(peer_id, data)
 		"cancel_construction": _2v2_cancel_construction(peer_id, data)
+		"research": _research_cmd(peer_id, player_info[peer_id].team, String(data.get("tech_id", "")))
+		"research_age": _research_cmd(peer_id, player_info[peer_id].team, "AGE")
+		"cancel_research": research_cancel(peer_id, player_info[peer_id].team)
+
+func _research_cmd(owner_peer_id: int, team: int, tid: String) -> Dictionary:
+	if tid == "AGE":
+		return research_start_age(owner_peer_id, team)
+	return research_start(owner_peer_id, team, tid)
 
 # ---------- 1v1 命令实现 ----------
 func _1v1_right_click(team: int, data: Dictionary):
@@ -923,7 +933,7 @@ func _1v1_build(team: int, data: Dictionary):
 	var pos = Vector3(data["pos_x"], data["pos_y"], data["pos_z"])
 	var cfg = EntityDatabase.get_config(building_id)
 	if cfg.is_empty(): return
-	if not is_building_unlocked(building_id): return
+	if not is_building_unlocked(building_id, -1, team): return
 	# 桥：必须邻接陆地或已建成的桥，且不能与其他实体重叠
 	if building_id == 7 and not is_valid_bridge_position(pos): return
 	# Cannot build near enemies
@@ -1058,8 +1068,9 @@ func _2v2_build(peer_id: int, data: Dictionary):
 	var pos = Vector3(data["pos_x"], data["pos_y"], data["pos_z"])
 	var cfg = EntityDatabase.get_config(building_id)
 	if cfg.is_empty(): return
+	if not is_building_unlocked(building_id, peer_id, player_info[peer_id].team): return
 	var req_lv = get_building_required_castle_level(building_id)
-	if req_lv > 1:
+	if req_lv > 1 and not is_research_mode():
 			var castle = player_castles.get(peer_id)
 			if not castle or castle.upgrade_level < req_lv: return
 	var cost = cfg.get("cost", {})
@@ -1855,10 +1866,27 @@ func build_snapshot_for_team(team: int) -> Dictionary:
 		r["enemy_nation"] = team_nations.get(RTSConfig.Team.RED if team == RTSConfig.Team.BLUE else RTSConfig.Team.BLUE, -1)
 		r["gather_counts"] = team_gather_counts.get(team, {"gold":0, "wood":0, "stone":0, "food":0, "oil":0})
 		r["income_rate"] = team_income_rates.get(team, {"gold":0.0, "wood":0.0, "stone":0.0, "food":0.0, "oil":0.0})
+	# 研究状态每帧携带：面板进度条需要平滑推进，数据量很小。
+	r["progression_mode"] = int(GameSettings.progression_mode)
 	r["nation_colors"] = RTSConfig.get_nation_colors()
+	if is_research_mode():
+		r["research"] = _serialize_research(-1, team)
 	# 警报兜底：连续多帧携带最近警报，客户端按 id 去重；RPC 主通道丢包也能补上。
 	r["alerts"] = _alerts_for_team(team)
 	return r
+
+func _serialize_research(owner_peer_id: int, team: int) -> Dictionary:
+	var st := get_research_state(owner_peer_id, team)
+	if st.is_empty():
+		return {}
+	var cur: Dictionary = st.get("current", {})
+	return {
+		"age": int(st.get("age", 0)),
+		"bits": int(st.get("bits", 0)),
+		"nation_bits": int(st.get("nation_bits", 0)),
+		"nation": int(st.get("nation", -1)),
+		"current": cur.duplicate(true),
+	}
 
 func _broadcast_1v1():
 	# Collect bullet data ONCE (reused for all players)
@@ -2235,6 +2263,9 @@ func build_snapshot_for_player(peer_id: int) -> Dictionary:
 	if is_full:
 		result["team_nations"] = team_nations
 		result["player_info"] = player_info
+	result["progression_mode"] = int(GameSettings.progression_mode)
+	if is_research_mode():
+		result["research"] = _serialize_research(peer_id, team)
 	result["nation_colors"] = RTSConfig.get_nation_colors()
 	result["player_castles"] = _serialize_castles()
 	# 警报兜底：组队模式 RPC 的 peer→team 映射历史上不可靠，快照多帧重发保证送达。

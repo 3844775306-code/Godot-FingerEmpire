@@ -273,6 +273,11 @@ func _apply_nation_bonus():
 		return
 	var nation = bm.get_team_nation(team)
 	if nation < 0:
+		# 无国家加成（中立/特殊单位）也要记录基础值并套用科研加成。
+		if bm.has_method("_capture_research_base"):
+			_capture_research_base()
+			if bm.has_method("apply_research_bonuses"):
+				bm.apply_research_bonuses(self)
 		return
 	var mults = NationBonuses.get_all_unit_multipliers(nation)
 	if mults.has("health"):
@@ -300,6 +305,12 @@ func _apply_nation_bonus():
 			gather_search_range = maxf(float(vision_range), BOAT_GATHER_SEARCH_RANGE)
 	# 国家加成可能改了视野/射程：若这个单位正被单选，范围圈半径跟着更新
 	_sync_range_rings()
+	# 科研模式：国家加成之后再做一次科技加成；基础值此刻已包含国家加成，
+	# 因此后续科技完成时从该基础值重算，不会重复叠加。
+	if bm.has_method("_capture_research_base"):
+		_capture_research_base()
+		if bm.has_method("apply_research_bonuses"):
+			bm.apply_research_bonuses(self)
 	  # ²»Ö÷¶¯×·»÷£¬Ö»¹¥»÷½øÈëÉä³ÌµÄµÐÈË
 	# Ô­ÓÐ×·»÷Âß¼­...
 func _ready():
@@ -3238,9 +3249,9 @@ func _attack(target, delta):
 			# 投石车(17) / 巨型投石机(59)：子弹飞向固定位置，不追踪目标
 			if entity_id == 17 or entity_id == 59:
 				var tpos = target.global_position
-				# 巨型投石机50%概率打偏
-				if entity_id == 59 and randf() < 0.5:
-					var miss_offset = Vector3(randf_range(-attack_range, attack_range), 0, randf_range(-attack_range, attack_range))
+				# 巨型投石机50%概率打偏；F7 望山定距降低散布（accuracy_mult < 1 更准）
+				if entity_id == 59 and randf() < 0.5 * accuracy_mult:
+					var miss_offset = Vector3(randf_range(-attack_range, attack_range), 0, randf_range(-attack_range, attack_range)) * accuracy_mult
 					tpos += miss_offset
 				bullet.target_pos = tpos
 			else:
@@ -3377,7 +3388,7 @@ func _apply_caster_hit(target) -> Dictionary:
 		55:
 			if not (target is Army) or target.team != team:
 				return result
-			var heal_amt = min(attack, target.max_health - target.health)
+			var heal_amt = min(attack * spell_power_mult, target.max_health - target.health)
 			if heal_amt <= 0.0:
 				return result
 			target.health += heal_amt
@@ -3386,7 +3397,7 @@ func _apply_caster_hit(target) -> Dictionary:
 		56:
 			if not (target is Army) or target.team == team:
 				return result
-			var dmg = target.max_health * 0.05
+			var dmg = target.max_health * 0.05 * spell_power_mult * (1.0 - clampf(target.spell_resist, 0.0, 1.0))
 			target.health -= dmg
 			result["kind"] = "elder"
 			result["amount"] = dmg
@@ -3395,7 +3406,7 @@ func _apply_caster_hit(target) -> Dictionary:
 		57:
 			if not (target is Army) or target.team == team:
 				return result
-			var reduce = attack
+			var reduce = attack * spell_power_mult * (1.0 - clampf(target.spell_resist, 0.0, 1.0))
 			var dist = global_position.distance_to(target.global_position)
 			if dist <= 2.0 + body_radius + target.body_radius:
 				reduce *= 2
@@ -3530,6 +3541,13 @@ func _gather(resource_node, delta):
 		if bm and bm.has_method("get_team_nation"):
 			var nation = bm.get_team_nation(team)
 			amount = int(amount * NationBonuses.get_gather_mult(nation, res_type))
+		if bm and bm.has_method("research_gather_mult"):
+			amount = int(amount * bm.research_gather_mult(owner_peer_id, team, res_type))
+		if bm and bm.has_method("get_research_mods"):
+			var rmods: Dictionary = bm.get_research_mods(owner_peer_id, team)
+			if float(rmods.get("animal_damage_pct", 0.0)) > 0.0 and resource_node is Army \
+					and str(resource_node.get("_animal_type")) != "":
+				amount = int(amount * (1.0 + float(rmods.get("animal_damage_pct", 0.0)) / 100.0))
 		if _get_cargo_total() + amount > max_cargo:
 			# 满载回城交付；找不到交付点（基地被拆/附近没有仓库）时不能停在原地假采集
 			if not _return_to_deliver():
@@ -4003,6 +4021,13 @@ func attack_move_to(pos: Vector3):
 func _calc_trade_volume(_castle_level: int, distance: float) -> int:
 	return mini(80 + 20 * _castle_level, int(distance * 2.0))
 
+# 科研模式：贸易收益百分比（N27/N30 等）。
+func _trade_bonus_mult(bm) -> float:
+	if bm == null or not bm.has_method("is_research_mode") or not bm.is_research_mode():
+		return 1.0
+	var mods: Dictionary = bm.get_research_mods(owner_peer_id, team)
+	return 1.0 + float(mods.get("trade_income_pct", 0.0)) / 100.0
+
 func _merchant_get_res(bm):
 	if owner_peer_id != -1 and bm.has_method("get_resources_for"):
 		return bm.get_resources_for(owner_peer_id)
@@ -4074,7 +4099,7 @@ func _process_merchant(delta):
 			amt = mini(amt, max(0, lim.get("gold", 99999) - res.get("gold", 0)))
 			if amt <= 0: _merchant_state = 0; return
 			_merchant_deduct(bm, {_merchant_resource: amt})
-			_merchant_add(bm, "gold", int(amt * 1.2))
+			_merchant_add(bm, "gold", int(amt * 1.2 * _trade_bonus_mult(bm)))
 			_merchant_state = 2
 
 		2:  # TRAVEL_TO_MARKET
@@ -4100,7 +4125,7 @@ func _process_merchant(delta):
 			amt2 = mini(amt2, max(0, lim2.get(_merchant_resource, 99999) - res2.get(_merchant_resource, 0)))
 			if amt2 <= 0: _merchant_state = 4; return
 			_merchant_deduct(bm, {"gold": amt2})
-			_merchant_add(bm, _merchant_resource, int(amt2 * 0.8))
+			_merchant_add(bm, _merchant_resource, int(amt2 * 0.8 * _trade_bonus_mult(bm)))
 			_merchant_state = 4
 
 		4:  # TRAVEL_HOME

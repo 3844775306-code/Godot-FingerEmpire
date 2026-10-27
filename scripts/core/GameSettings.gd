@@ -1,5 +1,12 @@
 extends Node
 enum AIDifficulty { EASY, NORMAL, HARD, HELL }
+# 发展模式：CLASSIC = 原「主城升级解锁」模式；RESEARCH = 四时代 + 科技树科研模式。
+# 默认保持经典模式，确保所有旧存档、旧流程和对局行为完全不变。
+enum ProgressionMode { CLASSIC = 0, RESEARCH = 1 }
+var progression_mode: int = ProgressionMode.CLASSIC
+
+func is_research_mode() -> bool:
+	return progression_mode == ProgressionMode.RESEARCH
 var player_nation: int = RTSConfig.Nation.VIKING
 var enemy_nation: int = RTSConfig.Nation.ENGLAND
 var ai_difficulty: int = AIDifficulty.EASY

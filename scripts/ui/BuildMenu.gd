@@ -92,20 +92,26 @@ func _ready() -> void:
 		var bid := int(bd.get("id", 0))
 		var bd_name := String(bd.get("name", ""))
 		var cost: Dictionary = bd.get("cost", {})
-		var locked: bool = BUILDING_REQUIRED_CASTLE.has(bid) and castle_level < int(BUILDING_REQUIRED_CASTLE[bid])
+		var research_mode: bool = bm != null and bm.has_method("is_research_mode") and bm.is_research_mode()
+		var research_locked: bool = research_mode and bm.has_method("is_building_unlocked") and not bm.is_building_unlocked(bid)
+		var locked: bool = research_locked or (not research_mode and BUILDING_REQUIRED_CASTLE.has(bid) and castle_level < int(BUILDING_REQUIRED_CASTLE[bid]))
 		var affordable := true
 		for res in cost.keys():
 			if int(have.get(res, 0)) < int(cost[res]):
 				affordable = false
 		var hotkey: int = i + 1 if (i < 9 and not mobile) else 0
-		var lock_text := "城堡 Lv.%d" % int(BUILDING_REQUIRED_CASTLE.get(bid, 1)) if locked else ""
+		var lock_text := ""
+		if research_locked and bm.has_method("get_building_unlock_text"):
+			lock_text = bm.get_building_unlock_text(bid)
+		elif locked:
+			lock_text = "城堡 Lv.%d" % int(BUILDING_REQUIRED_CASTLE.get(bid, 1))
 		var card_node := BuildMenuCardScript.new()
 		card_node.setup(bid, bd_name, BuildMenuCardScript.cost_bbcode(cost, have), locked, lock_text,
 			hotkey, card, icon, name_px, cost_px, 1 if mobile else 2)
 		card_node.disabled = locked or not affordable
 		var tip := "%s\n%s" % [bd_name, BuildMenuCardScript.cost_plain(cost)]
 		if locked:
-			tip = "%s\n需要城堡 Lv.%d" % [bd_name, int(BUILDING_REQUIRED_CASTLE.get(bid, 1))]
+			tip = "%s\n%s" % [bd_name, lock_text if lock_text != "" else "未解锁"]
 		elif not affordable:
 			tip += "\n资源不足"
 		card_node.tooltip_text = tip

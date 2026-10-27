@@ -2,6 +2,8 @@ class_name hud
 extends Control
 
 var _mobile_hud = null    # 移动端界面装配器（仅触屏设备创建）
+var _last_portrait: bool = false
+var _mobile_rebuild_pending: bool = false
 
 # 最近一次快照下发的经济数据（统计面板用；原左下角资源卡已移除）
 var _last_res: Dictionary = {}
@@ -37,6 +39,9 @@ var _stats_res_info: Dictionary = {}
 var _stats_castle_bar: HealthBarControl
 var _stats_castle_label: Label
 var _cmd_panel: Panel = null
+# 全局指令底板：6 个按钮 2 行 × 3 列
+const CMD_PANEL_W: float = 662.0
+const CMD_PANEL_H: float = 82.0
 var _unit_stats_timer: float = 1.0
 # 统计面板折叠态：展开是完整面板，折叠后只留一条「资源 + 人口」胶囊（与单机版一致，默认折叠）
 var _stats_collapsed: bool = true
@@ -44,6 +49,7 @@ var _stats_collapse_btn: Button = null
 var _stats_capsule: Panel = null
 var _capsule_pop_label: Label = null
 var _capsule_res_labels: Dictionary = {}
+var _capsule_row: HBoxContainer = null
 
 # ==================== 警报系统 ====================
 const MapPresets = preload("res://scripts/map/MapPresets.gd")
@@ -294,6 +300,10 @@ func _update_stats_capsule(res: Dictionary, lim: Dictionary, pop: int, max_pop: 
 			var cap: int = int(lim.get(rk, 0))
 			var full: bool = cap > 0 and cur >= cap
 			l.add_theme_color_override("font_color", UITheme.ALERT_DANGER if full else _res_color_for(rk))
+	# 胶囊宽度跟随内容：开局数字短时紧凑，后期四五位数也不会被截断
+	if _capsule_row != null and _stats_capsule != null:
+		var need: float = _capsule_row.get_combined_minimum_size().x + 32.0
+		_stats_capsule.size.x = maxf(580.0, need)
 
 # 折叠后的胶囊：一行显示人口与五项资源，点击展开回完整统计面板
 func _create_stats_capsule() -> void:
@@ -301,30 +311,31 @@ func _create_stats_capsule() -> void:
 	_stats_capsule.name = "StatsCapsule"
 	_stats_capsule.z_index = 100
 	_stats_capsule.position = Vector2(10, 10)
-	_stats_capsule.size = Vector2(600, 40)
+	_stats_capsule.size = Vector2(780, 52)
 	_stats_capsule.visible = false
 	_stats_capsule.mouse_filter = Control.MOUSE_FILTER_STOP
 	var st := StyleBoxFlat.new()
 	st.bg_color = Color(UITheme.INK, UITheme.ALPHA_BG)
-	st.set_corner_radius_all(8)
+	st.set_corner_radius_all(10)
 	st.set_border_width_all(2)
 	st.border_color = Color(UITheme.GOLD, UITheme.ALPHA_BORDER)
 	_stats_capsule.add_theme_stylebox_override("panel", st)
 	var row := HBoxContainer.new()
 	row.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	row.offset_left = 12
-	row.offset_right = -12
-	row.add_theme_constant_override("separation", 14)
+	row.offset_left = 16
+	row.offset_right = -16
+	row.add_theme_constant_override("separation", 18)
 	_stats_capsule.add_child(row)
+	_capsule_row = row
 	_capsule_pop_label = Label.new()
-	_capsule_pop_label.add_theme_font_size_override("font_size", 17)
+	_capsule_pop_label.add_theme_font_size_override("font_size", 21)
 	_capsule_pop_label.add_theme_color_override("font_color", Color.WHITE)
 	_capsule_pop_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	_capsule_pop_label.text = "👥 0/0"
 	row.add_child(_capsule_pop_label)
 	for rk in ["gold", "wood", "stone", "food", "oil"]:
 		var l := Label.new()
-		l.add_theme_font_size_override("font_size", 16)
+		l.add_theme_font_size_override("font_size", 20)
 		l.add_theme_color_override("font_color", _res_color_for(rk))
 		l.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 		l.text = "0"
@@ -575,7 +586,37 @@ func _get_player_resource(res: String) -> int:
 func _input(event):
 	if event is InputEventKey and event.pressed:
 		match event.keycode:
+			KEY_T:
+				if not event.echo:
+					_open_research_panel()
 			_: pass  # Space等由ClientInput统一处理
+
+func _update_research_button():
+	var rbtn := get_node_or_null("ResearchButton")
+	if rbtn == null:
+		return
+	var cr = get_tree().get_first_node_in_group("client_renderer")
+	var on: bool = GameSettings.is_research_mode() and cr != null and cr.has_method("ui_research_state")
+	rbtn.visible = on
+	if not on:
+		return
+	var st: Dictionary = cr.ui_research_state()
+	var age_name := TechTreeData.age_name(int(st.get("age", 0)))
+	var cur: Dictionary = st.get("current", {})
+	if cur.is_empty():
+		rbtn.text = "🔬 %s · 科研树 (T)" % age_name
+	else:
+		var pct: int = int(clampf(float(cur.get("elapsed", 0.0)) / maxf(float(cur.get("total", 1.0)), 0.1) * 100.0, 0.0, 100.0))
+		rbtn.text = "🔬 %s · %s %d%% (T)" % [age_name, String(cur.get("name", "")), pct]
+
+# 科研树：客户端状态来自 ClientRenderer 的快照镜像，操作通过 RPC 发给主机。
+func _open_research_panel():
+	if not GameSettings.is_research_mode():
+		return
+	var cr = get_tree().get_first_node_in_group("client_renderer")
+	if cr == null or not cr.has_method("ui_research_state"):
+		return
+	ResearchPanel.open(self, cr)
 
 # 把镜头定位到某个世界坐标（战报点击跳转用）
 func _jump_to_world(target: Vector3) -> void:
@@ -640,9 +681,10 @@ func show_alert_message(msg: String, color: Color = ALERT_DANGER, teams = [], al
 		_alert_stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_alert_stack.add_theme_constant_override("separation", 2 if mobile else 4)
 		if mobile:
-			var w: float = UILayout.dp(310.0)
-			# 顶部两行信息已挪到资源胶囊右侧，原来居中的那块空出来给警报
-			var top_y: float = UILayout.dp(76.0)
+			var portrait := UILayout.is_portrait()
+			var w: float = UILayout.dp(300.0 if portrait else 310.0)
+			# 横屏贴顶部；竖屏小地图在胶囊下方，警报再往下让开
+			var top_y: float = UILayout.dp(154.0 if portrait else 76.0)
 			_alert_stack.anchor_left = 0.5; _alert_stack.anchor_right = 0.5
 			_alert_stack.anchor_top = 0.0; _alert_stack.anchor_bottom = 0.0
 			_alert_stack.offset_left = -w * 0.5; _alert_stack.offset_right = w * 0.5
@@ -852,10 +894,11 @@ func _ready():
 			stick.set_process_unhandled_input(false)
 
 	# 全军指令：与单机版一致，6 个按钮正好排成两排（3×2），统一放在半透明底板里（620,10）
+	# 全局指令：6 个按钮排成 2 行 × 3 列（3×2），整块底板水平居中
 	_cmd_panel = Panel.new()
 	_cmd_panel.name = "GlobalCommandPanel"
-	_cmd_panel.position = Vector2(600, 10)
-	_cmd_panel.size = Vector2(880, 86)
+	_cmd_panel.size = Vector2(CMD_PANEL_W, CMD_PANEL_H)
+	_cmd_panel.position = Vector2((get_viewport().get_visible_rect().size.x - CMD_PANEL_W) * 0.5, 10)
 	_cmd_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var cmd_style := StyleBoxFlat.new()
 	cmd_style.bg_color = Color(0.0, 0.0, 0.0, 0.38)
@@ -866,7 +909,7 @@ func _ready():
 	add_child(_cmd_panel)
 
 	var cmd_grid := GridContainer.new()
-	cmd_grid.columns = 4
+	cmd_grid.columns = 3
 	cmd_grid.position = Vector2(8, 8)
 	cmd_grid.add_theme_constant_override("h_separation", 8)
 	cmd_grid.add_theme_constant_override("v_separation", 6)
@@ -882,6 +925,16 @@ func _ready():
 	var b_settings = _make_cmd_button("⚙ 设置", _open_game_settings, false)
 	for b in [attack_all_btn, retreat_all_btn, auto_attack_btn, b_ret_screen, b_ret_all, b_settings]:
 		cmd_grid.add_child(b)
+
+	var research_btn := Button.new()
+	research_btn.name = "ResearchButton"
+	research_btn.text = "🔬 科研树 (T)"
+	research_btn.position = Vector2(1620, 110)
+	research_btn.size = Vector2(260, 40)
+	UITheme.apply_muted_button(research_btn, 17)
+	research_btn.pressed.connect(_open_research_panel)
+	add_child(research_btn)
+	research_btn.visible = GameSettings.is_research_mode()
 
 	# 顶部两行信息：第一行性能、第二行对局/网络信息（只保留这两条）
 	# 桌面端偏右（0.675）避开左侧全局指令按钮与右上小地图；
@@ -927,15 +980,81 @@ func _ready():
 	call_deferred("_connect_client_input")
 
 	# 移动端：装配触屏界面（桌面端不进入此分支）
+	_last_portrait = UILayout.is_portrait()
+	if get_viewport() != null:
+		get_viewport().size_changed.connect(_on_viewport_size_changed)
 	if InputSource.use_mobile_ui():
 		_mobile_hud = MobileHUD.new()
 		add_child(_mobile_hud)
 		_mobile_hud.setup(self)
+		_apply_mobile_top_layout()
 
 	# 服务器警报：走 NetworkManager 的可靠 RPC 信号（快照里的 alerts 已弃用，丢包就永久丢失）
 	if NetworkManager.has_signal("client_alert_received"):
 		if not NetworkManager.client_alert_received.is_connected(_on_server_alert):
 			NetworkManager.client_alert_received.connect(_on_server_alert)
+
+# 手机横竖屏切换：战斗不能重载场景，只重建 MobileHUD。
+# 所有移动组件（资源胶囊/小地图/指令栏/信息面板）都在构建时按 dp 算尺寸，
+# 重建一遍才能让竖屏的 6.3 倍 dp 生效。
+func _on_viewport_size_changed() -> void:
+	if not InputSource.use_mobile_ui():
+		return
+	var now := UILayout.is_portrait()
+	if now == _last_portrait:
+		return
+	_last_portrait = now
+	if _mobile_rebuild_pending:
+		return
+	_mobile_rebuild_pending = true
+	call_deferred("_rebuild_mobile_hud_for_orientation")
+
+func _rebuild_mobile_hud_for_orientation() -> void:
+	_mobile_rebuild_pending = false
+	if not is_inside_tree():
+		return
+	if _mobile_hud != null and is_instance_valid(_mobile_hud):
+		remove_child(_mobile_hud)
+		_mobile_hud.queue_free()
+	_mobile_hud = MobileHUD.new()
+	add_child(_mobile_hud)
+	_mobile_hud.setup(self)
+	_apply_mobile_top_layout()
+	_layout_alert_stack()
+
+# 顶部两行性能/网络文字会占掉资源胶囊右侧的空间；竖屏没有那么多横向空间，
+# 先隐藏（桌面端和手机横屏仍保留）。旋转回横屏时恢复并重新贴到胶囊右侧。
+func _apply_mobile_top_layout() -> void:
+	if not InputSource.use_mobile_ui():
+		return
+	var portrait := UILayout.is_portrait()
+	_top_mobile_left = UILayout.safe_insets().x + UILayout.dp(2.0 + 344.0 + 8.0)
+	var half_w: float = UILayout.dp(146.0)
+	for lb in [_fps_label, _net_stat_label]:
+		if lb == null or not is_instance_valid(lb):
+			continue
+		lb.visible = not portrait
+		if not portrait:
+			lb.offset_left = _top_mobile_left
+			lb.offset_right = _top_mobile_left + half_w
+	if _top_bg != null and is_instance_valid(_top_bg):
+		_top_bg.visible = not portrait
+
+# 警报栈在竖屏时挪到小地图下方，避免压住右上角小地图。
+func _layout_alert_stack() -> void:
+	if _alert_stack == null or not is_instance_valid(_alert_stack):
+		return
+	if not InputSource.use_mobile_ui():
+		return
+	var portrait := UILayout.is_portrait()
+	var w: float = UILayout.dp(300.0 if portrait else 310.0)
+	var top_y: float = UILayout.dp(154.0 if portrait else 76.0)
+	_alert_stack.anchor_left = 0.5
+	_alert_stack.anchor_right = 0.5
+	_alert_stack.offset_left = -w * 0.5
+	_alert_stack.offset_right = w * 0.5
+	_alert_stack.offset_top = top_y
+	_alert_stack.offset_bottom = top_y
 
 # 收到服务器警报：直接走本地播报条
 func _on_server_alert(msg: String, color: Color, alert_id: int = 0, teams = [], alert_kind: int = 0, is_castle: bool = false, nations: Array = [], alert_pos: Vector3 = Vector3.ZERO, source_owner: int = -1) -> void:
@@ -1027,6 +1146,8 @@ var _top_mobile_left: float = 0.0
 func _update_top_bg() -> void:
 	if _top_bg == null or not is_instance_valid(_top_bg) or _fps_label == null:
 		return
+	if not _top_bg.visible:
+		return
 	var pad_x: float = UILayout.dp(10.0)
 	var pad_y: float = UILayout.dp(4.0)
 	var text_w: float = _fps_label.get_minimum_size().x
@@ -1090,6 +1211,7 @@ func _make_top_label(parent: CanvasLayer, node_name: String, top_y: float, line_
 	return lb
 
 func _process(delta):
+	_update_research_button()
 	# 同步自动进攻按钮状态（F2 可能由 ClientInput 直接触发）
 	if auto_attack_btn:
 		var ci = _get_client_input_node()

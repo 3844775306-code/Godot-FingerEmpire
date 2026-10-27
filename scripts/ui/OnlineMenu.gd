@@ -60,6 +60,8 @@ func _ready():
 	# 手机端：桌面版 2400×1400 绝对布局在 393dp 屏上只有 4~14dp 字，
 	# 直接改用竖排滚动布局；桌面路径完全不动。
 	if InputSource.use_mobile_ui():
+		# 横竖屏切换后重建表单，避免按钮/字号仍按旧方向计算。
+		add_child(OrientationReload.new())
 		_build_mobile_ui()
 		_apply_web_defaults()
 		return
@@ -171,6 +173,20 @@ func _ready():
 	ws_toggle_btn.toggle_mode = true; ws_toggle_btn.button_pressed = false
 	ws_toggle_btn.pressed.connect(func(): _on_transport_changed(true))
 	panel.add_child(ws_toggle_btn)
+
+	# 发展模式（主机权威；客户端进局时由主机 RPC 同步）
+	var research_check := CheckBox.new()
+	research_check.name = "ResearchCheck"
+	research_check.text = "科研模式（四时代·科技树）"
+	research_check.position = Vector2(30, 610)
+	research_check.size = Vector2(570, 40)
+	research_check.add_theme_font_size_override("font_size", 18)
+	research_check.add_theme_color_override("font_color", UITheme.PARCHMENT)
+	research_check.add_theme_color_override("font_hover_color", UITheme.GOLD)
+	research_check.add_theme_color_override("icon_normal_color", UITheme.GOLD)
+	research_check.button_pressed = GameSettings.progression_mode == GameSettings.ProgressionMode.RESEARCH
+	research_check.toggled.connect(func(on): GameSettings.progression_mode = GameSettings.ProgressionMode.RESEARCH if on else GameSettings.ProgressionMode.CLASSIC)
+	panel.add_child(research_check)
 
 	# Right column - Connection
 	var rx = 680; var ry = 30
@@ -345,6 +361,18 @@ func _build_mobile_ui() -> void:
 	mode_2v2_btn.toggle_mode = true
 	mode_3v3_btn = _mobile_btn("3V3", NetworkManager.GameMode.THREEvTHREE, mode_row, btn_h, fs_body)
 	mode_3v3_btn.toggle_mode = true
+
+	var mobile_research := CheckBox.new()
+	mobile_research.name = "ResearchCheck"
+	mobile_research.text = "科研模式（四时代·科技树）"
+	mobile_research.custom_minimum_size = Vector2(0, UILayout.dp(32.0))
+	mobile_research.add_theme_font_size_override("font_size", fs_body)
+	mobile_research.add_theme_color_override("font_color", UITheme.PARCHMENT)
+	mobile_research.add_theme_color_override("font_hover_color", UITheme.GOLD)
+	mobile_research.add_theme_color_override("icon_normal_color", UITheme.GOLD)
+	mobile_research.button_pressed = GameSettings.progression_mode == GameSettings.ProgressionMode.RESEARCH
+	mobile_research.toggled.connect(func(on): GameSettings.progression_mode = GameSettings.ProgressionMode.RESEARCH if on else GameSettings.ProgressionMode.CLASSIC)
+	vb.add_child(mobile_research)
 
 	sec.call("🤖 AI 玩家")
 	red_ai_spin = SpinBox.new()

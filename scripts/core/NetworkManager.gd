@@ -419,7 +419,7 @@ func start_game():
 	if use_steam:
 		SteamManager.set_lobby_data("game_status", "starting")
 	for peer_id in multiplayer.get_peers():
-		rpc_id(peer_id, "_load_battle_scene")
+		rpc_id(peer_id, "_load_battle_scene", GameSettings.progression_mode)
 	var _t = get_tree(); if _t: _t.change_scene_to_file("res://scenes/rts_battle_online_server.tscn")
 	return ""  # 成功
 
@@ -474,8 +474,10 @@ func notify_team_info(peer_id: int, team: int, slot: int, color: Color):
 		if renderer: renderer.set_player_info(peer_id, team, slot, color)
 
 @rpc("authority", "call_remote", "reliable")
-func _load_battle_scene():
+func _load_battle_scene(progression_mode: int = 0):
 	if mode == Mode.CLIENT:
+		# 主机权威：客户端在切场景前同步发展模式，保证进局 UI 与规则一致。
+		GameSettings.progression_mode = progression_mode
 		_invalidate_cache()
 		pending_map_data = {}
 		map_data_applied = false

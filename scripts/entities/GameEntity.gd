@@ -60,6 +60,21 @@ var owner_peer_id: int = -1
 var piercing: bool = false                  # 长枪兵穿透（无视军队护甲）
 var ignore_building_armor: bool = false     # 攻城车无视建筑护甲
 var ignore_armor: bool = false               # 无视目标护甲（爆破船等）
+# ── 科研模式运行时加成（由 RTSBattleManager.apply_research_bonuses 写入）──
+# 这些字段只影响结算，不改变经典模式的任何行为（科研关闭时保持默认值）。
+var shield_pierce: float = 0.0               # 0~1，弓箭类对盾甲的穿透比例
+var melee_pierce: float = 0.0                # 0~1，步兵类对近战护甲的穿透比例
+var building_damage_pct: float = 0.0         # 对建筑伤害加成（0.2 = +20%）
+var vs_archer_pct: float = 0.0               # 对弓箭类伤害加成
+var vs_cavalry_pct: float = 0.0              # 对骑兵类伤害加成
+var vs_ship_pct: float = 0.0                 # 对船只伤害加成
+var spell_power_mult: float = 1.0            # 法术强度倍率（治疗/长老/宗师）
+var spell_resist: float = 0.0                # 受到法术伤害/降攻的减免比例
+var accuracy_mult: float = 1.0               # 投石机散布倍率（越小越准）
+var splash_damage_mult: float = 0.0          # 炮弹溅射倍率；0 = 沿用默认 30%
+var volley_count: int = 1                    # 主城/城堡齐射箭数
+var volley_mult: float = 1.0                 # 每支箭的伤害倍率
+var _research_base_stats: Dictionary = {}    # 科研加成前的基础数值快照
 var _base_attack: float = 0.0               # 驻军前原始攻击力（用于还原）
 var _base_attack_speed: float = 0.0         # 驻军前原始攻速（攻城车专用）
 var _base_speed: float = 0.0                # 驻军前原始移速（攻城车专用）
@@ -215,6 +230,19 @@ func _refresh_damage_visual() -> void:
 func is_immune_to_damage() -> bool:
 	return false
 
+func _capture_research_base() -> void:
+	_research_base_stats = {
+		"max_health": max_health,
+		"attack": attack,
+		"attack_speed": attack_speed,
+		"attack_range": attack_range,
+		"speed": speed,
+		"vision_range": vision_range,
+		"melee_armor": melee_armor,
+		"shield_armor": shield_armor,
+		"damage_radius": damage_radius,
+	}
+
 func take_damage(amount: float, source = null):
 	if _is_dead or health <= 0.0:
 		return
@@ -231,6 +259,16 @@ func take_damage(amount: float, source = null):
 	var eff_armor: float = melee_armor
 	if source:
 		_last_damager = source
+		# 科研模式目标类型加成：对建筑/弓箭/骑兵/船只的额外伤害。
+		if self is Building and source.building_damage_pct > 0.0:
+			amount *= 1.0 + source.building_damage_pct
+		elif self is Army:
+			if source.vs_archer_pct > 0.0 and TechTreeData.unit_has_class(entity_id, "archer"):
+				amount *= 1.0 + source.vs_archer_pct
+			if source.vs_cavalry_pct > 0.0 and TechTreeData.unit_has_class(entity_id, "cavalry"):
+				amount *= 1.0 + source.vs_cavalry_pct
+			if source.vs_ship_pct > 0.0 and TechTreeData.unit_has_class(entity_id, "ship"):
+				amount *= 1.0 + source.vs_ship_pct
 		# 动物被攻击后反击
 		if self is Army and self.get("_animal_type") != "" and self.get("_animal_type") != null:
 			self.set("_animal_retaliating", true)
@@ -239,6 +277,10 @@ func take_damage(amount: float, source = null):
 		# 远程攻击(target_type=3) → 使用盾牌护甲
 		if source.target_type == 3:
 			eff_armor = shield_armor
+			if source.shield_pierce > 0.0:
+				eff_armor *= 1.0 - clampf(source.shield_pierce, 0.0, 1.0)
+		elif source.melee_pierce > 0.0:
+			eff_armor *= 1.0 - clampf(source.melee_pierce, 0.0, 1.0)
 
 		# 爆破船等特殊单位无视护甲
 		if source.ignore_armor:
@@ -652,8 +694,26 @@ func _spawn_produced_unit():
 		var next_id = production_queue[0]
 		for prod in production_list:
 			if prod.unit_id == next_id:
-				production_timer = prod.cooldown
+				production_timer = _research_prod_cooldown(float(prod.cooldown), int(next_id))
 				break
+
+# 科研模式生产加速：I6 只加速军事单位；国家科技还可按兵种/具体单位加速训练。
+func _research_prod_cooldown(base_cd: float, unit_id: int) -> float:
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if bm == null or not bm.has_method("is_research_mode") or not bm.is_research_mode():
+		return base_cd
+	var mods: Dictionary = bm.get_research_mods(owner_peer_id, team)
+	var speed := 0.0
+	var classes: Array = TechTreeData.UNIT_CLASSES.get(unit_id, [])
+	var military := false
+	for cls in classes:
+		if cls in ["infantry", "archer", "cavalry", "siege", "ship", "caster", "heavy"]:
+			military = true
+		speed += float(mods.get("class_training_speed_pct:%s" % cls, 0.0)) / 100.0
+	speed += float(mods.get("unit_training_speed_pct:%d" % unit_id, 0.0)) / 100.0
+	if military:
+		speed += float(mods.get("production_speed_pct", 0.0)) / 100.0
+	return base_cd / maxf(0.2, 1.0 + speed)
 
 
 # 将生产坐标夹到地图内部并留出单位体积，避免贴边建筑把单位刷到地图外
@@ -863,6 +923,9 @@ func try_produce(unit_id: int) -> bool:
 	var bm = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
 	if not bm:
 		return false
+	if bm.has_method("is_research_mode") and bm.is_research_mode() \
+			and bm.has_method("is_unit_unlocked") and not bm.is_unit_unlocked(unit_id, owner_peer_id, team):
+		return false
 
 	# 根据建筑所属队伍和 owner_peer_id 选择资源库
 	var res_dict = null
@@ -885,7 +948,7 @@ func try_produce(unit_id: int) -> bool:
 	
 	production_queue.append(unit_id)
 	if production_queue.size() == 1:
-		production_timer = prod_config.cooldown
+		production_timer = _research_prod_cooldown(float(prod_config.cooldown), int(unit_id))
 	return true
 
 func shock(duration: float):
