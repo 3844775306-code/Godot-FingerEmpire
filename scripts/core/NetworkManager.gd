@@ -10,6 +10,9 @@ var peer: Variant = ENetMultiplayerPeer.new()
 var ws_peer: WebSocketMultiplayerPeer = null
 const PORT = 9000
 const WS_PORT = 8080
+# WebSocketPeer 默认 outbound_buffer_size 只有 64KB，完整地图 RPC 约几百 KB，
+# 会在浏览器端触发 ERR_OUT_OF_MEMORY 并丢包，表现为客户端一片黑。这里统一放大。
+const WS_BUFFER_SIZE: int = 4 * 1024 * 1024
 
 # Web 页面为 HTTPS 时，浏览器禁止 ws://，必须使用 WSS 反向代理。
 func _web_page_is_https() -> bool:
@@ -77,6 +80,11 @@ var _cached_map = null
 var _scene_ready_peers: Dictionary = {}
 var pending_map_data: Dictionary = {}   # 场景未就绪时暂存的地图数据
 var map_data_applied: bool = false      # 本次战斗的地图是否已应用到客户端
+# 地图分块接收：一次性 RPC 会超过 WebSocket 默认 64KB 缓冲，拆成 16KB 小块。
+var _map_chunk_transfer: int = -1
+var _map_chunk_total: int = 0
+var _map_chunk_raw_size: int = 0
+var _map_chunks: Array = []
 
 func _ready():
 	multiplayer.peer_connected.connect(_on_peer_connected)
@@ -215,6 +223,12 @@ func start_server():
 	print("服务器已启动，等待连接...")
 	_upnp_setup()
 
+func _configure_ws_peer(peer: WebSocketMultiplayerPeer) -> void:
+	# 地图数据远大于默认 64KB 缓冲；必须在 create_server/create_client 前设置，
+	# WebSocketMultiplayerPeer 会把它应用到每个底层 WebSocketPeer。
+	peer.outbound_buffer_size = WS_BUFFER_SIZE
+	peer.inbound_buffer_size = WS_BUFFER_SIZE
+
 func start_ws_server(enable_upnp: bool = true) -> bool:
 	if OS.has_feature("web"):
 		emit_signal("connection_failed", "浏览器版不能创建服务器，请使用 PC 或专用服务器")
@@ -222,6 +236,7 @@ func start_ws_server(enable_upnp: bool = true) -> bool:
 	use_websocket = true
 	max_players = get_max_players()
 	ws_peer = WebSocketMultiplayerPeer.new()
+	_configure_ws_peer(ws_peer)
 	var err = ws_peer.create_server(WS_PORT)
 	if err != OK:
 		emit_signal("connection_failed", "WS服务器创建失败: " + str(err))
@@ -242,6 +257,7 @@ func start_ws_client(url: String = "ws://127.0.0.1:8080"):
 	url = normalize_ws_url(url)
 	print("[NetworkManager] WebSocket 客户端连接: ", url)
 	ws_peer = WebSocketMultiplayerPeer.new()
+	_configure_ws_peer(ws_peer)
 	var err = ws_peer.create_client(url)
 	if err != OK:
 		emit_signal("connection_failed", "WS连接失败: " + str(err))
@@ -463,6 +479,10 @@ func _load_battle_scene():
 		_invalidate_cache()
 		pending_map_data = {}
 		map_data_applied = false
+		_map_chunk_transfer = -1
+		_map_chunk_total = 0
+		_map_chunk_raw_size = 0
+		_map_chunks.clear()
 		_apply_map_size_for_mode()
 		var _t = get_tree(); if _t: _t.change_scene_to_file("res://scenes/rts_battle_client.tscn")
 
@@ -526,12 +546,44 @@ func request_map_data() -> void:
 func receive_map_data(terrain: Array, height_data: Array, resources: Array, map_id: String, overlay_zip: PackedByteArray):
 	if mode != Mode.CLIENT:
 		return
-	RTSConfig.MAP_SIZE = terrain.size()
-	GameSettings.map_id = map_id
-	var payload := {
+	_handle_map_payload({
 		"terrain": terrain, "height": height_data, "resources": resources,
 		"map_id": map_id, "overlay_zip": overlay_zip,
-	}
+	})
+
+# 地图分块接收：服务端把 var_to_bytes 后的完整地图压缩并切成 16KB 小块，
+# 避免单个 WebSocket 帧超过默认 64KB 导致 ERR_OUT_OF_MEMORY / 客户端黑屏。
+@rpc("authority", "call_remote", "reliable")
+func receive_map_data_chunk(transfer_id: int, index: int, total: int, raw_size: int, chunk: PackedByteArray):
+	if mode != Mode.CLIENT:
+		return
+	if transfer_id != _map_chunk_transfer:
+		_map_chunk_transfer = transfer_id
+		_map_chunk_total = total
+		_map_chunk_raw_size = raw_size
+		_map_chunks.clear()
+		_map_chunks.resize(total)
+	if index < 0 or index >= _map_chunks.size():
+		return
+	_map_chunks[index] = chunk
+	for part in _map_chunks:
+		if part == null or part.is_empty():
+			return
+	var packed := PackedByteArray()
+	for part in _map_chunks:
+		packed.append_array(part)
+	if packed.size() == 0 or _map_chunk_raw_size <= 0:
+		return
+	var raw := packed.decompress(_map_chunk_raw_size, FileAccess.COMPRESSION_ZSTD)
+	var payload = bytes_to_var(raw)
+	if payload is Dictionary:
+		_handle_map_payload(payload)
+		print("[NetworkManager] 客户端地图分块接收完成: %d 块, %d 字节" % [_map_chunk_total, raw.size()])
+
+func _handle_map_payload(payload: Dictionary) -> void:
+	var terrain_arr: Array = payload.get("terrain", [])
+	RTSConfig.MAP_SIZE = terrain_arr.size()
+	GameSettings.map_id = String(payload.get("map_id", "classic"))
 	# 客户端场景可能还没加载完（Ground 还没进树）：先暂存，等场景就绪后再应用
 	if _get_map() == null or _get_renderer() == null:
 		pending_map_data = payload

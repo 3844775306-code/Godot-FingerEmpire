@@ -46,6 +46,7 @@ var last_snapshot_cache: Dictionary = {}
 var team_explored_resources: Dictionary = {}
 var _mp_shift_held: bool = false
 var _bullet_cache: Array = []       # cached bullet list, refreshed once per snap
+var _map_send_seq: int = 0          # 地图分块传输 ID，客户端据此重置重组缓冲
 
 # ==================== 警报系统（服务器→客户端） ====================
 # 警报是一次性事件：主通道是可靠 RPC 直发给该阵营的每个玩家；
@@ -693,8 +694,27 @@ func _send_map_data(peers: Array):
 			overlay[oi] = $Map.get_overlay(x, y)
 			oi += 1
 	var overlay_zip := overlay.compress(FileAccess.COMPRESSION_ZSTD)
+	var payload := {
+		"terrain": terrain_copy,
+		"height": height_copy,
+		"resources": res_data,
+		"map_id": map_id,
+		"overlay_zip": overlay_zip,
+	}
+	var raw := var_to_bytes(payload)
+	var packed := raw.compress(FileAccess.COMPRESSION_ZSTD)
+	_map_send_seq += 1
+	var transfer_id := _map_send_seq
+	const CHUNK_SIZE := 16384
 	for pid in peers:
-		NetworkManager.receive_map_data.rpc_id(pid, terrain_copy, height_copy, res_data, map_id, overlay_zip)
+		var total := int(ceil(float(packed.size()) / float(CHUNK_SIZE)))
+		for i in range(total):
+			var begin := i * CHUNK_SIZE
+			var end := mini(begin + CHUNK_SIZE, packed.size())
+			NetworkManager.receive_map_data_chunk.rpc_id(
+				pid, transfer_id, i, total, raw.size(), packed.slice(begin, end)
+			)
+	print("[NetworkManager] 地图分块发送完成: peer(s)=", peers, " 原始=", raw.size(), " 压缩=", packed.size())
 
 # ---------- 组队模式城堡生成（2v2 / 3v3 共用） ----------
 func _init_all_castles_team():
@@ -1791,6 +1811,7 @@ func _broadcast_1v1():
 	# Collect bullet data ONCE (reused for all players)
 	var bullets_data = _build_bullets_data()
 	for pid in player_teams.keys():
+		if int(pid) == 1: continue  # 主机自己就是服务器，不能把快照 RPC 发给自己
 		var team = player_teams[pid]
 		var _pt_build = Time.get_ticks_usec()
 		var data = build_snapshot_for_team(team)
@@ -2049,6 +2070,7 @@ func _broadcast_2v2():
 	# Collect bullet data ONCE (reused for all players)
 	var bullets_data = _build_bullets_data()
 	for pid in player_info.keys():
+		if int(pid) == 1: continue  # 主机自己就是服务器，不能把快照 RPC 发给自己
 		if player_info[pid].get("is_ai", false): continue  # 跳过 AI，无客户端
 		var _pt_build = Time.get_ticks_usec()
 		var data = build_snapshot_for_player(pid)
