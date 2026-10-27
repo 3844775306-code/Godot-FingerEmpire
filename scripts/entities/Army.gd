@@ -19,6 +19,10 @@ const TARGET_LOST_GRACE_MS: int = 3000
 # 这会让步兵/弓兵/骑兵也误以为自己是攻城单位，锁敌时无脑优先建筑。
 const SIEGE_UNIT_IDS := [16, 17, 18, 59]
 var _target_lost_since_ms: int = 0
+# 玩家手动指定的攻击目标。锁定期间不因沿途出现更近的敌人而改锁，
+# 也不因目标暂时离开本单位视野而丢失；只有目标死亡/失效或收到新的
+# 移动、攻击移动、停止命令时才清除。
+var _commanded_attack_target_id: int = -1
 # 建筑被攻击后的临时回防位；目标消失/超时后回到这里，而不是留在远处。
 var _defense_return_position: Vector3 = Vector3.ZERO
 
@@ -1019,6 +1023,8 @@ func _clear_combat_destination() -> void:
 	combat_destination = Vector3.ZERO
 	combat_resume_destination = Vector3.ZERO
 	combat_resume_advance = false
+	# 移动/攻击移动/停止都会清掉手动攻击锁定；新的攻击命令随后会重新写入。
+	_commanded_attack_target_id = -1
 
 # 给场景/网络层清理命令用；不要直接改 current_order 后留下旧战斗状态。
 func cancel_combat_orders() -> void:
@@ -1042,6 +1048,8 @@ func cancel_combat_orders() -> void:
 		_movement.stop()
 
 func set_combat_advance_enabled(enabled: bool) -> void:
+	# 攻击移动是新的行动命令，必须解除此前的手动攻击锁定。
+	_commanded_attack_target_id = -1
 	if not _uses_combat_state():
 		# 非战斗单位没有攻击移动能力；历史上这里会把 is_attack_moving 置 true，
 		# 让农民/商队在 enable 后卡在 ATTACK_MOVING 状态并顺手攻击附近敌人。
@@ -1122,7 +1130,7 @@ func _blocked_by_high_ground(target) -> bool:
 	var limit: float = MELEE_HIGH_GROUND_MAX_RISE if is_melee else HIGH_GROUND_MAX_RISE
 	return (_target_height_base(target) - global_position.y) > limit
 
-func _set_combat_target(target, from_advance: bool = false) -> void:
+func _set_combat_target(target, from_advance: bool = false, manual: bool = false) -> void:
 	if target == null or not is_instance_valid(target):
 		return
 	# 墙上/运载船上的单位受保护，任何索敌、追击、攻击移动和手动指定都不能锁定。
@@ -1133,9 +1141,14 @@ func _set_combat_target(target, from_advance: bool = false) -> void:
 	# 才在攻击校验里被放弃，导致索敌反复选中同一个目标。
 	if _is_naval_chase_target_blocked(target):
 		return
-	# 站在低处打不到高处的远目标，直接不锁定，让索敌去挑别的敌人
-	if _blocked_by_high_ground(target):
+	# 站在低处打不到高处的远目标，直接不锁定，让索敌去挑别的敌人；
+	# 玩家手动指定的目标例外：先追过去，接近后高度差自然满足。
+	if not manual and _blocked_by_high_ground(target):
 		return
+	# 一旦切换到别的目标，手动攻击锁定就结束了，后续按普通索敌规则处理。
+	if _commanded_attack_target_id != -1 \
+			and _commanded_attack_target_id != target.get_instance_id():
+		_commanded_attack_target_id = -1
 	current_target = target
 	if from_advance and combat_destination != Vector3.ZERO:
 		combat_resume_destination = combat_destination
@@ -1176,6 +1189,7 @@ func _start_combat_march(pos: Vector3) -> void:
 	# process_move 会在 hold_position 检查处每帧把速度清零，表现为“行军中但不走”。
 	hold_position = false
 	current_target = null
+	_commanded_attack_target_id = -1
 	combat_destination = pos
 	combat_resume_destination = Vector3.ZERO
 	combat_resume_advance = false
@@ -1197,6 +1211,7 @@ func _start_combat_advance(pos: Vector3) -> void:
 	# 单位却一直显示为攻击移动状态。
 	hold_position = false
 	current_target = null
+	_commanded_attack_target_id = -1
 	combat_destination = pos
 	combat_resume_destination = Vector3.ZERO
 	combat_resume_advance = false
@@ -1264,6 +1279,7 @@ func _return_to_garrison() -> void:
 
 func _on_combat_target_lost() -> void:
 	current_target = null
+	_commanded_attack_target_id = -1
 	is_attack_moving = false
 	attack_move_target = Vector3.ZERO
 	_target_lost_since_ms = 0
@@ -1343,6 +1359,7 @@ func _clear_dead_target() -> bool:
 		return false
 	var was_attack_moving: bool = is_attack_moving
 	current_target = null
+	_commanded_attack_target_id = -1
 	_attack_move_search_timer = 0.0
 	if not was_attack_moving:
 		_set_order(UnitState.IDLE)
@@ -1815,6 +1832,15 @@ func _has_locked_combat_target() -> bool:
 		return false
 	return _is_target_attackable_now(current_target)
 
+# 当前目标是否是玩家手动指定的攻击目标。手动目标不参与自动改锁，
+# 也不会因为跑出视野被宽限计时器丢掉。
+func _is_commanded_attack_target(target) -> bool:
+	if target == null or not is_instance_valid(target):
+		return false
+	if _commanded_attack_target_id == -1:
+		return false
+	return _commanded_attack_target_id == target.get_instance_id()
+
 # 目标换阵营/上墙/上船/不再可攻击时立即放弃，避免长老/宗师把已招降的友军继续当目标。
 func _drop_current_attack_target() -> void:
 	if _uses_combat_state():
@@ -2120,11 +2146,17 @@ func _process_combat_target_cleanup(delta, bm) -> void:
 		return
 	if current_target != null and is_instance_valid(current_target):
 		var leash: float = _combat_leash_radius()
+		# 玩家手动攻击目标优先于驻扎圈：先追出去，目标消失后再自动回防。
 		if leash > 0.0 and garrison_point != Vector3.ZERO \
+				and not _is_commanded_attack_target(current_target) \
 				and current_target.global_position.distance_to(garrison_point) > leash:
 			_on_combat_target_lost()
 			return
-		if _combat_edge_distance(current_target) > vision_range * TARGET_LOST_RANGE_MULT:
+		# 手动目标不受视野丢失宽限限制：即使已经跑出本单位视野，也继续追。
+		# 目标节点仍然有效时保留 current_target；只有死亡/失效才清空。
+		if _is_commanded_attack_target(current_target):
+			_target_lost_since_ms = 0
+		elif _combat_edge_distance(current_target) > vision_range * TARGET_LOST_RANGE_MULT:
 			# 驻扎/建筑回防有各自的锚点 leash 和 15 秒时限，不能再用普通视野
 			# 丢失条件把远处的防守目标误判为丢失。
 			if garrison_point != Vector3.ZERO or _defense_return_position != Vector3.ZERO:
@@ -2355,6 +2387,10 @@ func _process_combat_attack(delta, bm) -> void:
 # 这样可避免“追击 2 秒就改锁”造成的频繁停步和路线抖动。
 func _try_reacquire_closer_out_of_range_target(delta: float) -> bool:
 	if current_target == null or not is_instance_valid(current_target):
+		return false
+	# 玩家手动指定的目标绝不中途改锁。即使沿途有更近的敌人，也先打到指定目标。
+	if _is_commanded_attack_target(current_target):
+		_reset_out_of_range_recheck()
 		return false
 	# 驻扎/建筑回防单位有各自的锚点，不能被这里的改锁带去追远处目标。
 	if garrison_point != Vector3.ZERO or _defense_return_position != Vector3.ZERO:
@@ -2938,6 +2974,10 @@ func _think_garrison(bm) -> void:
 		else:
 			remove_meta("ai_building_defense_until")
 	if current_target != null:
+		# 玩家手动攻击优先于驻扎防御圈；目标消失/失效后 _on_combat_target_lost
+		# 会走回防逻辑，不会让单位永久离岗。
+		if _is_commanded_attack_target(current_target):
+			return
 		if is_instance_valid(current_target) \
 				and current_target.global_position.distance_to(garrison_point) > defend_radius:
 			_on_combat_target_lost()
@@ -3453,6 +3493,7 @@ func convert_to_team(new_team: int, new_owner: int) -> void:
 	var bm = _get_bm()
 	# 清理自身旧命令、目标、驻扎点和路径
 	current_target = null
+	_commanded_attack_target_id = -1
 	attack_move_target = Vector3.ZERO
 	is_attack_moving = false
 	if _uses_combat_state():
@@ -3855,10 +3896,25 @@ func _execute_command(cmd: Dictionary):
 				_clear_stale_defense_anchor()
 				_clear_combat_destination()
 				attack_move_target = Vector3.ZERO
-				_set_combat_target(attack_cmd_target)
-				_movement.set_move_target(attack_cmd_target.global_position, attack_range)
+				# 新攻击命令必须立即放弃旧目标，即使新目标在视野外。
+				current_target = null
+				var manual: bool = bool(cmd.get("forced", false))
+				_commanded_attack_target_id = attack_cmd_target.get_instance_id() if manual else -1
+				# 玩家手动目标允许先接近再打（高度差等限制在接近后自然消失）。
+				_set_combat_target(attack_cmd_target, false, manual)
+				if current_target == null:
+					_commanded_attack_target_id = -1
+					_set_combat_state(CombatState.IDLE)
+					if _movement:
+						_movement.stop()
+					return
+				# 手动指定目标时解除原地坚守，否则 _process_combat_attack 会立刻放弃追击。
+				hold_position = false
+				if _movement:
+					_movement.set_move_target(attack_cmd_target.global_position, attack_range)
 				return
 			current_target = attack_cmd_target
+			_commanded_attack_target_id = -1
 			attack_move_target = Vector3.ZERO
 			_set_order(UnitState.ATTACKING)
 			is_attack_moving = false
@@ -4003,7 +4059,7 @@ func _clear_waypoint_markers():
 func move_to(pos: Vector3):
 	_queue_command({"type": "move", "pos": pos})
 
-func attack_target(p_target):
+func attack_target(p_target, forced: bool = false):
 	if not _is_valid_command_target(p_target):
 		return
 	# 手动指定目标时也拒绝陆军近战攻击海军，避免单位一直追到岸边
@@ -4016,7 +4072,7 @@ func attack_target(p_target):
 	# 玩家手动重新指定目标时清除“不可达”记忆，允许再试一次
 	if p_target is GameEntity:
 		_unreachable_targets.erase(p_target.get_instance_id())
-	_queue_command({"type": "attack", "target": p_target})
+	_queue_command({"type": "attack", "target": p_target, "forced": forced})
 
 func gather_at(source):
 	if not _is_valid_command_target(source):
