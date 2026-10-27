@@ -319,7 +319,7 @@ static func unlocked_buildings(bits: int, nation_mask: int, nation: int) -> Dict
 		if not has_bit(bits, tid):
 			continue
 		for uid in _techs[tid].get("unlocks", []):
-			if (uid >= 20 and uid < 30) or uid in [41, 42, 52, 53, 54, 64]:
+			if int(uid) in BUILDING_IDS:
 				out[int(uid)] = true
 	return out
 

@@ -592,7 +592,7 @@ func _input(event):
 			_: pass  # Space等由ClientInput统一处理
 
 func _update_research_button():
-	var rbtn := get_node_or_null("ResearchButton")
+	var rbtn: Button = get_node_or_null("ResearchButton") as Button
 	if rbtn == null:
 		return
 	var cr = get_tree().get_first_node_in_group("client_renderer")

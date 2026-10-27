@@ -9,7 +9,7 @@ const CARD_MIN := Vector2(430, 112)
 const PANEL_SIZE := Vector2(1240, 780)
 const CATEGORY_ALL := "ALL"
 
-var source_node: Node = null
+var source_node = null
 var _selected_category: String = "A"
 var _refresh_timer: float = 0.0
 var _last_hash: String = ""

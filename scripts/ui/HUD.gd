@@ -677,7 +677,7 @@ func _input(event):
 			KEY_T: _open_research_panel()
 
 func _update_research_button(bm) -> void:
-	var rbtn := get_node_or_null("ResearchButton")
+	var rbtn: Button = get_node_or_null("ResearchButton") as Button
 	if rbtn == null:
 		return
 	var on: bool = bm.has_method("is_research_mode") and bm.is_research_mode()
