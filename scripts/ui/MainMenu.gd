@@ -214,7 +214,7 @@ func _ready():
 	# 快速模式
 	var fast_check = CheckBox.new()
 	fast_check.name = "FastCheck"
-	fast_check.text = "快速模式（采集×3）"
+	fast_check.text = "快速模式（采集/科研×3）"
 	fast_check.position = Vector2(1360, 492)
 	fast_check.add_theme_font_size_override("font_size", 18)
 	fast_check.add_theme_color_override("font_color", UITheme.PARCHMENT)
@@ -913,7 +913,7 @@ func _build_mobile_layout() -> void:
 
 	var fast_check := CheckBox.new()
 	fast_check.name = "FastCheck"
-	fast_check.text = "快速模式（采集×3）"
+	fast_check.text = "快速模式（采集/科研×3）"
 	fast_check.custom_minimum_size = Vector2(0, UILayout.dp(34.0))
 	fast_check.add_theme_font_size_override("font_size", UILayout.font_dp(10.0))
 	fast_check.add_theme_color_override("font_color", UITheme.PARCHMENT)

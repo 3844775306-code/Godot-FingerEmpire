@@ -6246,13 +6246,16 @@ func _tick_research(delta: float) -> void:
 	# 暂停时研究也暂停（管理器本身要保持运行以接收指令）。
 	if get_tree().paused:
 		return
+	# 3 倍速模式的采集是 3 倍，科研此前仍是 1 倍，会明显显得“时代/科技很慢”。
+	# 科研进度与采集同步按 3 倍推进；研究费用和面板总时长不变。
+	var speed_mult: float = 3.0 if GameSettings.fast_mode else 1.0
 	for key in research_states.keys():
 		var st: Dictionary = research_states[key]
 		st["_key"] = key
 		var cur: Dictionary = st.get("current", {})
 		if cur.is_empty():
 			continue
-		cur["elapsed"] = float(cur.get("elapsed", 0.0)) + delta
+		cur["elapsed"] = float(cur.get("elapsed", 0.0)) + delta * speed_mult
 		if float(cur["elapsed"]) >= float(cur.get("total", 1.0)):
 			_research_complete(st)
 	# I2 户税：每 10 秒按人口结算，避免逐帧浮点累加漂移。

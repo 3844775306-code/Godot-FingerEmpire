@@ -281,6 +281,9 @@ func _effective_house_target() -> int:
 # 兵营造满后如果资源仍然堆积，多补几个生产建筑把资源转成兵力。
 func _effective_producer_target(b_id: int) -> int:
 	var target: int = int(MILITARY_PRODUCER_TARGETS.get(b_id, 1))
+	# 科研模式的升时代有硬性建筑要求。普通建造目标只保证“有 1 座”，
+	# 到帝国时代却需要 2 座城堡（53）；这里单独抬高目标，否则 AI 永远差建筑。
+	target = maxi(target, _research_age_required_building_target(b_id))
 	if not _resource_overflow():
 		return target
 	if b_id == 21:
@@ -288,6 +291,21 @@ func _effective_producer_target(b_id: int) -> int:
 	elif b_id == 24 or b_id == 29:
 		target += 1
 	return target
+
+# 当前科研时代升级还缺哪些建筑。返回值只负责“数量目标”，
+# 具体科技解锁仍由 _ai_can_build()/建造队列判断。
+func _research_age_required_building_target(b_id: int) -> int:
+	if battle == null or not battle.has_method("is_research_mode") or not battle.is_research_mode():
+		return 0
+	var st: Dictionary = battle.get_research_state(my_peer_id, my_team)
+	if st.is_empty():
+		return 0
+	# 封建时代(age=1)升城堡时代(age=2)的硬性条件是 3 座封建建筑；
+	# 普通建筑目标已覆盖（攻城车间/集市/修道院等），无需额外抬高。
+	# 城堡时代(age=2)升帝国时代(age=3)要求 4 座城堡建筑且至少 2 座城堡(53)。
+	if int(st.get("age", 0)) == 2 and b_id == 53:
+		return 2
+	return 0
 
 func _deduct_resources(cost: Dictionary) -> bool:
 	if my_peer_id != -1:
@@ -1221,6 +1239,20 @@ func _compute_research_age_reserve() -> Dictionary:
 		return {}
 	return TechTreeData.get_age(target).get("cost", {}).duplicate(true)
 
+# 升时代除人口外还有建筑条件；如果 AI 只按普通战斗科技顺序研究，
+# 经常会卡在“建筑没解锁/只有 1 座城堡”上。这里把当前目标时代需要的
+# 解锁科技插到研究队列最前面，保证 AI 能真正凑齐升级条件。
+func _research_age_requirement_techs(target_age: int) -> Array:
+	match target_age:
+		2:
+			# 3 座封建建筑：攻城车间(24)/集市(52)/修道院(54)/箭塔(25)
+			return ["F1", "I5", "H1", "B6"]
+		3:
+			# 4 座城堡建筑且至少 2 座城堡：城堡(53)/重装武器厂(29)/书院(42)
+			# 同时带上它们的前置科技，避免目标科技因缺前置被跳过。
+			return ["A4", "A2", "B6", "G1", "C3", "I1"]
+	return []
+
 func _tick_research() -> void:
 	var st: Dictionary = battle.get_research_state(my_peer_id, my_team)
 	if st.is_empty():
@@ -1239,9 +1271,10 @@ func _tick_research() -> void:
 	# 而且科技花费会把刚攒到的时代预算重新吃掉。等时代点下去后再继续研究。
 	if saving_for_age:
 		return
-	# 2) 通用科技：按优先表找到第一个满足时代/前置/资源的项目。
+	# 2) 通用科技：先处理升时代必需科技，再按常规优先表。
 	var bits: int = int(st.get("bits", 0))
-	for tid in RESEARCH_PRIORITY:
+	var research_order: Array = _research_age_requirement_techs(age + 1) + RESEARCH_PRIORITY
+	for tid in research_order:
 		if TechTreeData.has_bit(bits, tid):
 			continue
 		var info := TechTreeData.get_tech(tid)
@@ -3256,6 +3289,12 @@ func _process_line_5():
 		if e is Building and e.entity_id == 23 and e.health > 0 and e.build_timer <= 0 and entity_belongs_to_me(e):
 			shipyards.append(e)
 	if shipyards.is_empty(): return
+	# 战船也走普通兵种的全局数量上限。旧逻辑只数“船坞附近”的船，
+	# 战船一开走就重新计数，AI 会无限补船；改为全局 count_unit 后，
+	# 和步兵/骑兵一样最多补到当前军队目标数。
+	var army_target: int = _effective_army_target()
+	var total_warships: int = count_unit(13)
+	var total_gunboats: int = count_unit(39)
 	for sy in shipyards:
 		var warships = 0; var gunboats = 0; var fishermen = 0
 		for e in battle.entities.get_children():
@@ -3263,8 +3302,16 @@ func _process_line_5():
 				if e.entity_id == 13: warships += 1
 				elif e.entity_id == 39: gunboats += 1
 				elif e.entity_id == 14: fishermen += 1
-		while warships < 2 and can_afford(13) and _can_train_unit(): produce_unit(13); warships += 1
-		while gunboats < 2 and can_afford(39) and _can_train_unit(): produce_unit(39); gunboats += 1
+		while warships < 2 and total_warships < army_target and can_afford(13) and _can_train_unit():
+			if not produce_unit(13):
+				break
+			warships += 1
+			total_warships += 1
+		while gunboats < 2 and total_gunboats < army_target and can_afford(39) and _can_train_unit():
+			if not produce_unit(39):
+				break
+			gunboats += 1
+			total_gunboats += 1
 		# 每个船坞至少保证 1 艘采集船，直接在该船坞排队，避免被别的船坞抢走产能
 		# 重装武器厂科技期间油需求很大，每个船坞临时补到 2 艘采集船
 		var fisher_target = 1

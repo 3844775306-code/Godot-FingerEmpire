@@ -31,7 +31,7 @@ func update_ui_scale():
 		ui_offset_x = (vs.x - DESIGN_WIDTH * ui_scale) / 2.0
 		ui_offset_y = (vs.y - DESIGN_HEIGHT * ui_scale) / 2.0
 
-var fast_mode: bool = false  # 3x gather speed
+var fast_mode: bool = false  # 快速模式：采集/科研 3 倍速，建造/升级/生产 2 倍速
 var tutorial_mode: bool = false  # 新手教程对局：主菜单启动，进局后显示动态目标提示
 var campaign_mode: bool = false      # 闯关模式：进局后由 CampaignDirector 接管开局生成与胜负判定
 var campaign_level_id: String = ""   # 当前关卡 id（见 scripts/data/CampaignData.gd）
