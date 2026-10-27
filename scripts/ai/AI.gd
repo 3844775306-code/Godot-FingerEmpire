@@ -3598,6 +3598,7 @@ func update_debug_label():
 		_trait_rtl.text = "[color=#cba]%s[/color]" % NationBonuses.get_trait_full(_my_nation_index())
 	# 收起状态：主体不可见，跳过整块内容刷新，省掉每帧的统计与遍历开销
 	if _panel_collapsed: return
+	_update_research_text()
 
 	# 面板统计只遍历一次实体：原实现对每种资源/单位/建筑各扫一遍全实体，
 	# 7 个 AI 面板同时展开时每 10 帧会产生数百次全量扫描，是后期掉帧大户。
@@ -3825,6 +3826,53 @@ func _apply_panel_relation() -> void:
 		nc.b * 0.45 + 0.04,
 		0.93
 	)
+
+# AI 的科研情况：时代、在研项目（进度）、已完成的通用/特色科技。
+# 只有科研模式才有意义；经典模式把整节隐藏，避免面板多一行“暂无”。
+func _update_research_text() -> void:
+	if _research_title == null or _research_rtl == null:
+		return
+	var research_on: bool = battle != null and battle.has_method("is_research_mode") and battle.is_research_mode()
+	_research_title.visible = research_on
+	_research_rtl.visible = research_on
+	if not research_on:
+		return
+	if battle == null or not battle.has_method("get_research_state"):
+		_research_rtl.text = "[color=gray]（科研数据不可用）[/color]"
+		return
+	var st: Dictionary = battle.get_research_state(my_peer_id, my_team)
+	if st.is_empty():
+		_research_rtl.text = "[color=gray]（暂无科研数据）[/color]"
+		return
+	var age: int = int(st.get("age", 0))
+	var lines: Array = []
+	lines.append("[color=#9fd3ff]时代：%s[/color]" % TechTreeData.age_name(age))
+	var cur: Dictionary = st.get("current", {})
+	if cur.is_empty():
+		lines.append("[color=gray]研究队列空闲[/color]")
+	else:
+		var total: float = maxf(float(cur.get("total", 1.0)), 0.001)
+		var pct: int = int(round(clampf(float(cur.get("elapsed", 0.0)) / total, 0.0, 1.0) * 100.0))
+		lines.append("[color=#7fe]研究中：%s %d%%[/color]" % [String(cur.get("name", "?")), pct])
+	var bits: int = int(st.get("bits", 0))
+	var nation_bits: int = int(st.get("nation_bits", 0))
+	var nation: int = int(st.get("nation", -1))
+	var done_names: Array = []
+	for tid in TechTreeData.tech_ids():
+		if TechTreeData.has_bit(bits, String(tid)):
+			var info: Dictionary = TechTreeData.get_tech(String(tid))
+			done_names.append(String(info.get("name", tid)))
+	if nation >= 0:
+		for t in TechTreeData.nation_techs(nation):
+			if TechTreeData.has_nation_bit(nation_bits, nation, String(t.get("id", ""))):
+				done_names.append(String(t.get("name", t.get("id", ""))))
+	if done_names.is_empty():
+		lines.append("[color=#d5c8a5]已完成：无[/color]")
+	else:
+		# 只列最近 3 项，面板宽度有限；总数用数字说明
+		var recent: Array = done_names.slice(maxi(done_names.size() - 3, 0))
+		lines.append("[color=#d5c8a5]已完成 %d 项：%s[/color]" % [done_names.size(), "、".join(recent)])
+	_research_rtl.text = "\n".join(lines)
 
 func _create_debug_panel():
 	debug_panel = Control.new(); debug_panel.name = "AIDebugPanel"; debug_panel.z_index = 100

@@ -162,6 +162,9 @@ func _build() -> void:
 		func(on: bool): GameSettings.alert_friendly_upgrade = on))
 	vb.add_child(_make_check_row("训练完成", GameSettings.alert_friendly_produce,
 		func(on: bool): GameSettings.alert_friendly_produce = on))
+	# 科研默认接收：队友的时代/科技进度决定整局节奏，错过会打乱自己的出兵计划
+	vb.add_child(_make_check_row("科研完成（默认接收）", GameSettings.alert_friendly_research,
+		func(on: bool): GameSettings.alert_friendly_research = on))
 
 	# 底部：暂停 / 退出
 	var bottom := HBoxContainer.new()

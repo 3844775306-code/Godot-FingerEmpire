@@ -6191,8 +6191,11 @@ func _research_complete(st: Dictionary) -> void:
 	_update_player_population(int(st.get("owner", -1)))
 	var owner := int(st.get("owner", -1))
 	var team := int(st.get("team", get_host_team()))
-	if is_human_owned(owner, team):
-		_show_hud_alert("研究完成：%s" % String(cur.get("name", "")), Color(0.4, 0.9, 1.0), [team], team)
+	var nation := int(st.get("nation", -1))
+	# 自己完成科研 → 提示；队友（AI 队友 / 2v2 真人队友）完成科研也推给同队，
+	# 由 HUD 按「战报筛选 · 科研完成」决定是否显示（默认接收），敌方科研会被过滤掉。
+	_show_hud_alert("研究完成：%s" % String(cur.get("name", "")), Color(0.4, 0.9, 1.0),
+		[team], team, GameSettings.AlertKind.RESEARCH, false, [nation], Vector3.ZERO, owner)
 
 # 遍历该玩家单位/建筑，从基础值重算科研加成（不增量叠加）。
 func _apply_research_to_owned_entities(st: Dictionary) -> void:

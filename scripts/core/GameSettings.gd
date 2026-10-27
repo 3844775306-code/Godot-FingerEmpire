@@ -75,15 +75,18 @@ static func default_camera_zoom_mult() -> float:
 var post_game_data: Dictionary = {}  # {power_history, player_is_blue} for results screen
 
 # ==================== 战报接收筛选 ====================
-# 战报类型。只有建造 / 升级 / 生产三类需要按国家过滤，
+# 战报类型。建造 / 升级 / 生产 / 科研需要按国家过滤，
 # 战斗、外交、经济这类与自己直接相关的消息始终接收。
-enum AlertKind { COMBAT = 0, BUILD = 1, UPGRADE = 2, PRODUCE = 3, DIPLOMACY = 4, ECONOMY = 5, MISC = 6 }
+enum AlertKind { COMBAT = 0, BUILD = 1, UPGRADE = 2, PRODUCE = 3, DIPLOMACY = 4, ECONOMY = 5, MISC = 6, RESEARCH = 7 }
 
 # 默认不接收队友国家的建造 / 升级 / 生产战报（队友主城升级例外，始终接收）。
 # 队友的这些动静与自己关系不大，全收会把战况栏刷满自己关心的战斗消息。
 var alert_friendly_build: bool = false
 var alert_friendly_upgrade: bool = false
 var alert_friendly_produce: bool = false
+# 队友的科研完成默认接收：科研决定整局的兵种解锁与时代节奏，
+# 队友在研什么直接影响自己的打法，所以这一项默认打开。
+var alert_friendly_research: bool = true
 
 # 单位血条文字：默认关闭，只保留血条色条；需要在设置面板手动打开。
 # 单机 HUD 和联机 ClientRenderer 都读取这个开关。

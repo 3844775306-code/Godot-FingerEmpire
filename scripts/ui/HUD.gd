@@ -1134,9 +1134,23 @@ func _normalize_alert_teams(raw) -> Array:
 				out.append(int(t))
 	return out
 
-# 战报筛选：队友国家的建造/升级/生产默认不接收，主城升级例外。
+# 战报筛选：队友国家的建造/升级/生产默认不接收，主城升级例外；
+# 科研完成默认接收，但敌方科研永远不推送（会泄露对手时代/科技进度）。
 # 其他类型（战斗、外交、经济）与自己直接相关，始终接收。
 func _alert_is_filtered(teams: Array, alert_kind: int, is_castle: bool, source_owner: int = -1) -> bool:
+	if alert_kind == GameSettings.AlertKind.RESEARCH:
+		if teams.is_empty():
+			return false
+		var sender_team: int = int(teams[0])
+		var my_team: int = _alert_my_team()
+		if sender_team >= 0 and my_team >= 0 and sender_team != my_team:
+			return true
+		if source_owner < 0:
+			return false
+		var my_owner_id: int = _alert_my_owner()
+		if my_owner_id >= 0 and source_owner == my_owner_id:
+			return false
+		return not GameSettings.alert_friendly_research
 	if alert_kind != GameSettings.AlertKind.BUILD \
 		and alert_kind != GameSettings.AlertKind.UPGRADE \
 		and alert_kind != GameSettings.AlertKind.PRODUCE:
@@ -1163,6 +1177,13 @@ func _alert_is_filtered(teams: Array, alert_kind: int, is_castle: bool, source_o
 		GameSettings.AlertKind.PRODUCE:
 			return not GameSettings.alert_friendly_produce
 	return false
+
+# 本地玩家的队伍号：科研战报要区分「敌方科研」和「队友科研」
+func _alert_my_team() -> int:
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if bm == null or not bm.has_method("get_local_team"):
+		return -1
+	return int(bm.get_local_team())
 
 # 消息前加国家前缀。一条战报可能同时涉及多个国家（例如「A 攻打 B」），
 # 全部按同一规则着色：自己绿、同阵营友方蓝、敌方红，国家之间用箭头连接。
