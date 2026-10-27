@@ -108,6 +108,11 @@ const TREBUCHET_SAVE_TIMEOUT: float = 90.0
 const HEAVY_SIEGE_TECH_SAVE_TIMEOUT: float = 180.0
 var _trebuchet_save_started: float = -1.0
 var _heavy_siege_tech_save_started: float = -1.0
+# 科研模式：临近计划升时代的时点，先把时代升级预算锁住，避免 AI 把粮/金/石/油
+# 花在普通兵种、建筑和科技上，导致永远“差一点升级”。
+const RESEARCH_AGE_SAVE_LEAD_SECONDS: float = 90.0
+var _research_age_reserve_stamp: int = -1
+var _research_age_reserve_value: Dictionary = {}
 # 石油通常位于水域中央，船坞只要建在能出海的水岸即可，不必紧贴油田；
 # 该半径用于判断水岸是否可服务油田，以及已建船坞是否仍值得保留。
 const SHIPYARD_OIL_REACH: float = 32.0
@@ -666,6 +671,8 @@ func can_afford(unit_id: int) -> bool:
 	var cost = cfg.get("cost", {})
 	var res = _get_resources()
 	for k in cost: if res.get(k, 0) < cost[k]: return false
+	if _research_age_reserve_active() and not _can_pay_with_reserve(cost, _research_age_reserve_cost()):
+		return false
 	if unit_id != TREBUCHET_ID and _trebuchet_reserve_active():
 		return _can_pay_with_trebuchet_reserve(cost)
 	if unit_id != TREBUCHET_ID and _heavy_siege_tech_reserve_active():
@@ -678,6 +685,8 @@ func can_afford_building(building_id: int) -> bool:
 	var cost = cfg.get("cost", {})
 	var res = _get_resources()
 	for k in cost: if res.get(k, 0) < cost[k]: return false
+	if _research_age_reserve_active() and not _can_pay_with_reserve(cost, _research_age_reserve_cost()):
+		return false
 	if _trebuchet_reserve_active():
 		return _can_pay_with_trebuchet_reserve(cost)
 	if _heavy_siege_tech_reserve_active():
@@ -696,6 +705,8 @@ func can_afford_upgrade(building_id: int) -> bool:
 				var cost = entity.get_upgrade_cost()
 				var res = _get_resources()
 				for k in cost: if res.get(k, 0) < cost[k]: return false
+				if _research_age_reserve_active() and not _can_pay_with_reserve(cost, _research_age_reserve_cost()):
+					return false
 				if _trebuchet_reserve_active():
 					return _can_pay_with_trebuchet_reserve(cost)
 				if building_id != HEAVY_SIEGE_BUILDING_ID and building_id != 20 and _heavy_siege_tech_reserve_active():
@@ -708,6 +719,9 @@ func produce_unit(unit_id: int) -> bool:
 	if battle != null and battle.has_method("is_research_mode") and battle.is_research_mode():
 		if battle.has_method("is_unit_unlocked") and not battle.is_unit_unlocked(unit_id, my_peer_id, my_team):
 			return false
+	# 所有生产入口都统一走 can_afford，确保升时代攒预算不会被某个直接调用绕过。
+	if not can_afford(unit_id):
+		return false
 	# 贸易车没有商人可跟就是废单位；生产时严格保证“车 < 商人”
 	if unit_id == TRADE_CART_ID and count_unit(TRADE_CART_ID) >= _count_merchants():
 		return false
@@ -883,6 +897,8 @@ func build_building(building_id: int, pos: Vector3, facing: Vector3 = Vector3.ZE
 	if builder == null:
 		return false
 	var cost = cfg.get("cost", {})
+	if _research_age_reserve_active() and not _can_pay_with_reserve(cost, _research_age_reserve_cost()):
+		return false
 	if not _deduct_resources(cost): return false
 	cfg["owner_peer_id"] = my_peer_id
 	# 队伍判定：在线走 player_info；本地乱斗/多人各 AI 有唯一 team(my_team)，
@@ -911,6 +927,9 @@ func upgrade_building(building_id: int):
 			# 同类型可能有多个建筑；升级建筑必须是当前可升级的那一个，
 			# 不能只看第一个（第一个满级后会导致后面同类建筑永远不升级）
 			if not entity.can_upgrade(): continue
+			var upgrade_cost: Dictionary = entity.get_upgrade_cost()
+			if _research_age_reserve_active() and not _can_pay_with_reserve(upgrade_cost, _research_age_reserve_cost()):
+				continue
 			if entity.perform_upgrade(battle): return
 
 # ═══ 建筑修理（AI 决策）═══
@@ -994,6 +1013,8 @@ func _repair_has_spare_resources(cost: Dictionary) -> bool:
 		if int(res.get(k, 0)) - need < int(reserve.get(k, 0)):
 			return false
 	# 正在攒巨型投石机 / 重装武器厂科技时修理也要让路，沿用现有预留逻辑
+	if _research_age_reserve_active() and not _can_pay_with_reserve(cost, _research_age_reserve_cost()):
+		return false
 	if _trebuchet_reserve_active() and not _can_pay_with_trebuchet_reserve(cost):
 		return false
 	if _heavy_siege_tech_reserve_active() and not _can_pay_with_reserve(cost, _heavy_siege_tech_reserve_cost()):
@@ -1164,6 +1185,42 @@ func _ai_age_target_seconds(target_age: int) -> float:
 	var offset: int = absi(my_peer_id * 37 + nation * 11) % span
 	return float(lo + offset)
 
+# 当前是否应该为下一次时代升级锁资源。
+# 返回空字典 = 不预留；返回 {资源: 数量} = 在付款后必须仍保留这些资源。
+func _research_age_reserve_cost() -> Dictionary:
+	var stamp := Engine.get_physics_frames()
+	if stamp == _research_age_reserve_stamp:
+		return _research_age_reserve_value
+	_research_age_reserve_stamp = stamp
+	_research_age_reserve_value = _compute_research_age_reserve()
+	return _research_age_reserve_value
+
+func _research_age_reserve_active() -> bool:
+	return not _research_age_reserve_cost().is_empty()
+
+func _compute_research_age_reserve() -> Dictionary:
+	if battle == null or not battle.has_method("is_research_mode") or not battle.is_research_mode():
+		return {}
+	if _is_defending():
+		return {}
+	var st: Dictionary = battle.get_research_state(my_peer_id, my_team)
+	if st.is_empty() or not st.get("current", {}).is_empty():
+		return {}
+	var age: int = int(st.get("age", 0))
+	if age >= 3:
+		return {}
+	var target: int = age + 1
+	var target_time: float = _ai_age_target_seconds(target)
+	if battle.game_time < target_time - RESEARCH_AGE_SAVE_LEAD_SECONDS:
+		return {}
+	var check: Dictionary = battle.can_research_age(my_peer_id, my_team)
+	var error := String(check.get("error", ""))
+	# 只有“人口/建筑条件已齐、只差资源”或“现在就能点”时才锁预算；
+	# 如果还缺人口/建筑，AI 应继续发展，而不是提前囤着资源不动。
+	if not bool(check.get("ok", false)) and error != "资源不足":
+		return {}
+	return TechTreeData.get_age(target).get("cost", {}).duplicate(true)
+
 func _tick_research() -> void:
 	var st: Dictionary = battle.get_research_state(my_peer_id, my_team)
 	if st.is_empty():
@@ -1171,12 +1228,17 @@ func _tick_research() -> void:
 	if not st.get("current", {}).is_empty():
 		return
 	var age: int = int(st.get("age", 0))
+	var saving_for_age := _research_age_reserve_active()
 	# 1) 时代：到点且条件齐备才点，避免把资源卡在无法完成的条件上。
 	if age < 3 and battle.game_time >= _ai_age_target_seconds(age + 1):
 		var check: Dictionary = battle.can_research_age(my_peer_id, my_team)
 		if bool(check.get("ok", false)):
 			battle.research_start_age(my_peer_id, my_team)
 			return
+	# 已经进入升时代攒资源窗口时，暂停科技研究：研究队列会被普通科技占用，
+	# 而且科技花费会把刚攒到的时代预算重新吃掉。等时代点下去后再继续研究。
+	if saving_for_age:
+		return
 	# 2) 通用科技：按优先表找到第一个满足时代/前置/资源的项目。
 	var bits: int = int(st.get("bits", 0))
 	for tid in RESEARCH_PRIORITY:
@@ -1616,12 +1678,13 @@ func _diplo_maintain(ally: int):
 # 从自身余额最多的资源里送出 500（与外交系统的 TRIBUTE_DELIVERY=500 一致），送成则记录冷却。
 func _diplo_send_tribute(ally: int):
 	var res: Dictionary = battle.get_resources_for(my_peer_id)
+	var age_reserve: Dictionary = _research_age_reserve_cost()
 	var order := ["gold", "wood", "stone", "food", "oil"]
 	var best := ""
 	var best_v := 500
 	for k in order:
 		var v: int = res.get(k, 0)
-		if v >= best_v: best_v = v; best = k
+		if v >= best_v and v - 500 >= int(age_reserve.get(k, 0)): best_v = v; best = k
 	if best == "": return
 	if battle.diplomacy.deliver_tribute(my_peer_id, ally, best):
 		_diplo_last_tribute_time = battle.game_time
@@ -3042,6 +3105,8 @@ func _can_pay_with_reserves(cost: Dictionary, building_id: int = -1) -> bool:
 	for k in cost:
 		if int(res.get(k, 0)) < int(cost[k]):
 			return false
+	if _research_age_reserve_active() and not _can_pay_with_reserve(cost, _research_age_reserve_cost()):
+		return false
 	if _trebuchet_reserve_active() and not _can_pay_with_trebuchet_reserve(cost):
 		return false
 	# 与 can_afford_upgrade 保持一致：升级主城/重装厂本身就是在推进 59 科技，
