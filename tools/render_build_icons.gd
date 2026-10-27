@@ -9,7 +9,7 @@ extends Node
 # 这样不同尺寸的建筑在卡片里视觉重量一致。
 
 const OUT_DIR := "res://assets/ui/build_icons/"
-const BUILDING_IDS: Array = [7, 8, 21, 22, 23, 24, 25, 26, 27, 28, 29, 41, 42, 52, 53, 54, 64]
+const BUILDING_IDS: Array = [20, 7, 8, 21, 22, 23, 24, 25, 26, 27, 28, 29, 41, 42, 52, 53, 54, 64]
 
 var _vp: SubViewport
 var _cam: Camera3D

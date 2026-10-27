@@ -29,6 +29,7 @@ var _board_shore: Vector3 = Vector3.ZERO
 @onready var close_btn = $CloseBtn
 
 var name_rtl: RichTextLabel
+var _portrait: TextureRect = null   # 单选时显示实体模型图（单位/建筑/资源）
 var stats_rtl: RichTextLabel
 var hp_bar: ColorRect
 var observed_entity = null
@@ -85,6 +86,7 @@ func _ready():
 		_set_rtl_font(name_rtl, UILayout.font_dp(15.0))
 		_set_rtl_font(stats_rtl, UILayout.font_dp(12.0))
 		name_rtl.custom_minimum_size = Vector2(0, UILayout.font_dp(15.0) + UILayout.dp(3.0))
+	_build_portrait_row()
 
 	# 血条：黑色背景条 + 锚点前景（宽度 = 血量比例）
 	hp_bar_bg = ColorRect.new(); hp_bar_bg.name = "HPBarBg"
@@ -143,6 +145,36 @@ func _ready():
 
 # 手机端面板只有 260×200dp，建筑生产按钮一多就会超出屏幕底部；
 # 把内容包进滚动容器，触摸拖动由手势路由调用 UILayout.scroll_at 驱动。
+# 单选：名字左边放一张实体图（单位/建筑/资源都有渲染图），一眼看出选的是谁
+func _build_portrait_row() -> void:
+	if _portrait != null:
+		return
+	var px: float = UILayout.dp(42.0) if _is_mobile() else 56.0
+	_portrait = TextureRect.new()
+	_portrait.name = "Portrait"
+	_portrait.custom_minimum_size = Vector2(px, px)
+	_portrait.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_portrait.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_portrait.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_portrait.visible = false
+	var row := HBoxContainer.new()
+	row.name = "NameRow"
+	row.add_theme_constant_override("separation", 8)
+	var idx := name_rtl.get_index()
+	_vb.remove_child(name_rtl)
+	_vb.add_child(row)
+	_vb.move_child(row, idx)
+	row.add_child(_portrait)
+	row.add_child(name_rtl)
+	name_rtl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+
+func _update_portrait(entity) -> void:
+	if _portrait == null:
+		return
+	var tex: Texture2D = EntityIcon.texture(int(entity.entity_id), int(entity.entity_type))
+	_portrait.texture = tex
+	_portrait.visible = tex != null
+
 func _build_mobile_scroll() -> void:
 	# 关闭按钮放大到可点尺寸并固定在右上角，不随内容滚动
 	close_btn.custom_minimum_size = Vector2(UILayout.dp(46.0), UILayout.dp(18.0))
@@ -580,6 +612,7 @@ func update_info(entity):
 		# 另起一行：和名字挤在同一行时，长中文会把名字挤出可视区域，看起来像"名字不见了"
 		nm += "\n[color=%s]（%s · 仅查看）[/color]" % [UITheme.hex_str(UITheme.ALERT_WARNING), readonly_label]
 	name_rtl.text = nm
+	_update_portrait(entity)
 
 	var pct = float(entity.health) / max(float(entity.max_health), 1.0)
 	hp_bar.color = _faction_color(entity)
@@ -692,10 +725,10 @@ func update_info(entity):
 				if not uc: continue
 				var btn = Button.new(); btn.text = ""
 				if _is_mobile():
-					btn.custom_minimum_size = Vector2(0, UILayout.dp(40.0))
+					btn.custom_minimum_size = Vector2(0, UILayout.dp(52.0))
 					UITheme.apply_button(btn, UILayout.font_dp(13.0))
 				else:
-					btn.custom_minimum_size = Vector2(200, 40)
+					btn.custom_minimum_size = Vector2(200, 44)
 					UITheme.apply_button(btn, UITheme.FONT_SM)
 				btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 				var ok = true; var cs = []
@@ -715,19 +748,34 @@ func update_info(entity):
 					btn.tooltip_text = "官员总数不能超过可进驻建筑数"
 				elif readonly:
 					btn.tooltip_text = "%s仅可查看，无法下达生产命令" % readonly_label
+				var icon_px: float = UILayout.dp(24.0) if _is_mobile() else 28.0
+				var icon := EntityIcon.make_rect(int(prod.unit_id), 2, icon_px)
+				var row := HBoxContainer.new()
+				row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+				row.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+				row.add_theme_constant_override("separation", 6)
+				if icon != null:
+					row.add_child(icon)
 				var rtl = RichTextLabel.new(); rtl.bbcode_enabled = true; rtl.fit_content = true; rtl.autowrap_mode = TextServer.AUTOWRAP_OFF
 				rtl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-				rtl.anchor_left = 0; rtl.anchor_right = 1; rtl.anchor_top = 0; rtl.anchor_bottom = 1
+				rtl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+				rtl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 				rtl.add_theme_color_override("default_color", UITheme.PARCHMENT)
 				_set_rtl_font(rtl, _mobile_font(UITheme.FONT_SM))
 				var ct = ""
 				for ci in cs:
 					var cc = "white" if _get_res().get(ci.res, 0) >= ci.need else UITheme.hex_str(UITheme.VERMILION)
 					ct += "%s[color=%s]%d[/color] " % [UITheme.RESOURCE_ICONS.get(ci.res, ""), cc, ci.need]
-				rtl.text = "%s %s  [%s]" % [
-					UITheme.entity_emoji(int(uc.get("id", -1)), int(uc.get("type", 2))),
-					uc.get("name", "?"), ct.strip_edges()]
-				btn.add_child(rtl)
+				var uname = uc.get("name", "?")
+				if _is_mobile():
+					# 手机面板只有 260dp 宽：名称一行、价格一行，避免价格被挤出按钮外
+					rtl.text = "%s\n[%s]" % [uname, ct.strip_edges()]
+				elif icon != null:
+					rtl.text = "%s  [%s]" % [uname, ct.strip_edges()]
+				else:
+					rtl.text = "%s %s  [%s]" % [UITheme.entity_emoji(int(uc.get("id", -1)), int(uc.get("type", 2))), uname, ct.strip_edges()]
+				row.add_child(rtl)
+				btn.add_child(row)
 				btn.pressed.connect(func(): _on_produce_pressed(prod.unit_id))
 				produce_vbox.add_child(btn)
 		else:
@@ -848,7 +896,7 @@ func _ensure_board_box() -> void:
 	_board_up_btn = Button.new()
 	_board_up_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	if _is_mobile():
-		_board_up_btn.custom_minimum_size = Vector2(0, UILayout.dp(40.0))
+		_board_up_btn.custom_minimum_size = Vector2(0, UILayout.dp(44.0))
 		UITheme.apply_primary_button(_board_up_btn, UILayout.font_dp(12.0))
 	else:
 		_board_up_btn.custom_minimum_size = Vector2(90, 32)
@@ -859,7 +907,7 @@ func _ensure_board_box() -> void:
 	_board_down_btn = Button.new()
 	_board_down_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	if _is_mobile():
-		_board_down_btn.custom_minimum_size = Vector2(0, UILayout.dp(40.0))
+		_board_down_btn.custom_minimum_size = Vector2(0, UILayout.dp(44.0))
 		UITheme.apply_muted_button(_board_down_btn, UILayout.font_dp(12.0))
 	else:
 		_board_down_btn.custom_minimum_size = Vector2(90, 32)
@@ -1103,6 +1151,8 @@ func show_multi_selection(entities: Array):
 		old_box.queue_free()
 	visible = true
 	observed_entity = null
+	if _portrait != null:
+		_portrait.visible = false
 	upgrade_btn.visible = false
 	if demolish_btn: demolish_btn.visible = false
 	if repair_btn: repair_btn.visible = false
@@ -1143,9 +1193,9 @@ func show_multi_selection(entities: Array):
 
 		var btn = Button.new()
 		if _is_mobile():
-			btn.custom_minimum_size = Vector2(0, UILayout.dp(40.0))
+			btn.custom_minimum_size = Vector2(0, UILayout.dp(44.0))
 		else:
-			btn.custom_minimum_size = Vector2(200, 40)
+			btn.custom_minimum_size = Vector2(200, 44)
 		btn.toggle_mode = true
 		UITheme.apply_row_button(btn, row_color)
 		if _is_mobile():
@@ -1155,7 +1205,31 @@ func show_multi_selection(entities: Array):
 		if g["entities"].size() > 0:
 			etype = g["entities"][0].entity_type
 		var lvl_text = " Lv.%d" % g["min_level"] if g["min_level"] == g["max_level"] else " Lv.%d~%d" % [g["min_level"], g["max_level"]]
-		btn.text = "%s %d x %s%s" % [UITheme.entity_emoji(g["entity_id"], etype), g["count"], g["name"], lvl_text]
+		# 用真实模型图代替 emoji：同屏多兵种也能一眼分清（无图时回退 emoji）
+		var icon_px: float = UILayout.dp(24.0) if _is_mobile() else 28.0
+		var icon := EntityIcon.make_rect(int(g["entity_id"]), etype, icon_px)
+		var row := HBoxContainer.new()
+		row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		row.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		row.add_theme_constant_override("separation", 6)
+		if icon != null:
+			row.add_child(icon)
+		var label := "%d × %s%s" % [g["count"], g["name"], lvl_text]
+		var row_rtl := RichTextLabel.new()
+		row_rtl.bbcode_enabled = false
+		row_rtl.fit_content = true
+		row_rtl.autowrap_mode = TextServer.AUTOWRAP_OFF
+		row_rtl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		row_rtl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row_rtl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+		row_rtl.add_theme_color_override("default_color", row_color)
+		_set_rtl_font(row_rtl, _mobile_font(UITheme.FONT_SM))
+		if icon != null:
+			row_rtl.text = label
+		else:
+			row_rtl.text = "%s %s" % [UITheme.entity_emoji(int(g["entity_id"]), etype), label]
+		row.add_child(row_rtl)
+		btn.add_child(row)
 
 		var row_entities = g["entities"].duplicate()
 		btn.pressed.connect(func():
