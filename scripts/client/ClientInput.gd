@@ -230,32 +230,8 @@ func _input(event):
 			toggle_quartermaster()
 			get_viewport().set_input_as_handled(); return
 
-		# 无选中时 → 快速建造快捷键
+		# 无选中时 → 全局面板/镜头快捷键（建造统一走右键空地菜单）
 		if client_selected_ids.is_empty() and not ctrl and not shift:
-			var build_id = -1
-			match key:
-				KEY_Q: build_id = 28
-				KEY_W: build_id = 22
-				KEY_E: build_id = 41
-				KEY_R: build_id = 52
-				KEY_T: build_id = 42
-				KEY_Y: build_id = 7
-				KEY_A: build_id = 21
-				KEY_S: build_id = 23
-				KEY_D: build_id = 24
-				KEY_F: build_id = 29
-				KEY_G: build_id = 54
-				KEY_H: build_id = 53
-				KEY_Z: build_id = 27
-				KEY_X: build_id = 64
-				KEY_C: build_id = 25
-				KEY_V: build_id = 26
-				KEY_B: build_id = 8
-			if build_id != -1 and _can_afford_building(build_id):
-				renderer.start_build_placement(build_id)
-				get_viewport().set_input_as_handled()
-				return
-
 			# F5 统计面板
 			if key == KEY_F5:
 				_toggle_stats_panel()
@@ -427,6 +403,15 @@ func _input(event):
 		if _is_mobile_ui_point(event.position):
 			return
 		if event.pressed:
+			# Ctrl+Alt+左键 → 清除驻扎点（仅己方单位）
+			if event.ctrl_pressed and Input.is_key_pressed(KEY_ALT) \
+					and not client_selected_ids.is_empty() and _selection_all_local():
+				NetworkManager.send_command.rpc_id(1, {
+					"action": "clear_garrison",
+					"selected_ids": client_selected_ids.duplicate()
+				})
+				get_viewport().set_input_as_handled()
+				return
 			# Alt+左键 → 设置驻扎点（仅己方单位）
 			if Input.is_key_pressed(KEY_ALT) and not client_selected_ids.is_empty() and _selection_all_local():
 				var ground_pos = _get_ground_position(event.position)
@@ -548,14 +533,13 @@ func _input(event):
 					box_start = pos
 					box_end = pos
 				else:
-					# 有选中单位 + 点击空地/敌方/中立 → 攻击/移动命令
-					# 队友/敌方/中立单位只可查看：取消选中，不发送任何命令
-					if _selection_has_teammate() or _selection_has_enemy() or _selection_has_neutral():
+					# 有己方陆军：空地=移动；只有建筑/只读目标：空地=取消选中
+					if _selection_has_local_army():
+						_send_left_click(event)
+					else:
 						client_selected_ids.clear()
 						_update_selection_visuals()
 						emit_signal("selection_changed", [])
-					else:
-						_send_left_click(event)
 		else:
 			# 左键松开 → 处理框选
 			_on_left_release(event)
@@ -619,33 +603,35 @@ func _select_all_of_same_type(target_id: int, info: Dictionary):
 	emit_signal("selection_changed", client_selected_ids.duplicate())
 	_update_selection_visuals()
 
-# ==================== 右键处理（照搬单机版 _handle_right_click） ====================
+# ==================== 右键处理（与单机版 v2 一致） ====================
 func _unhandled_input(event):
 	if not renderer: return
-	# 右键 → 命令/建造（照搬单机版：_unhandled_input 只处理右键）
+	# 右键 → 只有空地打开建造菜单；点目标按当前选择执行命令或查看信息。
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
-		# Alt+右键 → 清除驻扎点（仅己方单位）
-		if Input.is_key_pressed(KEY_CTRL) and not client_selected_ids.is_empty() and _selection_all_local():
-			var hit_id = _get_entity_id_under_mouse(event.position)
-			if hit_id == -1:
-				NetworkManager.send_command.rpc_id(1, {"action": "clear_garrison", "selected_ids": client_selected_ids.duplicate()})
-			return
-
-		# 无选中 + 右键空地 → 打开建造菜单（照搬单机版 _try_open_build_menu）
+		var hit_id = _get_entity_id_under_mouse(event.position)
 		if client_selected_ids.is_empty():
+			if hit_id != -1:
+				# 空手右键单位/建筑 = 查看信息，不再打开建造菜单。
+				var info = _get_entity_info(hit_id)
+				if not info or int(info.get("health", 0)) <= 0:
+					return
+				client_selected_ids.clear()
+				client_selected_ids.append(hit_id)
+				_update_selection_visuals()
+				emit_signal("selection_changed", client_selected_ids.duplicate())
+				return
 			var ground_pos = _get_ground_position(event.position)
 			if ground_pos != Vector3.ZERO:
 				emit_signal("build_requested", ground_pos)
 			return
 
-		# 右键空地 → 取消选择（照搬单机版：hit==null → clear selection）
-		var hit_id = _get_entity_id_under_mouse(event.position)
+		# 有选中单位时：右键空地打开建造菜单并保留选择；点目标继续下达智能指令。
 		if hit_id == -1:
-			client_selected_ids.clear()
-			_update_selection_visuals()
-			emit_signal("selection_changed", [])
-		else:
-			_send_left_click(event)
+			var ground_pos2 = _get_ground_position(event.position)
+			if ground_pos2 != Vector3.ZERO:
+				emit_signal("build_requested", ground_pos2)
+			return
+		_send_left_click(event)
 
 # ---------- 命令发送 ----------
 func _send_left_click(event):

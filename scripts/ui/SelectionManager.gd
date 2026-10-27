@@ -87,9 +87,12 @@ func _add_box_rect_to_ui():
 # ---------- 输入事件处理 ----------
 func _input(event):
 	_sanitize_entity_refs()
-	# 建筑模式优先：不进行任何选择操作
+	# 建筑模式优先：不进行任何选择操作；Esc 仍要能退出建造模式
 	var bm = get_tree().get_first_node_in_group("battle_manager")
 	if bm and bm.build_mode:
+		if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+			bm._exit_build_mode()
+			get_viewport().set_input_as_handled()
 		return
 
 	# Don't process clicks on interactive UI panels
@@ -112,6 +115,13 @@ func _input(event):
 		var ctrl = event.ctrl_pressed
 		var shift = event.shift_pressed
 
+		# Esc：取消下令模式 → 建造菜单 → 当前选择
+		if key == KEY_ESCAPE:
+			if bm and bm.has_method("handle_cancel"):
+				bm.handle_cancel()
+				get_viewport().set_input_as_handled()
+			return
+
 		# Tab：跟随视角切换（仅单选时；再按 Tab 恢复原视角）
 		if key == KEY_TAB:
 			var cam = get_viewport().get_camera_3d()
@@ -130,31 +140,6 @@ func _input(event):
 			return
 
 		# F1~F3 全局命令交给 HUD 处理（屏幕内选择/自动进攻/撤退）
-
-		# 无选中 → 快速建造
-		if selected_entities.is_empty() and not ctrl and not shift:
-			var build_id = -1
-			match key:
-				KEY_Q: build_id = 28; 
-				KEY_W: build_id = 22; 
-				KEY_E: build_id = 41
-				KEY_R: build_id = 52; 
-				KEY_T: build_id = 42; 
-				KEY_Y: build_id = 7;
-				KEY_A: build_id = 21; 
-				KEY_S: build_id = 23; 
-				KEY_D: build_id = 24
-				KEY_F: build_id = 29; 
-				KEY_G: build_id = 54; 
-				KEY_H: build_id = 53
-				KEY_Z: build_id = 27; 
-				KEY_X: build_id = 64; 
-				KEY_C: build_id = 25
-				KEY_V: build_id = 26; 
-				KEY_B: build_id = 8
-			if build_id != -1 and bm and bm.can_afford_building(build_id, bm.get_host_team()):
-				bm.enter_build_mode(build_id)
-				get_viewport().set_input_as_handled(); return
 
 		# 选中建筑 → 命令卡热键（队友建筑只读，不能生产/升级/拆除）
 		if selected_entities.size() == 1 and not ctrl and not shift and _is_local_owned(selected_entities[0]):
@@ -183,13 +168,22 @@ func _input(event):
 			for e in selected_entities:
 				if is_instance_valid(e) and e is Army: army_selected = true; break
 			if army_selected and bm:
+				# A / M 进入一次性下令模式：下一次左键执行攻击 / 纯移动；
+				# 右键或 Esc 取消，避免和原来的全局进攻热键冲突。
+				if key == KEY_A:
+					bm.set_pending_command_mode("attack")
+					get_viewport().set_input_as_handled()
+					return
+				if key == KEY_M:
+					bm.set_pending_command_mode("move")
+					get_viewport().set_input_as_handled()
+					return
 				var handled = true
 				match key:
 					KEY_Q: bm.clear_orders_for_selected()
 					KEY_W: bm.toggle_attack_move_for_selected()
 					KEY_E: bm.garrison_nearest_for_selected()
 					KEY_R: _select_all_of_same_type(selected_entities[0])
-					KEY_A: bm.global_attack_selected()
 					KEY_S: bm.global_retreat_selected()
 					KEY_D: bm.ungarrison_selected()
 					KEY_F: bm.toggle_patrol_mode()
@@ -218,10 +212,17 @@ func _input(event):
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
 		if event.pressed:
 			_touch_start_pos = event.position
-			# Alt+左键 → 即时处理（仅己方单位可设置驻扎点）
+			# A/M 下令模式：下一次左键直接执行，不再进入选择流程
+			if bm and bm.has_method("has_pending_command") and bm.has_pending_command():
+				bm.execute_pending_command(event.position)
+				return
+			# Alt+左键 → 即时处理（设置驻扎点；Ctrl+Alt+左键清除驻扎点）
 			if Input.is_key_pressed(KEY_ALT) and not selected_entities.is_empty() and _selection_all_local():
 				if bm and bm.has_method("_set_garrison_for_selected"):
-					bm._set_garrison_for_selected(event.position)
+					if event.ctrl_pressed:
+						bm.clear_garrison_for_selected()
+					else:
+						bm._set_garrison_for_selected(event.position)
 				return
 			# Mobile: delegate to battle manager for 0.1s delay
 			if bm:
@@ -231,6 +232,13 @@ func _input(event):
 				bm._left_click_source = "selection"
 			var pos = event.position
 			var clicked_entity = _get_entity_under_mouse(pos)
+			# 己方城墙/桥/运载船：选中军队时优先作为特殊移动目标，不替换选择。
+			if clicked_entity and _selection_has_local_army() and bm \
+					and bm.has_method("is_special_move_target") \
+					and bm.is_special_move_target(clicked_entity):
+				if _selection_all_local():
+					bm.command_special_target(clicked_entity)
+				return
 			# 桥/运载船：已有选中单位时发送移动命令(不选中)，兼容射线未命中实体的桥
 			if not selected_entities.is_empty():
 				var bypass = (clicked_entity and ((clicked_entity is Army and clicked_entity.entity_id == 9) or (clicked_entity is Building and clicked_entity.entity_id == 7)))
@@ -288,12 +296,11 @@ func _input(event):
 					box_start = pos
 					box_end = pos
 				else:
-					# 有选中单位时点击敌方/中立/空地 → 攻击/移动命令；只读选中则取消查看
-					if _selection_has_teammate() or _selection_has_enemy() or _selection_has_neutral():
-						# 队友/敌方/中立单位无法指挥：点击空地只取消选中
-						_clear_selection()
-					else:
+					# 有己方陆军：空地=移动；只有建筑/只读目标：空地=取消选中
+					if _selection_has_local_army():
 						bm._command_selected_units(event.position)
+					else:
+						_clear_selection()
 		else:
 			_on_left_mouse_released(event)
 
@@ -579,6 +586,15 @@ func _selection_has_local_army() -> bool:
 	return false
 
 # ---------- 选择列表操作 ----------
+# 右键点非空目标（且当前无选中）时用于查看信息，不打开建造菜单。
+func inspect_entity(entity) -> void:
+	if entity == null or not is_instance_valid(entity):
+		return
+	if entity is GameEntity and entity.health <= 0:
+		return
+	_clear_selection()
+	_add_to_selection(entity)
+
 func _add_to_selection(entity):
 	if entity == null or not is_instance_valid(entity) or entity.health <= 0:
 		return

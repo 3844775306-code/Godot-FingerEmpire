@@ -288,9 +288,9 @@ func _ready():
 	tip_box.alignment = BoxContainer.ALIGNMENT_CENTER
 	bot_panel.add_child(tip_box)
 
-	_add_tip_line(tip_box, "🖱️ 鼠标：左键 选择·框选·移动·攻击·采集 · 未选中时右键空地 建造菜单 · 选中时右键空地 取消选择 · 中键拖拽平移 · Ctrl+中键拖拽旋转视角 · 滚轮缩放 · 新手先看 📘 操作指南 / 🎓 新手教程",
+	_add_tip_line(tip_box, "🖱️ 鼠标：左键 选择·框选·移动·攻击·采集 · 右键空地 建造菜单（有选中也不清空） · 选中建筑左键空地 取消选中 · 中键拖拽平移 · Ctrl+中键拖拽旋转视角 · 滚轮缩放 · 新手先看 📘 操作指南 / 🎓 新手教程",
 		16, UITheme.PARCHMENT)
-	_add_tip_line(tip_box, "⌨️ 键盘：Ctrl+1~9 编队 · 1~9 选编队 · F1 全选军队 · F2 自动进攻 · F3 撤退 · L 血条文字 · Tab 跟随 · Alt+左键 设驻扎点",
+	_add_tip_line(tip_box, "⌨️ 键盘：A+左键 攻击 · M+左键 纯移动 · Esc 取消 · Ctrl+1~9 编队 · F1 全选军队 · F2 自动进攻 · F3 撤退 · Alt+左键 设驻扎点 · Ctrl+Alt+左键 清除驻扎点",
 		16, UITheme.PARCHMENT)
 	_add_tip_line(tip_box, "✨ 本版 %s：设置里可调「相机放大倍数」· 选中单位改为贴边发光描边 · 建筑血条按阵营上色 · 手机端「↻ 按住旋转」· 点「📜 更新日志」看全部改动" % AppVersion.version(),
 		15, Color(UITheme.GOLD, 0.95))

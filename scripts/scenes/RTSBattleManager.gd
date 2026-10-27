@@ -45,6 +45,9 @@ var player_owner_id: int = 1                  # 玩家自己的owner_peer_id (�
 var player_team: int = RTSConfig.Team.BLUE
 var enemy_team: int = RTSConfig.Team.RED
 var local_auto_attack: bool = false           # 本地玩家的自动进攻开关
+# 左键智能指挥之外的显式下令模式："" / "attack" / "move"
+# 由 SelectionManager 在按 A / M 后置位，下一次左键执行一次后清空。
+var pending_command_mode: String = ""
 # 智能军需官：开启后自动把空闲农民派去采集，并在仓容紧张时自动补仓库
 var local_quartermaster: bool = false
 var _quartermaster_timer: float = 0.0
@@ -2959,43 +2962,26 @@ func _end_build_drag_and_place():
 	# 无论是否放置成功，都退出建造模式
 	_exit_build_mode()
 func _handle_right_click(event):
-	# Alt+右键 → 清除驻扎点（仅己方单位；敌方/队友只读）
-	if Input.is_key_pressed(KEY_ALT):
-		if not (selection and selection.has_method("_selection_all_local") and selection._selection_all_local()):
-			return false
-		for u in selection.selected_entities:
-			if u is Army and u.has_method("_clear_garrison"):
-				u._clear_garrison()
-			elif u is Building and u.has_method("_hide_garrison_marker"):
-				u.garrison_point = Vector3.ZERO
-				u._hide_garrison_marker()
+	# 右键：只有点空地才打开/关闭建造菜单；点目标继续执行智能命令或查看。
+	if pending_command_mode != "":
+		pending_command_mode = ""
 		return false
 
-	
-
+	var hit = _get_entity_under_click(event.position)
 	if selection.selected_entities.is_empty():
+		if hit:
+			selection.inspect_entity(hit)
+		else:
+			_try_open_build_menu(event.position)
+		return false
+
+	if not hit:
 		_try_open_build_menu(event.position)
 		return false
 
-	# 右键空地 → 取消选择（桥：射线穿透时通过grid后备检测）
-	var hit = _get_entity_under_click(event.position)
-	if not hit:
-		var gpos = _get_ground_pos(event.position)
-		if gpos != Vector3.ZERO:
-			var gg = world_to_grid(gpos)
-			var found_bridge = false
-			for e in entities.get_children():
-				if e is Building and e.entity_id == 7 and e.health > 0:
-					if world_to_grid(e.global_position) == gg:
-						found_bridge = true; break
-			if not found_bridge:
-				selection._clear_selection()
-				return false
-		else:
-			selection._clear_selection()
-			return false
-
+	# 点中目标：己方城墙/桥/运载船走特殊移动，其余目标交给智能指挥。
 	_command_selected_units(event.position)
+	return false
 
 func _set_garrison_for_selected(screen_pos: Vector2):
 	# 防御：队友/敌方单位只可查看，不允许设置驻扎点
@@ -3035,7 +3021,305 @@ func _get_entity_under_click(screen_pos: Vector2):
 		return res.collider
 	return null
 
-func _command_selected_units(screen_pos: Vector2):
+func set_pending_command_mode(mode: String) -> void:
+	if mode != "attack" and mode != "move":
+		return
+	pending_command_mode = mode
+	if mode == "attack":
+		_show_hud_alert("攻击模式：左键选择目标，右键或 Esc 取消", Color(0.4, 0.8, 1.0), get_host_team(), get_host_team())
+	else:
+		_show_hud_alert("移动模式：左键选择落点，右键或 Esc 取消", Color(0.4, 0.8, 1.0), get_host_team(), get_host_team())
+
+func has_pending_command() -> bool:
+	return pending_command_mode != ""
+
+func clear_pending_command() -> void:
+	pending_command_mode = ""
+
+func execute_pending_command(screen_pos: Vector2) -> void:
+	var mode := pending_command_mode
+	pending_command_mode = ""
+	if mode == "":
+		return
+	_command_selected_units(screen_pos, mode)
+
+# Esc 的取消优先级：一次性下令模式 → 建造模式/建造菜单 → 当前选择。
+func handle_cancel() -> void:
+	if pending_command_mode != "":
+		pending_command_mode = ""
+		return
+	if build_mode:
+		_exit_build_mode()
+		return
+	if current_build_menu and is_instance_valid(current_build_menu):
+		current_build_menu.queue_free()
+		current_build_menu = null
+		return
+	if selection and not selection.selected_entities.is_empty():
+		selection._clear_selection()
+
+func clear_garrison_for_selected() -> void:
+	if not (selection and selection.has_method("_selection_all_local") and selection._selection_all_local()):
+		return
+	for u in selection.selected_entities:
+		if u is Army and u.has_method("_clear_garrison"):
+			u._clear_garrison()
+		elif u is Building:
+			u.garrison_point = Vector3.ZERO
+			if u.has_method("_hide_garrison_marker"):
+				u._hide_garrison_marker()
+
+# 己方城墙、桥、己方运载船：选中军队时点击它们应作为移动/上墙/上船目标。
+# 敌方城墙/运载船仍按普通攻击目标处理，避免这里把攻城指令吃掉。
+func is_special_move_target(target) -> bool:
+	if target == null or not is_instance_valid(target) or target.health <= 0:
+		return false
+	if target is Building:
+		var bid := int(target.entity_id)
+		if bid == 7:
+			return true
+		if bid == 27:
+			return target.team == get_host_team() and target.build_timer <= 0.0 \
+				and is_local_player_owned(int(target.owner_peer_id), int(target.team))
+	if target is Army and int(target.entity_id) == 9:
+		return target.team == get_host_team() and is_local_player_owned(int(target.owner_peer_id), int(target.team))
+	return false
+
+func command_special_target(target) -> bool:
+	if not is_special_move_target(target):
+		return false
+	if not (selection and selection.has_method("_selection_all_local") and selection._selection_all_local()):
+		return false
+	if not selection.has_method("_selection_has_local_army") or not selection._selection_has_local_army():
+		return false
+	if target is Building and int(target.entity_id) == 27:
+		_command_wall_move(target)
+	elif target is Building and int(target.entity_id) == 7:
+		_command_bridge_move(target)
+	elif target is Army and int(target.entity_id) == 9:
+		_command_transport_move(target)
+	return true
+
+func _selected_ground_army() -> Array:
+	var out: Array = []
+	if selection == null:
+		return out
+	for u in selection.selected_entities:
+		if not is_instance_valid(u) or not (u is Army) or u.health <= 0:
+			continue
+		if bool(u.get("water_capable")):
+			continue
+		var boarded = u.get("_boarded_on")
+		if boarded != null and int(boarded) != -1:
+			continue
+		out.append(u)
+	return out
+
+func _clear_wall_guard_assignment(u) -> void:
+	if u == null or not is_instance_valid(u):
+		return
+	if u.has_meta("ai_wall_guard"):
+		u.remove_meta("ai_wall_guard")
+	if u.has_meta("ai_wall_guard_slot"):
+		u.remove_meta("ai_wall_guard_slot")
+	if u.has_meta("ai_wall_guard_pos"):
+		u.remove_meta("ai_wall_guard_pos")
+	if u.has_meta("_auto_board_ship"):
+		u.remove_meta("_auto_board_ship")
+	u.hold_position = false
+
+func _wall_guard_axis(wall) -> Vector3:
+	var best: Building = null
+	var best_d := 4.0
+	for b in _buildings:
+		if b == wall or not is_instance_valid(b) or b.health <= 0:
+			continue
+		if int(b.entity_id) != 27 or int(b.team) != int(wall.team):
+			continue
+		var d: float = wall.global_position.distance_to(b.global_position)
+		if d > 0.05 and d < best_d:
+			best_d = d
+			best = b
+	if best != null:
+		return (best.global_position - wall.global_position).normalized()
+	var basis_axis: Vector3 = wall.global_transform.basis.x
+	return basis_axis.normalized() if basis_axis.length_squared() > 0.01 else Vector3.RIGHT
+
+func _wall_guard_slot_position(wall, slot: int, count: int) -> Vector3:
+	var offsets: Array = [0.0]
+	if count == 2:
+		offsets = [-0.35, 0.35]
+	elif count >= 3:
+		offsets = [-0.35, 0.0, 0.35]
+	var idx: int = clampi(slot, 0, offsets.size() - 1)
+	var axis: Vector3 = _wall_guard_axis(wall)
+	# 用城墙格中心而不是建筑节点中心，偏移超过半格会掉到相邻格，失去墙顶保护。
+	var g: Vector2i = world_to_grid(wall.global_position)
+	var base: Vector3 = grid_to_world(g.x, g.y)
+	base.y = wall.global_position.y
+	return base + axis.normalized() * float(offsets[idx])
+
+func _wall_has_cannon(wall) -> bool:
+	var wg: Vector2i = world_to_grid(wall.global_position)
+	for b in _buildings:
+		if b == null or not is_instance_valid(b) or b.health <= 0:
+			continue
+		if int(b.entity_id) == 64 and int(b.team) == int(wall.team) \
+				and world_to_grid(b.global_position) == wg:
+			return true
+	return false
+
+# 墙脚待命点：找墙格外一圈可通行的陆地，避免容量外的部队被寻路塞到墙格上。
+func _wall_foot_point(wall) -> Vector3:
+	var wg: Vector2i = world_to_grid(wall.global_position)
+	var base: Vector3 = wall.global_position
+	var start_r: float = float(wall.body_radius) + 1.0
+	for r in [start_r, start_r + 1.0, start_r + 2.0]:
+		for i in 16:
+			var ang: float = TAU * float(i) / 16.0
+			var p := base + Vector3(cos(ang) * float(r), 0.0, sin(ang) * float(r))
+			if world_to_grid(p) == wg:
+				continue
+			var t: int = int(get_terrain_at(p))
+			if t not in [0, 3]:
+				continue
+			if is_cliff_between_world(base, p):
+				continue
+			return p
+	return base
+
+func _command_wall_move(wall) -> void:
+	var units: Array = _selected_ground_army()
+	if units.is_empty():
+		return
+	if not is_instance_valid(wall) or int(wall.entity_id) != 27 or wall.health <= 0 or wall.build_timer > 0.0:
+		return
+	if _wall_has_cannon(wall):
+		_show_hud_alert("这段城墙已安装炮台，无法再站人", Color(1.0, 0.8, 0.1), get_host_team(), get_host_team())
+		return
+
+	var used_slots: Dictionary = {}
+	var occupied := 0
+	var occupied_large := false
+	for e in _armies:
+		if not is_instance_valid(e) or e.health <= 0 or e == null:
+			continue
+		if not e.has_meta("ai_wall_guard"):
+			continue
+		if int(e.get_meta("ai_wall_guard")) != wall.get_instance_id():
+			continue
+		occupied += 1
+		used_slots[int(e.get_meta("ai_wall_guard_slot", 0))] = true
+		if float(e.body_radius) > 0.55:
+			occupied_large = true
+
+	var max_slots := 3
+	for u in units:
+		if float(u.body_radius) > 0.55:
+			max_slots = 1
+			break
+	if occupied_large:
+		max_slots = 1
+	var free_slots: Array = []
+	for i in max_slots:
+		if not used_slots.has(i):
+			free_slots.append(i)
+	# 大型单位独占一段墙：已经有一个守军时不再接受第二个大型单位。
+	if max_slots == 1 and occupied > 0:
+		free_slots.clear()
+	if free_slots.is_empty():
+		_show_hud_alert("城墙容量已满，多余部队在墙脚待命", Color(1.0, 0.8, 0.1), get_host_team(), get_host_team())
+		for u in units:
+			# 已经在墙上的守军保持原位，只把新增部队派到墙脚。
+			if u.has_meta("ai_wall_guard") and int(u.get_meta("ai_wall_guard")) == wall.get_instance_id():
+				continue
+			u.hold_position = true
+			u.move_to(_wall_foot_point(wall))
+		return
+
+	units.sort_custom(func(a, b):
+		return a.global_position.distance_squared_to(wall.global_position) \
+			< b.global_position.distance_squared_to(wall.global_position))
+	var assigned := 0
+	for u in units:
+		if assigned < free_slots.size():
+			var slot: int = int(free_slots[assigned])
+			_clear_wall_guard_assignment(u)
+			u.set_meta("ai_wall_guard", wall.get_instance_id())
+			u.set_meta("ai_wall_guard_slot", slot)
+			var slot_pos: Vector3 = _wall_guard_slot_position(wall, slot, max_slots)
+			u.set_meta("ai_wall_guard_pos", slot_pos)
+			u.hold_position = true
+			if u._movement:
+				u._movement.clear_blacklist_at(slot_pos)
+			u.move_to(slot_pos)
+			assigned += 1
+		else:
+			# 容量之外的部队到墙脚待命，不占用墙顶槽位。
+			_clear_wall_guard_assignment(u)
+			u.hold_position = true
+			u.move_to(_wall_foot_point(wall))
+
+func _command_bridge_move(bridge) -> void:
+	if bridge == null or not is_instance_valid(bridge) or bridge.health <= 0:
+		return
+	for u in _selected_ground_army():
+		_clear_wall_guard_assignment(u)
+		u.move_to(bridge.global_position)
+
+func _command_transport_move(ship) -> void:
+	if ship == null or not is_instance_valid(ship) or ship.health <= 0:
+		return
+	if int(ship.get_boarded_count()) >= int(ship.get_board_capacity()):
+		_show_hud_alert("运载船已满", Color(1.0, 0.8, 0.1), get_host_team(), get_host_team())
+		return
+	var shore: Vector3 = _ship_shore_point(ship)
+	if shore == Vector3.ZERO:
+		_show_hud_alert("运载船未靠岸，无法上船", Color(1.0, 0.8, 0.1), get_host_team(), get_host_team())
+		return
+	var available: int = int(ship.get_board_capacity()) - int(ship.get_boarded_count())
+	var units: Array = _selected_ground_army()
+	if units.is_empty():
+		return
+	# 先清掉旧的自动上船标记：容量外的部队必须原地待命，不能被旧指令带走。
+	for u in units:
+		if u.has_meta("_auto_board_ship"):
+			u.remove_meta("_auto_board_ship")
+	units.sort_custom(func(a, b):
+		return a.global_position.distance_squared_to(ship.global_position) \
+			< b.global_position.distance_squared_to(ship.global_position))
+	var assigned := 0
+	for u in units:
+		if assigned >= available:
+			# 容量外的选中部队原地待命，不能保留旧的移动指令。
+			u.stop_movement()
+			continue
+		_clear_wall_guard_assignment(u)
+		u.move_to(shore)
+		u.set_meta("_auto_board_ship", ship.get_instance_id())
+		assigned += 1
+	# 容量之外的选中部队保持原地（不要给它们 move_to/自动上船元数据）。
+
+# 运载船旁边的最近可通行陆地点；与 InfoPanel 的登船按钮使用同一套规则。
+func _ship_shore_point(ship) -> Vector3:
+	var base: Vector3 = ship.global_position
+	for r in [1.5, 2.5, 3.5, 5.0, 6.5, 8.0]:
+		for i in 16:
+			var ang: float = TAU * float(i) / 16.0
+			var p := base + Vector3(cos(ang) * float(r), 0.0, sin(ang) * float(r))
+			var terrain: int = int(get_terrain_at(p))
+			if terrain < 0:
+				continue
+			if terrain != 2 and is_cliff_between_world(base, p):
+				continue
+			if terrain == 2:
+				var g: Vector2i = world_to_grid(p)
+				if int(get_overlay_at_grid(g.x, g.y)) != 3:
+					continue
+			return p
+	return Vector3.ZERO
+
+func _command_selected_units(screen_pos: Vector2, mode: String = ""):
 	# 防御：只有己方单位可被指挥；队友/敌方选中仅用于查看信息
 	if not (selection and selection.has_method("_selection_all_local") and selection._selection_all_local()):
 		return
@@ -3057,6 +3341,15 @@ func _command_selected_units(screen_pos: Vector2):
 		elif res.collider.has_meta("entity_root"):
 			target = res.collider.get_meta("entity_root")
 	var pos = res.position if res else _ray_plane_intersection(from,to,Vector3.ZERO,Vector3.UP)
+
+	# 城墙/桥/运载船优先走特殊移动逻辑，不能被后面的建造/修理分支吃掉。
+	if target != null and command_special_target(target):
+		return
+
+	# 下达任何普通命令前，先解除此前的上墙/自动上船安排，避免单位继续往旧目标跑。
+	for u in selection.selected_entities:
+		if u is Army:
+			_clear_wall_guard_assignment(u)
 
 	# 选中农民 + 右键自家在建/破损建筑：优先派去施工/修理
 	if target is Building and target.team == get_host_team():
@@ -3104,6 +3397,28 @@ func _command_selected_units(screen_pos: Vector2):
 			# 已登船单位不响应任何地面命令：上/下船统一在运载船信息面板里操作
 			if u.get("_boarded_on") != null and u._boarded_on != -1:
 				continue
+			# A + 左键：强制攻击目标/攻击移动；M + 左键：纯移动，不主动索敌。
+			if mode == "move":
+				var dest: Vector3 = pos
+				if target != null:
+					dest = target.global_position
+				elif formation_offsets.size() > 1:
+					dest = pos + formation_offsets[fi]
+				u.move_to(dest)
+				fi += 1
+				continue
+			if mode == "attack":
+				if target is WorldResource:
+					u.attack_move_to(target.global_position)
+				elif target != null:
+					if u.has_method("_can_attack_target") and u._can_attack_target(target):
+						u.attack_target(target)
+					else:
+						u.attack_move_to(target.global_position)
+				else:
+					u.attack_move_to(pos)
+				fi += 1
+				continue
 			if target:
 				if target is WorldResource:
 					if u.entity_id == 10 or u.entity_id == 14 or u.get("_animal_type") != "":
@@ -3139,7 +3454,6 @@ func _command_selected_units(screen_pos: Vector2):
 			fi += 1
 
 func _try_open_build_menu(screen_pos: Vector2):
-	selection.selected_entities.clear()
 	var cam = get_viewport().get_camera_3d()
 	if not cam: return
 	var from = cam.project_ray_origin(screen_pos)
