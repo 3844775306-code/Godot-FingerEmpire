@@ -1777,24 +1777,22 @@ func _build_terrain_images() -> void:
 	_fog_prev_explored.clear()
 	_fog_prev_visible.clear()
 	_fog_prev_size = -1
-	_base_image = Image.create(TEX_SIZE, TEX_SIZE, false, Image.FORMAT_RGBA8)
-	_dark_image = Image.create(TEX_SIZE, TEX_SIZE, false, Image.FORMAT_RGBA8)
+	# 先在格子分辨率上算颜色，再双线性放大到贴图分辨率：格子边界不再是硬切色块，
+	# 草地/山脚/岸边会自然过渡。直接按 512 逐格填纯色会保留明显方格。
+	var base_small := Image.create(size, size, false, Image.FORMAT_RGBA8)
+	var dark_small := Image.create(size, size, false, Image.FORMAT_RGBA8)
 	for x in range(size):
-		var x_start = int(floor(float(x) / size * TEX_SIZE))
-		var x_end = int(floor(float(x + 1) / size * TEX_SIZE))
 		for y in range(size):
-			var y_start = int(floor(float(y) / size * TEX_SIZE))
-			var y_end = int(floor(float(y + 1) / size * TEX_SIZE))
-			# 一格一个颜色，整格平铺 —— 着色只由 (类型, 高度, 覆盖层) 决定，两端一致
+			# 着色只由 (类型, 高度, 覆盖层) 决定，两端一致
 			var c := _terrain_color_for(terrain_grid[x][y], height_grid[x][y], x, y, get_overlay(x, y))
+			base_small.set_pixel(x, y, c)
 			var d := c.darkened(0.7)
 			d.a = 1.0
-			for px in range(x_start, x_end):
-				for py in range(y_start, y_end):
-					if px >= TEX_SIZE or py >= TEX_SIZE:
-						continue
-					_base_image.set_pixel(px, py, c)
-					_dark_image.set_pixel(px, py, d)
+			dark_small.set_pixel(x, y, d)
+	base_small.resize(TEX_SIZE, TEX_SIZE, Image.INTERPOLATE_BILINEAR)
+	dark_small.resize(TEX_SIZE, TEX_SIZE, Image.INTERPOLATE_BILINEAR)
+	_base_image = base_small
+	_dark_image = dark_small
 
 # ---------- 城堡选址 ----------
 # 特殊地图团队锚点：沿镜像轴把每方 2/3 个基地均匀排开
