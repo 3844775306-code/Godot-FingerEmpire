@@ -110,12 +110,14 @@ func _build() -> void:
 
 	# ── 智能辅助：军需官 / 军队官 ──
 	# 这两个开关原来在顶部指令栏，会挤占战场空间；集中到设置里，联机/单机共用。
-	var assist_label := _make_label("🤖 智能辅助", UITheme.GOLD)
-	vb.add_child(assist_label)
-	vb.add_child(_make_check_row("🧺 智能军需官：自动补农民、按缺口分配采集、仓容紧张时补仓库",
-		_quartermaster_enabled(), func(on: bool): _set_quartermaster(on)))
-	vb.add_child(_make_check_row("🛡 智能军队官：兵种数量低于下面设定值时自动补兵（人口满/资源不够会跳过）",
-		_army_officer_enabled(), func(on: bool): _set_army_officer(on)))
+	vb.add_child(_make_label("🤖 智能辅助", UITheme.GOLD))
+	vb.add_child(_make_hint_label("军需官：自动补农民、按缺口分配采集、仓容紧张时补仓库。", UITheme.FONT_SM))
+	vb.add_child(_make_check_row("🧺 启用智能军需官", _quartermaster_enabled(),
+		func(on: bool): _set_quartermaster(on)))
+	vb.add_child(_make_hint_label("军队官：某个兵种少于下面的保底数量时自动补兵，人口满或资源不够会跳过。",
+		UITheme.FONT_SM))
+	vb.add_child(_make_check_row("🛡 启用智能军队官", _army_officer_enabled(),
+		func(on: bool): _set_army_officer(on)))
 	_build_officer_thresholds(vb)
 
 	# 画质（固定档位）
@@ -424,10 +426,9 @@ func _build_officer_thresholds(parent: Control) -> void:
 	_sync_thresholds_from_match()
 	var candidates := _army_officer_candidates()
 	if candidates.is_empty():
-		parent.add_child(_make_label("（还没有能自动生产兵种的建筑，先造兵营等生产建筑）",
-			UITheme.PARCHMENT, UITheme.FONT_SM))
+		parent.add_child(_make_hint_label("（还没有能自动生产兵种的建筑，先造兵营等生产建筑）", UITheme.FONT_SM))
 		return
-	parent.add_child(_make_label("每种兵的保底数量（0 = 不自动生产）", UITheme.PARCHMENT, UITheme.FONT_SM))
+	parent.add_child(_make_hint_label("每种兵的保底数量（0 = 不自动生产）", UITheme.FONT_SM))
 	var grid := GridContainer.new()
 	grid.columns = 1 if _mobile else 2
 	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -483,6 +484,16 @@ func _make_threshold_row(unit_id: int) -> HBoxContainer:
 	plus.pressed.connect(func(): _bump_threshold(unit_id, 1))
 	row.add_child(plus)
 	return row
+
+# 可换行的小字说明：设置面板窄，长句必须自动换行，否则会把面板撑宽
+func _make_hint_label(text: String, font_size: int) -> Label:
+	var l := Label.new()
+	l.text = text
+	l.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	l.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	l.add_theme_font_size_override("font_size", font_size)
+	l.add_theme_color_override("font_color", UITheme.PARCHMENT)
+	return l
 
 func _make_step_btn(text: String) -> Button:
 	var b := Button.new()
