@@ -86,6 +86,7 @@ func start(port: int = 8080) -> bool:
 	_log_path = ProjectSettings.globalize_path("user://web_tunnel_%s.log" % stamp)
 	_bat_path = ProjectSettings.globalize_path("user://web_tunnel_%s.bat" % stamp)
 	_kill_stale_process()
+	_kill_game_cloudflared()
 	_cleanup_old_temp_files()
 
 	# 清空本次日志；文件名唯一，不会撞上残留进程的锁。
@@ -208,6 +209,15 @@ func _kill_stale_process() -> void:
 		print("[WebTunnel] pid 文件指向的进程不是 cloudflared，跳过: ", old)
 	_remove_pid_file()
 
+# 通过 cmd 启动时拿到的 pid 不一定是 cloudflared 本身；再按命令行把本游戏端口的隧道进程清掉。
+# 只匹配 `--url http://127.0.0.1:<端口>`，不会动用户自己的其它 cloudflared 隧道。
+func _kill_game_cloudflared() -> void:
+	if OS.get_name() != "Windows":
+		return
+	var ps := "Get-CimInstance Win32_Process -Filter \"Name='cloudflared.exe'\" | Where-Object { $_.CommandLine -like '*--url http://127.0.0.1:%d*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" % _port
+	var out: Array = []
+	OS.execute("powershell.exe", ["-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps], out, false)
+
 # 清掉之前开房留下的临时日志/脚本；被占用的文件删不掉就跳过，不阻塞本次开房。
 func _cleanup_old_temp_files() -> void:
 	var dir := DirAccess.open("user://")
@@ -223,8 +233,9 @@ func _kill_pid(pid: int) -> void:
 	if pid <= 0:
 		return
 	if OS.get_name() == "Windows":
-		# 不能在这里同步等 taskkill：关房时游戏主线程会被卡住，窗口看起来像死机。
-		OS.create_process("taskkill", ["/PID", str(pid), "/T", "/F"])
+		# 同步结束整棵进程树，确保退出游戏时 cloudflared 不会残留成孤儿进程。
+		var out: Array = []
+		OS.execute("taskkill", ["/PID", str(pid), "/T", "/F"], out, false)
 	else:
 		OS.kill(pid)
 
@@ -240,6 +251,7 @@ func _fail(reason: String) -> void:
 func _kill_process() -> void:
 	if _pid > 0:
 		_kill_pid(_pid)
+	_kill_game_cloudflared()
 	_pid = -1
 	_remove_pid_file()
 
