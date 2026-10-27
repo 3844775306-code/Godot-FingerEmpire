@@ -3037,14 +3037,18 @@ func _train_overflow_units() -> void:
 		while budget > 0 and _can_train_unit_with_queue() and can_afford(u_id) and produce_unit(u_id):
 			budget -= 1
 
-func _can_pay_with_reserves(cost: Dictionary) -> bool:
+func _can_pay_with_reserves(cost: Dictionary, building_id: int = -1) -> bool:
 	var res: Dictionary = _get_resources()
 	for k in cost:
 		if int(res.get(k, 0)) < int(cost[k]):
 			return false
 	if _trebuchet_reserve_active() and not _can_pay_with_trebuchet_reserve(cost):
 		return false
-	if _heavy_siege_tech_reserve_active() and not _can_pay_with_reserve(cost, _heavy_siege_tech_reserve_cost()):
+	# 与 can_afford_upgrade 保持一致：升级主城/重装厂本身就是在推进 59 科技，
+	# 不应被“为 29 科技预留”的预算反锁住。
+	if _heavy_siege_tech_reserve_active() \
+			and building_id != HEAVY_SIEGE_BUILDING_ID and building_id != 20 \
+			and not _can_pay_with_reserve(cost, _heavy_siege_tech_reserve_cost()):
 		return false
 	return true
 
@@ -3062,7 +3066,7 @@ func _upgrade_any_affordable_building() -> bool:
 		if not entity.can_upgrade():
 			continue
 		var cost: Dictionary = entity.get_upgrade_cost()
-		if cost.is_empty() or not _can_pay_with_reserves(cost):
+		if cost.is_empty() or not _can_pay_with_reserves(cost, int(entity.entity_id)):
 			continue
 		if entity.perform_upgrade(battle):
 			return true
