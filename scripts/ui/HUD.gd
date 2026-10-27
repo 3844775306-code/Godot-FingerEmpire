@@ -35,6 +35,8 @@ var _minimap_fog_version: int = -1
 var player_nation_label: Label
 var auto_attack_btn: Button
 var auto_attack_on: bool = false
+var quartermaster_btn: Button
+var quartermaster_on: bool = false
 var enemy_nation_label: Label
 var nation_bonus_label: Label
 
@@ -592,6 +594,7 @@ func _input(event):
 				if event.ctrl_pressed: _on_select_all_pressed()
 				else: _on_select_screen_pressed()
 			KEY_F2: _on_attack_all_pressed()
+			KEY_F4: _on_quartermaster_pressed()
 			KEY_F3:
 				if event.ctrl_pressed: _on_retreat_all_pressed()
 				else: _on_retreat_screen_pressed()
@@ -719,6 +722,19 @@ func _update_auto_attack_button():
 	if auto_attack_btn:
 		auto_attack_btn.text = "⚔️ 自动进攻：%s (F2)" % ("开" if auto_attack_on else "关")
 
+func _on_quartermaster_pressed():
+	var bm = _get_bm()
+	if not bm: return
+	quartermaster_on = not quartermaster_on
+	if bm.has_method("set_local_quartermaster"):
+		bm.set_local_quartermaster(quartermaster_on)
+	_update_quartermaster_button()
+	show_alert_message("智能军需官：%s" % ("开启，自动派农民采集并补仓库" if quartermaster_on else "关闭"), ALERT_INFO)
+
+func _update_quartermaster_button():
+	if quartermaster_btn:
+		quartermaster_btn.text = "🧺 军需官：%s (F4)" % ("开" if quartermaster_on else "关")
+
 func _retreat_units(units: Array):
 	var bm = _get_bm()
 	if not bm: return
@@ -779,8 +795,8 @@ func _ready():
 	# 全局指令：6 个按钮正好排成两排（3×2），统一放在一块半透明底板里
 	_cmd_panel = Panel.new()
 	_cmd_panel.name = "GlobalCommandPanel"
-	_cmd_panel.position = Vector2(620, 10)
-	_cmd_panel.size = Vector2(662, 86)
+	_cmd_panel.position = Vector2(600, 10)
+	_cmd_panel.size = Vector2(880, 86)
 	_cmd_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var cmd_style := StyleBoxFlat.new()
 	cmd_style.bg_color = Color(0.0, 0.0, 0.0, 0.38)
@@ -791,7 +807,7 @@ func _ready():
 	add_child(_cmd_panel)
 
 	var cmd_grid := GridContainer.new()
-	cmd_grid.columns = 3
+	cmd_grid.columns = 4
 	cmd_grid.position = Vector2(8, 8)
 	cmd_grid.add_theme_constant_override("h_separation", 8)
 	cmd_grid.add_theme_constant_override("v_separation", 6)
@@ -801,10 +817,12 @@ func _ready():
 	var b_select_screen = _make_cmd_button("全选屏幕军队 (F1)", _on_select_screen_pressed, false)
 	var b_select_all = _make_cmd_button("全选所有军队 (Ctrl+F1)", _on_select_all_pressed, false)
 	auto_attack_btn = _make_cmd_button("⚔️ 自动进攻：关 (F2)", _on_attack_all_pressed, true)
+	quartermaster_btn = _make_cmd_button("🧺 军需官：关 (F4)", _on_quartermaster_pressed, false)
+	quartermaster_btn.tooltip_text = "开启后自动把空闲农民派去采最缺的资源，并在仓容紧张时自动补仓库"
 	var b_retreat_screen = _make_cmd_button("屏幕军队撤退 (F3)", _on_retreat_screen_pressed, false)
 	var b_retreat_all = _make_cmd_button("所有军队撤退 (Ctrl+F3)", _on_retreat_all_pressed, false)
 	var b_settings = _make_cmd_button("⚙ 设置", _open_game_settings, false)
-	for b in [b_select_screen, b_select_all, auto_attack_btn, b_retreat_screen, b_retreat_all, b_settings]:
+	for b in [b_select_screen, b_select_all, auto_attack_btn, quartermaster_btn, b_retreat_screen, b_retreat_all, b_settings]:
 		cmd_grid.add_child(b)
 
 	set_process(true)

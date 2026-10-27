@@ -13,6 +13,8 @@ const SNAP_VERSION = 9  # 9 = 建筑施工/修理增加农民登记状态（等�
 var player_teams: Dictionary = {}         # peer_id -> team
 var auto_attack_teams: Dictionary = {}    # 1v1: team -> bool
 var auto_attack_peers: Dictionary = {}    # 2v2/3v3: peer_id -> bool
+var quartermaster_teams: Dictionary = {}  # 1v1: team -> bool
+var quartermaster_peers: Dictionary = {}  # 2v2/3v3: peer_id -> bool
 
 # 2v2 专用
 var player_info: Dictionary = {}          # peer_id -> { "team": int, "slot": int, "alive": bool, "color": Color, "nation": int }
@@ -209,6 +211,11 @@ func get_host_max_pop() -> int:
 	return player_population.get(1, {}).get("max", 20)
 func get_host_limits() -> Dictionary:
 	return player_limits_dict.get(1, {"gold":500, "wood":500, "stone":500, "food":500, "oil":0})
+
+func get_limits_for(owner_id: int) -> Dictionary:
+	if player_limits_dict.has(owner_id):
+		return player_limits_dict[owner_id]
+	return super.get_limits_for(owner_id)
 func get_host_team() -> int:
 	if player_info.has(1): return player_info[1].team
 	if player_teams.has(1): return player_teams[1]
@@ -814,6 +821,7 @@ func _process_1v1_command(peer_id: int, data: Dictionary):
 		"clear_garrison": _clear_garrison_for_team(team, data)
 		"ungarrison_soldiers": _ungarrison_soldiers_1v1(team, data)
 		"toggle_auto_attack": _1v1_set_auto_attack(team, bool(data.get("enabled", false)))
+		"toggle_quartermaster": _1v1_set_quartermaster(team, bool(data.get("enabled", false)))
 		"repair": _1v1_repair(team, data)
 		"assign_builder": _1v1_assign_builder(team, data)
 		"cancel_construction": _1v1_cancel_construction(team, data)
@@ -835,6 +843,7 @@ func _process_2v2_command(peer_id: int, data: Dictionary):
 		"clear_garrison": _2v2_clear_garrison(peer_id, data)
 		"ungarrison_soldiers": _ungarrison_soldiers_2v2(peer_id, data)
 		"toggle_auto_attack": _2v2_set_auto_attack(peer_id, bool(data.get("enabled", false)))
+		"toggle_quartermaster": _2v2_set_quartermaster(peer_id, bool(data.get("enabled", false)))
 		"repair": _2v2_repair(peer_id, data)
 		"assign_builder": _2v2_assign_builder(peer_id, data)
 		"cancel_construction": _2v2_cancel_construction(peer_id, data)
@@ -1205,6 +1214,32 @@ func _2v2_set_auto_attack(peer_id: int, enabled: bool) -> void:
 			if _has_attack_move_order(entity) and entity.current_target == null:
 				entity.stop_movement()
 				entity._clear_command_queue()
+
+# ---------- 智能军需官（服务端权威） ----------
+func _quartermaster_owner_ids() -> Array:
+	if game_mode == NetworkManager.GameMode.ONEvONE:
+		return player_teams.keys()
+	var out: Array = []
+	for pid in player_info.keys():
+		if not is_ai_peer(int(pid)):
+			out.append(int(pid))
+	return out
+
+func _quartermaster_team_for(owner_id: int) -> int:
+	return _alert_team_of_peer(owner_id)
+
+func is_quartermaster_enabled_for(owner_id: int, team: int) -> bool:
+	if game_mode == NetworkManager.GameMode.ONEvONE:
+		return bool(quartermaster_teams.get(team, false))
+	if owner_id != -1:
+		return bool(quartermaster_peers.get(owner_id, false))
+	return bool(quartermaster_teams.get(team, false))
+
+func _1v1_set_quartermaster(team: int, enabled: bool) -> void:
+	quartermaster_teams[team] = enabled
+
+func _2v2_set_quartermaster(peer_id: int, enabled: bool) -> void:
+	quartermaster_peers[peer_id] = enabled
 
 # ---------- 通用工具 ----------
 func _find_entity_by_id(id: int) -> GameEntity:

@@ -76,7 +76,7 @@ func _hide_desktop_buttons(node: Node) -> void:
 	for child in node.get_children():
 		if child is Button:
 			var t: String = child.text
-			if t.contains("全选") or t.contains("撤退") or t.contains("自动进攻") or t.contains("统计"):
+			if t.contains("全选") or t.contains("撤退") or t.contains("自动进攻") or t.contains("军需官") or t.contains("统计"):
 				child.visible = false
 		elif child is Control and child != self:
 			_hide_desktop_buttons(child)

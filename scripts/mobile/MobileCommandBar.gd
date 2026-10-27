@@ -10,7 +10,7 @@ const WIDTH_DP: float = 152.0        # 原 190dp 的 80%，给战场多让出一
 const BTN_H_DP: float = 30.0
 const GAP_DP: float = 3.0
 const PAD_DP: float = 4.0
-const ROW_COUNT: int = 5             # 框选/旋转、两个全选、两个撤退、自动进攻/设置、批量/连续
+const ROW_COUNT: int = 6             # 框选/旋转、两个全选、两个撤退、自动进攻/设置、批量/连续、智能军需官
 # 面板高度按内容自适应：5 行按钮 + 4 条行间距 + 上下内边距
 const PANEL_H_DP: float = ROW_COUNT * BTN_H_DP + (ROW_COUNT - 1) * GAP_DP + PAD_DP * 2.0
 
@@ -20,6 +20,7 @@ var router: TouchGestureRouter = null
 var _box_mode_btn: Button = null
 var _rotate_btn: Button = null
 var _auto_btn: Button = null
+var _quartermaster_btn: Button = null
 var _batch_produce_btn: Button = null
 var _cont_build_btn: Button = null
 var _panel: Panel = null
@@ -97,6 +98,12 @@ func _build() -> void:
 	_cont_build_btn.toggled.connect(_on_cont_build_toggled)
 	row4.add_child(_cont_build_btn)
 	vb.add_child(row4)
+
+	# 智能军需官单独一行，避免挤占自动进攻/设置的文字空间
+	var row5 := _make_row()
+	_quartermaster_btn = _make_command_button("军需官：关", UILayout.font_dp(9.5), "_on_quartermaster_pressed")
+	row5.add_child(_quartermaster_btn)
+	vb.add_child(row5)
 	set_process(true)
 
 func _on_settings_pressed() -> void:
@@ -205,5 +212,19 @@ func sync_auto_attack() -> void:
 	_auto_btn.text = "自动进攻：开" if on else "自动进攻：关"
 	_auto_btn.add_theme_color_override("font_color", Color(0.55, 0.95, 0.55) if on else Color(0.9, 0.9, 0.9))
 
+func sync_quartermaster() -> void:
+	if _quartermaster_btn == null:
+		return
+	var on := false
+	if hud and hud.get("quartermaster_on") != null:
+		on = bool(hud.get("quartermaster_on"))
+	else:
+		var ci := get_tree().get_first_node_in_group("client_input")
+		if ci and ci.get("quartermaster_on") != null:
+			on = bool(ci.get("quartermaster_on"))
+	_quartermaster_btn.text = "军需官：开" if on else "军需官：关"
+	_quartermaster_btn.add_theme_color_override("font_color", Color(0.55, 0.95, 0.55) if on else Color(0.9, 0.9, 0.9))
+
 func _process(_delta: float) -> void:
 	sync_auto_attack()
+	sync_quartermaster()

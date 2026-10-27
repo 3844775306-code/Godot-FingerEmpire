@@ -12,6 +12,7 @@ var income_rate: Dictionary = {}
 var attack_all_btn: Button
 var retreat_all_btn: Button
 var auto_attack_btn: Button
+var quartermaster_btn: Button
 var rally_btn: Button
 
 var player_nation: int = -1
@@ -605,6 +606,16 @@ func _on_attack_all_pressed():
 		ci.toggle_auto_attack()
 		_on_auto_attack_changed(ci.auto_attack_on)
 
+func _on_quartermaster_pressed():
+	var ci = _get_client_input_node()
+	if ci and ci.has_method("toggle_quartermaster"):
+		ci.toggle_quartermaster()
+		_on_quartermaster_changed(ci.quartermaster_on)
+
+func _on_quartermaster_changed(on: bool):
+	if quartermaster_btn:
+		quartermaster_btn.text = "🧺 军需官：%s (F4)" % ("开" if on else "关")
+
 
 func _on_retreat_all_pressed():
 	NetworkManager.send_command.rpc_id(1, {
@@ -843,8 +854,8 @@ func _ready():
 	# 全军指令：与单机版一致，6 个按钮正好排成两排（3×2），统一放在半透明底板里（620,10）
 	_cmd_panel = Panel.new()
 	_cmd_panel.name = "GlobalCommandPanel"
-	_cmd_panel.position = Vector2(620, 10)
-	_cmd_panel.size = Vector2(662, 86)
+	_cmd_panel.position = Vector2(600, 10)
+	_cmd_panel.size = Vector2(880, 86)
 	_cmd_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var cmd_style := StyleBoxFlat.new()
 	cmd_style.bg_color = Color(0.0, 0.0, 0.0, 0.38)
@@ -855,7 +866,7 @@ func _ready():
 	add_child(_cmd_panel)
 
 	var cmd_grid := GridContainer.new()
-	cmd_grid.columns = 3
+	cmd_grid.columns = 4
 	cmd_grid.position = Vector2(8, 8)
 	cmd_grid.add_theme_constant_override("h_separation", 8)
 	cmd_grid.add_theme_constant_override("v_separation", 6)
@@ -865,10 +876,12 @@ func _ready():
 	attack_all_btn = _make_cmd_button("全选屏幕军队 (F1)", _on_select_screen_pressed, false)
 	retreat_all_btn = _make_cmd_button("全选所有军队 (Ctrl+F1)", _on_select_all_pressed, false)
 	auto_attack_btn = _make_cmd_button("⚔️ 自动进攻：关 (F2)", _on_attack_all_pressed, true)
+	quartermaster_btn = _make_cmd_button("🧺 军需官：关 (F4)", _on_quartermaster_pressed, false)
+	quartermaster_btn.tooltip_text = "开启后自动把空闲农民派去采最缺的资源，并在仓容紧张时自动补仓库"
 	var b_ret_screen = _make_cmd_button("屏幕军队撤退 (F3)", _on_retreat_screen_pressed, false)
 	var b_ret_all = _make_cmd_button("所有军队撤退 (Ctrl+F3)", _on_retreat_all_pressed, false)
 	var b_settings = _make_cmd_button("⚙ 设置", _open_game_settings, false)
-	for b in [attack_all_btn, retreat_all_btn, auto_attack_btn, b_ret_screen, b_ret_all, b_settings]:
+	for b in [attack_all_btn, retreat_all_btn, auto_attack_btn, quartermaster_btn, b_ret_screen, b_ret_all, b_settings]:
 		cmd_grid.add_child(b)
 
 	# 顶部两行信息：第一行性能、第二行对局/网络信息（只保留这两条）
@@ -1085,6 +1098,12 @@ func _process(delta):
 			var t = "⚔️ 自动进攻：%s (F2)" % ("开" if ci.auto_attack_on else "关")
 			if auto_attack_btn.text != t:
 				auto_attack_btn.text = t
+	if quartermaster_btn:
+		var ci_qm = _get_client_input_node()
+		if ci_qm:
+			var tq = "🧺 军需官：%s (F4)" % ("开" if ci_qm.quartermaster_on else "关")
+			if quartermaster_btn.text != tq:
+				quartermaster_btn.text = tq
 	# 每秒更新一次单位统计
 	_unit_stats_timer -= delta
 	if _unit_stats_timer <= 0:

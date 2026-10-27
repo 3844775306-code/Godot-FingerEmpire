@@ -45,6 +45,15 @@ var player_owner_id: int = 1                  # 玩家自己的owner_peer_id (�
 var player_team: int = RTSConfig.Team.BLUE
 var enemy_team: int = RTSConfig.Team.RED
 var local_auto_attack: bool = false           # 本地玩家的自动进攻开关
+# 智能军需官：开启后自动把空闲农民派去采集，并在仓容紧张时自动补仓库
+var local_quartermaster: bool = false
+var _quartermaster_timer: float = 0.0
+const QUARTERMASTER_INTERVAL: float = 1.6
+const QUARTERMASTER_WAREHOUSE_ID: int = 22
+const QUARTERMASTER_MAX_WAREHOUSES: int = 4
+const QUARTERMASTER_WAREHOUSE_GAP: float = 14.0
+const QUARTERMASTER_STORAGE_TRIGGER: float = 0.9
+var _qm_last_warehouse_time: Dictionary = {}  # owner_id -> 上次自动建仓库的 game_time
 const AUTO_ATTACK_EXCLUDE_IDS = [5, 6, 9, 10, 14, 43, 44, 45, 51, 46, 47, 48, 49, 50]
 # 官员编制：官员总数不能超过己方“可进驻建筑”的数量。
 # 桥(7)、梯(8)、城墙(27)不是驻军建筑，不提供官员名额；在建/被毁建筑也不计。
@@ -3224,10 +3233,12 @@ func is_valid_bridge_position(pos: Vector3) -> bool:
 	if not has_land: return false
 	return true
 
-func _is_valid_build_position(pos: Vector3) -> bool:
+func _is_valid_build_position(pos: Vector3, building_id: int = -1, for_team: int = -1) -> bool:
+	var bid: int = building_id if building_id >= 0 else selected_building_id
+	var bteam: int = for_team if for_team >= 0 else get_host_team()
 	# Cannot build near enemy units (10 unit radius)
 	for e in entities.get_children():
-		if e is GameEntity and e.team != get_host_team() and e.team != RTSConfig.Team.NEUTRAL and e.health > 0:
+		if e is GameEntity and e.team != bteam and e.team != RTSConfig.Team.NEUTRAL and e.health > 0:
 			if e.global_position.distance_to(pos) < 10.0:
 				return false
 	var t = get_terrain_at(pos)
@@ -3236,10 +3247,10 @@ func _is_valid_build_position(pos: Vector3) -> bool:
 	if t == 1:
 		return false
 	# 桥：只能在水上建造
-	if selected_building_id == 7:
+	if bid == 7:
 		return is_valid_bridge_position(pos)
 	# 梯子：必须在敌方城墙裸露侧建造
-	if selected_building_id == 8:
+	if bid == 8:
 		if t == 2: return false
 		for e in entities.get_children():
 			if e is GameEntity and e.health > 0:
@@ -3253,7 +3264,7 @@ func _is_valid_build_position(pos: Vector3) -> bool:
 				if abs(dx) + abs(dy) != 1: continue  # 仅正交方向
 				var wx = g.x + dx; var wy = g.y + dy
 				for e in entities.get_children():
-					if e is Building and e.entity_id == 27 and e.team != get_host_team() and e.team != RTSConfig.Team.NEUTRAL and e.health > 0:
+					if e is Building and e.entity_id == 27 and e.team != bteam and e.team != RTSConfig.Team.NEUTRAL and e.health > 0:
 						var wg = world_to_grid(e.global_position)
 						if wg.x == wx and wg.y == wy:
 							# 检查城墙在此方向是否裸露(反方向无同队城墙)
@@ -3265,7 +3276,7 @@ func _is_valid_build_position(pos: Vector3) -> bool:
 										exposed = false; break
 							if exposed: return true
 		return false
-	if selected_building_id == 23:
+	if bid == 23:
 		if t != 0: return false
 		var g = world_to_grid(pos)
 		var water_count = 0
@@ -3277,10 +3288,10 @@ func _is_valid_build_position(pos: Vector3) -> bool:
 		return false
 	else:
 		# 炮台(ID=64)：只能放在己方城墙上
-		if selected_building_id == 64:
+		if bid == 64:
 			var on_wall = false
 			for e in entities.get_children():
-				if e is Building and e.entity_id == 27 and e.team == get_host_team() and e.health > 0:
+				if e is Building and e.entity_id == 27 and e.team == bteam and e.health > 0:
 					var wd = Vector2(e.global_position.x - pos.x, e.global_position.z - pos.z).length()
 					if wd < (e.body_radius):
 						on_wall = true
@@ -3292,7 +3303,7 @@ func _is_valid_build_position(pos: Vector3) -> bool:
 				if e.global_position.distance_to(pos) < (e.body_radius + 0.5):
 					return false
 		# Check terrain flatness within building radius
-		var cfg = EntityDatabase.get_config(selected_building_id)
+		var cfg = EntityDatabase.get_config(bid)
 		var br = cfg.get("body_radius", 1.0) if cfg else 1.0
 		if not _is_terrain_flat(pos, br*0.5): return false
 		return t != 2
@@ -3992,6 +4003,7 @@ func _process(delta):
 					_exit_build_mode()
 	game_time += delta
 	_tick_builder_dispatch(delta)
+	_tick_quartermaster(delta)
 	_tick_abandoned_sites(delta)
 	_focus_camera_on_player_castle_once()
 	if battle_stats:
@@ -4752,6 +4764,295 @@ func assign_builders(b: Building, builder_ids: Array = []) -> int:
 		if u.work_on_building(b):
 			count += 1
 	return count
+
+# ==================== 智能军需官 ====================
+# 玩家开启后由服务端/主机自动执行两类工作：
+# 1) 把闲置农民派去采当前最缺的资源（不打断玩家手动安排的农民）；
+# 2) 仓容接近上限时，在资源点附近自动补一座仓库。
+func set_local_quartermaster(enabled: bool) -> void:
+	if local_quartermaster == enabled:
+		return
+	local_quartermaster = enabled
+	_quartermaster_timer = 0.0
+
+# 单机/主机默认只管本地玩家；OnlineBattleManager 会覆盖成每个真人玩家。
+func _quartermaster_owner_ids() -> Array:
+	return [get_local_owner_id()]
+
+func _quartermaster_team_for(owner_id: int) -> int:
+	if owner_id == player_owner_id:
+		return get_host_team()
+	return int(ai_players.get(owner_id, {}).get("team", -1))
+
+func is_quartermaster_enabled_for(owner_id: int, team: int) -> bool:
+	return local_quartermaster and is_local_player_owned(owner_id, team)
+
+func _tick_quartermaster(delta: float) -> void:
+	var any_enabled := false
+	for owner_id in _quartermaster_owner_ids():
+		if is_quartermaster_enabled_for(int(owner_id), _quartermaster_team_for(int(owner_id))):
+			any_enabled = true
+			break
+	if not any_enabled:
+		return
+	_quartermaster_timer -= delta
+	if _quartermaster_timer > 0.0:
+		return
+	_quartermaster_timer = QUARTERMASTER_INTERVAL
+	for owner_id in _quartermaster_owner_ids():
+		var oid: int = int(owner_id)
+		var team: int = _quartermaster_team_for(oid)
+		if team < 0 or not is_quartermaster_enabled_for(oid, team):
+			continue
+		_run_quartermaster(oid, team)
+
+func _run_quartermaster(owner_id: int, team: int) -> void:
+	_ensure_cache_fresh()
+	var peasants: Array = _qm_peasants(owner_id, team)
+	if peasants.is_empty():
+		return
+	_qm_assign_idle(owner_id, team, peasants)
+	_qm_maybe_build_warehouse(owner_id, team, peasants)
+
+func _qm_owner_matches(entity, owner_id: int) -> bool:
+	if owner_id < 0:
+		return true
+	var eo: int = int(entity.owner_peer_id)
+	return eo == owner_id or eo == -1
+
+func _qm_peasants(owner_id: int, team: int) -> Array:
+	var out: Array = []
+	for e in _armies:
+		if e == null or not is_instance_valid(e) or not (e is Army):
+			continue
+		if e.health <= 0 or int(e.entity_id) != 10 or int(e.team) != team:
+			continue
+		if not _qm_owner_matches(e, owner_id):
+			continue
+		out.append(e)
+	return out
+
+func _qm_resources(owner_id: int, team: int) -> Dictionary:
+	if owner_id >= 0:
+		var r = get_resources_for(owner_id)
+		if r != null and not r.is_empty():
+			return r
+	return get_team_resources(team)
+
+func _qm_limits(owner_id: int, team: int) -> Dictionary:
+	if has_method("get_limits_for"):
+		var lim = get_limits_for(owner_id)
+		if lim != null and not lim.is_empty():
+			return lim
+	return get_team_resource_limits(team) if team >= 0 else {}
+
+func _qm_assign_idle(owner_id: int, team: int, peasants: Array) -> void:
+	var res: Dictionary = _qm_resources(owner_id, team)
+	var lim: Dictionary = _qm_limits(owner_id, team)
+	if res.is_empty() or lim.is_empty():
+		return
+	var counts := {"food": 0, "wood": 0, "gold": 0, "stone": 0}
+	var idle: Array = []
+	for u in peasants:
+		var order := String(u.current_order)
+		if order == "gather" and u.current_target is WorldResource:
+			var rt: String = String(u.current_target.resource_type)
+			if counts.has(rt):
+				counts[rt] = int(counts[rt]) + 1
+		elif order in ["", "idle", "deliver"] and not u._has_cargo():
+			idle.append(u)
+	if idle.is_empty():
+		return
+	var desired: Dictionary = _qm_desired_counts(peasants.size(), res, lim)
+	var castle = _qm_castle(owner_id, team)
+	var castle_pos: Vector3 = castle.global_position if castle != null else Vector3.ZERO
+	for u in idle:
+		var pick := ""
+		var best_gap: int = 0
+		var best_ratio: float = 9.0
+		for rt in ["food", "wood", "gold", "stone"]:
+			var gap: int = int(desired.get(rt, 0)) - int(counts.get(rt, 0))
+			if gap <= 0:
+				continue
+			var cap: float = maxf(float(lim.get(rt, 1)), 1.0)
+			var ratio: float = float(res.get(rt, 0)) / cap
+			if gap > best_gap or (gap == best_gap and ratio < best_ratio):
+				best_gap = gap
+				best_ratio = ratio
+				pick = rt
+		if pick == "":
+			break
+		var node = get_nearest_resource(u.global_position, 80.0, [pick])
+		if node == null and castle != null:
+			node = get_nearest_resource(castle_pos, 140.0, [pick])
+		if node == null:
+			desired[pick] = 0
+			continue
+		u.gather_at(node)
+		counts[pick] = int(counts.get(pick, 0)) + 1
+
+func _qm_desired_counts(total: int, res: Dictionary, lim: Dictionary) -> Dictionary:
+	var d := {"food": 1, "wood": 1, "gold": 1, "stone": 0}
+	if total >= 4:
+		d["stone"] = 1
+	# 剩下的农民按木材→食物→黄金→石头的顺序补齐，尽量做到人人有活干。
+	var extra: int = total - 4 if total >= 4 else total - 3
+	while extra > 0:
+		var added := false
+		for rt in ["wood", "food", "gold", "stone"]:
+			if extra <= 0:
+				break
+			var cap: float = maxf(float(lim.get(rt, 1)), 1.0)
+			if float(res.get(rt, 0)) >= cap * 0.98:
+				continue
+			var add: int = mini(extra, maxi(1, total / 4))
+			d[rt] = int(d.get(rt, 0)) + add
+			extra -= add
+			added = true
+		if not added:
+			break
+	# 已经顶到仓容的资源不再派人；否则农民会一直往满仓里搬。
+	for rt in d.keys():
+		var cap: float = maxf(float(lim.get(rt, 1)), 1.0)
+		if float(res.get(rt, 0)) >= cap * 0.98:
+			d[rt] = 0
+	return d
+
+func _qm_castle(owner_id: int, team: int):
+	for b in _buildings:
+		if b == null or not is_instance_valid(b) or not (b is Building):
+			continue
+		if int(b.entity_id) != 20 or int(b.team) != team or b.health <= 0:
+			continue
+		if _qm_owner_matches(b, owner_id):
+			return b
+	return get_castle_by_team(team)
+
+func _qm_warehouse_cap(peasant_count: int) -> int:
+	return clampi(peasant_count / 3, 1, QUARTERMASTER_MAX_WAREHOUSES)
+
+func _qm_maybe_build_warehouse(owner_id: int, team: int, peasants: Array) -> void:
+	if game_time - float(_qm_last_warehouse_time.get(owner_id, -999.0)) < 25.0:
+		return
+	var owned := 0
+	var under := 0
+	for b in _buildings:
+		if b == null or not is_instance_valid(b) or not (b is Building):
+			continue
+		if int(b.entity_id) != QUARTERMASTER_WAREHOUSE_ID or int(b.team) != team:
+			continue
+		if b.health <= 0 or not _qm_owner_matches(b, owner_id):
+			continue
+		if b.build_timer > 0.0:
+			under += 1
+		else:
+			owned += 1
+	if under > 0 or owned + under >= _qm_warehouse_cap(peasants.size()):
+		return
+	var res: Dictionary = _qm_resources(owner_id, team)
+	var lim: Dictionary = _qm_limits(owner_id, team)
+	if res.is_empty() or lim.is_empty():
+		return
+	var pressure := false
+	for rt in ["food", "wood", "gold", "stone"]:
+		var cap: float = maxf(float(lim.get(rt, 1)), 1.0)
+		if float(res.get(rt, 0)) >= cap * QUARTERMASTER_STORAGE_TRIGGER:
+			pressure = true
+			break
+	# 开局资源还没用掉时不急着造；没有仓库且已经打了一会儿，补第一座。
+	if not pressure and owned == 0 and game_time > 25.0:
+		pressure = true
+	if not pressure:
+		return
+	var castle = _qm_castle(owner_id, team)
+	var center: Vector3 = castle.global_position if castle != null else Vector3.ZERO
+	var cluster: Vector3 = _qm_pick_resource_cluster(owner_id, team, res, lim, center)
+	var pos: Vector3 = _qm_find_warehouse_spot(cluster, team)
+	if not pos.is_finite():
+		pos = _qm_find_warehouse_spot(center, team)
+	if not pos.is_finite():
+		return
+	# 至少有一个农民能去施工，否则只拍地基没有意义。
+	if find_nearest_idle_builder(team, owner_id, center, 70.0) == null:
+		return
+	var cfg = EntityDatabase.get_config(QUARTERMASTER_WAREHOUSE_ID)
+	if cfg.is_empty():
+		return
+	var cost: Dictionary = cfg.get("cost", {})
+	if not _qm_deduct(owner_id, team, cost):
+		return
+	cfg["owner_peer_id"] = owner_id
+	var b = spawn_entity(cfg, team, pos, 1) as Building
+	if b == null:
+		_qm_refund(owner_id, team, cost)
+		return
+	b.start_construction(5.0, cfg)
+	request_construction(b)
+	_qm_last_warehouse_time[owner_id] = game_time
+	var builder = find_nearest_idle_builder(team, owner_id, pos, 70.0)
+	if builder != null:
+		assign_builders(b, [builder.get_instance_id()])
+
+func _qm_deduct(owner_id: int, team: int, cost: Dictionary) -> bool:
+	# 单机 1v1 的玩家 owner_id 可能是 -1（表示按队伍共用一个资源池），
+	# 此时不能走 get_resources_for(-1)，那会扣到敌方资源上。
+	if owner_id >= 0:
+		return deduct_resources_for(owner_id, cost)
+	var res: Dictionary = get_team_resources(team)
+	for k in cost:
+		if int(res.get(k, 0)) < int(cost[k]):
+			return false
+	for k in cost:
+		res[k] = int(res.get(k, 0)) - int(cost[k])
+	return true
+
+func _qm_refund(owner_id: int, team: int, cost: Dictionary) -> void:
+	for k in cost:
+		if owner_id >= 0:
+			add_resource_for(owner_id, k, int(cost[k]))
+		else:
+			add_resource(k, int(cost[k]), team)
+
+func _qm_pick_resource_cluster(owner_id: int, team: int, res: Dictionary, lim: Dictionary, center: Vector3) -> Vector3:
+	var best: Vector3 = center
+	var best_score: float = -INF
+	for node in _resources:
+		if node == null or not is_instance_valid(node) or not (node is WorldResource) or node.health <= 0:
+			continue
+		var rt: String = String(node.resource_type)
+		if not rt in ["food", "wood", "gold", "stone"]:
+			continue
+		var d: float = center.distance_to(node.global_position)
+		if d > 90.0:
+			continue
+		var covered := false
+		for b in _buildings:
+			if b == null or not is_instance_valid(b) or not (b is Building):
+				continue
+			if int(b.entity_id) == QUARTERMASTER_WAREHOUSE_ID and int(b.team) == team and _qm_owner_matches(b, owner_id):
+				if b.global_position.distance_to(node.global_position) < QUARTERMASTER_WAREHOUSE_GAP:
+					covered = true
+					break
+		if covered:
+			continue
+		var cap: float = maxf(float(lim.get(rt, 1)), 1.0)
+		var ratio: float = float(res.get(rt, 0)) / cap
+		var score: float = (1.0 - ratio) * 3.0 - d / 60.0
+		if score > best_score:
+			best_score = score
+			best = node.global_position
+	return best
+
+func _qm_find_warehouse_spot(center: Vector3, team: int) -> Vector3:
+	if center == Vector3.ZERO:
+		return Vector3.INF
+	for radius in [5.0, 6.5, 8.0, 10.0, 12.0, 15.0, 18.0]:
+		for i in range(16):
+			var ang: float = TAU * float(i) / 16.0
+			var pos := center + Vector3(cos(ang) * radius, 0.0, sin(ang) * radius)
+			if _is_valid_build_position(pos, QUARTERMASTER_WAREHOUSE_ID, team):
+				return pos
+	return Vector3.INF
 
 # 工地/修理点没人时自动补派最近的农民（玩家和 AI 共用）
 func _tick_builder_dispatch(delta: float) -> void:

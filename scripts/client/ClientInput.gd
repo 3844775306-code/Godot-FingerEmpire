@@ -10,6 +10,7 @@ signal build_requested(world_pos: Vector3)
 # 当前选中实体
 var client_selected_ids: Array = []
 var auto_attack_on: bool = false
+var quartermaster_on: bool = false
 
 # Local control groups (mirrored with server)
 var local_groups: Dictionary = {}  # int -> Array[int]
@@ -98,6 +99,16 @@ func toggle_auto_attack():
 		"enabled": auto_attack_on,
 	})
 	emit_signal("auto_attack_changed", auto_attack_on)
+
+func toggle_quartermaster():
+	quartermaster_on = not quartermaster_on
+	NetworkManager.send_command.rpc_id(1, {
+		"action": "toggle_quartermaster",
+		"enabled": quartermaster_on,
+	})
+	var chud = _get_client_hud()
+	if chud and chud.has_method("_on_quartermaster_changed"):
+		chud._on_quartermaster_changed(quartermaster_on)
 
 # 屏幕内军队撤退：向自己的主城发送移动指令
 func retreat_screen_units():
@@ -214,6 +225,9 @@ func _input(event):
 				NetworkManager.send_command.rpc_id(1, {"action": "global_retreat", "selected_ids": []})
 			else:
 				retreat_screen_units()
+			get_viewport().set_input_as_handled(); return
+		if key == KEY_F4:
+			toggle_quartermaster()
 			get_viewport().set_input_as_handled(); return
 
 		# 无选中时 → 快速建造快捷键
