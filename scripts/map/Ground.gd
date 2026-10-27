@@ -2766,9 +2766,9 @@ func _has_nearby_terrain(x, y, terr_type, radius, size) -> bool:
 
 func _create_visual_and_texture():
 	var size: int = _get_map_size()
-	# 细分到每格 3 段（移动端 2 段）：顶点越密，山坡轮廓越顺，不会被切成大三角面
+	# 细分到每格 4 段（移动端 3 段）：顶点越密，山坡轮廓越顺，不会被切成大三角面
 	var mobile := InputSource.is_mobile_platform()
-	var n: int = maxi(80, int(round(float(size) * (2.0 if mobile else 3.0))))
+	var n: int = maxi(80, int(round(float(size) * (3.0 if mobile else 4.0))))
 	var half: float = float(size) * 0.5
 	var step: float = float(size) / float(n)
 
@@ -2784,8 +2784,8 @@ func _create_visual_and_texture():
 	var surface_tool := SurfaceTool.new()
 	surface_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
 
-	# 解析法线用的采样半径：0.35 个顶点间距，既跟得上坡面，又不会被单格噪声带偏
-	var eps: float = maxf(0.02, step * 0.35)
+	# 第一趟：先填满顶点高度表。法线在第二趟直接取相邻顶点的差分，
+	# 和最终三角面完全一致，山坡不会因为"解析法线比几何更平滑"而出现局部鼓包。
 	for xi in range(n + 1):
 		var world_x: float = float(xi) * step - half
 		for zi in range(n + 1):
@@ -2796,15 +2796,26 @@ func _create_visual_and_texture():
 				_visual_min_height = height
 			else:
 				_visual_min_height = minf(_visual_min_height, height)
-			# 高度场的解析法线：坡度连续变化，山上不会再出现一块块明暗不同的三角面
-			var hxp: float = _visual_height(world_x + eps, world_z)
-			var hxm: float = _visual_height(world_x - eps, world_z)
-			var hzp: float = _visual_height(world_x, world_z + eps)
-			var hzm: float = _visual_height(world_x, world_z - eps)
-			var nrm := Vector3(hxm - hxp, 2.0 * eps, hzm - hzp).normalized()
+
+	# 第二趟：按顶点高度表计算法线、UV 和顶点位置
+	for xi in range(n + 1):
+		var world_x: float = float(xi) * step - half
+		var xm: int = maxi(xi - 1, 0)
+		var xp: int = mini(xi + 1, n)
+		var dx: float = float(xp - xm) * step
+		for zi in range(n + 1):
+			var world_z: float = float(zi) * step - half
+			var zm: int = maxi(zi - 1, 0)
+			var zp: int = mini(zi + 1, n)
+			var dz: float = float(zp - zm) * step
+			var hxm: float = float(vertex_grid[xm][zi])
+			var hxp: float = float(vertex_grid[xp][zi])
+			var hzm: float = float(vertex_grid[xi][zm])
+			var hzp: float = float(vertex_grid[xi][zp])
+			var nrm := Vector3((hxm - hxp) / dx, 1.0, (hzm - hzp) / dz).normalized()
 			surface_tool.set_normal(nrm)
 			surface_tool.set_uv(Vector2(float(xi) / float(n), float(zi) / float(n)))
-			surface_tool.add_vertex(Vector3(world_x, height, world_z))
+			surface_tool.add_vertex(Vector3(world_x, float(vertex_grid[xi][zi]), world_z))
 
 	for x in range(n):
 		for z in range(n):
@@ -3216,8 +3227,10 @@ func grid_to_world(gx: int, gy: int) -> Vector3:
 func get_base_colors() -> Array:
 	return base_colors
 
-# 地表视觉高度：把逐格高度做双线性插值 + 平滑过渡，
-# 山坡变成连续曲面（不再是台阶），但格间 10 米高差只有 1 格水平距离，所以依然很陡。
+# 地表视觉高度：把逐格高度做双线性插值，山坡变成连续曲面（不再是台阶）。
+# 这里用线性插值而不是逐格 smoothstep：smoothstep 在每个格线处导数归零，
+# 连续山坡会被揉成一格一格的波浪，从低角度看山体就像被压扁/揉皱。
+# 格间 10 米高差只有 1 格水平距离，所以山壁依然很陡。
 # 单位站立、建筑落地、地面发光圈都读这个函数，脚底才不会和画面对不上。
 func _visual_height(world_x: float, world_z: float) -> float:
 	if height_grid.is_empty():
@@ -3229,8 +3242,8 @@ func _visual_height(world_x: float, world_z: float) -> float:
 	var fz: float = world_z + float(size) * 0.5 - 0.5
 	var x0: int = int(floor(fx))
 	var z0: int = int(floor(fz))
-	var tx: float = _smooth01(clampf(fx - float(x0), 0.0, 1.0))
-	var tz: float = _smooth01(clampf(fz - float(z0), 0.0, 1.0))
+	var tx: float = clampf(fx - float(x0), 0.0, 1.0)
+	var tz: float = clampf(fz - float(z0), 0.0, 1.0)
 	var x1: int = clampi(x0 + 1, 0, size - 1)
 	var z1: int = clampi(z0 + 1, 0, size - 1)
 	x0 = clampi(x0, 0, size - 1)
@@ -3240,9 +3253,6 @@ func _visual_height(world_x: float, world_z: float) -> float:
 	var h01 := float(height_grid[x0][z1])
 	var h11 := float(height_grid[x1][z1])
 	return lerpf(lerpf(h00, h10, tx), lerpf(h01, h11, tx), tz)
-
-func _smooth01(t: float) -> float:
-	return t * t * (3.0 - 2.0 * t)
 
 # 按渲染网格的三角剖分插值（和 GroundStripMesh 的采样保持一致），
 # 返回值等于屏幕上看到的地面高度：单位贴地、地面划线、炮塔射程圈都不会陷进坡里
