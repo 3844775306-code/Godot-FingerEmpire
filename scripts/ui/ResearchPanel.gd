@@ -53,7 +53,9 @@ func _build_shell() -> void:
 
 	_root_panel = Panel.new()
 	_root_panel.size = PANEL_SIZE
-	_root_panel.position = Vector2(580, 280)
+	var vp_size := get_viewport_rect().size
+	var panel_pos := (vp_size - PANEL_SIZE) * 0.5
+	_root_panel.position = Vector2(maxf(panel_pos.x, 0.0), maxf(panel_pos.y, 0.0))
 	_root_panel.add_theme_stylebox_override("panel", UITheme.card_style(UITheme.GOLD))
 	add_child(_root_panel)
 
