@@ -6250,8 +6250,11 @@ func _tick_research(delta: float) -> void:
 				continue
 			var owner := int(st.get("owner", -1))
 			var team := int(st.get("team", get_host_team()))
+			var tax_rate := float(st.get("mods", {}).get("tax_gold", 0.0))
+			if tax_rate <= 0.0:
+				continue
 			var pop := research_pop(owner, team)
-			var pool := float(st.get("tax_pool", 0.0)) + float(pop) * 0.05
+			var pool := float(st.get("tax_pool", 0.0)) + float(pop) * tax_rate
 			var gain := int(floor(pool))
 			pool -= float(gain)
 			st["tax_pool"] = pool

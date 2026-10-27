@@ -226,7 +226,7 @@ func _attack(target, delta):
 		bullet.splash_damage_mult = splash_damage_mult
 		# 模型乘了 ENTITY_MODEL_SCALE，出手高度也要按放大后的实际尺寸算
 		bullet.global_position = global_position + Vector3(0, body_radius * RTSConfig.get_model_scale(entity_id) * 1.5, 0)
-		# B7 三矢齐发：主城/城堡一次攻击连射 3 支，每支 50% 伤害。
+		# B7 三矢齐发：主城/城堡一次攻击连射 3 支，每支 100% 伤害。
 		var extra_shots: int = maxi(0, volley_count - 1) if entity_id in [20, 53] else 0
 		for _i in range(extra_shots):
 			var extra = bm.acquire_bullet(self, damage_radius, team)
