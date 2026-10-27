@@ -341,9 +341,7 @@ func _on_dim_gui_input(event: InputEvent) -> void:
 			_on_close_pressed()
 
 func _on_close_pressed() -> void:
-	# 关闭面板时如果正暂停，顺手恢复游戏
-	if get_tree().paused:
-		get_tree().paused = false
+	# 关闭设置面板不自动恢复游戏：暂停后必须由玩家按 P 或再次点「继续游戏」手动继续。
 	queue_free()
 
 func _on_quit_pressed() -> void:

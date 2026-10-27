@@ -3616,6 +3616,11 @@ func _find_nearest_resource():
 	var search_r: float = gather_search_range if gather_search_range > 0.0 else float(vision_range)
 	var bm = _get_bm()
 	if bm:
+		# 智能军需官开启时，由军需官统一按资源缺口分配农民，
+		# 农民自动找最近资源会让分配结果不可控（并且新兵一出生就抢去采石头）。
+		if bm.has_method("is_quartermaster_enabled_for") \
+				and bm.is_quartermaster_enabled_for(int(owner_peer_id), int(team)):
+			return
 		# 附近没有资源时不要每 0.3 秒反复扫一遍大范围；短暂节流即可。
 		var now_ms: int = Time.get_ticks_msec()
 		if now_ms < _gather_search_retry_ms:

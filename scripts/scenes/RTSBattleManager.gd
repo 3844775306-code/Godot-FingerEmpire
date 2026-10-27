@@ -49,11 +49,14 @@ var local_auto_attack: bool = false           # 本地玩家的自动进攻开�
 var local_quartermaster: bool = false
 var _quartermaster_timer: float = 0.0
 const QUARTERMASTER_INTERVAL: float = 1.6
+const QUARTERMASTER_PEASANT_TARGET: int = 15
+const QUARTERMASTER_REBALANCE_INTERVAL: float = 8.0
 const QUARTERMASTER_WAREHOUSE_ID: int = 22
 const QUARTERMASTER_MAX_WAREHOUSES: int = 4
 const QUARTERMASTER_WAREHOUSE_GAP: float = 14.0
 const QUARTERMASTER_STORAGE_TRIGGER: float = 0.9
 var _qm_last_warehouse_time: Dictionary = {}  # owner_id -> 上次自动建仓库的 game_time
+var _qm_last_rebalance: Dictionary = {}       # owner_id -> 上次重分配农民的 game_time
 const AUTO_ATTACK_EXCLUDE_IDS = [5, 6, 9, 10, 14, 43, 44, 45, 51, 46, 47, 48, 49, 50]
 # 官员编制：官员总数不能超过己方“可进驻建筑”的数量。
 # 桥(7)、梯(8)、城墙(27)不是驻军建筑，不提供官员名额；在建/被毁建筑也不计。
@@ -3104,6 +3107,8 @@ func _command_selected_units(screen_pos: Vector2):
 			if target:
 				if target is WorldResource:
 					if u.entity_id == 10 or u.entity_id == 14 or u.get("_animal_type") != "":
+						# 玩家手动指定采集目标后，军需官不再把这个农民当成自己人重分配。
+						_qm_clear_managed(u)
 						u.gather_at(target)
 					else:
 						u.attack_move_to(target.global_position)
@@ -4778,14 +4783,31 @@ func assign_builders(b: Building, builder_ids: Array = []) -> int:
 	return count
 
 # ==================== 智能军需官 ====================
-# 玩家开启后由服务端/主机自动执行两类工作：
-# 1) 把闲置农民派去采当前最缺的资源（不打断玩家手动安排的农民）；
-# 2) 仓容接近上限时，在资源点附近自动补一座仓库。
+# 玩家开启后由服务端/主机自动执行三类工作：
+# 1) 农民不足 15 人时自动补农民；
+# 2) 按各资源储量/仓容缺口分配和重分配农民；
+# 3) 仓容接近上限时，在资源点附近自动补一座仓库。
 func set_local_quartermaster(enabled: bool) -> void:
 	if local_quartermaster == enabled:
 		return
 	local_quartermaster = enabled
 	_quartermaster_timer = 0.0
+	if enabled:
+		_qm_adopt_existing_workers()
+
+# 开启时接管当前正在采集的农民，像 AI 一样从现有分布开始调度；
+# 之后玩家手动改派目标会清除接管标记，军需官不会再抢回来。
+func _qm_adopt_existing_workers() -> void:
+	_ensure_cache_fresh()
+	for owner_id in _quartermaster_owner_ids():
+		var oid: int = int(owner_id)
+		var team: int = _quartermaster_team_for(oid)
+		if team < 0 or not is_quartermaster_enabled_for(oid, team):
+			continue
+		for u in _qm_peasants(oid, team):
+			var rt: String = _qm_current_resource_type(u)
+			if rt != "":
+				_qm_mark_managed(u, rt)
 
 # 单机/主机默认只管本地玩家；OnlineBattleManager 会覆盖成每个真人玩家。
 func _quartermaster_owner_ids() -> Array:
@@ -4821,10 +4843,65 @@ func _tick_quartermaster(delta: float) -> void:
 func _run_quartermaster(owner_id: int, team: int) -> void:
 	_ensure_cache_fresh()
 	var peasants: Array = _qm_peasants(owner_id, team)
+	# 仿照 AI 的经济循环：农民不足时先补农民，再把闲置/富余农民按资源缺口重新分配。
+	_qm_train_peasants(owner_id, team, peasants)
 	if peasants.is_empty():
 		return
 	_qm_assign_idle(owner_id, team, peasants)
+	_qm_rebalance_workers(owner_id, team, peasants)
 	_qm_maybe_build_warehouse(owner_id, team, peasants)
+
+func _qm_train_peasants(owner_id: int, team: int, peasants: Array) -> void:
+	if peasants.size() >= QUARTERMASTER_PEASANT_TARGET:
+		return
+	var queued: int = _qm_queued_peasants(owner_id, team)
+	if peasants.size() + queued >= QUARTERMASTER_PEASANT_TARGET:
+		return
+	var pop: Dictionary = _qm_population(owner_id, team)
+	if int(pop.get("current", 0)) + queued >= int(pop.get("max", 0)):
+		return
+	if owner_id >= 0 and has_method("can_player_train"):
+		if not can_player_train(owner_id):
+			return
+	elif not can_train_unit(team):
+		return
+	for b in _buildings:
+		if b == null or not is_instance_valid(b) or not (b is Building):
+			continue
+		if int(b.entity_id) <= 0 or int(b.team) != team or b.health <= 0 or b.build_timer > 0.0:
+			continue
+		if not _qm_owner_matches(b, owner_id):
+			continue
+		if b.try_produce(10):
+			return
+
+func _qm_queued_peasants(owner_id: int, team: int) -> int:
+	var total := 0
+	for b in _buildings:
+		if b == null or not is_instance_valid(b) or not (b is Building):
+			continue
+		if int(b.team) != team or not _qm_owner_matches(b, owner_id):
+			continue
+		for id in b.production_queue:
+			if int(id) == 10:
+				total += 1
+	return total
+
+func _qm_population(owner_id: int, team: int) -> Dictionary:
+	var online_pop = get("player_population")
+	if online_pop is Dictionary and online_pop.has(owner_id):
+		return online_pop[owner_id]
+	if owner_id < 0:
+		if team == get_host_team():
+			return {"current": player_pop, "max": player_max_pop}
+		return {"current": enemy_pop, "max": enemy_max_pop}
+	if has_method("get_population_for"):
+		var pop = get_population_for(owner_id)
+		if pop is Dictionary and not pop.is_empty():
+			return pop
+	if team == get_host_team():
+		return {"current": player_pop, "max": player_max_pop}
+	return {"current": enemy_pop, "max": enemy_max_pop}
 
 func _qm_owner_matches(entity, owner_id: int) -> bool:
 	if owner_id < 0:
@@ -4863,34 +4940,39 @@ func _qm_assign_idle(owner_id: int, team: int, peasants: Array) -> void:
 	var lim: Dictionary = _qm_limits(owner_id, team)
 	if res.is_empty() or lim.is_empty():
 		return
-	var counts := {"food": 0, "wood": 0, "gold": 0, "stone": 0}
+	var desired: Dictionary = _qm_desired_counts(peasants.size(), res, lim)
+	var counts := {}
+	for rt in desired.keys():
+		counts[rt] = 0
 	var idle: Array = []
 	for u in peasants:
 		var order := String(u.current_order)
-		if order == "gather" and u.current_target is WorldResource:
-			var rt: String = String(u.current_target.resource_type)
-			if counts.has(rt):
+		if order == "gather":
+			var rt: String = _qm_current_resource_type(u)
+			if rt != "" and counts.has(rt):
 				counts[rt] = int(counts[rt]) + 1
+			elif rt == "":
+				# 资源采空/目标不可达时 Army 不再自动找新矿，交给军需官重新分配。
+				idle.append(u)
 		elif order in ["", "idle", "deliver"] and not u._has_cargo():
 			idle.append(u)
 	if idle.is_empty():
 		return
-	var desired: Dictionary = _qm_desired_counts(peasants.size(), res, lim)
 	var castle = _qm_castle(owner_id, team)
 	var castle_pos: Vector3 = castle.global_position if castle != null else Vector3.ZERO
 	for u in idle:
 		var pick := ""
-		var best_gap: int = 0
-		var best_ratio: float = 9.0
-		for rt in ["food", "wood", "gold", "stone"]:
-			var gap: int = int(desired.get(rt, 0)) - int(counts.get(rt, 0))
-			if gap <= 0:
+		var best_gap: float = 0.0
+		var best_fill: float = 9.0
+		for rt in desired.keys():
+			var gap: float = float(desired[rt]) - float(counts.get(rt, 0))
+			if gap <= 0.0:
 				continue
 			var cap: float = maxf(float(lim.get(rt, 1)), 1.0)
-			var ratio: float = float(res.get(rt, 0)) / cap
-			if gap > best_gap or (gap == best_gap and ratio < best_ratio):
+			var fill: float = float(res.get(rt, 0)) / cap
+			if gap > best_gap or (is_equal_approx(gap, best_gap) and fill < best_fill):
 				best_gap = gap
-				best_ratio = ratio
+				best_fill = fill
 				pick = rt
 		if pick == "":
 			break
@@ -4898,37 +4980,121 @@ func _qm_assign_idle(owner_id: int, team: int, peasants: Array) -> void:
 		if node == null and castle != null:
 			node = get_nearest_resource(castle_pos, 140.0, [pick])
 		if node == null:
-			desired[pick] = 0
+			desired[pick] = 0.0
 			continue
 		u.gather_at(node)
+		_qm_mark_managed(u, pick)
 		counts[pick] = int(counts.get(pick, 0)) + 1
 
 func _qm_desired_counts(total: int, res: Dictionary, lim: Dictionary) -> Dictionary:
-	var d := {"food": 1, "wood": 1, "gold": 1, "stone": 0}
-	if total >= 4:
-		d["stone"] = 1
-	# 剩下的农民按木材→食物→黄金→石头的顺序补齐，尽量做到人人有活干。
-	var extra: int = total - 4 if total >= 4 else total - 3
-	while extra > 0:
-		var added := false
-		for rt in ["wood", "food", "gold", "stone"]:
-			if extra <= 0:
-				break
-			var cap: float = maxf(float(lim.get(rt, 1)), 1.0)
-			if float(res.get(rt, 0)) >= cap * 0.98:
-				continue
-			var add: int = mini(extra, maxi(1, total / 4))
-			d[rt] = int(d.get(rt, 0)) + add
-			extra -= add
-			added = true
-		if not added:
-			break
-	# 已经顶到仓容的资源不再派人；否则农民会一直往满仓里搬。
-	for rt in d.keys():
+	# 与 AI 的分配思路一致：先看各资源当前填充率，再乘经济权重；
+	# 越接近满仓的资源分到的农民越少，缺口大的资源优先补人。
+	var target_total: int = maxi(total, QUARTERMASTER_PEASANT_TARGET)
+	var weights: Dictionary
+	if total < 8:
+		weights = {"food": 5.0, "wood": 1.6, "gold": 0.6, "stone": 0.8}
+	else:
+		weights = {"food": 1.5, "wood": 3.0, "gold": 1.0, "stone": 2.0}
+	var scored := {}
+	var total_score := 0.0
+	for rt in weights.keys():
 		var cap: float = maxf(float(lim.get(rt, 1)), 1.0)
-		if float(res.get(rt, 0)) >= cap * 0.98:
-			d[rt] = 0
-	return d
+		var pct: float = float(res.get(rt, 0)) / cap
+		var scarcity := 0.0
+		if pct < 0.9:
+			scarcity = maxf(0.05, 1.0 - pct)
+		scored[rt] = scarcity * float(weights[rt])
+		total_score += float(scored[rt])
+	var out := {}
+	for rt in scored.keys():
+		out[rt] = 0.0
+	if total_score <= 0.0:
+		return out
+	for rt in scored.keys():
+		out[rt] = float(scored[rt]) / total_score * float(target_total)
+	return out
+
+func _qm_current_resource_type(u) -> String:
+	if u == null or not is_instance_valid(u):
+		return ""
+	if String(u.current_order) != "gather":
+		return ""
+	var target = u.current_target
+	if not is_instance_valid(target) or not (target is WorldResource) or target.health <= 0:
+		return ""
+	if u.has_method("_is_target_marked_unreachable") and u._is_target_marked_unreachable(target):
+		return ""
+	return String(target.resource_type)
+
+func _qm_mark_managed(u, resource_type: String) -> void:
+	if u == null or not is_instance_valid(u):
+		return
+	u.set_meta("qm_managed", true)
+	u.set_meta("qm_res_type", resource_type)
+
+func _qm_clear_managed(u) -> void:
+	if u == null or not is_instance_valid(u):
+		return
+	if u.has_meta("qm_managed"):
+		u.remove_meta("qm_managed")
+	if u.has_meta("qm_res_type"):
+		u.remove_meta("qm_res_type")
+
+func _qm_managed_type(u) -> String:
+	var rt: String = _qm_current_resource_type(u)
+	if rt == "" or not u.has_meta("qm_managed"):
+		return ""
+	if u.has_meta("qm_res_type") and String(u.get_meta("qm_res_type")) != rt:
+		_qm_clear_managed(u)
+		return ""
+	return rt
+
+func _qm_rebalance_workers(owner_id: int, team: int, peasants: Array) -> void:
+	if game_time - float(_qm_last_rebalance.get(owner_id, -999.0)) < QUARTERMASTER_REBALANCE_INTERVAL:
+		return
+	_qm_last_rebalance[owner_id] = game_time
+	var res: Dictionary = _qm_resources(owner_id, team)
+	var lim: Dictionary = _qm_limits(owner_id, team)
+	if res.is_empty() or lim.is_empty():
+		return
+	var desired: Dictionary = _qm_desired_counts(peasants.size(), res, lim)
+	var counts := {}
+	var managed := {}
+	for rt in desired.keys():
+		counts[rt] = 0
+		managed[rt] = 0
+	for u in peasants:
+		var rt: String = _qm_current_resource_type(u)
+		if rt == "":
+			continue
+		if counts.has(rt):
+			counts[rt] = int(counts[rt]) + 1
+		if _qm_managed_type(u) != "" and managed.has(rt):
+			managed[rt] = int(managed[rt]) + 1
+	var from_rt := ""
+	var from_surplus := 0.0
+	var to_rt := ""
+	var to_deficit := 0.0
+	for rt in desired.keys():
+		var gap: float = float(desired[rt]) - float(counts.get(rt, 0))
+		if gap < -1.0 and -gap > from_surplus and int(managed.get(rt, 0)) > 0:
+			from_surplus = -gap
+			from_rt = rt
+		elif gap > 1.0 and gap > to_deficit:
+			to_deficit = gap
+			to_rt = rt
+	if from_rt == "" or to_rt == "":
+		return
+	# 只重分配军需官自己派出去的农民；玩家手动安排的农民不动。
+	for u in peasants:
+		if _qm_managed_type(u) != from_rt:
+			continue
+		var node = get_nearest_resource(u.global_position, 110.0, [to_rt])
+		if node == null:
+			return
+		u.gather_at(node)
+		_qm_mark_managed(u, to_rt)
+		return
 
 func _qm_castle(owner_id: int, team: int):
 	for b in _buildings:

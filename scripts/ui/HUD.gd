@@ -622,7 +622,7 @@ func _create_pause_overlay():
 	vb.add_child(title)
 	var hint := Label.new()
 	hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	hint.text = "Alt + Space 继续游戏"
+	hint.text = "打开设置 → 继续游戏" if InputSource.use_mobile_ui() else "P 继续游戏"
 	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	hint.add_theme_font_size_override("font_size", 14)
 	hint.add_theme_color_override("font_color", Color(0.85, 0.87, 0.9))
@@ -644,8 +644,9 @@ func _exit_tree():
 
 func _input(event):
 	if event is InputEventKey and event.pressed:
-		# Alt+Space 快速暂停/继续；暂停中仍允许建造、升级、生产和下发指令。
-		if event.keycode == KEY_SPACE and event.alt_pressed:
+		# P 快速暂停/继续；暂停中仍允许建造、升级、生产和下发指令。
+		var is_p_key: bool = event.keycode == KEY_P or event.physical_keycode == KEY_P
+		if is_p_key and not event.ctrl_pressed and not event.alt_pressed and not event.shift_pressed:
 			if not event.echo and NetworkManager.mode == NetworkManager.Mode.NONE:
 				_toggle_battle_pause()
 			get_viewport().set_input_as_handled()
@@ -790,7 +791,7 @@ func _on_quartermaster_pressed():
 	if bm.has_method("set_local_quartermaster"):
 		bm.set_local_quartermaster(quartermaster_on)
 	_update_quartermaster_button()
-	show_alert_message("智能军需官：%s" % ("开启，自动派农民采集并补仓库" if quartermaster_on else "关闭"), ALERT_INFO)
+	show_alert_message("智能军需官：%s" % ("开启，自动补农民并按资源缺口分配，仓容紧张时补仓库" if quartermaster_on else "关闭"), ALERT_INFO)
 
 func _update_quartermaster_button():
 	if quartermaster_btn:
@@ -882,7 +883,7 @@ func _ready():
 	var b_select_all = _make_cmd_button("全选所有军队 (Ctrl+F1)", _on_select_all_pressed, false)
 	auto_attack_btn = _make_cmd_button("⚔️ 自动进攻：关 (F2)", _on_attack_all_pressed, true)
 	quartermaster_btn = _make_cmd_button("🧺 军需官：关 (F4)", _on_quartermaster_pressed, false)
-	quartermaster_btn.tooltip_text = "开启后自动把空闲农民派去采最缺的资源，并在仓容紧张时自动补仓库"
+	quartermaster_btn.tooltip_text = "开启后自动补充农民、按资源缺口分配采集并补仓库；会接管当前采集中的农民，之后手动改派的目标不会被抢回"
 	var b_retreat_screen = _make_cmd_button("屏幕军队撤退 (F3)", _on_retreat_screen_pressed, false)
 	var b_retreat_all = _make_cmd_button("所有军队撤退 (Ctrl+F3)", _on_retreat_all_pressed, false)
 	var b_settings = _make_cmd_button("⚙ 设置", _open_game_settings, false)
