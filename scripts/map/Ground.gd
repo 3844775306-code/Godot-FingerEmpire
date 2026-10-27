@@ -24,6 +24,10 @@ var overlay_grid: Array = []
 # 人工山墙（迷宫/台地/环形山/峡谷）的墙高：必须明显高于最大可走坡度对应的单格高差，
 # 否则部队会顺着缓坡直接翻墙；4.4 也为噪声起伏留出余量。
 const WALL_CLIFF_HEIGHT: float = 4.4
+# 小于这个格数的独立山块会被抹平：噪声偶尔冒出的 1~7 格孤立山尖，
+# 在镜头里像一根根突兀的石柱，既不能走也不像山。人工山体（有 overlay 4/5
+# 的坡道/台地）和王屋山墙不受影响。
+const MIN_MOUNTAIN_TILES: int = 8
 var base_colors: Array = []           # 原始颜色 (MAP_SIZE x MAP_SIZE)
 var terrain_image: Image
 var terrain_texture: ImageTexture
@@ -224,6 +228,8 @@ func _generate_classic(size: int):
 			height_col.append(h)
 		terrain_grid.append(col)
 		height_grid.append(height_col)
+	# 抹掉噪声偶然生成的孤立小石柱，再按新地形上色
+	_cleanup_small_mountains(size)
 	# 第二趟：上色
 	for x in range(size):
 		var color_col = []
@@ -294,6 +300,7 @@ func _generate_with_stages(size: int, stages: Array) -> void:
 				_op_coastal_siege(size, params)
 			_:
 				push_warning("[地图] 未知生成算子: %s" % op)
+	_cleanup_small_mountains(size)
 	_colorize_grid(size)
 
 func _init_stage_grids(size: int) -> void:
@@ -336,6 +343,72 @@ func _classify_tile(x: int, y: int, val: float) -> void:
 		height_grid[x][y] = val * 0.3
 	else:
 		height_grid[x][y] = -height_scale * 0.5
+
+# 清掉面积过小的独立山块：噪声图边缘偶尔会留下 1~7 格的小山尖，
+# 单独看像插在地上的石柱，不能走也没有山体轮廓。人工山体带 overlay 4/5，
+# 会整块保留；小岛中央的孤立山块则按周围地形填成平地或水面。
+func _cleanup_small_mountains(size: int) -> void:
+	var seen: Array = []
+	for x in range(size):
+		var row := []
+		row.resize(size)
+		row.fill(false)
+		seen.append(row)
+	var dirs := [
+		Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1),
+		Vector2i(1, 1), Vector2i(1, -1), Vector2i(-1, 1), Vector2i(-1, -1),
+	]
+	for x in range(size):
+		for y in range(size):
+			if terrain_grid[x][y] != 1 or seen[x][y]:
+				continue
+			var comp: Array = []
+			var stack: Array = [Vector2i(x, y)]
+			seen[x][y] = true
+			var keep := false
+			while not stack.is_empty():
+				var p: Vector2i = stack.pop_back()
+				comp.append(p)
+				if overlay_grid[p.x][p.y] == 4 or overlay_grid[p.x][p.y] == 5:
+					keep = true
+				for d in dirs:
+					var nx: int = p.x + d.x
+					var ny: int = p.y + d.y
+					if nx < 0 or ny < 0 or nx >= size or ny >= size:
+						continue
+					if seen[nx][ny] or terrain_grid[nx][ny] != 1:
+						continue
+					seen[nx][ny] = true
+					stack.append(Vector2i(nx, ny))
+			if keep or comp.size() >= MIN_MOUNTAIN_TILES:
+				continue
+			var plain_total := 0.0
+			var plain_count := 0
+			var water_count := 0
+			for p in comp:
+				for d in dirs:
+					var nx: int = p.x + d.x
+					var ny: int = p.y + d.y
+					if nx < 0 or ny < 0 or nx >= size or ny >= size:
+						continue
+					var t: int = terrain_grid[nx][ny]
+					if t == 0:
+						plain_total += float(height_grid[nx][ny])
+						plain_count += 1
+					elif t == 2:
+						water_count += 1
+			var fill_t := 0
+			var fill_h := 0.0
+			if plain_count > 0:
+				fill_h = clampf(plain_total / float(plain_count), -0.1, 0.5)
+			elif water_count > 0:
+				# 湖心/海面上的小孤山直接还原成水，不留下一个突兀的小岛
+				fill_t = 2
+				fill_h = -height_scale * 0.5
+			for p in comp:
+				terrain_grid[p.x][p.y] = fill_t
+				overlay_grid[p.x][p.y] = 0
+				height_grid[p.x][p.y] = fill_h
 
 func _op_noise_base(size: int, params: Dictionary) -> void:
 	var noise := FastNoiseLite.new()
