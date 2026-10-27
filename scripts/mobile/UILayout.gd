@@ -210,6 +210,28 @@ static func top_info_rect(vp: Vector2) -> Rect2:
 	var max_x := maxf(TOP_MARGIN, vp.x - TOP_MARGIN - TOP_INFO_W)
 	return Rect2(Vector2(clampf((vp.x - TOP_INFO_W) * 0.5, TOP_MARGIN, max_x), below), Vector2(TOP_INFO_W, TOP_INFO_H))
 
+# 桌面单行顶部信息：资源胶囊右侧到指令底板左侧之间的空档。
+# 胶囊变宽（资源数值变长）后空档会被挤窄，调用方按返回宽度再压字号。
+const TOP_INFO_1LINE_H: float = 48.0
+static func top_info_right_rect(vp: Vector2, capsule_right: float, h: float = TOP_INFO_1LINE_H) -> Rect2:
+	var cmd := top_cmd_rect(vp)
+	var left := capsule_right + 10.0
+	var right := cmd.position.x - 12.0
+	if right - left < 140.0:
+		return Rect2()
+	return Rect2(Vector2(left, TOP_MARGIN), Vector2(right - left, h))
+
+# 手机横屏单行顶部信息：资源胶囊右侧到小地图左侧；竖屏不用这个函数（竖屏保持胶囊下方多行）。
+static func mobile_info_right_rect(capsule_rect: Rect2, h_dp: float = 22.0) -> Rect2:
+	var mm := mobile_minimap_rect(capsule_rect)
+	var left := capsule_rect.position.x + capsule_rect.size.x + dp(8.0)
+	var right := mm.position.x - dp(8.0)
+	if right - left < dp(90.0):
+		return Rect2()
+	var h := dp(h_dp)
+	var top := capsule_rect.position.y + (capsule_rect.size.y - h) * 0.5
+	return Rect2(Vector2(left, top), Vector2(right - left, h))
+
 # 手机资源胶囊实际宽度（dp）：标准 9:16 竖屏用满 344dp；
 # 20:9 等高瘦屏竖屏逻辑宽度只有约 300dp，胶囊必须收窄，否则会被屏幕右边缘裁掉。
 static func mobile_capsule_width_dp() -> float:

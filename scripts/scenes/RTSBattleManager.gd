@@ -504,27 +504,61 @@ func _make_top_label(node_name: String, mobile: bool, font_size: int, color: Col
 	lb.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	return lb
 
-# 手机端资源胶囊矩形：优先取 MobileHUD 真实控件（展开/收起都能跟上），取不到按 place_dp 规则兜底
+# 资源胶囊矩形：手机取 MobileHUD 真实控件（展开/收起都能跟上）；
+# 桌面取 HUD 左上角的统计胶囊，取不到按 UILayout 兜底。
 func _diag_capsule_rect_now() -> Rect2:
-	var mh = get_tree().get_first_node_in_group("mobile_hud")
-	if mh != null and is_instance_valid(mh):
-		var cap = mh.get("capsule")
-		if cap is Control and (cap as Control).visible:
-			var cr: Rect2 = (cap as Control).get_global_rect()
-			if cr.size.x > 0.0:
-				return cr
-	var insets := UILayout.safe_insets()
-	return Rect2(Vector2(insets.x + UILayout.dp(2.0), insets.y + UILayout.dp(2.0)),
-		Vector2(UILayout.dp(UILayout.mobile_capsule_width_dp()), UILayout.dp(42.0)))
+	if InputSource.use_mobile_ui():
+		var mh = get_tree().get_first_node_in_group("mobile_hud")
+		if mh != null and is_instance_valid(mh):
+			var cap = mh.get("capsule")
+			if cap is Control and (cap as Control).visible:
+				var cr: Rect2 = (cap as Control).get_global_rect()
+				if cr.size.x > 0.0:
+					return cr
+		var insets := UILayout.safe_insets()
+		return Rect2(Vector2(insets.x + UILayout.dp(2.0), insets.y + UILayout.dp(2.0)),
+			Vector2(UILayout.dp(UILayout.mobile_capsule_width_dp()), UILayout.dp(42.0)))
+	var hud = get_tree().get_first_node_in_group("game_hud")
+	if hud != null and is_instance_valid(hud):
+		var cap2 = hud.get("_stats_capsule")
+		if cap2 is Control and (cap2 as Control).visible:
+			var cr2: Rect2 = (cap2 as Control).get_global_rect()
+			if cr2.size.x > 0.0:
+				return cr2
+	return UILayout.top_capsule_rect(UILayout.view_size(), UILayout.TOP_CAPSULE_MIN_W)
+
+# 是否单行模式：竖屏手机例外（保持胶囊下方两行），桌面与手机横屏都缩成一行放胶囊右边
+func _diag_single_line() -> bool:
+	return not (InputSource.use_mobile_ui() and UILayout.is_portrait())
+
+# 单行信息按可用宽度自动压字号，保证文字不撑破底板
+func _fit_diag_font(text: String, base_size: int, max_w: float) -> int:
+	var f: Font = _fps_label.get_theme_font("font") if _fps_label != null else null
+	if f == null:
+		f = ThemeDB.fallback_font
+	var fs := base_size
+	while fs > 8 and f.get_string_size(text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x > max_w:
+		fs -= 1
+	return fs
 
 # 顶部信息面板重排：每 10 帧随刷新跑一次，旋转屏幕 / 胶囊展开后矩形自动跟上
 func _layout_diag_now() -> void:
 	if _diag_bg == null or _fps_label == null:
 		return
 	var mobile := InputSource.use_mobile_ui()
+	var single := _diag_single_line()
 	var rect := Rect2()
-	if mobile:
-		_diag_capsule_rect = _diag_capsule_rect_now()
+	_diag_capsule_rect = _diag_capsule_rect_now()
+	if single:
+		var vp := UILayout.view_size()
+		if mobile:
+			rect = UILayout.mobile_info_right_rect(_diag_capsule_rect, 22.0)
+		else:
+			rect = UILayout.top_info_right_rect(vp, _diag_capsule_rect.position.x + _diag_capsule_rect.size.x, 48.0)
+		if rect.size.x <= 0.0:
+			# 极端窄屏（胶囊把空档吃光）兜底：退回指令栏下方一行
+			rect = UILayout.top_diag_rect(vp, 1040.0, 44.0)
+	elif mobile:
 		rect = UILayout.mobile_top_info_rect(_diag_capsule_rect)
 	else:
 		rect = UILayout.top_diag_rect(UILayout.view_size(), 1040.0, 44.0)
@@ -534,13 +568,23 @@ func _layout_diag_now() -> void:
 	_diag_bg.position = rect.position
 	_diag_bg.size = rect.size
 	var pad_x := UILayout.dp(6.0) if mobile else UILayout.dp(4.0)
-	var line_count: float = float(UILayout.MOBILE_INFO_LINES) if mobile else 2.0
-	var line_h := rect.size.y / line_count
-	var labels: Array = [_fps_label, _snap_rate_label]
-	for i in labels.size():
-		var lb: Label = labels[i]
-		lb.position = Vector2(rect.position.x + pad_x, rect.position.y + line_h * float(i))
-		lb.size = Vector2(rect.size.x - pad_x * 2.0, line_h)
+	var inner_w := rect.size.x - pad_x * 2.0
+	_fps_label.position = Vector2(rect.position.x + pad_x, rect.position.y)
+	_fps_label.size = Vector2(inner_w, rect.size.y)
+	_fps_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT if (single or mobile) else HORIZONTAL_ALIGNMENT_CENTER
+	if single:
+		_snap_rate_label.visible = false
+		var base := UILayout.font_dp(9.5) if mobile else 20
+		_fps_label.add_theme_font_size_override("font_size", _fit_diag_font(_fps_label.text, base, inner_w))
+		return
+	# 竖屏手机：仍是两行
+	_snap_rate_label.visible = true
+	var line_h := rect.size.y / 2.0
+	_fps_label.size = Vector2(inner_w, line_h)
+	_fps_label.add_theme_font_size_override("font_size", UILayout.font_dp(10.0))
+	_snap_rate_label.position = Vector2(rect.position.x + pad_x, rect.position.y + line_h)
+	_snap_rate_label.size = Vector2(inner_w, line_h)
+	_snap_rate_label.add_theme_font_size_override("font_size", UILayout.font_dp(9.5))
 
 # 战况栏避让用：信息面板底边
 func get_diag_panel_rect() -> Rect2:
@@ -4375,26 +4419,34 @@ func _process(delta):
 		var mobile := InputSource.use_mobile_ui()
 		var phys_frames = Engine.get_physics_frames()
 		var phys_ok = (phys_frames != _diag_physics_heartbeat)
+		var single := _diag_single_line()
+		var diff_names = ["简单", "普通", "困难", "地狱"]
+		var dn = diff_names[clampi(GameSettings.ai_difficulty, 0, 3)]
+		var map_name := String(MapPresets.get_info(GameSettings.map_id).get("name", "经典大陆"))
+		var clock := "%02d:%02d" % [int(game_time / 60.0), int(game_time) % 60]
 		if not phys_ok and _diag_physics_heartbeat > 0:
 			_fps_label.add_theme_color_override("font_color", Color.RED)
 			_fps_label.text = "🔴 主循环卡死 FPS:%.0f" % Engine.get_frames_per_second()
+			if _snap_rate_label:
+				_snap_rate_label.text = ""
 		else:
 			_fps_label.add_theme_color_override("font_color", Color.LIME_GREEN)
-			if mobile:
+			if single:
+				# 桌面/手机横屏：一行塞进胶囊右边；文字尽量短，字号由 _layout_diag_now 自适应
+				if mobile:
+					_fps_label.text = "%dF 画质%d | %s %s %s" % [
+						Engine.get_frames_per_second(), _perf_quality_level, dn, map_name, clock]
+				else:
+					_fps_label.text = "%dFPS 画质%d | %s %s %s" % [
+						Engine.get_frames_per_second(), _perf_quality_level, dn, map_name, clock]
+				if _snap_rate_label:
+					_snap_rate_label.text = ""
+			else:
+				# 竖屏手机：保持两行
 				_fps_label.text = "FPS:%.0f 画质:%d" % [
 					Engine.get_frames_per_second(), _perf_quality_level]
-			else:
-				_fps_label.text = "FPS:%.0f | 画质:%d" % [
-					Engine.get_frames_per_second(), _perf_quality_level]
-		if _snap_rate_label:
-			var diff_names = ["简单", "普通", "困难", "地狱"]
-			var dn = diff_names[clampi(GameSettings.ai_difficulty, 0, 3)]
-			var map_name := String(MapPresets.get_info(GameSettings.map_id).get("name", "经典大陆"))
-			var clock := "%02d:%02d" % [int(game_time / 60.0), int(game_time) % 60]
-			if mobile:
-				_snap_rate_label.text = "AI:%s %s %s" % [dn, map_name, clock]
-			else:
-				_snap_rate_label.text = "AI:%s | 地图:%s | 时间:%s" % [dn, map_name, clock]
+				if _snap_rate_label:
+					_snap_rate_label.text = "AI:%s %s %s" % [dn, map_name, clock]
 		_layout_diag_now()
 		_diag_physics_heartbeat = phys_frames
 		_diag_step = (_diag_step + 1) % 1000

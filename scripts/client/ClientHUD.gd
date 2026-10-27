@@ -6,6 +6,7 @@ var _last_portrait: bool = false
 var _mobile_rebuild_pending: bool = false
 var _cmd_research_btn: Button = null
 var _top_info_suppressed: bool = false   # 打开移动端统计大屏时隐藏顶部信息
+var _top_single_line: bool = false       # 顶部信息是否单行（桌面/手机横屏放胶囊右边）
 
 # 最近一次快照下发的经济数据（统计面板用；原左下角资源卡已移除）
 var _last_res: Dictionary = {}
@@ -1055,46 +1056,85 @@ func _on_stats_overlay_toggled(open: bool) -> void:
 	_top_info_suppressed = open
 	_layout_top_info()
 
-# 顶部信息栏：桌面塞进指令栏与小地图之间（塞不下落到指令栏下方居中）；
-# 手机竖屏放到资源胶囊正下方 4 行短句区，横屏夹在胶囊与小地图之间。
-# 手机端第一行 FPS、后三行给网络/对局信息（长句拆成多行，尽量不用省略号）。
+# 顶部信息栏：桌面与手机横屏缩成一行放资源胶囊右边（空档不够时自动压字号）；
+# 手机竖屏例外，保留胶囊下方 3 行短句。
 func _layout_top_info() -> void:
 	if _top_bg == null or not is_instance_valid(_top_bg):
 		return
 	if _fps_label == null or _net_stat_label == null:
 		return
 	var vp := get_viewport().get_visible_rect().size
+	var mobile_info := InputSource.use_mobile_ui()
+	var cap := _capsule_rect_for_info()
 	var rect := Rect2()
-	if InputSource.use_mobile_ui():
-		rect = UILayout.mobile_top_info_rect(_mobile_capsule_rect_ui(), 3)
+	var single := false
+	if mobile_info:
+		if UILayout.is_portrait():
+			rect = UILayout.mobile_top_info_rect(cap, 3)
+		else:
+			rect = UILayout.mobile_info_right_rect(cap, 22.0)
+			single = true
+			if rect.size.x <= 0.0:
+				rect = UILayout.mobile_top_info_rect(cap)
+			# 空档不足退回胶囊下方时仍按一行排，字号继续压
 	else:
-		rect = UILayout.top_info_rect(vp)
+		rect = UILayout.top_info_right_rect(vp, cap.position.x + cap.size.x, 48.0)
+		single = true
+		if rect.size.x <= 0.0:
+			# 联机桌面资源胶囊更宽（780），胶囊与指令底板之间只剩约 120 设计像素，
+			# 一行字压到最小也放不下，退到指令底板右侧、小地图左侧的顶部空档。
+			var cmd := UILayout.top_cmd_rect(vp)
+			var mm := UILayout.top_minimap_rect(vp)
+			var left := cmd.position.x + cmd.size.x + 12.0
+			var right := mm.position.x - 12.0
+			if right - left >= 140.0:
+				rect = Rect2(Vector2(left, UILayout.TOP_MARGIN), Vector2(right - left, 48.0))
+			else:
+				rect = UILayout.top_info_rect(vp)
+	_top_single_line = single
 	_top_rect = rect
 	var show := rect.size.x > 0.0 and rect.size.y > 0.0 and not _top_info_suppressed
 	_top_bg.visible = show
 	_fps_label.visible = show
-	_net_stat_label.visible = show
+	_net_stat_label.visible = show and not single
 	if not show:
 		return
-	# 底板与信息栏矩形完全一致（不再向外扩），这样右边缘不会压到小地图；
-	# 手机 3 行：FPS 占第 1 行，网络/对局信息占后 2 行；桌面两行各占一半。
-	var mobile_info := InputSource.use_mobile_ui()
 	var pad_x := UILayout.dp(8.0)
-	var line_h: float
-	if mobile_info:
-		line_h = rect.size.y / 3.0
-	else:
-		line_h = rect.size.y * 0.5
+	var inner_w := rect.size.x - pad_x * 2.0
 	_top_bg.position = rect.position
 	_top_bg.size = rect.size
 	_fps_label.position = rect.position + Vector2(pad_x, 0.0)
-	_fps_label.size = Vector2(rect.size.x - pad_x * 2.0, line_h)
+	_fps_label.size = Vector2(inner_w, rect.size.y)
+	_fps_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	if single:
+		# 单行：按文字实际宽度压字号，保证整行落在胶囊右侧空档里
+		var f: Font = _fps_label.get_theme_font("font")
+		if f == null:
+			f = ThemeDB.fallback_font
+		var fs: int = 18 if not mobile_info else UILayout.font_dp(9.5)
+		while fs > 8 and f.get_string_size(_fps_label.text, HORIZONTAL_ALIGNMENT_LEFT, -1, fs).x > inner_w:
+			fs -= 1
+		_fps_label.add_theme_font_size_override("font_size", fs)
+		return
+	# 竖屏手机：3 行（FPS + 网络/对局 2 行）
+	_fps_label.add_theme_font_size_override("font_size", UILayout.font_dp(10.5))
+	var line_h := rect.size.y / 3.0
+	_fps_label.size = Vector2(inner_w, line_h)
 	_net_stat_label.position = rect.position + Vector2(pad_x, line_h)
-	_net_stat_label.vertical_alignment = VERTICAL_ALIGNMENT_TOP if mobile_info else VERTICAL_ALIGNMENT_CENTER
-	if mobile_info:
-		_net_stat_label.size = Vector2(rect.size.x - pad_x * 2.0, line_h * 2.0)
-	else:
-		_net_stat_label.size = Vector2(rect.size.x - pad_x * 2.0, line_h)
+	_net_stat_label.size = Vector2(inner_w, line_h * 2.0)
+	_net_stat_label.vertical_alignment = VERTICAL_ALIGNMENT_TOP
+	_net_stat_label.add_theme_font_size_override("font_size", UILayout.font_dp(9.5))
+
+# 顶部信息避让用胶囊矩形：手机取真实控件；桌面取左上角统计胶囊，取不到按 UILayout 兜底
+func _capsule_rect_for_info() -> Rect2:
+	if InputSource.use_mobile_ui():
+		return _mobile_capsule_rect_ui()
+	var vp := get_viewport().get_visible_rect().size
+	if _stats_capsule != null and is_instance_valid(_stats_capsule) and _stats_capsule.visible:
+		var cr: Rect2 = _stats_capsule.get_global_rect()
+		if cr.size.x > 0.0:
+			return cr
+	return UILayout.top_capsule_rect(vp, UILayout.TOP_CAPSULE_MIN_W)
 
 # 手机端资源胶囊矩形：优先取 MobileHUD 真实控件，取不到按 dp 规则兜底。
 func _mobile_capsule_rect_ui() -> Rect2:
@@ -1267,17 +1307,29 @@ func _process(delta):
 	_fps_update_timer -= delta
 	if _fps_update_timer <= 0:
 		_fps_update_timer = 0.5
+		var diff_names = ["简单", "普通", "困难", "地狱"]
+		var dn = diff_names[clampi(GameSettings.ai_difficulty, 0, 3)]
+		var map_name := String(MapPresets.get_info(GameSettings.map_id).get("name", "经典大陆"))
+		var ping_txt := "%dms" % _ping_rtt if _ping_rtt > 0 else "--"
 		if _fps_label:
-			_fps_label.text = "FPS:%.0f" % Engine.get_frames_per_second()
+			if _top_single_line:
+				# 桌面/手机横屏一行：FPS + 对局/网络信息
+				if InputSource.use_mobile_ui():
+					_fps_label.text = "%dF %s %s %02d:%02d %s %d/s" % [
+						Engine.get_frames_per_second(), dn, map_name, t_min, t_sec,
+						ping_txt, _snap_recv_rate]
+				else:
+					_fps_label.text = "%dFPS | %s %s %02d:%02d | %s %d/s" % [
+						Engine.get_frames_per_second(), dn, map_name, t_min, t_sec,
+						ping_txt, _snap_recv_rate]
+			else:
+				_fps_label.text = "FPS:%.0f" % Engine.get_frames_per_second()
 		if _net_stat_label:
-			var diff_names = ["简单", "普通", "困难", "地狱"]
-			var dn = diff_names[clampi(GameSettings.ai_difficulty, 0, 3)]
-			var map_name := String(MapPresets.get_info(GameSettings.map_id).get("name", "经典大陆"))
-			var ping_txt := "%dms" % _ping_rtt if _ping_rtt > 0 else "--"
-			if InputSource.use_mobile_ui():
-				# 手机横屏信息栏只有约 137dp 宽：去掉「地图:/时间:」这类标签，
-				# 用空格分隔，两行都能完整显示，不会被省略号截断。
-				_net_stat_label.text = "AI:%s %s %02d:%02d\n延迟:%s 快照:%d/s" % [
+			if _top_single_line:
+				_net_stat_label.text = ""
+			elif InputSource.use_mobile_ui():
+				# 竖屏手机：网络/对局信息拆成两行
+				_net_stat_label.text = "AI:%s 地图:%s 时间:%02d:%02d\n延迟:%s 快照:%d/s" % [
 					dn, map_name, t_min, t_sec, ping_txt, _snap_recv_rate
 				]
 			else:
