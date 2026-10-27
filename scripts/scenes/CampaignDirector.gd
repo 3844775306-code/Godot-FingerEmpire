@@ -79,6 +79,14 @@ var _enemy_kills_by_id: Dictionary = {}
 var _enemy_water_spawn: Vector3 = Vector3.ZERO
 var _has_water_waves: bool = false
 
+# 无尽挑战（endless）：波次越滚越强，记录波数与得分
+var _endless_on: bool = false
+var _endless_first: float = 20.0
+var _endless_interval: float = 30.0
+var _endless_waves: int = 0
+var _endless_timer: float = 0.0
+var _endless_score: int = 0
+
 # 多控制区（hold_zones）与"守住自家建筑"（defend_targets）目标
 var _multi_zones: Array = []
 var _defend_ids: Array = []
@@ -356,6 +364,12 @@ func _parse_objectives() -> void:
 	_defend_initial = 0
 	_defend_alive = 0
 	_defend_duration = 0.0
+	_endless_on = false
+	_endless_first = 20.0
+	_endless_interval = 30.0
+	_endless_waves = 0
+	_endless_timer = 0.0
+	_endless_score = 0
 	for o in level.get("objectives", []):
 		var obj: Dictionary = o
 		var t := String(obj.get("type", ""))
@@ -425,6 +439,11 @@ func _parse_objectives() -> void:
 				_target_initial = _count_enemy_buildings(_target_ids)
 			"gather":
 				_gather_need = float(obj.get("amount", 1500.0))
+			"endless":
+				_endless_on = true
+				_endless_first = float(obj.get("first_wave", 20.0))
+				_endless_interval = float(obj.get("interval", 30.0))
+				_endless_timer = _endless_first
 			"kill_units":
 				_kill_need = int(obj.get("count", 10))
 				_kill_ids = obj.get("unit_ids", []).duplicate()
@@ -811,6 +830,46 @@ func _find_water_point(center: Vector3, min_dist: float, max_dist: float) -> Vec
 		dist += 4.0
 	return Vector3(center.x, 0.0, center.z + max_dist)
 
+# ==================== 无尽波次（endless）====================
+
+# 到点刷下一波：数量/等级随波数上涨，每 10 波来一个首领
+func _update_endless(dt: float) -> void:
+	if not _endless_on:
+		return
+	_endless_score = _endless_waves * 100 + int(elapsed)
+	_endless_timer -= dt
+	if _endless_timer > 0.0:
+		return
+	_endless_waves += 1
+	_endless_timer = _endless_interval
+	_fire_wave(_endless_wave_data(_endless_waves), _endless_waves)
+
+func _endless_wave_data(w: int) -> Dictionary:
+	var lv: int = clampi(1 + w / 4, 1, 5)
+	var units: Array = [
+		{"id": 11, "count": mini(4 + w * 2, 26), "level": lv},
+		{"id": 12, "count": mini(2 + w, 14), "level": lv},
+	]
+	if w >= 3:
+		units.append({"id": 15, "count": mini(1 + w / 3, 10), "level": lv})
+	if w >= 5:
+		units.append({"id": 18, "count": mini(1 + w / 6, 6), "level": lv})
+	if w >= 7:
+		units.append({"id": 16, "count": mini(1 + w / 8, 5), "level": lv})
+	if w % 10 == 0:
+		units.append({"id": 49, "count": 1, "level": 5})
+	return {"units": units, "label": "第 %d 波" % w}
+
+# 无尽挑战没有"胜利"，按坚持的波数给星
+func _endless_stars() -> int:
+	if _endless_waves >= 15:
+		return 3
+	if _endless_waves >= 10:
+		return 2
+	if _endless_waves >= 5:
+		return 1
+	return 0
+
 # ==================== 每帧推进 ====================
 
 func _process(delta: float) -> void:
@@ -828,6 +887,7 @@ func _process(delta: float) -> void:
 	_update_objective_states()
 	_update_zone(dt)
 	_update_multi_zones(dt)
+	_update_endless(dt)
 	_update_escort_marker()
 	_update_warning()
 	_update_progress_text()
@@ -914,6 +974,8 @@ func _update_objective_states() -> void:
 				done = hold_seconds >= _zone_hold_need
 			"hold_zones":
 				done = _multi_zones_done()
+			"endless":
+				done = false
 			"defend_targets":
 				done = _defend_duration > 0.0 and elapsed >= _defend_duration and _defend_alive >= _defend_min_alive
 			"escort":
@@ -1253,6 +1315,8 @@ func _update_warning() -> void:
 	for z in _multi_zones:
 		if not bool(z.get("done", false)) and bool(z.get("enemy", false)):
 			warning_text = "⚠ %s 被敌军压住，计时倒退！" % String(z.get("name", "控制区"))
+	if _endless_on and _endless_timer <= 10.0:
+		warning_text = "⚠ 第 %d 波还有 %d 秒抵达" % [_endless_waves + 1, int(ceil(_endless_timer))]
 
 # ==================== 胜负判定 ====================
 
@@ -1344,9 +1408,15 @@ func _finish(won: bool) -> void:
 	if won:
 		stars = _compute_stars()
 		CampaignProgressScript.record_win(String(level.get("id", "")), stars, elapsed)
+	elif _endless_on:
+		stars = _endless_stars()
+		CampaignProgressScript.record_win(String(level.get("id", "")), stars, elapsed)
+		CampaignProgressScript.record_endless(String(level.get("id", "")), _endless_waves, _endless_score)
 	_show_result(won, stars)
 
 func _compute_stars() -> int:
+	if _endless_on:
+		return _endless_stars()
 	var stars := 1
 	var star_cfg: Dictionary = level.get("stars", {})
 	var two: float = float(star_cfg.get("two", 0.0))
@@ -1402,9 +1472,14 @@ func _show_result(won: bool, stars: int) -> void:
 	card.add_child(vb)
 
 	var title := Label.new()
-	title.text = "🎉 任务完成" if won else "💀 任务失败"
+	if _endless_on:
+		title.text = "🏁 挑战结束"
+	elif won:
+		title.text = "🎉 任务完成"
+	else:
+		title.text = "💀 任务失败"
 	UIThemeScript.apply_label(title, UILayout.font_dp(22.0) if mobile else UIThemeScript.FONT_XXL,
-		UIThemeScript.EMERALD if won else UIThemeScript.VERMILION)
+		UIThemeScript.EMERALD if won else (UIThemeScript.GOLD if _endless_on else UIThemeScript.VERMILION))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(title)
 
@@ -1415,7 +1490,7 @@ func _show_result(won: bool, stars: int) -> void:
 	name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(name_label)
 
-	if won:
+	if won or _endless_on:
 		var star_label := Label.new()
 		star_label.text = "★".repeat(stars) + "☆".repeat(3 - stars)
 		UIThemeScript.apply_label(star_label, UILayout.font_dp(24.0) if mobile else 32, UIThemeScript.GOLD)
@@ -1428,6 +1503,11 @@ func _show_result(won: bool, stars: int) -> void:
 	if player_castle != null and is_instance_valid(player_castle):
 		var hp_pct: float = float(player_castle.health) / maxf(float(player_castle.max_health), 1.0)
 		lines.append("主城剩余血量：%d%%" % int(round(hp_pct * 100.0)))
+	if _endless_on:
+		lines.append("坚持到第 %d 波 · 得分 %d" % [_endless_waves, _endless_score])
+		lines.append("历史最高：第 %d 波 / %d 分" % [
+			CampaignProgressScript.best_wave(String(level.get("id", ""))),
+			CampaignProgressScript.best_score(String(level.get("id", "")))])
 	lines.append("本关最好成绩：%s / %d 星" % [
 		_fmt_time(CampaignProgressScript.best_time(String(level.get("id", "")))),
 		CampaignProgressScript.best_stars(String(level.get("id", "")))])
@@ -1556,6 +1636,10 @@ func _update_progress_text() -> void:
 					zone_parts.append("%s %d/%d 秒·%s" % [
 						String(z["name"]), int(z["held"]), int(z["need"]), String(z["state"])])
 				parts.append("；".join(zone_parts))
+			"endless":
+				parts.append("已坚持 %d 波 · 得分 %d（历史最高 %d 波）" % [
+					_endless_waves, _endless_score,
+					CampaignProgressScript.best_wave(String(level.get("id", "")))])
 			"defend_targets":
 				parts.append("目标建筑 %d/%d 座 · 撑过 %s / %s" % [
 					_defend_alive, maxi(_defend_initial, _defend_min_alive),

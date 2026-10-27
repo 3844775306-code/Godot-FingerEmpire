@@ -39,6 +39,8 @@ extends RefCounted
 #                                                        同时占住多个控制区（每区独立计时）
 #   {"type": "defend_targets", "building_ids":[22], "min_alive":1, "duration":360.0, "label":"…"}
 #                                                        守住己方指定建筑到倒计时结束（全毁即失败）
+#   {"type": "endless", "first_wave":20.0, "interval":30.0, "label":"…"}
+#                                                        无限波次：波数越多敌人越强，坚持到几波就算几波
 #   {"type": "kill_units", "unit_ids":[13], "count":8, "label":"…"}
 #                                                        击杀指定兵种（空 = 任意）数量
 # fail                 : 失败条件组合：army_wiped（全军覆没）/ castle_lost（主城被毁）/ timeout（超时）
@@ -838,6 +840,281 @@ const LEVELS := [
 			{"type": "destroy_targets", "building_ids": [22], "count": 3, "label": "摧毁敌军 3 座粮仓"},
 		],
 		"fail": ["castle_lost", "timeout"],
+	},
+	# ── 第 14 关：无兵开局，只有农民和一座空城，全靠自己爆兵 ──
+	{
+		"id": "c4_4",
+		"chapter": 4,
+		"index": 14,
+		"name": "巨鹿破釜",
+		"subtitle": "经营任务 · 从零开始 10 分钟破城",
+		"map_id": "marsh",
+		"map_seed": 11202,
+		"brief": "渡河之后烧掉退路，粮草只够十日。\n你手里没有一兵一卒，只有一群农民和一座空城。\n是时候把经济变成刀锋了。",
+		"tips": [
+			"开局没有任何军队，先造兵营、拉满人口，再出兵。",
+			"资源给得不少，别舍不得花；拖到 10 分钟就是死。",
+			"主城被拆或超过 10 分钟失败。",
+		],
+		"time_limit": 600.0,
+		"stars": {"two": 420.0, "three": 330.0},
+		"player": {
+			"nation": 3,
+			"castle": true,
+			"units": [
+				{"id": 10, "count": 12},
+			],
+			"resources": {"gold": 2000, "wood": 1500, "stone": 800, "food": 800, "oil": 0},
+			"pop_cap": 100,
+		},
+		"enemy": {
+			"nation": 2,
+			"castle": true,
+			"ai": true,
+			"ai_difficulty": 2,
+			"units": [
+				{"id": 10, "count": 4},
+				{"id": 11, "count": 6},
+				{"id": 12, "count": 2},
+			],
+			"resources": {"gold": 900, "wood": 700, "stone": 500, "food": 500, "oil": 0},
+			"pop_cap": 100,
+		},
+		"objectives": [
+			{"type": "destroy_castle", "label": "10 分钟内摧毁敌方主城"},
+		],
+		"fail": ["castle_lost", "timeout"],
+	},
+	# ── 第 15 关：渡海登陆，敌人在中央大岛据守 ──
+	{
+		"id": "c4_5",
+		"chapter": 4,
+		"index": 15,
+		"name": "海东登陆",
+		"subtitle": "跨海作战 · 装船渡海，攻上敌岛",
+		"map_id": "coast",
+		"map_seed": 11303,
+		"brief": "敌军退守中央大岛，环岛全是深水，陆军一步也过不去。\n把部队装进运载船，选一处滩头登陆，再向岛心推进。\n战船负责掩护，别让运输船半路被凿沉。",
+		"tips": [
+			"选中陆军、右键点自己的运载船即可登船；到对岸滩头后右键陆地卸船。",
+			"运载船很脆，先让战船把敌方水面力量清掉再渡海。",
+			"主城被拆、部队全灭或超过 15 分钟失败。",
+		],
+		"time_limit": 900.0,
+		"stars": {"two": 600.0, "three": 480.0},
+		"player": {
+			"nation": 0,
+			"castle": true,
+			"buildings": [
+				{"id": 23, "offset": [-12, 10]},
+				{"id": 25, "offset": [10, 12]},
+			],
+			"navy": [
+				{"id": 9, "count": 3},
+				{"id": 13, "count": 2},
+			],
+			"units": [
+				{"id": 10, "count": 4},
+				{"id": 11, "count": 8},
+				{"id": 12, "count": 4},
+				{"id": 15, "count": 2},
+			],
+			"resources": {"gold": 1200, "wood": 900, "stone": 500, "food": 500, "oil": 0},
+			"pop_cap": 90,
+		},
+		"enemy": {
+			"nation": 1,
+			"castle": true,
+			"ai": true,
+			"ai_difficulty": 2,
+			"buildings": [
+				{"id": 25, "offset": [-10, 8]},
+				{"id": 25, "offset": [10, 8]},
+				{"id": 25, "offset": [-10, -8]},
+				{"id": 25, "offset": [10, -8]},
+			],
+			"units": [
+				{"id": 11, "count": 6},
+				{"id": 12, "count": 4},
+			],
+			"resources": {"gold": 700, "wood": 600, "stone": 400, "food": 400, "oil": 0},
+			"pop_cap": 90,
+		},
+		"objectives": [
+			{"type": "destroy_castle", "label": "摧毁岛上的敌方主城"},
+		],
+		"fail": ["castle_lost", "army_wiped", "timeout"],
+	},
+	# ── 第 16 关：终章围歼，敌人被围但不断空降援军 ──
+	{
+		"id": "c4_6",
+		"chapter": 4,
+		"index": 16,
+		"name": "垓下之围",
+		"subtitle": "终章 · 围歼环山，顶住援军",
+		"map_id": "gaixia",
+		"map_seed": 11606,
+		"brief": "敌军残部被围在环形山里，四面山口都在你手里。\n但他们不甘心，每隔一分钟就有一支援军空降山口。\n和外圈援军抢时间，在山心合围之前解决他们的主城。",
+		"tips": [
+			"敌人在山中据守，六个山口都有箭塔，先拔塔再进宫。",
+			"每 60 秒会有一波援军从山口空降，别把攻城部队全压在城里。",
+			"主城被拆或超过 20 分钟失败。",
+		],
+		"time_limit": 1200.0,
+		"stars": {"two": 840.0, "three": 660.0},
+		"player": {
+			"nation": 3,
+			"castle": true,
+			"buildings": [
+				{"id": 25, "offset": [-14, 12]},
+				{"id": 25, "offset": [14, 12]},
+				{"id": 26, "offset": [-8, 16]},
+				{"id": 26, "offset": [8, 16]},
+			],
+			"units": [
+				{"id": 10, "count": 6},
+				{"id": 11, "count": 12},
+				{"id": 12, "count": 8},
+				{"id": 15, "count": 4},
+				{"id": 16, "count": 2},
+				{"id": 18, "count": 2},
+			],
+			"resources": {"gold": 1500, "wood": 1200, "stone": 900, "food": 900, "oil": 0},
+			"pop_cap": 120,
+		},
+		"enemy": {
+			"nation": 5,
+			"castle": true,
+			"ai": true,
+			"ai_difficulty": 3,
+			"buildings": [
+				{"id": 25, "offset": [-10, 6]},
+				{"id": 25, "offset": [10, 6]},
+				{"id": 25, "offset": [-10, -6]},
+				{"id": 25, "offset": [10, -6]},
+				{"id": 25, "offset": [0, 12]},
+				{"id": 25, "offset": [0, -12]},
+			],
+			"units": [
+				{"id": 11, "count": 8},
+				{"id": 12, "count": 4},
+			],
+			"waves": [
+				{"time": 60.0, "label": "第一支援军", "units": [{"id": 11, "count": 8}, {"id": 12, "count": 3}]},
+				{"time": 120.0, "label": "第二支援军", "units": [{"id": 11, "count": 9}, {"id": 12, "count": 3}, {"id": 15, "count": 2}]},
+				{"time": 180.0, "label": "第三支援军", "units": [{"id": 11, "count": 10}, {"id": 12, "count": 4}, {"id": 15, "count": 3}, {"id": 18, "count": 1}]},
+				{"time": 240.0, "label": "第四支援军", "units": [{"id": 11, "count": 12}, {"id": 12, "count": 5}, {"id": 15, "count": 3}, {"id": 18, "count": 1}]},
+				{"time": 300.0, "label": "最后援军", "units": [{"id": 11, "count": 14}, {"id": 12, "count": 6}, {"id": 15, "count": 4}, {"id": 18, "count": 2}]},
+			],
+			"resources": {"gold": 800, "wood": 600, "stone": 400, "food": 400, "oil": 0},
+			"pop_cap": 120,
+		},
+		"objectives": [
+			{"type": "destroy_castle", "label": "摧毁被围的敌方主城"},
+		],
+		"fail": ["castle_lost", "timeout"],
+	},
+	# ── 挑战 2：云顶争锋，两座台地同时抢点 ──
+	{
+		"id": "c5_2",
+		"chapter": 5,
+		"index": 102,
+		"name": "云顶争锋",
+		"subtitle": "挑战 · 双点争夺 · 两座台地各占 60 秒",
+		"map_id": "cloud_mesa",
+		"map_seed": 11802,
+		"brief": "五座平顶台地拔地而起，台缘全是绝壁，只有几条长坡能登顶。\n两处高地上的控制区都得占满一分钟。\n上坡慢、下坡无路，抢点就是抢坡道。",
+		"tips": [
+			"两个控制区分别在两座台地顶上，坡道是唯一入口，先堵坡再占点。",
+			"台地视野 +25%，站上高点能提前看到敌人从哪条坡道上。",
+			"主城被拆或超过 15 分钟失败。",
+		],
+		"time_limit": 900.0,
+		"stars": {"two": 600.0, "three": 450.0},
+		"player": {
+			"nation": 7,
+			"castle": true,
+			"units": [
+				{"id": 10, "count": 4},
+				{"id": 11, "count": 8},
+				{"id": 12, "count": 4},
+				{"id": 15, "count": 4},
+			],
+			"resources": {"gold": 800, "wood": 700, "stone": 500, "food": 500, "oil": 0},
+			"pop_cap": 90,
+		},
+		"enemy": {
+			"nation": 1,
+			"castle": true,
+			"ai": true,
+			"ai_difficulty": 3,
+			"units": [
+				{"id": 10, "count": 4},
+				{"id": 11, "count": 8},
+				{"id": 12, "count": 4},
+				{"id": 15, "count": 4},
+			],
+			"resources": {"gold": 800, "wood": 700, "stone": 500, "food": 500, "oil": 0},
+			"pop_cap": 90,
+		},
+		"objectives": [
+			{
+				"type": "hold_zones",
+				"zones": [
+					{"offset": [-18.0, 0.0], "radius": 7.0, "hold": 60.0, "name": "东台"},
+					{"offset": [18.0, 0.0], "radius": 7.0, "hold": 60.0, "name": "西台"},
+				],
+				"label": "东台、西台各累计占领 60 秒",
+			},
+		],
+		"fail": ["castle_lost", "timeout"],
+	},
+	# ── 挑战 3：无尽陨心，无限波次，看你能撑到第几波 ──
+	{
+		"id": "c5_3",
+		"chapter": 5,
+		"index": 103,
+		"name": "无尽陨心",
+		"subtitle": "挑战 · 无尽波次 · 看你能撑到第几波",
+		"map_id": "crater",
+		"map_seed": 11903,
+		"brief": "陨石坑里的残军被围在中心，四面八方都是敌人。\n没有增援，没有尽头，每一波都比上一波更强。\n把城守住，看看自己能撑到第几波。",
+		"tips": [
+			"波次一轮比一轮强，活过 5 波就有 1 星，10 波 2 星，15 波 3 星。",
+			"主城一倒就结束，你的波数与得分会记进档案，下次挑战可以超过自己。",
+			"别急着拆敌方——他们只是波次的来源，没有主城可拆。",
+		],
+		"time_limit": 0.0,
+		"stars": {"two": 0.0, "three": 0.0},
+		"player": {
+			"nation": 3,
+			"castle": true,
+			"buildings": [
+				{"id": 25, "offset": [-10, 10]},
+				{"id": 25, "offset": [10, 10]},
+				{"id": 22, "offset": [0, 14]},
+			],
+			"units": [
+				{"id": 10, "count": 4},
+				{"id": 11, "count": 8},
+				{"id": 12, "count": 6},
+				{"id": 15, "count": 2},
+				{"id": 18, "count": 1},
+			],
+			"resources": {"gold": 1200, "wood": 900, "stone": 700, "food": 700, "oil": 0},
+			"pop_cap": 100,
+		},
+		"enemy": {
+			"nation": 7,
+			"castle": false,
+			"ai": false,
+			"resources": {"gold": 0, "wood": 0, "stone": 0, "food": 0, "oil": 0},
+			"pop_cap": 150,
+		},
+		"objectives": [
+			{"type": "endless", "first_wave": 20.0, "interval": 30.0, "label": "一波接一波，撑到第 15 波"},
+		],
+		"fail": ["castle_lost"],
 	},
 	# ── 挑战 1：赤壁火攻，敌方火船成群撞岸，靠水军击沉 ──
 	{

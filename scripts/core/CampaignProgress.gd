@@ -82,6 +82,24 @@ static func record_win(level_id: String, stars: int, elapsed: float) -> void:
 	all["levels"] = levels
 	save_all(all)
 
+# 无尽挑战最好波数与最好得分（没有记录返回 0）
+static func best_wave(level_id: String) -> int:
+	return int(get_record(level_id).get("waves", 0))
+
+static func best_score(level_id: String) -> int:
+	return int(get_record(level_id).get("score", 0))
+
+# 记录无尽挑战成绩（只升不降）
+static func record_endless(level_id: String, waves: int, score: int) -> void:
+	var all := load_all()
+	var levels: Dictionary = all.get("levels", {})
+	var rec: Dictionary = levels.get(level_id, {})
+	rec["waves"] = maxi(int(rec.get("waves", 0)), waves)
+	rec["score"] = maxi(int(rec.get("score", 0)), score)
+	levels[level_id] = rec
+	all["levels"] = levels
+	save_all(all)
+
 # 全部关卡星级合计（选关界面顶部显示）
 static func total_stars() -> int:
 	var data := preload("res://scripts/data/CampaignData.gd")
