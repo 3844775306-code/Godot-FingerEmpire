@@ -153,9 +153,15 @@ const MOBILE_INFO_LINE_DP: float = 18.0
 const MOBILE_INFO_LINES: int = 2
 const MOBILE_INFO_H_DP: float = MOBILE_INFO_LINE_DP * float(MOBILE_INFO_LINES)
 
-# 桌面顶部指令底板：水平居中
+# 桌面顶部指令底板：略偏右，给资源胶囊右侧的单行信息让出宽度；
+# 窄屏用右侧小地图反向夹住，避免压到小地图。
+const TOP_CMD_SHIFT_RIGHT: float = 220.0
 static func top_cmd_rect(vp: Vector2) -> Rect2:
-	return Rect2(Vector2((vp.x - TOP_CMD_W) * 0.5, TOP_MARGIN), Vector2(TOP_CMD_W, top_cmd_h()))
+	var base_x := (vp.x - TOP_CMD_W) * 0.5
+	var mm := top_minimap_rect(vp)
+	var max_x := mm.position.x - 12.0 - TOP_CMD_W
+	var x := clampf(base_x + TOP_CMD_SHIFT_RIGHT, TOP_MARGIN, maxf(TOP_MARGIN, max_x))
+	return Rect2(Vector2(x, TOP_MARGIN), Vector2(TOP_CMD_W, top_cmd_h()))
 
 # 桌面小地图：贴右上角，与顶部带同一条高度
 static func top_minimap_rect(vp: Vector2) -> Rect2:
