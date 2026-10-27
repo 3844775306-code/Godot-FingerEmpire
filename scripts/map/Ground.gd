@@ -190,7 +190,7 @@ func _generate_terrain():
 		return
 	_generate_with_stages(size, stages)
 
-# 经典生成：与历史版本逐字节一致，作为默认图与回归基线
+# 经典生成：噪声大陆，生成后统一清理面积过小的孤立山块
 func _generate_classic(size: int):
 	var noise = FastNoiseLite.new()
 	if custom_seed != 0:

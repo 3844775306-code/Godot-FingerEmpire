@@ -1,7 +1,7 @@
 # 地图预设注册表
 #
 # 每张地图 = 地形配方(stages) + 资源画像(resources) + 规则修正(modifiers) + 外观(palette)。
-# stages 为空时走 Ground._generate_classic()，与历史版本逐字节一致，作为默认图与回归基线。
+# stages 为空时走 Ground._generate_classic()，作为默认图基线（生成后会清掉过小的孤立山块）。
 # 取值一律返回深拷贝，调用方可随意修改（与 EntityDatabase.get_config() 的约定一致）。
 extends RefCounted
 
