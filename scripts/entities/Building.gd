@@ -64,8 +64,6 @@ func start_construction(time: float, data: Dictionary):
 	production_list = []
 	# 建造期间不提供视野
 	vision_range = 0
-	if building_data.has("produces") and building_data["produces"] is Array:
-		_sync_production_unlocks()
 	BuildingConstructionVisual.begin(self)
 	# 建造期间先隐藏等级旗帜/徽章，等脚手架撤掉、等级确定后再显示。
 	LevelVisualScript.set_visible(self, false)
@@ -690,6 +688,8 @@ func setup(config: Dictionary):
 # 旧数据没有 unlock_level 时仍按数组下标推导等级；
 # 同一等级可以一次解锁多个单位（如船坞4级的炮艇+爆破船）。
 func _sync_production_unlocks():
+	if not is_inside_tree():
+		return
 	var full: Array = building_data.get("produces", [])
 	if full.is_empty():
 		return
