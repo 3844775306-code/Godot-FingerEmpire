@@ -183,6 +183,13 @@ const REPAIR_WEIGHT = {
 }
 var _repair_scan_timer: float = 0.0
 
+# ── 升时代建筑补齐 ──
+# 升时代不只要求人口，还要求若干“已建成建筑”。普通建造目标只覆盖出兵/经济建筑，
+# 像黑暗时代必需的瞭望塔(41)不在 wanted_buildings 里，AI 会一直差建筑。
+# 每 30 秒主动对照当前时代的建筑要求，缺什么补什么。
+const AGE_BUILDING_CHECK_INTERVAL: float = 30.0
+var _age_building_check_timer: float = AGE_BUILDING_CHECK_INTERVAL
+
 # ═══ Resource wrappers ═══
 func _get_resources() -> Dictionary:
 	if my_peer_id != -1:
@@ -306,6 +313,125 @@ func _research_age_required_building_target(b_id: int) -> int:
 	if int(st.get("age", 0)) == 2 and b_id == 53:
 		return 2
 	return 0
+
+# ── 升时代建筑条件兜底 ──
+# 升时代要求的是“已建成建筑”，普通建造目标不会主动补瞭望塔(41)这类条件建筑。
+# 每 30 秒按当前时代的目标建筑清单检查一次，缺什么补什么；建造目标本身仍受
+# 资源、城堡等级、地图空间和时代预留限制，不会为了凑数把时代预算花光。
+func _ensure_age_upgrade_buildings() -> void:
+	if battle == null or not battle.has_method("is_research_mode") or not battle.is_research_mode():
+		return
+	var st: Dictionary = battle.get_research_state(my_peer_id, my_team)
+	if st.is_empty():
+		return
+	var age: int = int(st.get("age", 0))
+	if age >= 3:
+		return
+	if get_peer_castle(my_peer_id) == null:
+		return
+	match age + 1:
+		1:
+			_ensure_age1_required_buildings()
+		2:
+			_ensure_age2_required_buildings()
+		3:
+			_ensure_age3_required_buildings()
+
+# age1：2 座 [兵营(21)/瞭望塔(41)]。AI 的普通目标只造兵营，经常没有瞭望塔。
+func _ensure_age1_required_buildings() -> void:
+	for _attempt in range(2):
+		var b21: int = count_building(21)
+		var b41: int = count_building(41)
+		if b21 + b41 >= 2:
+			return
+		var candidates: Array = []
+		if b21 >= 1 and b41 == 0:
+			# 已有兵营时优先补瞭望塔；若塔的位置被占，退回再造一座兵营。
+			candidates = [41, 21]
+		else:
+			candidates = [21, 41]
+		var built: bool = false
+		for bid in candidates:
+			if _try_build_age_requirement(int(bid)):
+				built = true
+				break
+		if not built:
+			return
+
+# age2：3 座 [船坞/攻城车间/箭塔/集市/修道院]，且至少 2 种类型。
+func _ensure_age2_required_buildings() -> void:
+	var ids: Array = [23, 24, 25, 52, 54]
+	var priority: Array = [24, 52, 54, 25, 23]
+	for _attempt in range(3):
+		var info: Dictionary = _age_building_counts(ids)
+		var counts: Dictionary = info["counts"]
+		if int(info["total"]) >= 3 and int(info["types"]) >= 2:
+			return
+		var candidates: Array = []
+		# 先补“完全没有的类型”，避免 3 座全是攻城车间却凑不出 2 种类型。
+		if int(info["types"]) < 2:
+			for bid in priority:
+				if int(counts.get(int(bid), 0)) == 0:
+					candidates.append(int(bid))
+		for bid in priority:
+			if int(counts.get(int(bid), 0)) < 2 and int(bid) not in candidates:
+				candidates.append(int(bid))
+		var built: bool = false
+		for bid in candidates:
+			if _try_build_age_requirement(int(bid)):
+				built = true
+				break
+		if not built:
+			return
+
+# age3：4 座 [炮塔/重装武器厂/书院/城堡/墙顶炮台]，且至少 2 座城堡(53)。
+func _ensure_age3_required_buildings() -> void:
+	var ids: Array = [26, 29, 42, 53, 64]
+	var priority: Array = [29, 42, 26, 64]
+	for _attempt in range(4):
+		var info: Dictionary = _age_building_counts(ids)
+		var counts: Dictionary = info["counts"]
+		if int(info["total"]) >= 4 and int(counts.get(53, 0)) >= 2:
+			return
+		var candidates: Array = []
+		if int(counts.get(53, 0)) < 2:
+			candidates.append(53)
+		for bid in priority:
+			if int(counts.get(int(bid), 0)) == 0:
+				candidates.append(int(bid))
+		for bid in priority:
+			if int(counts.get(int(bid), 0)) < 2 and int(bid) not in candidates:
+				candidates.append(int(bid))
+		var built: bool = false
+		for bid in candidates:
+			if _try_build_age_requirement(int(bid)):
+				built = true
+				break
+		if not built:
+			return
+
+func _age_building_counts(ids: Array) -> Dictionary:
+	var counts: Dictionary = {}
+	var total: int = 0
+	var types: int = 0
+	for raw in ids:
+		var bid: int = int(raw)
+		var cnt: int = count_building(bid)
+		counts[bid] = cnt
+		total += cnt
+		if cnt > 0:
+			types += 1
+	return {"counts": counts, "total": total, "types": types}
+
+func _try_build_age_requirement(building_id: int) -> bool:
+	if not _ai_can_build(building_id):
+		return false
+	if not can_afford_building(building_id):
+		return false
+	var pos: Vector3 = _get_build_position(building_id)
+	if pos == Vector3.ZERO:
+		return false
+	return build_building(building_id, pos)
 
 func _deduct_resources(cost: Dictionary) -> bool:
 	if my_peer_id != -1:
@@ -1429,6 +1555,11 @@ func decide(_delta):
 	_refresh_primary_enemy()
 	_update_resource_pressure(_delta)
 	_ensure_house_quota()
+	# 升时代建筑要求每 30 秒兜底检查一次：普通建造目标不一定包含瞭望塔等条件建筑。
+	_age_building_check_timer -= _delta
+	if _age_building_check_timer <= 0.0:
+		_age_building_check_timer = AGE_BUILDING_CHECK_INTERVAL
+		_ensure_age_upgrade_buildings()
 	# 资源囤到接近上限时先泄压：补人口/建筑升级/多排兵，避免继续采集却被上限截断。
 	_relieve_resource_pressure()
 	_diplo_decide()
