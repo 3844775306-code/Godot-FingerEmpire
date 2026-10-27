@@ -962,6 +962,9 @@ func get_counter_priority() -> Array:
 
 # ═══ Init ═══
 func _ready():
+	# 战斗管理器本身是 PROCESS_MODE_ALWAYS（暂停时仍接玩家指令），
+	# AI 必须显式 PAUSABLE，否则暂停时仍会生产、出兵、下令。
+	process_mode = Node.PROCESS_MODE_PAUSABLE
 	_add_nation_special_unit()
 	# 手机端不创建 AI 决策面板：屏幕装不下多块 540×400 的面板，
 	# 而且 MobileHUD 只在自己装配时隐藏一次，AI 是开局后才建的，压不住。
@@ -2140,7 +2143,7 @@ func execute_overwhelm():
 			if entity.current_target != null or entity.current_order != "" or entity.is_attack_moving: continue
 			entity.attack_move_to(rally)
 	# 等待部队集结
-	await get_tree().create_timer(10.0).timeout
+	await get_tree().create_timer(10.0, false).timeout
 	if _defense != null and int(_defense.threat_level) >= 2:
 		return
 	# 第二波：全军压上敌方城堡
@@ -2195,12 +2198,12 @@ func execute_raid():
 	var half = raid_army.size() / 2
 	for i in range(half):
 		if is_instance_valid(raid_army[i]): raid_army[i].move_to(waypoint)
-	await get_tree().create_timer(1.8).timeout
+	await get_tree().create_timer(1.8, false).timeout
 	if _defense != null and int(_defense.threat_level) >= 2:
 		return
 	for i in range(half, raid_army.size()):
 		if is_instance_valid(raid_army[i]): raid_army[i].move_to(waypoint)
-	await get_tree().create_timer(RAID_WAIT_TIME)
+	await get_tree().create_timer(RAID_WAIT_TIME, false).timeout
 	if _defense != null and int(_defense.threat_level) >= 2:
 		return
 	for u in raid_army:
@@ -2254,7 +2257,7 @@ func build_defense_line():
 	for i in range(WALL_COUNT):
 		var bp = front_center + right_dir * ((i - WALL_COUNT/2) * WALL_SPACING)
 		if _is_valid_build_ground(bp): build_building(27, bp); wall_positions.append(bp)
-	await get_tree().create_timer(0.3)
+	await get_tree().create_timer(0.3, false).timeout
 
 func check_defense_line():
 	var walls = 0; var cannons = 0; var arrows = 0

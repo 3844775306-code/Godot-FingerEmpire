@@ -70,6 +70,8 @@ var _shake_total: float = 0.0
 var _shake_amp: float = 0.0
 
 func _ready():
+	# 暂停时仍允许平移/缩放镜头，方便盯帧微操。
+	process_mode = Node.PROCESS_MODE_ALWAYS
 	add_to_group("camera_controller")
 	# 相机放大倍数：设备默认值（电脑最小、平板居中、手机最大），可在设置面板调
 	_zoom_mult = clampf(GameSettings.camera_zoom_mult, GameSettings.CAMERA_ZOOM_MIN, GameSettings.CAMERA_ZOOM_MAX)

@@ -37,6 +37,7 @@ var auto_attack_btn: Button
 var auto_attack_on: bool = false
 var quartermaster_btn: Button
 var quartermaster_on: bool = false
+var _pause_overlay: Control = null
 var enemy_nation_label: Label
 var nation_bonus_label: Label
 
@@ -587,8 +588,68 @@ func _update_unit_stats():
 		_stats_bld_rtl.text = " ".join(building_lines)
 
 
+func _create_pause_overlay():
+	_pause_overlay = PanelContainer.new()
+	_pause_overlay.name = "PauseOverlay"
+	_pause_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_pause_overlay.z_index = 200
+	_pause_overlay.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	_pause_overlay.offset_left = -190
+	_pause_overlay.offset_right = 190
+	_pause_overlay.offset_top = 118
+	_pause_overlay.offset_bottom = 196
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.04, 0.05, 0.07, 0.82)
+	style.border_color = Color(UITheme.GOLD, 0.75)
+	style.set_border_width_all(2)
+	style.set_corner_radius_all(10)
+	style.content_margin_left = 18
+	style.content_margin_right = 18
+	style.content_margin_top = 10
+	style.content_margin_bottom = 10
+	_pause_overlay.add_theme_stylebox_override("panel", style)
+	var vb := VBoxContainer.new()
+	vb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	vb.alignment = BoxContainer.ALIGNMENT_CENTER
+	vb.add_theme_constant_override("separation", 4)
+	_pause_overlay.add_child(vb)
+	var title := Label.new()
+	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	title.text = "⏸ 已暂停"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 24)
+	title.add_theme_color_override("font_color", UITheme.GOLD)
+	vb.add_child(title)
+	var hint := Label.new()
+	hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hint.text = "Alt + Space 继续游戏"
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint.add_theme_font_size_override("font_size", 14)
+	hint.add_theme_color_override("font_color", Color(0.85, 0.87, 0.9))
+	vb.add_child(hint)
+	_pause_overlay.visible = get_tree().paused
+	add_child(_pause_overlay)
+
+func _update_pause_overlay():
+	if is_instance_valid(_pause_overlay):
+		_pause_overlay.visible = get_tree().paused
+
+func _toggle_battle_pause():
+	get_tree().paused = not get_tree().paused
+	_update_pause_overlay()
+
+func _exit_tree():
+	if get_tree() != null and get_tree().paused:
+		get_tree().paused = false
+
 func _input(event):
 	if event is InputEventKey and event.pressed:
+		# Alt+Space 快速暂停/继续；暂停中仍允许建造、升级、生产和下发指令。
+		if event.keycode == KEY_SPACE and event.alt_pressed:
+			if not event.echo and NetworkManager.mode == NetworkManager.Mode.NONE:
+				_toggle_battle_pause()
+			get_viewport().set_input_as_handled()
+			return
 		match event.keycode:
 			KEY_F1:
 				if event.ctrl_pressed: _on_select_all_pressed()
@@ -781,6 +842,9 @@ func _ready():
 	# 血条文字默认关闭；设置面板/上一局状态由 GameSettings 统一保存。
 	show_unit_text = GameSettings.show_unit_text
 	add_to_group("game_hud")
+	# 暂停时 HUD 仍要响应快捷栏、建造菜单、信息面板与相机操作。
+	process_mode = Node.PROCESS_MODE_ALWAYS
+	_create_pause_overlay()
 	# 电脑版左下角的虚拟摇杆用不上：隐藏并停掉它的输入处理，避免抢占鼠标
 	if not InputSource.use_mobile_ui():
 		var stick := get_node_or_null("VirtualStick")
@@ -1079,6 +1143,7 @@ func update_data(resources: Dictionary, population: Dictionary, limits: Dictiona
 	if _mobile_hud and is_instance_valid(_mobile_hud):
 		_mobile_hud.update_data(resources, population, limits, gather_counts, income_rate)
 func _process(delta):
+	_update_pause_overlay()
 	_tick_ffa_diplo(delta)
 	_unit_stats_timer -= delta
 	var bm = _get_bm()

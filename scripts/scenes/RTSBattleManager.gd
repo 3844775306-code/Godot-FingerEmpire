@@ -258,6 +258,8 @@ func acquire_bullet(source, p_damage_radius: float, p_team: int) -> Bullet:
 			pooled.reset_for_reuse(source, p_damage_radius, p_team, key)
 			return pooled
 	var b := Bullet.new()
+	# 暂停时弹丸必须停在原地，避免解冻瞬间全部命中。
+	b.process_mode = Node.PROCESS_MODE_PAUSABLE
 	b.team = p_team
 	b.source = source
 	b.damage_radius = p_damage_radius
@@ -1252,6 +1254,9 @@ func can_train_unit(team: int) -> bool:
 	
 # ==================== 初始化 ====================
 func _ready():
+	# 暂停时整局仍要接收建造/生产/升级/右键指令，所以管理器保持运行；
+	# 真正的单位、建筑、弹丸会在 spawn 时显式设为 PAUSABLE，由 SceneTree.paused 冻结。
+	process_mode = Node.PROCESS_MODE_ALWAYS
 	# 每局重新随机国家颜色；颜色不再固定对应某个国家。
 	RTSConfig.randomize_nation_colors()
 	add_to_group("battle_manager")
@@ -1288,6 +1293,7 @@ func _ready():
 				campaign_ai.my_team = enemy_team
 			var director = CampaignDirectorScript.new()
 			director.name = "CampaignDirector"
+			director.process_mode = Node.PROCESS_MODE_PAUSABLE
 			add_child(director)
 		elif GameSettings.is_ffa:
 			_init_ffa_single(GameSettings.ffa_nation_count)
@@ -1320,6 +1326,7 @@ func _spawn_tutorial_hint() -> void:
 		return
 	var hint = TutorialHintScript.new()
 	hint.name = "TutorialHint"
+	hint.process_mode = Node.PROCESS_MODE_PAUSABLE
 	add_child(hint)
 
 # ==================== 乱斗模式（FFA） ====================
@@ -2604,6 +2611,8 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 
 	cfg["level"] = level
 	cfg["team"] = team
+	# 暂停时冻结所有游戏实体；管理器本身是 ALWAYS，只负责接指令和建造预览。
+	entity.process_mode = Node.PROCESS_MODE_PAUSABLE
 	entities.add_child(entity)
 	# 实体以任何方式离开场景树（死亡动画结束、销毁、场景退出）都立即标记缓存失效，
 	# 避免 AI/统计缓存里残留已释放实例，访问属性时报 "previously freed"。
@@ -4001,6 +4010,9 @@ func _process(delta):
 				_place_building()
 				if not Input.is_key_pressed(KEY_SHIFT):
 					_exit_build_mode()
+	# 暂停：建造预览和延迟左键已经处理完，但时间、AI、建造/生产/升级、寻路、迷雾全部冻结。
+	if get_tree().paused:
+		return
 	game_time += delta
 	_tick_builder_dispatch(delta)
 	_tick_quartermaster(delta)

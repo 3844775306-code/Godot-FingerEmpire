@@ -32,6 +32,8 @@ var _last_group_key: int = -1         # 双击切图检测
 var _last_group_time: float = 0.0
 
 func _ready():
+	# 暂停时仍要能框选、右键下令、切换编队；模拟单位则保持冻结。
+	process_mode = Node.PROCESS_MODE_ALWAYS
 	# 创建框选矩形（半透明蓝色）
 	box_rect = ColorRect.new()
 	box_rect.color = Color(0.3, 0.6, 1.0, 0.3)

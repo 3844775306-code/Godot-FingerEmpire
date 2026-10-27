@@ -157,7 +157,7 @@ func _spawn_impact_effect(pos: Vector3, big: bool) -> void:
 	p.position = pos
 	parent.add_child(p)
 	p.set_deferred("emitting", true)
-	get_tree().create_timer(1.4).timeout.connect(func():
+	get_tree().create_timer(1.4, false).timeout.connect(func():
 		if is_instance_valid(p):
 			p.queue_free())
 
@@ -196,7 +196,7 @@ func _spawn_impact_effect(pos: Vector3, big: bool) -> void:
 	dust.position = pos
 	parent.add_child(dust)
 	dust.set_deferred("emitting", true)
-	get_tree().create_timer(1.6).timeout.connect(func():
+	get_tree().create_timer(1.6, false).timeout.connect(func():
 		if is_instance_valid(dust):
 			dust.queue_free())
 
@@ -232,7 +232,7 @@ func _spawn_impact_effect(pos: Vector3, big: bool) -> void:
 		spark.position = pos
 		parent.add_child(spark)
 		spark.set_deferred("emitting", true)
-		get_tree().create_timer(1.0).timeout.connect(func():
+		get_tree().create_timer(1.0, false).timeout.connect(func():
 			if is_instance_valid(spark):
 				spark.queue_free())
 
