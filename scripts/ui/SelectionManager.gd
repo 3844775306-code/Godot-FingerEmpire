@@ -19,11 +19,13 @@ var last_clicked_entity = null
 var last_click_time: float = 0.0
 const DOUBLE_CLICK_THRESHOLD = 0.3   # 双击时间阈值（秒）
 var _ref_cleanup_timer: float = 0.0
+# 选中单位的目标 ❌：由集中管理器按目标实体/地面位置去重，避免多选时重
+# 复生成同一个标记。放在 battle_manager 下，标记跟随世界坐标。
+var _target_markers: TargetMarkerManager = null
 # 框选/全选时 _add_to_selection 会被连续调用几十上百次；每次立刻重建
 # InfoPanel 会让“框选大部队”明显卡顿。合并到本帧结束只刷新一次。
 var _info_panel_refresh_pending: bool = false
-# 框选几百个单位时，只为前 N 个显示选择环；每个环都是一次额外 draw call，
-# 而大部队的实际操作路径预览本来就只画第一个单位。
+# 框选几百个单位时，只为前 N 个显示选择环；每个环/路径指引都是一次额外 draw call。
 const MAX_SELECTION_RINGS: int = 64
 
 # 编队系统
@@ -50,6 +52,48 @@ func _process(delta):
 		_ref_cleanup_timer = 0.2
 		if _sanitize_entity_refs():
 			_update_info_panel()
+	_update_target_markers()
+
+# 只给自己的陆军画目标 ❌；敌方/中立选中查看时不展示作战目标。
+func _update_target_markers() -> void:
+	if _target_markers == null or not is_instance_valid(_target_markers):
+		var host: Node = get_parent()
+		if not (host is Node3D):
+			host = self
+		_target_markers = TargetMarkerManager.new()
+		_target_markers.name = "TargetMarkerManager"
+		_target_markers.process_mode = Node.PROCESS_MODE_PAUSABLE
+		host.add_child(_target_markers)
+		var bm = get_tree().get_first_node_in_group("battle_manager")
+		_target_markers.setup(bm)
+	var requests: Array = []
+	for e in selected_entities:
+		if is_instance_valid(e) and e is Army and _is_local_owned(e):
+			var req: Dictionary = _target_marker_request(e)
+			if not req.is_empty():
+				requests.append(req)
+	_target_markers.refresh_requests(requests)
+
+# 把一个选中陆军的目标整理成 TargetMarkerManager 的请求：
+#   - 有攻击/采集目标实体 → 跟随实体，标记放头顶；
+#   - 普通移动/攻击移动 → 放 A* 终点；没有路径说明已到达或没有命令。
+func _target_marker_request(e: Army) -> Dictionary:
+	var target = e.current_target
+	if target != null and is_instance_valid(target) and target is Node3D and target != e:
+		return {"follow": target}
+	var mc: MovementController = e._movement
+	if mc == null:
+		return {}
+	if mc.astar_path.is_empty():
+		if e.is_attack_moving and e.attack_move_target != Vector3.ZERO:
+			return {"pos": e.attack_move_target}
+		return {}
+	if mc.astar_path.size() < 2:
+		return {}
+	var pos: Vector3 = mc.astar_target
+	if pos == Vector3.ZERO:
+		pos = mc.astar_path[mc.astar_path.size() - 1]
+	return {"pos": pos}
 
 func _sanitize_entity_refs() -> bool:
 	var changed := false
