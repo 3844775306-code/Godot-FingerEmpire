@@ -341,6 +341,9 @@ func stop():
 	_next_no_path_reissue_ms = 0
 	_next_partial_continue_ms = 0
 	_stop_velocity()
+	# 命令结束/单位停下后不要把最后一段路径留在屏幕上。
+	if _is_selected:
+		_hide_path()
 
 # 只处理“移动逻辑还在要路径，但既没排队也没有失败标记”的漏网状态。
 # 失败的路径交给 Army 的换目标/拆墙超时，不能在这里反复重算。
@@ -527,19 +530,25 @@ func process_move(delta, bm: RTSBattleManager):
 		if h_dist.length() < 0.5:
 			astar_path.pop_front()
 			# 走过一个航点后让指引带跟着收一段（_show_path 内部按 0.45 米步长节流，
-			# 不会每帧重建网格）。路径走完则收起预览。
-			if astar_path.is_empty() and _is_selected:
-				_hide_path()
-			elif _is_selected:
+			# 不会每帧重建网格）。路径走空时不要立刻收起：单位可能还在做最后几米接近，
+			# 由 _show_path 用当前位置到目的地补一条短线。
+			if _is_selected:
 				_show_path()
 			if astar_path.size() > 0:
 				move_target = astar_path[0]
 	# 沿着长直路段前进时不会经过航点，这里按位移节流地刷新一次排头，
 	# 让线一直贴着脚下走，而不是等到下一个航点才跳一段。
-	if _is_selected and _path_guide != null and not astar_path.is_empty():
-		var head_now: Vector3 = _army.global_position
-		if _path_built_head.distance_to(head_now) > PATH_HEAD_STEP:
-			_show_path()
+	# 路径走空但单位仍在最终接近/直追时，也要补建这条短线；停下后收起。
+	if _is_selected:
+		if _path_guide == null or not is_instance_valid(_path_guide):
+			if astar_path.is_empty() and _preview_motion_active():
+				_show_path()
+		else:
+			var head_now: Vector3 = _army.global_position
+			if _path_built_head.distance_to(head_now) > PATH_HEAD_STEP:
+				_show_path()
+			elif astar_path.is_empty() and not _preview_motion_active():
+				_hide_path()
 	# 兜底：路径可能因建筑变化/单位被挤动而临期，实际行走前再检查一次下一段坡度。
 	# 尤其禁止从高地/台地边缘直接走下悬崖；发现后立即重算，而不是停下等 Army 的
 	# 0.75~1.2 秒重试计时器（那会表现为行军途中突然站住一两秒）。
@@ -845,9 +854,6 @@ func _separate_from(entity: GameEntity, delta: float, bm: RTSBattleManager) -> v
 # 指引带内部逐顶点贴地，并自带「起点淡出 + 末端呼吸落点环」，所以不再需要绿球标终点。
 # 每支被选中的军队各画自己的路径；路径点没变就沿用现有节点，不重复生成网格。
 func _show_path():
-	if astar_path.size() < 2:
-		_hide_path()
-		return
 	var bm = _get_bm()
 	if bm == null:
 		_hide_path()
@@ -856,14 +862,10 @@ func _show_path():
 	# 排头用单位当前位置，这样线始终从脚下开始，走一段收一段（实时缩短）。
 	var head: Vector3 = _army.global_position
 	head.y = 0.0
-	var tail: Array = []
-	if astar_path.size() <= MAX_PATH_PREVIEW_POINTS:
-		# 必须复制：astar_path 会被 process_move 逐个 pop_front，共享引用会让缓存对比失真
-		tail = astar_path.duplicate()
-	else:
-		var step: float = float(astar_path.size() - 1) / float(MAX_PATH_PREVIEW_POINTS - 1)
-		for i in range(MAX_PATH_PREVIEW_POINTS):
-			tail.append(astar_path[int(round(float(i) * step))])
+	var tail: Array = _preview_tail_points()
+	if tail.is_empty():
+		_hide_path()
+		return
 	# 单位在原地小幅晃动、或者只走了一点点时不必重建网格：
 	# 路径点没变、排头位移不到 PATH_HEAD_STEP 就沿用现有的指引带。
 	var head_moved: bool = _path_built_head.distance_to(head) > PATH_HEAD_STEP
@@ -882,6 +884,40 @@ func _show_path():
 	# 高度采样交给 GroundStripMesh.height_fn_for()，拿不到地形时退回路径点的原始 y。
 	_path_guide = GroundPathGuide.create(points, GroundStripMesh.height_fn_for(bm))
 	bm.add_child(_path_guide)
+
+# 路径预览的剩余路径点。
+# A* 路径可能只剩 1 个航点，甚至在最后几米被清空；此时单位仍在走（最终接近/直追），
+# 如果只按 astar_path.size() >= 2 判断，就会表现为“正在行走却没有路径”。
+func _preview_tail_points() -> Array:
+	var tail: Array = []
+	if astar_path.is_empty():
+		if not _preview_motion_active():
+			return tail
+		var dest: Vector3 = get_current_target()
+		if dest != Vector3.ZERO:
+			tail.append(dest)
+		return tail
+	if astar_path.size() <= MAX_PATH_PREVIEW_POINTS:
+		# 必须复制：astar_path 会被 process_move 逐个 pop_front，共享引用会让缓存对比失真
+		tail = astar_path.duplicate()
+	else:
+		var step: float = float(astar_path.size() - 1) / float(MAX_PATH_PREVIEW_POINTS - 1)
+		for i in range(MAX_PATH_PREVIEW_POINTS):
+			tail.append(astar_path[int(round(float(i) * step))])
+	# A* 终点常停在资源/建筑边缘外，最后一段由 process_move 直线接近；
+	# 把真正的目的地接到尾点，路径才不会提前断掉。
+	var dest2: Vector3 = get_current_target()
+	if dest2 != Vector3.ZERO and not tail.is_empty():
+		var last: Vector3 = tail[tail.size() - 1]
+		if Vector2(last.x - dest2.x, last.z - dest2.z).length() > 0.8:
+			tail.append(dest2)
+	return tail
+
+# 没有 A* 路径时，只有确实还在移动才补画最终接近/追击线；站桩攻击或采集不画假路径。
+func _preview_motion_active() -> bool:
+	if _army == null:
+		return false
+	return _army.velocity.length_squared() > 0.04 or _army.is_attack_moving
 
 func _hide_path():
 	_path_preview_points.clear()

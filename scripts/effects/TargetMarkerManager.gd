@@ -83,9 +83,12 @@ func _place_marker(marker, req: Dictionary) -> void:
 		p = (follow as Node3D).global_position + Vector3(0.0, head + ENTITY_HEAD_CLEARANCE, 0.0)
 	else:
 		p = req.get("pos", Vector3.ZERO)
+		var base_y: float = p.y
 		if _height_fn.is_valid():
 			var ground_y: float = float(_height_fn.call(Vector3(p.x, 0.0, p.z)))
 			if is_finite(ground_y):
-				p.y = ground_y + GROUND_CLEARANCE
+				base_y = ground_y
+		# 竖着的 ❌ 以中心为原点；抬高半个梁高，让底部贴在地表上方而不是埋一半。
+		p.y = base_y + GROUND_CLEARANCE + TargetMarker.BAR_HALF_HEIGHT
 	marker.global_position = p
 	marker.visible = true
