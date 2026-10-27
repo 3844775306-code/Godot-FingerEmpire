@@ -1299,6 +1299,14 @@ func _process(delta):
 	if _repair_scan_timer <= 0.0:
 		_repair_scan_timer = REPAIR_SCAN_INTERVAL
 		_tick_building_repair()
+	# 决策面板刷新独立于 AI 思考间隔：展开时每秒刷新一次，收起时放慢到 5 秒。
+	# 以前挂在 decide() 的帧计数上，AI 思考间隔 1~2 秒时面板最多要等两轮 think 才更新，
+	# 看起来像数据不刷新；现在按真实 delta 计时，打开面板就是稳定每秒更新。
+	if OS.is_debug_build() and is_instance_valid(debug_panel):
+		_panel_refresh_timer -= delta
+		if _panel_refresh_timer <= 0.0:
+			_panel_refresh_timer = PANEL_REFRESH_INTERVAL_COLLAPSED if _panel_collapsed else PANEL_REFRESH_INTERVAL_OPEN
+			update_debug_label()
 	# 部队积累判定放到 decide() 的 AI 思考节流里，避免每帧全实体扫描
 
 # ═══ 科研模式 AI：按难度节奏升时代，再按优先表研究科技 ═══
@@ -1590,11 +1598,6 @@ func decide(_delta):
 			phase = Phase.ASSAULT
 	if _water_crossing:
 		_water_crossing.tick(_delta)
-	# 收起时只保留标题，没必要频繁全量统计；展开后提高刷新频率，
-	# 避免点开面板后要等半秒以上才看到第一屏数据。
-	var panel_refresh_interval: int = 30 if _panel_collapsed else 10
-	if OS.is_debug_build() and (Engine.get_process_frames() + int(get_instance_id())) % panel_refresh_interval == 0:
-		update_debug_label()
 func get_team_castle(tm) -> Building:
 	for entity in _cached_buildings():
 		if not is_instance_valid(entity) or entity.health <= 0:
@@ -4003,6 +4006,10 @@ const HUNT_MIN_PEASANTS: int = 15
 const PANEL_WIDTH: float = 540.0
 const PANEL_HEIGHT: float = 400.0
 const PANEL_COLLAPSED_HEIGHT: float = 44.0
+# 决策面板展开时按真实时间每秒刷新一次；收起后只留标题条，放慢到 5 秒。
+const PANEL_REFRESH_INTERVAL_OPEN: float = 1.0
+const PANEL_REFRESH_INTERVAL_COLLAPSED: float = 5.0
+var _panel_refresh_timer: float = 0.0
 
 # 当前面板实际高度（折叠后只保留标题条），供统一布局函数计算下方面板位置
 func get_panel_height() -> float:
@@ -4243,8 +4250,10 @@ func set_panel_collapsed(collapsed: bool, relayout: bool = true):
 	debug_panel.size = Vector2(PANEL_WIDTH, h)
 	if not collapsed:
 		debug_panel.set_meta("expanded_at", Time.get_ticks_msec())
-		# 展开的瞬间就补一次数据。之前面板内容只在每 30 帧的定时刷新里更新，
-		# 点开后要等下一次 tick 才能看到第一屏统计，低帧率时尤其像“卡住”。
+		# 展开的瞬间就补一次数据，之后由 _process 里的 1 秒计时器稳定刷新。
+		# 之前面板内容只在每 30 帧的定时刷新里更新，点开后要等下一次 tick
+		# 才能看到第一屏统计，低帧率时尤其像“卡住”。
+		_panel_refresh_timer = PANEL_REFRESH_INTERVAL_OPEN
 		call_deferred("_refresh_debug_panel_now")
 	if relayout and battle and is_instance_valid(battle) and battle.has_method("layout_ai_debug_panels"):
 		battle.layout_ai_debug_panels()
