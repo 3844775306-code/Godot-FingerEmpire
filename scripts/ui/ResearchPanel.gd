@@ -53,7 +53,7 @@ func _build_shell() -> void:
 
 	_root_panel = Panel.new()
 	_root_panel.size = PANEL_SIZE
-	_root_panel.position = Vector2(580, 310)
+	_root_panel.position = Vector2(580, 280)
 	_root_panel.add_theme_stylebox_override("panel", UITheme.card_style(UITheme.GOLD))
 	add_child(_root_panel)
 
@@ -119,7 +119,7 @@ func _build_shell() -> void:
 	var left := VBoxContainer.new()
 	left.position = Vector2(24, 148)
 	left.size = Vector2(248, 610)
-	left.add_theme_constant_override("separation", 6)
+	left.add_theme_constant_override("separation", 4)
 	_root_panel.add_child(left)
 
 	var age_title := Label.new()
@@ -129,7 +129,7 @@ func _build_shell() -> void:
 	left.add_child(age_title)
 
 	_age_hint = Label.new()
-	_age_hint.custom_minimum_size = Vector2(240, 150)
+	_age_hint.custom_minimum_size = Vector2(240, 120)
 	_age_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_age_hint.add_theme_font_size_override("font_size", 14)
 	_age_hint.add_theme_color_override("font_color", UITheme.PARCHMENT)
@@ -151,7 +151,7 @@ func _build_shell() -> void:
 		var cid := String(cat["id"])
 		var b := Button.new()
 		b.text = "%s  %s" % [cid, String(cat["name"])]
-		b.custom_minimum_size = Vector2(240, 34)
+		b.custom_minimum_size = Vector2(240, 30)
 		b.alignment = HORIZONTAL_ALIGNMENT_LEFT
 		UITheme.apply_muted_button(b, 15)
 		b.pressed.connect(_select_category.bind(cid))
@@ -159,7 +159,7 @@ func _build_shell() -> void:
 		_tab_buttons[cid] = b
 	var nb := Button.new()
 	nb.text = "N  国家特色"
-	nb.custom_minimum_size = Vector2(240, 36)
+	nb.custom_minimum_size = Vector2(240, 32)
 	nb.alignment = HORIZONTAL_ALIGNMENT_LEFT
 	UITheme.apply_muted_button(nb, 15)
 	nb.pressed.connect(_select_category.bind("N"))

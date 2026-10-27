@@ -364,6 +364,8 @@ func get_host_team() -> int:
 # 与 RTSBattleManager.is_building_unlocked 保持一致的城堡等级解锁表
 func is_building_unlocked(building_id: int) -> bool:
 	if is_research_mode():
+		if research_unlocked_buildings.is_empty():
+			return building_id in [20, 21, 22, 27, 28, 41, 8]
 		return bool(research_unlocked_buildings.get(building_id, false))
 	var cl = get_player_castle_level()
 	match building_id:

@@ -932,7 +932,7 @@ func _ready():
 	var research_btn := Button.new()
 	research_btn.name = "ResearchButton"
 	research_btn.text = "🔬 科研树 (T)"
-	research_btn.position = Vector2(1620, 110)
+	research_btn.position = Vector2(1440, 110)
 	research_btn.size = Vector2(260, 40)
 	UITheme.apply_muted_button(research_btn, 17)
 	research_btn.pressed.connect(_open_research_panel)
