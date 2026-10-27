@@ -4,6 +4,8 @@ extends Node3D
 const MapPresets = preload("res://scripts/map/MapPresets.gd")
 
 const TEX_SIZE = 512
+# 地图边缘裙边向下延伸的深度（米）：从侧面看地形是"有厚度的一块地"，而不是一张纸
+const CLIFF_SKIRT_DEPTH: float = 3.5
 
 # 强制覆盖地图尺寸（0表示使用全局常量）
 var map_size_override: int = 0
@@ -31,8 +33,9 @@ var _fog_prev_explored: Array = []     # 上一次已应用的探索格，用于
 var _fog_prev_visible: Array = []      # 上一次已应用的可见格
 var _fog_prev_size: int = -1
 var terrain_mesh_instance: MeshInstance3D
-var vertex_grid: Array = []           # 存储顶点高度，用于快速查询
+var vertex_grid: Array = []           # 渲染顶点高度表（比格子更细），单位站立与地面划线也用它
 var height_scale: float = 2.0         # 高度缩放系数
+var _visual_min_height: float = 0.0   # 地形网格最低点，裙边从这里再往下延伸
 # 水面材质（用于把船只位置推给着色器做涟漪/尾迹，以及按画质档调反射强度）
 var _water_mat: ShaderMaterial = null
 # 陆地地表材质（自定义着色器：微小起伏 + 法线扰动）
@@ -2689,65 +2692,143 @@ func _has_nearby_terrain(x, y, terr_type, radius, size) -> bool:
 	return false
 
 func _create_visual_and_texture():
-	var size = _get_map_size()
-	var subdivisions = _get_map_size()
-	var mesh = ArrayMesh.new()
-	var surface_tool = SurfaceTool.new()
+	var size: int = _get_map_size()
+	# 细分到每格 3 段（移动端 2 段）：顶点越密，山坡轮廓越顺，不会被切成大三角面
+	var mobile := InputSource.is_mobile_platform()
+	var n: int = maxi(80, int(round(float(size) * (2.0 if mobile else 3.0))))
+	var half: float = float(size) * 0.5
+	var step: float = float(size) / float(n)
+
+	# 顶点高度表比格子更细：渲染、单位站立、地面划线读同一张表，三者才能严丝合缝
+	vertex_grid.clear()
+	vertex_grid.resize(n + 1)
+	for i in range(n + 1):
+		var col: Array = []
+		col.resize(n + 1)
+		vertex_grid[i] = col
+
+	var mesh := ArrayMesh.new()
+	var surface_tool := SurfaceTool.new()
 	surface_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
 
-	vertex_grid.clear()
-	vertex_grid.resize(subdivisions + 1)
-	for i in range(subdivisions + 1):
-		vertex_grid[i] = []
-		vertex_grid[i].resize(subdivisions + 1)
-
-	for x in range(subdivisions + 1):
-		for z in range(subdivisions + 1):
-			var world_x = (float(x) / subdivisions - 0.5) * size
-			var world_z = (float(z) / subdivisions - 0.5) * size
-			var height = _get_terrain_height(world_x, world_z)
-			vertex_grid[x][z] = height
-			surface_tool.set_uv(Vector2(float(x) / subdivisions, float(z) / subdivisions))
+	# 解析法线用的采样半径：0.35 个顶点间距，既跟得上坡面，又不会被单格噪声带偏
+	var eps: float = maxf(0.02, step * 0.35)
+	for xi in range(n + 1):
+		var world_x: float = float(xi) * step - half
+		for zi in range(n + 1):
+			var world_z: float = float(zi) * step - half
+			var height: float = _visual_height(world_x, world_z)
+			vertex_grid[xi][zi] = height
+			if xi == 0 and zi == 0:
+				_visual_min_height = height
+			else:
+				_visual_min_height = minf(_visual_min_height, height)
+			# 高度场的解析法线：坡度连续变化，山上不会再出现一块块明暗不同的三角面
+			var hxp: float = _visual_height(world_x + eps, world_z)
+			var hxm: float = _visual_height(world_x - eps, world_z)
+			var hzp: float = _visual_height(world_x, world_z + eps)
+			var hzm: float = _visual_height(world_x, world_z - eps)
+			var nrm := Vector3(hxm - hxp, 2.0 * eps, hzm - hzp).normalized()
+			surface_tool.set_normal(nrm)
+			surface_tool.set_uv(Vector2(float(xi) / float(n), float(zi) / float(n)))
 			surface_tool.add_vertex(Vector3(world_x, height, world_z))
 
-	for x in range(subdivisions):
-		for z in range(subdivisions):
-			var i00 = x * (subdivisions + 1) + z
-			var i10 = (x + 1) * (subdivisions + 1) + z
-			var i01 = x * (subdivisions + 1) + (z + 1)
-			var i11 = (x + 1) * (subdivisions + 1) + (z + 1)
+	for x in range(n):
+		for z in range(n):
+			var i00 = x * (n + 1) + z
+			var i10 = (x + 1) * (n + 1) + z
+			var i01 = x * (n + 1) + (z + 1)
+			var i11 = (x + 1) * (n + 1) + (z + 1)
 			surface_tool.add_index(i00); surface_tool.add_index(i10); surface_tool.add_index(i01)
 			surface_tool.add_index(i10); surface_tool.add_index(i11); surface_tool.add_index(i01)
-
-	surface_tool.generate_normals()
 	surface_tool.commit(mesh)
 
-	
+	# 第二层：四周裙边，把地形往下拉一段，侧面看不再是一张纸
+	_build_terrain_skirt(mesh, n, half, step)
 
 	# 底图逐像素画一次（草地点彩就在这里生成），之后迷雾阶段只做整块拷贝
 	_build_terrain_images()
 	terrain_image = Image.create_from_data(TEX_SIZE, TEX_SIZE, false, Image.FORMAT_RGBA8, _base_image.get_data())
 	terrain_texture = ImageTexture.create_from_image(terrain_image)
-	var mat = StandardMaterial3D.new()
-	mat.albedo_texture = terrain_texture
-	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
-	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
-	# 陆地和水面一样做微小起伏：贴图交给自定义着色器，顶点做几厘米的缓坡位移，
-	# 法线同步扰动，地面在光照下就不再是一张平板贴图
+
+	terrain_mesh_instance = MeshInstance3D.new()
+	terrain_mesh_instance.name = "TerrainPlane"
+	terrain_mesh_instance.mesh = mesh
+	terrain_mesh_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
+	terrain_mesh_instance.material_override = null
+	add_child(terrain_mesh_instance)
+
+	# 地表材质：贴图给颜色，着色器按坡度混岩壁；裙边单独一份岩石材质
+	var ground_mat: Material = null
 	var terrain_shader = load("res://resources/terrain_noise.gdshader")
 	if terrain_shader:
 		var tmat = ShaderMaterial.new()
 		tmat.shader = terrain_shader
 		tmat.set_shader_parameter("albedo_tex", terrain_texture)
 		_terrain_mat = tmat
-		mat = null
+		ground_mat = tmat
+	else:
+		var mat = StandardMaterial3D.new()
+		mat.albedo_texture = terrain_texture
+		mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
+		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+		ground_mat = mat
 
-	terrain_mesh_instance = MeshInstance3D.new()
-	terrain_mesh_instance.name = "TerrainPlane"
-	terrain_mesh_instance.mesh = mesh
-	terrain_mesh_instance.material_override = _terrain_mat if _terrain_mat != null else mat
-	add_child(terrain_mesh_instance)
+	var cliff_mat: Material = null
+	var cliff_shader = load("res://resources/terrain_cliff.gdshader")
+	if cliff_shader:
+		var cmat = ShaderMaterial.new()
+		cmat.shader = cliff_shader
+		cliff_mat = cmat
+	else:
+		var cmat = StandardMaterial3D.new()
+		cmat.albedo_color = Color(0.30, 0.27, 0.23)
+		cmat.roughness = 1.0
+		cliff_mat = cmat
+
+	if ground_mat != null and mesh.get_surface_count() > 0:
+		mesh.surface_set_material(0, ground_mat)
+	if cliff_mat != null and mesh.get_surface_count() > 1:
+		mesh.surface_set_material(1, cliff_mat)
+
+# 四周裙边：沿地图四条边生成竖条，从地表高度一直拉到最低点以下，
+# 让地形从任何角度看都是"一块厚地"，而不是零厚度的单面网格
+func _build_terrain_skirt(mesh: ArrayMesh, n: int, half: float, step: float) -> void:
+	var bottom: float = _visual_min_height - CLIFF_SKIRT_DEPTH
+	var surface_tool := SurfaceTool.new()
+	surface_tool.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	# axis=0 表示沿 z 方向走、x 固定；axis=1 表示沿 x 方向走、z 固定
+	var edges: Array = [
+		{"axis": 0, "fixed": 0, "outward": Vector3(-1.0, 0.0, 0.0)},
+		{"axis": 0, "fixed": n, "outward": Vector3(1.0, 0.0, 0.0)},
+		{"axis": 1, "fixed": 0, "outward": Vector3(0.0, 0.0, -1.0)},
+		{"axis": 1, "fixed": n, "outward": Vector3(0.0, 0.0, 1.0)},
+	]
+	for e in edges:
+		var outward: Vector3 = e["outward"]
+		var fixed: int = int(e["fixed"])
+		for i in range(n):
+			var a: Vector3
+			var b: Vector3
+			if int(e["axis"]) == 0:
+				var px: float = float(fixed) * step - half
+				a = Vector3(px, float(vertex_grid[fixed][i]), float(i) * step - half)
+				b = Vector3(px, float(vertex_grid[fixed][i + 1]), float(i + 1) * step - half)
+			else:
+				var pz: float = float(fixed) * step - half
+				a = Vector3(float(i) * step - half, float(vertex_grid[i][fixed]), pz)
+				b = Vector3(float(i + 1) * step - half, float(vertex_grid[i + 1][fixed]), pz)
+			var a_bot := Vector3(a.x, bottom, a.z)
+			var b_bot := Vector3(b.x, bottom, b.z)
+			# 双面材质，绕序不影响可见性；法线统一朝外，保证光照正确
+			var verts: Array = [a, a_bot, b_bot, a, b_bot, b]
+			for v in verts:
+				surface_tool.set_normal(outward)
+				surface_tool.set_uv(Vector2(0.0, 0.0))
+				surface_tool.add_vertex(v)
+	surface_tool.commit(mesh)
 
 # ---------- 碰撞与导航 ----------
 func _create_chunked_collisions():
@@ -3036,13 +3117,7 @@ func set_water_quality(level: int) -> void:
 	set_planar_reflection(level < 2)
 
 func get_height_at(world_pos: Vector3) -> float:
-	var size = _get_map_size()
-	var subdivisions = _get_map_size()
-	var fx = (world_pos.x / size + 0.5) * subdivisions
-	var fz = (world_pos.z / size + 0.5) * subdivisions
-	var x = clampi(int(fx), 0, subdivisions)
-	var z = clampi(int(fz), 0, subdivisions)
-	return vertex_grid[x][z] if vertex_grid.size() > x and vertex_grid[x].size() > z else 0.0
+	return _get_terrain_height(world_pos.x, world_pos.z)
 
 func get_terrain(gx: int, gy: int) -> int:
 	if gx >= 0 and gx < terrain_grid.size() and gy >= 0 and gy < terrain_grid[0].size():
@@ -3068,15 +3143,59 @@ func grid_to_world(gx: int, gy: int) -> Vector3:
 func get_base_colors() -> Array:
 	return base_colors
 
+# 地表视觉高度：把逐格高度做双线性插值 + 平滑过渡，
+# 山坡变成连续曲面（不再是台阶），但格间 10 米高差只有 1 格水平距离，所以依然很陡。
+# 单位站立、建筑落地、地面发光圈都读这个函数，脚底才不会和画面对不上。
+func _visual_height(world_x: float, world_z: float) -> float:
+	if height_grid.is_empty():
+		return 0.0
+	var size: int = height_grid.size()
+	if size <= 0:
+		return 0.0
+	var fx: float = world_x + float(size) * 0.5 - 0.5
+	var fz: float = world_z + float(size) * 0.5 - 0.5
+	var x0: int = int(floor(fx))
+	var z0: int = int(floor(fz))
+	var tx: float = _smooth01(clampf(fx - float(x0), 0.0, 1.0))
+	var tz: float = _smooth01(clampf(fz - float(z0), 0.0, 1.0))
+	var x1: int = clampi(x0 + 1, 0, size - 1)
+	var z1: int = clampi(z0 + 1, 0, size - 1)
+	x0 = clampi(x0, 0, size - 1)
+	z0 = clampi(z0, 0, size - 1)
+	var h00 := float(height_grid[x0][z0])
+	var h10 := float(height_grid[x1][z0])
+	var h01 := float(height_grid[x0][z1])
+	var h11 := float(height_grid[x1][z1])
+	return lerpf(lerpf(h00, h10, tx), lerpf(h01, h11, tx), tz)
+
+func _smooth01(t: float) -> float:
+	return t * t * (3.0 - 2.0 * t)
+
+# 按渲染网格的三角剖分插值（和 GroundStripMesh 的采样保持一致），
+# 返回值等于屏幕上看到的地面高度：单位贴地、地面划线、炮塔射程圈都不会陷进坡里
+func _sample_vertex_grid(world_x: float, world_z: float) -> float:
+	var n: int = vertex_grid.size() - 1
+	if n < 1:
+		return _visual_height(world_x, world_z)
+	var size: float = float(_get_map_size())
+	var fx: float = (world_x / size + 0.5) * float(n)
+	var fz: float = (world_z / size + 0.5) * float(n)
+	var x0: int = clampi(int(floor(fx)), 0, n - 1)
+	var z0: int = clampi(int(floor(fz)), 0, n - 1)
+	var tx: float = clampf(fx - float(x0), 0.0, 1.0)
+	var tz: float = clampf(fz - float(z0), 0.0, 1.0)
+	var h00 := float(vertex_grid[x0][z0])
+	var h10 := float(vertex_grid[x0 + 1][z0])
+	var h01 := float(vertex_grid[x0][z0 + 1])
+	var h11 := float(vertex_grid[x0 + 1][z0 + 1])
+	if tx + tz <= 1.0:
+		return h00 + (h10 - h00) * tx + (h01 - h00) * tz
+	return h11 + (h01 - h11) * (1.0 - tx) + (h10 - h11) * (1.0 - tz)
+
 func _get_terrain_height(world_x: float, world_z: float) -> float:
-	var size = _get_map_size()
-	var gx = int(world_x + size / 2.0)
-	var gz = int(world_z + size / 2.0)
-	gx = clampi(gx, 0, size - 1)
-	gz = clampi(gz, 0, size - 1)
-	if height_grid.size() > gx and height_grid[gx].size() > gz:
-		return height_grid[gx][gz]
-	return 0.0
+	if vertex_grid.size() > 1:
+		return _sample_vertex_grid(world_x, world_z)
+	return _visual_height(world_x, world_z)
 		
 
 func get_terrain_texture() -> ImageTexture:
