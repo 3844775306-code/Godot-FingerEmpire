@@ -809,6 +809,8 @@ func _global_retreat(team: int):
 
 # ---------- 命令处理（兼容两种模式） ----------
 func process_command(peer_id: int, data: Dictionary):
+	# 联机客户端的指令都是玩家主动命令：施工中的农民可以被重新指派。
+	_begin_player_command()
 	# 服务端兜底：剔除任何不属于该玩家的选中实体，禁止操控队友单位
 	if data.has("selected_ids"):
 		data["selected_ids"] = _owned_selected_ids(peer_id, data["selected_ids"])
@@ -816,6 +818,7 @@ func process_command(peer_id: int, data: Dictionary):
 		_process_1v1_command(peer_id, data)
 	else:
 		_process_2v2_command(peer_id, data)
+	_end_player_command()
 
 func _owned_selected_ids(peer_id: int, ids: Array) -> Array:
 	var team = player_teams.get(peer_id, -1)

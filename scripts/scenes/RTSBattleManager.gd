@@ -3146,6 +3146,12 @@ func is_special_move_target(target) -> bool:
 	return false
 
 func command_special_target(target) -> bool:
+	_begin_player_command()
+	var handled: bool = _command_special_target_impl(target)
+	_end_player_command()
+	return handled
+
+func _command_special_target_impl(target) -> bool:
 	if not is_special_move_target(target):
 		return false
 	if not (selection and selection.has_method("_selection_all_local") and selection._selection_all_local()):
@@ -3379,7 +3385,26 @@ func _ship_shore_point(ship) -> Vector3:
 			return p
 	return Vector3.ZERO
 
+# ==================== 玩家命令上下文 ====================
+# 用于区分“玩家主动命令”和 AI/军需官/自动逻辑的命令：
+# 施工中的农民只在玩家命令下才会放下锤子，自动命令会被 Army._queue_command 丢弃。
+var _player_cmd_depth: int = 0
+
+func is_player_command_active() -> bool:
+	return _player_cmd_depth > 0
+
+func _begin_player_command() -> void:
+	_player_cmd_depth += 1
+
+func _end_player_command() -> void:
+	_player_cmd_depth = maxi(0, _player_cmd_depth - 1)
+
 func _command_selected_units(screen_pos: Vector2, mode: String = ""):
+	_begin_player_command()
+	_command_selected_units_impl(screen_pos, mode)
+	_end_player_command()
+
+func _command_selected_units_impl(screen_pos: Vector2, mode: String = ""):
 	# 防御：只有己方单位可被指挥；队友/敌方选中仅用于查看信息
 	if not (selection and selection.has_method("_selection_all_local") and selection._selection_all_local()):
 		return

@@ -3849,6 +3849,10 @@ func _is_valid_command_target(target) -> bool:
 func _queue_command(cmd: Dictionary):
 	if cmd.has("target") and not _is_valid_command_target(cmd["target"]):
 		return
+	# 施工中的农民/修理中的农民不被自动命令打断（军需官、AI、自动索敌等）；
+	# 玩家主动下达的移动/采集/攻击命令仍然立即生效，由 battle 的玩家命令上下文放行。
+	if _work_command_locked():
+		return
 	cmd["is_loop"] = false
 	var q = _should_queue()
 	if q:
@@ -4055,6 +4059,14 @@ func _clear_waypoint_markers():
 		is_attack_moving = false
 		attack_move_target = Vector3.ZERO
 	_set_order(UnitState.IDLE)
+
+# 施工锁定：正在建造/修理时只接受玩家命令，其他系统（AI/军需官/自动逻辑）的命令丢弃。
+# 玩家命令上下文由 RTSBattleManager 的 _begin_player_command()/is_player_command_active() 标记。
+func _work_command_locked() -> bool:
+	if not _order_is(UnitState.BUILDING):
+		return false
+	var bm = _get_bm()
+	return bm == null or not bm.has_method("is_player_command_active") or not bm.is_player_command_active()
 
 func move_to(pos: Vector3):
 	_queue_command({"type": "move", "pos": pos})
@@ -4578,6 +4590,8 @@ func _on_garrison_building_died(official_id: int):
 			break
 
 func stop_movement():
+	if _work_command_locked():
+		return
 	_set_order(UnitState.IDLE)
 	current_target = null
 	attack_move_target = Vector3.ZERO
