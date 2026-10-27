@@ -3,7 +3,7 @@ extends Control
 
 # 更新日志面板：主菜单点「📜 更新日志」打开。
 # 结构参考对局内设置面板（暖黑卡片 + 金边 + 可滚动内容）：
-#   标题「📜 更新日志」+ 当前版本（v1.0.0 (2026-10-26)）+ 版本条目列表。
+#   标题「📜 更新日志」+ 当前版本（v4.0.0 (2026-10-25)）+ 版本条目列表。
 # 打开即把最新版本记为已读，主菜单入口的 NEW 标记随之消失。
 # 手机端：面板铺满可用高度、内容可滚动，触摸拖动由 MainMenu 的滚动驱动处理
 # （主菜单没有战斗里的 TouchGestureRouter，所以走 UILayout.scroll_at）。
@@ -151,9 +151,14 @@ func _build() -> void:
 	_add_latest_links(vb)
 	_add_separator(vb)
 
+	# 4.0 起按「大版本 = 游戏时代」命名，先展示 1.0 → 4.0 的时代简介
+	_add_milestones_section(vb)
+	_add_separator(vb)
+
 	var list: Array = ChangelogData.entries()
 	for i in list.size():
-		_add_entry(vb, list[i], i == 0 and _show_new)
+		var is_current: bool = String(list[i].get("version", "")) == AppVersion.version()
+		_add_entry(vb, list[i], is_current and _show_new)
 		if i < list.size() - 1:
 			_add_separator(vb)
 
@@ -240,17 +245,50 @@ func _add_separator(parent: Control) -> void:
 	sep.custom_minimum_size = Vector2(0, 1)
 	parent.add_child(sep)
 
+# ==================== 大版本里程碑 ====================
+# 4.0 起版本号按游戏时代命名；这里单独展示 1.0 → 4.0 的简介，
+# 和下面逐次发版的详细记录分开，玩家先看懂每个大版本带来了什么。
+func _add_milestones_section(parent: Control) -> void:
+	var caption := Label.new()
+	caption.text = "版本里程碑（1.0 → 4.0）"
+	caption.add_theme_font_size_override("font_size", UITheme.FONT_MD)
+	caption.add_theme_color_override("font_color", Color(UITheme.GOLD, 0.9))
+	parent.add_child(caption)
+
+	var hint := Label.new()
+	hint.text = "从球体军队到三端发布：每个大版本代表一个游戏时代。"
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	hint.add_theme_color_override("font_color", Color(UITheme.PARCHMENT, 0.72))
+	parent.add_child(hint)
+
+	var list: Array = ChangelogData.milestones()
+	for i in list.size():
+		var is_current: bool = String(list[i].get("version", "")) == AppVersion.version()
+		_add_entry(parent, list[i], is_current and _show_new)
+		if i < list.size() - 1:
+			_add_separator(parent)
+
 # ==================== 更早的历史版本 ====================
-# 当前版本条目只保留最近几次发版；这里按版本向前分页展开，
-# 每次点「查看更多」追加 HISTORY_PAGE_SIZE 个历史版本，直到 v1.0.0。
+# 4.0 起改用「大版本 = 游戏时代」的新编号；这里保留 4.0 之前按旧规则编号的
+# 详细版本记录，按版本向前分页展开，每次点「查看更多」追加 HISTORY_PAGE_SIZE 个。
 func _add_history_section(parent: Control) -> void:
 	_add_separator(parent)
 
 	var caption := Label.new()
-	caption.text = "更早的版本记录"
+	caption.text = "旧版本号记录（4.0 以前）"
 	caption.add_theme_font_size_override("font_size", UITheme.FONT_MD)
 	caption.add_theme_color_override("font_color", Color(UITheme.GOLD, 0.9))
 	parent.add_child(caption)
+
+	var hint := Label.new()
+	hint.text = "以下保留 4.0 之前按旧规则编号的发版记录，数字与上面的时代编号不是同一套。"
+	hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	hint.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	hint.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	hint.add_theme_color_override("font_color", Color(UITheme.PARCHMENT, 0.72))
+	parent.add_child(hint)
 
 	_history_entries = ChangelogHistory.entries()
 	_history_index = 0
@@ -325,15 +363,15 @@ func _update_history_button() -> void:
 	if remaining <= 0:
 		_history_more_btn.text = "已看到 2026-07-18 的初始提交"
 		_history_more_btn.disabled = true
-		_history_status.text = "已显示全部历史版本（v1.6.44 ~ v1.0.0）"
+		_history_status.text = "已显示全部旧版本号记录（v1.6.44 ~ v1.0.0）"
 		return
 	_history_more_btn.disabled = false
 	_history_more_btn.text = "查看更多更早的更新日志"
 	if _history_index <= 0:
-		_history_status.text = "共 %d 个历史版本，点击「查看更多」一直翻到 2026-07-18 的初始提交" % total
+		_history_status.text = "共 %d 个旧版本号记录，点击「查看更多」一直翻到 2026-07-18 的初始提交" % total
 	else:
 		var shown_version: String = String(_history_entries[_history_index - 1].get("version", ""))
-		_history_status.text = "已显示到 %s · 还有 %d 个历史版本" % [shown_version, remaining]
+		_history_status.text = "已显示到 %s · 还有 %d 个旧版本号记录" % [shown_version, remaining]
 
 # ==================== 检查更新 ====================
 # 面板顶部一行：手动强制联网查一次，结果就地显示在右边

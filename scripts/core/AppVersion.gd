@@ -5,11 +5,16 @@ extends RefCounted
 # 不要在别处再写一份版本字符串，否则很容易和更新日志对不上。
 #
 # 项目没有用 git tag，导出后也读不到 git 信息（git_describe 插件只在编辑器里可用），
-# 所以版本号用常量维护；版本历史按 tools/bump_version.ps1 的规则从 1.0.0 折算。
-const VERSION: String = "v1.6.54"
-const RELEASE_DATE: String = "2026-10-27"
+# 所以版本号用常量维护。版本号按「大版本 = 游戏时代」重新命名：
+#   1.0.0（2026-05）球体军队 / 方块建筑，5 个开服国家，联机很卡；
+#   2.0.0（2026-06）大量模型与动物、A* 寻路、商人和官员；
+#   3.0.0（2026-07）混战模式、3 个新国家、Steam 联机与 UI 大改；
+#   4.0.0（2026-10-25 起）画面重制、动画特效、错峰计算、Web/APK/EXE 三端与自动更新。
+# 同一时代内继续用中版本/小版本记录功能批次和修复批次，历史旧版本保留在更新日志里。
+const VERSION: String = "v4.0.0"
+const RELEASE_DATE: String = "2026-10-25"
 
-# 面板标题、入口按钮上显示用："v1.6.49 (2026-10-26)"
+# 面板标题、入口按钮上显示用："v4.0.0 (2026-10-25)"
 static func display() -> String:
 	return "%s (%s)" % [VERSION, RELEASE_DATE]
 

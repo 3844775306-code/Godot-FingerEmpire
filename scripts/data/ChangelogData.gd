@@ -1,10 +1,13 @@
 extends RefCounted
 
+const AppVersion = preload("res://scripts/core/AppVersion.gd")
+
 # 更新日志数据：玩家可读的改动要点，按版本倒序（最新的在最上面）。
 #
 # ── 版本号 ──
-# 已按全部 Git 提交从 v1.0.0 重新折算；当前版本见 AppVersion.gd。
-# 更早的历史版本（v1.6.44 → v1.0.0）由 ChangelogHistory.gd 提供，
+# 4.0 起按「大版本 = 游戏时代」命名：1.0 起步、2.0 模型与 AI、3.0 Steam 与混战、4.0 画面重制与三端发布。
+# 每个时代的简介见下面 milestones()；当前版本见 AppVersion.gd。
+# 4.0 之前的详细历史版本（v1.6.44 → v1.0.0）由 ChangelogHistory.gd 提供，
 # 面板底部「查看更多」按页加载，直到 2026-07-18 的初始提交。
 #
 # ── 发版流程 ──
@@ -21,7 +24,54 @@ extends RefCounted
 # 声明成 static var 方便调试/自动化测试临时指向别的路径（正常运行时不要改）。
 static var seen_path: String = "user://changelog_seen.txt"
 
-# 最近几个版本的更新日志（倒序）；更早的历史版本见 ChangelogHistory.gd。
+# ── 大版本里程碑 ──
+# 4.0 起版本号按游戏时代命名，这里放大版本的玩家向简介；
+# 面板顶部单独展示，不和逐次发版的 entries() 混在一起。
+static func milestones() -> Array:
+	return [
+		{
+			"version": "v1.0.0",
+			"date": "2026-05",
+			"title": "起步：球体军队与方块建筑",
+			"items": [
+				"军队用球体表示、建筑用正方体表示，单位可以过河、爬山。",
+				"开放 5 个开服国家；地图画质比较粗糙，联机延迟高、经常卡顿。",
+			],
+		},
+		{
+			"version": "v2.0.0",
+			"date": "2026-06",
+			"title": "模型化、动物与 A* 寻路",
+			"items": [
+				"引入大量模型，新增动物，地图上的单位不再是简单的球体。",
+				"采用 A* 寻路；一度出现性能瓶颈，单机版和多人模式都变得卡顿。",
+				"优化 AI 逻辑，新增商人和官员。",
+			],
+		},
+		{
+			"version": "v3.0.0",
+			"date": "2026-07",
+			"title": "混战模式、Steam 联机与 UI 大改",
+			"items": [
+				"引入混战模式和 3 个新国家。",
+				"改用 Steam 处理联机问题，联机稳定性提升。",
+				"UI 界面大幅优化，操作和读信息都更顺手。",
+			],
+		},
+		{
+			"version": "v4.0.0",
+			"date": "2026-10-25",
+			"title": "4.0 时代：画面重制与三端发布",
+			"items": [
+				"地图和画面质感大幅优化，加入大量动画和特效。",
+				"采用错峰计算处理多单位卡顿问题。",
+				"发布 Web、APK、EXE 三大版本，并实现自动检查更新。",
+				"调整玩法：建筑需要农民建造。",
+			],
+		},
+	]
+
+# 最近几个版本的更新日志（倒序）；大版本简介见 milestones()，更早的历史版本见 ChangelogHistory.gd。
 static func entries() -> Array:
 	return [
 		{
@@ -160,12 +210,10 @@ static func entries() -> Array:
 		},
 	]
 
-# 最新版本号（未读判断用）
+# 最新版本号（未读判断用）。当前版本是 4.0 时代的大版本号，可能没有对应的逐次 entries()，
+# 所以以 AppVersion 为准，避免 NEW 标记一直停留在旧版本。
 static func latest_version() -> String:
-	var list: Array = entries()
-	if list.is_empty():
-		return ""
-	return String(list[0].get("version", ""))
+	return AppVersion.version()
 
 # 是否还没看过最新版本的日志（主菜单的 NEW 标记用它）
 static func is_unseen() -> bool:
