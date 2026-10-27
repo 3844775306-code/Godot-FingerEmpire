@@ -36,6 +36,7 @@ var terrain_mesh_instance: MeshInstance3D
 var vertex_grid: Array = []           # 渲染顶点高度表（比格子更细），单位站立与地面划线也用它
 var height_scale: float = 2.0         # 高度缩放系数
 var _visual_min_height: float = 0.0   # 地形网格最低点，裙边从这里再往下延伸
+var _rock_root: Node3D = null         # 山脊岩石/山脚碎石装饰的父节点
 # 水面材质（用于把船只位置推给着色器做涟漪/尾迹，以及按画质档调反射强度）
 var _water_mat: ShaderMaterial = null
 # 陆地地表材质（自定义着色器：微小起伏 + 法线扰动）
@@ -2792,6 +2793,9 @@ func _create_visual_and_texture():
 	if cliff_mat != null and mesh.get_surface_count() > 1:
 		mesh.surface_set_material(1, cliff_mat)
 
+	# 山脊补真实岩石块、山脚散碎石，进一步遮住几何接缝
+	_spawn_rock_decor()
+
 # 四周裙边：沿地图四条边生成竖条，从地表高度一直拉到最低点以下，
 # 让地形从任何角度看都是"一块厚地"，而不是零厚度的单面网格
 func _build_terrain_skirt(mesh: ArrayMesh, n: int, half: float, step: float) -> void:
@@ -2829,6 +2833,216 @@ func _build_terrain_skirt(mesh: ArrayMesh, n: int, half: float, step: float) -> 
 				surface_tool.set_uv(Vector2(0.0, 0.0))
 				surface_tool.add_vertex(v)
 	surface_tool.commit(mesh)
+
+# ---------- 山脊岩石 / 山脚碎石（纯装饰） ----------
+# 不加碰撞、不进寻路、不参与联机同步：用 MultiMesh 合批，上百块石头也只有 4 个 draw call。
+# 随机种子由高度场算出，主机和客户端看到同一张地图就摆出同一批石头，不会两边不一样。
+func _spawn_rock_decor() -> void:
+	if _rock_root != null and is_instance_valid(_rock_root):
+		_rock_root.queue_free()
+	_rock_root = Node3D.new()
+	_rock_root.name = "RockDecor"
+	add_child(_rock_root)
+	if height_grid.is_empty() or terrain_grid.is_empty():
+		return
+
+	var mobile := InputSource.is_mobile_platform()
+	var belt_cap: int = 36 if mobile else 64        # 崖顶岩石簇上限
+	var scree_cluster_cap: int = 40 if mobile else 88  # 山脚碎石簇上限
+	var rim_a: Array = []
+	var rim_b: Array = []
+	var scree: Array = []
+	var pebbles: Array = []
+	var rng := RandomNumberGenerator.new()
+	rng.seed = _decor_seed()
+	var size: int = _get_map_size()
+
+	for gx in range(size):
+		for gy in range(size):
+			var terrain: int = int(terrain_grid[gx][gy])
+			var h: float = float(height_grid[gx][gy])
+			# 1) 山脊/崖顶：本格是山，且邻格明显更低（或本身就在地图边缘）
+			if terrain == 1:
+				if rim_a.size() + rim_b.size() >= belt_cap:
+					continue
+				var drop := 0.0
+				var dir := Vector2i.ZERO
+				for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+					var nx: int = clampi(gx + d.x, 0, size - 1)
+					var ny: int = clampi(gy + d.y, 0, size - 1)
+					var dh: float = h - float(height_grid[nx][ny])
+					if dh > drop:
+						drop = dh
+						dir = d
+				var at_border: bool = gx <= 1 or gy <= 1 or gx >= size - 2 or gy >= size - 2
+				if drop < 1.8 and not at_border:
+					continue
+				if rng.randf() > 0.5:
+					continue
+				var p := _tile_center_world(gx, gy, size)
+				if dir != Vector2i.ZERO:
+					p += Vector3(float(dir.x), 0.0, float(dir.y)) * 0.38
+				p.x += rng.randf_range(-0.14, 0.14)
+				p.z += rng.randf_range(-0.14, 0.14)
+				if _decor_blocked(p, gx, gy):
+					continue
+				var sc: float = rng.randf_range(0.24, 0.42)
+				var tilt := Basis(Vector3.UP, rng.randf_range(0.0, TAU))
+				tilt = tilt.scaled(Vector3(sc, sc * rng.randf_range(0.8, 1.15), sc))
+				p.y = _get_terrain_height(p.x, p.z) - sc * 0.55
+				var xf := Transform3D(tilt, p)
+				if rng.randf() < 0.5:
+					rim_a.append(xf)
+				else:
+					rim_b.append(xf)
+			# 2) 山脚碎石：林地/草地，紧挨着明显高差（断崖脚下）
+			elif terrain == 0 and int(get_overlay(gx, gy)) in [0, 1]:
+				if scree.size() + pebbles.size() >= scree_cluster_cap * 3:
+					continue
+				var drop2: float = _decor_max_drop(gx, gy, size)
+				if drop2 < 1.5:
+					continue
+				if rng.randf() > 0.5:
+					continue
+				var base := _tile_center_world(gx, gy, size)
+				if _decor_blocked(base, gx, gy):
+					continue
+				var count: int = rng.randi_range(2, 4)
+				for i in range(count):
+					var q := base + Vector3(rng.randf_range(-0.38, 0.38), 0.0, rng.randf_range(-0.38, 0.38))
+					q.y = _get_terrain_height(q.x, q.z)
+					if rng.randf() < 0.6:
+						var s2: float = rng.randf_range(0.08, 0.16)
+						var b2 := Basis(Vector3.UP, rng.randf_range(0.0, TAU))
+						b2 = b2.scaled(Vector3(s2, s2 * rng.randf_range(0.6, 0.95), s2))
+						q.y -= s2 * 0.5
+						scree.append(Transform3D(b2, q))
+					else:
+						var s3: float = rng.randf_range(1.2, 2.0)
+						var b3 := Basis(Vector3.UP, rng.randf_range(0.0, TAU))
+						b3 = b3.scaled(Vector3(s3, s3 * rng.randf_range(0.6, 0.85), s3))
+						q.y -= 0.04
+						pebbles.append(Transform3D(b3, q))
+
+	# 3) 山顶巨石：山体里的局部最高点，孤零零放一两块
+	var peak_cap: int = 10 if mobile else 20
+	var peaks := 0
+	for gx in range(2, size - 2):
+		for gy in range(2, size - 2):
+			if peaks >= peak_cap:
+				break
+			if int(terrain_grid[gx][gy]) != 1:
+				continue
+			var h: float = float(height_grid[gx][gy])
+			var is_peak := true
+			for dx in range(-2, 3):
+				for dy in range(-2, 3):
+					if dx == 0 and dy == 0:
+						continue
+					if float(height_grid[gx + dx][gy + dy]) > h + 0.05:
+						is_peak = false
+						break
+				if not is_peak:
+					break
+			if not is_peak:
+				continue
+			if rng.randf() > 0.35:
+				continue
+			var pp := _tile_center_world(gx, gy, size)
+			pp.y = _get_terrain_height(pp.x, pp.z) - 0.1
+			var ps: float = rng.randf_range(0.16, 0.28)
+			var pb := Basis(Vector3.UP, rng.randf_range(0.0, TAU))
+			pb = pb.scaled(Vector3(ps, ps * rng.randf_range(0.9, 1.2), ps))
+			rim_b.append(Transform3D(pb, pp))
+			peaks += 1
+
+	for part in _glb_mesh_parts("res://models/survival/rocks-a.glb"):
+		_add_decor_multimesh(part["mesh"], part["xform"], rim_a, true)
+	for part in _glb_mesh_parts("res://models/survival/rocks-b.glb"):
+		_add_decor_multimesh(part["mesh"], part["xform"], rim_b, true)
+	for part in _glb_mesh_parts("res://models/survival/rocks-c.glb"):
+		_add_decor_multimesh(part["mesh"], part["xform"], scree, false)
+	for part in _glb_mesh_parts("res://models/defense/weapon-ammo-boulder.glb"):
+		_add_decor_multimesh(part["mesh"], part["xform"], pebbles, false)
+	print("[地形] 山脊岩石=%d 山脚碎石=%d 卵石=%d" % [rim_a.size() + rim_b.size(), scree.size(), pebbles.size()])
+
+func _tile_center_world(gx: int, gy: int, size: int) -> Vector3:
+	return Vector3(float(gx) + 0.5 - float(size) * 0.5, 0.0, float(gy) + 0.5 - float(size) * 0.5)
+
+func _decor_max_drop(gx: int, gy: int, size: int) -> float:
+	var h: float = float(height_grid[gx][gy])
+	var best := 0.0
+	for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+		var nx: int = clampi(gx + d.x, 0, size - 1)
+		var ny: int = clampi(gy + d.y, 0, size - 1)
+		best = maxf(best, absf(h - float(height_grid[nx][ny])))
+	return best
+
+# 别把石头摆到城堡/资源点上：主城和矿点附近留干净地面
+func _decor_blocked(pos: Vector3, gx: int, gy: int) -> bool:
+	for c in _castle_cells:
+		if absi(int(c[0]) - gx) <= 3 and absi(int(c[1]) - gy) <= 3:
+			return true
+	for cp in [player_castle_pos, enemy_castle_pos]:
+		var cv: Vector3 = cp
+		if cv.length_squared() > 0.01 and pos.distance_squared_to(cv) < 36.0:
+			return true
+	for mp in multi_castle_positions:
+		var mv: Vector3 = mp
+		if mv.length_squared() > 0.01 and pos.distance_squared_to(mv) < 36.0:
+			return true
+	for r in resource_positions:
+		var rp: Vector3 = r.get("pos", Vector3.ZERO)
+		if pos.distance_squared_to(rp) < 9.0:
+			return true
+	return false
+
+# 由高度场推一个稳定种子：同一张地图（主机/客户端）摆出来的石头位置完全一致
+func _decor_seed() -> int:
+	var acc := 0.0
+	for x in range(height_grid.size()):
+		var col: Array = height_grid[x]
+		for y in range(col.size()):
+			acc += absf(float(col[y])) * float((x * 31 + y * 17) % 89 + 1)
+	return int(acc * 1000.0) & 0x7FFFFFFF
+
+# 把 GLB 里所有 MeshInstance3D 的网格和相对变换取出来，方便合批
+func _glb_mesh_parts(path: String) -> Array:
+	var out: Array = []
+	if not ResourceLoader.exists(path):
+		return out
+	var packed = load(path)
+	if packed == null or not (packed is PackedScene):
+		return out
+	var inst: Node = (packed as PackedScene).instantiate()
+	_collect_glb_parts(inst, Transform3D.IDENTITY, out)
+	inst.queue_free()
+	return out
+
+func _collect_glb_parts(node: Node, parent_xform: Transform3D, out: Array) -> void:
+	var xf: Transform3D = parent_xform
+	if node is Node3D:
+		xf = parent_xform * (node as Node3D).transform
+	if node is MeshInstance3D:
+		var mi := node as MeshInstance3D
+		if mi.mesh != null:
+			out.append({"mesh": mi.mesh, "xform": xf})
+	for c in node.get_children():
+		_collect_glb_parts(c, xf, out)
+
+func _add_decor_multimesh(mesh: Mesh, part_xform: Transform3D, world_xforms: Array, shadow: bool) -> void:
+	if mesh == null or world_xforms.is_empty():
+		return
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.mesh = mesh
+	mm.instance_count = world_xforms.size()
+	for i in range(world_xforms.size()):
+		mm.set_instance_transform(i, (world_xforms[i] as Transform3D) * part_xform)
+	var mmi := MultiMeshInstance3D.new()
+	mmi.multimesh = mm
+	mmi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON if shadow else GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	_rock_root.add_child(mmi)
 
 # ---------- 碰撞与导航 ----------
 func _create_chunked_collisions():
