@@ -12,6 +12,8 @@ var _vb: VBoxContainer = null
 var _dialog_layer: Control = null
 
 func _ready() -> void:
+	# 触屏滑动误点守卫：选关卡片列表滑动后不误进关卡
+	add_child(TouchDragGuard.new())
 	_mobile = InputSource.use_mobile_ui()
 	if _mobile:
 		# 横竖屏切换后重建选关卡片，避免竖屏下仍按横屏的列宽排版。

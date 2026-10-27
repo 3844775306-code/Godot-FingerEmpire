@@ -28,6 +28,8 @@ func _input(event: InputEvent) -> void:
 		UILayout.scroll_at(self, event.position, event.relative.y)
 
 func _ready():
+	# 触屏滑动误点守卫：菜单里所有滚动列表（地图/模式卡片）滑动后不再误触点击
+	add_child(TouchDragGuard.new())
 	AudioManager.play_music("menu")
 	# Scale to fit screen (design: 2400x1400)
 	var vs = get_viewport().get_visible_rect().size

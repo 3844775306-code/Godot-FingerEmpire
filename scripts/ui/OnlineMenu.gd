@@ -32,6 +32,8 @@ func _input(event: InputEvent) -> void:
 		UILayout.scroll_at(self, event.position, event.relative.y)
 
 func _ready():
+	# 触屏滑动误点守卫：房间/地图列表滑动后不误触按钮
+	add_child(TouchDragGuard.new())
 	NetworkManager.connection_success.connect(_on_connected)
 	NetworkManager.connection_failed.connect(_on_failed)
 

@@ -218,6 +218,8 @@ var _mobile := false
 
 
 func _ready() -> void:
+	# 触屏滑动误点守卫：单位列表滑动后不误切详情
+	add_child(TouchDragGuard.new())
 	_mobile = InputSource.use_mobile_ui()
 	if _mobile:
 		# 横竖屏切换后重建图鉴，左右分栏/字号会按新方向重新排。

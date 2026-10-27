@@ -47,6 +47,8 @@ const PINCH_MIN_DIST: float = 1.0   # 两指几乎重合时距离比例会爆掉
 var _ui_touch_index: int = -1
 var _ui_touch_down: bool = false
 var _ui_start_pos: Vector2 = Vector2.ZERO
+# 面板手指是否滑动过：滑动后抬起不能当成点击（滚动列表/按钮时最常见）
+var _ui_dragged: bool = false
 # 面板横向滑动收起（右下指令区向右滑出、左下信息面板向左滑出）
 var ui_slide_hit: Callable = Callable()
 var ui_slide_drag: Callable = Callable()
@@ -152,6 +154,7 @@ func _handle_touch(event: InputEventScreenTouch) -> void:
 			_ui_touch_down = true
 			_ui_start_pos = event.position
 			_ui_slide_ctrl = null
+			_ui_dragged = false
 			_emit_ui_button(event.position, true)
 			get_viewport().set_input_as_handled()
 			return
@@ -176,8 +179,16 @@ func _handle_touch(event: InputEventScreenTouch) -> void:
 				_emit_ui_button(Vector2(-200.0, -200.0), false)
 				_forwarding = false
 				_ui_slide_ctrl = null
+			elif _ui_dragged:
+				# 面板内滑动过（列表滚动、按钮上滑一下）：抬起若是原地松开会被当成点击，
+				# 这里先把指针挪出屏幕再松开，按钮的按下态被取消，不会误触。
+				_forwarding = true
+				_emit_ui_motion(Vector2(-200.0, -200.0), Vector2.ZERO)
+				_emit_ui_button(Vector2(-200.0, -200.0), false)
+				_forwarding = false
 			else:
 				_emit_ui_button(event.position, false)
+			_ui_dragged = false
 			get_viewport().set_input_as_handled()
 			return
 		if event.index != _touch_index:
@@ -204,6 +215,8 @@ func _handle_drag(event: InputEventScreenDrag) -> void:
 			return
 		var dx: float = event.position.x - _ui_start_pos.x
 		var dy: float = event.position.y - _ui_start_pos.y
+		if (Vector2(dx, dy)).length() > TAP_MOVE_LIMIT:
+			_ui_dragged = true
 		if absf(dx) > absf(dy) and absf(dx) > SLIDE_TRIGGER and ui_slide_hit.is_valid():
 			var ctrl = ui_slide_hit.call(_ui_start_pos)
 			if ctrl != null:

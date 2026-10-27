@@ -9,6 +9,8 @@ const MapPreview = preload("res://scripts/map/MapPreview.gd")
 
 func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	# 触屏滑动误点守卫：卡片网格可以放心上下滑，滑过阈值后抬手不会选中地图
+	add_child(TouchDragGuard.new())
 	# 延后一帧再建：_ready 时视口可能还没按 stretch 规则算出真实尺寸
 	call_deferred("_build")
 
