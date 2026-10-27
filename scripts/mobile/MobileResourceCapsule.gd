@@ -8,6 +8,8 @@ extends Control
 # 所有尺寸与字号都走 UILayout.dp()：设计空间 2400x1400 直接写 13 号字在手机上只有约 3.6dp。
 
 signal stats_pressed()
+# 展开/收起后胶囊高度变化，顶部其它元素（信息栏/科研入口/战况栏）需要重排
+signal layout_changed()
 
 const RES_KEYS: Array = ["gold", "wood", "stone", "food", "oil"]
 const ROW_H_DP: float = 42.0
@@ -31,10 +33,21 @@ var _res_colors: Dictionary = {}
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
+	# 高瘦屏（20:9）竖屏放不下 344dp，按实际可用宽度收窄，内部字号同步缩小，
+	# 避免胶囊被屏幕右边缘裁掉、也避免内容溢出压到下面的信息栏/小地图。
+	clip_contents = true
 	_build()
 
+# 当前方向下的胶囊宽度（dp）与内容缩放系数（高瘦竖屏 <1）
+func _width_dp() -> float:
+	return UILayout.mobile_capsule_width_dp()
+
+func _content_scale() -> float:
+	return clampf(_width_dp() / WIDTH_DP, 0.72, 1.0)
+
 func _build() -> void:
-	UILayout.place_dp(self, "tl", WIDTH_DP, ROW_H_DP, MARGIN_DP)
+	var k := _content_scale()
+	UILayout.place_dp(self, "tl", _width_dp(), ROW_H_DP, MARGIN_DP)
 	_res_colors = {
 		"gold": UITheme.RES_GOLD,
 		"wood": UITheme.RES_WOOD,
@@ -65,7 +78,7 @@ func _build() -> void:
 	add_child(_vbox)
 
 	var main_row := HBoxContainer.new()
-	main_row.add_theme_constant_override("separation", int(UILayout.dp(6.0)))
+	main_row.add_theme_constant_override("separation", int(UILayout.dp(6.0 * k)))
 	main_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_vbox.add_child(main_row)
 
@@ -76,13 +89,13 @@ func _build() -> void:
 		item.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		var icon_lbl := Label.new()
 		icon_lbl.text = String(UITheme.RESOURCE_ICONS.get(key, "◆"))
-		icon_lbl.add_theme_font_size_override("font_size", UILayout.font_dp(10.0))
+		icon_lbl.add_theme_font_size_override("font_size", UILayout.font_dp(10.0 * k))
 		icon_lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		icon_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		item.add_child(icon_lbl)
 		var value_lbl := Label.new()
 		value_lbl.text = "0"
-		value_lbl.add_theme_font_size_override("font_size", UILayout.font_dp(13.0))
+		value_lbl.add_theme_font_size_override("font_size", UILayout.font_dp(13.0 * k))
 		value_lbl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 		value_lbl.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		item.add_child(value_lbl)
@@ -96,7 +109,7 @@ func _build() -> void:
 
 	_pop_label = Label.new()
 	_pop_label.text = "👥0/0"
-	_pop_label.add_theme_font_size_override("font_size", UILayout.font_dp(12.0))
+	_pop_label.add_theme_font_size_override("font_size", UILayout.font_dp(12.0 * k))
 	_pop_label.add_theme_color_override("font_color", Color.WHITE)
 	_pop_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_pop_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -104,7 +117,7 @@ func _build() -> void:
 
 	_time_label = Label.new()
 	_time_label.text = "00:00"
-	_time_label.add_theme_font_size_override("font_size", UILayout.font_dp(12.0))
+	_time_label.add_theme_font_size_override("font_size", UILayout.font_dp(12.0 * k))
 	_time_label.add_theme_color_override("font_color", Color(UITheme.PARCHMENT, 0.9))
 	_time_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
 	_time_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -112,14 +125,14 @@ func _build() -> void:
 
 	_chart_btn = Button.new()
 	_chart_btn.text = "📊"
-	_chart_btn.custom_minimum_size = Vector2(UILayout.dp(34.0), UILayout.dp(34.0))
-	_chart_btn.add_theme_font_size_override("font_size", UILayout.font_dp(13.0))
+	_chart_btn.custom_minimum_size = Vector2(UILayout.dp(34.0 * k), UILayout.dp(34.0 * k))
+	_chart_btn.add_theme_font_size_override("font_size", UILayout.font_dp(13.0 * k))
 	_chart_btn.mouse_filter = Control.MOUSE_FILTER_STOP
 	_chart_btn.pressed.connect(func(): stats_pressed.emit())
 	main_row.add_child(_chart_btn)
 
 	_detail_row = HBoxContainer.new()
-	_detail_row.add_theme_constant_override("separation", int(UILayout.dp(6.0)))
+	_detail_row.add_theme_constant_override("separation", int(UILayout.dp(6.0 * k)))
 	_detail_row.visible = false
 	_detail_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_vbox.add_child(_detail_row)
@@ -127,7 +140,7 @@ func _build() -> void:
 	for key in RES_KEYS:
 		var detail := Label.new()
 		detail.text = "0人 +0.0"
-		detail.add_theme_font_size_override("font_size", UILayout.font_dp(9.0))
+		detail.add_theme_font_size_override("font_size", UILayout.font_dp(9.0 * k))
 		detail.add_theme_color_override("font_color", Color(UITheme.PARCHMENT, 0.75))
 		detail.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_res_detail_labels[key] = detail
@@ -147,7 +160,8 @@ func _gui_input(event: InputEvent) -> void:
 func _toggle_expanded() -> void:
 	expanded = not expanded
 	_detail_row.visible = expanded
-	UILayout.place_dp(self, "tl", WIDTH_DP, EXPANDED_H_DP if expanded else ROW_H_DP, MARGIN_DP)
+	UILayout.place_dp(self, "tl", _width_dp(), EXPANDED_H_DP if expanded else ROW_H_DP, MARGIN_DP)
+	layout_changed.emit()
 
 func apply_data(resources: Dictionary, population: Dictionary, limits: Dictionary = {}) -> void:
 	for key in RES_KEYS:

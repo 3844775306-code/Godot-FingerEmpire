@@ -101,6 +101,7 @@ func _create_components() -> void:
 	capsule = MobileResourceCapsule.new()
 	capsule.name = "ResourceCapsule"
 	capsule.stats_pressed.connect(_on_stats_requested)
+	capsule.layout_changed.connect(_on_capsule_layout_changed)
 	add_child(capsule)
 
 	command_bar = MobileCommandBar.new()
@@ -335,7 +336,7 @@ func _apply_minimap_layout(minimap: Control) -> void:
 		var vp := UILayout.view_size()
 		var insets := UILayout.safe_insets()
 		cap_rect = Rect2(Vector2(insets.x + UILayout.dp(2.0), insets.y + UILayout.dp(2.0)),
-				Vector2(UILayout.dp(UILayout.MOBILE_CAPSULE_W_DP), UILayout.dp(42.0)))
+				Vector2(UILayout.dp(UILayout.mobile_capsule_width_dp()), UILayout.dp(42.0)))
 	var r := UILayout.mobile_minimap_rect(cap_rect)
 	minimap.size = r.size
 	UILayout.place(minimap, 1.0, 0.0, r.position.x - UILayout.view_size().x, r.position.y,
@@ -511,6 +512,11 @@ func _format_game_time() -> String:
 	var mins := int(seconds / 60.0)
 	var secs := int(seconds) % 60
 	return "%02d:%02d" % [mins, secs]
+
+# 胶囊展开/收起后，让桌面 HUD 重排顶部带（信息栏/科研入口/战况栏都跟着新胶囊底边走）
+func _on_capsule_layout_changed() -> void:
+	if hud != null and is_instance_valid(hud) and hud.has_method("_layout_top_band"):
+		hud.call("_layout_top_band")
 
 func _on_stats_requested() -> void:
 	if stats_screen:

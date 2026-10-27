@@ -691,10 +691,13 @@ func _update_research_button(bm) -> void:
 	var age_name := TechTreeData.age_name(int(st.get("age", 0)))
 	var cur: Dictionary = st.get("current", {})
 	if cur.is_empty():
-		rbtn.text = "🔬 %s · 科研树 (T)" % age_name
+		rbtn.text = "🔬 科研" if InputSource.use_mobile_ui() else "🔬 %s · 科研树 (T)" % age_name
 	else:
 		var pct: int = int(clampf(float(cur.get("elapsed", 0.0)) / maxf(float(cur.get("total", 1.0)), 0.1) * 100.0, 0.0, 100.0))
-		rbtn.text = "🔬 %s · %s %d%% (T)" % [age_name, String(cur.get("name", "")), pct]
+		if InputSource.use_mobile_ui():
+			rbtn.text = "🔬 科研 %d%%" % pct
+		else:
+			rbtn.text = "🔬 %s · %s %d%% (T)" % [age_name, String(cur.get("name", "")), pct]
 
 # 科研树入口：经典模式不显示；联机客户端由 ClientHUD 处理。
 func _open_research_panel():
@@ -985,16 +988,25 @@ func _layout_top_band() -> void:
 	# 战况栏
 	_layout_alert_stack()
 
+# 手机端资源胶囊矩形：优先取 MobileHUD 真实控件，取不到按 UILayout 的 place_dp 规则兜底。
+func _mobile_capsule_rect_ui() -> Rect2:
+	var mh = _mobile_hud
+	if mh != null and is_instance_valid(mh):
+		var cap = mh.get("capsule")
+		if cap is Control and (cap as Control).visible:
+			var cr: Rect2 = (cap as Control).get_global_rect()
+			if cr.size.x > 0.0:
+				return cr
+	# 取不到真实控件时按 MobileResourceCapsule 的 place_dp 规则兜底（344×42dp）
+	var insets := UILayout.safe_insets()
+	return Rect2(Vector2(insets.x + UILayout.dp(2.0), insets.y + UILayout.dp(2.0)),
+		Vector2(UILayout.dp(UILayout.mobile_capsule_width_dp()), UILayout.dp(42.0)))
+
 # 科研入口：桌面放小地图下方右对齐；手机竖屏放资源胶囊下方左侧、横屏放小地图下方右侧，
 # 都避开居中战况栏，且按 dp 放大到可点击尺寸。
 func _place_research_entry(rb: Control, vp: Vector2, mobile: bool) -> void:
 	if mobile:
-		var cap_rect := UILayout.top_capsule_rect(vp, vp.x)
-		var mh = _mobile_hud
-		if mh != null and is_instance_valid(mh):
-			var cap = mh.get("capsule")
-			if cap is Control and (cap as Control).visible:
-				cap_rect = (cap as Control).get_global_rect()
+		var cap_rect := _mobile_capsule_rect_ui()
 		var r := UILayout.mobile_research_rect(cap_rect)
 		if r.size.x <= 0.0:
 			rb.visible = false
@@ -1035,12 +1047,13 @@ func _rebuild_mobile_hud_for_orientation() -> void:
 	_mobile_hud.setup(self)
 	_layout_top_band()
 
-# 战况栏：桌面放指令底板下方居中；手机按横竖屏放在胶囊/小地图下方，避免压住它们。
+# 战况栏：桌面放顶部信息面板/指令底板下方居中；手机按横竖屏放在信息栏/胶囊下方，
+# 避免压住胶囊、小地图和四行信息栏。
 func _layout_alert_stack() -> void:
 	if _alert_stack == null or not is_instance_valid(_alert_stack):
 		return
 	if InputSource.use_mobile_ui():
-		var r := UILayout.mobile_alert_rect()
+		var r := UILayout.mobile_alert_rect(_mobile_capsule_rect_ui())
 		_alert_stack.anchor_left = 0.5
 		_alert_stack.anchor_right = 0.5
 		_alert_stack.anchor_top = 0.0
@@ -1050,7 +1063,14 @@ func _layout_alert_stack() -> void:
 		_alert_stack.offset_top = r.position.y
 		_alert_stack.offset_bottom = r.position.y
 		return
-	var rd := UILayout.top_alert_rect(get_viewport().get_visible_rect().size)
+	# 桌面：单机顶部信息面板可能落到指令栏下方，战况栏要跟着往下让
+	var diag_bottom := 0.0
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if bm != null and bm.has_method("get_diag_panel_rect"):
+		var dr: Rect2 = bm.get_diag_panel_rect()
+		if dr.size.y > 0.0:
+			diag_bottom = dr.position.y + dr.size.y
+	var rd := UILayout.top_alert_rect(get_viewport().get_visible_rect().size, diag_bottom)
 	_alert_stack.anchor_left = 0.0
 	_alert_stack.anchor_right = 0.0
 	_alert_stack.anchor_top = 0.0

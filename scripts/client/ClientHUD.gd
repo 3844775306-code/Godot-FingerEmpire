@@ -607,10 +607,13 @@ func _update_research_button():
 	var age_name := TechTreeData.age_name(int(st.get("age", 0)))
 	var cur: Dictionary = st.get("current", {})
 	if cur.is_empty():
-		rbtn.text = "🔬 %s · 科研树 (T)" % age_name
+		rbtn.text = "🔬 科研" if InputSource.use_mobile_ui() else "🔬 %s · 科研树 (T)" % age_name
 	else:
 		var pct: int = int(clampf(float(cur.get("elapsed", 0.0)) / maxf(float(cur.get("total", 1.0)), 0.1) * 100.0, 0.0, 100.0))
-		rbtn.text = "🔬 %s · %s %d%% (T)" % [age_name, String(cur.get("name", "")), pct]
+		if InputSource.use_mobile_ui():
+			rbtn.text = "🔬 科研 %d%%" % pct
+		else:
+			rbtn.text = "🔬 %s · %s %d%% (T)" % [age_name, String(cur.get("name", "")), pct]
 
 # 科研树：客户端状态来自 ClientRenderer 的快照镜像，操作通过 RPC 发给主机。
 func _open_research_panel():
@@ -1062,8 +1065,9 @@ func _place_research_entry(rb: Control, vp: Vector2, mobile: bool) -> void:
 		rb.size = r2.size
 		rb.position = r2.position
 
-# 顶部信息栏：桌面塞进指令栏与小地图之间（塞不下落到指令栏下方居中），
-# 手机横屏夹在胶囊与小地图之间，竖屏隐藏；文字超长用省略号截断，绝不越界压到邻块。
+# 顶部信息栏：桌面塞进指令栏与小地图之间（塞不下落到指令栏下方居中）；
+# 手机竖屏放到资源胶囊正下方 4 行短句区，横屏夹在胶囊与小地图之间。
+# 手机端第一行 FPS、后三行给网络/对局信息（长句拆成多行，尽量不用省略号）。
 func _layout_top_info() -> void:
 	if _top_bg == null or not is_instance_valid(_top_bg):
 		return
@@ -1072,14 +1076,7 @@ func _layout_top_info() -> void:
 	var vp := get_viewport().get_visible_rect().size
 	var rect := Rect2()
 	if InputSource.use_mobile_ui():
-		var cap_rect := Rect2()
-		if _mobile_hud != null and is_instance_valid(_mobile_hud):
-			var cap = _mobile_hud.get("capsule")
-			if cap is Control and (cap as Control).visible:
-				cap_rect = (cap as Control).get_global_rect()
-		if cap_rect.size.x <= 0.0:
-			cap_rect = UILayout.top_capsule_rect(vp, UILayout.dp(UILayout.MOBILE_CAPSULE_W_DP))
-		rect = UILayout.mobile_top_info_rect(cap_rect)
+		rect = UILayout.mobile_top_info_rect(_mobile_capsule_rect_ui())
 	else:
 		rect = UILayout.top_info_rect(vp)
 	_top_rect = rect
@@ -1090,22 +1087,43 @@ func _layout_top_info() -> void:
 	if not show:
 		return
 	# 底板与信息栏矩形完全一致（不再向外扩），这样右边缘不会压到小地图；
-	# 两行文字各占一半高度，超长省略号截断。
+	# 手机 4 行：FPS 占第 1 行，网络/对局信息占后 3 行；桌面两行各占一半。
+	var mobile_info := InputSource.use_mobile_ui()
 	var pad_x := UILayout.dp(8.0)
-	var line_h: float = rect.size.y * 0.5
+	var line_h: float
+	if mobile_info:
+		line_h = rect.size.y / float(UILayout.MOBILE_INFO_LINES)
+	else:
+		line_h = rect.size.y * 0.5
 	_top_bg.position = rect.position
 	_top_bg.size = rect.size
 	_fps_label.position = rect.position + Vector2(pad_x, 0.0)
 	_fps_label.size = Vector2(rect.size.x - pad_x * 2.0, line_h)
 	_net_stat_label.position = rect.position + Vector2(pad_x, line_h)
-	_net_stat_label.size = Vector2(rect.size.x - pad_x * 2.0, line_h)
+	_net_stat_label.vertical_alignment = VERTICAL_ALIGNMENT_TOP if mobile_info else VERTICAL_ALIGNMENT_CENTER
+	if mobile_info:
+		_net_stat_label.size = Vector2(rect.size.x - pad_x * 2.0, line_h * float(UILayout.MOBILE_INFO_LINES - 1))
+	else:
+		_net_stat_label.size = Vector2(rect.size.x - pad_x * 2.0, line_h)
+
+# 手机端资源胶囊矩形：优先取 MobileHUD 真实控件，取不到按 dp 规则兜底。
+func _mobile_capsule_rect_ui() -> Rect2:
+	if _mobile_hud != null and is_instance_valid(_mobile_hud):
+		var cap = _mobile_hud.get("capsule")
+		if cap is Control and (cap as Control).visible:
+			var cr: Rect2 = (cap as Control).get_global_rect()
+			if cr.size.x > 0.0:
+				return cr
+	var insets := UILayout.safe_insets()
+	return Rect2(Vector2(insets.x + UILayout.dp(2.0), insets.y + UILayout.dp(2.0)),
+		Vector2(UILayout.dp(UILayout.mobile_capsule_width_dp()), UILayout.dp(42.0)))
 
 # 战况栏：桌面放指令底板正下方居中；手机横屏在胶囊下方，竖屏再往下让开小地图。
 func _layout_alert_stack() -> void:
 	if _alert_stack == null or not is_instance_valid(_alert_stack):
 		return
 	if InputSource.use_mobile_ui():
-		var r := UILayout.mobile_alert_rect()
+		var r := UILayout.mobile_alert_rect(_mobile_capsule_rect_ui())
 		_alert_stack.anchor_left = 0.5
 		_alert_stack.anchor_right = 0.5
 		_alert_stack.anchor_top = 0.0
@@ -1254,7 +1272,8 @@ func _process(delta):
 	_client_time_acc += delta
 	var t_min = int(_client_time_acc / 60)
 	var t_sec = int(_client_time_acc) % 60
-	# 顶部中央两行：第一行性能、第二行 AI/地图/时间/延迟/快照
+	# 顶部信息：桌面两行（性能 / AI/地图/时间/延迟/快照）；
+	# 手机四行：第一行 FPS，后三行放对局信息，长句拆行避免省略号。
 	_fps_update_timer -= delta
 	if _fps_update_timer <= 0:
 		_fps_update_timer = 0.5
@@ -1265,9 +1284,14 @@ func _process(delta):
 			var dn = diff_names[clampi(GameSettings.ai_difficulty, 0, 3)]
 			var map_name := String(MapPresets.get_info(GameSettings.map_id).get("name", "经典大陆"))
 			var ping_txt := "%dms" % _ping_rtt if _ping_rtt > 0 else "--"
-			_net_stat_label.text = "AI:%s | 地图:%s | 时间:%02d:%02d | 延迟:%s | 快照:%d/s" % [
-				dn, map_name, t_min, t_sec, ping_txt, _snap_recv_rate
-			]
+			if InputSource.use_mobile_ui():
+				_net_stat_label.text = "AI:%s 地图:%s 时间:%02d:%02d\n延迟:%s 快照:%d/s" % [
+					dn, map_name, t_min, t_sec, ping_txt, _snap_recv_rate
+				]
+			else:
+				_net_stat_label.text = "AI:%s | 地图:%s | 时间:%02d:%02d | 延迟:%s | 快照:%d/s" % [
+					dn, map_name, t_min, t_sec, ping_txt, _snap_recv_rate
+				]
 		_update_top_bg()
 
 	# 快照率每秒统计一次

@@ -418,11 +418,11 @@ var _diag_active_frame: int = 0
 var _diag_physics_heartbeat: int = 0
 var _fps_label: Label = null
 var _snap_rate_label: Label = null
+var _diag_entity_label: Label = null
+var _diag_path_label: Label = null
 var _diag_bg: Panel = null
-var _diag_top_y: float = 6.0
-var _diag_line_h: float = 34.0
-# 手机端顶部信息面板改成左对齐（贴在资源胶囊右侧），底板宽度固定不发散
-var _diag_left_aligned: bool = false
+var _diag_rect: Rect2 = Rect2()          # 顶部信息面板当前矩形（HUD 战况栏据此避让）
+var _diag_capsule_rect: Rect2 = Rect2()  # 手机端资源胶囊矩形：信息栏贴在它下面
 
 # ==================== 后期自动画质 ====================
 # 后期实体数量上来后，大量单位模型 + 实时阴影会把 GPU 压到 30~40 FPS。
@@ -456,104 +456,99 @@ var _physics_max_steps_original: int = 8
 var _physics_rate_low: bool = false
 
 func _create_diag_label():
-	# 顶部两行信息：第一行性能（帧率/画质/实体），第二行对局信息（AI/地图/时间）
-	# 桌面端放偏右（0.675）避开左侧那排全局指令按钮，右侧也不压小地图；
-	# 手机端改成「紧贴资源胶囊右侧、与胶囊同一条高度带」：
-	#   胶囊左边距 2dp、宽 344dp → 面板左边缘 = 安全边距 + 2 + 344 + 8dp，
-	#   宽度 146dp，右边缘刚好停在小地图（右上角 154dp）左边，三者互不遮挡。
+	# 顶部信息：桌面两行（性能 / 对局信息）放在指令底板下方居中，不再压住指令按钮和小地图；
+	# 手机按 4 行短句排（竖屏放资源胶囊正下方，横屏夹在胶囊与小地图之间），
+	# 每行只放一类信息，尽量不用省略号。
 	var mobile := InputSource.use_mobile_ui()
-	var center_anchor: float = 0.0 if mobile else 0.675
-	var f1: int = UILayout.font_dp(10.5) if mobile else 24
-	var f2: int = UILayout.font_dp(9.5) if mobile else 22
-	var y1: float = UILayout.dp(18.0) if mobile else 6.0
-	var line_h: float = UILayout.dp(18.0) if mobile else 34.0
-	var half_w: float = UILayout.dp(146.0) if mobile else 520.0
-	_diag_left_aligned = mobile
-	_diag_top_y = y1
-	_diag_line_h = line_h
 	_diag_bg = Panel.new()
 	_diag_bg.name = "DiagBG"
 	_diag_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_diag_bg.z_index = 199
-	_diag_bg.anchor_left = center_anchor
-	_diag_bg.anchor_right = center_anchor
-	_diag_bg.anchor_top = 0.0
-	_diag_bg.anchor_bottom = 0.0
 	var bg_style := StyleBoxFlat.new()
 	bg_style.bg_color = Color(0.0, 0.0, 0.0, 0.45)
 	bg_style.set_corner_radius_all(int(UILayout.dp(6.0)))
 	_diag_bg.add_theme_stylebox_override("panel", bg_style)
-	_fps_label = _make_top_label("DiagFPS", y1, line_h, f1, half_w, center_anchor, Color.LIME_GREEN)
-	_snap_rate_label = _make_top_label("DiagInfo", y1 + line_h, line_h, f2, half_w, center_anchor, Color(1.0, 0.9, 0.3))
-	var canvas = CanvasLayer.new()
+	var canvas := CanvasLayer.new()
 	canvas.name = "DiagLayer"
 	canvas.layer = 100
 	canvas.add_child(_diag_bg)
+	_fps_label = _make_top_label("DiagFPS", mobile, UILayout.font_dp(10.0) if mobile else 24, Color.LIME_GREEN)
+	_diag_entity_label = _make_top_label("DiagEntity", mobile, UILayout.font_dp(9.5), Color(0.8, 1.0, 0.8))
+	_diag_path_label = _make_top_label("DiagPath", mobile, UILayout.font_dp(9.5), Color(0.75, 0.92, 1.0))
+	_snap_rate_label = _make_top_label("DiagInfo", mobile, UILayout.font_dp(9.5) if mobile else 22, Color(1.0, 0.9, 0.3))
 	canvas.add_child(_fps_label)
+	canvas.add_child(_diag_entity_label)
+	canvas.add_child(_diag_path_label)
 	canvas.add_child(_snap_rate_label)
 	add_child(canvas)
-	_update_diag_bg(y1, line_h)
+	_diag_physics_heartbeat = 0
+	_layout_diag_now()
 
-# 半透明底板按两行文字的实际宽度自适应，文字换长（实体数变大）时也不会露在外面。
-# 手机端是左对齐的固定宽度块（贴在资源胶囊右侧），不再按文字宽度左右居中。
-func _update_diag_bg(top_y: float, line_h: float) -> void:
-	if _diag_bg == null or not is_instance_valid(_diag_bg) or _fps_label == null:
-		return
-	var pad_x: float = UILayout.dp(10.0)
-	var pad_y: float = UILayout.dp(4.0)
-	var text_w: float = _fps_label.get_minimum_size().x
-	if _snap_rate_label:
-		text_w = maxf(text_w, _snap_rate_label.get_minimum_size().x)
-	var w: float = text_w + pad_x * 2.0
-	var h: float = line_h * 2.0 + pad_y * 2.0
-	var bg_top: float = maxf(top_y - pad_y, 0.0)
-	if _diag_left_aligned:
-		var left: float = _diag_mobile_left()
-		_diag_bg.offset_left = left - pad_x
-		_diag_bg.offset_right = left + UILayout.dp(146.0) + pad_x
-		_diag_bg.offset_top = bg_top
-		_diag_bg.offset_bottom = bg_top + h
-		return
-	_diag_bg.offset_left = -w * 0.5
-	_diag_bg.offset_right = w * 0.5
-	_diag_bg.offset_top = bg_top
-	_diag_bg.offset_bottom = bg_top + h
-
-# 手机端顶部信息面板的左边缘：安全边距 + 胶囊左边距(2dp) + 胶囊宽(344dp) + 间隙(8dp)
-func _diag_mobile_left() -> float:
-	return UILayout.safe_insets().x + UILayout.dp(2.0 + 344.0 + 8.0)
-
-# 顶部中央的一行信息（带黑描边，浅色地面也看得清）
-func _make_top_label(node_name: String, top_y: float, line_h: float, font_size: int, half_w: float, center_anchor: float, color: Color) -> Label:
+# 顶部信息的一行文字（带黑描边，浅色地面也看得清）。
+# 桌面居中；手机左对齐并按 dp 放大字号，超长才用省略号兜底。
+func _make_top_label(node_name: String, mobile: bool, font_size: int, color: Color) -> Label:
 	var lb := Label.new()
 	lb.name = node_name
-	lb.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lb.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT if mobile else HORIZONTAL_ALIGNMENT_CENTER
 	lb.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	if _diag_left_aligned:
-		# 手机端：左对齐贴在资源胶囊右侧，极长文本按省略号截断，避免压到小地图
-		lb.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
+	if mobile:
 		lb.clip_text = true
 		lb.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		lb.anchor_left = 0.0
-		lb.anchor_right = 0.0
-		var left: float = _diag_mobile_left()
-		lb.offset_left = left
-		lb.offset_right = left + half_w
-	else:
-		lb.anchor_left = center_anchor
-		lb.anchor_right = center_anchor
-		lb.offset_left = -half_w
-		lb.offset_right = half_w
-	lb.anchor_top = 0.0
-	lb.anchor_bottom = 0.0
-	lb.offset_top = top_y
-	lb.offset_bottom = top_y + line_h
 	lb.add_theme_font_size_override("font_size", font_size)
 	lb.add_theme_color_override("font_color", color)
 	lb.add_theme_color_override("font_outline_color", Color.BLACK)
 	lb.add_theme_constant_override("outline_size", maxi(3, int(font_size * 0.2)))
 	lb.z_index = 200
+	lb.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	return lb
+
+# 手机端资源胶囊矩形：优先取 MobileHUD 真实控件（展开/收起都能跟上），取不到按 place_dp 规则兜底
+func _diag_capsule_rect_now() -> Rect2:
+	var mh = get_tree().get_first_node_in_group("mobile_hud")
+	if mh != null and is_instance_valid(mh):
+		var cap = mh.get("capsule")
+		if cap is Control and (cap as Control).visible:
+			var cr: Rect2 = (cap as Control).get_global_rect()
+			if cr.size.x > 0.0:
+				return cr
+	var insets := UILayout.safe_insets()
+	return Rect2(Vector2(insets.x + UILayout.dp(2.0), insets.y + UILayout.dp(2.0)),
+		Vector2(UILayout.dp(UILayout.mobile_capsule_width_dp()), UILayout.dp(42.0)))
+
+# 顶部信息面板重排：每 10 帧随刷新跑一次，旋转屏幕 / 胶囊展开后矩形自动跟上
+func _layout_diag_now() -> void:
+	if _diag_bg == null or _fps_label == null:
+		return
+	var mobile := InputSource.use_mobile_ui()
+	var rect := Rect2()
+	if mobile:
+		_diag_capsule_rect = _diag_capsule_rect_now()
+		rect = UILayout.mobile_top_info_rect(_diag_capsule_rect)
+	else:
+		rect = UILayout.top_diag_rect(UILayout.view_size(), 1040.0, 44.0)
+	if rect.size.x <= 0.0 or rect.size.y <= 0.0:
+		return
+	_diag_rect = rect
+	_diag_bg.position = rect.position
+	_diag_bg.size = rect.size
+	var pad_x := UILayout.dp(6.0) if mobile else UILayout.dp(4.0)
+	var line_count: float = float(UILayout.MOBILE_INFO_LINES) if mobile else 2.0
+	var line_h := rect.size.y / line_count
+	var labels: Array = [_fps_label]
+	if mobile:
+		labels.append(_diag_entity_label)
+		labels.append(_diag_path_label)
+	labels.append(_snap_rate_label)
+	for i in labels.size():
+		var lb: Label = labels[i]
+		lb.position = Vector2(rect.position.x + pad_x, rect.position.y + line_h * float(i))
+		lb.size = Vector2(rect.size.x - pad_x * 2.0, line_h)
+	_diag_entity_label.visible = mobile
+	_diag_path_label.visible = mobile
+
+# 战况栏避让用：信息面板底边
+func get_diag_panel_rect() -> Rect2:
+	return _diag_rect
 
 func _rebuild_entity_cache():
 	_all_entities.clear()
@@ -4378,33 +4373,49 @@ func _process(delta):
 			var secs = secs_total % 60
 			game_time_label.text = "%02d:%02d" % [mins, secs]
 
-	# ---- 顶部中央两行信息：性能 + 对局信息 ----
+	# ---- 顶部信息：性能 + 对局信息（桌面两行 / 手机四行短句）----
 	if _fps_label and Engine.get_process_frames() % 10 == 0:
 		_ensure_cache_fresh()
+		var mobile := InputSource.use_mobile_ui()
 		var phys_frames = Engine.get_physics_frames()
 		var phys_ok = (phys_frames != _diag_physics_heartbeat)
+		var np_stats: Dictionary = get_moving_no_path_stats()
 		if not phys_ok and _diag_physics_heartbeat > 0:
 			_fps_label.add_theme_color_override("font_color", Color.RED)
-			_fps_label.text = "🔴 主循环卡死 FPS:%.0f | 实体:%d" % [
+			_fps_label.text = "🔴 主循环卡死 FPS:%.0f 实体:%d" % [
 				Engine.get_frames_per_second(), _all_entities.size()
 			]
+			if mobile and _diag_entity_label:
+				_diag_entity_label.text = "实体:%d 军%d 建%d" % [
+					_all_entities.size(), _armies.size(), _buildings.size()]
 		else:
 			_fps_label.add_theme_color_override("font_color", Color.LIME_GREEN)
-			var np_stats := get_moving_no_path_stats()
-			_fps_label.text = "FPS:%.0f | 画质:%d | 实体:%d(A%d B%d) | 移动无路径:%d(排队:%d,卡:%d)" % [
-				Engine.get_frames_per_second(), _perf_quality_level,
-				_all_entities.size(), _armies.size(), _buildings.size(),
-				int(np_stats.get("total", 0)), int(np_stats.get("pending_total", 0)),
-				int(np_stats.get("stalled", 0))
-			]
+			if mobile:
+				# 手机：拆成短句，一行一类，避免一条长句被省略号截掉
+				_fps_label.text = "FPS:%.0f 画质:%d" % [
+					Engine.get_frames_per_second(), _perf_quality_level]
+				_diag_entity_label.text = "实体:%d 军%d 建%d" % [
+					_all_entities.size(), _armies.size(), _buildings.size()]
+				_diag_path_label.text = "无路径:%d 排队:%d 卡:%d" % [
+					int(np_stats.get("total", 0)), int(np_stats.get("pending_total", 0)),
+					int(np_stats.get("stalled", 0))]
+			else:
+				_fps_label.text = "FPS:%.0f | 画质:%d | 实体:%d(A%d B%d) | 移动无路径:%d(排队:%d,卡:%d)" % [
+					Engine.get_frames_per_second(), _perf_quality_level,
+					_all_entities.size(), _armies.size(), _buildings.size(),
+					int(np_stats.get("total", 0)), int(np_stats.get("pending_total", 0)),
+					int(np_stats.get("stalled", 0))
+				]
 		if _snap_rate_label:
 			var diff_names = ["简单", "普通", "困难", "地狱"]
 			var dn = diff_names[clampi(GameSettings.ai_difficulty, 0, 3)]
 			var map_name := String(MapPresets.get_info(GameSettings.map_id).get("name", "经典大陆"))
 			var clock := "%02d:%02d" % [int(game_time / 60.0), int(game_time) % 60]
-			_snap_rate_label.text = "AI:%s | 地图:%s | 时间:%s" % [dn, map_name, clock]
-		# 底板宽度跟着文字走
-		_update_diag_bg(_diag_top_y, _diag_line_h)
+			if mobile:
+				_snap_rate_label.text = "AI:%s %s %s" % [dn, map_name, clock]
+			else:
+				_snap_rate_label.text = "AI:%s | 地图:%s | 时间:%s" % [dn, map_name, clock]
+		_layout_diag_now()
 		_diag_physics_heartbeat = phys_frames
 		_diag_step = (_diag_step + 1) % 1000
 
