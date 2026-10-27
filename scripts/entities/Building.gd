@@ -1181,7 +1181,7 @@ func _unlock_nation_units(nation: int):
 	# 确保 NationData 已初始化
 	NationData._static_init()
 	var bm = get_tree().get_first_node_in_group("battle_manager")
-	var research := bm != null and bm.has_method("is_research_mode") and bm.is_research_mode()
+	var research: bool = bm != null and bm.has_method("is_research_mode") and bm.is_research_mode()
 	var units = NationData.NATION_UNITS.get(nation, [])
 	for u in units:
 		# 跳过农民（id 10），因为城堡本来就能生产
