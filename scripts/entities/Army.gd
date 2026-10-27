@@ -78,6 +78,7 @@ var _deliver_last_dist: float = -1.0
 # 建造/修理：农民走到建筑旁边的指定站位后开始施工。
 var _work_target_id: int = -1
 var _work_slot: int = 0
+var _work_slot_pos: Vector3 = Vector3.ZERO   # 最近合法边缘点：接活时算一次，之后一直用这个点
 var _at_work_site: bool = false
 var _work_repath_timer: float = 0.0
 var _deliver_total_time: float = 0.0
@@ -858,10 +859,13 @@ func work_on_building(b) -> bool:
 		combat_state = CombatState.IDLE
 	_work_target_id = b.get_instance_id()
 	_work_slot = slot
+	_work_slot_pos = b.get_builder_slot_for(global_position, slot)
+	if _work_slot_pos == Vector3.ZERO:
+		_work_slot_pos = b.get_builder_slot(slot)
 	_at_work_site = false
 	_work_repath_timer = 0.0
 	_set_order(UnitState.BUILDING)
-	_movement.set_move_target(b.get_builder_slot(slot), 0.25)
+	_movement.set_move_target(_work_slot_pos, 0.25)
 	return true
 
 func _get_work_building() -> Building:
@@ -2514,7 +2518,11 @@ func _tick_building_action(delta: float, bm) -> void:
 	if not still_needs_work:
 		_finish_work()
 		return
-	var slot: Vector3 = b.get_builder_slot(_work_slot)
+	if _work_slot_pos == Vector3.ZERO:
+		_work_slot_pos = b.get_builder_slot_for(global_position, _work_slot)
+		if _work_slot_pos == Vector3.ZERO:
+			_work_slot_pos = b.get_builder_slot(_work_slot)
+	var slot: Vector3 = _work_slot_pos
 	var dx: float = slot.x - global_position.x
 	var dz: float = slot.z - global_position.z
 	var dist: float = sqrt(dx * dx + dz * dz)

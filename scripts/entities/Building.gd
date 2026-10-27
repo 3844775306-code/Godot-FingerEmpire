@@ -469,6 +469,45 @@ func get_builder_slot(index: int) -> Vector3:
 		r += 0.6
 	return global_position
 
+# 给某个农民挑最近的合法建筑外缘：从农民所在方向开始绕一圈采样，
+# 比较所有能站人的边缘点到农民的距离，取代以前按编号固定朝向的站位。
+# 农民从哪边来就站哪边，不用绕到建筑背面，长条建筑/城墙也不会被固定点坑到。
+func get_builder_slot_for(from_pos: Vector3, index: int = 0) -> Vector3:
+	var bm = _get_bm()
+	if bm == null:
+		return global_position
+	var to_unit := from_pos - global_position
+	to_unit.y = 0.0
+	var start_ang: float = rotation.y
+	if to_unit.length_squared() > 0.01:
+		start_ang = atan2(to_unit.z, to_unit.x)
+	var max_r: float = body_radius + (4.5 if entity_id == 7 else 3.2)
+	var min_r: float = maxf(body_radius + 0.8, 1.2)
+	var samples: int = 48 if entity_id == 7 else 36
+	var best := global_position
+	var best_d := INF
+	var r := min_r
+	while r <= max_r:
+		for k in range(samples):
+			var ang: float = start_ang + TAU * float(k) / float(samples)
+			var p: Vector3 = global_position + Vector3(cos(ang), 0.0, sin(ang)) * r
+			var g: Vector2i = bm.world_to_grid(p)
+			if not _is_builder_tile_valid(bm, g.x, g.y):
+				continue
+			var wp: Vector3 = bm.grid_to_world(g.x, g.y)
+			wp.y = bm.get_height_at_grid(g.x, g.y)
+			var dx: float = wp.x - from_pos.x
+			var dz: float = wp.z - from_pos.z
+			var d: float = dx * dx + dz * dz
+			if d < best_d:
+				best_d = d
+				best = wp
+		r += 0.7
+	if best_d == INF:
+		# 没有合法边缘（被水/山/其他建筑围死）时退回旧逻辑，至少给个可达目标
+		return get_builder_slot(index)
+	return best
+
 func _is_builder_tile_valid(bm, gx: int, gy: int) -> bool:
 	if gx < 0 or gy < 0 or gx >= RTSConfig.MAP_SIZE or gy >= RTSConfig.MAP_SIZE:
 		return false
