@@ -37,6 +37,19 @@ const HOUSE_TARGET_MAX: int = 8
 const HOUSE_BUILD_LEAD_MINUTES: int = 1
 var target_house_count: int = HOUSE_TARGET_MAX
 var desired_worker_count: int = 8
+var _resource_pressure_time: float = 0.0
+
+# ═══ 资源溢出治理 ═══
+# 旧逻辑里军队/建筑都有固定上限（每兵种 7 个、民居 8 座、兵营 3 座…），
+# 但资源上限会随主城等级和仓库不断增加；中后期采集中队把资源顶到上限后，
+# 继续交资源会被 add_resource 直接截断，等于白采。下面几个阈值用于在资源
+# 接近满仓时主动把多余资源转成军队、人口和建筑升级，而不是继续囤着。
+const RESOURCE_PRESSURE_RATIO: float = 0.85      # 任一资源达到上限 85% 即开始泄压
+const RESOURCE_PRESSURE_GRACE: float = 10.0       # 连续高水位 10 秒才进入泄压，避开开局初始资源
+const RESOURCE_CRITICAL_RATIO: float = 0.97      # 接近满仓，允许一次多排几个兵
+const RESOURCE_PRESSURE_EXTRA_ARMY: int = 4      # 泄压时每个兵种额外允许的数量
+const RESOURCE_PRESSURE_EXTRA_HOUSES: int = 4    # 人口满时额外补的民居数
+const RESOURCE_PRESSURE_TRAIN_BURST: int = 2     # 最紧张时一次决策最多多排几个兵
 
 var cached_shipyard_pos: Vector3 = Vector3.ZERO
 var defense_line_built: bool = false
@@ -197,6 +210,79 @@ func _can_train_unit() -> bool:
 		if battle.has_method("can_train_for"):
 			return battle.can_train_for(my_peer_id)
 	return battle.can_train_unit(my_team)
+
+# 生产队列不会立刻增加人口，只有真正 spawn 时才 +1。普通补兵按当前人口
+# 判断会在排队阶段重复超编；泄压时一次多排几个更容易把人口顶爆。
+# 这里把“已存活 + 已排队”一起算，保证不会排到人口上限之外。
+func _queued_unit_count() -> int:
+	var total: int = 0
+	for entity in _cached_buildings():
+		if entity is Building and is_instance_valid(entity) and entity_belongs_to_me(entity):
+			total += entity.production_queue.size()
+	return total
+
+func _can_train_unit_with_queue() -> bool:
+	if not _can_train_unit():
+		return false
+	var pop: Dictionary = _get_population()
+	return int(pop.get("current", 0)) + _queued_unit_count() < int(pop.get("max", 0))
+
+func _resource_ratio(rk: String) -> float:
+	var lim: float = float(_get_limits().get(rk, 0))
+	if lim <= 0.0:
+		return 0.0
+	return float(_get_resources().get(rk, 0)) / lim
+
+func _resource_pressure_ratio() -> float:
+	var best: float = 0.0
+	for rk in ["gold", "wood", "stone", "food", "oil"]:
+		best = maxf(best, _resource_ratio(rk))
+	return best
+
+func _resource_overflow() -> bool:
+	return _resource_pressure_time >= RESOURCE_PRESSURE_GRACE \
+			and _resource_pressure_ratio() >= RESOURCE_PRESSURE_RATIO
+
+func _resource_critical() -> bool:
+	return _resource_pressure_time >= RESOURCE_PRESSURE_GRACE \
+			and _resource_pressure_ratio() >= RESOURCE_CRITICAL_RATIO
+
+# 开局 AI 的金/木/粮就是满的（500/500），但这是给建造序列用的启动资金。
+# 连续高水位一小段时间仍花不出去，才说明真的在浪费收入，此时再泄压。
+func _update_resource_pressure(delta: float) -> void:
+	if _resource_pressure_ratio() >= RESOURCE_PRESSURE_RATIO:
+		_resource_pressure_time += maxf(delta, 0.0)
+	else:
+		_resource_pressure_time = 0.0
+
+# 资源堆积时临时放宽每兵种数量上限，避免“每个兵种都 7 个”之后军队停止增长。
+func _effective_army_target() -> int:
+	if not _resource_overflow():
+		return target_army_count
+	var extra: int = RESOURCE_PRESSURE_EXTRA_ARMY
+	if _resource_critical():
+		extra += RESOURCE_PRESSURE_EXTRA_ARMY
+	return target_army_count + extra
+
+# 人口已满而资源还多时，先补额外民居，否则多出来的资源无处转化为军队。
+func _effective_house_target() -> int:
+	if not _resource_overflow():
+		return target_house_count
+	var pop: Dictionary = _get_population()
+	if int(pop.get("current", 0)) < int(pop.get("max", 0)) - 2:
+		return target_house_count
+	return maxi(target_house_count, HOUSE_TARGET_MAX + RESOURCE_PRESSURE_EXTRA_HOUSES)
+
+# 兵营造满后如果资源仍然堆积，多补几个生产建筑把资源转成兵力。
+func _effective_producer_target(b_id: int) -> int:
+	var target: int = int(MILITARY_PRODUCER_TARGETS.get(b_id, 1))
+	if not _resource_overflow():
+		return target
+	if b_id == 21:
+		target += 2
+	elif b_id == 24 or b_id == 29:
+		target += 1
+	return target
 
 func _deduct_resources(cost: Dictionary) -> bool:
 	if my_peer_id != -1:
@@ -752,7 +838,7 @@ func build_building(building_id: int, pos: Vector3, facing: Vector3 = Vector3.ZE
 				return false
 	# 城墙允许建 WALL_COUNT 面（防线需求），民居最多 HOUSE_TARGET_MAX 座，
 	# 墙顶炮台最多 WALL_COUNT 座；其余建筑上限 10
-	var _cap = WALL_COUNT if building_id == 27 else (target_house_count if building_id == 28 else 10)
+	var _cap = WALL_COUNT if building_id == 27 else (_effective_house_target() if building_id == 28 else 10)
 	if building_id == WALL_CANNON_ID:
 		_cap = WALL_COUNT
 	if count_building(building_id) >= _cap: return false
@@ -1147,7 +1233,7 @@ func _state_production(_delta):
 					built_shipyard_pos.append(cached_shipyard_pos)
 		if count_building(23) > 0 and count_unit(14) < 3 and can_afford(14) and _can_train_unit():
 			produce_unit(14)
-		if warehouses < WAREHOUSE_MAX_COUNT and can_afford_building(22):
+		if warehouses < WAREHOUSE_MAX_COUNT and not _resource_overflow() and can_afford_building(22):
 			var castle = get_peer_castle(my_peer_id)
 			if castle:
 				var near_count = 0
@@ -1246,7 +1332,10 @@ func decide(_delta):
 	clear_invalid_targets()
 	_refresh_visibility()
 	_refresh_primary_enemy()
+	_update_resource_pressure(_delta)
 	_ensure_house_quota()
+	# 资源囤到接近上限时先泄压：补人口/建筑升级/多排兵，避免继续采集却被上限截断。
+	_relieve_resource_pressure()
 	_diplo_decide()
 	if _defense == null:
 		_defense = AIDefenseScript.new(self)
@@ -1590,12 +1679,28 @@ func allocate_workers():
 	for w in workers:
 		if w.current_order != "deliver": non_delivering.append(w)
 
-	if workers.size() < desired_worker_count:
+	# 四种可采资源全部接近满仓时，继续采集只会被仓储上限截断。
+	# 给农民打上暂停标记（Army._find_nearest_resource 会尊重它），
+	# 有货的先送完；等泄压花掉资源后下一轮分配自动恢复采集。
+	var pause_gather: bool = _all_gather_resources_full()
+	for w in workers:
+		if pause_gather:
+			w.set_meta("ai_pause_gather", true)
+			if not _worker_is_fleeing(w) and w.current_order in ["", "gather", "move"]:
+				w.stop_movement()
+		elif w.has_meta("ai_pause_gather"):
+			w.remove_meta("ai_pause_gather")
+	if pause_gather:
+		return
+
+	if workers.size() < desired_worker_count and not _all_gather_resources_full():
 		if can_afford(10) and _can_train_unit(): produce_unit(10)
-		for w in non_delivering:
-			if _worker_is_fleeing(w): continue
-			var target = find_best_resource_for_worker(w, {"food": 100})
-			if target: w.gather_at(target)
+		var train_weights: Dictionary = _worker_resource_weights()
+		if not train_weights.is_empty():
+			for w in non_delivering:
+				if _worker_is_fleeing(w): continue
+				var target = find_best_resource_for_worker(w, train_weights)
+				if target: w.gather_at(target)
 
 	# 已经达到目标农民数后，新增/逃跑回来的农民不会走上面的补农分支；
 	# 这里每次分配都兜底处理完全空闲的农民，避免他们长期聚在主城不动。
@@ -1605,8 +1710,33 @@ func allocate_workers():
 		if w.has_meta("ai_flee_until"):
 			w.remove_meta("ai_flee_until")
 		if w.current_target == null and w.current_order == "":
-			var idle_target = find_best_resource_for_worker(w, _get_phase_weights())
+			var idle_weights: Dictionary = _worker_resource_weights()
+			if idle_weights.is_empty():
+				continue
+			var idle_target = find_best_resource_for_worker(w, idle_weights)
 			if idle_target: w.gather_at(idle_target)
+
+	# 某个资源快满仓时，正在采它的农民立即改采还有缺口的资源。
+	# 旧逻辑只有每 11 次分配才检查一次，而且已经站在矿上的农民即使
+	# 对应资源满仓也不会被改派，于是继续把收入送进被上限截断的池子。
+	var full_types: Array = []
+	for rk in ["gold", "wood", "stone", "food"]:
+		if _resource_ratio(rk) >= RESOURCE_CRITICAL_RATIO:
+			full_types.append(rk)
+	if not full_types.is_empty():
+		var alt_weights: Dictionary = _worker_resource_weights()
+		if not alt_weights.is_empty():
+			for w in workers:
+				if _worker_is_fleeing(w) or w.current_order == "deliver":
+					continue
+				var tgt = w.current_target
+				if not (is_instance_valid(tgt) and tgt is WorldResource):
+					continue
+				if not (tgt.resource_type in full_types):
+					continue
+				var alt = find_best_resource_for_worker(w, alt_weights)
+				if alt != null and not (alt.resource_type in full_types):
+					w.gather_at(alt)
 
 	allocate_timers += 1
 	if allocate_timers > 10:
@@ -1614,7 +1744,7 @@ func allocate_workers():
 		allocate_timers = 0
 		var res = _get_resources()
 		var limits = _get_limits()
-		var phase_weights = _get_phase_weights()
+		var phase_weights = _worker_resource_weights()
 		var scarcity = {}
 		for rk in ["gold","wood","stone","food"]:
 			var pct = float(res.get(rk,0)) / max(limits.get(rk,500), 1)
@@ -1688,6 +1818,22 @@ func _get_phase_weights() -> Dictionary:
 	if count_building(HEAVY_SIEGE_BUILDING_ID) > 0 and _trebuchet_pending() and not _trebuchet_unlocked():
 		w["oil"] = maxf(float(w.get("oil", 0.0)), 4.0)
 	return w
+
+# 农民不再去采已经接近上限的资源；否则交资源时会被 add_resource 截断。
+# 这里返回的权重只去掉“危险满仓”的类型，85%~97% 之间仍允许继续补，
+# 因为泄压流程会同时把资源花掉。
+func _worker_resource_weights() -> Dictionary:
+	var weights: Dictionary = _get_phase_weights()
+	for rk in ["gold", "wood", "stone", "food"]:
+		if _resource_ratio(rk) >= RESOURCE_CRITICAL_RATIO:
+			weights.erase(rk)
+	return weights
+
+func _all_gather_resources_full() -> bool:
+	for rk in ["gold", "wood", "stone", "food"]:
+		if _resource_ratio(rk) < RESOURCE_CRITICAL_RATIO:
+			return false
+	return true
 
 func clear_invalid_targets():
 	for entity in battle.entities.get_children():
@@ -1807,6 +1953,10 @@ func _should_build_or_upgrade(b_id: int) -> bool:
 
 # ═══ Warehouse ═══
 func consider_warehouse_near_farmer():
+	if _resource_overflow():
+		# 仓库只会抬高上限，不能把资源变成军队；已经接近上限时优先泄压，
+		# 否则 AI 会一边堆满仓、一边继续造仓库，资源仍然没有转化为实力。
+		return
 	var castle = get_peer_castle(my_peer_id)
 	if not castle: return
 	if count_building(22) >= WAREHOUSE_MAX_COUNT: return
@@ -2819,7 +2969,7 @@ func _process_line_1():
 			upgrade_building(b_id)
 			
 	for b_id in wanted_buildings:
-		var target = MILITARY_PRODUCER_TARGETS.get(b_id, 1)
+		var target = _effective_producer_target(b_id)
 		if count_building(b_id) < target and can_afford_building(b_id):
 			var bpos = _get_build_position(b_id)
 			if bpos != Vector3.ZERO:
@@ -2856,7 +3006,68 @@ func _process_line_upgrade():
 	for b_id in wanted_buildings:
 		if _should_build_or_upgrade(b_id) and can_afford_upgrade(b_id):
 			upgrade_building(b_id)
-			
+
+# 资源接近上限时的泄压流程：
+#   1) 人口快满 → 补民居；
+#   2) 任何可升级建筑（包括不在 wanted_buildings 里的民居/塔）→ 升级；
+#   3) 多排战斗兵；
+#   4) 兵营/马厩/重工不够就补生产建筑。
+# 所有支出仍然走 can_afford 系列，会保留投石机/重装科技预算；
+# 不同的是不再受“每兵种 7 个、民居 8 座”这类固定上限束缚。
+func _relieve_resource_pressure() -> void:
+	if not _resource_overflow():
+		return
+	_process_line_3()
+	_upgrade_any_affordable_building()
+	if _resource_critical():
+		_train_overflow_units()
+	_process_line_1()
+
+func _train_overflow_units() -> void:
+	if not _resource_overflow() or not _can_train_unit_with_queue():
+		return
+	var budget: int = RESOURCE_PRESSURE_TRAIN_BURST
+	for u_id in get_counter_priority():
+		if budget <= 0:
+			return
+		if u_id in SUPPORT_UNIT_IDS:
+			continue
+		if u_id == TRADE_CART_ID and count_unit(TRADE_CART_ID) >= _count_merchants():
+			continue
+		while budget > 0 and _can_train_unit_with_queue() and can_afford(u_id) and produce_unit(u_id):
+			budget -= 1
+
+func _can_pay_with_reserves(cost: Dictionary) -> bool:
+	var res: Dictionary = _get_resources()
+	for k in cost:
+		if int(res.get(k, 0)) < int(cost[k]):
+			return false
+	if _trebuchet_reserve_active() and not _can_pay_with_trebuchet_reserve(cost):
+		return false
+	if _heavy_siege_tech_reserve_active() and not _can_pay_with_reserve(cost, _heavy_siege_tech_reserve_cost()):
+		return false
+	return true
+
+# 泄压时不要只盯着 wanted_buildings：民居、塔等建筑继续升级
+# 也能把石/木/金吃掉，并带来人口/防御收益（仓库只抬上限，跳过）。
+func _upgrade_any_affordable_building() -> bool:
+	for entity in _cached_buildings():
+		if not (entity is Building) or not is_instance_valid(entity) or entity.health <= 0:
+			continue
+		if not entity_belongs_to_me(entity):
+			continue
+		# 仓库升级只把上限继续抬高，不产生战斗力；泄压时优先军营/民居/塔等。
+		if entity.entity_id == 22:
+			continue
+		if not entity.can_upgrade():
+			continue
+		var cost: Dictionary = entity.get_upgrade_cost()
+		if cost.is_empty() or not _can_pay_with_reserves(cost):
+			continue
+		if entity.perform_upgrade(battle):
+			return true
+	return false
+
 
 func _try_produce_merchants_or_officials() -> bool:
 	for mid in [51, 44, 45, 43]:
@@ -2891,23 +3102,26 @@ func _process_line_military():
 	if _trebuchet_reserve_active():
 		return
 	# 人口满时先补民居，否则 AI 会一直卡在上限，看起来像“不会造房、也不出兵”
-	if not _can_train_unit():
+	if not _can_train_unit_with_queue():
 		_process_line_3()
-		if not _can_train_unit():
+		if not _can_train_unit_with_queue():
 			return
 	var priority = get_counter_priority()
-	
+	var army_target: int = _effective_army_target()
+	var train_budget: int = RESOURCE_PRESSURE_TRAIN_BURST if _resource_critical() else 1
 	for u_id in priority:
 		if u_id in SUPPORT_UNIT_IDS:
 			continue
 		if u_id == TRADE_CART_ID and count_unit(TRADE_CART_ID) >= _count_merchants():
 			continue
-		if count_unit(u_id) < target_army_count and can_afford(u_id) and _can_train_unit():
-			
-			produce_unit(u_id); 
+		if count_unit(u_id) < army_target and can_afford(u_id) and _can_train_unit_with_queue():
+			# 普通情况每轮补 1 个；资源临界满仓时一次多排几个，尽快把收入转成兵力。
+			var trained: int = 0
+			while trained < train_budget and _can_train_unit_with_queue() and can_afford(u_id) and produce_unit(u_id):
+				trained += 1
 
 func _process_line_3():
-	if count_building(28) < target_house_count and can_afford_building(28):
+	if count_building(28) < _effective_house_target() and can_afford_building(28):
 		var castle = get_peer_castle(my_peer_id)
 		if castle:
 			var hp2 = find_valid_build_position(castle.global_position, 28)
@@ -3517,6 +3731,8 @@ var _pop_bar: ProgressBar; var _pop_label: Label
 var _res_bars: Array = []; var _res_labels: Array = []
 var _mil_rtl: RichTextLabel; var _bld_rtl: RichTextLabel
 var _trait_rtl: RichTextLabel
+var _research_title: RichTextLabel = null   # 「🔬 科研」小节标题（经典模式隐藏）
+var _research_rtl: RichTextLabel = null     # 科技时代 / 在研项目 / 已完成科技
 var _castle_bar: HealthBarControl
 var _castle_label: Label
 var _eco_title: RichTextLabel
@@ -3668,6 +3884,9 @@ func _create_debug_panel():
 	_header_rtl = _make_rtl(); _header_rtl.add_theme_font_size_override("font_size", 19); body.add_child(_header_rtl)
 	# 国家特色
 	_trait_rtl = _make_rtl(); _trait_rtl.add_theme_font_size_override("font_size", 13); body.add_child(_trait_rtl)
+	# 科研进度（仅科研模式显示）：时代、当前研究、已完成科技
+	_research_title = _make_section("🔬 科研"); body.add_child(_research_title)
+	_research_rtl = _make_rtl(); body.add_child(_research_rtl)
 	# 主城血量
 	var castle_hbox = HBoxContainer.new()
 	_castle_label = Label.new(); _castle_label.add_theme_font_size_override("font_size", 14)
