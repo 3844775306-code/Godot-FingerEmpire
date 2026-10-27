@@ -25,6 +25,17 @@ static var seen_path: String = "user://changelog_seen.txt"
 static func entries() -> Array:
 	return [
 		{
+			"version": "v1.6.52",
+			"date": "2026-10-27",
+			"title": "网页房创建失败修复",
+			"items": [
+				"修复：上一次开房异常退出后，残留的 cloudflared 进程会占住日志文件，导致再次创建网页房时报「无法创建隧道日志文件」；现在每次开房使用独立日志，不再互相覆盖。",
+				"修复：创建网页房前会自动清理上一次留下的 cloudflared 进程和临时文件，异常退出后也能直接重新开房。",
+				"修复：关闭网页房时不再同步等待命令行进程结束，避免关房时游戏窗口短暂无响应。",
+				"优化：Cloudflare 拒绝创建隧道时会立即显示原因，不再空等 45 秒。",
+			],
+		},
+		{
 			"version": "v1.6.51",
 			"date": "2026-10-27",
 			"title": "网页版联机：PC 开房，浏览器直接加入",
