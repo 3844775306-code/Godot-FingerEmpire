@@ -16,6 +16,7 @@ const DOWNLOAD_URL: String = "https://github.com/cloudflare/cloudflared/releases
 const WEB_ENTRY_URL: String = "https://fingerempire.netlify.app/"
 const START_TIMEOUT_MS: int = 45000
 const TUNNEL_HOST_RE: String = "https://([a-z0-9-]+\\.trycloudflare\\.com)"
+const PID_PATH: String = "user://web_tunnel.pid"
 
 var wss_url: String = ""
 var share_url: String = ""
@@ -79,13 +80,18 @@ func start(port: int = 8080) -> bool:
 	last_error = ""
 	_settled = false
 	_started_ms = Time.get_ticks_msec()
-	_log_path = ProjectSettings.globalize_path("user://web_tunnel.log")
-	_bat_path = ProjectSettings.globalize_path("user://web_tunnel.bat")
+	# 每次开房使用独立的日志和批处理文件：上一次异常退出时 cloudflared 可能还占着旧日志，
+	# 固定写 user://web_tunnel.log 会直接报“无法创建日志文件”，导致新房间永远开不出来。
+	var stamp := "%d_%d" % [int(Time.get_unix_time_from_system()), Time.get_ticks_msec()]
+	_log_path = ProjectSettings.globalize_path("user://web_tunnel_%s.log" % stamp)
+	_bat_path = ProjectSettings.globalize_path("user://web_tunnel_%s.bat" % stamp)
+	_kill_stale_process()
+	_cleanup_old_temp_files()
 
-	# 清空上一次日志，避免读到旧 URL
+	# 清空本次日志；文件名唯一，不会撞上残留进程的锁。
 	var log_file := FileAccess.open(_log_path, FileAccess.WRITE)
 	if log_file == null:
-		_fail("无法创建隧道日志文件: " + _log_path)
+		_fail("无法创建隧道日志文件: " + _log_path + "\n请检查用户目录是否可写，或结束残留的 cloudflared.exe 后重试。")
 		return false
 	log_file.close()
 
@@ -104,6 +110,7 @@ func start(port: int = 8080) -> bool:
 		_fail("启动 cloudflared 失败（create_process 返回 %d）" % _pid)
 		return false
 
+	_write_pid_file(_pid)
 	running = true
 	set_process(true)
 	print("[WebTunnel] cloudflared 启动: pid=", _pid, " port=", _port)
@@ -135,6 +142,14 @@ func _poll() -> void:
 						print("[WebTunnel] 网页房已就绪: ", wss_url)
 						tunnel_ready.emit(wss_url, share_url)
 						return
+			# 没有拿到地址，但 Cloudflare 已经明确拒绝：不要傻等 45 秒。
+			var lower := text.to_lower()
+			if (lower.contains("unauthorized: tunnel not found")
+					or lower.contains("failed to register tunnel")
+					or lower.contains("failed to request quick tunnel")
+					or lower.contains("failed to create tunnel")):
+				_fail("Cloudflare 拒绝创建隧道，请检查网络后重试。\n" + _read_log_tail())
+				return
 	if _pid > 0 and not OS.is_process_running(_pid):
 		_fail("cloudflared 已退出，未能生成公网地址。\n" + _read_log_tail())
 
@@ -151,6 +166,68 @@ func _read_log_tail() -> String:
 		text = text.substr(text.length() - 1200)
 	return text
 
+func _write_pid_file(pid: int) -> void:
+	var f := FileAccess.open(PID_PATH, FileAccess.WRITE)
+	if f == null:
+		return
+	f.store_string(str(pid))
+	f.close()
+
+func _read_pid_file() -> int:
+	if not FileAccess.file_exists(PID_PATH):
+		return -1
+	var f := FileAccess.open(PID_PATH, FileAccess.READ)
+	if f == null:
+		return -1
+	var text := f.get_as_text().strip_edges()
+	f.close()
+	return int(text) if text.is_valid_int() else -1
+
+func _remove_pid_file() -> void:
+	if FileAccess.file_exists(PID_PATH):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(PID_PATH))
+
+# 上一次游戏异常退出时 cloudflared 可能变成孤儿进程，继续占着旧日志/旧隧道。
+# 只处理 pid 文件里记录的、且进程名确实是 cloudflared 的进程，避免误杀用户自己的隧道。
+func _kill_stale_process() -> void:
+	var old := _read_pid_file()
+	if old <= 0 or old == _pid:
+		return
+	if not OS.is_process_running(old):
+		_remove_pid_file()
+		return
+	var out: Array = []
+	OS.execute("tasklist", ["/FI", "PID eq %d" % old, "/FO", "CSV", "/NH"], out, true)
+	var info := ""
+	for line in out:
+		info += String(line)
+	if info.to_lower().contains("cloudflared"):
+		print("[WebTunnel] 清理残留 cloudflared: pid=", old)
+		_kill_pid(old)
+	else:
+		print("[WebTunnel] pid 文件指向的进程不是 cloudflared，跳过: ", old)
+	_remove_pid_file()
+
+# 清掉之前开房留下的临时日志/脚本；被占用的文件删不掉就跳过，不阻塞本次开房。
+func _cleanup_old_temp_files() -> void:
+	var dir := DirAccess.open("user://")
+	if dir == null:
+		return
+	for name in dir.get_files():
+		if name.begins_with("web_tunnel_") and (name.ends_with(".log") or name.ends_with(".bat")):
+			dir.remove(name)
+		elif name == "web_tunnel.log" or name == "web_tunnel.bat":
+			dir.remove(name)
+
+func _kill_pid(pid: int) -> void:
+	if pid <= 0:
+		return
+	if OS.get_name() == "Windows":
+		# 不能在这里同步等 taskkill：关房时游戏主线程会被卡住，窗口看起来像死机。
+		OS.create_process("taskkill", ["/PID", str(pid), "/T", "/F"])
+	else:
+		OS.kill(pid)
+
 func _fail(reason: String) -> void:
 	last_error = reason
 	_settled = true
@@ -161,14 +238,10 @@ func _fail(reason: String) -> void:
 	tunnel_failed.emit(reason)
 
 func _kill_process() -> void:
-	if _pid <= 0:
-		return
-	if OS.get_name() == "Windows":
-		var out: Array = []
-		OS.execute("taskkill", ["/PID", str(_pid), "/T", "/F"], out, true)
-	else:
-		OS.kill(_pid)
+	if _pid > 0:
+		_kill_pid(_pid)
 	_pid = -1
+	_remove_pid_file()
 
 # 关闭隧道。网页房依赖这个进程，游戏退出/主动停止时必须调用。
 func stop() -> void:
