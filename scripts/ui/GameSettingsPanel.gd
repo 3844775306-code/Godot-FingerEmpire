@@ -23,6 +23,7 @@ var _pause_btn: Button = null
 var _hint_label: Label = null
 var _mobile: bool = false
 var _panel: Panel = null
+var _threshold_labels: Dictionary = {}   # unit_id -> 数字 Label（军队官阈值行）
 
 func setup(is_online: bool, is_client: bool) -> void:
 	_is_online = is_online
@@ -106,6 +107,16 @@ func _build() -> void:
 	UITheme.apply_muted_button(close_btn, UITheme.FONT_MD)
 	close_btn.pressed.connect(_on_close_pressed)
 	title_row.add_child(close_btn)
+
+	# ── 智能辅助：军需官 / 军队官 ──
+	# 这两个开关原来在顶部指令栏，会挤占战场空间；集中到设置里，联机/单机共用。
+	var assist_label := _make_label("🤖 智能辅助", UITheme.GOLD)
+	vb.add_child(assist_label)
+	vb.add_child(_make_check_row("🧺 智能军需官：自动补农民、按缺口分配采集、仓容紧张时补仓库",
+		_quartermaster_enabled(), func(on: bool): _set_quartermaster(on)))
+	vb.add_child(_make_check_row("🛡 智能军队官：兵种数量低于下面设定值时自动补兵（人口满/资源不够会跳过）",
+		_army_officer_enabled(), func(on: bool): _set_army_officer(on)))
+	_build_officer_thresholds(vb)
 
 	# 画质（固定档位）
 	vb.add_child(_make_label("🖼 画质（固定档位）", UITheme.GOLD))
@@ -354,6 +365,193 @@ func _on_quit_pressed() -> void:
 		get_tree().change_scene_to_file("res://scenes/online_menu.tscn")
 	else:
 		get_tree().change_scene_to_file("res://scenes/main_menu.tscn")
+
+# ==================== 智能辅助（军需官 / 军队官） ====================
+# 军队官不自动生产的单位：农民由军需官补，商队/运输船/官员属于手动决策
+const OFFICER_EXCLUDE_IDS: Array[int] = [5, 6, 9, 10, 14, 43, 44, 45, 51, 46, 47, 48, 49, 50]
+
+func _client_input_node() -> Node:
+	return get_tree().get_first_node_in_group("client_input")
+
+func _quartermaster_enabled() -> bool:
+	if _is_client:
+		var ci := _client_input_node()
+		return bool(ci.get("quartermaster_on")) if ci != null else false
+	var bm := _get_battle_manager()
+	return bool(bm.get("local_quartermaster")) if bm != null else false
+
+func _army_officer_enabled() -> bool:
+	if _is_client:
+		var ci := _client_input_node()
+		return bool(ci.get("army_officer_on")) if ci != null else false
+	var bm := _get_battle_manager()
+	return bool(bm.get("local_army_officer")) if bm != null else false
+
+func _set_quartermaster(on: bool) -> void:
+	if _is_client:
+		var ci := _client_input_node()
+		if ci and ci.has_method("set_quartermaster"):
+			ci.set_quartermaster(on)
+		return
+	var bm := _get_battle_manager()
+	if bm and bm.has_method("set_local_quartermaster"):
+		bm.set_local_quartermaster(on)
+	# 同步 HUD 内部状态：F4 快捷键的提示文字跟设置面板保持一致
+	for hud in get_tree().get_nodes_in_group("game_hud"):
+		if "quartermaster_on" in hud:
+			hud.set("quartermaster_on", on)
+
+func _set_army_officer(on: bool) -> void:
+	var candidates := _army_officer_candidates()
+	if on:
+		# 第一次开启时按推荐表填一遍，避免"开了但全是 0 = 什么都不产"
+		GameSettings.ensure_army_officer_defaults(candidates)
+		_refresh_threshold_labels()
+	var th := GameSettings.army_officer_thresholds.duplicate()
+	if _is_client:
+		var ci := _client_input_node()
+		if ci and ci.has_method("set_army_officer"):
+			ci.set_army_officer(on, th)
+		return
+	var bm := _get_battle_manager()
+	if bm and bm.has_method("set_local_army_officer"):
+		bm.set_local_army_officer(on)
+		if bm.has_method("set_army_officer_thresholds"):
+			bm.set_army_officer_thresholds(th)
+
+# 军队官阈值行：每种能造的兵一行，−/数字/＋ 直接调保底数量
+func _build_officer_thresholds(parent: Control) -> void:
+	_sync_thresholds_from_match()
+	var candidates := _army_officer_candidates()
+	if candidates.is_empty():
+		parent.add_child(_make_label("（还没有能自动生产兵种的建筑，先造兵营等生产建筑）",
+			UITheme.PARCHMENT, UITheme.FONT_SM))
+		return
+	parent.add_child(_make_label("每种兵的保底数量（0 = 不自动生产）", UITheme.PARCHMENT, UITheme.FONT_SM))
+	var grid := GridContainer.new()
+	grid.columns = 1 if _mobile else 2
+	grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	grid.add_theme_constant_override("h_separation", 10)
+	grid.add_theme_constant_override("v_separation", 4)
+	parent.add_child(grid)
+	for uid in candidates:
+		grid.add_child(_make_threshold_row(int(uid)))
+	var preset_row := HBoxContainer.new()
+	preset_row.add_theme_constant_override("separation", 8)
+	parent.add_child(preset_row)
+	var rec := Button.new()
+	rec.text = "推荐配置"
+	rec.custom_minimum_size = Vector2(0, 30)
+	rec.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UITheme.apply_primary_button(rec, UITheme.FONT_SM)
+	rec.pressed.connect(_on_officer_recommend)
+	preset_row.add_child(rec)
+	var clr := Button.new()
+	clr.text = "全部清零"
+	clr.custom_minimum_size = Vector2(0, 30)
+	clr.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UITheme.apply_muted_button(clr, UITheme.FONT_SM)
+	clr.pressed.connect(_on_officer_clear)
+	preset_row.add_child(clr)
+
+func _make_threshold_row(unit_id: int) -> HBoxContainer:
+	var cfg := EntityDatabase.get_config(unit_id)
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", 4)
+	var icon_px: float = UILayout.dp(20.0) if _mobile else 22.0
+	var icon := EntityIcon.make_rect(unit_id, 2, icon_px)
+	if icon != null:
+		row.add_child(icon)
+	var name_lb := Label.new()
+	name_lb.text = String(cfg.get("name", "?"))
+	name_lb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	name_lb.add_theme_font_size_override("font_size", UITheme.FONT_SM)
+	name_lb.add_theme_color_override("font_color", UITheme.PARCHMENT)
+	row.add_child(name_lb)
+	var minus := _make_step_btn("−")
+	minus.pressed.connect(func(): _bump_threshold(unit_id, -1))
+	row.add_child(minus)
+	var val := Label.new()
+	val.text = str(GameSettings.army_officer_threshold(unit_id))
+	val.custom_minimum_size = Vector2(28, 0)
+	val.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	val.add_theme_font_size_override("font_size", UITheme.FONT_MD)
+	val.add_theme_color_override("font_color", UITheme.GOLD)
+	row.add_child(val)
+	_threshold_labels[unit_id] = val
+	var plus := _make_step_btn("＋")
+	plus.pressed.connect(func(): _bump_threshold(unit_id, 1))
+	row.add_child(plus)
+	return row
+
+func _make_step_btn(text: String) -> Button:
+	var b := Button.new()
+	b.text = text
+	b.custom_minimum_size = Vector2(26, 26)
+	UITheme.apply_muted_button(b, UITheme.FONT_MD)
+	return b
+
+func _bump_threshold(unit_id: int, delta: int) -> void:
+	var v: int = GameSettings.army_officer_threshold(unit_id) + delta
+	GameSettings.set_army_officer_threshold(unit_id, v)
+	var lb: Label = _threshold_labels.get(unit_id, null)
+	if lb != null:
+		lb.text = str(GameSettings.army_officer_threshold(unit_id))
+	GameSettings.push_army_officer_thresholds()
+
+func _on_officer_recommend() -> void:
+	for uid in _army_officer_candidates():
+		var rec: int = int(GameSettings.ARMY_OFFICER_RECOMMENDED.get(int(uid), 5))
+		GameSettings.set_army_officer_threshold(int(uid), rec)
+	_refresh_threshold_labels()
+	GameSettings.push_army_officer_thresholds()
+
+func _on_officer_clear() -> void:
+	for uid in _army_officer_candidates():
+		GameSettings.set_army_officer_threshold(int(uid), 0)
+	_refresh_threshold_labels()
+	GameSettings.push_army_officer_thresholds()
+
+func _refresh_threshold_labels() -> void:
+	for uid in _threshold_labels.keys():
+		var lb: Label = _threshold_labels[uid]
+		if is_instance_valid(lb):
+			lb.text = str(GameSettings.army_officer_threshold(int(uid)))
+
+# 打开面板时把本局已有的阈值同步进 GameSettings，避免面板显示 0 但服务端还在补兵
+func _sync_thresholds_from_match() -> void:
+	if not GameSettings.army_officer_thresholds.is_empty():
+		return
+	if _is_client:
+		var ci := _client_input_node()
+		if ci != null:
+			var th: Dictionary = ci.get("army_officer_thresholds")
+			if th is Dictionary and not th.is_empty():
+				GameSettings.army_officer_thresholds = th.duplicate()
+		return
+	var bm := _get_battle_manager()
+	if bm != null:
+		var th2 = bm.get("army_officer_thresholds")
+		if th2 is Dictionary and not th2.is_empty():
+			GameSettings.army_officer_thresholds = th2.duplicate()
+
+# 单机优先用"自己的建筑真能造"的兵种；联机客户端拿不到服务端建筑列表，退回全部战斗兵种
+func _army_officer_candidates() -> Array:
+	var bm := _get_battle_manager()
+	if bm != null and bm.has_method("army_officer_candidates"):
+		var list: Array = bm.call("army_officer_candidates")
+		if not list.is_empty():
+			return list
+	var out: Array = []
+	for id in EntityDatabase.configs.keys():
+		if int(id) in OFFICER_EXCLUDE_IDS:
+			continue
+		var cfg: Dictionary = EntityDatabase.configs[id]
+		if int(cfg.get("type", -1)) != 2:
+			continue
+		out.append(int(id))
+	out.sort()
+	return out
 
 # ==================== 工具 ====================
 func _get_battle_manager() -> Node:

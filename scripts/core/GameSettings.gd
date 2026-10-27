@@ -92,6 +92,54 @@ func set_unit_text_enabled(on: bool) -> void:
 		if "show_unit_text" in node:
 			node.set("show_unit_text", on)
 
+# ==================== 智能军队官 ====================
+# 每个兵种一个"保底数量"，军队官每隔几秒检查一次，少于这个数量就用自己的
+# 生产建筑补兵；0 表示这个兵种不自动生产。只在本次运行内保存，不写存档。
+var army_officer_thresholds: Dictionary = {}
+
+# 第一次开启军队官时的推荐配置：常见主力兵先给一个温和的起步值，
+# 避免"开了但什么都不产"看起来像坏了。玩家随后可以逐个加减。
+const ARMY_OFFICER_RECOMMENDED: Dictionary = {
+	11: 10, 12: 6, 15: 4,
+	30: 8, 31: 6, 32: 4, 33: 6, 34: 3, 35: 8, 36: 8, 37: 6, 38: 4,
+	55: 4, 56: 3, 57: 3, 58: 6, 59: 2, 61: 6, 62: 4,
+}
+
+# 军队官阈值上下限：太高会一直占着产能，太低没意义
+const ARMY_OFFICER_THRESHOLD_MAX: int = 40
+
+func army_officer_threshold(unit_id: int) -> int:
+	return int(army_officer_thresholds.get(int(unit_id), 0))
+
+func set_army_officer_threshold(unit_id: int, value: int) -> void:
+	army_officer_thresholds[int(unit_id)] = clampi(int(value), 0, ARMY_OFFICER_THRESHOLD_MAX)
+
+# 阈值还没配过时，按推荐表给"现在真能造"的兵种填默认值
+func ensure_army_officer_defaults(available_ids: Array) -> void:
+	var any_set := false
+	for v in army_officer_thresholds.values():
+		if int(v) > 0:
+			any_set = true
+			break
+	if any_set:
+		return
+	for id in available_ids:
+		var v: int = int(ARMY_OFFICER_RECOMMENDED.get(int(id), 0))
+		if v > 0:
+			army_officer_thresholds[int(id)] = v
+
+# 阈值编辑时同步给对局（服务端/本地）；联机由 ClientInput 转发成命令
+func push_army_officer_thresholds() -> void:
+	var th := army_officer_thresholds.duplicate()
+	var ci := get_tree().get_first_node_in_group("client_input")
+	if ci and ci.has_method("set_army_officer"):
+		if bool(ci.get("army_officer_on")):
+			ci.set_army_officer(true, th)
+		return
+	var bm := get_tree().get_first_node_in_group("battle_manager")
+	if bm and bm.has_method("set_army_officer_thresholds"):
+		bm.set_army_officer_thresholds(th)
+
 func _ready() -> void:
 	# 调试构建支持命令行指定地图与模式：godot ... -- --map=ford --mode=2v2（导出包不生效）
 	if OS.is_debug_build():

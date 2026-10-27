@@ -882,12 +882,12 @@ func _ready():
 	var b_select_screen = _make_cmd_button("全选屏幕军队 (F1)", _on_select_screen_pressed, false)
 	var b_select_all = _make_cmd_button("全选所有军队 (Ctrl+F1)", _on_select_all_pressed, false)
 	auto_attack_btn = _make_cmd_button("⚔️ 自动进攻：关 (F2)", _on_attack_all_pressed, true)
-	quartermaster_btn = _make_cmd_button("🧺 军需官：关 (F4)", _on_quartermaster_pressed, false)
-	quartermaster_btn.tooltip_text = "开启后自动补充农民、按资源缺口分配采集并补仓库；会接管当前采集中的农民，之后手动改派的目标不会被抢回"
+	# 智能军需官 / 军队官的开关已经收进 ⚙ 设置面板，指令栏只留战斗相关按钮；
+	# F4 快捷键仍然可用（老玩家习惯），与设置面板共用同一个状态。
 	var b_retreat_screen = _make_cmd_button("屏幕军队撤退 (F3)", _on_retreat_screen_pressed, false)
 	var b_retreat_all = _make_cmd_button("所有军队撤退 (Ctrl+F3)", _on_retreat_all_pressed, false)
 	var b_settings = _make_cmd_button("⚙ 设置", _open_game_settings, false)
-	for b in [b_select_screen, b_select_all, auto_attack_btn, quartermaster_btn, b_retreat_screen, b_retreat_all, b_settings]:
+	for b in [b_select_screen, b_select_all, auto_attack_btn, b_retreat_screen, b_retreat_all, b_settings]:
 		cmd_grid.add_child(b)
 
 	set_process(true)

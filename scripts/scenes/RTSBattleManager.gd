@@ -60,6 +60,14 @@ const QUARTERMASTER_WAREHOUSE_GAP: float = 14.0
 const QUARTERMASTER_STORAGE_TRIGGER: float = 0.9
 var _qm_last_warehouse_time: Dictionary = {}  # owner_id -> 上次自动建仓库的 game_time
 var _qm_last_rebalance: Dictionary = {}       # owner_id -> 上次重分配农民的 game_time
+# 智能军队官：玩家在设置面板给每个兵种设一个"保底数量"，数量不足时自动补兵。
+# 阈值只存内存（按局生效），0 = 不自动生产。
+var local_army_officer: bool = false
+var _army_officer_timer: float = 0.0
+const ARMY_OFFICER_INTERVAL: float = 2.5
+# 每次检查最多入队几个：避免一开开关就把产能和资源全梭光
+const ARMY_OFFICER_MAX_PER_TICK: int = 3
+var army_officer_thresholds: Dictionary = {}   # unit_id -> 期望数量
 const AUTO_ATTACK_EXCLUDE_IDS = [5, 6, 9, 10, 14, 43, 44, 45, 51, 46, 47, 48, 49, 50]
 # 官员编制：官员总数不能超过己方“可进驻建筑”的数量。
 # 桥(7)、梯(8)、城墙(27)不是驻军建筑，不提供官员名额；在建/被毁建筑也不计。
@@ -4335,6 +4343,7 @@ func _process(delta):
 	game_time += delta
 	_tick_builder_dispatch(delta)
 	_tick_quartermaster(delta)
+	_tick_army_officer(delta)
 	_tick_abandoned_sites(delta)
 	_focus_camera_on_player_castle_once()
 	if battle_stats:
@@ -5545,6 +5554,133 @@ func _qm_find_warehouse_spot(center: Vector3, team: int) -> Vector3:
 			if _is_valid_build_position(pos, QUARTERMASTER_WAREHOUSE_ID, team):
 				return pos
 	return Vector3.INF
+
+# ==================== 智能军队官 ====================
+# 与军需官同一套结构：玩家在设置面板打开开关并给兵种设"保底数量"，
+# 军队官每隔 ARMY_OFFICER_INTERVAL 秒查一次自己的生产建筑，
+# 某种兵（存活 + 排队）少于保底数量就补一个，人口满或资源不够时自然跳过。
+func set_local_army_officer(enabled: bool) -> void:
+	if local_army_officer == enabled:
+		return
+	local_army_officer = enabled
+	_army_officer_timer = 0.0
+
+func set_army_officer_thresholds(th: Dictionary) -> void:
+	army_officer_thresholds.clear()
+	for k in th.keys():
+		army_officer_thresholds[int(k)] = clampi(int(th[k]), 0, GameSettings.ARMY_OFFICER_THRESHOLD_MAX)
+	_army_officer_timer = 0.0
+
+func get_army_officer_thresholds_for(_owner_id: int, _team: int = -1) -> Dictionary:
+	return army_officer_thresholds
+
+func is_army_officer_enabled_for(owner_id: int, team: int) -> bool:
+	return local_army_officer and is_local_player_owned(owner_id, team)
+
+# 单机/主机默认只管本地玩家；OnlineBattleManager 覆盖成每个真人玩家。
+func _army_officer_owner_ids() -> Array:
+	return [get_local_owner_id()]
+
+func _tick_army_officer(delta: float) -> void:
+	var any_enabled := false
+	for owner_id in _army_officer_owner_ids():
+		if is_army_officer_enabled_for(int(owner_id), _quartermaster_team_for(int(owner_id))):
+			any_enabled = true
+			break
+	if not any_enabled:
+		return
+	_army_officer_timer -= delta
+	if _army_officer_timer > 0.0:
+		return
+	_army_officer_timer = ARMY_OFFICER_INTERVAL
+	for owner_id in _army_officer_owner_ids():
+		var oid: int = int(owner_id)
+		var team: int = _quartermaster_team_for(oid)
+		if team < 0 or not is_army_officer_enabled_for(oid, team):
+			continue
+		_run_army_officer(oid, team)
+
+# 设置面板用：返回"自己的建筑真的能造"的战斗兵种，用来生成阈值行。
+# owner_id 传 -99999 表示当前本地玩家。
+func army_officer_candidates(owner_id: int = -99999) -> Array:
+	var oid: int = int(owner_id)
+	if oid == -99999:
+		oid = get_local_owner_id()
+	var team: int = _quartermaster_team_for(oid)
+	if team < 0:
+		return []
+	_ensure_cache_fresh()
+	var out: Array = []
+	for b in _buildings:
+		if b == null or not is_instance_valid(b) or not (b is Building):
+			continue
+		if int(b.team) != team or not _qm_owner_matches(b, oid):
+			continue
+		if b.health <= 0:
+			continue
+		for prod in b.production_list:
+			var uid: int = int(prod.get("unit_id", -1))
+			if uid <= 0 or out.has(uid) or not _ao_is_combat_unit(uid):
+				continue
+			out.append(uid)
+	out.sort()
+	return out
+
+# 农民/商队/运输船/官员不归军队官管：农民由军需官补，商队和官员是玩家手动决策
+func _ao_is_combat_unit(unit_id: int) -> bool:
+	if unit_id in [5, 6, 9, 10, 14, 43, 44, 45, 51, 46, 47, 48, 49, 50]:
+		return false
+	return true
+
+func _run_army_officer(owner_id: int, team: int) -> void:
+	var thresholds: Dictionary = get_army_officer_thresholds_for(owner_id, team)
+	if thresholds.is_empty():
+		return
+	_ensure_cache_fresh()
+	var pop: Dictionary = _qm_population(owner_id, team)
+	var pop_current: int = int(pop.get("current", 0))
+	var pop_max: int = int(pop.get("max", 0))
+	# 现存 + 排队一起算，否则会在排队还没落地时重复补兵
+	var counts := {}
+	for b in _buildings:
+		if b == null or not is_instance_valid(b) or not (b is Building):
+			continue
+		if int(b.team) != team or not _qm_owner_matches(b, owner_id):
+			continue
+		for id in b.production_queue:
+			var qid: int = int(id)
+			counts[qid] = int(counts.get(qid, 0)) + 1
+	for e in _armies:
+		if e == null or not is_instance_valid(e) or not (e is Army) or e.health <= 0:
+			continue
+		if int(e.team) != team or not _qm_owner_matches(e, owner_id):
+			continue
+		var eid: int = int(e.entity_id)
+		counts[eid] = int(counts.get(eid, 0)) + 1
+	var placed := 0
+	for b in _buildings:
+		if placed >= ARMY_OFFICER_MAX_PER_TICK or pop_current >= pop_max:
+			return
+		if b == null or not is_instance_valid(b) or not (b is Building):
+			continue
+		if int(b.team) != team or not _qm_owner_matches(b, owner_id):
+			continue
+		if b.health <= 0 or b.build_timer > 0.0:
+			continue
+		for prod in b.production_list:
+			if placed >= ARMY_OFFICER_MAX_PER_TICK or pop_current >= pop_max:
+				return
+			var uid: int = int(prod.get("unit_id", -1))
+			if uid <= 0 or not _ao_is_combat_unit(uid):
+				continue
+			var target: int = int(thresholds.get(uid, 0))
+			if target <= 0 or int(counts.get(uid, 0)) >= target:
+				continue
+			if not b.try_produce(uid):
+				continue
+			counts[uid] = int(counts.get(uid, 0)) + 1
+			pop_current += 1
+			placed += 1
 
 # 工地/修理点没人时自动补派最近的农民（玩家和 AI 共用）
 func _tick_builder_dispatch(delta: float) -> void:

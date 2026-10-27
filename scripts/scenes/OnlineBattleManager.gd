@@ -16,6 +16,12 @@ var auto_attack_peers: Dictionary = {}    # 2v2/3v3: peer_id -> bool
 var quartermaster_teams: Dictionary = {}  # 1v1: team -> bool
 var quartermaster_peers: Dictionary = {}  # 2v2/3v3: peer_id -> bool
 
+# 智能军队官：开关与阈值都由客户端命令上报，服务端按玩家存下来
+var army_officer_teams: Dictionary = {}   # 1v1: team -> bool
+var army_officer_peers: Dictionary = {}   # 2v2/3v3: peer_id -> bool
+var army_officer_team_thresholds: Dictionary = {}  # 1v1: team -> {unit_id: int}
+var army_officer_peer_thresholds: Dictionary = {}  # 2v2/3v3: peer_id -> {unit_id: int}
+
 # 2v2 专用
 var player_info: Dictionary = {}          # peer_id -> { "team": int, "slot": int, "alive": bool, "color": Color, "nation": int }
 var player_castles: Dictionary = {}       # peer_id -> Building
@@ -842,6 +848,7 @@ func _process_1v1_command(peer_id: int, data: Dictionary):
 		"ungarrison_soldiers": _ungarrison_soldiers_1v1(team, data)
 		"toggle_auto_attack": _1v1_set_auto_attack(team, bool(data.get("enabled", false)))
 		"toggle_quartermaster": _1v1_set_quartermaster(team, bool(data.get("enabled", false)))
+		"toggle_army_officer": _1v1_set_army_officer(team, bool(data.get("enabled", false)), data.get("thresholds", {}))
 		"repair": _1v1_repair(team, data)
 		"assign_builder": _1v1_assign_builder(team, data)
 		"cancel_construction": _1v1_cancel_construction(team, data)
@@ -864,6 +871,7 @@ func _process_2v2_command(peer_id: int, data: Dictionary):
 		"ungarrison_soldiers": _ungarrison_soldiers_2v2(peer_id, data)
 		"toggle_auto_attack": _2v2_set_auto_attack(peer_id, bool(data.get("enabled", false)))
 		"toggle_quartermaster": _2v2_set_quartermaster(peer_id, bool(data.get("enabled", false)))
+		"toggle_army_officer": _2v2_set_army_officer(peer_id, bool(data.get("enabled", false)), data.get("thresholds", {}))
 		"repair": _2v2_repair(peer_id, data)
 		"assign_builder": _2v2_assign_builder(peer_id, data)
 		"cancel_construction": _2v2_cancel_construction(peer_id, data)
@@ -1260,6 +1268,44 @@ func _1v1_set_quartermaster(team: int, enabled: bool) -> void:
 
 func _2v2_set_quartermaster(peer_id: int, enabled: bool) -> void:
 	quartermaster_peers[peer_id] = enabled
+
+# ---------- 智能军队官（服务端权威） ----------
+func _army_officer_owner_ids() -> Array:
+	if game_mode == NetworkManager.GameMode.ONEvONE:
+		return player_teams.keys()
+	var out: Array = []
+	for pid in player_info.keys():
+		if not is_ai_peer(int(pid)):
+			out.append(int(pid))
+	return out
+
+func is_army_officer_enabled_for(owner_id: int, team: int) -> bool:
+	if game_mode == NetworkManager.GameMode.ONEvONE:
+		return bool(army_officer_teams.get(team, false))
+	if owner_id != -1:
+		return bool(army_officer_peers.get(owner_id, false))
+	return bool(army_officer_teams.get(team, false))
+
+func get_army_officer_thresholds_for(owner_id: int, team: int = -1) -> Dictionary:
+	if game_mode == NetworkManager.GameMode.ONEvONE:
+		var th1 = army_officer_team_thresholds.get(team, null)
+		return th1 if th1 is Dictionary else {}
+	var th2 = army_officer_peer_thresholds.get(owner_id, null)
+	return th2 if th2 is Dictionary else {}
+
+func _1v1_set_army_officer(team: int, enabled: bool, thresholds: Dictionary) -> void:
+	army_officer_teams[team] = enabled
+	var clean := {}
+	for k in thresholds.keys():
+		clean[int(k)] = clampi(int(thresholds[k]), 0, GameSettings.ARMY_OFFICER_THRESHOLD_MAX)
+	army_officer_team_thresholds[team] = clean
+
+func _2v2_set_army_officer(peer_id: int, enabled: bool, thresholds: Dictionary) -> void:
+	army_officer_peers[peer_id] = enabled
+	var clean := {}
+	for k in thresholds.keys():
+		clean[int(k)] = clampi(int(thresholds[k]), 0, GameSettings.ARMY_OFFICER_THRESHOLD_MAX)
+	army_officer_peer_thresholds[peer_id] = clean
 
 # ---------- 通用工具 ----------
 func _find_entity_by_id(id: int) -> GameEntity:

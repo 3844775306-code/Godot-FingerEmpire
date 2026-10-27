@@ -11,6 +11,9 @@ signal build_requested(world_pos: Vector3)
 var client_selected_ids: Array = []
 var auto_attack_on: bool = false
 var quartermaster_on: bool = false
+# 智能军队官本地状态：服务端权威，这里只用于按钮/设置面板回显
+var army_officer_on: bool = false
+var army_officer_thresholds: Dictionary = {}
 
 # Local control groups (mirrored with server)
 var local_groups: Dictionary = {}  # int -> Array[int]
@@ -101,7 +104,10 @@ func toggle_auto_attack():
 	emit_signal("auto_attack_changed", auto_attack_on)
 
 func toggle_quartermaster():
-	quartermaster_on = not quartermaster_on
+	set_quartermaster(not quartermaster_on)
+
+func set_quartermaster(on: bool):
+	quartermaster_on = on
 	NetworkManager.send_command.rpc_id(1, {
 		"action": "toggle_quartermaster",
 		"enabled": quartermaster_on,
@@ -109,6 +115,22 @@ func toggle_quartermaster():
 	var chud = _get_client_hud()
 	if chud and chud.has_method("_on_quartermaster_changed"):
 		chud._on_quartermaster_changed(quartermaster_on)
+
+# 智能军队官：开关 + 每个兵种的保底数量一起发给服务端
+func toggle_army_officer():
+	set_army_officer(not army_officer_on, GameSettings.army_officer_thresholds)
+
+func set_army_officer(on: bool, thresholds: Dictionary):
+	army_officer_on = on
+	army_officer_thresholds = thresholds.duplicate()
+	NetworkManager.send_command.rpc_id(1, {
+		"action": "toggle_army_officer",
+		"enabled": army_officer_on,
+		"thresholds": army_officer_thresholds,
+	})
+	var chud = _get_client_hud()
+	if chud and chud.has_method("_on_army_officer_changed"):
+		chud._on_army_officer_changed(army_officer_on)
 
 # 屏幕内军队撤退：向自己的主城发送移动指令
 func retreat_screen_units():
