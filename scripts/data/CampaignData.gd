@@ -35,6 +35,10 @@ extends RefCounted
 #   {"type": "destroy_targets", "building_ids":[25,26], "count":4, "label":"…"}
 #                                                        摧毁敌方指定建筑 count 座
 #   {"type": "gather", "amount":2500, "label":"…"}      累计采集资源量
+#   {"type": "hold_zones", "zones":[{"offset":[x,z],"radius":6.5,"hold":60,"name":"西渡口"}], "label":"…"}
+#                                                        同时占住多个控制区（每区独立计时）
+#   {"type": "defend_targets", "building_ids":[22], "min_alive":1, "duration":360.0, "label":"…"}
+#                                                        守住己方指定建筑到倒计时结束（全毁即失败）
 #   {"type": "kill_units", "unit_ids":[13], "count":8, "label":"…"}
 #                                                        击杀指定兵种（空 = 任意）数量
 # fail                 : 失败条件组合：army_wiped（全军覆没）/ castle_lost（主城被毁）/ timeout（超时）
@@ -54,6 +58,16 @@ const CHAPTERS := [
 		"id": 3,
 		"name": "第三章 · 决战",
 		"desc": "封锁海峡、经营商路，最后在陨石坑边挡住敌军七波总攻。",
+	},
+	{
+		"id": 4,
+		"name": "第四章 · 帝国",
+		"desc": "守住粮道、抢下双河渡口、烧掉敌军粮仓——把战争打到敌人的家门口。",
+	},
+	{
+		"id": 5,
+		"name": "挑战",
+		"desc": "主线之外的试炼：海上火攻、双点争夺、无尽波次，通关主线后开放。",
 	},
 ]
 
@@ -217,10 +231,10 @@ const LEVELS := [
 		"tips": [
 			"地图中央的地面绿色色块 + 空中倒计时就是控制区，小地图上也会定时闪点。",
 			"占领按人数比：我军比敌人多才计时（混战半速），双方一样就暂停，敌人多就倒退。",
-			"累计占满 120 秒即胜利；主城被拆或超过 20 分钟失败。",
+			"累计占满 120 秒即胜利；主城被拆或超过 10 分钟失败。",
 		],
-		"time_limit": 1200.0,
-		"stars": {"two": 900.0, "three": 700.0},
+		"time_limit": 600.0,
+		"stars": {"two": 450.0, "three": 350.0},
 		"player": {
 			"nation": 6,
 			"castle": true,
@@ -654,6 +668,231 @@ const LEVELS := [
 		],
 		"fail": ["castle_lost"],
 	},
+	# ── 第 11 关：防守任务，敌人专拆粮仓，守到援军抵达 ──
+	{
+		"id": "c4_1",
+		"chapter": 4,
+		"index": 11,
+		"name": "长平绝粮",
+		"subtitle": "防守任务 · 守住粮仓 6 分钟",
+		"map_id": "changping",
+		"map_seed": 11101,
+		"brief": "两山夹一谷，我军粮仓就摆在两条隘口后面。\n敌军不攻主城，只盯着粮仓打：粮仓全丢，前线立刻崩溃。\n把兵分到两处隘口，撑到援军抵达。",
+		"tips": [
+			"任务目标不是杀光敌人，是守住两座粮仓 6 分钟（至少保住 1 座）。",
+			"敌人分两路来，两座粮仓都有危险，别把兵全堆在一边。",
+			"粮仓全毁或主城被拆即失败。",
+		],
+		"time_limit": 480.0,
+		"stars": {"two": 350.0, "three": 300.0},
+		"player": {
+			"nation": 3,
+			"castle": true,
+			"buildings": [
+				{"id": 22, "offset": [-12, 10]},
+				{"id": 22, "offset": [12, 10]},
+				{"id": 25, "offset": [-6, 14]},
+				{"id": 25, "offset": [6, 14]},
+			],
+			"units": [
+				{"id": 10, "count": 4},
+				{"id": 11, "count": 10},
+				{"id": 12, "count": 6},
+				{"id": 15, "count": 2},
+			],
+			"resources": {"gold": 800, "wood": 600, "stone": 400, "food": 500, "oil": 0},
+			"pop_cap": 80,
+		},
+		"enemy": {
+			"nation": 5,
+			"castle": false,
+			"ai": false,
+			"waves": [
+				{"time": 30.0, "label": "前锋", "units": [{"id": 11, "count": 6}, {"id": 12, "count": 2}]},
+				{"time": 90.0, "label": "第二波", "units": [{"id": 11, "count": 8}, {"id": 12, "count": 3}, {"id": 15, "count": 2}]},
+				{"time": 150.0, "label": "第三波", "units": [{"id": 11, "count": 8}, {"id": 12, "count": 3}, {"id": 15, "count": 3}, {"id": 18, "count": 1}]},
+				{"time": 210.0, "label": "第四波", "units": [{"id": 11, "count": 10}, {"id": 15, "count": 4}, {"id": 18, "count": 1}]},
+				{"time": 270.0, "label": "第五波", "units": [{"id": 11, "count": 10}, {"id": 15, "count": 4}, {"id": 18, "count": 2}, {"id": 16, "count": 1}]},
+			],
+			"resources": {"gold": 0, "wood": 0, "stone": 0, "food": 0, "oil": 0},
+			"pop_cap": 90,
+		},
+		"objectives": [
+			{"type": "defend_targets", "building_ids": [22], "min_alive": 1, "duration": 360.0, "label": "守住粮仓到援军抵达（至少 1 座）"},
+		],
+		"fail": ["castle_lost", "timeout"],
+	},
+	# ── 第 12 关：双控制区任务，兵不够只能二选一 ──
+	{
+		"id": "c4_2",
+		"chapter": 4,
+		"index": 12,
+		"name": "双河三岸",
+		"subtitle": "双点争夺 · 两个渡口各占 60 秒",
+		"map_id": "tworivers",
+		"map_seed": 11404,
+		"brief": "两条大河把战场切成三块，东西两处渡口是唯一的陆路通道。\n两个渡口必须都占满一分钟，分兵两线，谁也舍不得放弃任何一边。\n骑兵是唯一能在两线之间来回救火的力量。",
+		"tips": [
+			"两个渡口各有一个控制区，都会在地图上标出，各累计占满 60 秒才算胜利。",
+			"两边同时告急时优先保住已经计时较多的一边，别来回跑空。",
+			"主城被拆或超过 15 分钟失败。",
+		],
+		"time_limit": 900.0,
+		"stars": {"two": 600.0, "three": 450.0},
+		"player": {
+			"nation": 6,
+			"castle": true,
+			"units": [
+				{"id": 10, "count": 4},
+				{"id": 11, "count": 6},
+				{"id": 12, "count": 4},
+				{"id": 15, "count": 2},
+			],
+			"resources": {"gold": 600, "wood": 500, "stone": 400, "food": 400, "oil": 0},
+			"pop_cap": 70,
+		},
+		"enemy": {
+			"nation": 7,
+			"castle": true,
+			"ai": true,
+			"ai_difficulty": 2,
+			"units": [
+				{"id": 10, "count": 4},
+				{"id": 11, "count": 6},
+				{"id": 12, "count": 4},
+				{"id": 15, "count": 2},
+			],
+			"resources": {"gold": 600, "wood": 500, "stone": 400, "food": 400, "oil": 0},
+			"pop_cap": 70,
+		},
+		"objectives": [
+			{
+				"type": "hold_zones",
+				"zones": [
+					{"offset": [-16.0, 0.0], "radius": 6.5, "hold": 60.0, "name": "西渡口"},
+					{"offset": [16.0, 0.0], "radius": 6.5, "hold": 60.0, "name": "东渡口"},
+				],
+				"label": "东西两个渡口各累计占领 60 秒",
+			},
+		],
+		"fail": ["castle_lost", "timeout"],
+	},
+	# ── 第 13 关：拆敌方粮仓，敌军前线会疯狂反扑 ──
+	{
+		"id": "c4_3",
+		"chapter": 4,
+		"index": 13,
+		"name": "官渡焚粮",
+		"subtitle": "攻坚任务 · 摧毁敌军 3 座粮仓",
+		"map_id": "guandu",
+		"map_seed": 11505,
+		"brief": "敌军前线全靠三座粮仓续命，粮仓就屯在主城前面。\n拆掉全部粮仓，对面的攻势就会自己垮掉。\n但敌军不会看着你拆，每一波反扑都比上一波更凶。",
+		"tips": [
+			"三座粮仓比主城靠前，先拆粮仓再考虑主城。",
+			"敌军每隔一分半反扑一次，拆粮时别把部队全送进去。",
+			"主城被拆或超过 12 分钟失败。",
+		],
+		"time_limit": 720.0,
+		"stars": {"two": 540.0, "three": 420.0},
+		"player": {
+			"nation": 3,
+			"castle": true,
+			"units": [
+				{"id": 10, "count": 4},
+				{"id": 11, "count": 8},
+				{"id": 12, "count": 6},
+				{"id": 15, "count": 2},
+				{"id": 18, "count": 1},
+			],
+			"resources": {"gold": 900, "wood": 700, "stone": 500, "food": 500, "oil": 0},
+			"pop_cap": 80,
+		},
+		"enemy": {
+			"nation": 5,
+			"castle": true,
+			"ai": true,
+			"ai_difficulty": 2,
+			"buildings": [
+				{"id": 22, "offset": [-7, -10]},
+				{"id": 22, "offset": [0, -12]},
+				{"id": 22, "offset": [7, -10]},
+				{"id": 25, "offset": [-10, -6]},
+				{"id": 25, "offset": [10, -6]},
+			],
+			"units": [
+				{"id": 11, "count": 6},
+				{"id": 12, "count": 4},
+				{"id": 15, "count": 2},
+			],
+			"waves": [
+				{"time": 60.0, "label": "第一波反扑", "units": [{"id": 11, "count": 6}, {"id": 12, "count": 3}]},
+				{"time": 150.0, "label": "第二波反扑", "units": [{"id": 11, "count": 8}, {"id": 12, "count": 4}, {"id": 15, "count": 2}]},
+				{"time": 240.0, "label": "第三波反扑", "units": [{"id": 11, "count": 9}, {"id": 12, "count": 4}, {"id": 15, "count": 3}, {"id": 18, "count": 1}]},
+				{"time": 330.0, "label": "第四波反扑", "units": [{"id": 11, "count": 10}, {"id": 12, "count": 5}, {"id": 15, "count": 3}, {"id": 18, "count": 1}]},
+				{"time": 420.0, "label": "第五波反扑", "units": [{"id": 11, "count": 12}, {"id": 12, "count": 6}, {"id": 15, "count": 4}, {"id": 18, "count": 2}]},
+			],
+			"resources": {"gold": 800, "wood": 600, "stone": 400, "food": 400, "oil": 0},
+			"pop_cap": 80,
+		},
+		"objectives": [
+			{"type": "destroy_targets", "building_ids": [22], "count": 3, "label": "摧毁敌军 3 座粮仓"},
+		],
+		"fail": ["castle_lost", "timeout"],
+	},
+	# ── 挑战 1：赤壁火攻，敌方火船成群撞岸，靠水军击沉 ──
+	{
+		"id": "c5_1",
+		"chapter": 5,
+		"index": 101,
+		"name": "赤壁火攻",
+		"subtitle": "挑战 · 海上火攻 · 击沉 12 艘火船",
+		"map_id": "chibi",
+		"map_seed": 11701,
+		"brief": "长江天堑，敌军把装满柴薪的火船顺风放来，撞上岸就是一片火海。\n你手里只有六艘战船和几门岸炮，江面就是主战场。\n把火船拦在水上，一艘都别让它靠岸。",
+		"tips": [
+			"火船会朝岸边撞，战船要主动迎上去，别让它们贴近主城。",
+			"岸炮能覆盖近岸水面，把战船的火力集中在江心。",
+			"击沉 12 艘火船即胜利；主城被拆或超过 10 分钟失败。",
+		],
+		"time_limit": 600.0,
+		"stars": {"two": 450.0, "three": 360.0},
+		"player": {
+			"nation": 3,
+			"castle": true,
+			"buildings": [
+				{"id": 26, "offset": [-10, 8]},
+				{"id": 26, "offset": [10, 8]},
+			],
+			"navy": [
+				{"id": 13, "count": 6},
+			],
+			"units": [
+				{"id": 10, "count": 4},
+				{"id": 12, "count": 4},
+			],
+			"resources": {"gold": 800, "wood": 600, "stone": 400, "food": 400, "oil": 0},
+			"pop_cap": 60,
+		},
+		"enemy": {
+			"nation": 1,
+			"castle": false,
+			"ai": false,
+			"waves": [
+				{"time": 30.0, "label": "火船来袭", "water": true, "units": [{"id": 40, "count": 2}]},
+				{"time": 75.0, "label": "第二队火船", "water": true, "units": [{"id": 40, "count": 2}]},
+				{"time": 120.0, "label": "第三队火船", "water": true, "units": [{"id": 40, "count": 3}]},
+				{"time": 165.0, "label": "第四队火船", "water": true, "units": [{"id": 40, "count": 3}]},
+				{"time": 210.0, "label": "第五队火船", "water": true, "units": [{"id": 40, "count": 3}]},
+				{"time": 255.0, "label": "最后一队火船", "water": true, "units": [{"id": 40, "count": 3}]},
+			],
+			"resources": {"gold": 0, "wood": 0, "stone": 0, "food": 0, "oil": 0},
+			"pop_cap": 60,
+		},
+		"objectives": [
+			{"type": "kill_units", "unit_ids": [40], "count": 12, "intercept_dist": 16.0, "max_slip": 6, "label": "击沉 12 艘敌军火船（靠岸漏过超过 6 艘即失败）"},
+		],
+		"fail": ["castle_lost", "timeout"],
+	},
 ]
 
 
@@ -698,4 +937,8 @@ static func next_level_id(level_id: String) -> String:
 
 # 关卡显示名（"第 1 关 · 渡口奇袭"）
 static func display_name(level: Dictionary) -> String:
-	return "第 %d 关 · %s" % [int(level.get("index", 1)), String(level.get("name", ""))]
+	var chapter := int(level.get("chapter", 1))
+	var idx := int(level.get("index", 1))
+	if chapter == 5:
+		return "挑战 %d · %s" % [idx - 100, String(level.get("name", ""))]
+	return "第 %d 关 · %s" % [idx, String(level.get("name", ""))]

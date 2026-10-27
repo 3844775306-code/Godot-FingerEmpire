@@ -44,6 +44,10 @@ var _zone_state_text: String = ""
 var _zone_ping_timer: float = 0.0
 var _zone_nearest_dist: float = -1.0
 var _zone_enemy_inside: bool = false
+# 屏幕空间标记（俯视时 3D 文字会被压扁，所以再用一层 2D 标签钉在目标上方）
+var _screen_layer: CanvasLayer = null
+var _zone_screen_label: Label = null
+var _escort_screen_label: Label = null
 
 var _waves: Array = []
 var _waves_fired: int = 0
@@ -67,10 +71,21 @@ var _gather_total: float = 0.0
 var _gather_last_total: float = -1.0
 var _kill_need: int = 0
 var _kill_ids: Array = []
+var _kill_intercept_dist: float = 0.0   # >0 时：只有死在离主城这么远之外的才算"击沉"
+var _kill_max_slip: int = 0             # >0 时：靠岸漏过的数量超过它就判负
+var _kill_slipped: int = 0
 var _enemy_kills: int = 0
 var _enemy_kills_by_id: Dictionary = {}
 var _enemy_water_spawn: Vector3 = Vector3.ZERO
 var _has_water_waves: bool = false
+
+# 多控制区（hold_zones）与"守住自家建筑"（defend_targets）目标
+var _multi_zones: Array = []
+var _defend_ids: Array = []
+var _defend_min_alive: int = 1
+var _defend_initial: int = 0
+var _defend_alive: int = 0
+var _defend_duration: float = 0.0
 
 # 开局配置解析出来的任务参数
 var _survive_need: float = -1.0
@@ -328,10 +343,19 @@ func _parse_objectives() -> void:
 	_escort_unit_id = 0
 	_kill_need = 0
 	_kill_ids.clear()
+	_kill_intercept_dist = 0.0
+	_kill_max_slip = 0
+	_kill_slipped = 0
 	_target_ids.clear()
 	_target_need = 0
 	_target_initial = 0
 	_gather_need = 0.0
+	_multi_zones.clear()
+	_defend_ids.clear()
+	_defend_min_alive = 1
+	_defend_initial = 0
+	_defend_alive = 0
+	_defend_duration = 0.0
 	for o in level.get("objectives", []):
 		var obj: Dictionary = o
 		var t := String(obj.get("type", ""))
@@ -354,8 +378,15 @@ func _parse_objectives() -> void:
 				_escort_zone_radius = float(ezone.get("radius", 8.0))
 				var eoff: Array = ezone.get("offset", [0.0, 0.0])
 				_escort_zone_center = _map_center_offset(eoff, _escort_zone_radius)
-				_escort_mesh = _spawn_ring(_escort_zone_center, _escort_zone_radius,
-					Color(0.35, 0.7, 1.0, 0.7), "CampaignEscortRing")
+				var blue := Color(0.35, 0.7, 1.0)
+				_add_ground_mesh(_make_ground_disc(_escort_zone_center, _escort_zone_radius, 0.45),
+					_escort_zone_center, Color(blue, 0.14), "CampaignEscortDisc")
+				_escort_mesh = _add_ground_mesh(
+					_make_ground_band(_escort_zone_center, maxf(_escort_zone_radius - 0.8, 0.6),
+						_escort_zone_radius + 0.8, 0.6),
+					_escort_zone_center, Color(blue, 0.95), "CampaignEscortRing")
+				_ensure_screen_layer()
+				_escort_screen_label = _make_screen_label()
 				var escort_label := Label3D.new()
 				escort_label.name = "CampaignEscortLabel"
 				escort_label.text = "护送点"
@@ -370,6 +401,24 @@ func _parse_objectives() -> void:
 				escort_label.global_position = Vector3(_escort_zone_center.x,
 					float(_escort_zone_center.y) + 9.0, _escort_zone_center.z)
 				_ping_minimap(_escort_zone_center)
+			"hold_zones":
+				var zbase := _zone_group_base()
+				var zlist: Array = obj.get("zones", [])
+				for zi in range(zlist.size()):
+					var zc: Dictionary = zlist[zi]
+					var zr: float = float(zc.get("radius", 6.5))
+					var zoff: Array = zc.get("offset", [0.0, 0.0])
+					var zwant := Vector3(zbase.x + float(zoff[0]), 0.0, zbase.z + float(zoff[1]))
+					var zpos := _find_plain_area(zwant, zr)
+					var zcolor := Color(0.35, 0.95, 0.55) if zi == 0 else Color(1.0, 0.86, 0.35)
+					_multi_zones.append(_build_multi_zone(zpos, zr,
+						float(zc.get("hold", 60.0)), String(zc.get("name", "区 %d" % (zi + 1))), zcolor))
+			"defend_targets":
+				for bid in obj.get("building_ids", [22]):
+					_defend_ids.append(int(bid))
+				_defend_min_alive = int(obj.get("min_alive", 1))
+				_defend_duration = float(obj.get("duration", 300.0))
+				_defend_initial = _count_player_buildings(_defend_ids)
 			"destroy_targets":
 				_target_ids = obj.get("building_ids", [25, 26]).duplicate()
 				_target_need = int(obj.get("count", 3))
@@ -379,6 +428,8 @@ func _parse_objectives() -> void:
 			"kill_units":
 				_kill_need = int(obj.get("count", 10))
 				_kill_ids = obj.get("unit_ids", []).duplicate()
+				_kill_intercept_dist = float(obj.get("intercept_dist", 0.0))
+				_kill_max_slip = int(obj.get("max_slip", 0))
 
 # 在地图中间找一块足够大的平地放控制区（中心点被水/山占时向外搜）
 func _find_plain_area(center: Vector3, radius: float) -> Vector3:
@@ -496,35 +547,134 @@ func _spawn_ring(center: Vector3, radius: float, color: Color, ring_name: String
 	ring.global_position = Vector3(center.x, y + 0.35, center.z)
 	return ring
 
-# 占领区标记：地面半透明色块 + 粗光圈 + 光柱 + 头顶悬浮倒计时。
+# ==================== 地面标记（贴着地形画）====================
+
+func _ground_y_at(x: float, z: float) -> float:
+	var map = bm.get_node_or_null("Map")
+	if map != null and map.has_method("get_height_at"):
+		return float(map.get_height_at(Vector3(x, 0.0, z)))
+	return 0.0
+
+# 平铺在起伏地形上的扇形色块（逐顶点采地形高度，不会被山包/沙丘埋掉）
+func _make_ground_disc(center: Vector3, radius: float, y_off: float, segments: int = 48) -> ArrayMesh:
+	var base_y: float = _ground_y_at(center.x, center.z)
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var c := Vector3(0.0, y_off, 0.0)
+	for i in range(segments):
+		var a0: float = TAU * float(i) / float(segments)
+		var a1: float = TAU * float(i + 1) / float(segments)
+		var x0: float = center.x + cos(a0) * radius
+		var z0: float = center.z + sin(a0) * radius
+		var x1: float = center.x + cos(a1) * radius
+		var z1: float = center.z + sin(a1) * radius
+		var p0 := Vector3(cos(a0) * radius, _ground_y_at(x0, z0) - base_y + y_off, sin(a0) * radius)
+		var p1 := Vector3(cos(a1) * radius, _ground_y_at(x1, z1) - base_y + y_off, sin(a1) * radius)
+		for v in [c, p0, p1]:
+			st.set_normal(Vector3.UP)
+			st.add_vertex(v)
+	return st.commit()
+
+# 贴着地形的一圈色带（相当于"粗光圈"）
+func _make_ground_band(center: Vector3, inner_r: float, outer_r: float, y_off: float,
+		segments: int = 64) -> ArrayMesh:
+	var base_y: float = _ground_y_at(center.x, center.z)
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for i in range(segments):
+		var a0: float = TAU * float(i) / float(segments)
+		var a1: float = TAU * float(i + 1) / float(segments)
+		var i0 := _band_vertex(center, base_y, a0, inner_r, y_off)
+		var o0 := _band_vertex(center, base_y, a0, outer_r, y_off)
+		var i1 := _band_vertex(center, base_y, a1, inner_r, y_off)
+		var o1 := _band_vertex(center, base_y, a1, outer_r, y_off)
+		for v in [i0, o0, i1, o0, o1, i1]:
+			st.set_normal(Vector3.UP)
+			st.add_vertex(v)
+	return st.commit()
+
+func _band_vertex(center: Vector3, base_y: float, angle: float, r: float, y_off: float) -> Vector3:
+	var x: float = center.x + cos(angle) * r
+	var z: float = center.z + sin(angle) * r
+	return Vector3(cos(angle) * r, _ground_y_at(x, z) - base_y + y_off, sin(angle) * r)
+
+func _ground_mat(color: Color) -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color = color
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	mat.disable_receive_shadows = true
+	return mat
+
+func _add_ground_mesh(mesh: Mesh, center: Vector3, color: Color, node_name: String) -> MeshInstance3D:
+	var mi := MeshInstance3D.new()
+	mi.name = node_name
+	mi.mesh = mesh
+	mi.material_override = _ground_mat(color)
+	mi.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	bm.add_child(mi)
+	mi.global_position = Vector3(center.x, _ground_y_at(center.x, center.z), center.z)
+	return mi
+
+# ==================== 屏幕空间标记 ====================
+
+func _ensure_screen_layer() -> void:
+	if _screen_layer != null and is_instance_valid(_screen_layer):
+		return
+	_screen_layer = CanvasLayer.new()
+	_screen_layer.name = "CampaignMarkers"
+	_screen_layer.layer = 9
+	bm.add_child(_screen_layer)
+
+func _make_screen_label() -> Label:
+	var l := Label.new()
+	l.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	l.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	l.add_theme_font_size_override("font_size", UILayout.font_dp(13.0))
+	l.add_theme_color_override("font_outline_color", Color(0.0, 0.0, 0.0, 0.95))
+	l.add_theme_constant_override("outline_size", UILayout.font_dp(4.0))
+	l.visible = false
+	_screen_layer.add_child(l)
+	return l
+
+# 把 3D 坐标投影到屏幕，把标签钉在目标上方一点（俯视/斜视都看得见）
+func _update_screen_marker(label: Label, world_pos: Vector3, text: String, color: Color,
+		raise_px: float) -> void:
+	if label == null or not is_instance_valid(label):
+		return
+	var cam := bm.get_viewport().get_camera_3d()
+	if cam == null or cam.is_position_behind(world_pos):
+		label.visible = false
+		return
+	var screen: Vector2 = cam.unproject_position(world_pos)
+	var vp: Vector2 = bm.get_viewport().get_visible_rect().size
+	label.text = text
+	label.add_theme_color_override("font_color", color)
+	label.visible = true
+	label.reset_size()
+	var sz: Vector2 = label.get_combined_minimum_size()
+	# 目标不在画面里时把标签贴到屏幕边缘（不是只把中心点拉回来，否则会露半行字；
+	# 也不能直接隐藏，否则玩家找不到控制区）
+	var margin := UILayout.dp(20.0)
+	var min_x: float = margin + sz.x * 0.5
+	var max_x: float = maxf(vp.x - margin - sz.x * 0.5, min_x)
+	var min_y: float = margin + sz.y + raise_px
+	var max_y: float = maxf(vp.y - margin, min_y)
+	var anchor_pos := Vector2(clampf(screen.x, min_x, max_x), clampf(screen.y, min_y, max_y))
+	label.position = anchor_pos - Vector2(sz.x * 0.5, sz.y + raise_px)
+
+# 占领区标记：贴地色块 + 贴地粗光圈 + 光柱 + 3D 悬浮字 + 屏幕空间倒计时。
 # 只有一圈细线在野外地图上几乎看不见，所以这里做成"老远就能看到"的标记。
 func _mark_hold_zone(center: Vector3, radius: float) -> void:
 	var green := Color(0.3, 1.0, 0.45)
 	var y: float = float(center.y)
-	# 地面色块
-	var disc_mat := StandardMaterial3D.new()
-	disc_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	disc_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	disc_mat.albedo_color = Color(green, 0.16)
-	disc_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
-	var disc_mesh := CylinderMesh.new()
-	disc_mesh.top_radius = radius
-	disc_mesh.bottom_radius = radius
-	disc_mesh.height = 0.06
-	disc_mesh.radial_segments = 48
-	disc_mesh.material = disc_mat
-	_zone_disc = MeshInstance3D.new()
-	_zone_disc.name = "CampaignZoneDisc"
-	_zone_disc.mesh = disc_mesh
-	_zone_disc.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	bm.add_child(_zone_disc)
-	_zone_disc.global_position = Vector3(center.x, y + 0.14, center.z)
-	# 光圈（粗一点）
-	_zone_mesh = _spawn_ring(center, radius, Color(green, 0.95), "CampaignZoneRing")
-	if _zone_mesh != null and _zone_mesh.mesh is TorusMesh:
-		var torus: TorusMesh = _zone_mesh.mesh
-		torus.inner_radius = maxf(radius - 0.7, 0.5)
-		torus.outer_radius = radius + 0.7
+	# 地面色块（贴地形，逐顶点采高度）
+	_zone_disc = _add_ground_mesh(_make_ground_disc(center, radius, 0.45), center,
+		Color(green, 0.16), "CampaignZoneDisc")
+	# 贴地粗光圈
+	_zone_mesh = _add_ground_mesh(_make_ground_band(center, maxf(radius - 0.8, 0.6),
+		radius + 0.8, 0.6), center, Color(green, 0.95), "CampaignZoneRing")
 	# 光柱：远处也能一眼看到位置
 	_zone_pillar_mat = StandardMaterial3D.new()
 	_zone_pillar_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -555,7 +705,10 @@ func _mark_hold_zone(center: Vector3, radius: float) -> void:
 	_zone_label.outline_size = 14
 	_zone_label.text = "占领区 %d 秒" % int(_zone_hold_need)
 	bm.add_child(_zone_label)
-	_zone_label.global_position = Vector3(center.x, y + 11.0, center.z)
+	_zone_label.global_position = Vector3(center.x, y + 13.0, center.z)
+	# 屏幕空间倒计时：俯视时 3D 文字会被压扁到看不见，这层永远是正的
+	_ensure_screen_layer()
+	_zone_screen_label = _make_screen_label()
 	_ping_minimap(center)
 
 # 在小地图上闪一下标记点（复用 HUD 小地图的警报闪烁）
@@ -613,9 +766,16 @@ func _hook_enemy_kill(unit, unit_id: int) -> void:
 	if unit == null or not is_instance_valid(unit):
 		return
 	if not unit.died.is_connected(_on_enemy_unit_died):
-		unit.died.connect(_on_enemy_unit_died.bind(unit_id))
+		unit.died.connect(_on_enemy_unit_died.bind(unit, unit_id))
 
-func _on_enemy_unit_died(unit_id: int) -> void:
+func _on_enemy_unit_died(unit, unit_id: int) -> void:
+	# 海战关的"拦截"判定：火船靠岸自爆不算击沉（算漏过），
+	# 否则玩家什么都不做、等它们撞岸也能凑够击杀数。
+	if _kill_intercept_dist > 0.0 and is_instance_valid(unit) and player_castle != null 			and is_instance_valid(player_castle):
+		var dist: float = unit.global_position.distance_to(player_castle.global_position)
+		if dist < _kill_intercept_dist:
+			_kill_slipped += 1
+			return
 	_enemy_kills += 1
 	_enemy_kills_by_id[unit_id] = int(_enemy_kills_by_id.get(unit_id, 0)) + 1
 
@@ -664,8 +824,11 @@ func _process(delta: float) -> void:
 	var dt: float = _tick
 	_tick = 0.0
 	_update_economy()
+	_update_defend(dt)
 	_update_objective_states()
 	_update_zone(dt)
+	_update_multi_zones(dt)
+	_update_escort_marker()
 	_update_warning()
 	_update_progress_text()
 	_check_finish(dt)
@@ -749,6 +912,10 @@ func _update_objective_states() -> void:
 				done = _survive_need > 0.0 and elapsed >= _survive_need
 			"hold_zone":
 				done = hold_seconds >= _zone_hold_need
+			"hold_zones":
+				done = _multi_zones_done()
+			"defend_targets":
+				done = _defend_duration > 0.0 and elapsed >= _defend_duration and _defend_alive >= _defend_min_alive
 			"escort":
 				done = _escort_reached()
 			"destroy_targets":
@@ -756,6 +923,9 @@ func _update_objective_states() -> void:
 			"gather":
 				done = _gather_total >= _gather_need
 			"kill_units":
+				if _kill_max_slip > 0 and _kill_slipped > _kill_max_slip:
+					_finish(false)
+					return
 				done = _kill_progress() >= _kill_need
 		objective_states[i]["done"] = done
 
@@ -829,6 +999,8 @@ func _update_zone_visual(dt: float) -> void:
 		var pulse: float = 1.0 + 0.02 * sin(t * 2.6)
 		_zone_mesh.scale = Vector3(pulse, 1.0, pulse)
 		_zone_mesh.visible = not done
+	if _zone_disc != null and is_instance_valid(_zone_disc):
+		_zone_disc.visible = not done
 	if _zone_pillar != null and is_instance_valid(_zone_pillar) and _zone_pillar_mat != null:
 		_zone_pillar_mat.albedo_color.a = 0.08 + 0.05 * (0.5 + 0.5 * sin(t * 1.6))
 		_zone_pillar.visible = not done
@@ -842,11 +1014,223 @@ func _update_zone_visual(dt: float) -> void:
 			_zone_label.modulate = Color(1.0, 0.45, 0.35)
 		else:
 			_zone_label.modulate = Color(0.55, 1.0, 0.65)
+	# 屏幕空间倒计时（俯视也能看见）
+	if _zone_screen_label != null and is_instance_valid(_zone_screen_label):
+		if done:
+			_update_screen_marker(_zone_screen_label,
+				_zone_center + Vector3(0.0, 3.0, 0.0), "✔ 占领完成",
+				Color(0.55, 1.0, 0.65), 48.0)
+		else:
+			var mark_text := "占领区 %d/%d 秒 · %s" % [
+				int(hold_seconds), int(_zone_hold_need), _zone_state_text]
+			var mark_color := Color(1.0, 0.5, 0.4) if _zone_enemy_inside else Color(0.55, 1.0, 0.65)
+			_update_screen_marker(_zone_screen_label,
+				_zone_center + Vector3(0.0, 3.0, 0.0), mark_text, mark_color, 48.0)
 	# 小地图每 8 秒闪一次，别让玩家忘了圈在哪
 	_zone_ping_timer -= dt
 	if _zone_ping_timer <= 0.0 and not done:
 		_zone_ping_timer = 8.0
 		_ping_minimap(_zone_center)
+
+# 护送点标记：屏幕空间文字，显示信使还有多远
+func _update_escort_marker() -> void:
+	if _escort_screen_label == null or not is_instance_valid(_escort_screen_label):
+		return
+	if _escort_unit != null and is_instance_valid(_escort_unit) and _escort_unit.health > 0:
+		var dist: float = _escort_unit.global_position.distance_to(_escort_zone_center)
+		_update_screen_marker(_escort_screen_label, _escort_zone_center + Vector3(0.0, 3.0, 0.0),
+			"护送点 · 信使 %.0f 米" % dist, Color(0.55, 0.8, 1.0), 44.0)
+	else:
+		_update_screen_marker(_escort_screen_label, _escort_zone_center + Vector3(0.0, 3.0, 0.0),
+			"护送点", Color(0.55, 0.8, 1.0), 44.0)
+
+# ==================== 多控制区（hold_zones）====================
+
+# 多控制区的基准点：双方基地连线中点（没有基地时用地图中心）
+func _zone_group_base() -> Vector3:
+	if player_anchor.length() > 0.5 and enemy_anchor.length() > 0.5:
+		return Vector3((player_anchor.x + enemy_anchor.x) * 0.5, 0.0,
+			(player_anchor.z + enemy_anchor.z) * 0.5)
+	return Vector3.ZERO
+
+# 建一个多控制区：贴地色块 + 光圈 + 光柱 + 3D 字 + 屏幕标签，全部记在字典里
+func _build_multi_zone(center: Vector3, radius: float, need: float, zone_name: String,
+		color: Color) -> Dictionary:
+	var suffix := str(_multi_zones.size() + 1)
+	var z: Dictionary = {
+		"name": zone_name,
+		"center": center,
+		"radius": radius,
+		"need": need,
+		"held": 0.0,
+		"enemy": false,
+		"nearest": -1.0,
+		"state": "无人驻守",
+		"done": false,
+		"ping": 3.0 + float(_multi_zones.size()) * 2.0,
+		"disc": null,
+		"ring": null,
+		"pillar": null,
+		"mat": null,
+		"label3d": null,
+		"screen": null,
+	}
+	z["disc"] = _add_ground_mesh(_make_ground_disc(center, radius, 0.45), center,
+		Color(color, 0.16), "CampaignZoneDisc" + suffix)
+	z["ring"] = _add_ground_mesh(
+		_make_ground_band(center, maxf(radius - 0.8, 0.6), radius + 0.8, 0.6), center,
+		Color(color, 0.95), "CampaignZoneRing" + suffix)
+	var base_y: float = _ground_y_at(center.x, center.z)
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color = Color(color, 0.12)
+	mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var pillar_mesh := CylinderMesh.new()
+	pillar_mesh.top_radius = 1.0
+	pillar_mesh.bottom_radius = 1.0
+	pillar_mesh.height = 26.0
+	pillar_mesh.radial_segments = 16
+	pillar_mesh.material = mat
+	var pillar := MeshInstance3D.new()
+	pillar.name = "CampaignZonePillar" + suffix
+	pillar.mesh = pillar_mesh
+	pillar.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	bm.add_child(pillar)
+	pillar.global_position = Vector3(center.x, base_y + 13.0, center.z)
+	z["pillar"] = pillar
+	z["mat"] = mat
+	var l3 := Label3D.new()
+	l3.name = "CampaignZoneLabel" + suffix
+	l3.font_size = 64
+	l3.pixel_size = 0.03
+	l3.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	l3.no_depth_test = true
+	l3.modulate = color
+	l3.outline_modulate = Color(0.0, 0.0, 0.0, 0.95)
+	l3.outline_size = 14
+	l3.text = zone_name
+	bm.add_child(l3)
+	l3.global_position = Vector3(center.x, base_y + 13.0, center.z)
+	z["label3d"] = l3
+	_ensure_screen_layer()
+	z["screen"] = _make_screen_label()
+	_ping_minimap(center)
+	return z
+
+func _multi_zones_done() -> bool:
+	if _multi_zones.is_empty():
+		return false
+	for z in _multi_zones:
+		if not bool(z.get("done", false)):
+			return false
+	return true
+
+# 人数比 → 状态文案（单区/多区共用同一套规则，避免两处逻辑跑偏）
+func _zone_state_of(mine: int, theirs: int) -> String:
+	if mine > 0 and theirs == 0:
+		return "占领中"
+	if mine > theirs:
+		return "争夺中（我方人多，半速计时）"
+	if theirs > mine:
+		return "敌军控制，计时倒退"
+	if mine > 0 and mine == theirs:
+		return "争夺中（势均力敌，计时暂停）"
+	return "无人驻守"
+
+func _update_multi_zones(dt: float) -> void:
+	if _multi_zones.is_empty():
+		return
+	var t: float = float(Time.get_ticks_msec()) * 0.001
+	for z in _multi_zones:
+		var center: Vector3 = z["center"]
+		var radius: float = float(z["radius"])
+		var mine := 0
+		var theirs := 0
+		var nearest := -1.0
+		for e in bm.entities.get_children():
+			if not (e is Army) or e.health <= 0:
+				continue
+			var dist: float = e.global_position.distance_to(center)
+			if int(e.team) == bm.player_team:
+				if nearest < 0.0 or dist < nearest:
+					nearest = dist
+				if dist <= radius:
+					mine += 1
+			elif int(e.team) == bm.enemy_team and dist <= radius:
+				theirs += 1
+		z["nearest"] = nearest
+		z["enemy"] = theirs > 0
+		if not bool(z["done"]):
+			var held: float = float(z["held"])
+			var need: float = float(z["need"])
+			if mine > theirs:
+				held = minf(need, held + dt * (1.0 if theirs == 0 else 0.5))
+			elif theirs > mine:
+				held = maxf(0.0, held - dt * 2.0)
+			z["held"] = held
+			if held >= need:
+				z["done"] = true
+				z["state"] = "占领完成"
+			else:
+				z["state"] = _zone_state_of(mine, theirs)
+		_update_multi_zone_visual(z, t, dt)
+
+func _update_multi_zone_visual(z: Dictionary, t: float, dt: float) -> void:
+	var done: bool = bool(z.get("done", false))
+	var ring = z.get("ring")
+	if ring != null and is_instance_valid(ring):
+		var pulse: float = 1.0 + 0.02 * sin(t * 2.6)
+		ring.scale = Vector3(pulse, 1.0, pulse)
+		ring.visible = not done
+	var disc = z.get("disc")
+	if disc != null and is_instance_valid(disc):
+		disc.visible = not done
+	var mat = z.get("mat")
+	var pillar = z.get("pillar")
+	if pillar != null and is_instance_valid(pillar) and mat != null:
+		mat.albedo_color.a = 0.08 + 0.05 * (0.5 + 0.5 * sin(t * 1.6))
+		pillar.visible = not done
+	var l3 = z.get("label3d")
+	if l3 != null and is_instance_valid(l3):
+		if done:
+			l3.text = "%s\n占领完成" % String(z["name"])
+		else:
+			l3.text = "%s\n占领区 %d / %d 秒\n%s" % [
+				String(z["name"]), int(z["held"]), int(z["need"]), String(z["state"])]
+		l3.modulate = Color(1.0, 0.45, 0.35) if bool(z["enemy"]) and not done else Color(0.55, 1.0, 0.65)
+	var screen = z.get("screen")
+	if screen != null and is_instance_valid(screen):
+		var center: Vector3 = z["center"]
+		if done:
+			_update_screen_marker(screen, center + Vector3(0.0, 3.0, 0.0),
+				"✔ %s 占领完成" % String(z["name"]), Color(0.55, 1.0, 0.65), 48.0)
+		else:
+			var col := Color(1.0, 0.5, 0.4) if bool(z["enemy"]) else Color(0.55, 1.0, 0.65)
+			_update_screen_marker(screen, center + Vector3(0.0, 3.0, 0.0),
+				"%s %d/%d 秒 · %s" % [String(z["name"]), int(z["held"]), int(z["need"]),
+					String(z["state"])], col, 48.0)
+	z["ping"] = float(z["ping"]) - dt
+	if float(z["ping"]) <= 0.0 and not done:
+		z["ping"] = 8.0
+		_ping_minimap(z["center"])
+
+# ==================== 守住自家建筑（defend_targets）====================
+
+func _count_player_buildings(ids: Array) -> int:
+	var n := 0
+	for e in bm.entities.get_children():
+		if e is Building and e.health > 0 and int(e.team) == bm.player_team and int(e.entity_id) in ids:
+			n += 1
+	return n
+
+func _update_defend(dt: float) -> void:
+	if _defend_ids.is_empty():
+		return
+	_defend_alive = _count_player_buildings(_defend_ids)
+	# 目标建筑全毁：立刻判负，别等超时
+	if _defend_alive <= 0:
+		_finish(false)
 
 func _update_warning() -> void:
 	warning_text = ""
@@ -866,6 +1250,9 @@ func _update_warning() -> void:
 			warning_text = "⚠ %s %d 秒后抵达" % [label, secs]
 	if _zone_hold_need > 0.0 and hold_seconds < _zone_hold_need and _zone_enemy_inside:
 		warning_text = "⚠ 控制区被敌军压住，计时倒退！快把兵调回去"
+	for z in _multi_zones:
+		if not bool(z.get("done", false)) and bool(z.get("enemy", false)):
+			warning_text = "⚠ %s 被敌军压住，计时倒退！" % String(z.get("name", "控制区"))
 
 # ==================== 胜负判定 ====================
 
@@ -948,6 +1335,8 @@ func _finish(won: bool) -> void:
 	AudioManager.play_music("victory" if won else "defeat")
 	if _hud != null and is_instance_valid(_hud):
 		_hud.visible = false
+	if _screen_layer != null and is_instance_valid(_screen_layer):
+		_screen_layer.visible = false
 	# 战役用自己的结算卡：隐藏普通对局的统计面板
 	if bm.game_over_panel != null and is_instance_valid(bm.game_over_panel):
 		bm.game_over_panel.visible = false
@@ -1161,13 +1550,26 @@ func _update_progress_text() -> void:
 					parts.append("信使距哨站 %.0f 米（进蓝圈即送达）" % dist)
 				else:
 					parts.append("信使已阵亡")
+			"hold_zones":
+				var zone_parts: Array = []
+				for z in _multi_zones:
+					zone_parts.append("%s %d/%d 秒·%s" % [
+						String(z["name"]), int(z["held"]), int(z["need"]), String(z["state"])])
+				parts.append("；".join(zone_parts))
+			"defend_targets":
+				parts.append("目标建筑 %d/%d 座 · 撑过 %s / %s" % [
+					_defend_alive, maxi(_defend_initial, _defend_min_alive),
+					_fmt_time(maxf(_defend_duration - elapsed, 0.0)), _fmt_time(_defend_duration)])
 			"destroy_targets":
-				parts.append("已摧毁 %d / %d 座防御塔" % [_targets_destroyed(), _target_need])
+				parts.append("已摧毁 %d / %d 座目标建筑" % [_targets_destroyed(), _target_need])
 			"gather":
 				parts.append("累计采集 %d / %d 资源" % [int(_gather_total), int(_gather_need)])
 			"kill_units":
 				var verb := "已击沉敌船" if not _kill_ids.is_empty() else "已歼灭敌军"
-				parts.append("%s %d / %d" % [verb, _kill_progress(), _kill_need])
+				var kill_line := "%s %d / %d" % [verb, _kill_progress(), _kill_need]
+				if _kill_max_slip > 0:
+					kill_line += "（漏过 %d / %d 艘）" % [_kill_slipped, _kill_max_slip]
+				parts.append(kill_line)
 			"destroy_castle":
 				if enemy_castle != null and is_instance_valid(enemy_castle):
 					var hp: float = float(enemy_castle.health)
