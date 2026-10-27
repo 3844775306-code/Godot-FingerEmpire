@@ -16,6 +16,9 @@ var renderer: ClientRenderer = null
 var demolish_btn: Button = null
 var repair_btn: Button = null
 var cancel_build_btn: Button = null
+var _portrait: TextureRect = null
+var _header_row: HBoxContainer = null
+var _produce_grid: GridContainer = null
 var resources: Dictionary = {}
 var limits: Dictionary = {}
 var population: Dictionary = {}
@@ -37,7 +40,7 @@ func _ready():
 	_vb = get_node("VBox")
 	# 与单机版信息面板同一套皇庭皮肤：暖黑底 + 金边
 	add_theme_stylebox_override("panel", UITheme.panel_style(UITheme.RADIUS_LG, UITheme.BORDER_MED))
-	custom_minimum_size = Vector2(UILayout.dp(182.0) if _is_mobile() else 200.0, 0)
+	custom_minimum_size = Vector2(UILayout.dp(182.0) if _is_mobile() else 470.0, 0)
 
 	_swap_rtl("NameLabel"); _swap_rtl("StatsLabel")
 	name_rtl = _vb.get_node("NameLabel")
@@ -66,6 +69,7 @@ func _ready():
 	hp_bar.anchor_left = 0; hp_bar.anchor_right = 1
 	hp_bar_bg.add_child(hp_bar)
 	var vb = _vb; vb.add_child(hp_bar_bg); vb.move_child(hp_bar_bg, 1)
+	_build_header()
 	close_btn.pressed.connect(_on_close_pressed)
 	close_btn.text = "✕ 关闭"
 	UITheme.apply_muted_button(close_btn, UITheme.FONT_SM)
@@ -126,6 +130,69 @@ func _set_rtl_font(rtl: RichTextLabel, size: int) -> void:
 	rtl.add_theme_font_size_override("mono_font_size", size)
 
 # 手机端信息面板只有 182×200dp，内容和单机版一样需要滚动，否则生产按钮会超出屏幕。
+# 单选头部：左边大头像，右边名称 + 血条 + 属性（手机面板窄，头像只挨着名字）
+func _build_header() -> void:
+	if _header_row != null:
+		return
+	_portrait = TextureRect.new()
+	_portrait.name = "Portrait"
+	_portrait.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	_portrait.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	_portrait.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_portrait.visible = false
+	_header_row = HBoxContainer.new()
+	_header_row.name = "HeaderRow"
+	_header_row.add_theme_constant_override("separation", 10)
+	var idx := name_rtl.get_index()
+	_vb.remove_child(name_rtl)
+	_vb.remove_child(hp_bar_bg)
+	_vb.remove_child(stats_rtl)
+	_vb.add_child(_header_row)
+	_vb.move_child(_header_row, mini(idx, maxi(0, _vb.get_child_count() - 1)))
+	_header_row.add_child(_portrait)
+	if _is_mobile():
+		_portrait.custom_minimum_size = Vector2(UILayout.dp(56.0), UILayout.dp(56.0))
+		_header_row.add_child(name_rtl)
+		name_rtl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_vb.add_child(hp_bar_bg)
+		_vb.move_child(hp_bar_bg, _header_row.get_index() + 1)
+		_vb.add_child(stats_rtl)
+		_vb.move_child(stats_rtl, hp_bar_bg.get_index() + 1)
+	else:
+		_portrait.custom_minimum_size = Vector2(112.0, 112.0)
+		var info_col := VBoxContainer.new()
+		info_col.name = "InfoCol"
+		info_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		info_col.add_theme_constant_override("separation", 3)
+		info_col.add_child(name_rtl)
+		info_col.add_child(hp_bar_bg)
+		info_col.add_child(stats_rtl)
+		_header_row.add_child(info_col)
+
+func _update_portrait_info(info: Dictionary) -> void:
+	if _portrait == null:
+		return
+	var tex: Texture2D = EntityIcon.texture(int(info.get("entity_id", -1)), int(info.get("type", 2)))
+	_portrait.texture = tex
+	_portrait.visible = tex != null
+
+func _ensure_produce_grid() -> GridContainer:
+	if _produce_grid != null and is_instance_valid(_produce_grid):
+		return _produce_grid
+	_produce_grid = GridContainer.new()
+	_produce_grid.name = "ProduceGrid"
+	_produce_grid.columns = 1 if _is_mobile() else 2
+	_produce_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_produce_grid.add_theme_constant_override("h_separation", 6)
+	_produce_grid.add_theme_constant_override("v_separation", 4)
+	produce_vbox.add_child(_produce_grid)
+	return _produce_grid
+
+func _clear_produce_area() -> void:
+	for c in produce_vbox.get_children():
+		c.queue_free()
+	_produce_grid = null
+
 func _build_mobile_scroll() -> void:
 	close_btn.anchor_left = 1.0
 	close_btn.anchor_right = 1.0
@@ -442,6 +509,7 @@ func update_info(entity_id: int):
 	if readonly:
 		nm += "  [color=%s]（%s · 仅查看）[/color]" % [UITheme.hex_str(UITheme.PARCHMENT), readonly_label]
 	name_rtl.text = nm
+	_update_portrait_info(info)
 
 	var pct = float(info["health"]) / max(float(info["max_health"]), 1.0)
 	hp_bar.color = _faction_color(info)
@@ -524,20 +592,14 @@ func update_info(entity_id: int):
 		else:
 			upgrade_btn.visible = false
 
-		# Spacer
-		var sp = Control.new(); sp.custom_minimum_size = Vector2(0, 8); produce_vbox.add_child(sp)
-		for c in produce_vbox.get_children(): c.queue_free()
+		_clear_produce_area()
 		var pl = info.get("production_list", [])
 		if pl:
 			produce_vbox.visible = true
+			var grid := _ensure_produce_grid()
 			for prod in pl:
 				var uc = EntityDatabase.get_config(prod["unit_id"])
 				if not uc: continue
-				var btn = Button.new(); btn.text = ""
-				var pfont: int = UILayout.font_dp(10.0) if _is_mobile() else UITheme.FONT_SM
-				UITheme.apply_button(btn, pfont)
-				btn.custom_minimum_size = Vector2(UILayout.dp(160.0), UILayout.dp(30.0)) if _is_mobile() else Vector2(200, 40)
-				btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 				var ok = population.get("current", 0) < population.get("max", 0); var cs = []
 				var cost = prod.get("current_cost", uc.get("cost", {}))
 				for res in cost:
@@ -546,23 +608,22 @@ func update_info(entity_id: int):
 						var have = resources.get(res, 0)
 						if have < need: ok = false
 						cs.append({"res": res, "need": need, "have": have})
-				btn.disabled = (not ok) or readonly
-				if readonly:
-					btn.tooltip_text = "%s仅可查看，无法下达生产命令" % readonly_label
-				var rtl = RichTextLabel.new(); rtl.bbcode_enabled = true; rtl.fit_content = true; rtl.autowrap_mode = TextServer.AUTOWRAP_OFF
-				rtl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-				rtl.anchor_left = 0; rtl.anchor_right = 1; rtl.anchor_top = 0; rtl.anchor_bottom = 1
-				rtl.add_theme_color_override("default_color", UITheme.PARCHMENT)
-				rtl.add_theme_font_size_override("normal_font_size", pfont if _is_mobile() else UITheme.FONT_SM)
 				var ct = ""
 				for ci in cs:
-					var rc = RC.get(ci.res, "white")
 					var cc = "white" if ci.have >= ci.need else "red"
 					ct += "%s[color=%s]%d[/color] " % [UITheme.RESOURCE_ICONS.get(ci.res, ""), cc, ci.need]
-				rtl.text = "%s %s  [%s]" % [UITheme.entity_emoji(int(uc.get("id", -1)), int(uc.get("type", 2))), uc.get("name", "?"), ct.strip_edges()]
-				btn.add_child(rtl)
-				btn.pressed.connect(func(): _on_produce_pressed(prod["unit_id"]))
-				produce_vbox.add_child(btn)
+				var card_min := Vector2(0, UILayout.dp(64.0)) if _is_mobile() else Vector2(0, 86.0)
+				var icon_px: float = UILayout.dp(48.0) if _is_mobile() else 64.0
+				var card := EntityCard.make(int(prod["unit_id"]), 2, uc.get("name", "?"), ct.strip_edges(),
+					icon_px, card_min, UITheme.GOLD, false,
+					UILayout.font_dp(13.0) if _is_mobile() else UITheme.FONT_MD,
+					UILayout.font_dp(10.0) if _is_mobile() else UITheme.FONT_XS, false)
+				card.disabled = (not ok) or readonly
+				EntityCard.set_dimmed(card, card.disabled)
+				if readonly:
+					card.tooltip_text = "%s仅可查看，无法下达生产命令" % readonly_label
+				card.pressed.connect(func(): _on_produce_pressed(prod["unit_id"]))
+				grid.add_child(card)
 		else:
 			produce_vbox.visible = false
 	else:
@@ -733,7 +794,8 @@ func show_multi_selection(ids: Array):
 		old_box.queue_free()
 	name_rtl.text = "[color=%s]⚔️ 选中 %d 个单位[/color]" % [UITheme.hex_str(UITheme.GOLD), ids.size()]
 	stats_rtl.text = ""
-	for c in produce_vbox.get_children(): c.queue_free()
+	_clear_produce_area()
+	var grid := _ensure_produce_grid()
 
 	# Aggregate by (entity_id, owner_peer_id)
 	var groups: Dictionary = {}
@@ -761,41 +823,35 @@ func show_multi_selection(ids: Array):
 	for i in range(keys.size()):
 		var g = groups[keys[i]]
 		var row_color = ROW_COLORS[i % ROW_COLORS.size()]
-
-		var btn = Button.new()
-		btn.custom_minimum_size = Vector2(UILayout.dp(160.0), UILayout.dp(30.0)) if _is_mobile() else Vector2(200, 40)
-		btn.toggle_mode = true
-		UITheme.apply_row_button(btn, row_color)
-		if _is_mobile():
-			btn.add_theme_font_size_override("font_size", UILayout.font_dp(10.0))
-
-		var lvl_text = " Lv.%d" % g["min_level"] if g["min_level"] == g["max_level"] else " Lv.%d~%d" % [g["min_level"], g["max_level"]]
-		btn.text = "%s %d x %s%s" % [UITheme.entity_emoji(g["entity_id"], 2), g["count"], g["name"], lvl_text]
-
+		var lvl_text = "Lv.%d" % g["min_level"] if g["min_level"] == g["max_level"] else "Lv.%d~%d" % [g["min_level"], g["max_level"]]
+		var icon_px: float = UILayout.dp(48.0) if _is_mobile() else 64.0
+		var card_min := Vector2(0, UILayout.dp(64.0)) if _is_mobile() else Vector2(0, 84.0)
+		var card := EntityCard.make(int(g["entity_id"]), 2, "%d × %s" % [g["count"], g["name"]],
+			lvl_text, icon_px, card_min, row_color, true,
+			UILayout.font_dp(13.0) if _is_mobile() else UITheme.FONT_MD,
+			UILayout.font_dp(10.0) if _is_mobile() else UITheme.FONT_SM, false)
+		card.tooltip_text = "点击单独选中这一种；按住 Ctrl 点击可累加 / 取消"
 		var row_ids = g["ids"].duplicate()
-		btn.pressed.connect(func():
+		card.pressed.connect(func():
 			var ci = get_tree().get_first_node_in_group("client_input") as client_input
 			if not ci: return
 			if Input.is_key_pressed(KEY_CTRL):
-				# Toggle in pending list
-				if btn.button_pressed:
+				if card.button_pressed:
 					if row_ids[0] not in _pending_multi_ids:
 						for rid in row_ids:
 							if rid not in _pending_multi_ids:
 								_pending_multi_ids.append(rid)
-						_pending_multi_btns[btn] = true
+						_pending_multi_btns[card] = true
 				else:
 					for rid in row_ids:
 						_pending_multi_ids.erase(rid)
-					_pending_multi_btns.erase(btn)
+					_pending_multi_btns.erase(card)
 			else:
-				# Immediate selection - recast
 				var _cx = get_tree().get_first_node_in_group("client_input") as client_input
 				if _cx:
 					_cx.set_client_selected_ids(row_ids)
 		)
-
-		produce_vbox.add_child(btn)
+		grid.add_child(card)
 
 	# Start monitoring Ctrl key release
 	set_process_input(true)

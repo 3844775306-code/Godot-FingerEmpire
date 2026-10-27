@@ -30,6 +30,8 @@ var _board_shore: Vector3 = Vector3.ZERO
 
 var name_rtl: RichTextLabel
 var _portrait: TextureRect = null   # 单选时显示实体模型图（单位/建筑/资源）
+var _header_row: HBoxContainer = null   # 头像 + 名称/血条/属性 的头部区
+var _produce_grid: GridContainer = null  # 生产按钮 / 框选分组的大图标网格
 var stats_rtl: RichTextLabel
 var hp_bar: ColorRect
 var observed_entity = null
@@ -69,7 +71,8 @@ func _ready():
 	upgrade_btn = _vb.get_node("UpgradeBtn")
 	produce_vbox = _vb.get_node("ProduceVBox")
 	add_theme_stylebox_override("panel", UITheme.panel_style(UITheme.RADIUS_LG, UITheme.BORDER_MED))
-	custom_minimum_size = Vector2(360, 0)
+	# 桌面端加宽到 470：图标卡片要两列排得下；手机端尺寸由 MobileHUD.place_dp 决定
+	custom_minimum_size = Vector2(470, 0) if not _is_mobile() else Vector2(0, 0)
 
 	_swap_rtl("NameLabel"); _swap_rtl("StatsLabel")
 	name_rtl = _vb.get_node("NameLabel")
@@ -86,7 +89,6 @@ func _ready():
 		_set_rtl_font(name_rtl, UILayout.font_dp(15.0))
 		_set_rtl_font(stats_rtl, UILayout.font_dp(12.0))
 		name_rtl.custom_minimum_size = Vector2(0, UILayout.font_dp(15.0) + UILayout.dp(3.0))
-	_build_portrait_row()
 
 	# 血条：黑色背景条 + 锚点前景（宽度 = 血量比例）
 	hp_bar_bg = ColorRect.new(); hp_bar_bg.name = "HPBarBg"
@@ -99,6 +101,7 @@ func _ready():
 	hp_bar.anchor_left = 0; hp_bar.anchor_right = 1
 	hp_bar_bg.add_child(hp_bar)
 	var vb = _vb; vb.add_child(hp_bar_bg); vb.move_child(hp_bar_bg, 1)
+	_build_header()
 	close_btn.pressed.connect(_on_close_pressed)
 	close_btn.text = "✕ 关闭"
 	UITheme.apply_muted_button(close_btn, UITheme.FONT_SM)
@@ -146,27 +149,45 @@ func _ready():
 # 手机端面板只有 260×200dp，建筑生产按钮一多就会超出屏幕底部；
 # 把内容包进滚动容器，触摸拖动由手势路由调用 UILayout.scroll_at 驱动。
 # 单选：名字左边放一张实体图（单位/建筑/资源都有渲染图），一眼看出选的是谁
-func _build_portrait_row() -> void:
-	if _portrait != null:
+# 单选头部：左边大头像，右边名称 + 血条 + 属性（手机面板太窄，头像只挨着名字，
+# 血条和属性仍占满整行，避免右列被挤成一条缝）
+func _build_header() -> void:
+	if _header_row != null:
 		return
-	var px: float = UILayout.dp(42.0) if _is_mobile() else 56.0
 	_portrait = TextureRect.new()
 	_portrait.name = "Portrait"
-	_portrait.custom_minimum_size = Vector2(px, px)
 	_portrait.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
 	_portrait.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	_portrait.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_portrait.visible = false
-	var row := HBoxContainer.new()
-	row.name = "NameRow"
-	row.add_theme_constant_override("separation", 8)
+	_header_row = HBoxContainer.new()
+	_header_row.name = "HeaderRow"
+	_header_row.add_theme_constant_override("separation", 10)
 	var idx := name_rtl.get_index()
 	_vb.remove_child(name_rtl)
-	_vb.add_child(row)
-	_vb.move_child(row, idx)
-	row.add_child(_portrait)
-	row.add_child(name_rtl)
-	name_rtl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_vb.remove_child(hp_bar_bg)
+	_vb.remove_child(stats_rtl)
+	_vb.add_child(_header_row)
+	_vb.move_child(_header_row, mini(idx, maxi(0, _vb.get_child_count() - 1)))
+	_header_row.add_child(_portrait)
+	if _is_mobile():
+		_portrait.custom_minimum_size = Vector2(UILayout.dp(56.0), UILayout.dp(56.0))
+		_header_row.add_child(name_rtl)
+		name_rtl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		_vb.add_child(hp_bar_bg)
+		_vb.move_child(hp_bar_bg, _header_row.get_index() + 1)
+		_vb.add_child(stats_rtl)
+		_vb.move_child(stats_rtl, hp_bar_bg.get_index() + 1)
+	else:
+		_portrait.custom_minimum_size = Vector2(112.0, 112.0)
+		var info_col := VBoxContainer.new()
+		info_col.name = "InfoCol"
+		info_col.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		info_col.add_theme_constant_override("separation", 3)
+		info_col.add_child(name_rtl)
+		info_col.add_child(hp_bar_bg)
+		info_col.add_child(stats_rtl)
+		_header_row.add_child(info_col)
 
 func _update_portrait(entity) -> void:
 	if _portrait == null:
@@ -174,6 +195,24 @@ func _update_portrait(entity) -> void:
 	var tex: Texture2D = EntityIcon.texture(int(entity.entity_id), int(entity.entity_type))
 	_portrait.texture = tex
 	_portrait.visible = tex != null
+
+# 生产按钮/框选分组共用的网格：桌面两列、手机一列，卡片由 EntityCard 生成
+func _ensure_produce_grid() -> GridContainer:
+	if _produce_grid != null and is_instance_valid(_produce_grid):
+		return _produce_grid
+	_produce_grid = GridContainer.new()
+	_produce_grid.name = "ProduceGrid"
+	_produce_grid.columns = 1 if _is_mobile() else 2
+	_produce_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_produce_grid.add_theme_constant_override("h_separation", 6)
+	_produce_grid.add_theme_constant_override("v_separation", 4)
+	produce_vbox.add_child(_produce_grid)
+	return _produce_grid
+
+func _clear_produce_area() -> void:
+	for c in produce_vbox.get_children():
+		c.queue_free()
+	_produce_grid = null
 
 func _build_mobile_scroll() -> void:
 	# 关闭按钮放大到可点尺寸并固定在右上角，不随内容滚动
@@ -706,7 +745,7 @@ func update_info(entity):
 		else:
 			upgrade_btn.visible = false
 
-		for c in produce_vbox.get_children(): c.queue_free()
+		_clear_produce_area()
 		if not entity.production_list.is_empty():
 			produce_vbox.visible = true
 			# 书院显示当前官员编制，让玩家知道为什么官员生产按钮会置灰。
@@ -717,20 +756,13 @@ func update_info(entity):
 				cap_label.text = "官员编制（含排队）[color=%s]%d / %d[/color]" % [
 					UITheme.hex_str(UITheme.GOLD), used, cap]
 				produce_vbox.add_child(cap_label)
+			var grid := _ensure_produce_grid()
 			var seen = {}
 			for prod in entity.production_list:
 				if seen.has(prod.unit_id): continue
 				seen[prod.unit_id] = true
 				var uc = EntityDatabase.get_config(prod.unit_id)
 				if not uc: continue
-				var btn = Button.new(); btn.text = ""
-				if _is_mobile():
-					btn.custom_minimum_size = Vector2(0, UILayout.dp(52.0))
-					UITheme.apply_button(btn, UILayout.font_dp(13.0))
-				else:
-					btn.custom_minimum_size = Vector2(200, 44)
-					UITheme.apply_button(btn, UITheme.FONT_SM)
-				btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 				var ok = true; var cs = []
 				var lv = entity.level
 				for res in uc.get("cost", {}):
@@ -743,41 +775,25 @@ func update_info(entity):
 				var official_full := false
 				if battle and battle.has_method("can_produce_official") and uc.get("official_type", "") != "":
 					official_full = not battle.can_produce_official(prod.unit_id, entity)
-				btn.disabled = (not ok) or readonly or official_full
-				if official_full and not readonly:
-					btn.tooltip_text = "官员总数不能超过可进驻建筑数"
-				elif readonly:
-					btn.tooltip_text = "%s仅可查看，无法下达生产命令" % readonly_label
-				var icon_px: float = UILayout.dp(24.0) if _is_mobile() else 28.0
-				var icon := EntityIcon.make_rect(int(prod.unit_id), 2, icon_px)
-				var row := HBoxContainer.new()
-				row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-				row.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-				row.add_theme_constant_override("separation", 6)
-				if icon != null:
-					row.add_child(icon)
-				var rtl = RichTextLabel.new(); rtl.bbcode_enabled = true; rtl.fit_content = true; rtl.autowrap_mode = TextServer.AUTOWRAP_OFF
-				rtl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-				rtl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-				rtl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-				rtl.add_theme_color_override("default_color", UITheme.PARCHMENT)
-				_set_rtl_font(rtl, _mobile_font(UITheme.FONT_SM))
 				var ct = ""
 				for ci in cs:
 					var cc = "white" if _get_res().get(ci.res, 0) >= ci.need else UITheme.hex_str(UITheme.VERMILION)
 					ct += "%s[color=%s]%d[/color] " % [UITheme.RESOURCE_ICONS.get(ci.res, ""), cc, ci.need]
-				var uname = uc.get("name", "?")
-				if _is_mobile():
-					# 手机面板只有 260dp 宽：名称一行、价格一行，避免价格被挤出按钮外
-					rtl.text = "%s\n[%s]" % [uname, ct.strip_edges()]
-				elif icon != null:
-					rtl.text = "%s  [%s]" % [uname, ct.strip_edges()]
-				else:
-					rtl.text = "%s %s  [%s]" % [UITheme.entity_emoji(int(uc.get("id", -1)), int(uc.get("type", 2))), uname, ct.strip_edges()]
-				row.add_child(rtl)
-				btn.add_child(row)
-				btn.pressed.connect(func(): _on_produce_pressed(prod.unit_id))
-				produce_vbox.add_child(btn)
+				# 大图标卡片：桌面 64px 图标 / 手机 40dp，名字一行、价格一行
+				var card_min := Vector2(0, UILayout.dp(64.0)) if _is_mobile() else Vector2(0, 86.0)
+				var icon_px: float = UILayout.dp(48.0) if _is_mobile() else 64.0
+				var card := EntityCard.make(int(prod.unit_id), 2, uc.get("name", "?"), ct.strip_edges(),
+					icon_px, card_min, UITheme.GOLD, false,
+					_mobile_font(UITheme.FONT_MD) if _is_mobile() else UITheme.FONT_MD,
+					_mobile_font(UITheme.FONT_XS) if _is_mobile() else UITheme.FONT_XS, false)
+				card.disabled = (not ok) or readonly or official_full
+				EntityCard.set_dimmed(card, card.disabled)
+				if official_full and not readonly:
+					card.tooltip_text = "官员总数不能超过可进驻建筑数"
+				elif readonly:
+					card.tooltip_text = "%s仅可查看，无法下达生产命令" % readonly_label
+				card.pressed.connect(func(): _on_produce_pressed(prod.unit_id))
+				grid.add_child(card)
 		else:
 			produce_vbox.visible = false
 	else:
@@ -1162,7 +1178,8 @@ func show_multi_selection(entities: Array):
 	if hp_bar_bg: hp_bar_bg.visible = false
 	name_rtl.text = "[color=%s]⚔️ 选中 %d 个单位[/color]" % [UITheme.hex_str(UITheme.GOLD), entities.size()]
 	stats_rtl.text = ""
-	for c in produce_vbox.get_children(): c.queue_free()
+	_clear_produce_area()
+	var grid := _ensure_produce_grid()
 
 	# Aggregate by (entity_id, team, owner_peer_id)
 	var groups: Dictionary = {}
@@ -1190,64 +1207,33 @@ func show_multi_selection(entities: Array):
 	for i in range(keys.size()):
 		var g = groups[keys[i]]
 		var row_color = ROW_COLORS[i % ROW_COLORS.size()]
-
-		var btn = Button.new()
-		if _is_mobile():
-			btn.custom_minimum_size = Vector2(0, UILayout.dp(44.0))
-		else:
-			btn.custom_minimum_size = Vector2(200, 44)
-		btn.toggle_mode = true
-		UITheme.apply_row_button(btn, row_color)
-		if _is_mobile():
-			btn.add_theme_font_size_override("font_size", UILayout.font_dp(12.0))
-
 		var etype: int = 2
 		if g["entities"].size() > 0:
 			etype = g["entities"][0].entity_type
-		var lvl_text = " Lv.%d" % g["min_level"] if g["min_level"] == g["max_level"] else " Lv.%d~%d" % [g["min_level"], g["max_level"]]
-		# 用真实模型图代替 emoji：同屏多兵种也能一眼分清（无图时回退 emoji）
-		var icon_px: float = UILayout.dp(24.0) if _is_mobile() else 28.0
-		var icon := EntityIcon.make_rect(int(g["entity_id"]), etype, icon_px)
-		var row := HBoxContainer.new()
-		row.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		row.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-		row.add_theme_constant_override("separation", 6)
-		if icon != null:
-			row.add_child(icon)
-		var label := "%d × %s%s" % [g["count"], g["name"], lvl_text]
-		var row_rtl := RichTextLabel.new()
-		row_rtl.bbcode_enabled = false
-		row_rtl.fit_content = true
-		row_rtl.autowrap_mode = TextServer.AUTOWRAP_OFF
-		row_rtl.mouse_filter = Control.MOUSE_FILTER_IGNORE
-		row_rtl.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		row_rtl.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-		row_rtl.add_theme_color_override("default_color", row_color)
-		_set_rtl_font(row_rtl, _mobile_font(UITheme.FONT_SM))
-		if icon != null:
-			row_rtl.text = label
-		else:
-			row_rtl.text = "%s %s" % [UITheme.entity_emoji(int(g["entity_id"]), etype), label]
-		row.add_child(row_rtl)
-		btn.add_child(row)
-
+		var lvl_text = "Lv.%d" % g["min_level"] if g["min_level"] == g["max_level"] else "Lv.%d~%d" % [g["min_level"], g["max_level"]]
+		# 大图标卡片：点数即选中，Ctrl+点击累加/取消
+		var icon_px: float = UILayout.dp(48.0) if _is_mobile() else 64.0
+		var card_min := Vector2(0, UILayout.dp(64.0)) if _is_mobile() else Vector2(0, 84.0)
+		var card := EntityCard.make(int(g["entity_id"]), etype, "%d × %s" % [g["count"], g["name"]],
+			lvl_text, icon_px, card_min, row_color, true,
+			_mobile_font(UITheme.FONT_MD) if _is_mobile() else UITheme.FONT_MD,
+			_mobile_font(UITheme.FONT_SM) if _is_mobile() else UITheme.FONT_SM, false)
+		card.tooltip_text = "点击单独选中这一种；按住 Ctrl 点击可累加 / 取消"
 		var row_entities = g["entities"].duplicate()
-		btn.pressed.connect(func():
+		card.pressed.connect(func():
 			var sel = get_tree().get_first_node_in_group("battle_manager").get_node_or_null("SelectionManager")
 			if not sel: return
 			if Input.is_key_pressed(KEY_CTRL):
-				# Toggle in pending list
-				if btn.button_pressed:
+				if card.button_pressed:
 					for e in row_entities:
 						if is_instance_valid(e) and e not in _pending_multi_entities:
 							_pending_multi_entities.append(e)
-					_pending_multi_btns[btn] = true
+					_pending_multi_btns[card] = true
 				else:
 					for e in row_entities:
 						_pending_multi_entities.erase(e)
-					_pending_multi_btns.erase(btn)
+					_pending_multi_btns.erase(card)
 			else:
-				# Immediate selection
 				for e in sel.selected_entities:
 					if is_instance_valid(e): e.set_selected(false)
 				sel.selected_entities = row_entities
@@ -1255,8 +1241,7 @@ func show_multi_selection(entities: Array):
 					if is_instance_valid(e): e.set_selected(true)
 				sel._update_info_panel()
 		)
-
-		produce_vbox.add_child(btn)
+		grid.add_child(card)
 
 	# Start monitoring Ctrl key release
 	set_process_input(true)

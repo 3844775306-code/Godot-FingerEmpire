@@ -117,9 +117,9 @@ offset_bottom = 40.0
 [node name="InfoPanel" type="Panel" parent="UI"]
 z_index = 10
 offset_left = 16.0
-offset_top = 590.0
-offset_right = 400.0
-offset_bottom = 1110.0
+offset_top = 496.0
+offset_right = 486.0
+offset_bottom = 1114.0
 script = ExtResource("6_j6f5n")
 
 [node name="VBox" type="VBoxContainer" parent="UI/InfoPanel"]
