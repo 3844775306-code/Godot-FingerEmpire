@@ -15,6 +15,15 @@ const CampaignProgressScript = preload("res://scripts/core/CampaignProgress.gd")
 const CampaignHUDScript = preload("res://scripts/ui/CampaignHUD.gd")
 const UIThemeScript = preload("res://scripts/ui/UITheme.gd")
 
+# ── 控制区/护送类目标的 AI 布防参数 ──
+# 战役 AI 原来只会闷头打玩家主城，占领区和护送路线没人争；
+# 这里给敌人配开局守军 + 持续增援 + 护送途中的伏兵。
+const AI_GUARD_UNIT_IDS: Array = [11, 12, 11, 12, 15, 16, 18]  # 步兵/弓手/骑兵/攻城车轮换
+const AI_ZONE_FIRST_DELAY: float = 14.0     # 第一次增援控制区的延迟（秒）
+const AI_ZONE_INTERVAL: float = 30.0        # 之后每隔多久再派一队去争控制区
+const AI_ZONE_MAX_WAVES: int = 5            # 单局最多增援次数，避免无限刷兵
+const AI_ESCORT_TRIGGERS: Array = [0.25, 0.55, 0.8]     # 信使走到路线这些比例时触发伏兵
+
 enum State { RUNNING, WON, LOST }
 
 var bm: RTSBattleManager = null
@@ -95,6 +104,12 @@ var _defend_initial: int = 0
 var _defend_alive: int = 0
 var _defend_duration: float = 0.0
 
+# 控制区/护送点的 AI 布防状态
+var _ai_zone_timer: float = 0.0
+var _ai_zone_waves: int = 0
+var _ai_escort_points: Array = []     # 护送路线上预埋的伏击点
+var _ai_escort_flags: Array = []      # 每档伏击是否已触发
+
 # 开局配置解析出来的任务参数
 var _survive_need: float = -1.0
 var _destroy_castle_goal: bool = false
@@ -102,6 +117,8 @@ var _has_army_wiped_fail: bool = false
 var _has_castle_lost_fail: bool = false
 var _has_timeout_fail: bool = false
 var _time_limit: float = 0.0
+var _three_star_time: float = 0.0
+var _three_star_warned: bool = false
 
 func _ready() -> void:
 	if not GameSettings.campaign_mode or GameSettings.campaign_level_id.is_empty():
@@ -180,6 +197,7 @@ func _setup() -> void:
 
 	_parse_objectives()
 	_spawn_escort()
+	_deploy_objective_guards()
 	if _has_water_waves:
 		_enemy_water_spawn = _find_water_point(player_anchor, 22.0, 60.0)
 	_create_hud()
@@ -192,6 +210,7 @@ func _setup() -> void:
 	_update_objective_states()
 	_update_progress_text()
 	_announce_start()
+	_announce_objective_guards()
 	set_process(true)
 
 # 保留/移除静态 AI：波次关没有城堡，AI 没法发展，直接不启用
@@ -337,6 +356,8 @@ func _pick_spawn_point() -> Vector3:
 
 func _parse_objectives() -> void:
 	_time_limit = float(level.get("time_limit", 0.0))
+	_three_star_time = float(level.get("stars", {}).get("three", 0.0))
+	_three_star_warned = false
 	var fail_flags: Array = level.get("fail", [])
 	_has_army_wiped_fail = fail_flags.has("army_wiped")
 	_has_castle_lost_fail = fail_flags.has("castle_lost")
@@ -364,6 +385,10 @@ func _parse_objectives() -> void:
 	_defend_initial = 0
 	_defend_alive = 0
 	_defend_duration = 0.0
+	_ai_zone_timer = 0.0
+	_ai_zone_waves = 0
+	_ai_escort_points.clear()
+	_ai_escort_flags.clear()
 	_endless_on = false
 	_endless_first = 20.0
 	_endless_interval = 30.0
@@ -770,6 +795,229 @@ func _on_escort_died() -> void:
 		_finish(false)
 		return
 
+# ==================== AI 争夺控制区 / 拦截护送 ====================
+#
+# 战役里的 AI 本来只按自己的三阶段逻辑打玩家主城，占领类关卡不会派人进圈，
+# 护送类关卡也不会在半路拦截。这里按目标类型单独给敌人布置战场压力：
+#   · hold_zone / hold_zones：开局在圈里放守军 + 圈边箭塔，之后定时派兵增援正在被抢的圈；
+#   · escort：沿护送路线预埋两处伏兵 + 中点箭塔，信使推进到 20%/45%/70%/90% 时再两翼包抄。
+
+func _deploy_objective_guards() -> void:
+	_ai_zone_timer = AI_ZONE_FIRST_DELAY
+	_ai_zone_waves = 0
+	_ai_escort_points.clear()
+	_ai_escort_flags.clear()
+	# 单控制区：8 个守军 + 1 座箭塔
+	if _zone_radius > 0.0 and _zone_hold_need > 0.0 and _zone_center != Vector3.ZERO:
+		_guard_zone(_zone_center, _zone_radius, 6)
+	# 多控制区：每个点都要有人守，玩家没法靠"占一个点"白嫖
+	for z in _multi_zones:
+		_guard_zone(z["center"], float(z["radius"]), 4)
+	# 护送路线：预埋伏兵 + 卡路口箭塔
+	if _escort_unit_id > 0:
+		_setup_escort_ambush()
+	for i in range(AI_ESCORT_TRIGGERS.size()):
+		_ai_escort_flags.append(false)
+
+# 某个控制区里敌我各有几个单位（增援判断用）
+func _zone_unit_counts(center: Vector3, radius: float) -> Dictionary:
+	var mine := 0
+	var theirs := 0
+	for e in bm.entities.get_children():
+		if not (e is Army) or e.health <= 0:
+			continue
+		if e.global_position.distance_to(center) > radius:
+			continue
+		if int(e.team) == bm.player_team:
+			mine += 1
+		elif int(e.team) == bm.enemy_team:
+			theirs += 1
+	return {"mine": mine, "theirs": theirs}
+
+# 在控制区里放一队守军：直接设驻扎点，挨打会迎战、追远了会自己回圈里，不会一路追到玩家主城
+func _guard_zone(center: Vector3, radius: float, squad: int) -> void:
+	# 箭塔放在圈外 5 米，既守圈又不挡圈内走位
+	var tower_pos := _find_spot_near(Vector3(center.x, 0.0, center.z + radius + 5.0), 12.0, 4.0)
+	if tower_pos == Vector3.ZERO:
+		tower_pos = _find_spot_near(Vector3(center.x, 0.0, center.z - radius - 5.0), 12.0, 4.0)
+	if tower_pos != Vector3.ZERO:
+		bm.spawn_entity(EntityDatabase.get_config(25), bm.enemy_team, tower_pos, 1)
+	for i in range(squad):
+		var slot := _zone_slot(center, i, squad, radius)
+		if slot == Vector3.ZERO:
+			continue
+		var uid: int = int(AI_GUARD_UNIT_IDS[i % AI_GUARD_UNIT_IDS.size()])
+		var unit = bm.spawn_entity(EntityDatabase.get_config(uid), bm.enemy_team, slot, 1)
+		if unit == null:
+			continue
+		_hook_enemy_kill(unit, uid)
+		unit.garrison_point = center
+
+# 圈内铺兵：中心附近两圈，避开占地实体
+func _zone_slot(center: Vector3, index: int, total: int, radius: float) -> Vector3:
+	var ring_radius: float = maxf(radius * 0.45, 2.0) + float(index / 6) * 2.2
+	var angle: float = TAU * float(index % 6) / 6.0 + float(index / 6) * 0.5
+	for attempt in range(8):
+		var a: float = angle + float(attempt) * 0.4
+		var p := Vector3(center.x + cos(a) * ring_radius, 0.0, center.z + sin(a) * ring_radius)
+		if _is_plain(p) and not _too_close(p, 1.1):
+			return p
+	return Vector3.ZERO
+
+# 护送路线伏击：1/3 与 2/3 处各埋一队，中点立箭塔卡住必经之路
+func _setup_escort_ambush() -> void:
+	var start := player_anchor
+	var dir := Vector3(_escort_zone_center.x - start.x, 0.0, _escort_zone_center.z - start.z)
+	if dir.length() < 5.0:
+		return
+	var side := Vector3(-dir.z, 0.0, dir.x).normalized()
+	for frac in [0.34, 0.66]:
+		var mid := start.lerp(_escort_zone_center, float(frac))
+		var ambush := _find_spot_near(mid + side * 7.0, 12.0, 2.0)
+		if ambush == Vector3.ZERO:
+			ambush = _find_spot_near(mid, 12.0, 2.0)
+		if ambush == Vector3.ZERO:
+			continue
+		_ai_escort_points.append(ambush)
+		_spawn_ambushers(ambush, 4, true)
+	var tower := _find_spot_near(start.lerp(_escort_zone_center, 0.5) - side * 9.0, 14.0, 4.0)
+	if tower != Vector3.ZERO:
+		bm.spawn_entity(EntityDatabase.get_config(25), bm.enemy_team, tower, 1)
+
+# 一队伏兵：garrison=true 时原地埋伏，false 时由调用方下达攻击移动
+func _spawn_ambushers(pos: Vector3, count: int, garrison: bool) -> Array:
+	var spawned: Array = []
+	for i in range(count):
+		var slot := _zone_slot(pos, i, count, 4.0)
+		if slot == Vector3.ZERO:
+			continue
+		var uid: int = int(AI_GUARD_UNIT_IDS[i % AI_GUARD_UNIT_IDS.size()])
+		var unit = bm.spawn_entity(EntityDatabase.get_config(uid), bm.enemy_team, slot, 1)
+		if unit == null:
+			continue
+		_hook_enemy_kill(unit, uid)
+		spawned.append(unit)
+		if garrison:
+			unit.garrison_point = pos
+	return spawned
+
+# 每帧（0.15 秒节拍）推进：控制区增援 + 护送伏兵触发
+func _update_objective_ai(dt: float) -> void:
+	if _zone_radius > 0.0 and _zone_hold_need > 0.0:
+		_tick_zone_reinforcement(dt)
+	if _escort_unit_id > 0:
+		_tick_escort_ambush()
+
+func _tick_zone_reinforcement(dt: float) -> void:
+	if _ai_zone_waves >= AI_ZONE_MAX_WAVES:
+		return
+	_ai_zone_timer -= dt
+	if _ai_zone_timer > 0.0:
+		return
+	var center := _contested_zone_center()
+	if center == Vector3.ZERO:
+		return
+	_ai_zone_timer = AI_ZONE_INTERVAL
+	_ai_zone_waves += 1
+	var from := enemy_spawn_point
+	if enemy_castle != null and is_instance_valid(enemy_castle):
+		from = enemy_castle.global_position
+	var spawn_pos := _find_spot_near(Vector3(from.x, 0.0, from.z), 20.0, 2.0)
+	if spawn_pos == Vector3.ZERO:
+		spawn_pos = from
+	var squad := _spawn_ambushers(spawn_pos, 5, false)
+	for unit in squad:
+		if is_instance_valid(unit) and unit.has_method("attack_move_to"):
+			unit.attack_move_to(center)
+			unit.garrison_point = center
+	if not squad.is_empty():
+		bm._show_hud_alert(
+			"敌军增援正赶往控制区（第 %d 波）" % _ai_zone_waves,
+			Color(1.0, 0.45, 0.25), [bm.enemy_team], bm.player_team,
+			GameSettings.AlertKind.COMBAT, false,
+			[bm.team_nations.get(bm.enemy_team, -1)], center, -1)
+
+# 找出"需要增援"的圈：玩家在圈里、敌人还没到，或玩家人数压过守军
+func _contested_zone_center() -> Vector3:
+	if _zone_radius > 0.0 and _zone_hold_need > 0.0:
+		if hold_seconds >= _zone_hold_need:
+			return Vector3.ZERO
+		var c := _zone_unit_counts(_zone_center, _zone_radius)
+		if int(c["mine"]) > 0 and int(c["mine"]) > int(c["theirs"]):
+			return _zone_center
+		return Vector3.ZERO
+	for z in _multi_zones:
+		if bool(z.get("done", false)):
+			continue
+		var center: Vector3 = z["center"]
+		var counts := _zone_unit_counts(center, float(z["radius"]))
+		if int(counts["mine"]) > int(counts["theirs"]):
+			return center
+	return Vector3.ZERO
+
+# 信使推进到路线相应比例时触发两翼伏兵
+func _tick_escort_ambush() -> void:
+	if _ai_escort_flags.is_empty():
+		return
+	if _escort_unit == null or not is_instance_valid(_escort_unit) or _escort_unit.health <= 0:
+		return
+	if state != State.RUNNING:
+		return
+	var total: float = player_anchor.distance_to(_escort_zone_center)
+	if total < 5.0:
+		return
+	var progress: float = clampf(
+		1.0 - _escort_unit.global_position.distance_to(_escort_zone_center) / total, 0.0, 1.0)
+	for i in range(AI_ESCORT_TRIGGERS.size()):
+		if bool(_ai_escort_flags[i]):
+			continue
+		if progress < float(AI_ESCORT_TRIGGERS[i]):
+			continue
+		_ai_escort_flags[i] = true
+		_trigger_escort_intercept(i)
+
+func _trigger_escort_intercept(index: int) -> void:
+	if _escort_unit == null or not is_instance_valid(_escort_unit):
+		return
+	var escort_pos: Vector3 = _escort_unit.global_position
+	var dir := Vector3(_escort_zone_center.x - escort_pos.x, 0.0, _escort_zone_center.z - escort_pos.z)
+	if dir.length() < 1.0:
+		dir = Vector3(0.0, 0.0, 1.0)
+	dir = dir.normalized()
+	var side := Vector3(-dir.z, 0.0, dir.x)
+	var base: Vector3 = escort_pos + dir * 18.0
+	var spawned_total := 0
+	for side_i in range(2):
+		var group := _find_spot_near(base + side * (7.0 if side_i == 0 else -7.0), 10.0, 2.0)
+		if group == Vector3.ZERO:
+			continue
+		var squad := _spawn_ambushers(group, 2, false)
+		for unit in squad:
+			if is_instance_valid(unit) and unit.has_method("attack_move_to"):
+				unit.attack_move_to(escort_pos)
+		spawned_total += squad.size()
+	if spawned_total > 0:
+		bm._show_hud_alert(
+			"伏兵从两翼杀出，保护信使！（第 %d 档）" % (index + 1),
+			Color(1.0, 0.35, 0.2), [bm.enemy_team], bm.player_team,
+			GameSettings.AlertKind.COMBAT, false,
+			[bm.team_nations.get(bm.enemy_team, -1)], escort_pos, -1)
+
+# 开局播报：告诉玩家敌人已经在目标点布防，别以为跑过去就能白拿
+func _announce_objective_guards() -> void:
+	var text := ""
+	if _zone_radius > 0.0 and _zone_hold_need > 0.0:
+		text = "敌军已抢先占据控制区并架起箭塔，带兵把他们赶出去"
+	elif not _multi_zones.is_empty():
+		text = "每处控制区都有敌军守军和箭塔，逐个拔掉"
+	elif _escort_unit_id > 0:
+		text = "护送路线两侧有敌军伏兵，路上还会不断有拦截部队"
+	if text.is_empty():
+		return
+	bm._show_hud_alert(text, Color(1.0, 0.55, 0.3), [bm.player_team], bm.player_team,
+		GameSettings.AlertKind.MISC, false, [bm.team_nations.get(bm.player_team, -1)],
+		player_anchor, -1)
+
 # 统计敌方指定建筑还活着几座（拆塔类目标的基线）
 func _count_enemy_buildings(ids: Array) -> int:
 	var n := 0
@@ -887,6 +1135,7 @@ func _process(delta: float) -> void:
 	_update_objective_states()
 	_update_zone(dt)
 	_update_multi_zones(dt)
+	_update_objective_ai(dt)
 	_update_endless(dt)
 	_update_escort_marker()
 	_update_warning()
@@ -1296,6 +1545,14 @@ func _update_defend(dt: float) -> void:
 
 func _update_warning() -> void:
 	warning_text = ""
+	# 3 星时限（7 分钟）过去后提示一次，让玩家知道这关已经拿不到 3 星
+	if not _endless_on and _three_star_time > 0.0 and not _three_star_warned and elapsed > _three_star_time:
+		_three_star_warned = true
+		bm._show_hud_alert(
+			"已超过 3★ 时限（%s），本关最多 2 星" % _fmt_time(_three_star_time),
+			Color(1.0, 0.7, 0.25), [bm.player_team], bm.player_team,
+			GameSettings.AlertKind.MISC, false, [bm.team_nations.get(bm.player_team, -1)],
+			player_anchor, -1)
 	# 波次预警：下一波 15 秒内提示
 	if _waves_fired < _waves.size():
 		var wave: Dictionary = _waves[_waves_fired]
@@ -1421,16 +1678,15 @@ func _compute_stars() -> int:
 	var star_cfg: Dictionary = level.get("stars", {})
 	var two: float = float(star_cfg.get("two", 0.0))
 	var three: float = float(star_cfg.get("three", 0.0))
+	# 3 星只认速度：7 分钟内通关，主城血量不能把慢通关补成 3 星
 	if three > 0.0 and elapsed <= three:
 		stars = 3
 	elif two > 0.0 and elapsed <= two:
 		stars = 2
-	# 有主城的关卡：主城血量也是评价标准（守得越好星级越高）
-	if player_castle != null and is_instance_valid(player_castle):
+	# 有主城的关卡：主城血量只作为 1★→2★ 的补救（最高 2 星，不越过时间门槛）
+	if stars < 3 and player_castle != null and is_instance_valid(player_castle):
 		var hp_pct: float = float(player_castle.health) / maxf(float(player_castle.max_health), 1.0)
-		if hp_pct >= 0.85 and stars < 3:
-			stars = 3
-		elif hp_pct >= 0.5 and stars < 2:
+		if hp_pct >= 0.85 and stars < 2:
 			stars = 2
 	return clampi(stars, 1, 3)
 
@@ -1500,6 +1756,9 @@ func _show_result(won: bool, stars: int) -> void:
 	var stats := Label.new()
 	var lines: Array = []
 	lines.append("用时：%s" % _fmt_time(elapsed))
+	if not _endless_on and _three_star_time > 0.0:
+		lines.append("3★ 门槛：%s 内通关（本关限时 %s）" % [
+			_fmt_time(_three_star_time), _fmt_time(_time_limit)])
 	if player_castle != null and is_instance_valid(player_castle):
 		var hp_pct: float = float(player_castle.health) / maxf(float(player_castle.max_health), 1.0)
 		lines.append("主城剩余血量：%d%%" % int(round(hp_pct * 100.0)))

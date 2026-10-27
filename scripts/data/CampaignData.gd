@@ -12,8 +12,8 @@ extends RefCounted
 # ── 字段说明 ──
 # map_id / map_seed    : 地图预设（scripts/map/MapPresets.gd）与固定种子，同一关每次地形一致
 # brief / tips         : 关卡简报与 3 条提示（选关界面显示）
-# time_limit           : 关卡总时限（秒），0 = 不限时
-# stars.two / .three   : 星级时间门槛（秒）：通关时间内 ≤ two 得 2 星、≤ three 得 3 星
+# time_limit           : 关卡总时限（秒）。统一 600 秒（10 分钟），0 = 不限时（仅无尽挑战）
+# stars.two / .three   : 星级时间门槛（秒）：统一 two = 600、three = 420，即 7 分钟内通关才 3 星
 # player / enemy       : 双方开局配置：
 #   castle     : 是否有主城（false = 没有主城，纯军队开局）
 #   ai         : 是否创建 AI 控制（false = 只用波次刷兵，敌人没有城堡也不发展）
@@ -44,6 +44,28 @@ extends RefCounted
 #   {"type": "kill_units", "unit_ids":[13], "count":8, "label":"…"}
 #                                                        击杀指定兵种（空 = 任意）数量
 # fail                 : 失败条件组合：army_wiped（全军覆没）/ castle_lost（主城被毁）/ timeout（超时）
+
+# ── 统一节奏规则（玩家要求：10 分钟硬上限、7 分钟内通关才 3 星）──
+# 数据表里每关仍单独写着 time_limit / stars，这里再兜一道：
+# 以后新增关卡忘记改也不会把时限放回 15、20 分钟。
+const TIME_LIMIT := 600.0
+const STAR_TWO_TIME := 600.0
+const STAR_THREE_TIME := 420.0
+
+# 把统一时限与星级门槛套到关卡副本上；无尽挑战不设时限，保持原样
+static func _normalize_level(lv: Dictionary) -> Dictionary:
+	for o in lv.get("objectives", []):
+		if String(o.get("type", "")) == "endless":
+			return lv
+	lv["time_limit"] = TIME_LIMIT
+	lv["stars"] = {"two": STAR_TWO_TIME, "three": STAR_THREE_TIME}
+	# 存活/防守目标不能比 3 星门槛更长，否则这类关卡永远拿不到 3 星
+	for o in lv.get("objectives", []):
+		var t := String(o.get("type", ""))
+		if t == "survive" or t == "defend_targets":
+			if float(o.get("duration", 0.0)) > STAR_THREE_TIME:
+				o["duration"] = STAR_THREE_TIME
+	return lv
 
 const CHAPTERS := [
 	{
@@ -89,7 +111,7 @@ const LEVELS := [
 			"攻城车对建筑伤害极高，先让步兵扛住箭塔，再用攻城车拆主城。",
 			"全军覆没而敌方主城还在，任务立即失败；没有主城就没法补兵。",
 		],
-		"time_limit": 900.0,
+		"time_limit": 600.0,
 		"stars": {"two": 600.0, "three": 420.0},
 		"player": {
 			"nation": 2,
@@ -140,8 +162,8 @@ const LEVELS := [
 			"六波从第 1 分钟起每分钟一波，最后一波带火炮和攻城车。",
 			"主城被拆就失败；撑过 7 分钟即胜利，主城血量越高星级越高。",
 		],
-		"time_limit": 0.0,
-		"stars": {"two": 420.0, "three": 420.0},
+		"time_limit": 600.0,
+		"stars": {"two": 600.0, "three": 420.0},
 		"player": {
 			"nation": 0,
 			"castle": true,
@@ -217,7 +239,7 @@ const LEVELS := [
 		"objectives": [
 			{"type": "survive", "duration": 420.0, "label": "守住 7 分钟"},
 		],
-		"fail": ["castle_lost"],
+		"fail": ["castle_lost", "timeout"],
 	},
 
 	# ── 第 3 关：占领任务，双方都有主城，靠控制中央区域取胜 ──
@@ -236,7 +258,7 @@ const LEVELS := [
 			"累计占满 120 秒即胜利；主城被拆或超过 10 分钟失败。",
 		],
 		"time_limit": 600.0,
-		"stars": {"two": 450.0, "three": 350.0},
+		"stars": {"two": 600.0, "three": 420.0},
 		"player": {
 			"nation": 6,
 			"castle": true,
@@ -286,10 +308,10 @@ const LEVELS := [
 		"tips": [
 			"信使是队伍里头顶挂蓝色标记的侦察兵，跑得快但很脆，别让他冲在最前面。",
 			"伏兵会在 1:30 / 2:30 / 3:30 / 4:30 从林子两侧杀出来，用步兵把他围在中间。",
-			"信使阵亡立即失败；主城被拆或超过 7 分钟也失败。",
+			"信使阵亡立即失败；主城被拆或超过 10 分钟也失败。",
 		],
-		"time_limit": 420.0,
-		"stars": {"two": 300.0, "three": 240.0},
+		"time_limit": 600.0,
+		"stars": {"two": 600.0, "three": 420.0},
 		"player": {
 			"nation": 1,
 			"castle": true,
@@ -338,10 +360,10 @@ const LEVELS := [
 		"tips": [
 			"渡口地面上的绿色色块 + 空中倒计时就是控制区（横跨桥面，圈内允许有水），小地图会定时闪点。",
 			"占领按人数比：我军比敌人多才计时（混战半速），势均力敌暂停，敌人多就倒退。",
-			"主城被拆或超过 15 分钟失败；累计占满 90 秒即胜利。",
+			"主城被拆或超过 10 分钟失败；累计占满 90 秒即胜利。",
 		],
-		"time_limit": 900.0,
-		"stars": {"two": 600.0, "three": 480.0},
+		"time_limit": 600.0,
+		"stars": {"two": 600.0, "three": 420.0},
 		"player": {
 			"nation": 3,
 			"castle": true,
@@ -390,10 +412,10 @@ const LEVELS := [
 		"tips": [
 			"火炮（16）射程比箭塔远，先用火炮点掉最外圈的塔。",
 			"攻城车（18）专门拆建筑，但很脆，需要步兵在前面挡刀。",
-			"4 座塔全倒即胜利；主城被拆或超过 15 分钟失败。",
+			"4 座塔全倒即胜利；主城被拆或超过 10 分钟失败。",
 		],
-		"time_limit": 900.0,
-		"stars": {"two": 660.0, "three": 500.0},
+		"time_limit": 600.0,
+		"stars": {"two": 600.0, "three": 420.0},
 		"player": {
 			"nation": 4,
 			"castle": true,
@@ -450,7 +472,7 @@ const LEVELS := [
 			"主城被毁或超过 10 分钟失败；岸炮和战船集火先打最前面那艘。",
 		],
 		"time_limit": 600.0,
-		"stars": {"two": 420.0, "three": 330.0},
+		"stars": {"two": 600.0, "three": 420.0},
 		"player": {
 			"nation": 0,
 			"castle": true,
@@ -503,10 +525,10 @@ const LEVELS := [
 		"tips": [
 			"开局有 10 个农民，优先采矿和金矿，木头够用就行。",
 			"敌人会持续骚扰矿区，留 3~4 个步兵在采集点附近驻守。",
-			"累计采集量只算进账，花出去的不会被扣；主城被拆或超过 15 分钟失败。",
+			"累计采集量只算进账，花出去的不会被扣；主城被拆或超过 10 分钟失败。",
 		],
-		"time_limit": 900.0,
-		"stars": {"two": 600.0, "three": 480.0},
+		"time_limit": 600.0,
+		"stars": {"two": 600.0, "three": 420.0},
 		"player": {
 			"nation": 8,
 			"castle": true,
@@ -550,10 +572,10 @@ const LEVELS := [
 		"tips": [
 			"城墙南北各有一段，东西两侧是开口，从侧翼绕进去比正面撞墙划算。",
 			"敌人 AI 会出骑兵反冲，攻城车一定要留步兵保护。",
-			"摧毁敌方主城即胜利；我方主城被拆或超过 20 分钟失败。",
+			"摧毁敌方主城即胜利；我方主城被拆或超过 10 分钟失败。",
 		],
-		"time_limit": 1200.0,
-		"stars": {"two": 900.0, "three": 720.0},
+		"time_limit": 600.0,
+		"stars": {"two": 600.0, "three": 420.0},
 		"player": {
 			"nation": 6,
 			"castle": true,
@@ -612,14 +634,14 @@ const LEVELS := [
 		"subtitle": "防守任务 · 挡住七波总攻",
 		"map_id": "crater",
 		"map_seed": 10011,
-		"brief": "这是最后一座城。\n陨石坑边的城墙是三天前才补好的，敌人把全部家当都压上来了：七波，一波比一波狠。\n撑过 8 分钟，援军就会赶到。",
+		"brief": "这是最后一座城。\n陨石坑边的城墙是三天前才补好的，敌人把全部家当都压上来了：七波，一波比一波狠。\n撑过 7 分钟，援军就会赶到。",
 		"tips": [
 			"每 1 分钟一波，第七波带 4 台火炮和 3 台攻城车，提前把攻城车集火掉。",
 			"城墙东西两侧各留了一个缺口，用步兵堵口、弓箭手在墙后输出。",
-			"主城被拆即失败；撑满 8 分钟胜利，主城血量越高星级越高。",
+			"主城被拆即失败；撑满 7 分钟胜利，主城血量越高星级越高。",
 		],
-		"time_limit": 0.0,
-		"stars": {"two": 480.0, "three": 480.0},
+		"time_limit": 600.0,
+		"stars": {"two": 600.0, "three": 420.0},
 		"player": {
 			"nation": 2,
 			"castle": true,
@@ -666,9 +688,9 @@ const LEVELS := [
 			"pop_cap": 120,
 		},
 		"objectives": [
-			{"type": "survive", "duration": 480.0, "label": "守住 8 分钟"},
+			{"type": "survive", "duration": 420.0, "label": "守住 7 分钟"},
 		],
-		"fail": ["castle_lost"],
+		"fail": ["castle_lost", "timeout"],
 	},
 	# ── 第 11 关：防守任务，敌人专拆粮仓，守到援军抵达 ──
 	{
@@ -685,8 +707,8 @@ const LEVELS := [
 			"敌人分两路来，两座粮仓都有危险，别把兵全堆在一边。",
 			"粮仓全毁或主城被拆即失败。",
 		],
-		"time_limit": 480.0,
-		"stars": {"two": 350.0, "three": 300.0},
+		"time_limit": 600.0,
+		"stars": {"two": 600.0, "three": 420.0},
 		"player": {
 			"nation": 3,
 			"castle": true,
@@ -737,10 +759,10 @@ const LEVELS := [
 		"tips": [
 			"两个渡口各有一个控制区，都会在地图上标出，各累计占满 60 秒才算胜利。",
 			"两边同时告急时优先保住已经计时较多的一边，别来回跑空。",
-			"主城被拆或超过 15 分钟失败。",
+			"主城被拆或超过 10 分钟失败。",
 		],
-		"time_limit": 900.0,
-		"stars": {"two": 600.0, "three": 450.0},
+		"time_limit": 600.0,
+		"stars": {"two": 600.0, "three": 420.0},
 		"player": {
 			"nation": 6,
 			"castle": true,
@@ -792,10 +814,10 @@ const LEVELS := [
 		"tips": [
 			"三座粮仓比主城靠前，先拆粮仓再考虑主城。",
 			"敌军每隔一分半反扑一次，拆粮时别把部队全送进去。",
-			"主城被拆或超过 12 分钟失败。",
+			"主城被拆或超过 10 分钟失败。",
 		],
-		"time_limit": 720.0,
-		"stars": {"two": 540.0, "three": 420.0},
+		"time_limit": 600.0,
+		"stars": {"two": 600.0, "three": 420.0},
 		"player": {
 			"nation": 3,
 			"castle": true,
@@ -857,7 +879,7 @@ const LEVELS := [
 			"主城被拆或超过 10 分钟失败。",
 		],
 		"time_limit": 600.0,
-		"stars": {"two": 420.0, "three": 330.0},
+		"stars": {"two": 600.0, "three": 420.0},
 		"player": {
 			"nation": 3,
 			"castle": true,
@@ -898,10 +920,10 @@ const LEVELS := [
 		"tips": [
 			"选中陆军、右键点自己的运载船即可登船；到对岸滩头后右键陆地卸船。",
 			"运载船很脆，先让战船把敌方水面力量清掉再渡海。",
-			"主城被拆、部队全灭或超过 15 分钟失败。",
+			"主城被拆、部队全灭或超过 10 分钟失败。",
 		],
-		"time_limit": 900.0,
-		"stars": {"two": 600.0, "three": 480.0},
+		"time_limit": 600.0,
+		"stars": {"two": 600.0, "three": 420.0},
 		"player": {
 			"nation": 0,
 			"castle": true,
@@ -958,10 +980,10 @@ const LEVELS := [
 		"tips": [
 			"敌人在山中据守，六个山口都有箭塔，先拔塔再进宫。",
 			"每 60 秒会有一波援军从山口空降，别把攻城部队全压在城里。",
-			"主城被拆或超过 20 分钟失败。",
+			"主城被拆或超过 10 分钟失败。",
 		],
-		"time_limit": 1200.0,
-		"stars": {"two": 840.0, "three": 660.0},
+		"time_limit": 600.0,
+		"stars": {"two": 600.0, "three": 420.0},
 		"player": {
 			"nation": 3,
 			"castle": true,
@@ -1027,10 +1049,10 @@ const LEVELS := [
 		"tips": [
 			"两个控制区分别在两座台地顶上，坡道是唯一入口，先堵坡再占点。",
 			"台地视野 +25%，站上高点能提前看到敌人从哪条坡道上。",
-			"主城被拆或超过 15 分钟失败。",
+			"主城被拆或超过 10 分钟失败。",
 		],
-		"time_limit": 900.0,
-		"stars": {"two": 600.0, "three": 450.0},
+		"time_limit": 600.0,
+		"stars": {"two": 600.0, "three": 420.0},
 		"player": {
 			"nation": 7,
 			"castle": true,
@@ -1132,7 +1154,7 @@ const LEVELS := [
 			"击沉 12 艘火船即胜利；主城被拆或超过 10 分钟失败。",
 		],
 		"time_limit": 600.0,
-		"stars": {"two": 450.0, "three": 360.0},
+		"stars": {"two": 600.0, "three": 420.0},
 		"player": {
 			"nation": 3,
 			"castle": true,
@@ -1175,7 +1197,10 @@ const LEVELS := [
 
 # 全部关卡（深拷贝：调用方可安全修改返回值）
 static func all_levels() -> Array:
-	return LEVELS.duplicate(true)
+	var out: Array = []
+	for lv in LEVELS:
+		out.append(_normalize_level(lv.duplicate(true)))
+	return out
 
 # 全部章节
 static func all_chapters() -> Array:
@@ -1185,14 +1210,14 @@ static func all_chapters() -> Array:
 static func get_level(level_id: String) -> Dictionary:
 	for lv in LEVELS:
 		if String(lv.get("id", "")) == level_id:
-			return lv.duplicate(true)
+			return _normalize_level(lv.duplicate(true))
 	return {}
 
 # 全部关卡（按 index 排序，跨章节统一编号）
 static func playable_levels() -> Array:
 	var out: Array = []
 	for lv in LEVELS:
-		out.append(lv.duplicate(true))
+		out.append(_normalize_level(lv.duplicate(true)))
 	out.sort_custom(func(a, b): return int(a.get("index", 0)) < int(b.get("index", 0)))
 	return out
 

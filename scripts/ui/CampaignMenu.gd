@@ -290,7 +290,11 @@ func _objective_text(level: Dictionary) -> String:
 	var text := "；".join(labels)
 	var limit := float(level.get("time_limit", 0.0))
 	if limit > 0.0:
-		text += "（限时 %d 分钟）" % int(limit / 60.0)
+		text += "（限时 %d 分钟" % int(limit / 60.0)
+		var three := float(level.get("stars", {}).get("three", 0.0))
+		if three > 0.0:
+			text += " · %d 分钟内通关 3★" % int(three / 60.0)
+		text += "）"
 	return text
 
 func _start_level(level: Dictionary) -> void:
