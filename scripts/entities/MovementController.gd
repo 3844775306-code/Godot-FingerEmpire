@@ -58,7 +58,7 @@ const DIRECT_CHECK_CACHE_MS: int = 250
 var _direct_check_result: bool = true
 var _direct_check_ms: int = 0
 
-# 路径预览：一条贴地流动的指引带（替代原来那一串青色小球），只给第一个选中单位画。
+# 路径预览：一条贴地流动的指引带（替代原来那一串青色小球），每支选中军队各一条。
 var _path_guide: GroundPathGuide = null
 var _path_preview_points: Array = []  # 当前指引带使用的路径点，用来判断是否需要重建
 var _path_preview_tail: Array = []    # 除排头之外还剩的路径点（用来判断路径是否被消费掉）
@@ -765,7 +765,7 @@ func _separate_from(entity: GameEntity, delta: float, bm: RTSBattleManager) -> v
 
 # 路径预览：用一条贴地流动的指引带代替原来那一串青色小球。
 # 指引带内部逐顶点贴地，并自带「起点淡出 + 末端呼吸落点环」，所以不再需要绿球标终点。
-# 只有「第一个被选中的单位」才画；路径点没变就沿用现有节点，不重复生成网格。
+# 每支被选中的军队各画自己的路径；路径点没变就沿用现有节点，不重复生成网格。
 func _show_path():
 	if astar_path.size() < 2:
 		_hide_path()
@@ -774,12 +774,6 @@ func _show_path():
 	if bm == null:
 		_hide_path()
 		return
-	# 框选大部队时只为第一个选中单位绘制路径，避免几十/上百条路径同时生成。
-	if bm.selection != null and bm.selection.selected_entities.size() > 1:
-		if bm.selection.selected_entities[0] != _army:
-			# 多选状态下不该有路径带：顺手收掉可能残留的那一条
-			_hide_path()
-			return
 	# 单条长路径也不逐格取点，按固定上限抽样；尾点始终保留。
 	# 排头用单位当前位置，这样线始终从脚下开始，走一段收一段（实时缩短）。
 	var head: Vector3 = _army.global_position
