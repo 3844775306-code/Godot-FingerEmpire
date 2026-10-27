@@ -343,9 +343,16 @@ func _ensure_age_upgrade_buildings() -> void:
 # age1：2 座 [兵营(21)/瞭望塔(41)]。AI 的普通目标只造兵营，经常没有瞭望塔。
 func _ensure_age1_required_buildings() -> void:
 	for _attempt in range(2):
-		var b21: int = count_building(21)
-		var b41: int = count_building(41)
-		if b21 + b41 >= 2:
+		var info: Dictionary = _age_building_counts([21, 41])
+		var counts: Dictionary = info["counts"]
+		var b21: int = int(counts.get(21, 0))
+		var b41: int = int(counts.get(41, 0))
+		if int(info["total"]) >= 2:
+			return
+		# 升时代只认“已完成建筑”。如果地基已经拍下但农民被杀/被调走，建筑会永久停工；
+		# 旧逻辑把地基也算进数量，于是 AI 会一直以为条件已满足，永远不补建。
+		if not _age_pending_buildings([21, 41]).is_empty():
+			_ensure_age_pending_builders([21, 41])
 			return
 		var candidates: Array = []
 		if b21 >= 1 and b41 == 0:
@@ -369,6 +376,9 @@ func _ensure_age2_required_buildings() -> void:
 		var info: Dictionary = _age_building_counts(ids)
 		var counts: Dictionary = info["counts"]
 		if int(info["total"]) >= 3 and int(info["types"]) >= 2:
+			return
+		if not _age_pending_buildings(ids).is_empty():
+			_ensure_age_pending_builders(ids)
 			return
 		var candidates: Array = []
 		# 先补“完全没有的类型”，避免 3 座全是攻城车间却凑不出 2 种类型。
@@ -396,6 +406,9 @@ func _ensure_age3_required_buildings() -> void:
 		var counts: Dictionary = info["counts"]
 		if int(info["total"]) >= 4 and int(counts.get(53, 0)) >= 2:
 			return
+		if not _age_pending_buildings(ids).is_empty():
+			_ensure_age_pending_builders(ids)
+			return
 		var candidates: Array = []
 		if int(counts.get(53, 0)) < 2:
 			candidates.append(53)
@@ -413,18 +426,43 @@ func _ensure_age3_required_buildings() -> void:
 		if not built:
 			return
 
+# 只统计已完成的时代条件建筑（建造中的地基不能算数）。
 func _age_building_counts(ids: Array) -> Dictionary:
 	var counts: Dictionary = {}
 	var total: int = 0
 	var types: int = 0
-	for raw in ids:
-		var bid: int = int(raw)
-		var cnt: int = count_building(bid)
-		counts[bid] = cnt
-		total += cnt
-		if cnt > 0:
+	for b in _cached_buildings():
+		if not is_instance_valid(b) or b.health <= 0 or b.build_timer > 0.0:
+			continue
+		if not (b.entity_id in ids) or not entity_belongs_to_me(b):
+			continue
+		counts[b.entity_id] = int(counts.get(b.entity_id, 0)) + 1
+		total += 1
+	for bid in ids:
+		if int(counts.get(int(bid), 0)) > 0:
 			types += 1
 	return {"counts": counts, "total": total, "types": types}
+
+# 当前正在建造、且属于升时代条件的己方建筑。
+func _age_pending_buildings(ids: Array) -> Array:
+	var out: Array = []
+	for b in _cached_buildings():
+		if not is_instance_valid(b) or b.health <= 0 or b.build_timer <= 0.0:
+			continue
+		if b.entity_id in ids and entity_belongs_to_me(b):
+			out.append(b)
+	return out
+
+# 给停工的地基补派农民，避免“地基永远建不完、条件永远差一座”。
+func _ensure_age_pending_builders(ids: Array) -> int:
+	var assigned: int = 0
+	if battle == null or not battle.has_method("assign_builders"):
+		return assigned
+	for b in _age_pending_buildings(ids):
+		if int(b.get("builder_count_cache")) <= 0 or bool(b.get("awaiting_builder")):
+			if battle.assign_builders(b, []) > 0:
+				assigned += 1
+	return assigned
 
 func _try_build_age_requirement(building_id: int) -> bool:
 	if not _ai_can_build(building_id):
