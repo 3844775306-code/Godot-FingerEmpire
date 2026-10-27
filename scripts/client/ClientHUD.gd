@@ -300,10 +300,13 @@ func _update_stats_capsule(res: Dictionary, lim: Dictionary, pop: int, max_pop: 
 			var cap: int = int(lim.get(rk, 0))
 			var full: bool = cap > 0 and cur >= cap
 			l.add_theme_color_override("font_color", UITheme.ALERT_DANGER if full else _res_color_for(rk))
-	# 胶囊宽度跟随内容：开局数字短时紧凑，后期四五位数也不会被截断
+	# 胶囊宽度跟随内容：开局数字短时紧凑，后期四五位数也不会被截断；
+	# 位置与宽度统一交给顶部带布局，保证不会顶到居中的指令栏。
 	if _capsule_row != null and _stats_capsule != null:
 		var need: float = _capsule_row.get_combined_minimum_size().x + 32.0
-		_stats_capsule.size.x = maxf(580.0, need)
+		var rect := UILayout.top_capsule_rect(get_viewport().get_visible_rect().size, need)
+		_stats_capsule.position = rect.position
+		_stats_capsule.size = rect.size
 
 # 折叠后的胶囊：一行显示人口与五项资源，点击展开回完整统计面板
 func _create_stats_capsule() -> void:
@@ -680,20 +683,8 @@ func show_alert_message(msg: String, color: Color = ALERT_DANGER, teams = [], al
 		_alert_stack.name = "AlertStack"
 		_alert_stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
 		_alert_stack.add_theme_constant_override("separation", 2 if mobile else 4)
-		if mobile:
-			var portrait := UILayout.is_portrait()
-			var w: float = UILayout.dp(300.0 if portrait else 310.0)
-			# 横屏贴顶部；竖屏小地图在胶囊下方，警报再往下让开
-			var top_y: float = UILayout.dp(154.0 if portrait else 76.0)
-			_alert_stack.anchor_left = 0.5; _alert_stack.anchor_right = 0.5
-			_alert_stack.anchor_top = 0.0; _alert_stack.anchor_bottom = 0.0
-			_alert_stack.offset_left = -w * 0.5; _alert_stack.offset_right = w * 0.5
-			_alert_stack.offset_top = top_y; _alert_stack.offset_bottom = top_y
-		else:
-			_alert_stack.position = Vector2(752, 194)
-			_alert_stack.custom_minimum_size = Vector2(820, 0)
-			_alert_stack.size = Vector2(820, 0)
 		add_child(_alert_stack)
+		_layout_alert_stack()
 
 	# 每行一个半透明背景块：纯文字压在战场上读不清，但也不能变回实心黑条挡住战场
 	var holder := PanelContainer.new()
@@ -927,30 +918,18 @@ func _ready():
 		cmd_grid.add_child(b)
 
 	var research_btn := Button.new()
+	# 科研模式入口：桌面挂在小地图下方右对齐；手机按横竖屏挂到胶囊/小地图下方。
 	research_btn.name = "ResearchButton"
 	research_btn.text = "🔬 科研树 (T)"
-	research_btn.position = Vector2(1440, 110)
 	research_btn.size = Vector2(260, 40)
 	UITheme.apply_muted_button(research_btn, 17)
 	research_btn.pressed.connect(_open_research_panel)
 	add_child(research_btn)
 	research_btn.visible = GameSettings.is_research_mode()
 
-	# 顶部两行信息：第一行性能、第二行对局/网络信息（只保留这两条）
-	# 桌面端偏右（0.675）避开左侧全局指令按钮与右上小地图；
-	# 手机端贴在资源胶囊右侧、与胶囊同一条高度带（胶囊左边距 2dp、宽 344dp），
-	# 右边缘停在小地图（右上角 154dp）左边，互不遮挡。
-	var mobile := InputSource.use_mobile_ui()
-	var center_anchor: float = 0.0 if mobile else 0.675
-	_top_is_right = false
-	var f1: int = UILayout.font_dp(10.5) if mobile else 24
-	var f2: int = UILayout.font_dp(9.5) if mobile else 22
-	var y1: float = UILayout.dp(18.0) if mobile else 6.0
-	var line_h: float = UILayout.dp(18.0) if mobile else 34.0
-	var half_w: float = UILayout.dp(146.0) if mobile else 560.0
-	_top_mobile_left = UILayout.safe_insets().x + UILayout.dp(2.0 + 344.0 + 8.0)
-	_top_top_y = y1
-	_top_line_h = line_h
+	# 顶部两行信息：第一行性能、第二行对局/网络信息。
+	# 位置不写死：桌面优先塞进指令栏与小地图之间的空档（放不下就落到指令栏正下方），
+	# 手机横屏夹在资源胶囊与小地图之间，竖屏隐藏，统一由 _layout_top_info() 计算。
 	var diag := CanvasLayer.new()
 	diag.name = "TopInfoLayer"
 	diag.layer = 90
@@ -959,21 +938,17 @@ func _ready():
 	_top_bg.name = "TopInfoBG"
 	_top_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	_top_bg.z_index = 89
-	_top_bg.anchor_left = center_anchor
-	_top_bg.anchor_right = center_anchor
-	_top_bg.anchor_top = 0.0
-	_top_bg.anchor_bottom = 0.0
 	var bg_style := StyleBoxFlat.new()
 	bg_style.bg_color = Color(0.0, 0.0, 0.0, 0.45)
 	bg_style.set_corner_radius_all(int(UILayout.dp(6.0)))
 	_top_bg.add_theme_stylebox_override("panel", bg_style)
 	diag.add_child(_top_bg)
-	_fps_label = _make_top_label(diag, "DiagFPS", y1, line_h, f1, half_w, center_anchor, Color.LIME_GREEN)
-	_net_stat_label = _make_top_label(diag, "DiagInfo", y1 + line_h, line_h, f2, half_w, center_anchor, Color(1.0, 0.9, 0.3))
+	_fps_label = _make_top_label(diag, "DiagFPS", 24 if not InputSource.use_mobile_ui() else UILayout.font_dp(10.5), Color.LIME_GREEN)
+	_net_stat_label = _make_top_label(diag, "DiagInfo", 22 if not InputSource.use_mobile_ui() else UILayout.font_dp(9.5), Color(1.0, 0.9, 0.3))
+	_top_line_h = UILayout.dp(18.0) if InputSource.use_mobile_ui() else 34.0
 	# 游戏时间 / 延迟已并入第二行，不再单独显示
 	_game_time_label = null
 	_ping_label = null
-	_update_top_bg()
 
 	set_process(true)
 	add_to_group("client_hud")
@@ -987,7 +962,7 @@ func _ready():
 		_mobile_hud = MobileHUD.new()
 		add_child(_mobile_hud)
 		_mobile_hud.setup(self)
-		_apply_mobile_top_layout()
+	_layout_top_band()
 
 	# 服务器警报：走 NetworkManager 的可靠 RPC 信号（快照里的 alerts 已弃用，丢包就永久丢失）
 	if NetworkManager.has_signal("client_alert_received"):
@@ -998,6 +973,7 @@ func _ready():
 # 所有移动组件（资源胶囊/小地图/指令栏/信息面板）都在构建时按 dp 算尺寸，
 # 重建一遍才能让竖屏的 6.3 倍 dp 生效。
 func _on_viewport_size_changed() -> void:
+	_layout_top_band()
 	if not InputSource.use_mobile_ui():
 		return
 	var now := UILayout.is_portrait()
@@ -1019,42 +995,118 @@ func _rebuild_mobile_hud_for_orientation() -> void:
 	_mobile_hud = MobileHUD.new()
 	add_child(_mobile_hud)
 	_mobile_hud.setup(self)
-	_apply_mobile_top_layout()
+	_layout_top_band()
+
+# 顶部带统一排布：资源胶囊 / 指令栏 / 小地图 / 顶部信息栏 / 科研入口 / 战况栏一次算好，
+# 元素之间固定留出空隙，窄屏时信息栏自动改到指令栏下方，避免互相压住。
+func _layout_top_band() -> void:
+	var vp := get_viewport().get_visible_rect().size
+	var mobile := InputSource.use_mobile_ui()
+	if _cmd_panel != null:
+		var cmd_rect := UILayout.top_cmd_rect(vp)
+		_cmd_panel.position = cmd_rect.position
+		_cmd_panel.size = cmd_rect.size
+	if _stats_capsule != null and not mobile:
+		var cap_rect := UILayout.top_capsule_rect(vp, _stats_capsule.size.x)
+		_stats_capsule.position = cap_rect.position
+		_stats_capsule.size = cap_rect.size
+	if not mobile:
+		var mm := get_node_or_null("../Minimap") as Control
+		if mm != null:
+			var mm_rect := UILayout.top_minimap_rect(vp)
+			UILayout.place(mm, 1.0, 0.0, -UILayout.TOP_MARGIN - mm_rect.size.x,
+					UILayout.TOP_MARGIN, -UILayout.TOP_MARGIN, UILayout.TOP_MARGIN + mm_rect.size.y)
+	var rb := get_node_or_null("ResearchButton") as Control
+	if rb != null and rb.visible:
+		_place_research_entry(rb, vp, mobile)
+	_layout_top_info()
 	_layout_alert_stack()
 
-# 顶部两行性能/网络文字会占掉资源胶囊右侧的空间；竖屏没有那么多横向空间，
-# 先隐藏（桌面端和手机横屏仍保留）。旋转回横屏时恢复并重新贴到胶囊右侧。
-func _apply_mobile_top_layout() -> void:
-	if not InputSource.use_mobile_ui():
-		return
-	var portrait := UILayout.is_portrait()
-	_top_mobile_left = UILayout.safe_insets().x + UILayout.dp(2.0 + 344.0 + 8.0)
-	var half_w: float = UILayout.dp(146.0)
-	for lb in [_fps_label, _net_stat_label]:
-		if lb == null or not is_instance_valid(lb):
-			continue
-		lb.visible = not portrait
-		if not portrait:
-			lb.offset_left = _top_mobile_left
-			lb.offset_right = _top_mobile_left + half_w
-	if _top_bg != null and is_instance_valid(_top_bg):
-		_top_bg.visible = not portrait
+# 科研入口：桌面放小地图下方右对齐；手机竖屏放胶囊下方左侧、横屏放小地图下方右侧，
+# 都避开居中战况栏，并按 dp 放大到可点击尺寸。
+func _place_research_entry(rb: Control, vp: Vector2, mobile: bool) -> void:
+	if mobile:
+		var cap_rect := UILayout.top_capsule_rect(vp, vp.x)
+		if _mobile_hud != null and is_instance_valid(_mobile_hud):
+			var cap = _mobile_hud.get("capsule")
+			if cap is Control and (cap as Control).visible:
+				cap_rect = (cap as Control).get_global_rect()
+		var r := UILayout.mobile_research_rect(cap_rect)
+		if r.size.x <= 0.0:
+			rb.visible = false
+			return
+		rb.add_theme_font_size_override("font_size", UILayout.font_dp(12.0))
+		rb.add_theme_constant_override("icon_max_width", int(UILayout.dp(16.0)))
+		rb.custom_minimum_size = r.size
+		rb.size = r.size
+		rb.position = r.position
+	else:
+		var r2 := UILayout.top_research_rect(vp)
+		rb.custom_minimum_size = r2.size
+		rb.size = r2.size
+		rb.position = r2.position
 
-# 警报栈在竖屏时挪到小地图下方，避免压住右上角小地图。
+# 顶部信息栏：桌面塞进指令栏与小地图之间（塞不下落到指令栏下方居中），
+# 手机横屏夹在胶囊与小地图之间，竖屏隐藏；文字超长用省略号截断，绝不越界压到邻块。
+func _layout_top_info() -> void:
+	if _top_bg == null or not is_instance_valid(_top_bg):
+		return
+	if _fps_label == null or _net_stat_label == null:
+		return
+	var vp := get_viewport().get_visible_rect().size
+	var rect := Rect2()
+	if InputSource.use_mobile_ui():
+		var cap_rect := Rect2()
+		if _mobile_hud != null and is_instance_valid(_mobile_hud):
+			var cap = _mobile_hud.get("capsule")
+			if cap is Control and (cap as Control).visible:
+				cap_rect = (cap as Control).get_global_rect()
+		if cap_rect.size.x <= 0.0:
+			cap_rect = UILayout.top_capsule_rect(vp, UILayout.dp(UILayout.MOBILE_CAPSULE_W_DP))
+		rect = UILayout.mobile_top_info_rect(cap_rect)
+	else:
+		rect = UILayout.top_info_rect(vp)
+	_top_rect = rect
+	var show := rect.size.x > 0.0 and rect.size.y > 0.0
+	_top_bg.visible = show
+	_fps_label.visible = show
+	_net_stat_label.visible = show
+	if not show:
+		return
+	# 底板与信息栏矩形完全一致（不再向外扩），这样右边缘不会压到小地图；
+	# 两行文字各占一半高度，超长省略号截断。
+	var pad_x := UILayout.dp(8.0)
+	var line_h: float = rect.size.y * 0.5
+	_top_bg.position = rect.position
+	_top_bg.size = rect.size
+	_fps_label.position = rect.position + Vector2(pad_x, 0.0)
+	_fps_label.size = Vector2(rect.size.x - pad_x * 2.0, line_h)
+	_net_stat_label.position = rect.position + Vector2(pad_x, line_h)
+	_net_stat_label.size = Vector2(rect.size.x - pad_x * 2.0, line_h)
+
+# 战况栏：桌面放指令底板正下方居中；手机横屏在胶囊下方，竖屏再往下让开小地图。
 func _layout_alert_stack() -> void:
 	if _alert_stack == null or not is_instance_valid(_alert_stack):
 		return
-	if not InputSource.use_mobile_ui():
+	if InputSource.use_mobile_ui():
+		var r := UILayout.mobile_alert_rect()
+		_alert_stack.anchor_left = 0.5
+		_alert_stack.anchor_right = 0.5
+		_alert_stack.anchor_top = 0.0
+		_alert_stack.anchor_bottom = 0.0
+		_alert_stack.offset_left = -r.size.x * 0.5
+		_alert_stack.offset_right = r.size.x * 0.5
+		_alert_stack.offset_top = r.position.y
+		_alert_stack.offset_bottom = r.position.y
 		return
-	var portrait := UILayout.is_portrait()
-	var w: float = UILayout.dp(300.0 if portrait else 310.0)
-	var top_y: float = UILayout.dp(154.0 if portrait else 76.0)
-	_alert_stack.anchor_left = 0.5
-	_alert_stack.anchor_right = 0.5
-	_alert_stack.offset_left = -w * 0.5
-	_alert_stack.offset_right = w * 0.5
-	_alert_stack.offset_top = top_y
-	_alert_stack.offset_bottom = top_y
+	var rd := UILayout.top_alert_rect(get_viewport().get_visible_rect().size)
+	_alert_stack.anchor_left = 0.0
+	_alert_stack.anchor_right = 0.0
+	_alert_stack.anchor_top = 0.0
+	_alert_stack.anchor_bottom = 0.0
+	_alert_stack.position = rd.position
+	_alert_stack.custom_minimum_size = Vector2(rd.size.x, 0)
+	_alert_stack.size = Vector2(rd.size.x, 0)
 
 # 收到服务器警报：直接走本地播报条
 func _on_server_alert(msg: String, color: Color, alert_id: int = 0, teams = [], alert_kind: int = 0, is_castle: bool = false, nations: Array = [], alert_pos: Vector3 = Vector3.ZERO, source_owner: int = -1) -> void:
@@ -1135,71 +1187,22 @@ var _ping_label: Label = null
 var _net_stat_label: Label = null
 var _ping_rtt: int = 0
 var _top_bg: Panel = null
-var _top_top_y: float = 6.0
 var _top_line_h: float = 34.0
-# 手机端顶部信息面板贴在资源胶囊右侧（左对齐），桌面端仍是居中偏右
-var _top_is_right: bool = false
-# 手机端左对齐时面板左边缘（安全边距 + 胶囊 2+344dp + 间隙 8dp）
-var _top_mobile_left: float = 0.0
+var _top_rect: Rect2 = Rect2()
 
-# 半透明底板按两行文字的实际宽度自适应
+# 顶部信息栏的文字宽度不再决定底板尺寸：位置/尺寸由 _layout_top_info() 统一给，
+# 文字超长时用省略号截断，避免把底板顶到指令栏或小地图上。
 func _update_top_bg() -> void:
-	if _top_bg == null or not is_instance_valid(_top_bg) or _fps_label == null:
-		return
-	if not _top_bg.visible:
-		return
-	var pad_x: float = UILayout.dp(10.0)
-	var pad_y: float = UILayout.dp(4.0)
-	var text_w: float = _fps_label.get_minimum_size().x
-	if _net_stat_label:
-		text_w = maxf(text_w, _net_stat_label.get_minimum_size().x)
-	var w: float = text_w + pad_x * 2.0
-	var h: float = _top_line_h * 2.0 + pad_y * 2.0
-	var bg_top: float = maxf(_top_top_y - pad_y, 0.0)
-	if _top_mobile_left > 0.0:
-		# 手机端：左对齐固定宽度，文字再长也不往小地图那边长
-		_top_bg.offset_left = _top_mobile_left - pad_x
-		_top_bg.offset_right = _top_mobile_left + UILayout.dp(146.0) + pad_x
-	elif _top_is_right:
-		var m: float = UILayout.dp(6.0)
-		_top_bg.offset_left = -w - m
-		_top_bg.offset_right = -m
-	else:
-		_top_bg.offset_left = -w * 0.5
-		_top_bg.offset_right = w * 0.5
-	_top_bg.offset_top = bg_top
-	_top_bg.offset_bottom = bg_top + h
+	_layout_top_info()
 
-# 顶部中央的一行信息（挂在独立 CanvasLayer 上，锚点按视口算）
-func _make_top_label(parent: CanvasLayer, node_name: String, top_y: float, line_h: float,
-		font_size: int, half_w: float, center_anchor: float, color: Color) -> Label:
+# 顶部信息行：左对齐、超长省略号截断；具体坐标由 _layout_top_info() 设置。
+func _make_top_label(parent: CanvasLayer, node_name: String, font_size: int, color: Color) -> Label:
 	var lb := Label.new()
 	lb.name = node_name
-	lb.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	lb.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
 	lb.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	lb.anchor_left = center_anchor
-	lb.anchor_right = center_anchor
-	lb.anchor_top = 0.0
-	lb.anchor_bottom = 0.0
-	if _top_mobile_left > 0.0:
-		# 手机端：左对齐贴在资源胶囊右侧，超长文本省略号截断
-		lb.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-		lb.clip_text = true
-		lb.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
-		lb.anchor_left = 0.0
-		lb.anchor_right = 0.0
-		lb.offset_left = _top_mobile_left
-		lb.offset_right = _top_mobile_left + half_w
-	elif _top_is_right:
-		# 右锚时 offset 从右边界往回算，右边留一点安全边距
-		var m: float = UILayout.dp(8.0)
-		lb.offset_left = -half_w * 2.0 - m
-		lb.offset_right = -m
-	else:
-		lb.offset_left = -half_w
-		lb.offset_right = half_w
-	lb.offset_top = top_y
-	lb.offset_bottom = top_y + line_h
+	lb.clip_text = true
+	lb.text_overrun_behavior = TextServer.OVERRUN_TRIM_ELLIPSIS
 	lb.add_theme_font_size_override("font_size", font_size)
 	lb.add_theme_color_override("font_color", color)
 	lb.add_theme_color_override("font_outline_color", Color.BLACK)

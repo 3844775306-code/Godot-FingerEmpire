@@ -208,10 +208,8 @@ func _ready():
 		add_child(_snap_time_label)
 	_init_fog_grids()
 
-	# 小地图右下角
-	await get_tree().process_frame
-	var mm = get_node_or_null("UI/Minimap")
-	if mm: mm.position = Vector2(2000, 10)
+	# 小地图位置交给 ClientHUD / MobileHUD 统一排布（桌面贴右上、手机按横竖屏），
+	# 这里不再写死坐标，否则会盖掉 HUD 算好的顶部带布局。
 
 	# 建造预览体
 	placement_preview = MeshInstance3D.new()

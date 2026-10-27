@@ -126,6 +126,108 @@ static func place_dp(ctrl: Control, corner: String, width_dp: float, height_dp: 
 			ctrl.grow_horizontal = Control.GROW_DIRECTION_BOTH
 			ctrl.grow_vertical = Control.GROW_DIRECTION_BEGIN
 
+# ==================== 顶部带布局 ====================
+# 资源胶囊、顶部指令栏、顶部信息栏、小地图四类元素共用屏幕顶部一条横带。
+# 统一在这里算矩形，各端只负责套用，避免每个 HUD 各写一套坐标导致互相压住。
+const TOP_MARGIN: float = 10.0          # 桌面顶部带外边距（设计空间）
+const TOP_CMD_W: float = 662.0          # 桌面指令底板宽（3 列 × 210 + 间距 + 内边距）
+const TOP_CMD_H: float = 82.0           # 桌面指令底板高（2 行 × 33 + 间距 + 内边距）
+const TOP_CAPSULE_MIN_W: float = 580.0  # 桌面资源胶囊最小宽
+const TOP_CAPSULE_H: float = 52.0
+const TOP_MINIMAP: float = 400.0        # 桌面小地图边长
+const TOP_INFO_W: float = 440.0         # 顶部信息栏宽（两行：性能 / 对局网络）
+const TOP_INFO_H: float = 92.0
+const TOP_ALERT_W: float = 820.0        # 战况栏宽
+const MOBILE_CAPSULE_W_DP: float = 344.0
+const MOBILE_MINIMAP_DP: float = 154.0          # 手机横屏小地图
+const MOBILE_MINIMAP_PORTRAIT_DP: float = 100.0 # 手机竖屏小地图
+
+# 桌面顶部指令底板：水平居中
+static func top_cmd_rect(vp: Vector2) -> Rect2:
+	return Rect2(Vector2((vp.x - TOP_CMD_W) * 0.5, TOP_MARGIN), Vector2(TOP_CMD_W, TOP_CMD_H))
+
+# 桌面小地图：贴右上角，与顶部带同一条高度
+static func top_minimap_rect(vp: Vector2) -> Rect2:
+	return Rect2(Vector2(vp.x - TOP_MARGIN - TOP_MINIMAP, TOP_MARGIN), Vector2(TOP_MINIMAP, TOP_MINIMAP))
+
+# 桌面资源胶囊：贴左上角，宽度由内容自适应（不窄于 TOP_CAPSULE_MIN_W）
+static func top_capsule_rect(vp: Vector2, width: float) -> Rect2:
+	var w := maxf(width, TOP_CAPSULE_MIN_W)
+	w = minf(w, maxf(TOP_CAPSULE_MIN_W, vp.x - TOP_MARGIN * 2.0))
+	return Rect2(Vector2(TOP_MARGIN, TOP_MARGIN), Vector2(w, TOP_CAPSULE_H))
+
+# 桌面战况栏：指令底板正下方居中；若顶部信息栏也被挤到指令栏下方，
+# 战况栏再往下让一行，保证两者不叠在一起。
+static func top_alert_rect(vp: Vector2) -> Rect2:
+	var cmd := top_cmd_rect(vp)
+	var info := top_info_rect(vp)
+	var y := cmd.position.y + cmd.size.y + 10.0
+	if info.position.y > cmd.position.y + 1.0:
+		y = maxf(y, info.position.y + info.size.y + 8.0)
+	return Rect2(Vector2((vp.x - TOP_ALERT_W) * 0.5, y), Vector2(TOP_ALERT_W, 0.0))
+
+# 桌面顶部信息栏：指令栏与小地图之间有空档就塞进空档右对齐，
+# 塞不下（窄屏 / 4:3）就落到指令底板正下方居中，保证不压资源胶囊与小地图。
+static func top_info_rect(vp: Vector2) -> Rect2:
+	var cmd := top_cmd_rect(vp)
+	var mm := top_minimap_rect(vp)
+	var gap_left := cmd.position.x + cmd.size.x + 12.0
+	var gap_right := mm.position.x - 12.0
+	if gap_right - gap_left >= TOP_INFO_W:
+		return Rect2(Vector2(gap_right - TOP_INFO_W, TOP_MARGIN), Vector2(TOP_INFO_W, TOP_INFO_H))
+	var below := TOP_MARGIN + TOP_CMD_H + 8.0
+	var max_x := maxf(TOP_MARGIN, vp.x - TOP_MARGIN - TOP_INFO_W)
+	return Rect2(Vector2(clampf((vp.x - TOP_INFO_W) * 0.5, TOP_MARGIN, max_x), below), Vector2(TOP_INFO_W, TOP_INFO_H))
+
+# 桌面科研入口：小地图正下方右对齐
+static func top_research_rect(vp: Vector2, w: float = 260.0, h: float = 40.0) -> Rect2:
+	var mm := top_minimap_rect(vp)
+	return Rect2(Vector2(vp.x - TOP_MARGIN - w, mm.position.y + mm.size.y + 8.0), Vector2(w, h))
+
+# 手机小地图：横屏贴右上（与胶囊同高）；竖屏放到资源胶囊正下方右侧，
+# 因为竖屏胶囊几乎占满整行宽度，横着放必然重叠。
+static func mobile_minimap_rect(capsule_rect: Rect2) -> Rect2:
+	var vp := view_size()
+	var insets := safe_insets()
+	if is_portrait():
+		var side := dp(MOBILE_MINIMAP_PORTRAIT_DP)
+		var right := insets.z + dp(6.0)
+		var top := capsule_rect.position.y + capsule_rect.size.y + dp(6.0)
+		return Rect2(Vector2(vp.x - right - side, top), Vector2(side, side))
+	var side_l := dp(MOBILE_MINIMAP_DP)
+	var right_l := insets.z + dp(6.0)
+	return Rect2(Vector2(vp.x - right_l - side_l, insets.y + dp(2.0)), Vector2(side_l, side_l))
+
+# 手机顶部信息栏：横屏时夹在资源胶囊与小地图之间；竖屏没有横向空间，返回空矩形（隐藏）。
+static func mobile_top_info_rect(capsule_rect: Rect2) -> Rect2:
+	if is_portrait():
+		return Rect2()
+	var insets := safe_insets()
+	var mm := mobile_minimap_rect(capsule_rect)
+	var left := capsule_rect.position.x + capsule_rect.size.x + dp(8.0)
+	var right := mm.position.x - dp(8.0)
+	if right - left < dp(120.0):
+		return Rect2()
+	return Rect2(Vector2(left, insets.y + dp(4.0)), Vector2(right - left, dp(44.0)))
+
+# 手机科研入口：竖屏放胶囊下方左侧；横屏放小地图下方右对齐。
+# 两种方向都避开居中战况栏（战况栏在 y≥170dp 处）。
+static func mobile_research_rect(capsule_rect: Rect2, w_dp: float = 120.0, h_dp: float = 40.0) -> Rect2:
+	var insets := safe_insets()
+	var w := dp(w_dp)
+	var h := dp(h_dp)
+	# 两种方向都放在资源胶囊正下方左侧：横屏时右边留给居中的战况栏和右下指令栏，
+	# 竖屏时右边留给小地图，互不遮挡。
+	var top := capsule_rect.position.y + capsule_rect.size.y + dp(8.0)
+	return Rect2(Vector2(insets.x + dp(6.0), top), Vector2(w, h))
+
+# 手机战况栏：横屏放胶囊下方居中；竖屏再往下让开小地图。
+static func mobile_alert_rect() -> Rect2:
+	var vp := view_size()
+	var w := dp(300.0 if is_portrait() else 310.0)
+	var top_y := dp(170.0 if is_portrait() else 76.0)
+	return Rect2(Vector2((vp.x - w) * 0.5, top_y), Vector2(w, 0.0))
+
 # 按钮最小触控热区（dp）：低于 44 不可靠，统一 48
 static func touch_min() -> Vector2:
 	return Vector2(dp(48), dp(48))

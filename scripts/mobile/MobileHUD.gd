@@ -321,25 +321,25 @@ func _get_bm() -> Node:
 		_bm = get_tree().get_first_node_in_group("battle_manager")
 	return _bm
 
-# 手机端小地图横屏 154dp（右上角）；竖屏缩到 100dp 并下移到资源胶囊下方，
-# 否则 344dp 宽的胶囊和 154dp 的小地图会挤在同一条顶部带里互相遮挡。
+# 手机端小地图：横屏贴右上角、与资源胶囊同一高度带；竖屏胶囊几乎占满整行，
+# 小地图改放到胶囊正下方右侧，避免与胶囊/顶部信息栏挤在同一条带上。
 const MINIMAP_DP: float = 154.0
 const MINIMAP_PORTRAIT_DP: float = 100.0
-const MINIMAP_PORTRAIT_TOP_DP: float = 48.0
 
 func _apply_minimap_layout(minimap: Control) -> void:
 	minimap.custom_minimum_size = Vector2.ZERO
-	if UILayout.is_portrait():
-		var size_dp := MINIMAP_PORTRAIT_DP
-		var side := UILayout.dp(size_dp)
+	var cap_rect := Rect2()
+	if capsule != null and capsule.visible:
+		cap_rect = capsule.get_global_rect()
+	if cap_rect.size.x <= 0.0:
+		var vp := UILayout.view_size()
 		var insets := UILayout.safe_insets()
-		var right := insets.z + UILayout.dp(6.0)
-		var top := insets.y + UILayout.dp(MINIMAP_PORTRAIT_TOP_DP)
-		minimap.size = Vector2(side, side)
-		UILayout.place(minimap, 1.0, 0.0, -right - side, top, -right, top + side)
-	else:
-		minimap.size = Vector2(UILayout.dp(MINIMAP_DP), UILayout.dp(MINIMAP_DP))
-		UILayout.place_dp(minimap, "tr", MINIMAP_DP, MINIMAP_DP, 6.0)
+		cap_rect = Rect2(Vector2(insets.x + UILayout.dp(2.0), insets.y + UILayout.dp(2.0)),
+				Vector2(UILayout.dp(UILayout.MOBILE_CAPSULE_W_DP), UILayout.dp(42.0)))
+	var r := UILayout.mobile_minimap_rect(cap_rect)
+	minimap.size = r.size
+	UILayout.place(minimap, 1.0, 0.0, r.position.x - UILayout.view_size().x, r.position.y,
+			r.position.x - UILayout.view_size().x + r.size.x, r.position.y + r.size.y)
 	minimap.mouse_filter = Control.MOUSE_FILTER_STOP
 	_minimap_sized = true
 
