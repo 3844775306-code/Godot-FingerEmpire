@@ -539,9 +539,8 @@ func _sync_thresholds_from_match() -> void:
 func _army_officer_candidates() -> Array:
 	var bm := _get_battle_manager()
 	if bm != null and bm.has_method("army_officer_candidates"):
-		var list: Array = bm.call("army_officer_candidates")
-		if not list.is_empty():
-			return list
+		# 单机/主机能直接问对局：返回空就说明现在还没有能造的战斗兵种，不要瞎列
+		return bm.call("army_officer_candidates")
 	var out: Array = []
 	for id in EntityDatabase.configs.keys():
 		if int(id) in OFFICER_EXCLUDE_IDS:

@@ -1307,6 +1307,13 @@ func _2v2_set_army_officer(peer_id: int, enabled: bool, thresholds: Dictionary) 
 		clean[int(k)] = clampi(int(thresholds[k]), 0, GameSettings.ARMY_OFFICER_THRESHOLD_MAX)
 	army_officer_peer_thresholds[peer_id] = clean
 
+# 军队官自动补默认阈值时按队/按玩家存下来（不写服务端的本地玩家状态）
+func _apply_army_officer_thresholds(owner_id: int, team: int, th: Dictionary) -> void:
+	if game_mode == NetworkManager.GameMode.ONEvONE:
+		army_officer_team_thresholds[team] = th.duplicate()
+	else:
+		army_officer_peer_thresholds[owner_id] = th.duplicate()
+
 # ---------- 通用工具 ----------
 func _find_entity_by_id(id: int) -> GameEntity:
 	for entity in entities.get_children():

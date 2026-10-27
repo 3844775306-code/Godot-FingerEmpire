@@ -5632,10 +5632,29 @@ func _ao_is_combat_unit(unit_id: int) -> bool:
 		return false
 	return true
 
+# 推荐阈值：只给"现在真的能造"的兵种填，避免设置一堆造不出来的兵种
+func _default_army_officer_thresholds(owner_id: int) -> Dictionary:
+	var out := {}
+	for uid in army_officer_candidates(owner_id):
+		var v: int = int(GameSettings.ARMY_OFFICER_RECOMMENDED.get(int(uid), 0))
+		if v > 0:
+			out[int(uid)] = v
+	return out
+
+# 默认写进本地玩家状态；OnlineBattleManager 覆盖成按队/按玩家存
+func _apply_army_officer_thresholds(_owner_id: int, _team: int, th: Dictionary) -> void:
+	set_army_officer_thresholds(th)
+	GameSettings.army_officer_thresholds = th.duplicate()
+
 func _run_army_officer(owner_id: int, team: int) -> void:
 	var thresholds: Dictionary = get_army_officer_thresholds_for(owner_id, team)
 	if thresholds.is_empty():
-		return
+		# 刚开局就开开关时还没有能造的战斗兵种：等建筑造好后自动补上推荐值
+		var def := _default_army_officer_thresholds(owner_id)
+		if def.is_empty():
+			return
+		_apply_army_officer_thresholds(owner_id, team, def)
+		thresholds = get_army_officer_thresholds_for(owner_id, team)
 	_ensure_cache_fresh()
 	var pop: Dictionary = _qm_population(owner_id, team)
 	var pop_current: int = int(pop.get("current", 0))
