@@ -3841,7 +3841,7 @@ func update_debug_label():
 		_title_rtl.text = _relation_tag() + _panel_title_base + _my_nation_tag()
 	_apply_panel_relation()
 	if _trait_rtl:
-		_trait_rtl.text = "[color=#cba]%s[/color]" % NationBonuses.get_trait_full(_my_nation_index())
+		_trait_rtl.text = "[color=#d9c6aa]%s[/color]" % NationBonuses.get_trait_full(_my_nation_index())
 	# 收起状态：主体不可见，跳过整块内容刷新，省掉每帧的统计与遍历开销
 	if _panel_collapsed: return
 	_update_research_text()
@@ -3877,13 +3877,18 @@ func update_debug_label():
 
 	var res = _get_resources(); var pop = _get_population()
 	var _pe = {"PRODUCTION": "🌱", "DEVELOPMENT": "🏗️", "ASSAULT": "⚔️"}
-	_header_rtl.text = "%s [color=#%s]%s[/color]  |  %s" % [_pe.get(Phase.keys()[phase], "▶️"), (Color.GREEN if phase == Phase.ASSAULT else (Color(1,0.7,0) if phase == Phase.DEVELOPMENT else Color.CYAN)).to_html(), Phase.keys()[phase], _get_tactic_name(current_tactic)]
+	var phase_color := Color(0.49, 0.89, 0.63)
+	if phase == Phase.DEVELOPMENT:
+		phase_color = Color(1.0, 0.78, 0.34)
+	elif phase == Phase.ASSAULT:
+		phase_color = Color(1.0, 0.48, 0.42)
+	_header_rtl.text = "%s [color=#%s]%s[/color]  |  %s" % [_pe.get(Phase.keys()[phase], "▶️"), phase_color.to_html(), Phase.keys()[phase], _get_tactic_name(current_tactic)]
 	if _defense != null:
 		_header_rtl.text += "\n[color=#9fd3ff]🛡 %s[/color]" % _defense.get_status_text()
 	var pop_pct = float(pop.current) / max(pop.max, 1)
 	_pop_bar.value = pop_pct * 100
 	var pfs = _pop_bar.get_theme_stylebox("fill")
-	if pfs: pfs.bg_color = Color.GREEN if pop_pct < 0.8 else Color(1,0.5,0)
+	if pfs: pfs.bg_color = Color(0.36, 0.82, 0.52) if pop_pct < 0.8 else Color(1.0, 0.62, 0.25)
 	_pop_label.text = "👥 人口 %d/%d" % [pop.current, pop.max]
 	# 主城血量
 	var castle = get_peer_castle(my_peer_id) if my_peer_id != -1 else get_team_castle(my_team)
@@ -3917,9 +3922,9 @@ func update_debug_label():
 	for u in eco_units:
 		var cnt = int(own_unit_counts.get(u[0], 0))
 		eco_total += cnt
-		if cnt > 0: eco_lines.append("[color=#8c8]%s%s[/color]:[color=white]%d[/color]" % [UITheme.entity_emoji(u[0], 2), u[1], cnt])
-	_eco_rtl.text = "[color=gray](无经济单位)[/color]" if eco_lines.is_empty() else " ".join(eco_lines)
-	if _eco_title: _eco_title.text = "[color=#5af]▸ 💰 经济 %d[/color]" % eco_total
+		if cnt > 0: eco_lines.append("[color=#9fd6a4]%s%s[/color]:[color=white]%d[/color]" % [UITheme.entity_emoji(u[0], 2), u[1], cnt])
+	_eco_rtl.text = "[color=#a39a8e](无经济单位)[/color]" if eco_lines.is_empty() else " ".join(eco_lines)
+	if _eco_title: _eco_title.text = "[color=#7cc4ff]▸ 💰 经济 %d[/color]" % eco_total
 
 	var mil_units = [[11,"步"],[12,"弓"],[13,"战船"],[15,"骑"],[16,"炮"],[17,"投石"],[18,"攻城"],[19,"侦察"],
 		[30,"狂战"],[31,"长弓"],[32,"法骑"],[33,"诸弩"],[34,"象骑"],[35,"长枪"],[36,"重步"],[37,"重弓"],[38,"重骑"],[39,"炮艇"],[40,"爆破"],
@@ -3930,9 +3935,9 @@ func update_debug_label():
 	for u in mil_units:
 		var cnt = int(own_unit_counts.get(u[0], 0))
 		mil_total += cnt
-		if cnt > 0: mil_lines.append("[color=#aaa]%s%s[/color]:[color=white]%d[/color]" % [UITheme.entity_emoji(u[0], 2), u[1], cnt])
-	_mil_rtl.text = "[color=gray](无军队)[/color]" if mil_lines.is_empty() else " ".join(mil_lines)
-	if _mil_title: _mil_title.text = "[color=#5af]▸ ⚔️ 军队 %d[/color]" % mil_total
+		if cnt > 0: mil_lines.append("[color=#c9c0b0]%s%s[/color]:[color=white]%d[/color]" % [UITheme.entity_emoji(u[0], 2), u[1], cnt])
+	_mil_rtl.text = "[color=#a39a8e](无军队)[/color]" if mil_lines.is_empty() else " ".join(mil_lines)
+	if _mil_title: _mil_title.text = "[color=#7cc4ff]▸ ⚔️ 军队 %d[/color]" % mil_total
 	var all_blds = [[20,"城"],[21,"营"],[22,"仓"],[23,"坞"],[24,"攻城车"],[25,"箭塔"],[26,"炮塔"],[27,"墙"],[28,"民"],[29,"重工"],[41,"瞭望"],[42,"书院"],[52,"集市"],[53,"城堡"],[64,"炮台"],[7,"桥"],[8,"梯子"],[54,"修道"]]
 	var bld_lines = []
 	var bld_total = 0
@@ -3940,15 +3945,15 @@ func update_debug_label():
 		var cnt = int(own_build_counts.get(b[0], 0))
 		var max_lv = int(own_build_levels.get(b[0], 1))
 		bld_total += cnt
-		if cnt > 0: bld_lines.append("[color=#888]%s【%d】%s[/color]:[color=white]%d[/color]" % [UITheme.entity_emoji(b[0], 1), max_lv, b[1], cnt])
-	_bld_rtl.text = "[color=gray](无建筑)[/color]" if bld_lines.is_empty() else " ".join(bld_lines)
-	if _bld_title: _bld_title.text = "[color=#5af]▸ 🏰 建筑 %d[/color]" % bld_total
-	var hunt_info = "[color=#ffa]🏹 狩猎: %.0fs[/color]" % max(0, _hunt_timer)
+		if cnt > 0: bld_lines.append("[color=#b6ad9f]%s【%d】%s[/color]:[color=white]%d[/color]" % [UITheme.entity_emoji(b[0], 1), max_lv, b[1], cnt])
+	_bld_rtl.text = "[color=#a39a8e](无建筑)[/color]" if bld_lines.is_empty() else " ".join(bld_lines)
+	if _bld_title: _bld_title.text = "[color=#7cc4ff]▸ 🏰 建筑 %d[/color]" % bld_total
+	var hunt_info = "[color=#ffd27a]🏹 狩猎: %.0fs[/color]" % max(0, _hunt_timer)
 	if _hunt_target and is_instance_valid(_hunt_target):
-		hunt_info += " [color=#f88]目标:%s 猎人:%d/5[/color]" % [_hunt_target.get("_animal_type"), hunt_count]
-	else: hunt_info += " [color=gray](待命)[/color]"
+		hunt_info += " [color=#ff9a8a]目标:%s 猎人:%d/5[/color]" % [_hunt_target.get("_animal_type"), hunt_count]
+	else: hunt_info += " [color=#a39a8e](待命)[/color]"
 	if repair_active > 0:
-		hunt_info += " [color=#7fd]🔧 修理中:%d/%d[/color]" % [repair_active, REPAIR_MAX_CONCURRENT]
+		hunt_info += " [color=#8fe6c0]🔧 修理中:%d/%d[/color]" % [repair_active, REPAIR_MAX_CONCURRENT]
 	_bld_rtl.text = hunt_info + "\n" + _bld_rtl.text
 
 var debug_panel: Control = null
@@ -3976,7 +3981,10 @@ func _my_nation_tag() -> String:
 		return ""
 	var nat := _my_nation_index()
 	if nat >= 0:
-		return " [color=#ffd34f]「%s」[/color]" % battle.get_nation_name(nat)
+		# 国家名本身用暖白，避免国家色与敌我红/蓝在文字上抢语义；
+		# 左边加一个实色小方块作为国家索引，和顶部色带呼应。
+		var nc := RTSConfig.get_nation_color(nat, Color(0.85, 0.80, 0.70))
+		return " [color=#%s]■[/color] [color=#e8dcc4]「%s」[/color]" % [nc.to_html(false), battle.get_nation_name(nat)]
 	return ""
 var _pop_bar: ProgressBar; var _pop_label: Label
 var _res_bars: Array = []; var _res_labels: Array = []
@@ -4010,6 +4018,15 @@ const PANEL_COLLAPSED_HEIGHT: float = 44.0
 const PANEL_REFRESH_INTERVAL_OPEN: float = 1.0
 const PANEL_REFRESH_INTERVAL_COLLAPSED: float = 5.0
 var _panel_refresh_timer: float = 0.0
+# 面板配色：主体保持低饱和暖黑，保证长文本可读；国家色只用于顶部色带和极淡底纹，
+# 阵营色只用于左侧粗边和标题徽标，避免整块底板被高饱和色染得刺眼、发闷。
+const PANEL_BG_BASE := Color(0.078, 0.072, 0.082, 0.95)
+const PANEL_NATION_BG_TINT: float = 0.06
+const PANEL_HEADER_TINT_ALPHA: float = 0.14
+const PANEL_FRIENDLY := Color(0.34, 0.67, 1.0)
+const PANEL_HOSTILE := Color(1.0, 0.40, 0.34)
+const PANEL_NEUTRAL := Color(0.65, 0.65, 0.65)
+var _panel_header_style: StyleBoxFlat = null
 
 # 当前面板实际高度（折叠后只保留标题条），供统一布局函数计算下方面板位置
 func get_panel_height() -> float:
@@ -4027,17 +4044,17 @@ func _relation_to_player() -> int:
 
 func _relation_color() -> Color:
 	match _relation_to_player():
-		1: return Color(0.25, 0.65, 1.0)
-		-1: return Color(1.0, 0.3, 0.25)
-		_: return Color(0.7, 0.7, 0.7)
+		1: return PANEL_FRIENDLY
+		-1: return PANEL_HOSTILE
+		_: return PANEL_NEUTRAL
 
 func _relation_tag() -> String:
 	match _relation_to_player():
-		1: return "[color=#4ac3ff]🛡 友方[/color] "
-		-1: return "[color=#ff6b5a]⚔ 敌方[/color] "
+		1: return "[color=#7cc4ff]🛡 友方[/color] "
+		-1: return "[color=#ff9288]⚔ 敌方[/color] "
 		_: return ""
 
-# AI 所属国家的颜色：面板底色用它，一眼能看出是哪个国家在指挥。
+# AI 所属国家的颜色：顶部色带与极淡底纹用它，一眼能看出是哪个国家在指挥。
 # 不能用 team_nations：2v2/3v3 同队 AI 可能来自不同国家，按队伍取色会让
 # 同一队的所有面板变成同一个颜色。优先按 owner peer（my_peer_id）取国家。
 func _nation_color() -> Color:
@@ -4051,7 +4068,8 @@ func _nation_color() -> Color:
 			return RTSConfig.get_nation_color(nn)
 	return Color(0.7, 0.7, 0.7)
 
-# 面板边框按友方蓝、敌方红区分（乱斗联盟变化时随之刷新），底色用 AI 国家色
+# 面板左侧粗边按友方蓝、敌方红区分（乱斗联盟变化时随之刷新）；
+# 顶部色带与淡底纹用 AI 国家色，两者分开表达，互不抢文字可读性。
 func _apply_panel_relation() -> void:
 	if _panel_bg_style == null: return
 	var rel = _relation_to_player()
@@ -4063,19 +4081,19 @@ func _apply_panel_relation() -> void:
 	_last_relation = rel
 	_last_panel_nation = nc
 	var c = _relation_color()
-	_panel_bg_style.border_color = Color(c.r, c.g, c.b, 0.7)
-	_panel_bg_style.border_width_left = 6
-	_panel_bg_style.border_width_right = 2
-	_panel_bg_style.border_width_top = 2
-	_panel_bg_style.border_width_bottom = 2
-	# 底色直接使用 AI 所属国家的颜色，再压暗到能保证文字可读的亮度；
-	# 敌我关系继续由边框颜色表达，不再占据底色。
-	_panel_bg_style.bg_color = Color(
-		nc.r * 0.45 + 0.03,
-		nc.g * 0.45 + 0.03,
-		nc.b * 0.45 + 0.04,
-		0.93
-	)
+	# 左侧粗边表达阵营，其余三边收细，减少“整块色框”的压迫感。
+	_panel_bg_style.border_color = Color(c.r, c.g, c.b, 0.9)
+	_panel_bg_style.border_width_left = 5
+	_panel_bg_style.border_width_right = 1
+	_panel_bg_style.border_width_top = 1
+	_panel_bg_style.border_width_bottom = 1
+	# 主体只保留极淡的国家色倾向（6%），文字区基本是中性暖黑；
+	# 国家身份主要交给顶部色带和提亮后的国家名，避免深红/深黄/深绿底把文字吞掉。
+	var tinted: Color = PANEL_BG_BASE.lerp(nc, PANEL_NATION_BG_TINT)
+	_panel_bg_style.bg_color = Color(tinted.r, tinted.g, tinted.b, 0.95)
+	if _panel_header_style != null:
+		_panel_header_style.bg_color = Color(nc.r, nc.g, nc.b, PANEL_HEADER_TINT_ALPHA)
+		_panel_header_style.border_color = Color(nc.r, nc.g, nc.b, 0.95)
 
 # AI 的科研情况：时代、在研项目（进度）、已完成的通用/特色科技。
 # 只有科研模式才有意义；经典模式把整节隐藏，避免面板多一行“暂无”。
@@ -4088,22 +4106,22 @@ func _update_research_text() -> void:
 	if not research_on:
 		return
 	if battle == null or not battle.has_method("get_research_state"):
-		_research_rtl.text = "[color=gray]（科研数据不可用）[/color]"
+		_research_rtl.text = "[color=#a39a8e]（科研数据不可用）[/color]"
 		return
 	var st: Dictionary = battle.get_research_state(my_peer_id, my_team)
 	if st.is_empty():
-		_research_rtl.text = "[color=gray]（暂无科研数据）[/color]"
+		_research_rtl.text = "[color=#a39a8e]（暂无科研数据）[/color]"
 		return
 	var age: int = int(st.get("age", 0))
 	var lines: Array = []
 	lines.append("[color=#9fd3ff]时代：%s[/color]" % TechTreeData.age_name(age))
 	var cur: Dictionary = st.get("current", {})
 	if cur.is_empty():
-		lines.append("[color=gray]研究队列空闲[/color]")
+		lines.append("[color=#a39a8e]研究队列空闲[/color]")
 	else:
 		var total: float = maxf(float(cur.get("total", 1.0)), 0.001)
 		var pct: int = int(round(clampf(float(cur.get("elapsed", 0.0)) / total, 0.0, 1.0) * 100.0))
-		lines.append("[color=#7fe]研究中：%s %d%%[/color]" % [String(cur.get("name", "?")), pct])
+		lines.append("[color=#8fe6c0]研究中：%s %d%%[/color]" % [String(cur.get("name", "?")), pct])
 	var bits: int = int(st.get("bits", 0))
 	var nation_bits: int = int(st.get("nation_bits", 0))
 	var nation: int = int(st.get("nation", -1))
@@ -4146,15 +4164,29 @@ func _create_debug_panel():
 	debug_panel.position = Vector2(400, offset_y)
 	debug_panel.custom_minimum_size = Vector2(PANEL_WIDTH, PANEL_HEIGHT); debug_panel.size = Vector2(PANEL_WIDTH, PANEL_HEIGHT)
 	var bg = Panel.new(); bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	var bg_style = StyleBoxFlat.new(); bg_style.bg_color = Color(0.05, 0.06, 0.12, 0.92)
+	var bg_style = StyleBoxFlat.new(); bg_style.bg_color = PANEL_BG_BASE
 	bg_style.corner_radius_top_left = 8; bg_style.corner_radius_top_right = 8
 	bg_style.corner_radius_bottom_left = 8; bg_style.corner_radius_bottom_right = 8
 	bg_style.border_width_left = 2; bg_style.border_width_right = 2
 	bg_style.border_width_top = 2; bg_style.border_width_bottom = 2
 	bg_style.border_color = Color(0.25, 0.5, 0.8, 0.5)
 	_panel_bg_style = bg_style
-	_apply_panel_relation()
 	bg.add_theme_stylebox_override("panel", bg_style); debug_panel.add_child(bg)
+	# 顶部 42px 国家色带：顶部 3px 实色描边 + 14% 淡色底，国家一眼可辨，
+	# 但不会像以前那样把整块面板染成深红/深黄，正文仍是中性底。
+	var header = Panel.new(); header.name = "NationHeader"
+	header.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	debug_panel.add_child(header)
+	header.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	header.offset_left = 1.0; header.offset_top = 0.0
+	header.offset_right = -1.0; header.offset_bottom = 42.0
+	var header_style = StyleBoxFlat.new()
+	header_style.bg_color = PANEL_BG_BASE
+	header_style.corner_radius_top_left = 8; header_style.corner_radius_top_right = 8
+	header_style.border_width_top = 3
+	_panel_header_style = header_style
+	header.add_theme_stylebox_override("panel", header_style)
+	_apply_panel_relation()
 	var vb = VBoxContainer.new(); vb.position = Vector2(10, 8); vb.add_theme_constant_override("separation", 3)
 	# 固定内容宽度：折叠后主体隐藏时 VBox 不能收缩，否则右对齐的折叠按钮会跳到标题旁边
 	vb.custom_minimum_size = Vector2(PANEL_WIDTH - 20.0, PANEL_HEIGHT - 16.0)
@@ -4280,7 +4312,7 @@ func _make_bar(color: Color) -> ProgressBar:
 
 func _make_section(title: String) -> RichTextLabel:
 	var r = RichTextLabel.new(); r.bbcode_enabled = true; r.fit_content = true
-	r.text = "[color=#5af]▸ %s[/color]" % title; r.add_theme_font_size_override("font_size", 16); return r
+	r.text = "[color=#7cc4ff]▸ %s[/color]" % title; r.add_theme_font_size_override("font_size", 16); return r
 
 func _get_tactic_name(tactic: int) -> String:
 	match tactic:
