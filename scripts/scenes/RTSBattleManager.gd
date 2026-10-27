@@ -1276,8 +1276,9 @@ func can_train_unit(team: int) -> bool:
 	
 # ==================== 初始化 ====================
 func _ready():
-	# 新手教程/战役沿用原有成长节奏，强制经典模式，避免关卡目标与科技解锁冲突。
-	if GameSettings.tutorial_mode or GameSettings.campaign_mode:
+	# 新手教程沿用原有成长节奏，强制经典模式，避免教程目标与科技解锁冲突。
+	# 战役可由选关界面选择科研模式，不再在这里强制回经典。
+	if GameSettings.tutorial_mode:
 		GameSettings.progression_mode = GameSettings.ProgressionMode.CLASSIC
 	# 暂停时整局仍要接收建造/生产/升级/右键指令，所以管理器保持运行；
 	# 真正的单位、建筑、弹丸会在 spawn 时显式设为 PAUSABLE，由 SceneTree.paused 冻结。

@@ -6,6 +6,7 @@ const AppVersion = preload("res://scripts/core/AppVersion.gd")
 const ChangelogData = preload("res://scripts/data/ChangelogData.gd")
 const ChangelogPanel = preload("res://scripts/ui/ChangelogPanel.gd")
 const GuidePanel = preload("res://scripts/ui/GuidePanel.gd")
+const TechOverviewPanel = preload("res://scripts/ui/TechOverviewPanel.gd")
 const UpdateConfig = preload("res://scripts/core/UpdateConfig.gd")
 const UpdateChecker = preload("res://scripts/core/UpdateChecker.gd")
 
@@ -231,8 +232,9 @@ func _ready():
 	research_check.add_theme_color_override("font_color", UITheme.PARCHMENT)
 	research_check.add_theme_color_override("font_hover_color", UITheme.GOLD)
 	research_check.add_theme_color_override("icon_normal_color", UITheme.GOLD)
-	research_check.tooltip_text = "关闭为经典模式（原升级模式）；开启后通过时代与科技树解锁建筑/单位。新手教程与战役固定使用经典模式。"
+	research_check.tooltip_text = "关闭为经典模式（原升级模式）；开启后通过时代与科技树解锁建筑/单位。科研模式支持单人、联机、乱斗与战役；新手教程固定经典模式。"
 	add_child(research_check)
+	research_check.button_pressed = GameSettings.is_research_mode()
 	research_check.toggled.connect(func(on): GameSettings.progression_mode = GameSettings.ProgressionMode.RESEARCH if on else GameSettings.ProgressionMode.CLASSIC)
 
 	# 按钮（金主 CTA / 蓝书图鉴 / 石次 / 朱红危险）
@@ -259,25 +261,32 @@ func _ready():
 			_changelog_btn = btn
 			_attach_new_badge(btn, UITheme.FONT_SM)
 
-	# 帮助入口：操作指南（蓝书）+ 新手教程（金色 CTA），并排放在主按钮下方。
+	# 帮助入口：操作指南 / 新手教程 / 战役闯关 / 科技总览，并排放在主按钮下方。
 	var guide_btn := _make_menu_button("📘 操作指南", Vector2(660, center_y + 620), "book")
-	guide_btn.size = Vector2(340, 52)
+	guide_btn.size = Vector2(250, 52)
 	guide_btn.pressed.connect(_on_guide_pressed)
 	add_child(guide_btn)
 	UITheme.hover_scale(guide_btn)
 
-	var tutorial_btn := _make_menu_button("🎓 新手教程", Vector2(1030, center_y + 620), "primary")
-	tutorial_btn.size = Vector2(340, 52)
+	var tutorial_btn := _make_menu_button("🎓 新手教程", Vector2(930, center_y + 620), "primary")
+	tutorial_btn.size = Vector2(250, 52)
 	tutorial_btn.pressed.connect(_on_tutorial_pressed)
 	add_child(tutorial_btn)
 	UITheme.hover_scale(tutorial_btn)
 
 	# 闯关模式（战役）：固定地图 + 任务目标，独立的选关界面
-	var campaign_btn := _make_menu_button("⚔ 战役闯关", Vector2(1400, center_y + 620), "primary")
-	campaign_btn.size = Vector2(340, 52)
+	var campaign_btn := _make_menu_button("⚔ 战役闯关", Vector2(1200, center_y + 620), "primary")
+	campaign_btn.size = Vector2(250, 52)
 	campaign_btn.pressed.connect(_on_campaign_pressed)
 	add_child(campaign_btn)
 	UITheme.hover_scale(campaign_btn)
+
+	# 科技总览：主菜单即可查看四时代、56 项通用科技与各国特色科技。
+	var tech_btn := _make_menu_button("📜 科技总览", Vector2(1470, center_y + 620), "book")
+	tech_btn.size = Vector2(250, 52)
+	tech_btn.pressed.connect(_on_tech_overview_pressed)
+	add_child(tech_btn)
+	UITheme.hover_scale(tech_btn)
 
 	# 菜单底部再写一行当前版本，玩家不进日志也能看到
 	var version_hint := Label.new()
@@ -469,6 +478,16 @@ func _on_units_pressed():
 	# 打开单位图鉴页面
 	get_tree().change_scene_to_file("res://scenes/unit_view.tscn")
 
+# 科技总览：主菜单只读查看完整科研路线，开关式弹层。
+func _on_tech_overview_pressed() -> void:
+	var existing := get_node_or_null("TechOverviewPanel")
+	if existing != null:
+		existing.queue_free()
+		return
+	var panel := TechOverviewPanel.new()
+	panel.name = "TechOverviewPanel"
+	add_child(panel)
+
 # 操作指南：完整按键 / 经济 / 战斗说明，可滚动阅读
 func _on_guide_pressed() -> void:
 	GuidePanel.open(self, GuidePanel.Mode.GUIDE)
@@ -505,6 +524,10 @@ func _on_campaign_pressed() -> void:
 	GameSettings.tutorial_mode = false
 	GameSettings.campaign_mode = true
 	GameSettings.campaign_level_id = ""
+	# 把主菜单当前勾选的发展模式带进战役；选关界面里还可以再切换。
+	var rc = _find_ui("ResearchCheck")
+	if rc != null:
+		GameSettings.progression_mode = GameSettings.ProgressionMode.RESEARCH if rc.button_pressed else GameSettings.ProgressionMode.CLASSIC
 	get_tree().change_scene_to_file("res://scenes/campaign_menu.tscn")
 
 # 打开更新日志面板（已打开则关掉，形成"按钮开关"）
@@ -906,8 +929,9 @@ func _build_mobile_layout() -> void:
 	research_check.add_theme_color_override("font_color", UITheme.PARCHMENT)
 	research_check.add_theme_color_override("font_hover_color", UITheme.GOLD)
 	research_check.add_theme_color_override("icon_normal_color", UITheme.GOLD)
-	research_check.tooltip_text = "关闭为经典模式；开启后通过时代与科技树解锁建筑/单位。教程与战役固定经典模式。"
+	research_check.tooltip_text = "关闭为经典模式；开启后通过时代与科技树解锁建筑/单位。科研模式支持单人、联机、乱斗与战役；新手教程固定经典模式。"
 	vb.add_child(research_check)
+	research_check.button_pressed = GameSettings.is_research_mode()
 	research_check.toggled.connect(func(on): GameSettings.progression_mode = GameSettings.ProgressionMode.RESEARCH if on else GameSettings.ProgressionMode.CLASSIC)
 
 	var sep := HSeparator.new()
@@ -917,6 +941,7 @@ func _build_mobile_layout() -> void:
 		["⚔️ 单人游戏", _on_play_pressed, "primary"],
 		["🌐 联机对战", _on_multiplayer_pressed, "primary"],
 		["📖 单位图鉴", _on_units_pressed, "book"],
+		["📜 科技总览", _on_tech_overview_pressed, "book"],
 		["📘 操作指南", _on_guide_pressed, "book"],
 		["🎓 新手教程", _on_tutorial_pressed, "primary"],
 		["⚔️ 战役闯关", _on_campaign_pressed, "primary"],

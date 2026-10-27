@@ -184,6 +184,7 @@ func _setup() -> void:
 	bm.update_population_limits()
 	_apply_resources(bm.player_resources, player_cfg.get("resources", {}))
 	_apply_resources(bm.enemy_resources, enemy_cfg.get("resources", {}))
+	_apply_campaign_research_setup()
 
 	# 波次表（防守关：敌人没有城堡，只按时间点刷兵）
 	_waves = enemy_cfg.get("waves", []).duplicate(true)
@@ -1827,6 +1828,30 @@ func _on_menu_pressed() -> void:
 	get_tree().change_scene_to_file("res://scenes/main_menu.tscn")
 
 # ==================== 小工具 ====================
+
+# 战役科研模式的开局校准：
+# 1. 按章节把时代推进到本章应有的阶段（第一章黑暗、第二章封建……），
+#    否则固定 10 分钟关卡从黑暗时代点起，科研几乎来不及展开；
+# 2. 给一小笔“战前科研补给”，保证纯军队关（无主城/无农民/零资源）也能真正点科技。
+# 只影响科研模式，经典模式的战役数值完全不变。
+func _apply_campaign_research_setup() -> void:
+	if not GameSettings.is_research_mode():
+		return
+	var chapter: int = clampi(int(level.get("chapter", 1)), 1, 4)
+	var target_age: int = chapter - 1
+	var st: Dictionary = bm.get_host_research_state()
+	if not st.is_empty():
+		st["age"] = maxi(int(st.get("age", 0)), target_age)
+		bm._refresh_research_derived(st)
+	# 有城堡的关卡若给了资源，保留关卡原值；只在科研模式下追加固定补给。
+	var stipend := {"food": 200, "wood": 200, "gold": 150, "stone": 150}
+	for key in stipend:
+		bm.player_resources[key] = int(bm.player_resources.get(key, 0)) + int(stipend[key])
+	# 敌方 AI 也进入同一时代，避免玩家用封建科技碾压黑暗 AI。
+	var enemy_st: Dictionary = bm.get_research_state(-1, bm.enemy_team)
+	if not enemy_st.is_empty():
+		enemy_st["age"] = maxi(int(enemy_st.get("age", 0)), target_age)
+		bm._refresh_research_derived(enemy_st)
 
 func _apply_resources(bucket: Dictionary, values: Dictionary) -> void:
 	for k in values:

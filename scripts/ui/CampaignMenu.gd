@@ -10,6 +10,7 @@ const UIThemeScript = preload("res://scripts/ui/UITheme.gd")
 var _mobile := false
 var _vb: VBoxContainer = null
 var _dialog_layer: Control = null
+var _mode_check: CheckBox = null
 
 func _ready() -> void:
 	# 触屏滑动误点守卫：选关卡片列表滑动后不误进关卡
@@ -36,7 +37,7 @@ func _build() -> void:
 	add_child(title)
 
 	var sub := Label.new()
-	sub.text = "闯关模式 · 固定地图 · 每关一个任务"
+	sub.text = "闯关模式 · 固定地图 · 每关一个任务 · 支持经典/科研两种发展模式"
 	UIThemeScript.apply_label(sub, UILayout.font_dp(9.0) if _mobile else UIThemeScript.FONT_SM,
 		Color(UIThemeScript.STONE).lightened(0.35))
 	sub.position = Vector2(UILayout.dp(16.0) if _mobile else 50.0,
@@ -62,6 +63,16 @@ func _build() -> void:
 	progress.offset_bottom = progress.offset_top + 30.0
 	add_child(progress)
 
+	# 战役也支持科研模式；选关界面直接切换，开始关卡时沿用当前选择。
+	_mode_check = _make_mode_check()
+	if _mobile:
+		# 手机端放在滚动列表最上方，避免和标题、进度重叠。
+		pass
+	else:
+		_mode_check.position = Vector2(520, 26)
+		_mode_check.size = Vector2(520, 32)
+		add_child(_mode_check)
+
 	# 关卡列表（可滚动）
 	var scroll := ScrollContainer.new()
 	scroll.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -76,6 +87,9 @@ func _build() -> void:
 	_vb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_vb.add_theme_constant_override("separation", 10)
 	scroll.add_child(_vb)
+
+	if _mobile and _mode_check != null:
+		_vb.add_child(_mode_check)
 
 	for chapter in CampaignDataScript.all_chapters():
 		_vb.add_child(_make_chapter_header(chapter))
@@ -114,6 +128,25 @@ func _build() -> void:
 		back.offset_bottom = -30.0
 	back.pressed.connect(_on_back_pressed)
 	add_child(back)
+
+func _make_mode_check() -> CheckBox:
+	var cb := CheckBox.new()
+	cb.name = "CampaignResearchCheck"
+	cb.text = "科研模式（四时代科技树）"
+	cb.button_pressed = GameSettings.is_research_mode()
+	cb.tooltip_text = "开启后，本关使用四时代与科技树发展；关闭则沿用经典主城升级模式。新手教程仍固定经典模式。"
+	cb.add_theme_font_size_override("font_size", UILayout.font_dp(9.0) if _mobile else UIThemeScript.FONT_MD)
+	cb.add_theme_color_override("font_color", UIThemeScript.PARCHMENT)
+	cb.add_theme_color_override("font_hover_color", UIThemeScript.GOLD)
+	cb.add_theme_color_override("icon_normal_color", UIThemeScript.GOLD)
+	cb.toggled.connect(_on_mode_toggled)
+	if _mobile:
+		cb.custom_minimum_size = Vector2(0, UILayout.dp(34.0))
+		cb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	return cb
+
+func _on_mode_toggled(on: bool) -> void:
+	GameSettings.progression_mode = GameSettings.ProgressionMode.RESEARCH if on else GameSettings.ProgressionMode.CLASSIC
 
 func _make_chapter_header(chapter: Dictionary) -> Control:
 	var box := VBoxContainer.new()
@@ -254,6 +287,13 @@ func _open_brief(level: Dictionary) -> void:
 		UIThemeScript.EMERALD)
 	vb.add_child(goal)
 
+	var mode_line := Label.new()
+	mode_line.text = "发展模式：" + ("科研模式（四时代科技树）" if GameSettings.is_research_mode() else "经典模式（主城升级）")
+	mode_line.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UIThemeScript.apply_label(mode_line, UILayout.font_dp(9.0) if _mobile else UIThemeScript.FONT_SM,
+		Color(UIThemeScript.GOLD, 0.92))
+	vb.add_child(mode_line)
+
 	var row := HBoxContainer.new()
 	row.alignment = BoxContainer.ALIGNMENT_CENTER
 	row.add_theme_constant_override("separation", 12)
@@ -301,6 +341,8 @@ func _start_level(level: Dictionary) -> void:
 	GameSettings.campaign_mode = true
 	GameSettings.campaign_level_id = String(level.get("id", ""))
 	GameSettings.tutorial_mode = false
+	if _mode_check != null and is_instance_valid(_mode_check):
+		GameSettings.progression_mode = GameSettings.ProgressionMode.RESEARCH if _mode_check.button_pressed else GameSettings.ProgressionMode.CLASSIC
 	GameSettings.is_ffa = false
 	GameSettings.ai_mode = 1
 	GameSettings.map_id = String(level.get("map_id", "classic"))
