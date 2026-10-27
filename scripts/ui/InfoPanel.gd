@@ -506,6 +506,21 @@ func _army_is_countering(a: Army, has_target: bool) -> bool:
 
 # 非五状态单位（农民/商队/官员/僧侣/运输等）沿用原来的任务说明。
 func _legacy_army_task_text(a: Army) -> String:
+	# 农民施工/修理时 current_target 会被清空，真正的目标记在 _work_target_id；
+	# 旧任务栏只看 current_target，所以这类任务一直显示“空闲”。
+	if a.current_order == "build":
+		var work_b = a._get_work_building() if a.has_method("_get_work_building") else null
+		if work_b != null:
+			var at_site: bool = bool(a.get("_at_work_site"))
+			var repairing: bool = bool(work_b.repair_pending) or (work_b.has_method("is_under_repair") and work_b.is_under_repair())
+			var label: String
+			if repairing:
+				label = "🔧 修理" if at_site else "🔧 前往修理"
+			else:
+				label = "🔨 建造" if at_site else "🔨 前往建造"
+			return "%s · %s" % [label, _target_display_name(work_b)]
+		# 目标建筑已被拆掉/缓存未刷新时，至少不要让农民看起来在“空闲”。
+		return "🔨 建造/修理"
 	var target = a.current_target
 	# 采集/交付的目标是资源点，不是作战目标；只把军队/建筑当作攻击目标显示
 	var has_target: bool = target != null and is_instance_valid(target) and target.health > 0 and (target is Army or target is Building)
