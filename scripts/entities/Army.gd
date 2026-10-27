@@ -164,11 +164,15 @@ const THINK_INTERVAL: float = 0.3
 const TARGET_RETARGET_INTERVAL: float = 1.0
 var _retarget_timer: float = TARGET_RETARGET_INTERVAL
 var _retarget_target_id: int = -1
-# 锁定目标仍在视野内、但还没进入射程时，每 2 秒复查一次；
-# 如果这段时间仍没走到射程内，就改打视野内更近的目标。
-const TARGET_OUT_OF_RANGE_RECHECK_INTERVAL: float = 2.0
+# 锁定目标仍在视野内、但还没进入射程时，至少追击 5 秒才复查一次；
+# 且复查时目标必须比 5 秒前的位置移动超过 5 米，才允许改打视野内更近的目标。
+# 目标原地不动/被墙卡住时不再因为“附近有更近的敌人”而半途换目标，
+# 避免全军在追击途中被频繁改锁、反复停步。
+const TARGET_OUT_OF_RANGE_RECHECK_INTERVAL: float = 5.0
+const TARGET_OUT_OF_RANGE_MIN_MOVE: float = 5.0
 var _out_of_range_recheck_timer: float = TARGET_OUT_OF_RANGE_RECHECK_INTERVAL
 var _out_of_range_recheck_target_id: int = -1
+var _out_of_range_anchor: Vector3 = Vector3.ZERO
 # 攻击移动时不必每帧全量搜敌；0.4s 一次足够跟随战场变化
 const ATTACK_MOVE_SEARCH_INTERVAL: float = 0.4
 var _attack_move_search_timer: float = 0.0
@@ -1145,6 +1149,7 @@ func _set_combat_target(target, from_advance: bool = false) -> void:
 	_retarget_timer = _retarget_interval(_cached_bm)
 	_out_of_range_recheck_target_id = target.get_instance_id()
 	_out_of_range_recheck_timer = TARGET_OUT_OF_RANGE_RECHECK_INTERVAL
+	_out_of_range_anchor = target.global_position
 	_attack_watch_target_id = target.get_instance_id()
 	_attack_stall_time = 0.0
 	_target_validate_timer = TARGET_VALIDATE_INTERVAL
@@ -2309,7 +2314,7 @@ func _process_combat_attack(delta, bm) -> void:
 		return
 	var dist: float = _combat_edge_distance(current_target)
 	if dist <= attack_range:
-		_out_of_range_recheck_timer = TARGET_OUT_OF_RANGE_RECHECK_INTERVAL
+		_reset_out_of_range_recheck()
 		_set_combat_state(CombatState.ATTACK)
 		_attack_stall_time = 0.0
 		if _movement:
@@ -2322,7 +2327,8 @@ func _process_combat_attack(delta, bm) -> void:
 	if hold_position:
 		_on_combat_target_lost()
 		return
-	# 目标在视野内但还没走到射程内：每 2 秒复查一次，仍够不到就改打更近的目标。
+	# 目标在视野内但还没走到射程内：至少追击 5 秒，且目标比 5 秒前移动超过
+	# 5 米时，才复查并改打更近的目标；否则继续追当前目标。
 	if _try_reacquire_closer_out_of_range_target(delta):
 		return
 	_set_combat_state(CombatState.PURSUE)
@@ -2343,10 +2349,10 @@ func _process_combat_attack(delta, bm) -> void:
 		return
 	_movement.set_move_target(current_target.global_position, attack_range)
 
-# 锁定目标还在视野内、但超过攻击距离时，每 2 秒检查一次是否仍未进入射程。
-# 仍然够不到就找视野内更近的可攻击目标；找到了立即改锁，避免一直追一个
-# 被墙/地形挡住或正在逃跑的远端目标。目标已经在射程内、已经丢失或不在视野内
-# 时不走这里，保留“锁定后不主动改锁”和原有的脱靶宽限逻辑。
+# 锁定目标还在视野内、但超过攻击距离时，每 5 秒检查一次是否仍未进入射程。
+# 只有目标在这 5 秒内移动超过 5 米（说明它确实在逃跑/位移），才找视野内
+# 更近的可攻击目标并改锁；目标原地站桩、被墙挡住或只是小幅晃动时不换目标。
+# 这样可避免“追击 2 秒就改锁”造成的频繁停步和路线抖动。
 func _try_reacquire_closer_out_of_range_target(delta: float) -> bool:
 	if current_target == null or not is_instance_valid(current_target):
 		return false
@@ -2357,29 +2363,45 @@ func _try_reacquire_closer_out_of_range_target(delta: float) -> bool:
 	if tid != _out_of_range_recheck_target_id:
 		_out_of_range_recheck_target_id = tid
 		_out_of_range_recheck_timer = TARGET_OUT_OF_RANGE_RECHECK_INTERVAL
+		_out_of_range_anchor = current_target.global_position
 	var cur_dist: float = _combat_edge_distance(current_target)
 	if cur_dist <= attack_range:
-		_out_of_range_recheck_timer = TARGET_OUT_OF_RANGE_RECHECK_INTERVAL
+		_reset_out_of_range_recheck()
 		return false
 	# 目标已经不在视野内：交给 _process_combat_target_cleanup 的脱靶宽限处理。
 	if cur_dist > vision_range:
+		_reset_out_of_range_recheck()
 		return false
 	_out_of_range_recheck_timer -= delta
 	if _out_of_range_recheck_timer > 0.0:
 		return false
-	_out_of_range_recheck_timer = TARGET_OUT_OF_RANGE_RECHECK_INTERVAL
+	# 5 秒窗口到期：目标必须真的离开 5 秒前的位置超过 5 米，才允许改锁。
+	var moved: float = _out_of_range_anchor.distance_to(current_target.global_position)
+	if moved <= TARGET_OUT_OF_RANGE_MIN_MOVE:
+		_reset_out_of_range_recheck()
+		return false
 	var nearer = _find_combat_enemy(vision_range, false)
 	if nearer == null or not is_instance_valid(nearer) or nearer == current_target:
+		_reset_out_of_range_recheck()
 		return false
 	# 只有严格更近才换目标，避免两个近似等距的目标之间来回抖动。
 	if _combat_edge_distance(nearer) >= cur_dist - 0.05:
+		_reset_out_of_range_recheck()
 		return false
 	_set_combat_target(nearer)
 	if current_target != nearer:
+		_reset_out_of_range_recheck()
 		return false
 	if _movement:
 		_movement.set_move_target(nearer.global_position, attack_range)
 	return true
+
+func _reset_out_of_range_recheck() -> void:
+	_out_of_range_recheck_timer = TARGET_OUT_OF_RANGE_RECHECK_INTERVAL
+	if current_target != null and is_instance_valid(current_target):
+		_out_of_range_anchor = current_target.global_position
+	else:
+		_out_of_range_anchor = Vector3.ZERO
 
 func _process_wall_guard_action(delta, bm) -> void:
 	if _movement and (_movement.astar_path.size() > 0 or _movement.astar_target != Vector3.ZERO):

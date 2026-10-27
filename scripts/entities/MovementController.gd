@@ -87,6 +87,15 @@ var _path_cache: Dictionary = {}  # Vector2i(world_x, world_z) -> path_array, cl
 # 同时展开上千节点把 A* 预算吃光。单位从最近航点并入缓存路线。
 const GROUP_PATH_MERGE_RADIUS: float = 7.0
 const GROUP_PATH_CACHE_CELL: float = 2.0
+# 追击时新路径还在排队、旧路径已走完，且目标已接近攻击距离，允许最后几米
+# 直接朝目标走。否则每一次目标移动触发重新寻路都会让单位停一帧甚至更久，
+# 表现为“追着追着突然站住”。
+const CHASE_DIRECT_APPROACH_MARGIN: float = 6.0
+# 部分路径（A* 节点预算耗尽/终点暂时不可达）走完一段后立即续算下一段。
+# 以前要等 Army 的 0.5 秒重试计时器，单位每走完一小段就会站住半秒，
+# 大部队长途行军时表现为走走停停。
+const PARTIAL_PATH_CONTINUE_MS: int = 80
+var _next_partial_continue_ms: int = 0
 var _blacklist: Dictionary = {}  # Vector2i -> 过期时间戳，暂时跳过不可达目标
 # 普通移动失败只临时拉黑：如果永久记住，玩家一次失败后同一位置就再也点不动，
 # 只有建筑布局变化触发 recalculate() 才会恢复，表现为“单位不听移动命令”。
@@ -330,6 +339,7 @@ func stop():
 	_pending_path = false
 	_pending_since_ms = 0
 	_next_no_path_reissue_ms = 0
+	_next_partial_continue_ms = 0
 	_stop_velocity()
 
 # 只处理“移动逻辑还在要路径，但既没排队也没有失败标记”的漏网状态。
@@ -350,6 +360,56 @@ func _try_reissue_missing_path(target_pos: Vector3) -> bool:
 		stop_range = _army.attack_range
 	clear_blacklist_at(target_pos)
 	set_move_target(target_pos, stop_range)
+	return true
+
+# 当前是否在追击一个“锁定了但还没进入射程”的目标。
+func _is_chasing_locked_target() -> bool:
+	if _army == null or _army.current_target == null \
+			or not is_instance_valid(_army.current_target):
+		return false
+	if not _army._order_is(_army.UnitState.ATTACKING):
+		return false
+	return _army._combat_edge_distance(_army.current_target) > _army.attack_range
+
+# 追击路径暂时中断时，是否允许直接朝目标走最后几米。
+# 只对已接近攻击距离、中间无悬崖、且没有被建筑实际挡住的目标放行；
+# 远距离/隔墙目标仍然等 A*，不能靠直线硬挤。
+func _can_direct_chase(bm: RTSBattleManager) -> bool:
+	if bm == null or not _is_chasing_locked_target():
+		return false
+	if blocking_building != null and is_instance_valid(blocking_building):
+		return false
+	var edge: float = _army._combat_edge_distance(_army.current_target)
+	if edge > _army.attack_range + CHASE_DIRECT_APPROACH_MARGIN:
+		return false
+	return not _is_cliff_between_positions(
+		bm, _army.global_position, _army.current_target.global_position)
+
+# 当前移动命令使用的寻路 stop_range：追击目标用攻击距离，其它命令用 0。
+func _current_move_stop_range() -> float:
+	if _army != null and _army.current_target != null \
+			and is_instance_valid(_army.current_target) \
+			and _army._order_is(_army.UnitState.ATTACKING):
+		return _army.attack_range
+	return 0.0
+
+# 部分路径即将/已经走完时，立刻从当前位置续算下一段，避免每段之间停顿。
+# allow_empty=false 只在还剩 1 个航点时预取；allow_empty=true 用于路径已空。
+func _try_continue_partial_path(target_pos: Vector3, allow_empty: bool) -> bool:
+	if not path_partial or target_pos == Vector3.ZERO:
+		return false
+	if not allow_empty and astar_path.size() > 1:
+		return false
+	if not allow_empty and astar_path.is_empty():
+		return false
+	var now_ms := Time.get_ticks_msec()
+	if now_ms < _next_partial_continue_ms:
+		return false
+	_next_partial_continue_ms = now_ms + PARTIAL_PATH_CONTINUE_MS
+	path_partial = false
+	_last_path_partial = false
+	clear_blacklist_at(target_pos)
+	set_move_target(target_pos, _current_move_stop_range())
 	return true
 
 # 单位停止/进入攻击距离后必须把残留速度清零，否则 Army 的 simple_idle 永远不成立，
@@ -391,9 +451,12 @@ func process_move(delta, bm: RTSBattleManager):
 				else:
 					_try_compute_pending_path(bm)
 			if _pending_path:
-				# 攻击移动即使新路径还没算完，也可以先沿现有路径继续推进；
-				# 普通攻击/普通移动没有可用新路径时先停住，等下一帧重试。
-				if not (_army.is_attack_moving and astar_path.size() > 0):
+				# 攻击移动/追击即使新路径还没算完，也可以先沿现有路径继续推进；
+				# 若旧路径已走完但目标就在几米内，允许直接朝目标接近。
+				# 普通移动没有可用新路径时先停住，等下一帧重试。
+				var keep_moving: bool = astar_path.size() > 0 \
+					and (_army.is_attack_moving or _is_chasing_locked_target())
+				if not keep_moving and not _can_direct_chase(bm):
 					_stop_velocity()
 					return
 	if not _army.can_move or _army.speed <= 0:
@@ -424,12 +487,22 @@ func process_move(delta, bm: RTSBattleManager):
 	if target_pos == Vector3.ZERO:
 		_stop_velocity()
 		return
+	# 部分路径只剩最后 1 个航点（或刚走空）时先续算，不等 Army 的 0.5 秒重试。
+	if path_partial:
+		if astar_path.is_empty():
+			# 路径已经走空：不允许冷却把单位晾在路中间，立即续算。
+			_next_partial_continue_ms = 0
+		_try_continue_partial_path(target_pos, astar_path.is_empty())
 
 	# Follow A* path
 	var move_target = target_pos
 	# No A* path = no movement, unless close to target (final approach)
 	if astar_path.size() == 0:
-		if astar_target.distance_squared_to(_army.global_position) > 3.0:
+		if _can_direct_chase(bm):
+			# 追击目标已进入最后几米：旧路径在等待新路径时走完也不要站住，
+			# 直接朝目标推进，交由 Army 的攻击距离判定停下。
+			move_target = target_pos
+		elif astar_target.distance_squared_to(_army.global_position) > 3.0:
 			# 采集目标所在的格子本身是 A* 阻挡格，寻路终点常常停在离资源 1~3 米处。
 			# 普通移动在 1.7 米外就原地等待重算，农民于是站在远处“假采集”（资源血量不掉）。
 			# 对采集目标放行最后几米的直线接近，终点取资源边缘外 0.5 米的站位点，
@@ -468,11 +541,16 @@ func process_move(delta, bm: RTSBattleManager):
 		if _path_built_head.distance_to(head_now) > PATH_HEAD_STEP:
 			_show_path()
 	# 兜底：路径可能因建筑变化/单位被挤动而临期，实际行走前再检查一次下一段坡度。
-	# 尤其禁止从高地/台地边缘直接走下悬崖；发现后停止并按寻路失败处理，等待重算。
+	# 尤其禁止从高地/台地边缘直接走下悬崖；发现后立即重算，而不是停下等 Army 的
+	# 0.75~1.2 秒重试计时器（那会表现为行军途中突然站住一两秒）。
 	if bm != null and astar_path.size() > 0 and _is_cliff_between_positions(bm, _army.global_position, move_target):
 		_stop_velocity()
 		astar_path.clear()
-		move_path_failed = true
+		clear_blacklist_at(target_pos)
+		var stop_range: float = _current_move_stop_range()
+		set_move_target(target_pos, stop_range)
+		if astar_path.is_empty() and not _pending_path:
+			move_path_failed = true
 		return
 	# Build horizontal direction
 	var horizontal_target = Vector3(move_target.x, _army.global_position.y, move_target.z)
