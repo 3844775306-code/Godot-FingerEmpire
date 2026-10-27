@@ -6186,6 +6186,7 @@ func _research_complete(st: Dictionary) -> void:
 		update_population_limits()
 	_apply_research_to_owned_entities(st)
 	_refresh_research_production(st)
+	_research_refresh_entity_bars()
 	# 1v1 的 state key 是队伍号（0/1），不能当 owner 传给按 peer 统计的人口接口。
 	_update_player_population(int(st.get("owner", -1)))
 	var owner := int(st.get("owner", -1))
@@ -6256,7 +6257,8 @@ func _tick_research(delta: float) -> void:
 			st["tax_pool"] = pool
 			if gain > 0:
 				var res := research_resources(owner, team)
-				var cap := int(get_team_resource_limits(team).get("gold", 99999))
+				var lim: Dictionary = get_limits_for(owner) if owner >= 0 else get_team_resource_limits(team)
+				var cap := int(lim.get("gold", 99999))
 				res["gold"] = min(int(res.get("gold", 0)) + gain, cap)
 
 # ==================== 科研解锁查询 ====================
@@ -6364,8 +6366,6 @@ func apply_research_bonuses(e) -> void:
 			hp_pct += _mod_pct(mods, "castle_wall_hp_pct")
 			armor_add += int(mods.get("castle_wall_armor", 0))
 		hp_pct += _mod_pct(mods, "building_hp_pct:%d" % uid)
-		if uid in [25, 26]:
-			hp_pct += _mod_pct(mods, "building_hp_pct:25")
 		e.max_health = float(base.get("max_health", e.max_health)) * (1.0 + hp_pct)
 		e.melee_armor = int(base.get("melee_armor", 0)) + armor_add
 		e.shield_armor = int(base.get("shield_armor", 0)) + armor_add

@@ -53,7 +53,7 @@ func _build_shell() -> void:
 
 	_root_panel = Panel.new()
 	_root_panel.size = PANEL_SIZE
-	_root_panel.position = Vector2(340, 130)
+	_root_panel.position = Vector2(580, 310)
 	_root_panel.add_theme_stylebox_override("panel", UITheme.card_style(UITheme.GOLD))
 	add_child(_root_panel)
 
@@ -70,7 +70,7 @@ func _build_shell() -> void:
 	_age_roman.size = Vector2(160, 48)
 	_age_roman.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	_age_roman.add_theme_font_size_override("font_size", 34)
-	_age_roman.add_theme_color_override("font_color", UITheme.GOLD_TEXT)
+	_age_roman.add_theme_color_override("font_color", UITheme.GOLD)
 	_root_panel.add_child(_age_roman)
 
 	_age_label = Label.new()
@@ -184,7 +184,7 @@ func _build_shell() -> void:
 	_foot_label.position = Vector2(28, 730)
 	_foot_label.size = Vector2(1180, 28)
 	_foot_label.add_theme_font_size_override("font_size", 15)
-	_foot_label.add_theme_color_override("font_color", UITheme.GOLD_TEXT)
+	_foot_label.add_theme_color_override("font_color", UITheme.PARCHMENT)
 	_root_panel.add_child(_foot_label)
 
 func _select_category(cid: String) -> void:
@@ -285,7 +285,9 @@ func _tech_list() -> Array:
 		var st := _state()
 		var nation := int(st.get("nation", -1))
 		if nation < 0 and source_node != null:
-			nation = int(source_node.get("my_nation")) if "my_nation" in source_node else -1
+			var mn = source_node.get("my_nation")
+			if mn != null:
+				nation = int(mn)
 		return TechTreeData.nation_techs(nation) if nation >= 0 else []
 	var out: Array = []
 	for t in TechTreeData.all_techs():

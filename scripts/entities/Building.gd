@@ -335,6 +335,13 @@ func _finish_construction():
 		if bm.has_method("apply_research_bonuses"):
 			bm.apply_research_bonuses(self)
 		_sync_production_unlocks()
+		# 科研模式的生产列表会被上面的 sync 重置，特色兵种要在重置之后再补一次。
+		if entity_id == 53 and bm.has_method("_unlock_nation_units"):
+			var rn: int = bm.get_entity_nation(self) if bm.has_method("get_entity_nation") else -1
+			if rn < 0 and bm.has_method("get_team_nation"):
+				rn = bm.get_team_nation(team)
+			if rn >= 0:
+				_unlock_nation_units(rn)
 	# 建造期间视野为 0，完成后恢复；若建筑正被选中，立即补上视野/射程圈
 	_sync_range_rings()
 	# 建造完成、全局等级同步后重建一次等级外观。

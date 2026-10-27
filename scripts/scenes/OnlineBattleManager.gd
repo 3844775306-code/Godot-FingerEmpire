@@ -327,7 +327,10 @@ func update_player_population(peer_id: int):
 			elif entity.entity_id == 28: max_pop += 10
 	if info:
 		max_pop += NationBonuses.get_population_bonus(int(info.get("nation", team_nations.get(info.team, -1))))
+	if is_research_mode():
+		max_pop += research_pop_bonus(peer_id, int(info.get("team", team_nations.get(peer_id, -1))) if info else -1)
 	player_population[peer_id]["max"] = max_pop
+
 # ==================== 生命周期 ====================
 func _ready():
 	game_mode = NetworkManager.selected_mode
@@ -851,9 +854,9 @@ func _process_1v1_command(peer_id: int, data: Dictionary):
 		"repair": _1v1_repair(team, data)
 		"assign_builder": _1v1_assign_builder(team, data)
 		"cancel_construction": _1v1_cancel_construction(team, data)
-		"research": _research_cmd(-1, team, String(data.get("tech_id", "")))
-		"research_age": _research_cmd(-1, team, "AGE")
-		"cancel_research": research_cancel(-1, team)
+		"research": _research_cmd(peer_id, team, String(data.get("tech_id", "")))
+		"research_age": _research_cmd(peer_id, team, "AGE")
+		"cancel_research": research_cancel(peer_id, team)
 
 func _process_2v2_command(peer_id: int, data: Dictionary):
 	if not player_info.has(peer_id) or not player_info[peer_id].alive: return
@@ -885,6 +888,34 @@ func _research_cmd(owner_peer_id: int, team: int, tid: String) -> Dictionary:
 	if tid == "AGE":
 		return research_start_age(owner_peer_id, team)
 	return research_start(owner_peer_id, team, tid)
+
+# 1v1 的实体带 owner_peer_id（房主=1、远程=真实 peer、补位 AI=合成 peer），
+# 科研状态必须按同一个 owner 建，不能再用 -1/队伍号，否则快照和实体状态对不上。
+func _research_owner_for_team(team: int) -> int:
+	for pid in player_info:
+		if int(player_info[pid].get("team", -1)) == team:
+			return int(pid)
+	for pid in player_teams:
+		if int(player_teams[pid]) == team:
+			return int(pid)
+	return -1
+
+func research_resources(owner_peer_id: int, team: int) -> Dictionary:
+	if owner_peer_id >= 0:
+		return get_resources_for(owner_peer_id)
+	return super.research_resources(owner_peer_id, team)
+
+func research_nation(owner_peer_id: int, team: int) -> int:
+	if owner_peer_id >= 0 and player_info.has(owner_peer_id):
+		var n := int(player_info[owner_peer_id].get("nation", -1))
+		if n >= 0:
+			return n
+	return super.research_nation(owner_peer_id, team)
+
+func research_pop(owner_peer_id: int, team: int) -> int:
+	if owner_peer_id >= 0 and player_population.has(owner_peer_id):
+		return int(player_population[owner_peer_id].get("current", 0))
+	return super.research_pop(owner_peer_id, team)
 
 # ---------- 1v1 命令实现 ----------
 func _1v1_right_click(team: int, data: Dictionary):
@@ -933,7 +964,7 @@ func _1v1_build(team: int, data: Dictionary):
 	var pos = Vector3(data["pos_x"], data["pos_y"], data["pos_z"])
 	var cfg = EntityDatabase.get_config(building_id)
 	if cfg.is_empty(): return
-	if not is_building_unlocked(building_id, -1, team): return
+	if not is_building_unlocked(building_id, _research_owner_for_team(team), team): return
 	# 桥：必须邻接陆地或已建成的桥，且不能与其他实体重叠
 	if building_id == 7 and not is_valid_bridge_position(pos): return
 	# Cannot build near enemies
@@ -1870,7 +1901,7 @@ func build_snapshot_for_team(team: int) -> Dictionary:
 	r["progression_mode"] = int(GameSettings.progression_mode)
 	r["nation_colors"] = RTSConfig.get_nation_colors()
 	if is_research_mode():
-		r["research"] = _serialize_research(-1, team)
+		r["research"] = _serialize_research(_research_owner_for_team(team), team)
 	# 警报兜底：连续多帧携带最近警报，客户端按 id 去重；RPC 主通道丢包也能补上。
 	r["alerts"] = _alerts_for_team(team)
 	return r
