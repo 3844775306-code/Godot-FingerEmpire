@@ -1,5 +1,6 @@
 # scripts/ui/ResearchPanel.gd
 # 科研模式主面板：时代、研究队列、9 类通用科技 + 本国 3 项特色科技。
+# 右上「科研官」按钮打开智能科研官：设置分类优先级，自动研究科技与升级时代。
 # 单机由 RTSBattleManager 提供状态；联机客户端由 ClientRenderer 的快照镜像提供，
 # 面板只调用统一的 ui_research_* 接口，不直接改任何服务端状态。
 class_name ResearchPanel
@@ -26,6 +27,17 @@ var _foot_label: Label = null
 var _scroll: ScrollContainer = null
 var _grid: GridContainer = null
 var _tab_buttons: Dictionary = {}
+# 智能科研官
+var _auto_btn: Button = null
+var _auto_dim: ColorRect = null
+var _auto_panel: Panel = null
+var _auto_enable_check: CheckButton = null
+var _auto_age_check: CheckButton = null
+var _priority_rank_labels: Dictionary = {}
+var _priority_up_buttons: Dictionary = {}
+var _priority_down_buttons: Dictionary = {}
+var _auto_foot: Label = null
+var _syncing_auto_ui := false
 
 static func open(host: Node, provider: Node = null) -> void:
 	var existing := host.get_node_or_null("ResearchPanel")
@@ -42,6 +54,7 @@ func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	z_index = 210
 	_build_shell()
+	_build_auto_panel()
 	_rebuild()
 
 func _build_shell() -> void:
@@ -77,10 +90,19 @@ func _build_shell() -> void:
 
 	_age_label = Label.new()
 	_age_label.position = Vector2(620, 18)
-	_age_label.size = Vector2(300, 36)
+	_age_label.size = Vector2(270, 36)
 	_age_label.add_theme_font_size_override("font_size", 24)
 	_age_label.add_theme_color_override("font_color", UITheme.PARCHMENT)
 	_root_panel.add_child(_age_label)
+
+	_auto_btn = Button.new()
+	_auto_btn.text = "⚙ 科研官"
+	_auto_btn.position = Vector2(900, 16)
+	_auto_btn.size = Vector2(158, 40)
+	_auto_btn.tooltip_text = "打开智能科研官：设置科研分类优先级，自动研究科技与升级时代"
+	UITheme.apply_muted_button(_auto_btn, 16)
+	_auto_btn.pressed.connect(_toggle_auto_panel)
+	_root_panel.add_child(_auto_btn)
 
 	var close_btn := Button.new()
 	close_btn.text = "✕ 关闭 (T)"
@@ -189,6 +211,220 @@ func _build_shell() -> void:
 	_foot_label.add_theme_color_override("font_color", UITheme.PARCHMENT)
 	_root_panel.add_child(_foot_label)
 
+func _build_auto_panel() -> void:
+	_auto_dim = ColorRect.new()
+	_auto_dim.color = Color(0.02, 0.03, 0.04, 0.5)
+	_auto_dim.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_auto_dim.mouse_filter = Control.MOUSE_FILTER_STOP
+	_auto_dim.z_index = 4
+	_auto_dim.visible = false
+	_root_panel.add_child(_auto_dim)
+
+	_auto_panel = Panel.new()
+	_auto_panel.name = "AutoResearchPanel"
+	_auto_panel.size = Vector2(640, 650)
+	_auto_panel.position = Vector2((PANEL_SIZE.x - _auto_panel.size.x) * 0.5, (PANEL_SIZE.y - _auto_panel.size.y) * 0.5)
+	_auto_panel.z_index = 5
+	_auto_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	_auto_panel.add_theme_stylebox_override("panel", UITheme.card_style(UITheme.GOLD))
+	_auto_panel.visible = false
+	_root_panel.add_child(_auto_panel)
+
+	var title := Label.new()
+	title.text = "🧠  智能科研官"
+	title.position = Vector2(24, 16)
+	title.size = Vector2(420, 40)
+	title.add_theme_font_size_override("font_size", 26)
+	title.add_theme_color_override("font_color", UITheme.GOLD)
+	_auto_panel.add_child(title)
+
+	var close_btn := Button.new()
+	close_btn.text = "✕ 关闭"
+	close_btn.position = Vector2(540, 14)
+	close_btn.size = Vector2(76, 36)
+	UITheme.apply_muted_button(close_btn, 15)
+	close_btn.pressed.connect(_close_auto_panel)
+	_auto_panel.add_child(close_btn)
+
+	var desc := Label.new()
+	desc.text = "开启后，科研官会按下方分类优先级自动选择下一项科技；时代升级条件满足时会优先升时代。\n人口/建筑条件未满足时，会先补能解锁所需建筑的科技。"
+	desc.position = Vector2(24, 60)
+	desc.size = Vector2(592, 52)
+	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	desc.add_theme_font_size_override("font_size", 15)
+	desc.add_theme_color_override("font_color", UITheme.PARCHMENT)
+	_auto_panel.add_child(desc)
+
+	_auto_enable_check = CheckButton.new()
+	_auto_enable_check.text = "启用自动研究"
+	_auto_enable_check.position = Vector2(24, 118)
+	_auto_enable_check.size = Vector2(280, 34)
+	_auto_enable_check.add_theme_font_size_override("font_size", 18)
+	_auto_enable_check.add_theme_color_override("font_color", UITheme.GOLD)
+	_auto_enable_check.toggled.connect(_on_auto_enabled_toggled)
+	_auto_panel.add_child(_auto_enable_check)
+
+	_auto_age_check = CheckButton.new()
+	_auto_age_check.text = "自动升级时代"
+	_auto_age_check.position = Vector2(320, 118)
+	_auto_age_check.size = Vector2(280, 34)
+	_auto_age_check.add_theme_font_size_override("font_size", 16)
+	_auto_age_check.add_theme_color_override("font_color", UITheme.PARCHMENT)
+	_auto_age_check.toggled.connect(_on_auto_age_toggled)
+	_auto_panel.add_child(_auto_age_check)
+
+	var prio_title := Label.new()
+	prio_title.text = "科研分类优先级"
+	prio_title.position = Vector2(24, 160)
+	prio_title.size = Vector2(260, 28)
+	prio_title.add_theme_font_size_override("font_size", 20)
+	prio_title.add_theme_color_override("font_color", UITheme.GOLD)
+	_auto_panel.add_child(prio_title)
+
+	var prio_hint := Label.new()
+	prio_hint.text = "数字越小越优先，用 ▲▼ 调整；同类科技按时代、耗时依次研究。"
+	prio_hint.position = Vector2(24, 190)
+	prio_hint.size = Vector2(592, 26)
+	prio_hint.add_theme_font_size_override("font_size", 14)
+	prio_hint.add_theme_color_override("font_color", UITheme.PARCHMENT)
+	_auto_panel.add_child(prio_hint)
+
+	var rows := VBoxContainer.new()
+	rows.position = Vector2(24, 220)
+	rows.size = Vector2(592, 360)
+	rows.add_theme_constant_override("separation", 3)
+	_auto_panel.add_child(rows)
+	for cid in ResearchAdvisor.CATEGORY_IDS:
+		var row := HBoxContainer.new()
+		row.custom_minimum_size = Vector2(592, 30)
+		row.add_theme_constant_override("separation", 6)
+		rows.add_child(row)
+
+		var rank := Label.new()
+		rank.custom_minimum_size = Vector2(30, 28)
+		rank.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		rank.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		rank.add_theme_font_size_override("font_size", 18)
+		rank.add_theme_color_override("font_color", UITheme.GOLD)
+		row.add_child(rank)
+		_priority_rank_labels[cid] = rank
+
+		var cat_label := Label.new()
+		cat_label.text = "%s  %s" % [String(cid), ResearchAdvisor.category_name(String(cid))]
+		cat_label.custom_minimum_size = Vector2(408, 28)
+		cat_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+		cat_label.add_theme_font_size_override("font_size", 16)
+		cat_label.add_theme_color_override("font_color", UITheme.PARCHMENT)
+		row.add_child(cat_label)
+
+		var up := Button.new()
+		up.text = "▲ 提前"
+		up.custom_minimum_size = Vector2(70, 28)
+		UITheme.apply_muted_button(up, 13)
+		up.pressed.connect(_on_priority_move.bind(String(cid), -1))
+		row.add_child(up)
+		_priority_up_buttons[cid] = up
+
+		var down := Button.new()
+		down.text = "▼ 延后"
+		down.custom_minimum_size = Vector2(70, 28)
+		UITheme.apply_muted_button(down, 13)
+		down.pressed.connect(_on_priority_move.bind(String(cid), 1))
+		row.add_child(down)
+		_priority_down_buttons[cid] = down
+
+	_auto_foot = Label.new()
+	_auto_foot.position = Vector2(24, 598)
+	_auto_foot.size = Vector2(592, 30)
+	_auto_foot.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_auto_foot.add_theme_font_size_override("font_size", 14)
+	_auto_foot.add_theme_color_override("font_color", UITheme.PARCHMENT)
+	_auto_panel.add_child(_auto_foot)
+
+func _toggle_auto_panel() -> void:
+	if _auto_panel == null:
+		return
+	_auto_panel.visible = not _auto_panel.visible
+	if _auto_dim != null:
+		_auto_dim.visible = _auto_panel.visible
+	if _auto_panel.visible:
+		_refresh_auto_ui()
+
+func _close_auto_panel() -> void:
+	if _auto_panel != null:
+		_auto_panel.visible = false
+	if _auto_dim != null:
+		_auto_dim.visible = false
+
+func _auto_config() -> Dictionary:
+	var st := _state()
+	if st.is_empty():
+		return ResearchAdvisor.default_config()
+	return ResearchAdvisor.normalize_config(st.get("auto", {}))
+
+func _refresh_auto_ui() -> void:
+	if _auto_panel == null or not _auto_panel.visible:
+		return
+	var cfg := _auto_config()
+	_syncing_auto_ui = true
+	_auto_enable_check.button_pressed = bool(cfg.get("enabled", false))
+	_auto_age_check.button_pressed = bool(cfg.get("auto_age", true))
+	_syncing_auto_ui = false
+	var priority: Array = cfg.get("priority", ResearchAdvisor.DEFAULT_PRIORITY)
+	for cid in ResearchAdvisor.CATEGORY_IDS:
+		var rank := ResearchAdvisor.priority_rank(priority, String(cid))
+		var rank_label: Label = _priority_rank_labels.get(cid)
+		if rank_label != null:
+			rank_label.text = str(rank + 1)
+		var up: Button = _priority_up_buttons.get(cid)
+		if up != null:
+			up.disabled = rank <= 0
+		var down: Button = _priority_down_buttons.get(cid)
+		if down != null:
+			down.disabled = rank >= priority.size() - 1
+	var enabled := bool(cfg.get("enabled", false))
+	_auto_foot.text = "科研官已启用，队列空闲时会自动开始研究。" if enabled else "科研官当前关闭，不会消耗任何资源。"
+	_auto_btn.text = "⚙ 科研官：开" if enabled else "⚙ 科研官"
+
+func _push_auto_config(cfg: Dictionary) -> void:
+	if source_node == null or not source_node.has_method("ui_research_set_auto"):
+		_auto_foot.text = "⚠ 当前模式不支持智能科研官"
+		return
+	var r: Dictionary = source_node.ui_research_set_auto(cfg)
+	if r.has("ok") and not bool(r.get("ok", true)):
+		_auto_foot.text = "⚠ " + String(r.get("error", "设置失败"))
+		return
+	_last_hash = ""
+	_refresh_auto_ui()
+	_auto_foot.text = "设置已保存，科研官会在队列空闲后按新优先级工作。"
+
+func _on_auto_enabled_toggled(on: bool) -> void:
+	if _syncing_auto_ui:
+		return
+	var cfg := _auto_config()
+	cfg["enabled"] = on
+	_push_auto_config(cfg)
+
+func _on_auto_age_toggled(on: bool) -> void:
+	if _syncing_auto_ui:
+		return
+	var cfg := _auto_config()
+	cfg["auto_age"] = on
+	_push_auto_config(cfg)
+
+func _on_priority_move(cid: String, delta: int) -> void:
+	var cfg := _auto_config()
+	var priority: Array = cfg.get("priority", ResearchAdvisor.DEFAULT_PRIORITY).duplicate()
+	var i := priority.find(cid)
+	var j := i + delta
+	if i < 0 or j < 0 or j >= priority.size():
+		return
+	var tmp = priority[i]
+	priority[i] = priority[j]
+	priority[j] = tmp
+	cfg["priority"] = priority
+	_push_auto_config(cfg)
+
 func _select_category(cid: String) -> void:
 	_selected_category = cid
 	_last_hash = ""
@@ -223,6 +459,10 @@ func _process(delta: float) -> void:
 		_current_label.text = "研究中：%s  （剩余 %.0f 秒）" % [String(cur.get("name", "")), left]
 		_cancel_btn.visible = String(cur.get("kind", "")) != "age"
 	_update_age_panel(st)
+	var auto_cfg := ResearchAdvisor.normalize_config(st.get("auto", {}))
+	_auto_btn.text = "⚙ 科研官：开" if bool(auto_cfg.get("enabled", false)) else "⚙ 科研官"
+	if _auto_panel != null and _auto_panel.visible:
+		_refresh_auto_ui()
 	_refresh_timer -= delta
 	if _refresh_timer <= 0.0:
 		_refresh_timer = 0.35
@@ -447,5 +687,9 @@ func _on_cancel_pressed() -> void:
 		_last_hash = ""
 
 func _input(event: InputEvent) -> void:
-	if event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_T:
-		queue_free()
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_ESCAPE and _auto_panel != null and _auto_panel.visible:
+			_close_auto_panel()
+			return
+		if event.keycode == KEY_T:
+			queue_free()

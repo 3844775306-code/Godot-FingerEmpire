@@ -5927,6 +5927,9 @@ func _update_command_card_sp():
 # 客户端 ClientRenderer 只镜像快照；所有开始/取消/完成都在这里校验和结算。
 var research_states: Dictionary = {}
 var _research_tax_timer: float = 0.0
+# 智能科研官检查间隔：避免每帧扫描全部科技；0.8 秒足够在完成研究后立刻接下一项。
+const RESEARCH_AUTO_INTERVAL: float = 0.8
+var _research_auto_timer: float = 0.0
 
 func is_research_mode() -> bool:
 	return GameSettings.progression_mode == GameSettings.ProgressionMode.RESEARCH
@@ -5965,6 +5968,7 @@ func _new_research_state(owner_peer_id: int, team: int) -> Dictionary:
 		"tax_pool": 0.0,
 		"owner": owner_peer_id,
 		"team": team,
+		"auto": ResearchAdvisor.default_config(),
 	}
 
 func get_research_state(owner_peer_id: int, team: int, create: bool = true) -> Dictionary:
@@ -5979,6 +5983,8 @@ func get_research_state(owner_peer_id: int, team: int, create: bool = true) -> D
 		_refresh_research_derived(research_states[key])
 	elif int(research_states[key].get("nation", -1)) < 0:
 		_refresh_research_derived(research_states[key])
+	if not research_states[key].has("auto"):
+		research_states[key]["auto"] = ResearchAdvisor.default_config()
 	return research_states[key]
 
 func get_research_state_for_entity(e) -> Dictionary:
@@ -6021,6 +6027,25 @@ func research_can_afford(owner_peer_id: int, team: int, cost: Dictionary) -> boo
 		if int(res.get(k, 0)) < int(cost[k]):
 			return false
 	return true
+
+func research_auto_config(owner_peer_id: int, team: int) -> Dictionary:
+	var st := get_research_state(owner_peer_id, team)
+	if st.is_empty():
+		return ResearchAdvisor.default_config()
+	return ResearchAdvisor.normalize_config(st.get("auto", {}))
+
+# 玩家设置智能科研官：启用开关、自动升时代开关、分类优先级。
+# 服务端会重新清洗一遍，客户端只能改自己的配置。
+func research_set_auto(owner_peer_id: int, team: int, config) -> Dictionary:
+	if not is_research_mode():
+		return {"ok": false, "error": "当前不是科研模式"}
+	if not (config is Dictionary):
+		return {"ok": false, "error": "科研官配置格式错误"}
+	var st := get_research_state(owner_peer_id, team)
+	if st.is_empty():
+		return {"ok": false, "error": "当前不是科研模式"}
+	st["auto"] = ResearchAdvisor.normalize_config(config)
+	return {"ok": true, "error": "", "auto": st["auto"].duplicate(true)}
 
 func _research_pay(owner_peer_id: int, team: int, cost: Dictionary) -> void:
 	var res := research_resources(owner_peer_id, team)
@@ -6290,6 +6315,11 @@ func _tick_research(delta: float) -> void:
 		cur["elapsed"] = float(cur.get("elapsed", 0.0)) + delta * speed_mult
 		if float(cur["elapsed"]) >= float(cur.get("total", 1.0)):
 			_research_complete(st)
+	# 智能科研官：只对玩家开启了自动研究的科研状态生效；AI 有自己的科研节奏。
+	_research_auto_timer += delta
+	if _research_auto_timer >= RESEARCH_AUTO_INTERVAL:
+		_research_auto_timer = 0.0
+		_tick_auto_research()
 	# I2 户税：每 10 秒按人口结算，避免逐帧浮点累加漂移。
 	_research_tax_timer += delta
 	while _research_tax_timer >= 10.0:
@@ -6313,6 +6343,138 @@ func _tick_research(delta: float) -> void:
 				var lim: Dictionary = get_limits_for(owner) if owner >= 0 else get_team_resource_limits(team)
 				var cap := int(lim.get("gold", 99999))
 				res["gold"] = min(int(res.get("gold", 0)) + gain, cap)
+
+# ==================== 智能科研官（玩家科研自动化） ====================
+func _tick_auto_research() -> void:
+	for key in research_states.keys():
+		var st: Dictionary = research_states[key]
+		if st.is_empty():
+			continue
+		var cfg := ResearchAdvisor.normalize_config(st.get("auto", {}))
+		st["auto"] = cfg
+		if not bool(cfg.get("enabled", false)):
+			continue
+		if not st.get("current", {}).is_empty():
+			continue
+		var owner := int(st.get("owner", -1))
+		var team := int(st.get("team", get_host_team()))
+		if not _research_has_completed_castle(owner, team):
+			continue
+		_auto_research_state(st, cfg)
+
+func _auto_research_state(st: Dictionary, cfg: Dictionary) -> void:
+	var owner := int(st.get("owner", -1))
+	var team := int(st.get("team", get_host_team()))
+	var age := int(st.get("age", 0))
+	var reserve: Dictionary = {}
+	if bool(cfg.get("auto_age", true)) and age < 3:
+		var check := can_research_age(owner, team)
+		if bool(check.get("ok", false)):
+			if bool(research_start_age(owner, team).get("ok", false)):
+				return
+		else:
+			var err := String(check.get("error", ""))
+			if err == "资源不足":
+				# 人口/建筑条件已齐，只差资源：把时代费用锁住，科技只能花“多出来”的
+				# 那部分，避免科研官自己把升时代预算吃掉。
+				reserve = TechTreeData.get_age(age + 1).get("cost", {}).duplicate(true)
+			else:
+				# 条件没齐：先补能解锁升级所需建筑的科技，否则自动升时代会永远卡住。
+				var support := ResearchAdvisor.age_requirement_techs(age + 1)
+				if _auto_start_first_tech(st, support, reserve):
+					return
+	# 按玩家设定的分类优先级选下一项；如果正在为升时代攒资源，只允许不破坏预算的科技。
+	_auto_start_by_priority(st, cfg, reserve)
+
+func _auto_start_first_tech(st: Dictionary, ids: Array, reserve: Dictionary) -> bool:
+	var owner := int(st.get("owner", -1))
+	var team := int(st.get("team", get_host_team()))
+	var age := int(st.get("age", 0))
+	for tid in ids:
+		var t := TechTreeData.get_tech(String(tid))
+		if t.is_empty() or not _auto_tech_candidate(st, t, age, reserve):
+			continue
+		if bool(research_start_tech(owner, team, String(tid)).get("ok", false)):
+			return true
+	return false
+
+func _auto_start_by_priority(st: Dictionary, cfg: Dictionary, reserve: Dictionary) -> bool:
+	var owner := int(st.get("owner", -1))
+	var team := int(st.get("team", get_host_team()))
+	var age := int(st.get("age", 0))
+	var nation := int(st.get("nation", -1))
+	var priority: Array = cfg.get("priority", ResearchAdvisor.DEFAULT_PRIORITY)
+	var candidates: Array = []
+	var order := 0
+	for tid in TechTreeData.tech_ids():
+		var t := TechTreeData.get_tech(String(tid))
+		if _auto_tech_candidate(st, t, age, reserve):
+			candidates.append({
+				"id": String(tid),
+				"rank": ResearchAdvisor.priority_rank(priority, String(t.get("category", ""))),
+				"age": int(t.get("age", 0)),
+				"time": float(t.get("time", 0.0)),
+				"order": order,
+			})
+		order += 1
+	for t in TechTreeData.nation_techs(nation):
+		if _auto_tech_candidate(st, t, age, reserve):
+			candidates.append({
+				"id": String(t.get("id", "")),
+				"rank": ResearchAdvisor.priority_rank(priority, "N"),
+				"age": int(t.get("age", 0)),
+				"time": float(t.get("time", 0.0)),
+				"order": order,
+			})
+		order += 1
+	if candidates.is_empty():
+		return false
+	candidates.sort_custom(func(a, b):
+		if int(a["rank"]) != int(b["rank"]):
+			return int(a["rank"]) < int(b["rank"])
+		if int(a["age"]) != int(b["age"]):
+			return int(a["age"]) < int(b["age"])
+		if not is_equal_approx(float(a["time"]), float(b["time"])):
+			return float(a["time"]) < float(b["time"])
+		return int(a["order"]) < int(b["order"])
+	)
+	for c in candidates:
+		if bool(research_start_tech(owner, team, String(c["id"])).get("ok", false)):
+			return true
+	return false
+
+func _auto_tech_candidate(st: Dictionary, t: Dictionary, age: int, reserve: Dictionary) -> bool:
+	if t.is_empty():
+		return false
+	var tid := String(t.get("id", ""))
+	if tid.is_empty():
+		return false
+	var nation := int(st.get("nation", -1))
+	var is_nation := String(t.get("kind", "")) == "nation"
+	if is_nation:
+		if int(t.get("nation", -1)) != nation:
+			return false
+		if TechTreeData.has_nation_bit(int(st.get("nation_bits", 0)), nation, tid):
+			return false
+	else:
+		if TechTreeData.has_bit(int(st.get("bits", 0)), tid):
+			return false
+	if int(t.get("age", 0)) > age:
+		return false
+	if _research_check_tech_prereq(t, st) != "":
+		return false
+	if _research_exclusion_error(st, tid) != "":
+		return false
+	var owner := int(st.get("owner", -1))
+	var team := int(st.get("team", get_host_team()))
+	return _auto_can_afford_with_reserve(owner, team, t.get("cost", {}), reserve)
+
+func _auto_can_afford_with_reserve(owner_peer_id: int, team: int, cost: Dictionary, reserve: Dictionary) -> bool:
+	var res := research_resources(owner_peer_id, team)
+	for k in cost:
+		if int(res.get(k, 0)) < int(cost[k]) + int(reserve.get(k, 0)):
+			return false
+	return true
 
 # ==================== 科研解锁查询 ====================
 func is_unit_unlocked(unit_id: int, owner_peer_id: int = -1, team: int = -1) -> bool:
@@ -6509,6 +6671,10 @@ func ui_research_start_age() -> Dictionary:
 
 func ui_research_cancel() -> Dictionary:
 	return research_cancel(player_owner_id, get_host_team())
+
+# 智能科研官设置（单机/房主直接写服务端状态；联机客户端由 ClientRenderer 转发）。
+func ui_research_set_auto(config: Dictionary) -> Dictionary:
+	return research_set_auto(player_owner_id, get_host_team(), config)
 
 func ui_research_available() -> bool:
 	return is_research_mode()

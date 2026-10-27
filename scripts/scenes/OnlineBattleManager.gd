@@ -857,6 +857,7 @@ func _process_1v1_command(peer_id: int, data: Dictionary):
 		"research": _research_cmd(peer_id, team, String(data.get("tech_id", "")))
 		"research_age": _research_cmd(peer_id, team, "AGE")
 		"cancel_research": research_cancel(peer_id, team)
+		"research_auto": _research_auto_cmd(peer_id, team, data.get("auto", {}))
 
 func _process_2v2_command(peer_id: int, data: Dictionary):
 	if not player_info.has(peer_id) or not player_info[peer_id].alive: return
@@ -883,11 +884,15 @@ func _process_2v2_command(peer_id: int, data: Dictionary):
 		"research": _research_cmd(peer_id, player_info[peer_id].team, String(data.get("tech_id", "")))
 		"research_age": _research_cmd(peer_id, player_info[peer_id].team, "AGE")
 		"cancel_research": research_cancel(peer_id, player_info[peer_id].team)
+		"research_auto": _research_auto_cmd(peer_id, player_info[peer_id].team, data.get("auto", {}))
 
 func _research_cmd(owner_peer_id: int, team: int, tid: String) -> Dictionary:
 	if tid == "AGE":
 		return research_start_age(owner_peer_id, team)
 	return research_start(owner_peer_id, team, tid)
+
+func _research_auto_cmd(owner_peer_id: int, team: int, config) -> Dictionary:
+	return research_set_auto(owner_peer_id, team, config)
 
 # 1v1 的实体带 owner_peer_id（房主=1、远程=真实 peer、补位 AI=合成 peer），
 # 科研状态必须按同一个 owner 建，不能再用 -1/队伍号，否则快照和实体状态对不上。
@@ -1917,6 +1922,7 @@ func _serialize_research(owner_peer_id: int, team: int) -> Dictionary:
 		"nation_bits": int(st.get("nation_bits", 0)),
 		"nation": int(st.get("nation", -1)),
 		"current": cur.duplicate(true),
+		"auto": ResearchAdvisor.normalize_config(st.get("auto", {})),
 	}
 
 func _broadcast_1v1():

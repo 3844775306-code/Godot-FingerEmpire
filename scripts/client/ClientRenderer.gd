@@ -144,6 +144,11 @@ func research_cancel_local() -> void:
 		return
 	NetworkManager.send_command.rpc_id(1, {"action": "cancel_research"})
 
+func research_auto_local(config: Dictionary) -> void:
+	if not is_research_mode() or NetworkManager.mode != NetworkManager.Mode.CLIENT:
+		return
+	NetworkManager.send_command.rpc_id(1, {"action": "research_auto", "auto": config})
+
 # 与单机 RTSBattleManager 保持同一套 UI 接口。
 func ui_research_state() -> Dictionary:
 	return research_state
@@ -158,6 +163,10 @@ func ui_research_start_age() -> Dictionary:
 
 func ui_research_cancel() -> Dictionary:
 	research_cancel_local()
+	return {"ok": true, "error": ""}
+
+func ui_research_set_auto(config: Dictionary) -> Dictionary:
+	research_auto_local(config)
 	return {"ok": true, "error": ""}
 
 func ui_research_available() -> bool:
