@@ -36,6 +36,13 @@ var _zone_center: Vector3 = Vector3.ZERO
 var _zone_radius: float = 12.0
 var _zone_hold_need: float = 120.0
 var _zone_mesh: MeshInstance3D = null
+var _zone_disc: MeshInstance3D = null
+var _zone_pillar: MeshInstance3D = null
+var _zone_pillar_mat: StandardMaterial3D = null
+var _zone_label: Label3D = null
+var _zone_state_text: String = ""
+var _zone_ping_timer: float = 0.0
+var _zone_nearest_dist: float = -1.0
 var _zone_enemy_inside: bool = false
 
 var _waves: Array = []
@@ -312,6 +319,19 @@ func _parse_objectives() -> void:
 	_has_castle_lost_fail = fail_flags.has("castle_lost")
 	_has_timeout_fail = fail_flags.has("timeout")
 	objective_states.clear()
+	# 先把所有目标参数清零：没有 hold_zone 的关卡不能带着上一关/默认值继续算计时，
+	# 否则会在地图原点凭空出现"控制区"（还会刷出控制区警告）。
+	_zone_radius = 0.0
+	_zone_hold_need = 0.0
+	_zone_center = Vector3.ZERO
+	_zone_state_text = ""
+	_escort_unit_id = 0
+	_kill_need = 0
+	_kill_ids.clear()
+	_target_ids.clear()
+	_target_need = 0
+	_target_initial = 0
+	_gather_need = 0.0
 	for o in level.get("objectives", []):
 		var obj: Dictionary = o
 		var t := String(obj.get("type", ""))
@@ -327,8 +347,7 @@ func _parse_objectives() -> void:
 				_zone_radius = float(zone.get("radius", 12.0))
 				var off: Array = zone.get("offset", [0.0, 0.0])
 				_zone_center = _map_center_offset(off, _zone_radius)
-				_zone_mesh = _spawn_ring(_zone_center, _zone_radius,
-					Color(0.25, 0.95, 0.45, 0.45), "CampaignZoneRing")
+				_mark_hold_zone(_zone_center, _zone_radius)
 			"escort":
 				_escort_unit_id = int(obj.get("unit_id", 19))
 				var ezone: Dictionary = obj.get("zone", {})
@@ -336,7 +355,21 @@ func _parse_objectives() -> void:
 				var eoff: Array = ezone.get("offset", [0.0, 0.0])
 				_escort_zone_center = _map_center_offset(eoff, _escort_zone_radius)
 				_escort_mesh = _spawn_ring(_escort_zone_center, _escort_zone_radius,
-					Color(0.35, 0.7, 1.0, 0.5), "CampaignEscortRing")
+					Color(0.35, 0.7, 1.0, 0.7), "CampaignEscortRing")
+				var escort_label := Label3D.new()
+				escort_label.name = "CampaignEscortLabel"
+				escort_label.text = "护送点"
+				escort_label.font_size = 64
+				escort_label.pixel_size = 0.03
+				escort_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+				escort_label.no_depth_test = true
+				escort_label.modulate = Color(0.55, 0.8, 1.0)
+				escort_label.outline_modulate = Color(0.0, 0.0, 0.0, 0.95)
+				escort_label.outline_size = 14
+				bm.add_child(escort_label)
+				escort_label.global_position = Vector3(_escort_zone_center.x,
+					float(_escort_zone_center.y) + 9.0, _escort_zone_center.z)
+				_ping_minimap(_escort_zone_center)
 			"destroy_targets":
 				_target_ids = obj.get("building_ids", [25, 26]).duplicate()
 				_target_need = int(obj.get("count", 3))
@@ -353,19 +386,38 @@ func _find_plain_area(center: Vector3, radius: float) -> Vector3:
 	var half: float = float(RTSConfig.MAP_SIZE) * 0.5
 	if map != null and map.terrain_grid.size() > 0:
 		half = float(map.terrain_grid.size()) * 0.5
-	for ring in range(0, 16):
-		var step: float = 4.0 + float(ring) * 4.0
-		for da in [0.0, 0.6, -0.6, 1.2, -1.2, 1.8, -1.8, 2.4, -2.4, 3.1]:
+	# 从目标点开始一圈圈往外找，优先用最近的点；占领区只需要"大部分是平地"，
+	# 不能要求整圈都是平地，否则桥头/绿洲这种地形会把它挤到几十米外的岸上
+	for ring in range(0, 21):
+		var step: float = float(ring) * 2.0
+		for i in range(16):
+			var da: float = TAU * float(i) / 16.0
 			var pos := Vector3(center.x + cos(float(da)) * step, 0.0, center.z + sin(float(da)) * step)
 			if absf(pos.x) > half - radius - 4.0 or absf(pos.z) > half - radius - 4.0:
 				continue
-			if _area_is_plain(pos, radius):
+			if _area_is_plain_loose(pos, radius):
 				if map != null and map.has_method("get_height_at"):
 					pos.y = float(map.get_height_at(pos))
 				return pos
 	if map != null and map.has_method("get_height_at"):
 		center.y = float(map.get_height_at(center))
 	return center
+
+# 占领区判定：中心必须是平地，圈内 60%/100% 半径上至少 75% 的点是平地
+func _area_is_plain_loose(center: Vector3, radius: float) -> bool:
+	if not _is_plain(center):
+		return false
+	var plain := 0
+	var total := 0
+	for scale in [0.6, 1.0]:
+		for i in range(16):
+			var a: float = TAU * float(i) / 16.0
+			var p := Vector3(center.x + cos(a) * radius * float(scale), 0.0,
+				center.z + sin(a) * radius * float(scale))
+			total += 1
+			if _is_plain(p):
+				plain += 1
+	return float(plain) / float(total) >= 0.75
 
 func _area_is_plain(center: Vector3, radius: float) -> bool:
 	if not _is_plain(center):
@@ -384,7 +436,42 @@ func _map_center_offset(off: Array, radius: float) -> Vector3:
 	if map != null and map.terrain_grid.size() > 0:
 		var size: int = int(map.terrain_grid.size())
 		center = map.grid_to_world(int(size / 2), int(size / 2))
+	# 偏移为 0 表示"抢中间"：用双方主城连线的中点当地图中心，
+	# 不能直接用地形中心——地形中心有时正好压在某一方基地里，那一方开局白赚计时。
+	if absf(float(off[0])) < 0.01 and absf(float(off[1])) < 0.01:
+		if player_anchor != Vector3.ZERO and enemy_anchor != Vector3.ZERO \
+				and player_anchor.distance_to(enemy_anchor) > 8.0:
+			return _find_balanced_area(radius)
 	return _find_plain_area(Vector3(center.x + float(off[0]), 0.0, center.z + float(off[1])), radius)
+
+# 在双方基地连线中点附近找一块平地当争夺区，优先取"两边跑过来差不多远"的点，
+# 避免因为地形把圈挤到某一方门口（那样另一方开局就吃亏）。
+func _find_balanced_area(radius: float) -> Vector3:
+	var mid: Vector3 = player_anchor.lerp(enemy_anchor, 0.5)
+	var best := Vector3.ZERO
+	var found := false
+	var best_score := -INF
+	for ring in range(0, 11):
+		var step: float = float(ring) * 4.0
+		for i in range(16):
+			var a: float = TAU * float(i) / 16.0
+			var pos := Vector3(mid.x + cos(a) * step, 0.0, mid.z + sin(a) * step)
+			if not _area_is_plain_loose(pos, radius):
+				continue
+			# 两边距离差越小越好，同时不能为了"一样远"把圈甩到地图角落：
+			# 离中点每远 1 米扣 0.6 分，距离差每 1 米扣 1 分
+			var score: float = -absf(player_anchor.distance_to(pos) - enemy_anchor.distance_to(pos))
+			score -= step * 0.6
+			if not found or score > best_score:
+				found = true
+				best_score = score
+				best = pos
+	if found:
+		var map = bm.get_node_or_null("Map")
+		if map != null and map.has_method("get_height_at"):
+			best.y = float(map.get_height_at(best))
+		return best
+	return _find_plain_area(mid, radius)
 
 # 地面上画一个目标光圈（占领区绿色 / 护送点蓝色）
 func _spawn_ring(center: Vector3, radius: float, color: Color, ring_name: String) -> MeshInstance3D:
@@ -408,6 +495,74 @@ func _spawn_ring(center: Vector3, radius: float, color: Color, ring_name: String
 	var y: float = float(center.y) if center.y != 0.0 else 0.15
 	ring.global_position = Vector3(center.x, y + 0.35, center.z)
 	return ring
+
+# 占领区标记：地面半透明色块 + 粗光圈 + 光柱 + 头顶悬浮倒计时。
+# 只有一圈细线在野外地图上几乎看不见，所以这里做成"老远就能看到"的标记。
+func _mark_hold_zone(center: Vector3, radius: float) -> void:
+	var green := Color(0.3, 1.0, 0.45)
+	var y: float = float(center.y)
+	# 地面色块
+	var disc_mat := StandardMaterial3D.new()
+	disc_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	disc_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	disc_mat.albedo_color = Color(green, 0.16)
+	disc_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var disc_mesh := CylinderMesh.new()
+	disc_mesh.top_radius = radius
+	disc_mesh.bottom_radius = radius
+	disc_mesh.height = 0.06
+	disc_mesh.radial_segments = 48
+	disc_mesh.material = disc_mat
+	_zone_disc = MeshInstance3D.new()
+	_zone_disc.name = "CampaignZoneDisc"
+	_zone_disc.mesh = disc_mesh
+	_zone_disc.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	bm.add_child(_zone_disc)
+	_zone_disc.global_position = Vector3(center.x, y + 0.14, center.z)
+	# 光圈（粗一点）
+	_zone_mesh = _spawn_ring(center, radius, Color(green, 0.95), "CampaignZoneRing")
+	if _zone_mesh != null and _zone_mesh.mesh is TorusMesh:
+		var torus: TorusMesh = _zone_mesh.mesh
+		torus.inner_radius = maxf(radius - 0.7, 0.5)
+		torus.outer_radius = radius + 0.7
+	# 光柱：远处也能一眼看到位置
+	_zone_pillar_mat = StandardMaterial3D.new()
+	_zone_pillar_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	_zone_pillar_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	_zone_pillar_mat.albedo_color = Color(green, 0.12)
+	_zone_pillar_mat.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var pillar_mesh := CylinderMesh.new()
+	pillar_mesh.top_radius = 1.0
+	pillar_mesh.bottom_radius = 1.0
+	pillar_mesh.height = 26.0
+	pillar_mesh.radial_segments = 12
+	pillar_mesh.material = _zone_pillar_mat
+	_zone_pillar = MeshInstance3D.new()
+	_zone_pillar.name = "CampaignZonePillar"
+	_zone_pillar.mesh = pillar_mesh
+	_zone_pillar.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	bm.add_child(_zone_pillar)
+	_zone_pillar.global_position = Vector3(center.x, y + 13.0, center.z)
+	# 头顶悬浮文字（倒计时）
+	_zone_label = Label3D.new()
+	_zone_label.name = "CampaignZoneLabel"
+	_zone_label.font_size = 64
+	_zone_label.pixel_size = 0.03
+	_zone_label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	_zone_label.no_depth_test = true
+	_zone_label.modulate = Color(0.55, 1.0, 0.65)
+	_zone_label.outline_modulate = Color(0.0, 0.0, 0.0, 0.95)
+	_zone_label.outline_size = 14
+	_zone_label.text = "占领区 %d 秒" % int(_zone_hold_need)
+	bm.add_child(_zone_label)
+	_zone_label.global_position = Vector3(center.x, y + 11.0, center.z)
+	_ping_minimap(center)
+
+# 在小地图上闪一下标记点（复用 HUD 小地图的警报闪烁）
+func _ping_minimap(pos: Vector3) -> void:
+	var mm = bm.find_child("Minimap", true, false)
+	if mm != null and mm.has_method("add_alert"):
+		mm.add_alert(pos)
 
 # ==================== 护送目标 ====================
 
@@ -629,21 +784,69 @@ func _update_zone(dt: float) -> void:
 		return
 	var mine := 0
 	var theirs := 0
+	var nearest := -1.0
 	for e in bm.entities.get_children():
 		if not (e is Army) or e.health <= 0:
 			continue
-		if e.global_position.distance_to(_zone_center) > _zone_radius:
-			continue
+		var dist: float = e.global_position.distance_to(_zone_center)
 		if int(e.team) == bm.player_team:
-			mine += 1
-		elif int(e.team) == bm.enemy_team:
+			if nearest < 0.0 or dist < nearest:
+				nearest = dist
+			if dist <= _zone_radius:
+				mine += 1
+		elif int(e.team) == bm.enemy_team and dist <= _zone_radius:
 			theirs += 1
+	_zone_nearest_dist = nearest
 	_zone_enemy_inside = theirs > 0
-	if mine > 0 and theirs == 0:
-		hold_seconds = minf(_zone_hold_need, hold_seconds + dt)
-	elif theirs > 0:
-		# 敌军进区：计时以两倍速倒退，防止只守不攻
+	# 占领规则（按人数比，不是"敌人一进来就全盘倒退"）：
+	#   我方人多  → 计时走，纯占领全速、混战半速；
+	#   双方一样  → 都推不动，计时暂停；
+	#   敌方人多  → 计时倒退（含我方一个都没有的情况）。
+	if mine > theirs:
+		hold_seconds = minf(_zone_hold_need,
+			hold_seconds + dt * (1.0 if theirs == 0 else 0.5))
+	elif theirs > mine:
 		hold_seconds = maxf(0.0, hold_seconds - dt * 2.0)
+	if hold_seconds >= _zone_hold_need:
+		_zone_state_text = "占领完成"
+	elif mine > 0 and theirs == 0:
+		_zone_state_text = "占领中"
+	elif mine > 0 and mine > theirs:
+		_zone_state_text = "争夺中（我方人多，半速计时）"
+	elif theirs > mine:
+		_zone_state_text = "敌军控制，计时倒退"
+	elif mine > 0 and mine == theirs:
+		_zone_state_text = "争夺中（势均力敌，计时暂停）"
+	else:
+		_zone_state_text = "无人驻守"
+	_update_zone_visual(dt)
+
+# 占领区动态表现：光圈呼吸、光柱闪烁、头顶倒计时、小地图定时闪点
+func _update_zone_visual(dt: float) -> void:
+	var t: float = float(Time.get_ticks_msec()) * 0.001
+	var done: bool = hold_seconds >= _zone_hold_need
+	if _zone_mesh != null and is_instance_valid(_zone_mesh):
+		var pulse: float = 1.0 + 0.02 * sin(t * 2.6)
+		_zone_mesh.scale = Vector3(pulse, 1.0, pulse)
+		_zone_mesh.visible = not done
+	if _zone_pillar != null and is_instance_valid(_zone_pillar) and _zone_pillar_mat != null:
+		_zone_pillar_mat.albedo_color.a = 0.08 + 0.05 * (0.5 + 0.5 * sin(t * 1.6))
+		_zone_pillar.visible = not done
+	if _zone_label != null and is_instance_valid(_zone_label):
+		if done:
+			_zone_label.text = "占领完成"
+		else:
+			_zone_label.text = "占领区 %d / %d 秒\n%s" % [
+				int(hold_seconds), int(_zone_hold_need), _zone_state_text]
+		if _zone_enemy_inside and not done:
+			_zone_label.modulate = Color(1.0, 0.45, 0.35)
+		else:
+			_zone_label.modulate = Color(0.55, 1.0, 0.65)
+	# 小地图每 8 秒闪一次，别让玩家忘了圈在哪
+	_zone_ping_timer -= dt
+	if _zone_ping_timer <= 0.0 and not done:
+		_zone_ping_timer = 8.0
+		_ping_minimap(_zone_center)
 
 func _update_warning() -> void:
 	warning_text = ""
@@ -661,8 +864,8 @@ func _update_warning() -> void:
 					[bm.enemy_team], bm.player_team, GameSettings.AlertKind.COMBAT,
 					false, [bm.team_nations.get(bm.enemy_team, -1)], enemy_spawn_point, -1)
 			warning_text = "⚠ %s %d 秒后抵达" % [label, secs]
-	if _zone_enemy_inside and _zone_hold_need > 0.0:
-		warning_text = "⚠ 敌军正在控制区内，计时倒退！"
+	if _zone_hold_need > 0.0 and hold_seconds < _zone_hold_need and _zone_enemy_inside:
+		warning_text = "⚠ 控制区被敌军压住，计时倒退！快把兵调回去"
 
 # ==================== 胜负判定 ====================
 
@@ -947,7 +1150,11 @@ func _update_progress_text() -> void:
 				parts.append("守城倒计时 %s / %s" % [
 					_fmt_time(maxf(_survive_need - elapsed, 0.0)), _fmt_time(_survive_need)])
 			"hold_zone":
-				parts.append("控制区累计 %d / %d 秒" % [int(hold_seconds), int(_zone_hold_need)])
+				var zone_line := "占领区 %d / %d 秒 · %s" % [
+					int(hold_seconds), int(_zone_hold_need), _zone_state_text]
+				if _zone_nearest_dist > _zone_radius:
+					zone_line += "（最近部队 %.0f 米外）" % _zone_nearest_dist
+				parts.append(zone_line)
 			"escort":
 				if _escort_unit != null and is_instance_valid(_escort_unit) and _escort_unit.health > 0:
 					var dist: float = _escort_unit.global_position.distance_to(_escort_zone_center)
