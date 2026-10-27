@@ -9,10 +9,15 @@ const WIDTH_DP: float = 152.0        # 原 190dp 的 80%，给战场多让出一
 # 按钮 30dp、行距 3dp、内边距 4dp，整体从 240dp 压到约 170dp，上缘抬到 y≈709。
 const BTN_H_DP: float = 30.0
 const GAP_DP: float = 3.0
-const PAD_DP: float = 4.0
-const ROW_COUNT: int = 5             # 框选/旋转、两个全选、两个撤退、自动进攻/设置、批量/连续
-# 面板高度按内容自适应：5 行按钮 + 4 条行间距 + 上下内边距
-const PANEL_H_DP: float = ROW_COUNT * BTN_H_DP + (ROW_COUNT - 1) * GAP_DP + PAD_DP * 2.0
+const PAD_DP: float = 2.0
+const BASE_ROWS: int = 5             # 框选/旋转、两个全选、两个撤退、自动进攻/设置、批量/连续
+# 科研模式下底部再加一行「科研树」，高度按实际行数算，避免横屏顶到右上角小地图
+func _row_count() -> int:
+	return BASE_ROWS + (1 if GameSettings.is_research_mode() else 0)
+
+func _panel_h_dp() -> float:
+	var rows := float(_row_count())
+	return rows * BTN_H_DP + (rows - 1.0) * GAP_DP + PAD_DP * 2.0
 
 var hud: Node = null
 var router: TouchGestureRouter = null
@@ -23,13 +28,14 @@ var _auto_btn: Button = null
 var _batch_produce_btn: Button = null
 var _cont_build_btn: Button = null
 var _panel: Panel = null
+var _research_btn: Button = null
 
 func _ready() -> void:
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	_build()
 
 func _build() -> void:
-	UILayout.place_dp(self, "br", WIDTH_DP, PANEL_H_DP)
+	UILayout.place_dp(self, "br", WIDTH_DP, _panel_h_dp())
 
 	_panel = Panel.new()
 	_panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -98,8 +104,21 @@ func _build() -> void:
 	row4.add_child(_cont_build_btn)
 	vb.add_child(row4)
 
+	# 科研树归入指令按钮栏：科研模式下多一行整宽按钮，经典模式不出现。
+	if GameSettings.is_research_mode():
+		var row5 := _make_row()
+		_research_btn = _make_button("🔬 科研树", UILayout.font_dp(10.0))
+		_research_btn.pressed.connect(func(): _invoke("_open_research_panel"))
+		row5.add_child(_research_btn)
+		vb.add_child(row5)
+
 	# 智能军需官 / 军队官的开关已移到 ⚙ 设置面板，命令栏不再单占一行
 	set_process(true)
+
+# 手机指令栏的科研树按钮同步显示年龄/进度（HUD 每秒调一次）
+func set_research_text(text: String) -> void:
+	if _research_btn != null and is_instance_valid(_research_btn):
+		_research_btn.text = text
 
 func _on_settings_pressed() -> void:
 	if hud and hud.has_method("_open_game_settings"):

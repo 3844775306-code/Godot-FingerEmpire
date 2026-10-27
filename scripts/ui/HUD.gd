@@ -70,6 +70,7 @@ var _capsule_res_labels: Dictionary = {}
 var _capsule_row: HBoxContainer = null
 # 全局指令按钮底板（6 个按钮排两行）
 var _cmd_panel: Panel = null
+var _cmd_research_btn: Button = null
 # 全局指令底板：6 个按钮 2 行 × 3 列
 const CMD_PANEL_W: float = 662.0
 const CMD_PANEL_H: float = 82.0
@@ -680,24 +681,28 @@ func _input(event):
 			KEY_T: _open_research_panel()
 
 func _update_research_button(bm) -> void:
-	var rbtn: Button = get_node_or_null("ResearchButton") as Button
-	if rbtn == null:
+	if _cmd_research_btn == null or not is_instance_valid(_cmd_research_btn):
 		return
 	var on: bool = bm.has_method("is_research_mode") and bm.is_research_mode()
-	rbtn.visible = on
+	_cmd_research_btn.visible = on
 	if not on:
 		return
 	var st: Dictionary = bm.get_host_research_state() if bm.has_method("get_host_research_state") else {}
 	var age_name := TechTreeData.age_name(int(st.get("age", 0)))
 	var cur: Dictionary = st.get("current", {})
+	var short_text := "🔬 科研树"
 	if cur.is_empty():
-		rbtn.text = "🔬 科研" if InputSource.use_mobile_ui() else "🔬 %s · 科研树 (T)" % age_name
+		_cmd_research_btn.text = "🔬 %s · 科研树 (T)" % age_name
 	else:
 		var pct: int = int(clampf(float(cur.get("elapsed", 0.0)) / maxf(float(cur.get("total", 1.0)), 0.1) * 100.0, 0.0, 100.0))
-		if InputSource.use_mobile_ui():
-			rbtn.text = "🔬 科研 %d%%" % pct
-		else:
-			rbtn.text = "🔬 %s · %s %d%% (T)" % [age_name, String(cur.get("name", "")), pct]
+		_cmd_research_btn.text = "🔬 %s · %s %d%% (T)" % [age_name, String(cur.get("name", "")), pct]
+		short_text = "🔬 科研 %d%%" % pct
+	# 手机指令栏里的科研树按钮同步显示年龄/进度（指令栏空间小，用短文案）
+	var mh = _mobile_hud
+	if mh != null and is_instance_valid(mh):
+		var cb = mh.get("command_bar")
+		if cb != null and is_instance_valid(cb) and cb.has_method("set_research_text"):
+			cb.call("set_research_text", short_text)
 
 # 科研树入口：经典模式不显示；联机客户端由 ClientHUD 处理。
 func _open_research_panel():
@@ -900,6 +905,8 @@ func _ready():
 			stick.set_process_unhandled_input(false)
 
 	_create_unit_stats_panel()
+	# 科研模式下指令底板多一行科研树按钮，底板高度跟着变
+	UILayout.cmd_research_row = GameSettings.is_research_mode()
 
 	# 全局指令：6 个按钮排成 2 行 × 3 列（3×2），整块底板水平居中
 	_cmd_panel = Panel.new()
@@ -934,16 +941,18 @@ func _ready():
 	var b_settings = _make_cmd_button("⚙ 设置", _open_game_settings, false)
 	for b in [b_select_screen, b_select_all, auto_attack_btn, b_retreat_screen, b_retreat_all, b_settings]:
 		cmd_grid.add_child(b)
-
-	# 科研模式入口：桌面端挂在小地图下方右对齐；经典模式下隐藏。
-	var research_btn := Button.new()
-	research_btn.name = "ResearchButton"
-	research_btn.text = "🔬 科研树 (T)"
-	research_btn.size = Vector2(260, 40)
-	UITheme.apply_muted_button(research_btn, 17)
-	research_btn.pressed.connect(_open_research_panel)
-	add_child(research_btn)
-	research_btn.visible = GameSettings.is_research_mode()
+	# 科研树归入指令按钮栏：整行放在六个指令按钮下面，经典模式隐藏。
+	# 不再单独挂一个悬浮按钮，顶部带只保留胶囊/指令/信息/小地图四类元素。
+	_cmd_research_btn = Button.new()
+	_cmd_research_btn.name = "CmdResearchButton"
+	_cmd_research_btn.text = "🔬 科研树 (T)"
+	_cmd_research_btn.position = Vector2(8, 82)
+	_cmd_research_btn.size = Vector2(UILayout.TOP_CMD_W - 16.0, 30)
+	_cmd_research_btn.custom_minimum_size = _cmd_research_btn.size
+	UITheme.apply_muted_button(_cmd_research_btn, UITheme.FONT_MD)
+	_cmd_research_btn.pressed.connect(_open_research_panel)
+	_cmd_research_btn.visible = GameSettings.is_research_mode()
+	_cmd_panel.add_child(_cmd_research_btn)
 
 	set_process(true)
 
@@ -981,10 +990,6 @@ func _layout_top_band() -> void:
 			var mm_rect := UILayout.top_minimap_rect(vp)
 			UILayout.place(mm, 1.0, 0.0, -UILayout.TOP_MARGIN - mm_rect.size.x,
 					UILayout.TOP_MARGIN, -UILayout.TOP_MARGIN, UILayout.TOP_MARGIN + mm_rect.size.y)
-	# 科研入口
-	var rb := get_node_or_null("ResearchButton") as Control
-	if rb != null and rb.visible:
-		_place_research_entry(rb, vp, mobile)
 	# 战况栏
 	_layout_alert_stack()
 
@@ -1002,25 +1007,13 @@ func _mobile_capsule_rect_ui() -> Rect2:
 	return Rect2(Vector2(insets.x + UILayout.dp(2.0), insets.y + UILayout.dp(2.0)),
 		Vector2(UILayout.dp(UILayout.mobile_capsule_width_dp()), UILayout.dp(42.0)))
 
-# 科研入口：桌面放小地图下方右对齐；手机竖屏放资源胶囊下方左侧、横屏放小地图下方右侧，
-# 都避开居中战况栏，且按 dp 放大到可点击尺寸。
-func _place_research_entry(rb: Control, vp: Vector2, mobile: bool) -> void:
-	if mobile:
-		var cap_rect := _mobile_capsule_rect_ui()
-		var r := UILayout.mobile_research_rect(cap_rect)
-		if r.size.x <= 0.0:
-			rb.visible = false
-			return
-		rb.add_theme_font_size_override("font_size", UILayout.font_dp(12.0))
-		rb.add_theme_constant_override("icon_max_width", int(UILayout.dp(16.0)))
-		rb.custom_minimum_size = r.size
-		rb.size = r.size
-		rb.position = r.position
-	else:
-		var r2 := UILayout.top_research_rect(vp)
-		rb.custom_minimum_size = r2.size
-		rb.size = r2.size
-		rb.position = r2.position
+# 移动端统计大屏打开时隐藏顶部信息面板（DiagLayer 在很上层，会压住统计大屏的关闭按钮）
+func _on_stats_overlay_toggled(open: bool) -> void:
+	if not is_inside_tree():
+		return
+	var bm = _get_bm()
+	if bm != null and bm.has_method("set_top_info_visible"):
+		bm.call("set_top_info_visible", not open)
 
 func _on_viewport_size_changed() -> void:
 	_layout_top_band()

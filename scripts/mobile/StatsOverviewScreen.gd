@@ -61,14 +61,19 @@ func _build() -> void:
 	_title.add_theme_font_size_override("font_size", UILayout.font_dp(16.0))
 	_title.add_theme_color_override("font_color", Color(UITheme.PARCHMENT))
 	_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_title.clip_text = true
 	header.add_child(_title)
 
+	# 关闭按钮直接锚在屏幕右上角（不进 header 的 HBox）：
+	# 竖屏卡片最小宽度会把 header 撑出屏幕，按钮如果跟着 HBox 走就会被挤出右边缘看不见。
 	_close_btn = Button.new()
-	_close_btn.text = "关闭"
-	_close_btn.custom_minimum_size = Vector2(UILayout.dp(64.0), UILayout.dp(32.0))
+	_close_btn.text = "✕ 关闭"
+	_close_btn.custom_minimum_size = Vector2(UILayout.dp(76.0), UILayout.dp(36.0))
 	UITheme.apply_button(_close_btn, UILayout.font_dp(13.0))
 	_close_btn.pressed.connect(close)
-	header.add_child(_close_btn)
+	_close_btn.z_index = 20
+	add_child(_close_btn)
+	UILayout.place_dp(_close_btn, "tr", 76.0, 36.0, 12.0)
 
 	var body := HBoxContainer.new()
 	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -82,7 +87,8 @@ func _build() -> void:
 	body.add_child(scroll)
 
 	_grid = GridContainer.new()
-	_grid.columns = 2
+	# 竖屏一行只放一张国家卡：手机逻辑宽度放不下两张卡并排，硬塞会把整体最小宽度撑出屏幕
+	_grid.columns = 1 if UILayout.is_portrait() else 2
 	_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_grid.add_theme_constant_override("h_separation", int(UILayout.dp(6.0)))
 	_grid.add_theme_constant_override("v_separation", int(UILayout.dp(6.0)))
@@ -104,10 +110,19 @@ func open() -> void:
 	_refresh()
 	_attach_diplo(true)
 	move_to_front()
+	if hud != null and hud.has_method("_on_stats_overlay_toggled"):
+		hud.call("_on_stats_overlay_toggled", true)
 
 func close() -> void:
 	_attach_diplo(false)
 	visible = false
+	if hud != null and hud.has_method("_on_stats_overlay_toggled"):
+		hud.call("_on_stats_overlay_toggled", false)
+
+# 横竖屏切换会直接重建 MobileHUD；如果统计大屏还开着，先恢复顶部信息，避免一直隐藏
+func _exit_tree() -> void:
+	if visible and hud != null and is_instance_valid(hud) and hud.is_inside_tree() and hud.has_method("_on_stats_overlay_toggled"):
+		hud.call("_on_stats_overlay_toggled", false)
 
 func is_point_inside(pos: Vector2) -> bool:
 	return visible and get_global_rect().has_point(pos)

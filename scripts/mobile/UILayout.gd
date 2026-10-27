@@ -131,7 +131,13 @@ static func place_dp(ctrl: Control, corner: String, width_dp: float, height_dp: 
 # 统一在这里算矩形，各端只负责套用，避免每个 HUD 各写一套坐标导致互相压住。
 const TOP_MARGIN: float = 10.0          # 桌面顶部带外边距（设计空间）
 const TOP_CMD_W: float = 662.0          # 桌面指令底板宽（3 列 × 210 + 间距 + 内边距）
-const TOP_CMD_H: float = 82.0           # 桌面指令底板高（2 行 × 33 + 间距 + 内边距）
+const TOP_CMD_H: float = 82.0           # 桌面指令底板高（6 键 3×2）
+const TOP_CMD_RESEARCH_H: float = 120.0 # 科研模式下多一行整宽科研树按钮
+# 科研模式下指令底板加高；HUD/ClientHUD 构建指令栏前按当局模式设置一次。
+static var cmd_research_row: bool = false
+
+static func top_cmd_h() -> float:
+	return TOP_CMD_RESEARCH_H if cmd_research_row else TOP_CMD_H
 const TOP_CAPSULE_MIN_W: float = 580.0  # 桌面资源胶囊最小宽
 const TOP_CAPSULE_H: float = 52.0
 const TOP_MINIMAP: float = 400.0        # 桌面小地图边长
@@ -141,15 +147,15 @@ const TOP_ALERT_W: float = 820.0        # 战况栏宽
 const MOBILE_CAPSULE_W_DP: float = 344.0
 const MOBILE_MINIMAP_DP: float = 154.0          # 手机横屏小地图
 const MOBILE_MINIMAP_PORTRAIT_DP: float = 100.0 # 手机竖屏小地图
-# 手机顶部信息栏（性能/对局信息）统一按 4 行排：每行一句短信息，
-# 比原来「一条长句 + 省略号」能多看到内容，也不会把文字截掉。
-const MOBILE_INFO_LINE_DP: float = 17.0
-const MOBILE_INFO_LINES: int = 4
+# 手机顶部信息栏只留两行：性能（FPS/画质）和对局信息（AI/地图/时间）。
+# 实体数量、A* 寻路统计已经移出这里，腾出来的高度留给战场。
+const MOBILE_INFO_LINE_DP: float = 18.0
+const MOBILE_INFO_LINES: int = 2
 const MOBILE_INFO_H_DP: float = MOBILE_INFO_LINE_DP * float(MOBILE_INFO_LINES)
 
 # 桌面顶部指令底板：水平居中
 static func top_cmd_rect(vp: Vector2) -> Rect2:
-	return Rect2(Vector2((vp.x - TOP_CMD_W) * 0.5, TOP_MARGIN), Vector2(TOP_CMD_W, TOP_CMD_H))
+	return Rect2(Vector2((vp.x - TOP_CMD_W) * 0.5, TOP_MARGIN), Vector2(TOP_CMD_W, top_cmd_h()))
 
 # 桌面小地图：贴右上角，与顶部带同一条高度
 static func top_minimap_rect(vp: Vector2) -> Rect2:
@@ -200,14 +206,9 @@ static func top_info_rect(vp: Vector2) -> Rect2:
 	var gap_right := mm.position.x - 12.0
 	if gap_right - gap_left >= TOP_INFO_W:
 		return Rect2(Vector2(gap_right - TOP_INFO_W, TOP_MARGIN), Vector2(TOP_INFO_W, TOP_INFO_H))
-	var below := TOP_MARGIN + TOP_CMD_H + 8.0
+	var below := TOP_MARGIN + top_cmd_h() + 8.0
 	var max_x := maxf(TOP_MARGIN, vp.x - TOP_MARGIN - TOP_INFO_W)
 	return Rect2(Vector2(clampf((vp.x - TOP_INFO_W) * 0.5, TOP_MARGIN, max_x), below), Vector2(TOP_INFO_W, TOP_INFO_H))
-
-# 桌面科研入口：小地图正下方右对齐
-static func top_research_rect(vp: Vector2, w: float = 260.0, h: float = 40.0) -> Rect2:
-	var mm := top_minimap_rect(vp)
-	return Rect2(Vector2(vp.x - TOP_MARGIN - w, mm.position.y + mm.size.y + 8.0), Vector2(w, h))
 
 # 手机资源胶囊实际宽度（dp）：标准 9:16 竖屏用满 344dp；
 # 20:9 等高瘦屏竖屏逻辑宽度只有约 300dp，胶囊必须收窄，否则会被屏幕右边缘裁掉。
@@ -231,11 +232,11 @@ static func mobile_minimap_rect(capsule_rect: Rect2) -> Rect2:
 	return Rect2(Vector2(vp.x - right_l - side_l, insets.y + dp(2.0)), Vector2(side_l, side_l))
 
 # 手机顶部信息栏：横屏时夹在资源胶囊与小地图之间；竖屏放到资源胶囊正下方，
-# 左边一直延伸到小地图左侧。两种方向都按 4 行排短句，避免长句被省略号截断。
-static func mobile_top_info_rect(capsule_rect: Rect2) -> Rect2:
+# 左边一直延伸到小地图左侧。单机默认 2 行；联机信息多，可以传 lines=3。
+static func mobile_top_info_rect(capsule_rect: Rect2, lines: int = MOBILE_INFO_LINES) -> Rect2:
 	var insets := safe_insets()
 	var mm := mobile_minimap_rect(capsule_rect)
-	var h := dp(MOBILE_INFO_H_DP)
+	var h := dp(MOBILE_INFO_LINE_DP * float(maxi(lines, 1)))
 	if is_portrait():
 		var left := insets.x + dp(2.0)
 		var right := mm.position.x - dp(6.0)
@@ -248,30 +249,17 @@ static func mobile_top_info_rect(capsule_rect: Rect2) -> Rect2:
 		return Rect2()
 	return Rect2(Vector2(left_l, insets.y + dp(4.0)), Vector2(right_l - left_l, h))
 
-# 手机科研入口：竖屏放在顶部信息栏下面（左侧），横屏放胶囊下方左侧；
-# 两种方向都避开居中战况栏。
-static func mobile_research_rect(capsule_rect: Rect2, w_dp: float = 120.0, h_dp: float = 40.0) -> Rect2:
-	var insets := safe_insets()
-	var w := dp(w_dp)
-	var h := dp(h_dp)
-	if is_portrait():
-		var info := mobile_top_info_rect(capsule_rect)
-		var top := info.position.y + info.size.y + dp(4.0)
-		return Rect2(Vector2(insets.x + dp(6.0), top), Vector2(w, h))
-	# 横屏：资源胶囊正下方左侧，右边留给居中的战况栏和右下指令栏
-	var top_l := capsule_rect.position.y + capsule_rect.size.y + dp(8.0)
-	return Rect2(Vector2(insets.x + dp(6.0), top_l), Vector2(w, h))
-
-# 手机战况栏：横屏放顶部信息栏下方居中；竖屏继续往下让开信息栏与科研入口。
-static func mobile_alert_rect(capsule_rect: Rect2 = Rect2()) -> Rect2:
+# 手机战况栏：竖屏让开胶囊下方的信息栏和小地图，横屏放在信息栏下方居中。
+# info_lines：调用方信息栏实际行数（联机 3 行时传 3，避免战况栏压住信息文字）。
+static func mobile_alert_rect(capsule_rect: Rect2 = Rect2(), info_lines: int = MOBILE_INFO_LINES) -> Rect2:
 	var vp := view_size()
 	var w := dp(300.0 if is_portrait() else 310.0)
-	# 竖屏：信息栏（胶囊下面 4 行）+ 科研入口（40dp）之后；
-	# 横屏：信息栏 4 行之后。
-	var base_y := dp(176.0) if is_portrait() else dp(92.0)
+	# 竖屏小地图 100dp 高，战况栏必须在小地图底边之下（166dp）；
+	# 横屏战况栏与右上小地图左右错开，可以直接贴信息栏下方（58dp）。
+	var base_y := dp(166.0) if is_portrait() else dp(58.0)
 	var top_y := base_y
 	if capsule_rect.size.x > 0.0:
-		var info := mobile_top_info_rect(capsule_rect)
+		var info := mobile_top_info_rect(capsule_rect, info_lines)
 		top_y = maxf(top_y, info.position.y + info.size.y + dp(6.0))
 	return Rect2(Vector2((vp.x - w) * 0.5, top_y), Vector2(w, 0.0))
 

@@ -418,9 +418,9 @@ var _diag_active_frame: int = 0
 var _diag_physics_heartbeat: int = 0
 var _fps_label: Label = null
 var _snap_rate_label: Label = null
-var _diag_entity_label: Label = null
-var _diag_path_label: Label = null
 var _diag_bg: Panel = null
+var _diag_layer: CanvasLayer = null
+var _top_info_visible: bool = true       # 打开移动端统计大屏时临时隐藏顶部信息
 var _diag_rect: Rect2 = Rect2()          # 顶部信息面板当前矩形（HUD 战况栏据此避让）
 var _diag_capsule_rect: Rect2 = Rect2()  # 手机端资源胶囊矩形：信息栏贴在它下面
 
@@ -456,9 +456,9 @@ var _physics_max_steps_original: int = 8
 var _physics_rate_low: bool = false
 
 func _create_diag_label():
-	# 顶部信息：桌面两行（性能 / 对局信息）放在指令底板下方居中，不再压住指令按钮和小地图；
-	# 手机按 4 行短句排（竖屏放资源胶囊正下方，横屏夹在胶囊与小地图之间），
-	# 每行只放一类信息，尽量不用省略号。
+	# 顶部信息只保留两行：性能（FPS/画质）和对局信息（AI/地图/时间）。
+	# 实体数量、A* 寻路排队这些诊断数据已从这里移除，给战场留空间。
+	# 桌面放指令底板下方居中；手机竖屏放资源胶囊正下方，横屏夹在胶囊与小地图之间。
 	var mobile := InputSource.use_mobile_ui()
 	_diag_bg = Panel.new()
 	_diag_bg.name = "DiagBG"
@@ -468,21 +468,23 @@ func _create_diag_label():
 	bg_style.bg_color = Color(0.0, 0.0, 0.0, 0.45)
 	bg_style.set_corner_radius_all(int(UILayout.dp(6.0)))
 	_diag_bg.add_theme_stylebox_override("panel", bg_style)
-	var canvas := CanvasLayer.new()
-	canvas.name = "DiagLayer"
-	canvas.layer = 100
-	canvas.add_child(_diag_bg)
+	_diag_layer = CanvasLayer.new()
+	_diag_layer.name = "DiagLayer"
+	_diag_layer.layer = 100
+	_diag_layer.add_child(_diag_bg)
 	_fps_label = _make_top_label("DiagFPS", mobile, UILayout.font_dp(10.0) if mobile else 24, Color.LIME_GREEN)
-	_diag_entity_label = _make_top_label("DiagEntity", mobile, UILayout.font_dp(9.5), Color(0.8, 1.0, 0.8))
-	_diag_path_label = _make_top_label("DiagPath", mobile, UILayout.font_dp(9.5), Color(0.75, 0.92, 1.0))
 	_snap_rate_label = _make_top_label("DiagInfo", mobile, UILayout.font_dp(9.5) if mobile else 22, Color(1.0, 0.9, 0.3))
-	canvas.add_child(_fps_label)
-	canvas.add_child(_diag_entity_label)
-	canvas.add_child(_diag_path_label)
-	canvas.add_child(_snap_rate_label)
-	add_child(canvas)
+	_diag_layer.add_child(_fps_label)
+	_diag_layer.add_child(_snap_rate_label)
+	add_child(_diag_layer)
 	_diag_physics_heartbeat = 0
 	_layout_diag_now()
+
+# 移动端统计大屏打开时隐藏顶部信息，关掉再恢复（大屏是模态覆盖，信息栏会压住它）
+func set_top_info_visible(v: bool) -> void:
+	_top_info_visible = v
+	if _diag_layer != null and is_instance_valid(_diag_layer):
+		_diag_layer.visible = v
 
 # 顶部信息的一行文字（带黑描边，浅色地面也看得清）。
 # 桌面居中；手机左对齐并按 dp 放大字号，超长才用省略号兜底。
@@ -534,17 +536,11 @@ func _layout_diag_now() -> void:
 	var pad_x := UILayout.dp(6.0) if mobile else UILayout.dp(4.0)
 	var line_count: float = float(UILayout.MOBILE_INFO_LINES) if mobile else 2.0
 	var line_h := rect.size.y / line_count
-	var labels: Array = [_fps_label]
-	if mobile:
-		labels.append(_diag_entity_label)
-		labels.append(_diag_path_label)
-	labels.append(_snap_rate_label)
+	var labels: Array = [_fps_label, _snap_rate_label]
 	for i in labels.size():
 		var lb: Label = labels[i]
 		lb.position = Vector2(rect.position.x + pad_x, rect.position.y + line_h * float(i))
 		lb.size = Vector2(rect.size.x - pad_x * 2.0, line_h)
-	_diag_entity_label.visible = mobile
-	_diag_path_label.visible = mobile
 
 # 战况栏避让用：信息面板底边
 func get_diag_panel_rect() -> Rect2:
@@ -4379,33 +4375,17 @@ func _process(delta):
 		var mobile := InputSource.use_mobile_ui()
 		var phys_frames = Engine.get_physics_frames()
 		var phys_ok = (phys_frames != _diag_physics_heartbeat)
-		var np_stats: Dictionary = get_moving_no_path_stats()
 		if not phys_ok and _diag_physics_heartbeat > 0:
 			_fps_label.add_theme_color_override("font_color", Color.RED)
-			_fps_label.text = "🔴 主循环卡死 FPS:%.0f 实体:%d" % [
-				Engine.get_frames_per_second(), _all_entities.size()
-			]
-			if mobile and _diag_entity_label:
-				_diag_entity_label.text = "实体:%d 军%d 建%d" % [
-					_all_entities.size(), _armies.size(), _buildings.size()]
+			_fps_label.text = "🔴 主循环卡死 FPS:%.0f" % Engine.get_frames_per_second()
 		else:
 			_fps_label.add_theme_color_override("font_color", Color.LIME_GREEN)
 			if mobile:
-				# 手机：拆成短句，一行一类，避免一条长句被省略号截掉
 				_fps_label.text = "FPS:%.0f 画质:%d" % [
 					Engine.get_frames_per_second(), _perf_quality_level]
-				_diag_entity_label.text = "实体:%d 军%d 建%d" % [
-					_all_entities.size(), _armies.size(), _buildings.size()]
-				_diag_path_label.text = "无路径:%d 排队:%d 卡:%d" % [
-					int(np_stats.get("total", 0)), int(np_stats.get("pending_total", 0)),
-					int(np_stats.get("stalled", 0))]
 			else:
-				_fps_label.text = "FPS:%.0f | 画质:%d | 实体:%d(A%d B%d) | 移动无路径:%d(排队:%d,卡:%d)" % [
-					Engine.get_frames_per_second(), _perf_quality_level,
-					_all_entities.size(), _armies.size(), _buildings.size(),
-					int(np_stats.get("total", 0)), int(np_stats.get("pending_total", 0)),
-					int(np_stats.get("stalled", 0))
-				]
+				_fps_label.text = "FPS:%.0f | 画质:%d" % [
+					Engine.get_frames_per_second(), _perf_quality_level]
 		if _snap_rate_label:
 			var diff_names = ["简单", "普通", "困难", "地狱"]
 			var dn = diff_names[clampi(GameSettings.ai_difficulty, 0, 3)]

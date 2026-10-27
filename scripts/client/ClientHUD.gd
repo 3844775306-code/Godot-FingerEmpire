@@ -4,6 +4,8 @@ extends Control
 var _mobile_hud = null    # 移动端界面装配器（仅触屏设备创建）
 var _last_portrait: bool = false
 var _mobile_rebuild_pending: bool = false
+var _cmd_research_btn: Button = null
+var _top_info_suppressed: bool = false   # 打开移动端统计大屏时隐藏顶部信息
 
 # 最近一次快照下发的经济数据（统计面板用；原左下角资源卡已移除）
 var _last_res: Dictionary = {}
@@ -595,25 +597,29 @@ func _input(event):
 			_: pass  # Space等由ClientInput统一处理
 
 func _update_research_button():
-	var rbtn: Button = get_node_or_null("ResearchButton") as Button
-	if rbtn == null:
+	if _cmd_research_btn == null or not is_instance_valid(_cmd_research_btn):
 		return
 	var cr = get_tree().get_first_node_in_group("client_renderer")
 	var on: bool = GameSettings.is_research_mode() and cr != null and cr.has_method("ui_research_state")
-	rbtn.visible = on
+	_cmd_research_btn.visible = on
 	if not on:
 		return
 	var st: Dictionary = cr.ui_research_state()
 	var age_name := TechTreeData.age_name(int(st.get("age", 0)))
 	var cur: Dictionary = st.get("current", {})
+	var short_text := "🔬 科研树"
 	if cur.is_empty():
-		rbtn.text = "🔬 科研" if InputSource.use_mobile_ui() else "🔬 %s · 科研树 (T)" % age_name
+		_cmd_research_btn.text = "🔬 %s · 科研树 (T)" % age_name
 	else:
 		var pct: int = int(clampf(float(cur.get("elapsed", 0.0)) / maxf(float(cur.get("total", 1.0)), 0.1) * 100.0, 0.0, 100.0))
-		if InputSource.use_mobile_ui():
-			rbtn.text = "🔬 科研 %d%%" % pct
-		else:
-			rbtn.text = "🔬 %s · %s %d%% (T)" % [age_name, String(cur.get("name", "")), pct]
+		_cmd_research_btn.text = "🔬 %s · %s %d%% (T)" % [age_name, String(cur.get("name", "")), pct]
+		short_text = "🔬 科研 %d%%" % pct
+	# 手机指令栏的科研树按钮同步进度（空间小，用短文案）
+	var mh = _mobile_hud
+	if mh != null and is_instance_valid(mh):
+		var cb = mh.get("command_bar")
+		if cb != null and is_instance_valid(cb) and cb.has_method("set_research_text"):
+			cb.call("set_research_text", short_text)
 
 # 科研树：客户端状态来自 ClientRenderer 的快照镜像，操作通过 RPC 发给主机。
 func _open_research_panel():
@@ -892,6 +898,8 @@ func _on_alert_gui_input(event: InputEvent, holder = null) -> void:
 func _ready():
 	# 与单机版一致：左上统计面板（含资源/人口/主城/经济/军队/建筑），原左下角资源 HUD 已移除
 	_create_unit_stats_panel()
+	# 科研模式下指令底板多一行科研树按钮，底板高度跟着变
+	UILayout.cmd_research_row = GameSettings.is_research_mode()
 
 	# 电脑版左下角摇杆用不上：隐藏并停掉它的输入处理，避免抢占鼠标
 	if not InputSource.use_mobile_ui():
@@ -936,15 +944,17 @@ func _ready():
 	for b in [attack_all_btn, retreat_all_btn, auto_attack_btn, b_ret_screen, b_ret_all, b_settings]:
 		cmd_grid.add_child(b)
 
-	var research_btn := Button.new()
-	# 科研模式入口：桌面挂在小地图下方右对齐；手机按横竖屏挂到胶囊/小地图下方。
-	research_btn.name = "ResearchButton"
-	research_btn.text = "🔬 科研树 (T)"
-	research_btn.size = Vector2(260, 40)
-	UITheme.apply_muted_button(research_btn, 17)
-	research_btn.pressed.connect(_open_research_panel)
-	add_child(research_btn)
-	research_btn.visible = GameSettings.is_research_mode()
+	# 科研树归入指令按钮栏（整行放在六个指令按钮下面），不再单独挂悬浮按钮。
+	_cmd_research_btn = Button.new()
+	_cmd_research_btn.name = "CmdResearchButton"
+	_cmd_research_btn.text = "🔬 科研树 (T)"
+	_cmd_research_btn.position = Vector2(8, 82)
+	_cmd_research_btn.size = Vector2(UILayout.TOP_CMD_W - 16.0, 30)
+	_cmd_research_btn.custom_minimum_size = _cmd_research_btn.size
+	UITheme.apply_muted_button(_cmd_research_btn, UITheme.FONT_MD)
+	_cmd_research_btn.pressed.connect(_open_research_panel)
+	_cmd_research_btn.visible = GameSettings.is_research_mode()
+	_cmd_panel.add_child(_cmd_research_btn)
 
 	# 顶部两行信息：第一行性能、第二行对局/网络信息。
 	# 位置不写死：桌面优先塞进指令栏与小地图之间的空档（放不下就落到指令栏正下方），
@@ -1035,35 +1045,15 @@ func _layout_top_band() -> void:
 			var mm_rect := UILayout.top_minimap_rect(vp)
 			UILayout.place(mm, 1.0, 0.0, -UILayout.TOP_MARGIN - mm_rect.size.x,
 					UILayout.TOP_MARGIN, -UILayout.TOP_MARGIN, UILayout.TOP_MARGIN + mm_rect.size.y)
-	var rb := get_node_or_null("ResearchButton") as Control
-	if rb != null and rb.visible:
-		_place_research_entry(rb, vp, mobile)
 	_layout_top_info()
 	_layout_alert_stack()
 
-# 科研入口：桌面放小地图下方右对齐；手机竖屏放胶囊下方左侧、横屏放小地图下方右侧，
-# 都避开居中战况栏，并按 dp 放大到可点击尺寸。
-func _place_research_entry(rb: Control, vp: Vector2, mobile: bool) -> void:
-	if mobile:
-		var cap_rect := UILayout.top_capsule_rect(vp, vp.x)
-		if _mobile_hud != null and is_instance_valid(_mobile_hud):
-			var cap = _mobile_hud.get("capsule")
-			if cap is Control and (cap as Control).visible:
-				cap_rect = (cap as Control).get_global_rect()
-		var r := UILayout.mobile_research_rect(cap_rect)
-		if r.size.x <= 0.0:
-			rb.visible = false
-			return
-		rb.add_theme_font_size_override("font_size", UILayout.font_dp(12.0))
-		rb.add_theme_constant_override("icon_max_width", int(UILayout.dp(16.0)))
-		rb.custom_minimum_size = r.size
-		rb.size = r.size
-		rb.position = r.position
-	else:
-		var r2 := UILayout.top_research_rect(vp)
-		rb.custom_minimum_size = r2.size
-		rb.size = r2.size
-		rb.position = r2.position
+# 移动端统计大屏打开时隐藏顶部信息栏（它是全屏模态，信息栏会压住关闭按钮）
+func _on_stats_overlay_toggled(open: bool) -> void:
+	if not is_inside_tree():
+		return
+	_top_info_suppressed = open
+	_layout_top_info()
 
 # 顶部信息栏：桌面塞进指令栏与小地图之间（塞不下落到指令栏下方居中）；
 # 手机竖屏放到资源胶囊正下方 4 行短句区，横屏夹在胶囊与小地图之间。
@@ -1076,23 +1066,23 @@ func _layout_top_info() -> void:
 	var vp := get_viewport().get_visible_rect().size
 	var rect := Rect2()
 	if InputSource.use_mobile_ui():
-		rect = UILayout.mobile_top_info_rect(_mobile_capsule_rect_ui())
+		rect = UILayout.mobile_top_info_rect(_mobile_capsule_rect_ui(), 3)
 	else:
 		rect = UILayout.top_info_rect(vp)
 	_top_rect = rect
-	var show := rect.size.x > 0.0 and rect.size.y > 0.0
+	var show := rect.size.x > 0.0 and rect.size.y > 0.0 and not _top_info_suppressed
 	_top_bg.visible = show
 	_fps_label.visible = show
 	_net_stat_label.visible = show
 	if not show:
 		return
 	# 底板与信息栏矩形完全一致（不再向外扩），这样右边缘不会压到小地图；
-	# 手机 4 行：FPS 占第 1 行，网络/对局信息占后 3 行；桌面两行各占一半。
+	# 手机 3 行：FPS 占第 1 行，网络/对局信息占后 2 行；桌面两行各占一半。
 	var mobile_info := InputSource.use_mobile_ui()
 	var pad_x := UILayout.dp(8.0)
 	var line_h: float
 	if mobile_info:
-		line_h = rect.size.y / float(UILayout.MOBILE_INFO_LINES)
+		line_h = rect.size.y / 3.0
 	else:
 		line_h = rect.size.y * 0.5
 	_top_bg.position = rect.position
@@ -1102,7 +1092,7 @@ func _layout_top_info() -> void:
 	_net_stat_label.position = rect.position + Vector2(pad_x, line_h)
 	_net_stat_label.vertical_alignment = VERTICAL_ALIGNMENT_TOP if mobile_info else VERTICAL_ALIGNMENT_CENTER
 	if mobile_info:
-		_net_stat_label.size = Vector2(rect.size.x - pad_x * 2.0, line_h * float(UILayout.MOBILE_INFO_LINES - 1))
+		_net_stat_label.size = Vector2(rect.size.x - pad_x * 2.0, line_h * 2.0)
 	else:
 		_net_stat_label.size = Vector2(rect.size.x - pad_x * 2.0, line_h)
 
@@ -1123,7 +1113,7 @@ func _layout_alert_stack() -> void:
 	if _alert_stack == null or not is_instance_valid(_alert_stack):
 		return
 	if InputSource.use_mobile_ui():
-		var r := UILayout.mobile_alert_rect(_mobile_capsule_rect_ui())
+		var r := UILayout.mobile_alert_rect(_mobile_capsule_rect_ui(), 3)
 		_alert_stack.anchor_left = 0.5
 		_alert_stack.anchor_right = 0.5
 		_alert_stack.anchor_top = 0.0
@@ -1285,7 +1275,9 @@ func _process(delta):
 			var map_name := String(MapPresets.get_info(GameSettings.map_id).get("name", "经典大陆"))
 			var ping_txt := "%dms" % _ping_rtt if _ping_rtt > 0 else "--"
 			if InputSource.use_mobile_ui():
-				_net_stat_label.text = "AI:%s 地图:%s 时间:%02d:%02d\n延迟:%s 快照:%d/s" % [
+				# 手机横屏信息栏只有约 137dp 宽：去掉「地图:/时间:」这类标签，
+				# 用空格分隔，两行都能完整显示，不会被省略号截断。
+				_net_stat_label.text = "AI:%s %s %02d:%02d\n延迟:%s 快照:%d/s" % [
 					dn, map_name, t_min, t_sec, ping_txt, _snap_recv_rate
 				]
 			else:
