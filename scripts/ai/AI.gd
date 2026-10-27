@@ -108,9 +108,8 @@ const TREBUCHET_SAVE_TIMEOUT: float = 90.0
 const HEAVY_SIEGE_TECH_SAVE_TIMEOUT: float = 180.0
 var _trebuchet_save_started: float = -1.0
 var _heavy_siege_tech_save_started: float = -1.0
-# 科研模式：临近计划升时代的时点，先把时代升级预算锁住，避免 AI 把粮/金/石/油
-# 花在普通兵种、建筑和科技上，导致永远“差一点升级”。
-const RESEARCH_AGE_SAVE_LEAD_SECONDS: float = 90.0
+# 科研模式：升时代不再按固定时间点，改为每 30 秒检查一次“现在能不能升”，
+# 条件齐备时立刻开始；这里只负责在差资源时锁住时代预算。
 var _research_age_reserve_stamp: int = -1
 var _research_age_reserve_value: Dictionary = {}
 # 石油通常位于水域中央，船坞只要建在能出海的水岸即可，不必紧贴油田；
@@ -189,7 +188,7 @@ var _repair_scan_timer: float = 0.0
 # ── 升时代建筑补齐 ──
 # 升时代不只要求人口，还要求若干“已建成建筑”。普通建造目标只覆盖出兵/经济建筑，
 # 像黑暗时代必需的瞭望塔(41)不在 wanted_buildings 里，AI 会一直差建筑。
-# 每 30 秒主动对照当前时代的建筑要求，缺什么补什么。
+# 每 30 秒同时检查一次：缺建筑就补建筑；条件齐备就直接开始升时代。
 const AGE_BUILDING_CHECK_INTERVAL: float = 30.0
 var _age_building_check_timer: float = AGE_BUILDING_CHECK_INTERVAL
 
@@ -1358,27 +1357,8 @@ const RESEARCH_PRIORITY: Array = [
 	"E3", "F4", "F10", "I1", "I6", "H3", "H4", "G2", "B7", "F8",
 ]
 
-func _ai_age_target_seconds(target_age: int) -> float:
-	var diff := GameSettings.ai_difficulty
-	if battle is OnlineBattleManager and my_peer_id != -1:
-		diff = GameSettings.red_ai_difficulty if my_team == RTSConfig.Team.RED else GameSettings.blue_ai_difficulty
-	var table := {
-		# 原节奏把封建时代安排在 7~11 分钟，玩家在实战中经常只看到 AI 一直停在黑暗时代。
-		# 现在提前到 4~6 分钟：不改变人口/建筑/资源硬条件，条件不足时仍会自然延后。
-		GameSettings.AIDifficulty.EASY: [[5, 6], [13, 15], [22, 25]],
-		GameSettings.AIDifficulty.NORMAL: [[4, 5], [11, 13], [19, 22]],
-		GameSettings.AIDifficulty.HARD: [[3, 4], [10, 12], [17, 20]],
-		GameSettings.AIDifficulty.HELL: [[3, 4], [9, 11], [16, 19]],
-	}
-	var ranges: Array = table.get(diff, table[GameSettings.AIDifficulty.NORMAL])
-	var idx: int = clampi(target_age - 1, 0, 2)
-	var pair: Array = ranges[idx]
-	var lo: int = int(pair[0]) * 60
-	var hi: int = int(pair[1]) * 60
-	# 同一难度的多个 AI 错开到达时间，避免同一秒一起点时代。
-	var span: int = maxi(hi - lo, 1)
-	var offset: int = absi(my_peer_id * 37 + nation * 11) % span
-	return float(lo + offset)
+# 升时代不再有固定时间表：是否进入新时代只看当前人口、建筑和资源条件。
+# 每 30 秒由 decide() 调用 _try_start_age_upgrade() 检查一次，条件满足就点。
 
 # 当前是否应该为下一次时代升级锁资源。
 # 返回空字典 = 不预留；返回 {资源: 数量} = 在付款后必须仍保留这些资源。
@@ -1412,9 +1392,6 @@ func _compute_research_age_reserve() -> Dictionary:
 	if age >= 3:
 		return {}
 	var target: int = age + 1
-	var target_time: float = _ai_age_target_seconds(target)
-	if battle.game_time < target_time - RESEARCH_AGE_SAVE_LEAD_SECONDS:
-		return {}
 	var check: Dictionary = battle.can_research_age(my_peer_id, my_team)
 	var error := String(check.get("error", ""))
 	# 只有“人口/建筑条件已齐、只差资源”或“现在就能点”时才锁预算；
@@ -1422,6 +1399,20 @@ func _compute_research_age_reserve() -> Dictionary:
 	if not bool(check.get("ok", false)) and error != "资源不足":
 		return {}
 	return TechTreeData.get_age(target).get("cost", {}).duplicate(true)
+
+# 每 30 秒检查一次能否进入新时代；条件齐备就立刻开始研究。
+func _try_start_age_upgrade() -> bool:
+	if battle == null:
+		return false
+	var st: Dictionary = battle.get_research_state(my_peer_id, my_team)
+	if st.is_empty() or not st.get("current", {}).is_empty():
+		return false
+	if int(st.get("age", 0)) >= 3:
+		return false
+	var check: Dictionary = battle.can_research_age(my_peer_id, my_team)
+	if not bool(check.get("ok", false)):
+		return false
+	return bool(battle.research_start_age(my_peer_id, my_team).get("ok", false))
 
 # 升时代除人口外还有建筑条件；如果 AI 只按普通战斗科技顺序研究，
 # 经常会卡在“建筑没解锁/只有 1 座城堡”上。这里把当前目标时代需要的
@@ -1445,17 +1436,12 @@ func _tick_research() -> void:
 		return
 	var age: int = int(st.get("age", 0))
 	var saving_for_age := _research_age_reserve_active()
-	# 1) 时代：到点且条件齐备才点，避免把资源卡在无法完成的条件上。
-	if age < 3 and battle.game_time >= _ai_age_target_seconds(age + 1):
-		var check: Dictionary = battle.can_research_age(my_peer_id, my_team)
-		if bool(check.get("ok", false)):
-			battle.research_start_age(my_peer_id, my_team)
-			return
+	# 升时代由 decide() 每 30 秒统一检查；这里只负责普通科技。
 	# 已经进入升时代攒资源窗口时，暂停科技研究：研究队列会被普通科技占用，
 	# 而且科技花费会把刚攒到的时代预算重新吃掉。等时代点下去后再继续研究。
 	if saving_for_age:
 		return
-	# 2) 通用科技：先处理升时代必需科技，再按常规优先表。
+	# 1) 通用科技：先处理升时代必需科技，再按常规优先表。
 	var bits: int = int(st.get("bits", 0))
 	var research_order: Array = _research_age_requirement_techs(age + 1) + RESEARCH_PRIORITY
 	for tid in research_order:
@@ -1613,11 +1599,13 @@ func decide(_delta):
 	_refresh_primary_enemy()
 	_update_resource_pressure(_delta)
 	_ensure_house_quota()
-	# 升时代建筑要求每 30 秒兜底检查一次：普通建造目标不一定包含瞭望塔等条件建筑。
+	# 升时代要求每 30 秒兜底检查一次：普通建造目标不一定包含瞭望塔等条件建筑；
+	# 同一轮里再检查一次能否直接进入新时代（不再按固定分钟数等待）。
 	_age_building_check_timer -= _delta
 	if _age_building_check_timer <= 0.0:
 		_age_building_check_timer = AGE_BUILDING_CHECK_INTERVAL
 		_ensure_age_upgrade_buildings()
+		_try_start_age_upgrade()
 	# 资源囤到接近上限时先泄压：补人口/建筑升级/多排兵，避免继续采集却被上限截断。
 	_relieve_resource_pressure()
 	_diplo_decide()
