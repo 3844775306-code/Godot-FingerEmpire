@@ -3227,10 +3227,9 @@ func grid_to_world(gx: int, gy: int) -> Vector3:
 func get_base_colors() -> Array:
 	return base_colors
 
-# 地表视觉高度：把逐格高度做双线性插值，山坡变成连续曲面（不再是台阶）。
-# 这里用线性插值而不是逐格 smoothstep：smoothstep 在每个格线处导数归零，
-# 连续山坡会被揉成一格一格的波浪，从低角度看山体就像被压扁/揉皱。
-# 格间 10 米高差只有 1 格水平距离，所以山壁依然很陡。
+# 地表视觉高度：用 Catmull-Rom 双三次插值，山坡连续且不会在每个格线处
+# 像逐格 smoothstep 那样导数归零；结果再限制在周围 4x4 格高度的最小/最大值内，
+# 避免山壁边缘过冲出新尖角。格间 10 米高差只有 1 格水平距离，所以山壁依然很陡。
 # 单位站立、建筑落地、地面发光圈都读这个函数，脚底才不会和画面对不上。
 func _visual_height(world_x: float, world_z: float) -> float:
 	if height_grid.is_empty():
@@ -3244,15 +3243,32 @@ func _visual_height(world_x: float, world_z: float) -> float:
 	var z0: int = int(floor(fz))
 	var tx: float = clampf(fx - float(x0), 0.0, 1.0)
 	var tz: float = clampf(fz - float(z0), 0.0, 1.0)
-	var x1: int = clampi(x0 + 1, 0, size - 1)
-	var z1: int = clampi(z0 + 1, 0, size - 1)
-	x0 = clampi(x0, 0, size - 1)
-	z0 = clampi(z0, 0, size - 1)
-	var h00 := float(height_grid[x0][z0])
-	var h10 := float(height_grid[x1][z0])
-	var h01 := float(height_grid[x0][z1])
-	var h11 := float(height_grid[x1][z1])
-	return lerpf(lerpf(h00, h10, tx), lerpf(h01, h11, tx), tz)
+	var wx := _catmull_weights(tx)
+	var wz := _catmull_weights(tz)
+	var total := 0.0
+	var lo := INF
+	var hi := -INF
+	for ix in range(4):
+		var gx: int = clampi(x0 + ix - 1, 0, size - 1)
+		for iz in range(4):
+			var gz: int = clampi(z0 + iz - 1, 0, size - 1)
+			var h := float(height_grid[gx][gz])
+			total += h * float(wx[ix]) * float(wz[iz])
+			lo = minf(lo, h)
+			hi = maxf(hi, h)
+	# 限幅防止插值过冲：山脊不会冒出额外尖角，山脚也不会凹出坑
+	return clampf(total, lo, hi)
+
+# Catmull-Rom 的 4 个基函数权重（t 在 0..1 之间）
+func _catmull_weights(t: float) -> Array:
+	var t2 := t * t
+	var t3 := t2 * t
+	return [
+		-0.5 * t3 + t2 - 0.5 * t,
+		1.5 * t3 - 2.5 * t2 + 1.0,
+		-1.5 * t3 + 2.0 * t2 + 0.5 * t,
+		0.5 * t3 - 0.5 * t2,
+	]
 
 # 按渲染网格的三角剖分插值（和 GroundStripMesh 的采样保持一致），
 # 返回值等于屏幕上看到的地面高度：单位贴地、地面划线、炮塔射程圈都不会陷进坡里
