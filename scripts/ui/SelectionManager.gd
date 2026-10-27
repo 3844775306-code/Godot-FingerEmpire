@@ -76,7 +76,8 @@ func _update_target_markers() -> void:
 
 # 把一个选中陆军的目标整理成 TargetMarkerManager 的请求：
 #   - 有攻击/采集目标实体 → 跟随实体，标记放头顶；
-#   - 普通移动/攻击移动 → 放 A* 终点；没有路径说明已到达或没有命令。
+#   - 普通移动/攻击移动 → 放 A* 终点；路径还没算好、只剩 1 个航点或已进入最后接近时
+#     也要显示，不能只在 astar_path.size() >= 2 时才画。
 func _target_marker_request(e: Army) -> Dictionary:
 	var target = e.current_target
 	if target != null and is_instance_valid(target) and target is Node3D and target != e:
@@ -84,15 +85,19 @@ func _target_marker_request(e: Army) -> Dictionary:
 	var mc: MovementController = e._movement
 	if mc == null:
 		return {}
-	if mc.astar_path.is_empty():
-		if e.is_attack_moving and e.attack_move_target != Vector3.ZERO:
-			return {"pos": e.attack_move_target}
-		return {}
-	if mc.astar_path.size() < 2:
+	# 攻击移动没有实体目标时，终点是 attack_move_target；即使 A* 还在排队/已走空，
+	# 命令目的地仍然存在，应该继续显示 ❌。
+	if e.is_attack_moving and e.attack_move_target != Vector3.ZERO:
+		return {"pos": e.attack_move_target}
+	# 普通移动/建造/交付的终点保存在 astar_target；路径可能在 pending 或已走完，
+	# 不能因为 path 为空/只有 1 个点就误判为“没有命令”。
+	if mc.move_path_failed:
 		return {}
 	var pos: Vector3 = mc.astar_target
-	if pos == Vector3.ZERO:
+	if pos == Vector3.ZERO and not mc.astar_path.is_empty():
 		pos = mc.astar_path[mc.astar_path.size() - 1]
+	if pos == Vector3.ZERO:
+		return {}
 	return {"pos": pos}
 
 func _sanitize_entity_refs() -> bool:

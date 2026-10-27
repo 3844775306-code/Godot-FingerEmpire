@@ -588,8 +588,22 @@ func process_move(delta, bm: RTSBattleManager):
 	var slope_mult: float = _get_slope_speed_multiplier(bm, _army.global_position, move_target)
 	_slope_speed_mult = lerpf(_slope_speed_mult, slope_mult, clampf(delta * 8.0, 0.0, 1.0))
 	var effective_speed: float = _army.speed * _slope_speed_mult
+	# 海军不能越过岸线：A* 会绕开陆地，但追击/采集的最后几米是直线接近，
+	# 目标点可能落在岸上；这里按实际地形再拦一次，船停在岸边而不是开上岸。
+	if _army.water_capable and bm != null:
+		var lookahead: float = maxf(effective_speed * delta * 2.0, 0.8)
+		var next_water_pos: Vector3 = _army.global_position + Vector3(move_dir.x, 0.0, move_dir.z) * lookahead
+		if not _can_push_to(next_water_pos, bm):
+			_stop_velocity()
+			return
+	var prev_pos: Vector3 = _army.global_position
 	_army.velocity = Vector3(move_dir.x, 0, move_dir.z) * effective_speed
 	_army.move_and_slide()
+	# 碰撞/滑动也可能把船体挤出岸线；移动后按实际落点再校验一次并回退。
+	if _army.water_capable and bm != null and not _can_push_to(_army.global_position, bm):
+		_army.global_position = prev_pos
+		_stop_velocity()
+		return
 	# 陆地单位的脚步音由 Army._play_step_sfx 按实际落脚点触发；
 	# 这里只保留船只的持续航行音，避免和脚步音重复。
 	if _army.speed > 0.1 and Engine.get_process_frames() % 40 == 0:
