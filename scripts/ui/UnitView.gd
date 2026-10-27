@@ -219,6 +219,9 @@ var _mobile := false
 
 func _ready() -> void:
 	_mobile = InputSource.use_mobile_ui()
+	if _mobile:
+		# 横竖屏切换后重建图鉴，左右分栏/字号会按新方向重新排。
+		add_child(OrientationReload.new())
 	_build_canvas()
 	_prepare_data()
 	_build_tabs()

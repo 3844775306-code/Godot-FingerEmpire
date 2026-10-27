@@ -38,7 +38,8 @@ func _ready() -> void:
 	_mobile = InputSource.use_mobile_ui()
 	add_to_group("mobile_modal_ui")
 	# 主菜单根节点在桌面分支没有设置设计尺寸，这里直接按 2400×1400 铺满。
-	size = Vector2(UILayout.DESIGN_W, UILayout.DESIGN_H)
+	# 手机竖屏时改用实际展开后的设计视口，否则指南面板只有 1400 高、上下留黑。
+	size = UILayout.view_size() if _mobile else Vector2(UILayout.DESIGN_W, UILayout.DESIGN_H)
 	position = Vector2.ZERO
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	z_index = 260
@@ -61,10 +62,12 @@ func _build() -> void:
 	var w: float = PANEL_W
 	var h: float = PANEL_H
 	if _mobile:
-		w = UILayout.DESIGN_W - UILayout.dp(14.0)
-		h = UILayout.DESIGN_H - UILayout.dp(18.0)
+		var vp_size := UILayout.view_size()
+		w = vp_size.x - UILayout.dp(14.0)
+		h = vp_size.y - UILayout.dp(18.0)
 	panel.size = Vector2(w, h)
-	panel.position = Vector2((UILayout.DESIGN_W - w) * 0.5, (UILayout.DESIGN_H - h) * 0.5)
+	var vp_now := UILayout.view_size()
+	panel.position = Vector2((vp_now.x - w) * 0.5, (vp_now.y - h) * 0.5)
 	panel.add_theme_stylebox_override("panel", UITheme.card_style(UITheme.GOLD))
 	add_child(panel)
 

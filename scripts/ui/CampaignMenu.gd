@@ -13,6 +13,9 @@ var _dialog_layer: Control = null
 
 func _ready() -> void:
 	_mobile = InputSource.use_mobile_ui()
+	if _mobile:
+		# 横竖屏切换后重建选关卡片，避免竖屏下仍按横屏的列宽排版。
+		add_child(OrientationReload.new())
 	GameSettings.campaign_mode = true
 	AudioManager.play_music("menu")
 	_build()

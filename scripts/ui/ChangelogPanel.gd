@@ -55,7 +55,8 @@ func _ready() -> void:
 	add_to_group("mobile_modal_ui")
 	# 主菜单（桌面分支）根节点没有设设计尺寸，anchors 会整体塌成 40×40，
 	# 所以这里直接按设计尺寸铺满，不依赖父节点大小。
-	size = Vector2(UILayout.DESIGN_W, UILayout.DESIGN_H)
+	# 手机竖屏时设计视口会被 expand 拉长到 2400×4000+，固定 1400 高会让面板只占中间一条。
+	size = UILayout.view_size() if _mobile else Vector2(UILayout.DESIGN_W, UILayout.DESIGN_H)
 	position = Vector2.ZERO
 	mouse_filter = Control.MOUSE_FILTER_STOP
 	z_index = 250
@@ -78,8 +79,9 @@ func _build() -> void:
 	var w: float = PANEL_W
 	var h: float = PANEL_H
 	if _mobile:
-		w = minf(UILayout.dp(360.0), UILayout.DESIGN_W - UILayout.dp(12.0))
-		h = UILayout.DESIGN_H - UILayout.dp(16.0)
+		var vp_size := UILayout.view_size()
+		w = minf(UILayout.dp(360.0), vp_size.x - UILayout.dp(12.0))
+		h = vp_size.y - UILayout.dp(16.0)
 	panel.custom_minimum_size = Vector2(w, h)
 	panel.size = Vector2(w, h)
 	panel.set_anchors_and_offsets_preset(Control.PRESET_CENTER)

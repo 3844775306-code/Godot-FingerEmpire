@@ -56,7 +56,7 @@ func _is_mobile() -> bool:
 func _mobile_font(base_size: int) -> int:
 	if not _is_mobile():
 		return base_size
-	return int(round(base_size * UILayout.DP_RATIO))
+	return int(round(base_size * UILayout.dp_ratio()))
 
 func _set_rtl_font(rtl: RichTextLabel, size: int) -> void:
 	rtl.add_theme_font_size_override("normal_font_size", size)
