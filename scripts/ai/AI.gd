@@ -126,7 +126,10 @@ const RAID_FLANK_MAX: float = 46.0
 const RAID_WAIT_TIME: float = 5.0
 const AVOID_DEFENSE_RANGE: float = 22.0
 const RAID_UNIT: int = 15
-const WALL_COUNT: int = 24            # 连续墙线的段数上限（铺满整条防线比旧版多得多）
+const WALL_COUNT: int = 24            # 旧版连续墙线的段数上限
+# AIDefense 的封闭塔圈要绕主城一整圈，旧的 24 段上限会在圆圈上留下缺口，
+# 这里单独放宽城墙/墙顶炮台的实际上限；旧版防线仍只规划 WALL_COUNT 段。
+const WALL_COUNT_MAX: int = 160
 const WALL_SPACING: float = 1.3       # 旧版直线防线间距（build_defense_line 仍在用）
 const WALL_STEP: float = 1.5          # 连续墙线的中心距：必须 < 墙直径 2.0，段段重叠才不留缝
 const WALL_MAX_HALF_SPAN: float = 11.0  # 墙线从正中向两侧各延伸的最大距离
@@ -996,9 +999,9 @@ func build_building(building_id: int, pos: Vector3, facing: Vector3 = Vector3.ZE
 				return false
 	# 城墙允许建 WALL_COUNT 面（防线需求），民居最多 HOUSE_TARGET_MAX 座，
 	# 墙顶炮台最多 WALL_COUNT 座；其余建筑上限 10
-	var _cap = WALL_COUNT if building_id == 27 else (_effective_house_target() if building_id == 28 else 10)
+	var _cap = WALL_COUNT_MAX if building_id == 27 else (_effective_house_target() if building_id == 28 else 10)
 	if building_id == WALL_CANNON_ID:
-		_cap = WALL_COUNT
+		_cap = WALL_COUNT_MAX
 	if count_building(building_id) >= _cap: return false
 	# 周围 10 单位内不能有敌方作战军队；否则直接放弃本次建造，不扣资源
 	if _enemy_army_within(pos):
@@ -1322,10 +1325,12 @@ func _ai_age_target_seconds(target_age: int) -> float:
 	if battle is OnlineBattleManager and my_peer_id != -1:
 		diff = GameSettings.red_ai_difficulty if my_team == RTSConfig.Team.RED else GameSettings.blue_ai_difficulty
 	var table := {
-		GameSettings.AIDifficulty.EASY: [[9, 11], [15, 18], [26, 30]],
-		GameSettings.AIDifficulty.NORMAL: [[7, 9], [12, 15], [20, 24]],
-		GameSettings.AIDifficulty.HARD: [[6, 8], [10, 13], [18, 21]],
-		GameSettings.AIDifficulty.HELL: [[5, 7], [9, 11], [16, 19]],
+		# 原节奏把封建时代安排在 7~11 分钟，玩家在实战中经常只看到 AI 一直停在黑暗时代。
+		# 现在提前到 4~6 分钟：不改变人口/建筑/资源硬条件，条件不足时仍会自然延后。
+		GameSettings.AIDifficulty.EASY: [[5, 6], [13, 15], [22, 25]],
+		GameSettings.AIDifficulty.NORMAL: [[4, 5], [11, 13], [19, 22]],
+		GameSettings.AIDifficulty.HARD: [[3, 4], [10, 12], [17, 20]],
+		GameSettings.AIDifficulty.HELL: [[3, 4], [9, 11], [16, 19]],
 	}
 	var ranges: Array = table.get(diff, table[GameSettings.AIDifficulty.NORMAL])
 	var idx: int = clampi(target_age - 1, 0, 2)
@@ -1353,8 +1358,15 @@ func _research_age_reserve_active() -> bool:
 func _compute_research_age_reserve() -> Dictionary:
 	if battle == null or not battle.has_method("is_research_mode") or not battle.is_research_mode():
 		return {}
+	# 以前防守时直接关闭升时代预留，结果只要玩家持续骚扰，AI 就永远在补兵/补科技，
+	# 永远攒不齐 600 食物，看起来像卡死在黑暗时代。现在防守时也继续攒时代预算，
+	# 只有主城血量已经很低（马上要丢城）时才临时取消预留，优先保命。
 	if _is_defending():
-		return {}
+		var castle = get_peer_castle(my_peer_id)
+		if castle != null and is_instance_valid(castle):
+			var hp_ratio: float = float(castle.health) / maxf(float(castle.max_health), 1.0)
+			if hp_ratio < 0.30:
+				return {}
 	var st: Dictionary = battle.get_research_state(my_peer_id, my_team)
 	if st.is_empty() or not st.get("current", {}).is_empty():
 		return {}
