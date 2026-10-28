@@ -84,6 +84,8 @@ func _ready():
 	name_rtl.custom_minimum_size = Vector2(0, float(UITheme.FONT_XL) + 6.0)
 	stats_rtl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	stats_rtl.add_theme_color_override("default_color", UITheme.PARCHMENT)
+	# 加成说明可能比属性行更长（国家特色、多项科研），窄面板必须允许换行
+	stats_rtl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	if _is_mobile():
 		# 手机上名称与属性两行都要能看清：名称 15dp、属性 12dp
 		_set_rtl_font(name_rtl, UILayout.font_dp(15.0))
@@ -359,6 +361,8 @@ func _refresh_detail_text(reset_scroll: bool) -> void:
 	if observed_entity == null or not is_instance_valid(observed_entity):
 		return
 	var text: String = EntityInfoText.detailed(int(observed_entity.entity_id), _entity_detail_state(observed_entity))
+	# 详细页也展示加成来源：国家特色 + 科研，避免切到详细后信息消失
+	text += _bonus_text(observed_entity)
 	if text != _detail_last_text:
 		_detail_last_text = text
 		_detail_rtl.text = text
@@ -418,6 +422,18 @@ func _nation_display(entity) -> String:
 	var nc: Color = RTSConfig.get_nation_color(nation) if RTSConfig.has_nation_color(nation) else UITheme.GOLD
 	return "🌍 [color=%s]国家[/color]:  [color=%s]%s[/color]" % [
 		UITheme.hex_str(UITheme.PARCHMENT), UITheme.hex_str(nc), nation_name]
+
+# 加成来源：国家特色（始终显示）+ 已生效科研（科研模式才显示）。
+# 科研部分直接对比实体套用科技前的基础值，避免把国家加成误算成科研。
+func _bonus_text(entity) -> String:
+	var nation: int = _entity_nation(entity)
+	var out: String = EntityBonusText.nation_block(nation)
+	if nation < 0:
+		return out
+	var bm = battle if battle else get_tree().get_first_node_in_group("battle_manager")
+	if bm != null and bm.has_method("is_research_mode") and bm.is_research_mode():
+		out += EntityBonusText.research_block_from_entity(entity)
+	return out
 
 func _hc(pct: float) -> String:
 	return UITheme.hex_str(UITheme.health_bar_color(pct))
@@ -710,6 +726,7 @@ func update_info(entity):
 	if entity is Army:
 		t += "\n🧭 [color=%s]任务[/color]:  [color=white]%s[/color]" % [
 			UITheme.hex_str(UITheme.SAPPHIRE), _army_task_text(entity)]
+	t += _bonus_text(entity)
 	stats_rtl.text = t
 
 	# Always detach old upgrade box first (avoid deferred-deletion residue)

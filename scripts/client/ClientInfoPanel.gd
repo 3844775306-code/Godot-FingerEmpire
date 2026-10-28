@@ -50,6 +50,8 @@ func _ready():
 	name_rtl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	stats_rtl.add_theme_font_size_override("font_size", UITheme.FONT_SM)
 	stats_rtl.add_theme_color_override("default_color", UITheme.PARCHMENT)
+	# 加成说明较长，窄面板需要自动换行；否则国家特色会被裁掉
+	stats_rtl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	if _is_mobile():
 		# 联机信息面板和单机版一样是桌面节点：RichTextLabel 不会走 MobileHUD
 		# 的 Label/Button 放大逻辑，这里必须自己按 dp 设置。
@@ -326,6 +328,8 @@ func _refresh_detail_text(reset_scroll: bool) -> void:
 	if info.is_empty():
 		return
 	var text: String = EntityInfoText.detailed(int(info.get("entity_id", -1)), info)
+	# 详细页也展示加成来源，避免切到详细后国家特色与科研信息消失
+	text += _bonus_text(info)
 	if text != _detail_last_text:
 		_detail_last_text = text
 		_detail_rtl.text = text
@@ -375,6 +379,23 @@ func _nation_display(info: Dictionary) -> String:
 	var nc: Color = RTSConfig.get_nation_color(nation) if RTSConfig.has_nation_color(nation) else UITheme.GOLD
 	return "🌍 [color=%s]国家[/color]:  [color=%s]%s[/color]" % [
 		UITheme.hex_str(UITheme.PARCHMENT), UITheme.hex_str(nc), nation_name]
+
+# 加成来源：国家特色所有玩家都能看到；科研只有本地玩家有完整快照。
+# 队友/敌方的科技由各自玩家维护，客户端不拿本地科技冒充他们的加成。
+func _bonus_text(info: Dictionary) -> String:
+	var nation: int = _entity_nation(info)
+	var out: String = EntityBonusText.nation_block(nation)
+	if nation < 0:
+		return out
+	if renderer == null or not renderer.is_research_mode():
+		return out
+	if _is_local_owned_info(info):
+		var uid := int(info.get("entity_id", -1))
+		var etype := int(info.get("type", 2))
+		out += EntityBonusText.research_block_from_mods(uid, renderer.get_research_mods(), etype)
+	else:
+		out += EntityBonusText.research_unavailable_block("仅显示我方科研加成（队友/敌方科技由服务端结算）")
+	return out
 
 func _hc(pct: float) -> String:
 	return UITheme.hex_str(UITheme.health_bar_color(pct))
@@ -548,6 +569,7 @@ func update_info(entity_id: int):
 		t += "\n⛓️ [color=%s]铠甲[/color]:  [color=white]%d[/color]  🛡️ [color=%s]盾牌[/color]:  [color=white]%d[/color]" % [UITheme.hex_str(UITheme.SAPPHIRE), info.get("melee_armor", 0), UITheme.hex_str(UITheme.STONE), info.get("shield_armor", 0)]
 	t += "\n🎯 [color=%s]RANGE[/color]:  [color=white]%.1f[/color]" % [UITheme.hex_str(UITheme.GOLD), info.get("attack_range", 0.0)]
 	t += "\n👟 [color=%s]SPEED[/color]:  [color=white]%.1f[/color]" % [UITheme.hex_str(UITheme.EMERALD), info.get("speed", 0.0)]
+	t += _bonus_text(info)
 	stats_rtl.text = t
 
 	# Always detach old upgrade box first (avoid deferred-deletion residue)
