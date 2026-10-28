@@ -6,6 +6,7 @@ class_name AIController
 
 const AIDefenseScript = preload("res://scripts/ai/AIDefense.gd")
 const AIWaterCrossingScript = preload("res://scripts/ai/AIWaterCrossing.gd")
+const AIWallPlannerScript = preload("res://scripts/ai/AIWallPlanner.gd")
 
 enum Phase { PRODUCTION, DEVELOPMENT, ASSAULT }
 enum LateTactic { NONE, HARASS, OVERWHELM, RAID, DEFEND }
@@ -59,6 +60,7 @@ var _defense_queue: Array = []          # 待建防线队列：[{"id": 建筑id,
 const DEFENSE_CHECK_INTERVAL: float = 120.0
 const DEFENSE_STEP_MAX: int = 3         # 每个 think tick 至多尝试建造的防线建筑数
 var _defense = null                      # AIDefense 模块：威胁/防线/守军/资源区
+var _wall_planner = null                 # AIWallPlanner 模块：城墙施工顺序/墙顶炮选点
 var _water_crossing = null               # AIWaterCrossing 模块：搭桥/运载船渡水
 var _harass_ids: Dictionary = {}         # 当前骚扰小队 instance_id -> true
 var _harass_until: float = -999.0        # 骚扰小队回收时间
@@ -1180,7 +1182,32 @@ func _tick_building_repair() -> void:
 # 权重决定「同类里更该修的」，已损比例保证残血建筑不会被小修拖后。
 func _repair_score(b: Building) -> float:
 	var w: float = float(REPAIR_WEIGHT.get(int(b.entity_id), 1.0))
+	# 城墙是防线上的“连续墙段”：端头/破口旁的墙先修，否则敌人会从缺口灌进来。
+	# 这里只提高权重，真正能不能修仍由 Building.can_repair() 的附近无敌军规则决定。
+	if int(b.entity_id) == 27:
+		w *= _wall_repair_weight(b)
 	return w * (0.4 + 0.6 * float(b.repair_damage_ratio()))
+
+func _wall_repair_weight(wall: Building) -> float:
+	var neighbors: int = 0
+	for e in _cached_buildings():
+		if not is_instance_valid(e) or not (e is Building) or e == wall:
+			continue
+		if int(e.entity_id) != 27 or e.health <= 0:
+			continue
+		if not entity_belongs_to_me(e):
+			continue
+		var d: Vector3 = e.global_position - wall.global_position
+		d.y = 0.0
+		if d.length_squared() <= 2.35 * 2.35:
+			neighbors += 1
+			if neighbors >= 2:
+				break
+	if neighbors <= 1:
+		return 1.5   # 墙端/破口旁：优先续上
+	if neighbors == 2:
+		return 1.15  # 正常连续墙段
+	return 1.0
 
 # 修理费储备门槛：不同阶段给造兵/升级留的钱不一样。
 # 防守时进一步放宽 —— 前线建筑塌了会直接丢防线，这时修比攒钱重要。
@@ -1645,6 +1672,10 @@ func decide(_delta):
 		var army_count = count_field_military(my_peer_id if my_peer_id != -1 else my_team)
 		if army_count >= 30:
 			phase = Phase.ASSAULT
+	if _defense != null:
+		if _wall_planner == null:
+			_wall_planner = AIWallPlannerScript.new(self, _defense)
+		_wall_planner.tick(_delta)
 	if _water_crossing:
 		_water_crossing.tick(_delta)
 func get_team_castle(tm) -> Building:
@@ -3756,8 +3787,9 @@ func _deploy_ranged_units_to_walls() -> void:
 		if occupied.has(battle.world_to_grid(e.global_position)):
 			continue
 		candidates.append(e)
-	# 每面城墙独立抽一次：50% 建炮台，50% 派远程单位驻守。
-	# 抽签结果和驻守目标数记在城墙节点上，城墙存活期间不会每次检查都改主意。
+	# 墙顶炮台不再每面墙 50% 随机：优先拐角、墙端和正对威胁方向的墙段，
+	# 并限制总量，避免把石头/木材全砸在整圈炮台上。
+	var cannon_walls: Dictionary = _pick_wall_cannon_walls(walls)
 	for wall in walls:
 		var wid: int = wall.get_instance_id()
 		var wall_grid: Vector2i = battle.world_to_grid(wall.global_position)
@@ -3775,7 +3807,7 @@ func _deploy_ranged_units_to_walls() -> void:
 			mode = "ranged"
 			wall.set_meta(WALL_GUARD_MODE_META, mode)
 		if mode == "":
-			mode = "cannon" if randf() < 0.5 else "ranged"
+			mode = "cannon" if cannon_walls.has(wid) else "ranged"
 			wall.set_meta(WALL_GUARD_MODE_META, mode)
 		if mode == "cannon":
 			if have > 0:
@@ -3864,6 +3896,79 @@ func _try_build_wall_cannon(wall) -> bool:
 	if not _ai_can_build(WALL_CANNON_ID) or not can_afford_building(WALL_CANNON_ID):
 		return false
 	return build_building(WALL_CANNON_ID, wall.global_position)
+
+# 墙顶炮台只放在“值得放”的墙段：拐角、墙端、正对敌方向。
+# 总量按墙数 30% 封顶（2~24 座），防止 AI 把整圈城墙都改造成炮台。
+func _pick_wall_cannon_walls(walls: Array) -> Dictionary:
+	var existing: int = 0
+	for b in _cached_buildings():
+		if is_instance_valid(b) and b.health > 0 and int(b.entity_id) == WALL_CANNON_ID \
+				and entity_belongs_to_me(b):
+			existing += 1
+	var quota: int = clampi(int(ceil(float(walls.size()) * 0.3)), 2, 24)
+	var need: int = quota - existing
+	if need <= 0:
+		return {}
+	var castle = get_peer_castle(my_peer_id)
+	var enemy_dir: Vector3 = _get_enemy_army_direction(castle.global_position) \
+			if is_instance_valid(castle) else Vector3.FORWARD
+	enemy_dir.y = 0.0
+	if enemy_dir.length_squared() < 0.0001:
+		enemy_dir = Vector3.FORWARD
+	else:
+		enemy_dir = enemy_dir.normalized()
+	var rated: Array = []
+	for w in walls:
+		if not is_instance_valid(w):
+			continue
+		if _wall_has_cannon(w):
+			continue
+		if str(w.get_meta(WALL_GUARD_MODE_META, "")) == "ranged":
+			continue
+		if int(w.get_meta(WALL_GUARD_TARGET_META, 0)) > 0:
+			continue
+		rated.append(w)
+	rated.sort_custom(func(a, b):
+		return _wall_cannon_score(a, walls, castle, enemy_dir) \
+				> _wall_cannon_score(b, walls, castle, enemy_dir)
+	)
+	var out: Dictionary = {}
+	for i in mini(need, rated.size()):
+		out[rated[i].get_instance_id()] = true
+	return out
+
+func _wall_cannon_score(wall: Building, walls: Array, castle, enemy_dir: Vector3) -> float:
+	var score: float = 0.0
+	if is_instance_valid(castle):
+		var to_wall: Vector3 = wall.global_position - castle.global_position
+		to_wall.y = 0.0
+		if to_wall.length_squared() > 0.0001:
+			score += to_wall.normalized().dot(enemy_dir) * 2.0
+	var neighbors: int = 0
+	var dirs: Array = []
+	for other in walls:
+		if other == wall or not is_instance_valid(other):
+			continue
+		var d: Vector3 = other.global_position - wall.global_position
+		d.y = 0.0
+		if d.length_squared() <= 2.35 * 2.35:
+			neighbors += 1
+			dirs.append(d.normalized())
+	if neighbors <= 1:
+		score += 2.2   # 墙端：正对绕后/爆破点，炮台价值最高
+	else:
+		# 拐角：相邻墙方向不是一条直线
+		var corner: bool = false
+		for i in dirs.size():
+			for j in range(i + 1, dirs.size()):
+				if absf(dirs[i].dot(dirs[j])) < 0.55:
+					corner = true
+					break
+			if corner:
+				break
+		if corner:
+			score += 1.4
+	return score
 
 # ═══ Naval Patrol ═══
 func _patrol_navy_around_water():
