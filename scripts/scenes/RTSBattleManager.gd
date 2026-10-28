@@ -1040,7 +1040,7 @@ func is_building_unlocked(building_id: int, owner_peer_id: int = -1, team: int =
 # 获取某建筑需要的城堡等级描述
 func get_building_required_castle_level(building_id: int) -> int:
 	match building_id:
-		23, 25, 26: return 2
+		23, 25, 26, 64: return 2
 		24, 29: return 3
 		42, 54: return 4
 	return 1
@@ -2979,7 +2979,12 @@ func _count_buildings_of_type(building_id: int, for_team: int) -> int:
 	return cnt
 func _place_building_at(pos: Vector3):
 	# 检查城堡等级解锁
-	if not is_building_unlocked(selected_building_id, player_owner_id, get_host_team()): return
+	if not is_building_unlocked(selected_building_id, player_owner_id, get_host_team()):
+		var unlock_tip := get_building_unlock_text(selected_building_id, player_owner_id, get_host_team())
+		if unlock_tip == "":
+			unlock_tip = "需要主城 Lv.%d" % get_building_required_castle_level(selected_building_id)
+		_show_hud_alert(unlock_tip, Color(1.0, 0.8, 0.1), get_host_team(), get_host_team())
+		return
 
 	var cfg = EntityDatabase.get_config(selected_building_id)
 	if not cfg:
@@ -3087,6 +3092,8 @@ func _end_build_drag_and_place():
 		var pos = build_preview.global_position
 		if is_position_in_player_vision(pos) and _is_valid_build_position(pos):
 			_place_building_at(pos)
+		elif selected_building_id == 64:
+			_show_hud_alert("炮台只能建在已完工的己方城墙上", Color(1.0, 0.8, 0.1), get_host_team(), get_host_team())
 	# 无论是否放置成功，都退出建造模式
 	_exit_build_mode()
 func _handle_right_click(event):
@@ -3723,11 +3730,15 @@ func is_valid_bridge_position(pos: Vector3) -> bool:
 func _is_valid_build_position(pos: Vector3, building_id: int = -1, for_team: int = -1) -> bool:
 	var bid: int = building_id if building_id >= 0 else selected_building_id
 	var bteam: int = for_team if for_team >= 0 else get_host_team()
-	# Cannot build near enemy units (10 unit radius)
-	for e in entities.get_children():
-		if e is GameEntity and e.team != bteam and e.team != RTSConfig.Team.NEUTRAL and e.health > 0:
-			if e.global_position.distance_to(pos) < 10.0:
-				return false
+	var cfg: Dictionary = EntityDatabase.get_config(bid)
+	var wall_only := bool(cfg.get("wall_only", false))
+	# 普通建筑不能贴着敌军造（防塔攻）。墙顶炮台本来就只能装在己方城墙上，
+	# 前线交火时墙边有敌军是常态，不能再按 10 米敌军范围拒绝，否则炮台永远补不上墙。
+	if not wall_only:
+		for e in entities.get_children():
+			if e is GameEntity and e.team != bteam and e.team != RTSConfig.Team.NEUTRAL and e.health > 0:
+				if e.global_position.distance_to(pos) < 10.0:
+					return false
 	var t = get_terrain_at(pos)
 	# 陆军不能直接上山，建筑也不能落在普通山体或缓坡/台地上：
 	# 否则会造出工人和援军都走不到的孤岛建筑。
@@ -3790,7 +3801,6 @@ func _is_valid_build_position(pos: Vector3, building_id: int = -1, for_team: int
 				if e.global_position.distance_to(pos) < (e.body_radius + 0.5):
 					return false
 		# Check terrain flatness within building radius
-		var cfg = EntityDatabase.get_config(bid)
 		var br = cfg.get("body_radius", 1.0) if cfg else 1.0
 		if not _is_terrain_flat(pos, br*0.5): return false
 		return t != 2
@@ -3800,9 +3810,17 @@ func _place_building():
 	var pos = build_preview.global_position
 	if not is_position_in_player_vision(pos): return
 	# Cannot build near enemies
-	if not _is_valid_build_position(pos): return
+	if not _is_valid_build_position(pos):
+		if selected_building_id == 64:
+			_show_hud_alert("炮台只能建在已完工的己方城墙上", Color(1.0, 0.8, 0.1), get_host_team(), get_host_team())
+		return
 	# 检查城堡等级解锁
-	if not is_building_unlocked(selected_building_id, player_owner_id, get_host_team()): return
+	if not is_building_unlocked(selected_building_id, player_owner_id, get_host_team()):
+		var unlock_tip := get_building_unlock_text(selected_building_id, player_owner_id, get_host_team())
+		if unlock_tip == "":
+			unlock_tip = "需要主城 Lv.%d" % get_building_required_castle_level(selected_building_id)
+		_show_hud_alert(unlock_tip, Color(1.0, 0.8, 0.1), get_host_team(), get_host_team())
+		return
 
 	var cfg = EntityDatabase.get_config(selected_building_id)
 	if not cfg: return

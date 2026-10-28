@@ -11,7 +11,7 @@ const BuildMenuCardScript = preload("res://scripts/ui/BuildMenuCard.gd")
 var world_pos: Vector3
 
 const BUILDING_REQUIRED_CASTLE: Dictionary = {
-	23: 2, 25: 2, 26: 2,   # 船坞、箭塔、炮塔 → 2级
+	23: 2, 25: 2, 26: 2, 64: 2,   # 船坞、箭塔、炮塔、炮台 → 2级
 	24: 3, 29: 3, 52: 3,    # 攻城车间、重装武器厂、集市 → 3级
 	42: 3, 53: 4, 54: 4     # 书院→3级 城堡→4级
 }
