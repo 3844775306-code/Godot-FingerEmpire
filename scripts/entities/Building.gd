@@ -325,6 +325,10 @@ func _finish_construction():
 			upgrade_level = glv
 			level = glv
 			_sync_production_unlocks()
+	# start_construction 为了隐藏施工期生产入口清空了 production_list；
+	# 1 级建筑 glv == upgrade_level，不会进入上面的分支，必须在这里无条件重建，
+	# 否则新建的 1 级兵营建好后生产列表仍为空，无法训练步兵。
+	_sync_production_unlocks()
 	
 	
 	if bm :
