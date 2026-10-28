@@ -129,6 +129,9 @@ const WALL_COUNT: int = 24            # 旧版连续墙线的段数上限
 # AIDefense 的封闭塔圈要绕主城一整圈，旧的 24 段上限会在圆圈上留下缺口，
 # 这里单独放宽城墙/墙顶炮台的实际上限；旧版防线仍只规划 WALL_COUNT 段。
 const WALL_COUNT_MAX: int = 160
+# 主城 3/4/5 级（或封建/城堡/帝国）会各扩建一圈城墙，
+# 单圈上限之外还需要容纳三层圈的总墙数。
+const WALL_BUILD_CAP_AI: int = 420
 const WALL_SPACING: float = 1.3       # 旧版直线防线间距（build_defense_line 仍在用）
 const WALL_STEP: float = 1.5          # 连续墙线的中心距：必须 < 墙直径 2.0，段段重叠才不留缝
 const WALL_MAX_HALF_SPAN: float = 11.0  # 墙线从正中向两侧各延伸的最大距离
@@ -1034,9 +1037,9 @@ func build_building(building_id: int, pos: Vector3, facing: Vector3 = Vector3.ZE
 			var want_wood: int = int(cfg.get("cost", {}).get("wood", 0))
 			if own_wood - want_wood < bridge_wood:
 				return false
-	# 城墙允许建 WALL_COUNT 面（防线需求），民居最多 HOUSE_TARGET_MAX 座，
-	# 墙顶炮台最多 WALL_COUNT 座；其余建筑上限 10
-	var _cap = WALL_COUNT_MAX if building_id == 27 else (_effective_house_target() if building_id == 28 else 10)
+	# 城墙允许建三层圈（WALL_BUILD_CAP_AI 面），民居最多 HOUSE_TARGET_MAX 座，
+	# 墙顶炮台最多 WALL_COUNT_MAX 座；其余建筑上限 10
+	var _cap = WALL_BUILD_CAP_AI if building_id == 27 else (_effective_house_target() if building_id == 28 else 10)
 	if building_id == WALL_CANNON_ID:
 		_cap = WALL_COUNT_MAX
 	if count_building(building_id) >= _cap: return false
@@ -3301,6 +3304,10 @@ func _process_line_upgrade():
 # 不同的是不再受“每兵种 7 个、民居 8 座”这类固定上限束缚。
 func _relieve_resource_pressure() -> void:
 	if not _resource_overflow():
+		return
+	# 第一圈城墙触发后，先保证墙圈建造资金，别把溢出的石头/木材转成升级和兵。
+	if _defense != null and _defense.has_method("first_ring_needs_priority") \
+			and _defense.first_ring_needs_priority():
 		return
 	# 先补仓库：溢出时仓库直接抬高存储上限，比把资源排成兵更能解决“满仓后白采”。
 	# 必须放在泄压支出之前，否则几轮兵/升级花完后资源已低于阈值，又不会造仓库。
