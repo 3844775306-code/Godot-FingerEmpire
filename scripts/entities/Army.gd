@@ -18,6 +18,8 @@ const TARGET_LOST_GRACE_MS: int = 3000
 # 不能用 target_type 判断：Army._init 会把所有战斗单位的 target_type 统一设为 1，
 # 这会让步兵/弓兵/骑兵也误以为自己是攻城单位，锁敌时无脑优先建筑。
 const SIEGE_UNIT_IDS := [16, 17, 18, 59]
+# 只能拆建筑、不能攻击任何军队的攻城单位。18 = 冲车/攻城车。
+const BUILDING_ONLY_ATTACKER_IDS := [18]
 var _target_lost_since_ms: int = 0
 # 玩家手动指定的攻击目标。锁定期间不因沿途出现更近的敌人而改锁，
 # 也不因目标暂时离开本单位视野而丢失；只有目标死亡/失效或收到新的
@@ -1179,6 +1181,9 @@ func _set_combat_target(target, from_advance: bool = false, manual: bool = false
 	# 近战锁定墙顶目标时改成锁定脚下城墙；远程直接锁定墙顶目标。
 	target = _resolve_melee_wall_target(target)
 	if target == null or not is_instance_valid(target):
+		return
+	# 冲车只锁定建筑；手动/自动来源都不能绕过这里。
+	if _is_building_only_attacker() and not target is Building:
 		return
 	# 运载船上的目标仍不可锁定；墙顶目标只对近战免疫。
 	if _is_protected_army(target):
@@ -2695,6 +2700,10 @@ func _prefers_buildings() -> bool:
 	# 统一设成 1 就把所有战斗单位都当成攻城车。
 	return entity_id in SIEGE_UNIT_IDS
 
+# 冲车只能攻击建筑：自动索敌、手动指定、追击和实际出手都必须经过这里。
+func _is_building_only_attacker() -> bool:
+	return entity_id in BUILDING_ONLY_ATTACKER_IDS
+
 # ----------------- ÐÐÎª´¦Àí -----------------
 # 农民施工帧逻辑：目标建筑失效/完工就退出；否则走到站位、站定后朝建筑。
 func _tick_building_action(delta: float, bm) -> void:
@@ -3335,6 +3344,8 @@ func _attack_tick(target, delta, bm) -> void:
 	# 建筑/梯子等完整攻击类型校验由 _process_action 每 0.5 秒做一次。
 	if not _is_healer():
 		var _cheap_invalid: bool = not _is_target_team_valid(target)
+		if not _cheap_invalid and _is_building_only_attacker() and not target is Building:
+			_cheap_invalid = true
 		if not _cheap_invalid and _is_land_melee() and target is Army and target.water_capable:
 			_cheap_invalid = true
 		# 目标刚上墙/上船时不再等 0.5 秒的完整校验，立即停火并丢目标。
@@ -3442,6 +3453,11 @@ func _face_attack_target(target, delta: float = 0.0) -> void:
 		look_at(global_position + to_target, Vector3.UP)
 
 func _attack(target, delta):
+	# 最后一道保险：任何路径把非建筑目标送进来，冲车都不出手。
+	if _is_building_only_attacker() and is_instance_valid(target) and not target is Building:
+		if current_target == target:
+			_drop_current_attack_target()
+		return
 	if _is_target_gone(target):
 		if current_target == target or current_target == null:
 			current_target = null
@@ -5055,6 +5071,9 @@ func _is_animal_unit(target) -> bool:
 
 func _can_attack_target(target: GameEntity) -> bool:
 	if not is_instance_valid(target) or target.health <= 0: return false
+	# 冲车只能拆建筑，不能把敌方军队/动物/资源当成攻击目标。
+	if _is_building_only_attacker() and not target is Building:
+		return false
 	# 平民单位（target_type<=0：农民、商队、官员、运输船等）没有战斗能力，
 	# 不能手动/自动攻击敌方军队或建筑；狩猎动物是唯一例外。
 	if target_type <= 0 and not _is_animal_unit(target):
