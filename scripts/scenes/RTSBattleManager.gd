@@ -4830,10 +4830,12 @@ func _tick_physics_rate(delta: float) -> void:
 		_set_physics_rate_low(false)
 
 func _set_physics_rate_low(low: bool) -> void:
-	var ent_count: int = entities.get_child_count() if entities else 0
-	# 大兵团每渲染帧最多补跑 2 步；450 以上只补 1 步。steps 越多，低帧率时
-	# 每帧要重复跑越多遍 Army 逻辑，反而把帧率继续压低。
-	var want_steps: int = 1 if ent_count >= 450 else 2
+	# 低帧率时必须允许引擎按真实时间补跑足够的物理步：30Hz 模拟在 10FPS
+	# 每帧需要 3 步。以前大兵团只允许 1 步、普通规模 2 步，10FPS 下物理
+	# 时间只推进 1/3 或 2/3 真实时间，表现就是单位动作和游戏时间整体变慢。
+	# 这里放宽到默认的 8 步上限：只有真正掉帧时才会补跑，正常帧率不会多跑；
+	# 8 步仍能限制极端卡顿后的无限追赶，但足以让 10FPS 保持接近实时。
+	var want_steps: int = maxi(_physics_max_steps_original, 8)
 	if _physics_rate_low == low \
 			and (not low or Engine.max_physics_steps_per_frame == want_steps):
 		return
