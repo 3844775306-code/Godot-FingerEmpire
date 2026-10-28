@@ -571,7 +571,8 @@ func _append_ring_line(out: Array, from: Vector2i, to: Vector2i) -> void:
 			err += dx
 			y0 += sy
 
-# 该环格是否已被天然地形/现有建筑/资源点堵死（无需再补墙）
+# 该环格是否已被天然地形/现有建筑/资源点堵死（无需再补墙）；
+# 间距按墙真实可建造间距预留，建筑本身就可以充当一段墙。
 func _ring_cell_blocked(cell: Vector2i) -> bool:
 	if cell.x < 0 or cell.y < 0 or cell.x >= RTSConfig.MAP_SIZE or cell.y >= RTSConfig.MAP_SIZE:
 		return true
@@ -589,7 +590,7 @@ func _ring_cell_blocked(cell: Vector2i) -> bool:
 			continue
 		var dx: float = e.global_position.x - wp.x
 		var dz: float = e.global_position.z - wp.z
-		if sqrt(dx * dx + dz * dz) < float(e.body_radius) + 0.9:
+		if sqrt(dx * dx + dz * dz) < float(e.body_radius) + 1.15:
 			return true
 	return false
 
@@ -667,8 +668,10 @@ func _ring_connect_a_star(start: Vector2i, goal: Vector2i, center: Vector2i, rad
 	if start == goal:
 		return {"ok": true, "cells": []}
 	var sz: int = RTSConfig.MAP_SIZE
-	var lo: int = maxi(4, radius - 2)
-	var hi: int = radius + 2
+	# 墙线不必是标准圆：允许在环内外各 4 格范围内绕开建筑/陡坡，
+	# 只要最终仍把主城包住，形状可以是不规则的。
+	var lo: int = maxi(3, radius - 4)
+	var hi: int = radius + 4
 	var exact_cache: Dictionary = {}
 	var g: Dictionary = {start: 0.0}
 	var parent: Dictionary = {}
@@ -718,7 +721,7 @@ func _ring_connect_a_star(start: Vector2i, goal: Vector2i, center: Vector2i, rad
 			if not is_wall and n != goal:
 				continue
 			var step: float = 1.0
-			step += absf(sqrt(float(dist2)) - float(radius)) * 0.35
+			step += absf(sqrt(float(dist2)) - float(radius)) * 0.22
 			var ng: float = float(g.get(cur, INF)) + step
 			if ng < float(g.get(n, INF)):
 				g[n] = ng
@@ -726,7 +729,8 @@ func _ring_connect_a_star(start: Vector2i, goal: Vector2i, center: Vector2i, rad
 				open.append(n)
 	return {"ok": false, "cells": []}
 
-# 规划一圈完全闭合的墙：以环上的天然屏障为锚点，逐段 A* 连墙；
+# 规划一圈完全闭合的墙：以环上的天然屏障（山水/建筑/资源）为锚点，逐段 A* 连墙。
+# 不要求墙线是规则圆：A* 可在环内外绕行，最终形状由地形和建筑决定；
 # 没有天然屏障时要求环格全部能直接放墙。
 func _ring_build_path(center: Vector2i, radius: int) -> Dictionary:
 	var cells: Array = _ring_cells(center, radius)
