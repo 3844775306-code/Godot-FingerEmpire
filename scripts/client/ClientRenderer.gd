@@ -1040,7 +1040,9 @@ func _play_client_step_sfx(pos: Vector3, terrain: int, overlay: int, vehicle: bo
 	AudioManager.play_sfx_3d(key, pos, _get_cam_pos(), pitch)
 
 func _update_entity_animation(node: Node3D, info: Dictionary):
-	var ap: AnimationPlayer = node.get_meta("_anim_player", null)
+	var ap: AnimationPlayer = null
+	if node.has_meta("_anim_player"):
+		ap = node.get_meta("_anim_player")
 	if not is_instance_valid(ap):
 		ap = AnimationHelper.find_player(node)
 		if ap != null:
@@ -1500,13 +1502,13 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 		# Scale model to match entity body_radius（再乘特殊体型系数，与服务端一致）
 		var body_radius: float = float(info.get("body_radius", 1.0))
 		var aabb = _get_model_aabb(loaded_model)
+		var scale_factor: float = 1.0
 		if eid == 27:
 			# 城墙横向咬合缩放必须与服务端一致，否则连续墙段会留缝或拐角变窄。
 			loaded_model.scale = RTSConfig.get_wall_model_scale(body_radius, aabb)
 		else:
 			var target_size = body_radius * 2.0 * RTSConfig.get_model_scale(eid)
 			var current_size = max(aabb.size.x, max(aabb.size.y, aabb.size.z))
-			var scale_factor := 1.0
 			if current_size > 0.01:
 				scale_factor = target_size / current_size
 				loaded_model.scale = Vector3.ONE * scale_factor
