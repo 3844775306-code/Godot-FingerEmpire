@@ -671,7 +671,20 @@ func _is_cliff_between_positions(bm: RTSBattleManager, from_pos: Vector3, to_pos
 		return false
 	return _is_cliff_between_tiles(bm, from_tile, to_tile)
 
+# 墙/建筑/桥/梯子缓存是“当前队伍”视角。别的队伍刚寻路后，
+# process_move 里的逐帧坡度/拐角检查仍会读这份全局缓存；如果不切回
+# 本单位队伍，斜向拐角检查会把“敌方眼中的我方城墙/建筑”误判成障碍，
+# 表现为追击单位有路径却每帧清路径、原地不动。
+func _ensure_current_team_static_caches(bm: RTSBattleManager) -> void:
+	if bm == null:
+		return
+	if _wall_bm_id != bm.get_instance_id() \
+			or _wall_ver != bm._wall_cache_version \
+			or _wall_team != _army.team:
+		_ensure_static_caches(bm)
+
 func _is_cliff_between_tiles(bm: RTSBattleManager, from_tile: Vector2i, to_tile: Vector2i) -> bool:
+	_ensure_current_team_static_caches(bm)
 	# 斜向跨格不能从两格障碍的角尖上抄近路：A* 的 8 方向邻居和直线采样
 	# 以前只检查终点格，山体拐角处会出现“起点和终点都是平地，但中间擦着
 	# 山角过去”的路径；单位实际碰撞半径过不去，就会顶着山角原地踏步。
@@ -719,6 +732,11 @@ func _is_diagonal_corner_blocked(bm: RTSBattleManager, from_tile: Vector2i,
 	var dx: int = to_tile.x - from_tile.x
 	var dy: int = to_tile.y - from_tile.y
 	if dx == 0 or dy == 0:
+		return false
+	# 只处理相邻两格。process_move 也会用“当前位置→远处目标”调用这里，
+	# 远距离的端点格虽然对角，但实际路线并不经过这两个侧格；旧写法会把
+	# 远处目标旁边的建筑/山体误判成挡路，导致追击单位有路径却反复停下。
+	if absi(dx) > 1 or absi(dy) > 1:
 		return false
 	var side_a := Vector2i(from_tile.x + dx, from_tile.y)
 	var side_b := Vector2i(from_tile.x, from_tile.y + dy)
