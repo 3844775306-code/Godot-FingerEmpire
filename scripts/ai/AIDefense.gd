@@ -51,6 +51,11 @@ const RING_WALL_MIN: int = 8
 # 圈规划在 AI 思考帧里同步跑，必须硬限时；否则白垩山脊这种多坡地图
 # 一次规划会卡住 1~3 秒。先算最可能的半径，超时就退回“可见的近似圈”。
 const RING_PLAN_BUDGET_MS: int = 55
+# 进攻类战役关卡的首圈是开局预置的“外围防线”，不能只贴着主城围一圈：
+# 至少留出 14 米半径来容纳箭塔/炮塔/墙顶炮台，同时仍在主城视野包络内。
+const CAMPAIGN_RING_MIN_RADIUS: int = 14
+# 预置防线每圈最多配几座墙顶炮台；实际按墙段数量取 3~6 座。
+const CAMPAIGN_WALL_CANNON_MAX: int = 6
 # 三层圈的总墙数上限（旧版单圈上限 160 不够扩建圈使用）。
 const WALL_BUILD_CAP: int = 420
 const GUARD_INTERVAL: float = 60.0
@@ -123,6 +128,8 @@ var _first_ring_wall_start: int = 0
 var _wall_rings_planned: int = 0
 var _wall_ring_radii: Array = []
 var _wall_ring_target: int = 0
+# 战役进攻关开局预置外围墙圈时临时抬高首圈最小半径，结束后恢复 0。
+var _campaign_ring_min_radius: int = 0
 # 一次圈规划内复用：墙格可建性和山/水/建筑阻挡都不随候选半径变化，
 # 每个半径都重算一次会让一次规划卡住好几秒。
 var _ring_exact_ok_cache: Dictionary = {}
@@ -356,6 +363,9 @@ func _is_combat_enemy(e) -> bool:
 func _required_wall_ring_count(castle) -> int:
 	if castle == null or not is_instance_valid(castle):
 		return 0
+	# 战役进攻关的敌基地开局已有预置外围墙圈，不再按主城等级额外套圈。
+	if bool(ai.get_meta("campaign_prebuilt_ring", false)):
+		return 1
 	if ai.battle != null and ai.battle.has_method("is_research_mode") and ai.battle.is_research_mode():
 		var st: Dictionary = ai.battle.get_research_state(ai.my_peer_id, ai.my_team)
 		return clampi(int(st.get("age", 0)), 0, 3)
@@ -452,6 +462,8 @@ func _wall_ring_desired_radius(castle, ring_index: int) -> int:
 	var idx: int = clampi(int(ceil(float(samples.size() - 1) * 0.9)), 0, samples.size() - 1)
 	var desired: int = maxi(min_r, int(ceil(float(samples[idx]))))
 	var max_r: int = RING_FIRST_MAX if ring_index == 0 else RING_MAX_RADIUS
+	if ring_index == 0 and _campaign_ring_min_radius > 0:
+		desired = maxi(desired, _campaign_ring_min_radius)
 	return clampi(desired, RING_MIN_RADIUS, max_r)
 
 # 规划一圈墙。ring_index=0 是首圈，>0 是逐级扩建的外圈。
@@ -505,6 +517,93 @@ func _plan_wall_ring(castle, ring_index: int) -> bool:
 	# 队列按优先级从低到高建；首圈墙排在塔和外圈之前。
 	_defense_queue.sort_custom(func(a, b): return float(a["priority"]) < float(b["priority"]))
 	return true
+
+# 战役进攻关：开局直接把 AI 基地外围的一圈城墙、箭塔、炮塔和墙顶炮台预置好。
+# 复用塔圈规划器保证墙线沿地形闭合；这里只把规划结果一次性落成建筑，不扣资源、
+# 不等农民施工，避免玩家前 2 分钟就看到一个没有外围工事的敌基地。
+func prebuild_campaign_castle_ring(castle, threat_dir: Vector3) -> bool:
+	if ai == null or castle == null or not is_instance_valid(castle):
+		return false
+	if bool(ai.get_meta("campaign_prebuilt_ring", false)):
+		return true
+	var dir := Vector3(threat_dir.x, 0.0, threat_dir.z)
+	if dir.length_squared() < 0.0001:
+		dir = Vector3.FORWARD
+	_defense_dir = dir.normalized()
+	# 部分地图的敌基地贴着河岸/山脚，14 米外墙圈可能无处闭合；依次退到更小的
+	# 外围半径重试，避免整张关卡一张城墙都预置不出来。
+	var planned_ok: bool = false
+	for min_r in [CAMPAIGN_RING_MIN_RADIUS, 12, 10, 8]:
+		_clear_campaign_prebuild_plan()
+		_campaign_ring_min_radius = int(min_r)
+		planned_ok = _plan_wall_ring(castle, 0)
+		_campaign_ring_min_radius = 0
+		if planned_ok:
+			break
+	if not planned_ok:
+		return false
+
+	var wall_buildings: Array = []
+	var failed: Array = []
+	for item in _defense_queue:
+		var bid: int = int(item.get("id", -1))
+		var pos: Vector3 = item.get("pos", Vector3.ZERO)
+		var spawned = ai.battle.spawn_entity(EntityDatabase.get_config(bid), ai.my_team, pos, 1)
+		if spawned == null:
+			failed.append(item)
+			continue
+		if bid == 27:
+			wall_buildings.append(spawned)
+	# 没落成的墙位保留在队列里，后续 AI 仍可补建；已落成的清掉，避免重复施工。
+	_defense_queue = failed
+	_spawn_campaign_wall_cannons(castle, wall_buildings)
+	defense_initialized = true
+	_wall_rings_planned = 1
+	_wall_ring_target = 1
+	_castle_ring_planned = true
+	_castle_ring_radius = int(_wall_ring_radii[0]) if not _wall_ring_radii.is_empty() else 0
+	_castle_ring_wall_count = wall_buildings.size()
+	# 预置圈不需要再让经济给“首圈施工”让路。
+	_first_ring_planned_at = -1.0
+	ai.set_meta("campaign_prebuilt_ring", true)
+	return true
+
+# 预置外围防线每次重试前清掉上一轮的墙位/塔位；保留 _defense_dir。
+func _clear_campaign_prebuild_plan() -> void:
+	_defense_queue.clear()
+	_defense_slots.clear()
+	wall_positions.clear()
+	tower_positions.clear()
+	_wall_ring_radii.clear()
+	_wall_rings_planned = 0
+	_wall_ring_target = 1
+	_first_ring_planned_at = -1.0
+	_castle_ring_planned = false
+	_castle_ring_wall_count = 0
+	_castle_ring_radius = 0
+	_ring_exact_ok_cache.clear()
+	_ring_blocked_base_cache.clear()
+
+# 沿预置墙圈均匀挑 3~6 段放墙顶炮台，保证“箭塔 / 炮台 / 炮塔”三种都有。
+func _spawn_campaign_wall_cannons(castle, walls: Array) -> void:
+	if castle == null or walls.size() < 3:
+		return
+	var center: Vector3 = castle.global_position
+	walls.sort_custom(func(a, b):
+		var aa: float = atan2(a.global_position.z - center.z, a.global_position.x - center.x)
+		var ab: float = atan2(b.global_position.z - center.z, b.global_position.x - center.x)
+		return aa < ab
+	)
+	var count: int = mini(CAMPAIGN_WALL_CANNON_MAX,
+			maxi(3, int(ceil(float(walls.size()) / 9.0))))
+	for i in range(count):
+		var idx: int = int(round(float(i) * float(walls.size() - 1)
+				/ float(maxi(count - 1, 1))))
+		var wall = walls[clampi(idx, 0, walls.size() - 1)]
+		if not is_instance_valid(wall) or wall.health <= 0:
+			continue
+		ai.battle.spawn_entity(EntityDatabase.get_config(64), ai.my_team,
+				wall.global_position, 1)
 
 # ── 地形防线：在朝敌方向前方寻找隘口/浅滩 ──
 func _cell_blocks_land(gx: int, gz: int) -> bool:
@@ -1270,6 +1369,10 @@ func _ring_build_spot_fallback(center: Vector2i, radius: int) -> Dictionary:
 		var wp: Vector3 = _ring_wall_spot(cell)
 		if wp == Vector3.ZERO:
 			return {"ok": false}
+		# 相邻环格在绕坡时可能吸附到同一个墙位；重复墙位会触发 0.9 米间距校验，
+		# 让整圈兜底被误判为不可建。保留第一个即可，后面的格子由同一面墙覆盖。
+		if not positions.is_empty() and (positions[positions.size() - 1] as Vector3).distance_to(wp) < 0.9:
+			continue
 		# 兜底墙位允许在 2.5 米内避坡，但相邻两面墙必须仍能咬合；
 		# 否则看似“规划成功”，实际墙圈会留下敌人可钻的缺口。
 		if prev_was_wall and prev_pos.distance_to(wp) > 1.85:
@@ -1433,11 +1536,20 @@ func _plan_ring_towers(castle, radius: int) -> void:
 				_add_defense_slot(25, ospot, 14.0 + float(i) * 0.2, "tower")
 	var cannon_r: float = maxf(4.8, float(radius) - 4.0)
 	for side in [-1.0, 1.0]:
-		var dir: Vector3 = _defense_dir.rotated(Vector3.UP, 0.55 * float(side))
-		var cp: Vector3 = castle.global_position + dir * cannon_r
-		var cspot: Vector3 = _find_anchor_spot(cp, 26, 2.0)
-		if cspot != Vector3.ZERO:
-			_add_defense_slot(26, cspot, 12.0, "tower")
+		# 墙圈内侧同时有瞭望塔/箭塔，固定角度可能刚好被占；向两侧多试几个角度，
+		# 保证每圈至少落下一座炮塔，而不是“规划成功但只有箭塔”。
+		var placed: bool = false
+		for turn in [0.0, 0.35, -0.35, 0.7, -0.7, 1.0, -1.0]:
+			var dir: Vector3 = _defense_dir.rotated(Vector3.UP, (0.55 + float(turn)) * float(side))
+			for extra in [0.0, 2.0, -2.0]:
+				var cp: Vector3 = castle.global_position + dir * (cannon_r + float(extra))
+				var cspot: Vector3 = _find_anchor_spot(cp, 26, 2.0)
+				if cspot != Vector3.ZERO:
+					_add_defense_slot(26, cspot, 12.0 + absf(float(turn)), "tower")
+					placed = true
+					break
+			if placed:
+				break
 
 # 山/水 + 现有建筑/资源对陆军的阻挡。同一次圈规划里这些不会变，
 # 缓存一次供所有候选半径复用，避免每个半径都扫全图地形和实体。

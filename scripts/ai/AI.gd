@@ -856,6 +856,14 @@ func _scout_enemy_near(pos: Vector3) -> bool:
 			return true
 	return false
 
+# 战役进攻关开局调用：按 AIDefense 的地形塔圈规划，预置一整圈外围城墙与防御塔。
+func prebuild_campaign_defense(castle, threat_dir: Vector3) -> bool:
+	if battle == null or castle == null or not is_instance_valid(castle):
+		return false
+	if _defense == null:
+		_defense = AIDefenseScript.new(self)
+	return _defense.prebuild_campaign_castle_ring(castle, threat_dir)
+
 # 每个 think 周期调用：更新探索记录，并给侦察兵分配下一个前沿目标。
 func _process_scout_recon() -> void:
 	if battle == null:

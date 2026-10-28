@@ -178,6 +178,7 @@ func _setup() -> void:
 	_setup_ai(enemy_cfg)
 	_spawn_side(player_cfg, bm.player_team, player_anchor, true)
 	_spawn_side(enemy_cfg, bm.enemy_team, enemy_anchor, false)
+	_prebuild_attack_ai_defense(enemy_cfg)
 
 	# 人口上限与起始资源由关卡指定（没有主城时按建筑算会是 0，必须走战役覆盖）
 	bm.campaign_pop_caps = {
@@ -235,6 +236,26 @@ func _setup_ai(enemy_cfg: Dictionary) -> void:
 	var nation: int = int(enemy_cfg.get("nation", -1))
 	if nation >= 0:
 		ai.nation = nation
+
+# 进攻类关卡（摧毁主城/指定建筑）的 AI 基地开局就应是一座完整要塞：
+# 用 AIDefense 的地形塔圈规划预置一圈外围城墙，并配箭塔、炮塔、墙顶炮台。
+# 只对“玩家进攻、敌方有 AI 主城”的关卡生效，防守关/纯波次关不受影响。
+func _prebuild_attack_ai_defense(enemy_cfg: Dictionary) -> void:
+	if not bool(enemy_cfg.get("ai", false)) or enemy_castle == null:
+		return
+	if not is_instance_valid(enemy_castle) or not _is_attack_objective_level():
+		return
+	var ai = bm.get_node_or_null("AIController")
+	if ai == null or not ai.has_method("prebuild_campaign_defense"):
+		return
+	ai.prebuild_campaign_defense(enemy_castle, player_anchor - enemy_anchor)
+
+func _is_attack_objective_level() -> bool:
+	for o in level.get("objectives", []):
+		var t: String = String(o.get("type", ""))
+		if t == "destroy_castle" or t == "destroy_targets" or t == "destroy_buildings":
+			return true
+	return false
 
 # 生成一方的开局：主城 / 城墙 / 建筑 / 军队
 func _spawn_side(cfg: Dictionary, team: int, anchor: Vector3, is_player: bool) -> void:
