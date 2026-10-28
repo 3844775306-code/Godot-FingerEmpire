@@ -9,6 +9,9 @@ const MUZZLE_ATTACK_IDS = [25, 26, 64]
 # 生成时模型还会按 body_radius 自动缩放，所以实际站墙高度必须用
 # get_wall_top_height() 按每面墙的模型实例计算，不能直接加这个常量。
 const WALL_TOP_HEIGHT: float = 1.31
+# 城墙模型按格子中心放置，间距为 body_radius*2；相比碰撞体多留一点横向重叠，
+# 让相邻墙段边缘真正咬合，而不是只靠两个碰撞体“看起来接近”。
+const WALL_JOIN_OVERLAP: float = 0.12
 # 放置炮台时向最近城墙吸附的水平半径（米）
 const WALL_CANNON_SNAP: float = 6.0
 # 建造/修理自动派工：每隔一段时间给没人施工的工地找最近的空闲农民
@@ -2243,6 +2246,22 @@ func _init_entities_deferred():
 		cam.global_position = Vector3(player_castle.global_position.x, cam.global_position.y, player_castle.global_position.z)
 
 # ==================== 实体生成 ====================
+# 模型缩放：普通模型按最大边等比缩放到实体直径；城墙另外处理横向占地，
+# 让中心相距 2 米的相邻墙段边缘咬合，同时保持原来的墙顶高度。
+func _model_scale_for(entity_id: int, body_radius: float, aabb: AABB) -> Vector3:
+	var target_size: float = body_radius * 2.0
+	var current_size: float = max(aabb.size.x, max(aabb.size.y, aabb.size.z))
+	if current_size <= 0.01:
+		return Vector3.ONE
+	var model_scale: float = RTSConfig.get_model_scale(entity_id)
+	if entity_id == 27:
+		var footprint: float = max(aabb.size.x, aabb.size.z)
+		var width_scale: float = (target_size + WALL_JOIN_OVERLAP) \
+			/ maxf(footprint, 0.01) * model_scale
+		var height_scale: float = target_size / maxf(aabb.size.y, 0.01) * model_scale
+		return Vector3(width_scale, height_scale, width_scale)
+	return Vector3.ONE * (target_size / current_size * model_scale)
+
 func _apply_entity_model(entity: GameEntity) -> bool:
 	var model_path = RTSConfig.get_entity_model(entity.entity_id, entity.level)
 	# 城墙拐角检测
@@ -2266,13 +2285,8 @@ func _apply_entity_model(entity: GameEntity) -> bool:
 		if child is MeshInstance3D and child.name != "SelectionRing":
 			child.queue_free()
 	# 缩放模型以匹配实体大小
-	var target_size = entity.body_radius * 2.0
 	var aabb = _get_model_aabb(model_instance)
-	var current_size = max(aabb.size.x, max(aabb.size.y, aabb.size.z))
-	var scale_factor := 1.0
-	if current_size > 0.01:
-		scale_factor = target_size / current_size * RTSConfig.get_model_scale(entity.entity_id)
-		model_instance.scale = Vector3.ONE * scale_factor
+	model_instance.scale = _model_scale_for(entity.entity_id, entity.body_radius, aabb)
 	# 打个标记，让 Army 能稳定取到自己的模型根节点（不能按名字找：名字来自 GLB）
 	model_instance.set_meta("entity_model", true)
 	entity.add_child(model_instance)
@@ -3938,11 +3952,9 @@ func _on_building_selected_for_build(building_id: int):
 		build_preview = MeshInstance3D.new()
 		build_preview.mesh = BoxMesh.new()
 		build_preview.mesh.size = Vector3(effective_radius * 2.0, effective_radius * 1.5, effective_radius * 2.0)
-	# 缩放预览模型匹配实际大小
-	var target_size = effective_radius * 2.0 * RTSConfig.get_model_scale(building_id)
+	# 缩放预览模型匹配实际大小（城墙也要共用横向咬合缩放，避免预览比实墙窄）
 	var aabb = _get_model_aabb(build_preview)
-	var current_size = max(aabb.size.x, max(aabb.size.y, aabb.size.z))
-	if current_size > 0.01: build_preview.scale = Vector3.ONE * (target_size / current_size)
+	build_preview.scale = _model_scale_for(building_id, effective_radius, aabb)
 	build_preview.visible = false
 	# 预览旋转（与实际放置一致）
 	if building_id in [22, 27, 28]: build_preview.rotation.y = deg_to_rad(90)
