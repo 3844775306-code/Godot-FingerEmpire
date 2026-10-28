@@ -34,6 +34,17 @@ func popup_at(p_world_pos: Vector3, screen_pos: Vector2) -> void:
 	show()
 	_clamp_to_viewport()
 
+# 手机端「建造」按钮：菜单在屏幕正中弹出
+func popup_center() -> void:
+	world_pos = Vector3.ZERO
+	_refresh_ui()
+	var vp := get_viewport().get_visible_rect().size
+	position = (vp - _menu_size) * 0.5
+	_clamped = false
+	set_process(true)
+	show()
+	_clamp_to_viewport()
+
 # 手机上菜单以触点为中心弹出，必须夹回屏幕内，否则最右/最下会被裁掉
 func _clamp_to_viewport() -> void:
 	var vp := get_viewport().get_visible_rect().size
@@ -101,7 +112,7 @@ func _refresh_ui() -> void:
 	for cfg in by_id.values():
 		defs.append(cfg)
 
-	var cells: int = defs.size() + 1
+	var cells: int = defs.size() + 2  # +「连续建造」开关 +「取消」
 	var rows: int = int(ceil(float(cells) / float(cols)))
 	_menu_size = Vector2(
 		cols * card.x + (cols - 1) * gap + pad * 2.0,
@@ -155,6 +166,22 @@ func _refresh_ui() -> void:
 		grid.add_child(card_node)
 		_cards.append(card_node)
 
+	# 手机端：连续建造开关占一个卡片格，放在「取消」前面，不额外增加菜单高度
+	if mobile:
+		var toggle := Button.new()
+		toggle.toggle_mode = true
+		toggle.button_pressed = GameSettings.mobile_continuous_build
+		toggle.text = "连续建造：开" if toggle.button_pressed else "连续建造：关"
+		toggle.custom_minimum_size = card
+		toggle.size = card
+		UITheme.apply_muted_button(toggle, name_px)
+		toggle.add_theme_font_size_override("font_size", name_px)
+		toggle.focus_mode = Control.FOCUS_NONE
+		toggle.tooltip_text = "开启后放置完一个建筑仍保持建造模式"
+		toggle.add_theme_color_override("font_color", Color(0.55, 0.95, 0.55) if toggle.button_pressed else Color(0.9, 0.9, 0.9))
+		toggle.toggled.connect(func(pressed: bool): _on_continuous_build_toggled(pressed, toggle))
+		grid.add_child(toggle)
+
 	var close_btn := Button.new()
 	close_btn.text = "取消"
 	UITheme.apply_muted_button(close_btn, name_px)
@@ -205,6 +232,15 @@ func _point_inside(pos: Vector2) -> bool:
 func _on_building_selected(building_id: int) -> void:
 	emit_signal("build_placement_started", building_id)
 	hide()
+
+# 连续建造：放置完一个建筑后继续保持建造模式（等价电脑端按住 Shift）
+func _on_continuous_build_toggled(pressed: bool, toggle: Button) -> void:
+	GameSettings.mobile_continuous_build = pressed
+	toggle.text = "连续建造：开" if pressed else "连续建造：关"
+	toggle.add_theme_color_override("font_color", Color(0.55, 0.95, 0.55) if pressed else Color(0.9, 0.9, 0.9))
+	var bm := get_tree().get_first_node_in_group("battle_manager")
+	if bm and "mobile_keep_build_mode" in bm:
+		bm.mobile_keep_build_mode = pressed
 
 # 手机端触摸转发需要知道菜单实际面板范围（根 Control 尺寸即面板尺寸）
 func is_point_inside(pos: Vector2) -> bool:

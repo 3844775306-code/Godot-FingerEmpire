@@ -415,7 +415,11 @@ func _is_local_owned_info(info: Dictionary) -> bool:
 	if info.is_empty(): return false
 	if not renderer: return false
 	if renderer.my_peer_id != -1:
-		return int(info.get("owner_peer_id", -1)) == renderer.my_peer_id
+		var owner_id := int(info.get("owner_peer_id", -1))
+		# 初始建筑/单位可能还没写 owner（服务端补位 AI 或旧快照），此时按队伍兜底，
+		# 与 ClientRenderer.is_local_owned_info 保持一致，避免自己的单位被当成队友只读。
+		if owner_id != -1:
+			return owner_id == renderer.my_peer_id
 	return int(info.get("team", -1)) == renderer.player_team
 
 # 不同队伍且非中立：只读信息面板上显示「敌方」而不是「队友」

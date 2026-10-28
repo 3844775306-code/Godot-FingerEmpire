@@ -278,6 +278,12 @@ func _ready():
 			start_build_placement(bid)
 		)
 
+# 手机端右下角「建造」按钮：在屏幕中央打开建造菜单（与长按地图入口共用同一菜单）
+func open_build_menu_for_mobile() -> void:
+	var menu = $UI/BuildMenu as ClientBuildMenu
+	if menu:
+		menu.popup_center()
+
 func start_build_placement(bid: int):
 	placement_mode = true
 	placement_building_id = bid

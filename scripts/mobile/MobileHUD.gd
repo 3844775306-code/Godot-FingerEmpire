@@ -10,7 +10,8 @@ extends Control
 #
 # 布局分区：态势左上（资源胶囊）、复盘全屏（统计大屏）、看左（单位信息面板）、
 #          单位条底部居中（生产按钮在单位信息面板里）、令右（框选模式 + 五个全局指令）。
-# 建造入口改为长按地图呼出建造菜单（由 TouchGestureRouter 合成右键触发），不再有底部抽屉。
+# 建造入口：点命令栏「建造」按钮或长按地图呼出建造菜单（TouchGestureRouter 合成右键），
+# 菜单内提供连续建造开关，不再有底部抽屉。
 
 var hud: Node = null
 var router: TouchGestureRouter = null

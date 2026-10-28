@@ -190,6 +190,12 @@ func _ready():
 func _input(event):
 	if not renderer: return
 
+	# 鼠标按在己方 UI 面板/按钮上时，交给 GUI 处理，不能先做世界选择。
+	# 单机 SelectionManager 一直有这层判断，联机客户端之前只判断了手机面板，
+	# 导致桌面/网页端点生产、升级、拆除按钮时先把当前选中清掉，按钮在抬起前就被隐藏。
+	if event is InputEventMouseButton and event.pressed and _is_ui_point(event.position):
+		return
+
 	# 建造放置模式优先
 	if renderer.placement_mode:
 		# 手机端居中建造：世界触摸只用于平移地图（由 TouchGestureRouter 处理），
@@ -421,8 +427,8 @@ func _input(event):
 
 	# ========== 左键处理（照搬 SelectionManager._input） ==========
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
-		# 移动端：触屏面板上的点击交给 GUI，不做世界选择
-		if _is_mobile_ui_point(event.position):
+		# UI 面板上的点击交给 GUI，不做世界选择
+		if _is_ui_point(event.position):
 			return
 		if event.pressed:
 			# Ctrl+Alt+左键 → 清除驻扎点（仅己方单位）
@@ -1023,6 +1029,35 @@ func _is_mobile_ui_point(pos: Vector2) -> bool:
 	var mh = get_tree().get_first_node_in_group("mobile_hud")
 	if mh and mh.has_method("is_point_over_panel"):
 		return bool(mh.call("is_point_over_panel", pos))
+	return false
+
+# 任意平台：判断屏幕坐标是否落在联机客户端的可交互 UI 上。
+# GUI 会先收到鼠标事件，但 _input 也会收到；这里提前跳过，避免点按钮时把选中清空。
+func _is_ui_point(pos: Vector2) -> bool:
+	if _is_mobile_ui_point(pos):
+		return true
+	var root := get_parent()
+	if root == null:
+		return false
+	var ui := root.get_node_or_null("UI")
+	if ui == null:
+		return false
+	for node_name in ["InfoPanel", "BuildMenu", "CommandCard"]:
+		var ctrl := ui.get_node_or_null(node_name)
+		if ctrl is Control and ctrl.visible and _control_contains(ctrl, pos):
+			return true
+	return false
+
+func _control_contains(ctrl: Control, pos: Vector2) -> bool:
+	if not ctrl.visible:
+		return false
+	if ctrl.get_global_rect().has_point(pos):
+		return true
+	for child in ctrl.get_children():
+		if child is Control and child.visible:
+			var child_rect: Rect2 = child.get_global_rect()
+			if child_rect.size != Vector2.ZERO and child_rect.has_point(pos):
+				return true
 	return false
 
 func _jump_camera_to_group(g: int):

@@ -10,7 +10,7 @@ const WIDTH_DP: float = 152.0        # 原 190dp 的 80%，给战场多让出一
 const BTN_H_DP: float = 30.0
 const GAP_DP: float = 3.0
 const PAD_DP: float = 2.0
-const BASE_ROWS: int = 5             # 框选/旋转、两个全选、两个撤退、自动进攻/设置、批量/连续
+const BASE_ROWS: int = 5             # 框选/旋转、两个全选、两个撤退、自动进攻/设置、批量/建造
 # 科研模式下底部再加一行「科研树」，高度按实际行数算，避免横屏顶到右上角小地图
 func _row_count() -> int:
 	return BASE_ROWS + (1 if GameSettings.is_research_mode() else 0)
@@ -26,7 +26,7 @@ var _box_mode_btn: Button = null
 var _rotate_btn: Button = null
 var _auto_btn: Button = null
 var _batch_produce_btn: Button = null
-var _cont_build_btn: Button = null
+var _build_btn: Button = null
 var _panel: Panel = null
 var _research_btn: Button = null
 
@@ -92,16 +92,15 @@ func _build() -> void:
 	vb.add_child(row3)
 	sync_auto_attack()
 
-	# 手机端替代键盘修饰键的两个开关
+	# 手机端替代键盘修饰键的两个入口：批量生产 + 建造菜单
 	var row4 := _make_row()
 	_batch_produce_btn = _make_button("批量生产：关", UILayout.font_dp(9.5))
 	_batch_produce_btn.toggle_mode = true
 	_batch_produce_btn.toggled.connect(_on_batch_produce_toggled)
 	row4.add_child(_batch_produce_btn)
-	_cont_build_btn = _make_button("连续建造：关", UILayout.font_dp(9.5))
-	_cont_build_btn.toggle_mode = true
-	_cont_build_btn.toggled.connect(_on_cont_build_toggled)
-	row4.add_child(_cont_build_btn)
+	_build_btn = _make_button("🏗 建造", UILayout.font_dp(9.5))
+	_build_btn.pressed.connect(_on_build_pressed)
+	row4.add_child(_build_btn)
 	vb.add_child(row4)
 
 	# 科研树归入指令按钮栏：科研模式下多一行整宽按钮，经典模式不出现。
@@ -204,14 +203,15 @@ func _on_batch_produce_toggled(pressed: bool) -> void:
 	_batch_produce_btn.text = "批量生产：开" if pressed else "批量生产：关"
 	_batch_produce_btn.add_theme_color_override("font_color", Color(0.55, 0.95, 0.55) if pressed else Color(0.9, 0.9, 0.9))
 
-# 连续建造开关：打开后放置建筑不退出建造模式 = 电脑端按住 Shift
-func _on_cont_build_toggled(pressed: bool) -> void:
-	GameSettings.mobile_continuous_build = pressed
-	_cont_build_btn.text = "连续建造：开" if pressed else "连续建造：关"
-	_cont_build_btn.add_theme_color_override("font_color", Color(0.55, 0.95, 0.55) if pressed else Color(0.9, 0.9, 0.9))
+# 建造按钮：和长按地图一样呼出建造菜单；连续建造开关已移入菜单内
+func _on_build_pressed() -> void:
+	var renderer := get_tree().get_first_node_in_group("client_renderer")
+	if renderer and renderer.has_method("open_build_menu_for_mobile"):
+		renderer.call("open_build_menu_for_mobile")
+		return
 	var bm := get_tree().get_first_node_in_group("battle_manager")
-	if bm:
-		bm.mobile_keep_build_mode = pressed
+	if bm and bm.has_method("open_build_menu_for_mobile"):
+		bm.call("open_build_menu_for_mobile")
 
 func sync_auto_attack() -> void:
 	if _auto_btn == null:
