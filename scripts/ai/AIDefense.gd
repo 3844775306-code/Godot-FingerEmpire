@@ -54,6 +54,9 @@ const RING_PLAN_BUDGET_MS: int = 55
 # 进攻类战役关卡的首圈是开局预置的“外围防线”，不能只贴着主城围一圈：
 # 至少留出 14 米半径来容纳箭塔/炮塔/墙顶炮台，同时仍在主城视野包络内。
 const CAMPAIGN_RING_MIN_RADIUS: int = 14
+# 普通对战 AI 的首圈也按“外围要塞”来修，而不是贴着主城围一个刚好包住
+# 现有建筑的小圈；否则城墙、箭塔、炮塔、墙顶炮台会挤在一起，看不出层次。
+const NORMAL_RING_MIN_RADIUS: int = 14
 # 预置防线每圈最多配几座墙顶炮台；实际按墙段数量取 3~6 座。
 const CAMPAIGN_WALL_CANNON_MAX: int = 6
 # 三层圈的总墙数上限（旧版单圈上限 160 不够扩建圈使用）。
@@ -445,6 +448,11 @@ func _wall_ring_desired_radius(castle, ring_index: int) -> int:
 	if ring_index > 0 and _wall_ring_radii.size() >= ring_index:
 		min_r = maxi(min_r, int(_wall_ring_radii[ring_index - 1]) + 3)
 	var center: Vector3 = castle.global_position
+	var outer_min: int = 0
+	if ring_index == 0:
+		# 战役预置圈用临时最小半径；普通对战用统一的外围首圈半径。
+		outer_min = _campaign_ring_min_radius if _campaign_ring_min_radius > 0 \
+				else NORMAL_RING_MIN_RADIUS
 	var samples: Array = []
 	for e in ai.battle.entities.get_children():
 		if not (e is Building) or e.health <= 0 or not ai.entity_belongs_to_me(e):
@@ -457,13 +465,14 @@ func _wall_ring_desired_radius(castle, ring_index: int) -> int:
 			continue
 		samples.append(d + float(e.body_radius) + 1.8)
 	if samples.is_empty():
-		return min_r
+		return clampi(maxi(min_r, outer_min), RING_MIN_RADIUS,
+				RING_FIRST_MAX if ring_index == 0 else RING_MAX_RADIUS)
 	samples.sort()
 	var idx: int = clampi(int(ceil(float(samples.size() - 1) * 0.9)), 0, samples.size() - 1)
 	var desired: int = maxi(min_r, int(ceil(float(samples[idx]))))
 	var max_r: int = RING_FIRST_MAX if ring_index == 0 else RING_MAX_RADIUS
-	if ring_index == 0 and _campaign_ring_min_radius > 0:
-		desired = maxi(desired, _campaign_ring_min_radius)
+	if ring_index == 0:
+		desired = maxi(desired, outer_min)
 	return clampi(desired, RING_MIN_RADIUS, max_r)
 
 # 规划一圈墙。ring_index=0 是首圈，>0 是逐级扩建的外圈。
