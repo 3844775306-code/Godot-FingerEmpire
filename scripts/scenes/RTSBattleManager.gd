@@ -4154,10 +4154,14 @@ func is_wall_blocking_shot(viewer, target) -> bool:
 		return false
 	if _is_wall_shot_exempt(viewer) or _is_wall_shot_exempt(target):
 		return false
+	return is_wall_between_positions(viewer.global_position, target.global_position)
+
+# 任意两点之间是否隔着一道城墙（路径被封锁时用于挑出真正挡路的墙）。
+func is_wall_between_positions(from_pos: Vector3, to_pos: Vector3) -> bool:
 	if $Map == null:
 		return false
 	var cells: Array = VisionSystem.ray_cells(
-		$Map, viewer.global_position, target.global_position, RTSConfig.MAP_SIZE
+		$Map, from_pos, to_pos, RTSConfig.MAP_SIZE
 	)
 	# 两端格不参与遮挡：观察者/目标可能已经贴着墙脚。
 	for i in range(1, cells.size() - 1):

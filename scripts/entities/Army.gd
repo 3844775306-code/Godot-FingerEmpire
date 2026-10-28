@@ -1884,11 +1884,49 @@ func _drop_current_attack_target() -> void:
 	_set_order(UnitState.IDLE)
 	_find_enemy_in_range()
 
+func _fallback_route_destination() -> Vector3:
+	if attack_move_target != Vector3.ZERO:
+		return attack_move_target
+	if current_target != null and is_instance_valid(current_target):
+		return current_target.global_position
+	if combat_destination != Vector3.ZERO:
+		return combat_destination
+	return Vector3.ZERO
+
+# 只有城墙真的横在“当前位置→目标/攻击移动终点”的直线上时，才把它作为
+# 兜底拆墙目标。这样空闲部队不会看到附近有墙就去啃，路线被封死时又能破墙。
+func _find_blocking_wall_fallback(bm: RTSBattleManager) -> Building:
+	if bm == null or not bm.has_method("is_wall_between_positions"):
+		return null
+	var dest: Vector3 = _fallback_route_destination()
+	if dest == Vector3.ZERO:
+		return null
+	if not bm.is_wall_between_positions(global_position, dest):
+		return null
+	var candidates: Array = bm.get_nearby_enemies(global_position, vision_range, team, owner_peer_id, true)
+	var best: Building = null
+	var best_dist: float = INF
+	for e in candidates:
+		if not (e is Building) or int(e.entity_id) != 27 or e.health <= 0:
+			continue
+		if _is_target_marked_unreachable(e) or not _can_attack_target(e):
+			continue
+		if not bm.is_target_visible_from(self, e):
+			continue
+		var dist: float = global_position.distance_to(e.global_position)
+		if dist < best_dist:
+			best_dist = dist
+			best = e
+	return best
+
 # 目标打不到时，优先改打最近的敌方建筑（城墙/建筑），让近战单位去拆挡路物，
 # 而不是站在原地看着目标播放走路动画。
 func _find_attack_fallback_building(bm: RTSBattleManager) -> Building:
 	if bm == null:
 		return null
+	var blocking_wall: Building = _find_blocking_wall_fallback(bm)
+	if blocking_wall != null:
+		return blocking_wall
 	var candidates: Array = bm.get_nearby_enemies(global_position, vision_range, team, owner_peer_id, true)
 	var best: Building = null
 	var best_dist: float = INF
