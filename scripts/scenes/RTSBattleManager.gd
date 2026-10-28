@@ -1991,6 +1991,7 @@ func _init_training_multi(mode: String) -> void:
 	update_population_limits()
 	for res in map.resource_positions:
 		spawn_entity(EntityDatabase.get_config(int(res.type)), RTSConfig.Team.NEUTRAL, res.pos)
+	_unlock_training_nation_units()
 	_init_fog_grid()
 	var cam = get_viewport().get_camera_3d()
 	if cam and player_castle:
@@ -2391,6 +2392,48 @@ func is_training_unit_allowed(unit_id: int) -> bool:
 
 func is_training_building_allowed(building_id: int) -> bool:
 	return (not training_active) or training_buildings.has(int(building_id))
+
+# 训练营的“国家特色兵”从主城/前线城堡训练：
+# 普通对局只在前线城堡 53 上补特色兵，而训练关（尤其第 24 关）只有主城 20。
+# 这里把本城堡所属国家的特色兵写进 building_data，显式设 unlock_level=1，
+# 后续升级重建生产列表也不会丢失；最终仍由训练白名单决定是否可见。
+func _unlock_training_nation_units() -> void:
+	if not GameSettings.training_mode:
+		return
+	_ensure_cache_fresh()
+	NationData._static_init()
+	for b in _buildings:
+		if not is_instance_valid(b) or b.health <= 0 or b.build_timer > 0.0:
+			continue
+		if int(b.entity_id) not in [20, 53]:
+			continue
+		var nation := int(get_entity_nation(b))
+		if nation < 0:
+			continue
+		var units: Array = NationData.NATION_UNITS.get(nation, [])
+		var produces: Array = b.building_data.get("produces", [])
+		var changed := false
+		for u in units:
+			var uid := int(u.get("unit_id", -1))
+			if uid < 0 or uid == 10:
+				continue
+			var exists := false
+			for p in produces:
+				if int(p.get("unit_id", -1)) == uid:
+					exists = true
+					break
+			if not exists:
+				produces.append({
+					"unit_id": uid,
+					"cooldown": float(u.get("cooldown", 5.0)),
+					"queue_limit": int(u.get("queue_limit", 5)),
+					"unlock_level": 1,
+				})
+				changed = true
+		if changed:
+			b.building_data["produces"] = produces
+			if b.has_method("_sync_production_unlocks"):
+				b._sync_production_unlocks()
 
 func _init_building_defs():
 	building_defs.clear()

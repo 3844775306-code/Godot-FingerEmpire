@@ -228,6 +228,9 @@ func _setup() -> void:
 	_deploy_objective_guards()
 	if _has_water_waves:
 		_enemy_water_spawn = _find_water_point(player_anchor, 22.0, 60.0)
+	# 国家试炼：主城默认不生产特色兵，训练营在这里补上本关所选国家。
+	if _is_training() and bm.has_method("_unlock_training_nation_units"):
+		bm._unlock_training_nation_units()
 	_create_hud()
 
 	# 相机对准玩家出生点（没有主城时也要对准军队）

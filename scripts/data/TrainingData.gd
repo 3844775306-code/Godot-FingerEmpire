@@ -486,7 +486,7 @@ static func levels() -> Array:
 		"type": "教学", "map_id": "desert", "map_seed": 116,
 		"time_limit": 600.0, "stars": {"two": 480.0, "three": 360.0},
 		"concepts": [
-			{"name": "重装武器厂", "kind": "building", "id": 29, "icon": "🏭", "desc": "生产重装步兵/弓手/骑兵和巨型投石机；需要石油，升级解锁更重单位。"},
+			{"name": "重装武器厂", "kind": "building", "id": 29, "icon": "🏭", "desc": "生产重装步兵/弓手/骑兵和巨型投石机；需要石油。本关先熟悉建筑，重装单位下一关正式登场。"},
 			{"name": "长枪兵", "kind": "unit", "id": 35, "icon": "🔱", "desc": "攻击无视护甲并带小范围穿透，专门克制重装和高甲单位；怕弓箭手。"},
 		],
 		"unlock_units": [35],
@@ -503,7 +503,7 @@ static func levels() -> Array:
 			{"type": "kill_units", "unit_ids": [36], "count": 3, "label": "用长枪兵击杀 3 名重装步兵"},
 		],
 		"fail": ["castle_lost", "timeout"],
-		"brief": "重装武器厂需要石油。长枪兵无视护甲，正好克制重装步兵；但长枪兵怕弓箭手，记得带盾。",
+		"brief": "重装武器厂需要石油，本关先熟悉它；主力用兵营 4 级的长枪兵，下一关才正式生产重装兵。长枪兵无视护甲，正好克制重装步兵。",
 	}))
 
 	out.append(_level({

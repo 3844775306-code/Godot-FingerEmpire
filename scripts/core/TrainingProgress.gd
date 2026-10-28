@@ -28,8 +28,11 @@ static func load_all() -> Dictionary:
 	var nations = parsed.get("nations", [])
 	if typeof(nations) != TYPE_ARRAY:
 		nations = []
+	var normalized_nations: Array = []
+	for n in nations:
+		normalized_nations.append(int(n))
 	data["levels"] = levels
-	data["nations"] = nations
+	data["nations"] = normalized_nations
 	return data
 
 static func save_all(data: Dictionary) -> void:
@@ -95,7 +98,10 @@ static func mark_nation_seen(nation: int) -> void:
 
 static func nation_seen(nation: int) -> bool:
 	var all := load_all()
-	return all.get("nations", []).has(int(nation))
+	for n in all.get("nations", []):
+		if int(n) == int(nation):
+			return true
+	return false
 
 static func nation_seen_count() -> int:
 	var all := load_all()
