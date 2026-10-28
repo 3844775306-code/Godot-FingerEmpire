@@ -717,7 +717,7 @@ func _update_repair_ui(info: Dictionary, readonly: bool) -> void:
 	elif under:
 		tip += "\n状态：修理中"
 	elif not can_click:
-		tip += "\n状态：资源不足或附近有敌军，暂不可修"
+		tip += "\n状态：资源不足或修理科技未解锁，暂不可修"
 	repair_btn.tooltip_text = tip
 
 func _repair_cost_text(cost: Dictionary) -> String:

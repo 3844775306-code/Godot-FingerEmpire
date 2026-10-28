@@ -1332,19 +1332,12 @@ func _update_placement_preview(screen_pos: Vector2):
 
 func _confirm_placement():
 	var pos = renderer.placement_preview.global_position
-	var no_enemy_nearby = true
-	for node in renderer.entity_nodes.values():
-		if not node.has_meta("snapshot_info"): continue
-		var info = node.get_meta("snapshot_info")
-		if info and info["team"] != renderer.player_team and info["team"] != RTSConfig.Team.NEUTRAL and info["health"] > 0:
-			if node.global_position.distance_to(pos) < 10.0:
-				no_enemy_nearby = false; break
-	var valid = renderer.is_in_player_vision(pos) and renderer.get_terrain_at(pos) != 2 and no_enemy_nearby
+	var valid = renderer.is_in_player_vision(pos) and renderer.get_terrain_at(pos) != 2
 	if renderer.placement_building_id == 23:
 		valid = valid and renderer.get_terrain_at(pos) == 0 and _check_adjacent_water(pos)
 	elif renderer.placement_building_id == 7:
 		# 桥允许建在水上，地形/邻接条件全部交给 _check_bridge_placement
-		valid = renderer.is_in_player_vision(pos) and no_enemy_nearby and _check_bridge_placement(pos)
+		valid = renderer.is_in_player_vision(pos) and _check_bridge_placement(pos)
 	if not valid: return
 	var cmd = {
 		"action": "build",

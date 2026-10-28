@@ -180,7 +180,8 @@ const NAVAL_PATROL_INTERVAL: float = 15.0
 var _naval_patrol_timer: float = 0.0
 
 # ── 建筑修理（AI 也会修残破建筑）──
-# 修理机制本身在 Building 内实现：按已损比例扣费 + 计时 + 附近 10 米无敌军才能修，主城(20/53)不可修。
+# 修理机制本身在 Building 内实现：按已损比例扣费 + 计时，主城(20/53)不可修；
+# 玩家可在敌军旁边强行修理，AI 则会避开附近 10 米内有敌方部队的建筑。
 # AI 侧只负责「什么时候修、先修哪座、别把造兵的钱花光」这层决策：
 #   · 每 REPAIR_SCAN_INTERVAL 扫一次自己的建筑，不每帧遍历；
 #   · 同时最多 REPAIR_MAX_CONCURRENT 座、每轮最多新开 REPAIR_MAX_START_PER_SCAN 座；
@@ -1357,7 +1358,7 @@ func upgrade_building(building_id: int):
 
 # ═══ 建筑修理（AI 决策）═══
 # 只处理「自己的、非主城、受损且附近没有敌方部队」的建筑：
-# Building.can_repair() 已经排除了主城/满血/建造中/升级中/已在修理/10 米内有敌军的情况，
+# Building.can_repair() 对 AI 建筑已经排除了主城/满血/建造中/升级中/已在修理/10 米内有敌军的情况，
 # 这里只再叠加资源余量与并发限制，然后直接 perform_repair()（扣费在 Building 内完成）。
 func _tick_building_repair() -> void:
 	if battle == null:
@@ -1409,7 +1410,7 @@ func _tick_building_repair() -> void:
 func _repair_score(b: Building) -> float:
 	var w: float = float(REPAIR_WEIGHT.get(int(b.entity_id), 1.0))
 	# 城墙是防线上的“连续墙段”：端头/破口旁的墙先修，否则敌人会从缺口灌进来。
-	# 这里只提高权重，真正能不能修仍由 Building.can_repair() 的附近无敌军规则决定。
+	# 这里只提高权重，真正能不能修仍由 Building.can_repair() 对 AI 的附近无敌军规则决定。
 	if int(b.entity_id) == 27:
 		w *= _wall_repair_weight(b)
 	return w * (0.4 + 0.6 * float(b.repair_damage_ratio()))

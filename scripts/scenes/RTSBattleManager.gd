@@ -4076,18 +4076,12 @@ func is_valid_bridge_position(pos: Vector3) -> bool:
 	if not has_land: return false
 	return true
 
+# 玩家建造只检查地形/重叠/视野，不再因附近有敌军而拒绝；
+# AI 的敌情安全距离单独在 AI.build_building() 的 _enemy_army_within() 里检查。
 func _is_valid_build_position(pos: Vector3, building_id: int = -1, for_team: int = -1) -> bool:
 	var bid: int = building_id if building_id >= 0 else selected_building_id
 	var bteam: int = for_team if for_team >= 0 else get_host_team()
 	var cfg: Dictionary = EntityDatabase.get_config(bid)
-	var wall_only := bool(cfg.get("wall_only", false))
-	# 普通建筑不能贴着敌军造（防塔攻）。墙顶炮台本来就只能装在己方城墙上，
-	# 前线交火时墙边有敌军是常态，不能再按 10 米敌军范围拒绝，否则炮台永远补不上墙。
-	if not wall_only:
-		for e in entities.get_children():
-			if e is GameEntity and e.team != bteam and e.team != RTSConfig.Team.NEUTRAL and e.health > 0:
-				if e.global_position.distance_to(pos) < 10.0:
-					return false
 	var t = get_terrain_at(pos)
 	# 陆军不能直接上山，建筑也不能落在普通山体或缓坡/台地上：
 	# 否则会造出工人和援军都走不到的孤岛建筑。
@@ -4158,7 +4152,7 @@ func _place_building():
 	if not build_preview or not build_preview.visible: return
 	var pos = build_preview.global_position
 	if not is_position_in_player_vision(pos): return
-	# Cannot build near enemies
+	# 玩家可以在敌军附近强行建造；AI 的建造安全检查在 AI.build_building() 中单独处理。
 	if not _is_valid_build_position(pos):
 		if selected_building_id == 64:
 			_show_hud_alert("炮台只能建在已完工的己方城墙上", Color(1.0, 0.8, 0.1), get_host_team(), get_host_team())

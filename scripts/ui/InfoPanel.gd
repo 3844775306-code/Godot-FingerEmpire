@@ -883,7 +883,7 @@ func _on_upgrade_pressed():
 		if not observed_entity.can_upgrade() or not observed_entity.perform_upgrade(battle): break
 
 # 信息面板里的修理入口：只在「掉血且不是主城」时出现，和命令卡规则保持一致。
-# 建造/升级中不显示；资源不足或附近有敌军时保留按钮但置灰，tooltip 说明原因。
+# 建造/升级中不显示；资源不足时保留按钮但置灰，tooltip 说明原因。
 func _update_repair_ui(entity: Building, readonly: bool) -> void:
 	if repair_btn == null:
 		return
@@ -925,7 +925,7 @@ func _update_repair_ui(entity: Building, readonly: bool) -> void:
 	elif dmg <= 0.001:
 		tip += "\n状态：建筑完好"
 	elif not can_click:
-		tip += "\n状态：资源不足或附近有敌军，暂不可修"
+		tip += "\n状态：资源不足或修理科技未解锁，暂不可修"
 	repair_btn.tooltip_text = tip
 
 func _repair_cost_text(cost: Dictionary) -> String:

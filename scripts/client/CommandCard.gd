@@ -95,8 +95,8 @@ func show_building(produces: Array, bid: int, eid: int, bm):
 			if btn.pressed.is_connected(_d): btn.pressed.disconnect(_d)
 			btn.pressed.connect(func(): _send_ungarrison(bid), CONNECT_ONE_SHOT)
 		elif i == 8:
-			# 修理：主城(20/53)、满血、建造中、升级中、正在修理、附近有敌兵时按钮不出现；
-			# 资源不够时保留按钮但置灰，tooltip 里写清费用/耗时/不可用原因
+			# 修理：主城(20/53)、满血、建造中、升级中、正在修理时按钮不出现；
+			# 玩家在敌军附近也可修理；资源不够时保留按钮但置灰，tooltip 里写清费用/耗时/不可用原因
 			var rep := _get_repair_state(bid, eid, bm)
 			var show_repair := bool(rep["known"]) and eid not in [20, 53] and not bool(rep["busy"])
 			show_repair = show_repair and (float(rep["damaged"]) > 0.001 or bool(rep["under_repair"]))
@@ -195,7 +195,7 @@ func _get_repair_state(bid: int, eid: int, bm) -> Dictionary:
 	if info.has("can_repair"):
 		st["can_repair"] = int(info.get("can_repair", 0)) != 0
 	else:
-		# 老快照没有 can_repair：按客户端可见条件保守估算（敌人靠近/资源不足由服务端拒绝）
+		# 老快照没有 can_repair：按客户端可见条件保守估算（资源不足由服务端拒绝）
 		st["can_repair"] = dmg > 0.001 and not st["under_repair"] and not st["busy"]
 	return st
 
@@ -215,7 +215,7 @@ func _repair_tooltip(rep: Dictionary) -> String:
 		elif bool(rep["busy"]):
 			lines.append("状态：建造/升级中，暂不可修理")
 		else:
-			lines.append("状态：附近有敌军或资源不足，暂不可修理")
+			lines.append("状态：资源不足或修理科技未解锁，暂不可修理")
 	return "\n".join(lines)
 
 # ==================== 选中军队 ====================

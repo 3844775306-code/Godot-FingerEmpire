@@ -979,10 +979,6 @@ func _1v1_build(team: int, data: Dictionary):
 	if not is_building_unlocked(building_id, _research_owner_for_team(team), team): return
 	# 桥：必须邻接陆地或已建成的桥，且不能与其他实体重叠
 	if building_id == 7 and not is_valid_bridge_position(pos): return
-	# Cannot build near enemies
-	for e in entities.get_children():
-		if e is GameEntity and e.team != team and e.team != RTSConfig.Team.NEUTRAL and e.health > 0:
-			if e.global_position.distance_to(pos) < 10.0: return
 	var res = get_resources_for(1) if team == RTSConfig.Team.BLUE else enemy_resources
 	var cost = cfg.get("cost", {})
 	for r in cost.keys():
@@ -1120,10 +1116,6 @@ func _2v2_build(peer_id: int, data: Dictionary):
 			var castle = player_castles.get(peer_id)
 			if not castle or castle.upgrade_level < req_lv: return
 	var cost = cfg.get("cost", {})
-	# Cannot build near enemies
-	for e in entities.get_children():
-		if e is GameEntity and e.team != player_info[peer_id].team and e.team != RTSConfig.Team.NEUTRAL and e.health > 0:
-			if e.global_position.distance_to(pos) < 10.0: return
 	# 桥：必须邻接陆地或已建成的桥，且不能与其他实体重叠
 	if building_id == 7 and not is_valid_bridge_position(pos): return
 	# 人口检查（防御塔）

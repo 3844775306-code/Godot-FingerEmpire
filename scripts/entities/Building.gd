@@ -32,11 +32,18 @@ var _target_scan_timer: float = randf_range(0.0, 0.25)
 # Hell difficulty speed bonus
 
 # 该建筑的拥有者是否为 AI：联机客户端的 peer_id 是随机大整数（实测见过 385949886），
-# 不能简单用 >= 1000 判断，否则人类客户端会被当成 AI 吃 HELL 难度加成
+# 不能简单用 >= 1000 判断，否则人类客户端会被当成 AI 吃 HELL 难度加成。
+# 单机 AI 的 my_peer_id / 建筑 owner_peer_id 常为 -1，需要用队伍上是否有
+# AIController 来区分；联机里 owner=-1 可能是真人客户端，不能这样判断。
 func _owner_is_ai() -> bool:
-	if owner_peer_id < 0:
-		return false
 	var bm = _get_bm()
+	if owner_peer_id < 0:
+		if bm == null or bm.is_online:
+			return false
+		for c in bm.get_children():
+			if c is AIController and int(c.my_team) == team:
+				return true
+		return false
 	if bm and bm.is_online and bm.has_method("is_ai_peer"):
 		return bool(bm.call("is_ai_peer", owner_peer_id))
 	return owner_peer_id >= 1000
@@ -128,7 +135,7 @@ func _process(delta):
 			_finish_upgrade()
 			AudioManager.play_sfx("upgrade_done")
 
-	# 修理计时 + 附近敌人扫描（扫描每 0.5 秒一次，避免每次快照都做空间查询）
+	# 修理计时 + AI 附近敌人扫描（每 0.5 秒一次，避免每次快照都做空间查询）
 	_tick_repair_scan(delta)
 	if repair_pending or repair_timer > 0.0:
 		_tick_repair(delta)
@@ -1139,11 +1146,12 @@ func _set_range_rings_visible(on: bool) -> void:
 			ring.set_ring_visible(on)
 
 # ==================== 修理 ====================
-# 规则：残破建筑可以在「附近 10 米内没有敌人」时修理（主城除外）。
+# 规则：残破建筑可以修理（主城除外）。玩家在敌军附近也能修理；
+# AI 为了尽量保证修理成功，仍会避开附近 10 米内有敌方部队的建筑。
 # 花钱 = 已损生命百分比 × 原价，耗时 = 已损生命百分比 × 建造时间（建造时间沿用 start_construction 的公式）。
 # 修理过程复用建造那套脚手架/扬尘/进度表现，服务端与联机客户端共用 BuildingConstructionVisual。
-const REPAIR_BLOCK_RADIUS: float = 10.0        # 这个半径内有敌方部队就不能修
-const REPAIR_SCAN_INTERVAL: float = 0.5        # 附近敌人扫描频率（秒）
+const REPAIR_BLOCK_RADIUS: float = 10.0        # AI 的修理安全半径：这个范围内有敌方部队就放弃
+const REPAIR_SCAN_INTERVAL: float = 0.5        # AI 附近敌人扫描频率（秒）
 const BUILD_TIME_PER_HP: float = 75.0          # 与 start_construction 一致：满血建造耗时 = max_health / 75
 const MAX_BUILDERS: int = 3                    # 单座建筑最多登记 3 个农民
 const BUILDER_ARRIVE_PAD: float = 2.2          # 到建筑外缘多近才算「站在旁边」
@@ -1216,7 +1224,7 @@ func _has_enemy_near_repair() -> bool:
 	if found == null:
 		return false
 	for e in found:
-		# 只把敌方「部队」算作威胁：敌方建筑在 10 米内是正常前线，不该阻止修墙
+		# AI 只把敌方「部队」算作威胁：敌方建筑在 10 米内是正常前线，不该阻止 AI 修墙
 		if is_instance_valid(e) and e is Army and e.health > 0:
 			return true
 	return false
@@ -1226,6 +1234,9 @@ func _tick_repair_scan(delta: float) -> void:
 	if _repair_scan_timer > 0.0:
 		return
 	_repair_scan_timer = REPAIR_SCAN_INTERVAL
+	# 玩家修理不受附近敌军限制，不需要为玩家建筑反复扫描敌人。
+	if not _owner_is_ai():
+		return
 	_repair_enemy_near = _has_enemy_near_repair()
 
 func can_repair() -> bool:
@@ -1243,7 +1254,10 @@ func can_repair() -> bool:
 		return false
 	if health >= _model_health_max():
 		return false
-	return not _repair_enemy_near
+	# 玩家可以在敌军旁边强行修理；AI 仍避开附近有敌方部队的建筑，减少修到一半被拆。
+	if _owner_is_ai() and _repair_enemy_near:
+		return false
+	return true
 
 # 扣除修理费并登记为「等待农民」。真正开始计时由 _tick_repair 在农民到场后推进。
 # 联机时只在服务端调用（客户端 UI 只做同样的置灰提示）。
