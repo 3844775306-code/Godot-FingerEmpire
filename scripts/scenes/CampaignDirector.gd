@@ -101,6 +101,7 @@ var _endless_score: int = 0
 # 多控制区（hold_zones）与"守住自家建筑"（defend_targets）目标
 var _multi_zones: Array = []
 var _defend_ids: Array = []
+var _defend_buildings: Array = []   # 开局就存在的指定目标建筑；玩家后建的同 ID 建筑不算
 var _defend_min_alive: int = 1
 var _defend_initial: int = 0
 var _defend_alive: int = 0
@@ -541,6 +542,7 @@ func _parse_objectives() -> void:
 	_gather_need = 0.0
 	_multi_zones.clear()
 	_defend_ids.clear()
+	_defend_buildings.clear()
 	_defend_min_alive = 1
 	_defend_initial = 0
 	_defend_alive = 0
@@ -617,7 +619,10 @@ func _parse_objectives() -> void:
 					_defend_ids.append(int(bid))
 				_defend_min_alive = int(obj.get("min_alive", 1))
 				_defend_duration = float(obj.get("duration", 300.0))
-				_defend_initial = _count_player_buildings(_defend_ids)
+				# 只把开局由关卡摆放的目标建筑记成“真正的粮仓”。
+				# 玩家后续自己补建的同 ID 建筑不能顶上，否则粮仓全毁后还能靠新建续命。
+				_defend_buildings = _collect_defend_buildings(_defend_ids)
+				_defend_initial = _defend_buildings.size()
 			"destroy_targets":
 				_target_ids = obj.get("building_ids", [25, 26]).duplicate()
 				_target_need = int(obj.get("count", 3))
@@ -1715,18 +1720,35 @@ func _update_multi_zone_visual(z: Dictionary, t: float, dt: float) -> void:
 
 # ==================== 守住自家建筑（defend_targets）====================
 
-func _count_player_buildings(ids: Array) -> int:
-	var n := 0
+# 开局目标建筑：只认这一刻已经存在的实体，后续新建的同 ID 建筑不会进来。
+func _collect_defend_buildings(ids: Array) -> Array:
+	var found: Array = []
 	for e in bm.entities.get_children():
-		if e is Building and e.health > 0 and int(e.team) == bm.player_team and int(e.entity_id) in ids:
+		if not (e is Building):
+			continue
+		if e.health <= 0 or e.is_queued_for_deletion():
+			continue
+		if int(e.team) != bm.player_team:
+			continue
+		if int(e.entity_id) not in ids:
+			continue
+		found.append(e)
+	return found
+
+func _count_alive_defend_targets() -> int:
+	var n := 0
+	for b in _defend_buildings:
+		if not is_instance_valid(b) or b.is_queued_for_deletion():
+			continue
+		if b.health > 0 and int(b.team) == bm.player_team:
 			n += 1
 	return n
 
 func _update_defend(dt: float) -> void:
 	if _defend_ids.is_empty():
 		return
-	_defend_alive = _count_player_buildings(_defend_ids)
-	# 目标建筑全毁：立刻判负，别等超时
+	_defend_alive = _count_alive_defend_targets()
+	# 目标建筑全毁：立刻判负，别等超时；新建的同 ID 建筑不能替代开局粮仓
 	if _defend_alive <= 0:
 		_finish(false)
 
