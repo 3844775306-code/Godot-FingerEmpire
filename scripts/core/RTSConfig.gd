@@ -227,6 +227,19 @@ const ENTITY_MODEL_SCALE := {
 static func get_model_scale(entity_id: int) -> float:
 	return float(ENTITY_MODEL_SCALE.get(entity_id, 1.0))
 
+# 城墙横向咬合余量：墙段中心间距是 body_radius*2，模型横向略放大一点，
+# 让相邻墙段边缘真正重叠。服务端生成、客户端渲染、建造预览必须共用。
+const WALL_JOIN_OVERLAP: float = 0.12
+
+# 城墙不能按最大边等比缩放：模型高度大于占地宽度，等比缩放会让墙段
+# 横向只有约 1.5 米，和 2 米中心间距对不上；这里分别按占地和高度缩放。
+static func get_wall_model_scale(body_radius: float, aabb: AABB) -> Vector3:
+	var target_size: float = body_radius * 2.0
+	var footprint: float = maxf(aabb.size.x, aabb.size.z)
+	var width_scale: float = (target_size + WALL_JOIN_OVERLAP) / maxf(footprint, 0.01)
+	var height_scale: float = target_size / maxf(aabb.size.y, 0.01)
+	return Vector3(width_scale, height_scale, width_scale)
+
 # 建筑生成时的整体半径倍率。这些建筑与地形/城墙拼接尺寸绑定，不能放大：
 # 瞭望塔、城墙、炮台、桥、梯子、箭塔、炮塔。
 const BUILDING_BODY_SCALE := 2.0

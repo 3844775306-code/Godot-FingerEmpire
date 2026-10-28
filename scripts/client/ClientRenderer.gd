@@ -302,10 +302,14 @@ func start_build_placement(bid: int):
 		var box = BoxMesh.new()
 		box.size = Vector3(effective_radius * 2.0, effective_radius * 1.5, effective_radius * 2.0)
 		placement_preview.mesh = box
-	var target_size = effective_radius * 2.0 * RTSConfig.get_model_scale(bid)
 	var aabb = _get_model_aabb(placement_preview)
-	var current_size = max(aabb.size.x, max(aabb.size.y, aabb.size.z))
-	if current_size > 0.01: placement_preview.scale = Vector3.ONE * (target_size / current_size)
+	if bid == 27:
+		# 城墙预览和服务端实际生成共用横向咬合缩放，避免预览比实墙窄。
+		placement_preview.scale = RTSConfig.get_wall_model_scale(effective_radius, aabb)
+	else:
+		var target_size = effective_radius * 2.0 * RTSConfig.get_model_scale(bid)
+		var current_size = max(aabb.size.x, max(aabb.size.y, aabb.size.z))
+		if current_size > 0.01: placement_preview.scale = Vector3.ONE * (target_size / current_size)
 	if bid in [22, 27, 28]: placement_preview.rotation.y = deg_to_rad(90)
 	if bid == 18: placement_preview.rotation.y = deg_to_rad(-90)
 	_tint_preview(placement_preview, Color(0, 1, 0))
@@ -931,10 +935,14 @@ func _update_wall_orientation(wall_node: Node3D, info: Dictionary):
 			if s:
 				var inst = s.instantiate()
 				if inst:
-					var target_size = r * 2.0
 					var aabb = _get_model_aabb(inst)
-					var cs = max(aabb.size.x, max(aabb.size.y, aabb.size.z))
-					if cs > 0.01: inst.scale = Vector3.ONE * (target_size / cs)
+					if info.get("entity_id", 0) == 27:
+						# 拐角/直墙切换复用同一套横向咬合缩放，避免拐角比直墙窄。
+						inst.scale = RTSConfig.get_wall_model_scale(r, aabb)
+					else:
+						var target_size = r * 2.0
+						var cs = max(aabb.size.x, max(aabb.size.y, aabb.size.z))
+						if cs > 0.01: inst.scale = Vector3.ONE * (target_size / cs)
 					wall_node.add_child(inst)
 					wall_node.set_meta("_model_instance", inst)
 					BuildingConstructionVisual.rebind(wall_node)
@@ -1490,13 +1498,18 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 
 	if loaded_model:
 		# Scale model to match entity body_radius（再乘特殊体型系数，与服务端一致）
-		var target_size = info["body_radius"] * 2.0 * RTSConfig.get_model_scale(eid)
+		var body_radius: float = float(info.get("body_radius", 1.0))
 		var aabb = _get_model_aabb(loaded_model)
-		var current_size = max(aabb.size.x, max(aabb.size.y, aabb.size.z))
-		var scale_factor := 1.0
-		if current_size > 0.01:
-			scale_factor = target_size / current_size
-			loaded_model.scale = Vector3.ONE * scale_factor
+		if eid == 27:
+			# 城墙横向咬合缩放必须与服务端一致，否则连续墙段会留缝或拐角变窄。
+			loaded_model.scale = RTSConfig.get_wall_model_scale(body_radius, aabb)
+		else:
+			var target_size = body_radius * 2.0 * RTSConfig.get_model_scale(eid)
+			var current_size = max(aabb.size.x, max(aabb.size.y, aabb.size.z))
+			var scale_factor := 1.0
+			if current_size > 0.01:
+				scale_factor = target_size / current_size
+				loaded_model.scale = Vector3.ONE * scale_factor
 		# Special rotations
 		if info.get("entity_id", 0) == 16: loaded_model.rotation.y = deg_to_rad(180)
 		elif info.get("entity_id", 0) == 17: loaded_model.rotation.y = deg_to_rad(90)

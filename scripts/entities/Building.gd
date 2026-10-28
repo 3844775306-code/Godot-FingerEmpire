@@ -276,14 +276,17 @@ func _reload_wall_model(bm, path):
 	if s:
 		var inst = s.instantiate()
 		if inst:
-			# 和服务端首次生成、客户端换拐角模型保持同一套缩放：
-			# wall.glb 原始高度 1.31，按 body_radius 自动缩放到约 2 米。
-			# 原来换拐角后直接使用原始模型，会比直墙矮一截，墙顶单位也会悬空/陷墙。
-			var target_size: float = body_radius * 2.0
+			# 和服务端首次生成、直墙/拐角切换共用同一套缩放：
+			# 城墙要分别按占地和高度缩放，不能按最大边等比缩放，否则换拐角后
+			# 会比旁边直墙窄一截。普通建筑仍走通用等比缩放。
 			var aabb: AABB = bm._get_model_aabb(inst)
-			var current_size: float = maxf(aabb.size.x, maxf(aabb.size.y, aabb.size.z))
-			if current_size > 0.01:
-				inst.scale = Vector3.ONE * (target_size / current_size * RTSConfig.get_model_scale(entity_id))
+			if bm.has_method("_model_scale_for"):
+				inst.scale = bm._model_scale_for(entity_id, body_radius, aabb)
+			else:
+				var target_size: float = body_radius * 2.0
+				var current_size: float = maxf(aabb.size.x, maxf(aabb.size.y, aabb.size.z))
+				if current_size > 0.01:
+					inst.scale = Vector3.ONE * (target_size / current_size * RTSConfig.get_model_scale(entity_id))
 			add_child(inst); set_meta("_model_instance", inst)
 			# 换模型后视觉尺寸可能变化，土色贴花跟着重算
 			_refresh_ground_patch_size()

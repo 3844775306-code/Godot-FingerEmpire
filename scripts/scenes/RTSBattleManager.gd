@@ -9,9 +9,6 @@ const MUZZLE_ATTACK_IDS = [25, 26, 64]
 # 生成时模型还会按 body_radius 自动缩放，所以实际站墙高度必须用
 # get_wall_top_height() 按每面墙的模型实例计算，不能直接加这个常量。
 const WALL_TOP_HEIGHT: float = 1.31
-# 城墙模型按格子中心放置，间距为 body_radius*2；相比碰撞体多留一点横向重叠，
-# 让相邻墙段边缘真正咬合，而不是只靠两个碰撞体“看起来接近”。
-const WALL_JOIN_OVERLAP: float = 0.12
 # 放置炮台时向最近城墙吸附的水平半径（米）
 const WALL_CANNON_SNAP: float = 6.0
 # 建造/修理自动派工：每隔一段时间给没人施工的工地找最近的空闲农民
@@ -2255,11 +2252,7 @@ func _model_scale_for(entity_id: int, body_radius: float, aabb: AABB) -> Vector3
 		return Vector3.ONE
 	var model_scale: float = RTSConfig.get_model_scale(entity_id)
 	if entity_id == 27:
-		var footprint: float = max(aabb.size.x, aabb.size.z)
-		var width_scale: float = (target_size + WALL_JOIN_OVERLAP) \
-			/ maxf(footprint, 0.01) * model_scale
-		var height_scale: float = target_size / maxf(aabb.size.y, 0.01) * model_scale
-		return Vector3(width_scale, height_scale, width_scale)
+		return RTSConfig.get_wall_model_scale(body_radius, aabb) * model_scale
 	return Vector3.ONE * (target_size / current_size * model_scale)
 
 func _apply_entity_model(entity: GameEntity) -> bool:
