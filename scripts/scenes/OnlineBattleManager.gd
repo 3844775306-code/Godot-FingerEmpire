@@ -1419,6 +1419,9 @@ func _on_castle_died(team: int):
 	var stats_payload: Dictionary = battle_stats.export_payload() if battle_stats else {}
 	for pid in multiplayer.get_peers():
 		NetworkManager.notify_game_over.rpc_id(pid, winner, stats_payload)
+	# 结算面板已经生成，再清掉失败方残余单位；1v1 初始单位不一定带
+	# owner_peer_id，所以这里按队伍清，不能只按玩家 owner 清。
+	_clear_eliminated_team_entities(team)
 
 # 房主也是玩家：RPC 只发给远程客户端，本地必须自己显示结算面板
 func _show_host_game_over(winner_team: int) -> void:
@@ -1441,9 +1444,73 @@ func _show_host_game_over(winner_team: int) -> void:
 			game_over_panel.show_stats(battle_stats)
 		game_over_panel.visible = true
 
+# 玩家主城被摧毁 = 该玩家淘汰。组队模式下队伍可能还有队友，不能直接结束整局，
+# 但必须清空这个玩家名下的全部残余单位、建筑，并停掉他的 AI 控制器，
+# 否则他的部队会继续参与战斗，造成“主城没了还在打”的异常。
+func _clear_eliminated_player_entities(peer_id: int) -> void:
+	var to_free: Array = []
+	for e in entities.get_children():
+		if e is GameEntity and int(e.owner_peer_id) == peer_id and e.health > 0:
+			to_free.append(e)
+	for e in to_free:
+		if is_instance_valid(e):
+			e.queue_free()
+	print("[GameOver-组队] Cleared %d remaining entities of peer %d" % [to_free.size(), peer_id])
+	for c in get_children():
+		if c is AIController and int(c.my_peer_id) == peer_id:
+			c.set_process(false)
+			c.set_physics_process(false)
+			if is_instance_valid(c.debug_panel):
+				c.debug_panel.queue_free()
+				c.debug_panel = null
+			c.queue_free()
+	# 城堡引用可以移除；但 player_resources / player_population / player_limits_dict
+	# 仍会被发给该玩家的快照直接索引，不能在这里 erase，否则下一帧快照会报 key 不存在的错。
+	player_castles.erase(peer_id)
+	if player_population.has(peer_id):
+		player_population[peer_id]["current"] = 0
+	ai_players.erase(peer_id)
+	ai_resources.erase(peer_id)
+	ai_population.erase(peer_id)
+	ai_limits.erase(peer_id)
+
+# 1v1 联机失败方的初始单位历史上按队伍归属，owner_peer_id 可能为 -1，
+# 因此除了按 owner 清场外，还需要一个按队伍清场的入口。
+func _clear_eliminated_team_entities(team: int) -> void:
+	var to_free: Array = []
+	for e in entities.get_children():
+		if e is GameEntity and int(e.team) == team and e.health > 0:
+			to_free.append(e)
+	for e in to_free:
+		if is_instance_valid(e):
+			e.queue_free()
+	print("[GameOver-1v1] Cleared %d remaining entities of team %d" % [to_free.size(), team])
+	for c in get_children():
+		if c is AIController and int(c.my_team) == team:
+			c.set_process(false)
+			c.set_physics_process(false)
+			if is_instance_valid(c.debug_panel):
+				c.debug_panel.queue_free()
+				c.debug_panel = null
+			c.queue_free()
+	for pid in player_teams.keys():
+		if int(player_teams[pid]) == team:
+			player_castles.erase(int(pid))
+			if player_population.has(int(pid)):
+				player_population[int(pid)]["current"] = 0
+	for pid in player_info.keys():
+		if int(player_info[pid].get("team", -1)) == team:
+			player_castles.erase(int(pid))
+			if player_population.has(int(pid)):
+				player_population[int(pid)]["current"] = 0
+
 func _on_castle_died_team(peer_id: int):
 	if not player_info.has(peer_id): return
 	player_info[peer_id].alive = false
+	# 组队模式里单个玩家被淘汰后队伍可能继续作战。如果只把 alive 置 false，
+	# 该玩家剩下的部队/建筑仍会留在战场上，继续攻击、采集和占人口。
+	# 必须在服务端立即清空这些实体，客户端再通过快照的 dead_ids 同步删除。
+	_clear_eliminated_player_entities(peer_id)
 	var team = player_info[peer_id].team
 	print("[GameOver-组队] Castle died: peer=%d team=%d, checking team..." % [peer_id, team])
 	var _alive_count = 0
@@ -1488,6 +1555,9 @@ const DEAD_ID_MAX: int = 64                  # 单次快照最多携带的死亡
 var _snap_tick: int = 0                      # 单调递增的广播序号（_snap_sent 每秒会清零，不能当钟用）
 var _entity_last_sent: Dictionary = {}       # key -> {entity_id: 最后一次发送时的广播序号}
 var _recent_dead_ids: Dictionary = {}        # key -> {entity_id: 过期广播序号}
+# 主城被摧毁会一次性清掉几十上百个单位，超过单次 DEAD_ID_MAX 时不能直接丢弃，
+# 否则客户端永远收不到剩余单位的 dead_ids，会残留“幽灵部队”。
+var _dead_id_backlog: Dictionary = {}        # key -> Array[int] 等待首次下发的死亡 ID
 # 建造/升级完工后的"粘性重发"：完工只产生一次状态变化，丢包会让进度条永久卡住
 var _build_phase: Dictionary = {}            # entity_id -> {build: bool, upgrade: bool}
 var _sticky_resend_until: Dictionary = {}    # entity_id -> 过期广播序号
@@ -1613,10 +1683,17 @@ func _should_include_in_delta(snapshot_key, entity_id: int, new_hash: int, force
 func _collect_dead_ids(snapshot_key, dead: Array) -> Array:
 	if not _recent_dead_ids.has(snapshot_key):
 		_recent_dead_ids[snapshot_key] = {}
+	if not _dead_id_backlog.has(snapshot_key):
+		_dead_id_backlog[snapshot_key] = []
 	var recent = _recent_dead_ids[snapshot_key]
+	var backlog: Array = _dead_id_backlog[snapshot_key]
 	for id in dead:
 		_build_phase.erase(id)
 		_sticky_resend_until.erase(id)
+		# 新死亡 ID 先进入待首发队列；超过单次上限的 ID 留到后续快照继续发，
+		# 不能像旧逻辑那样直接丢弃。
+		if not backlog.has(id):
+			backlog.append(id)
 	var expire_at = _snap_tick + DEAD_ID_RESEND_SNAPSHOTS
 	for id in dead:
 		recent[id] = expire_at
@@ -1626,15 +1703,23 @@ func _collect_dead_ids(snapshot_key, dead: Array) -> Array:
 			expired.append(id)
 	for id in expired:
 		recent.erase(id)
-	# 大规模阵亡时限制单次携带的数量，避免快照包体过大被整包丢弃
-	if recent.size() > DEAD_ID_MAX:
-		var ids = recent.keys()
-		ids.sort_custom(func(a, b): return int(recent[a]) > int(recent[b]))
-		for i in range(DEAD_ID_MAX, ids.size()):
-			recent.erase(ids[i])
-	if recent.is_empty():
+	# 先保证队列里每个死亡 ID 至少下发一次；再补重发窗口内的历史 ID。
+	var out: Array = []
+	var remaining: Array = []
+	for id in backlog:
+		if out.size() < DEAD_ID_MAX:
+			out.append(id)
+		else:
+			remaining.append(id)
+	_dead_id_backlog[snapshot_key] = remaining
+	for id in recent.keys():
+		if out.size() >= DEAD_ID_MAX:
+			break
+		if not out.has(id):
+			out.append(id)
+	if out.is_empty():
 		return dead
-	return recent.keys()
+	return out
 
 func _is_full_snapshot(snapshot_key) -> bool:
 	# 第一次快照一定是全量的（客户端还没有任何实体）
