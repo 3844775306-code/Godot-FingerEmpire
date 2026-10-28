@@ -40,6 +40,8 @@ var enemy_castle = null
 var player_anchor: Vector3 = Vector3.ZERO
 var enemy_anchor: Vector3 = Vector3.ZERO
 var enemy_spawn_point: Vector3 = Vector3.ZERO
+# 防守关的多路进攻入口：按波次轮换主攻方向，同一波再拆主攻/侧翼两股。
+var _defense_wave_lanes: Array = []
 
 var _zone_center: Vector3 = Vector3.ZERO
 var _zone_radius: float = 12.0
@@ -197,6 +199,11 @@ func _setup() -> void:
 	enemy_spawn_point = _pick_spawn_point()
 
 	_parse_objectives()
+	# 防守关不再让所有波次共用同一个边缘刷兵点：从地图隘口/敌方来路展开几条进攻路线，
+	# 每波轮换入口；没有隘口的地图至少从敌方方向拉出左右两翼。
+	_defense_wave_lanes = _build_defense_wave_lanes()
+	if not _defense_wave_lanes.is_empty():
+		enemy_spawn_point = _defense_wave_lanes[0]
 	_spawn_escort()
 	_deploy_objective_guards()
 	if _has_water_waves:
@@ -335,23 +342,175 @@ func _unit_slot(anchor: Vector3, index: int, total: int) -> Vector3:
 			return pos2
 	return Vector3.ZERO
 
-# 波次刷兵点：从玩家出生点朝敌方旧营地方向拉开一段距离，保证是可走平地
+# 波次刷兵点：从玩家出生点朝敌方营地方向拉开一段距离，保证在地图内、可走平地。
+# 旧实现用的是“玩家 - 敌方”方向，实际会把兵刷到玩家背后的地图边缘；
+# 这里改为朝敌方一侧，并避开地图外和已有实体。
 func _pick_spawn_point() -> Vector3:
-	var dir := Vector3(player_anchor.x - enemy_anchor.x, 0.0, player_anchor.z - enemy_anchor.z)
+	var dir := Vector3(enemy_anchor.x - player_anchor.x, 0.0, enemy_anchor.z - player_anchor.z)
 	if dir.length() < 1.0:
 		dir = Vector3(0.0, 0.0, 1.0)
 	dir = dir.normalized()
 	var base_angle: float = atan2(dir.z, dir.x)
-	for dist in [48.0, 40.0, 34.0, 28.0]:
+	for dist in [44.0, 38.0, 32.0, 26.0, 50.0]:
 		for da in [0.0, 0.35, -0.35, 0.7, -0.7, 1.1, -1.1]:
 			var pos := Vector3(
-				player_anchor.x + cos(base_angle + float(da)) * dist,
+				player_anchor.x + cos(base_angle + float(da)) * float(dist),
 				0.0,
-				player_anchor.z + sin(base_angle + float(da)) * dist
+				player_anchor.z + sin(base_angle + float(da)) * float(dist)
 			)
-			if _is_plain(pos):
+			if _is_inside_spawn_map(pos) and _is_plain(pos) and not _too_close(pos, 2.0):
 				return pos
-	return Vector3(player_anchor.x + dir.x * 45.0, 0.0, player_anchor.z + dir.z * 45.0)
+	# 兜底：沿敌方方向缩到 24 米，并夹到地图内，宁可靠近也不能刷到图外
+	for dist in [24.0, 20.0, 28.0, 16.0]:
+		for da in [0.0, 0.5, -0.5, 1.0, -1.0]:
+			var pos := Vector3(
+				player_anchor.x + cos(base_angle + float(da)) * float(dist), 0.0,
+				player_anchor.z + sin(base_angle + float(da)) * float(dist))
+			if _is_inside_spawn_map(pos) and _is_plain(pos):
+				return pos
+	var fallback := Vector3(player_anchor.x + dir.x * 16.0, 0.0,
+		player_anchor.z + dir.z * 16.0)
+	var half := _map_half_extent()
+	fallback.x = clampf(fallback.x, -half + 6.0, half - 6.0)
+	fallback.z = clampf(fallback.z, -half + 6.0, half - 6.0)
+	return fallback
+
+func _map_half_extent() -> float:
+	var map = bm.get_node_or_null("Map")
+	if map != null and map.terrain_grid.size() > 0:
+		return float(map.terrain_grid.size()) * 0.5
+	return float(RTSConfig.MAP_SIZE) * 0.5
+
+func _is_inside_spawn_map(pos: Vector3, margin: float = 6.0) -> bool:
+	var half := _map_half_extent()
+	return absf(pos.x) <= half - margin and absf(pos.z) <= half - margin
+
+# 防守关：只有“无敌方主城 + 纯防守目标”的波次关才启用地形多路入场。
+func _is_defense_wave_level() -> bool:
+	var enemy_cfg: Dictionary = level.get("enemy", {})
+	if bool(enemy_cfg.get("castle", true)):
+		return false
+	for obj in level.get("objectives", []):
+		var t := String(obj.get("type", ""))
+		if t == "survive" or t == "defend_targets" or t == "endless":
+			return true
+	return false
+
+# 候选入口：在玩家外围、地图内、平地，且没有压住现有实体。
+func _is_valid_wave_lane(pos: Vector3, center: Vector3) -> bool:
+	if not _is_inside_spawn_map(pos):
+		return false
+	if not _is_plain(pos):
+		return false
+	var dist: float = Vector2(pos.x - center.x, pos.z - center.z).length()
+	if dist < 24.0 or dist > 72.0:
+		return false
+	return not _too_close(pos, 2.5)
+
+func _append_wave_lane(lanes: Array, pos: Vector3) -> void:
+	if pos == Vector3.ZERO:
+		return
+	var flat := Vector3(pos.x, 0.0, pos.z)
+	for p in lanes:
+		if flat.distance_to(Vector3(p.x, 0.0, p.z)) < 10.0:
+			return
+	lanes.append(flat)
+
+# 波次入口按波次轮换：同一关的敌军可以走不同隘口/侧翼，而不是永远压在同一条边线。
+func _wave_entry_point(number: int) -> Vector3:
+	if _defense_wave_lanes.is_empty():
+		return enemy_spawn_point
+	var idx: int = int(posmod(number - 1, _defense_wave_lanes.size()))
+	return _defense_wave_lanes[idx]
+
+# 一路主攻 + 一路侧翼：同一波拆成两股，比整波只走一条线更像真实围攻；
+# 波次轮换主攻方向，避免每波都从同一个入口压过来。
+func _wave_centers(number: int) -> Array:
+	if _defense_wave_lanes.is_empty():
+		return [enemy_spawn_point]
+	if _defense_wave_lanes.size() == 1:
+		return [_defense_wave_lanes[0]]
+	var size: int = _defense_wave_lanes.size()
+	var primary: int = int(posmod(number - 1, size))
+	var offset: int = int(ceil(float(size) / 2.0))
+	var secondary: int = (primary + offset) % size
+	return [_defense_wave_lanes[primary], _defense_wave_lanes[secondary]]
+
+# 隘口通常只有几格宽：沿“玩家→隘口”的径向偏移很容易直接顶到山壁，
+# 因此在隘口周围再找一圈仍在通道里的平地，优先取靠敌方一侧的点。
+func _find_pass_wave_lane(pass_pos: Vector3, center: Vector3) -> Vector3:
+	var delta := Vector3(pass_pos.x - center.x, 0.0, pass_pos.z - center.z)
+	if delta.length() < 8.0:
+		return Vector3.ZERO
+	var outward := delta.normalized()
+	for extra in [8.0, 14.0, 4.0, 0.0]:
+		var pos := pass_pos + outward * float(extra)
+		if _is_valid_wave_lane(pos, center):
+			return pos
+	var pass_dist: float = delta.length()
+	for radius in [3.0, 5.0, 7.0, 9.0]:
+		for i in range(8):
+			var a := TAU * float(i) / 8.0
+			var pos := pass_pos + Vector3(cos(a), 0.0, sin(a)) * float(radius)
+			if not _is_valid_wave_lane(pos, center):
+				continue
+			# 优先刷在隘口外侧（离玩家更远），这样部队会穿过隘口再进攻。
+			if Vector2(pos.x - center.x, pos.z - center.z).length() >= pass_dist:
+				return pos
+	# 通道太窄时退而求其次，允许选靠近玩家一侧的通道口，至少保证这一路存在。
+	for radius in [3.0, 5.0]:
+		for i in range(8):
+			var a := TAU * float(i) / 8.0
+			var pos := pass_pos + Vector3(cos(a), 0.0, sin(a)) * float(radius)
+			if _is_valid_wave_lane(pos, center):
+				return pos
+	return Vector3.ZERO
+
+# 防守关生成多路进攻入口：优先用地图隘口，其次从敌方方向展开正面+左右两翼。
+func _build_defense_wave_lanes() -> Array:
+	var lanes: Array = []
+	if not _is_defense_wave_level():
+		return lanes
+	var center: Vector3 = _player_target_position()
+	var map = bm.get_node_or_null("Map")
+	var raw_passes: Array = []
+	if map != null:
+		var raw = map.get("_pass_centers")
+		if raw is Array:
+			raw_passes = raw
+	# 先用地形隘口：刷在隘口靠敌方一侧，让部队必须穿过隘口才能到玩家面前。
+	for pc in raw_passes:
+		if not (pc is Vector2i):
+			continue
+		var pass_pos: Vector3 = map.grid_to_world(pc.x, pc.y)
+		var lane := _find_pass_wave_lane(pass_pos, center)
+		if lane != Vector3.ZERO:
+			_append_wave_lane(lanes, lane)
+	# 隘口太少（或这张图没有隘口）时，从敌方方向展开扇形：
+	# 普通防守关保证至少两路；无尽挑战要求“四面八方”，补到四路。
+	var min_lanes: int = 4 if _endless_on else 2
+	if lanes.size() < min_lanes:
+		var base := Vector3(enemy_anchor.x - center.x, 0.0, enemy_anchor.z - center.z)
+		if base.length() < 1.0:
+			base = Vector3(0.0, 0.0, 1.0)
+		var base_angle: float = atan2(base.z, base.x)
+		for da in [0.0, 0.55, -0.55, 1.05, -1.05, 1.5, -1.5]:
+			for dist in [42.0, 36.0, 30.0, 48.0, 26.0]:
+				var pos := Vector3(
+					center.x + cos(base_angle + float(da)) * float(dist), 0.0,
+					center.z + sin(base_angle + float(da)) * float(dist))
+				if _is_valid_wave_lane(pos, center):
+					_append_wave_lane(lanes, pos)
+					break
+	if lanes.is_empty():
+		if enemy_spawn_point != Vector3.ZERO:
+			_append_wave_lane(lanes, enemy_spawn_point)
+		if lanes.is_empty():
+			lanes.append(_pick_spawn_point())
+	# 最多保留 4 条主攻路线，太多会让“敌军来了”失去方向感。
+	if lanes.size() > 4:
+		lanes = lanes.slice(0, 4)
+	return lanes
 
 # ==================== 任务解析 ====================
 
@@ -1156,12 +1315,39 @@ func _fire_wave(wave: Dictionary, number: int) -> void:
 	var label := String(wave.get("label", "第 %d 波" % number))
 	var units: Array = wave.get("units", [])
 	var water: bool = bool(wave.get("water", false))
+	var lane_centers: Array = []
+	if not water:
+		# 玩家可能在预定路线上补了建筑：刷兵前把每个入口挪到附近空地，避免兵卡在墙里。
+		for c in _wave_centers(number):
+			var spot: Vector3 = c
+			var legal := _find_spot_near(spot, 8.0, 2.0)
+			if legal != Vector3.ZERO and _is_inside_spawn_map(legal):
+				spot = legal
+			lane_centers.append(spot)
+		if lane_centers.is_empty():
+			lane_centers.append(enemy_spawn_point)
+	var total_units: int = 0
+	for u in units:
+		total_units += int(u.get("count", 1))
+	var split_at: int = int(ceil(float(total_units) / 2.0))
+	var spawn_index: int = 0
+	var alert_pos: Vector3 = lane_centers[0] if not lane_centers.is_empty() else enemy_spawn_point
+	if water:
+		alert_pos = _enemy_water_spawn if _enemy_water_spawn != Vector3.ZERO else enemy_spawn_point
 	var spawned: Array = []
 	for u in units:
 		var count: int = int(u.get("count", 1))
 		var unit_id: int = int(u.get("id", 11))
 		for i in range(count):
-			var pos := _water_spawn_slot(i, count) if water else _wave_slot(i, count)
+			var pos: Vector3
+			if water:
+				pos = _water_spawn_slot(i, count)
+			else:
+				var lane: Vector3 = lane_centers[0]
+				if lane_centers.size() > 1 and spawn_index >= split_at:
+					lane = lane_centers[1]
+				pos = _wave_slot(spawn_index, total_units, lane)
+			spawn_index += 1
 			if pos == Vector3.ZERO:
 				continue
 			var unit = bm.spawn_entity(EntityDatabase.get_config(unit_id), bm.enemy_team, pos, int(u.get("level", 1)))
@@ -1175,7 +1361,7 @@ func _fire_wave(wave: Dictionary, number: int) -> void:
 		"%s 敌军抵达！共 %d 个单位" % [label, spawned.size()],
 		Color(1.0, 0.35, 0.2), [bm.enemy_team], bm.player_team,
 		GameSettings.AlertKind.COMBAT, false, [bm.team_nations.get(bm.enemy_team, -1)],
-		enemy_spawn_point, -1
+		alert_pos, -1
 	)
 
 # 一波兵在刷兵点周围铺开
@@ -1194,16 +1380,16 @@ func _water_spawn_slot(index: int, total: int) -> Vector3:
 			return pos
 	return center if _is_water(center) else Vector3.ZERO
 
-func _wave_slot(index: int, total: int) -> Vector3:
+func _wave_slot(index: int, total: int, center: Vector3) -> Vector3:
 	var ring: int = index / 10
 	var i_in_ring: int = index % 10
 	var radius: float = 2.0 + float(ring) * 2.0
 	var angle: float = TAU * float(i_in_ring) / 10.0 + float(ring) * 0.4
 	for attempt in range(6):
 		var pos := Vector3(
-			enemy_spawn_point.x + cos(angle + float(attempt) * 0.35) * radius, 0.0,
-			enemy_spawn_point.z + sin(angle + float(attempt) * 0.35) * radius)
-		if _is_plain(pos):
+			center.x + cos(angle + float(attempt) * 0.35) * radius, 0.0,
+			center.z + sin(angle + float(attempt) * 0.35) * radius)
+		if _is_inside_spawn_map(pos) and _is_plain(pos):
 			return pos
 	return Vector3.ZERO
 
@@ -1563,10 +1749,13 @@ func _update_warning() -> void:
 			var secs: int = int(ceil(remain))
 			if not _wave_warned.has(_waves_fired):
 				_wave_warned[_waves_fired] = true
+				var warn_pos := _wave_entry_point(_waves_fired + 1)
+				if warn_pos == Vector3.ZERO:
+					warn_pos = enemy_spawn_point
 				bm._show_hud_alert(
 					"%s %d 秒后抵达" % [label, secs], Color(1.0, 0.8, 0.1),
 					[bm.enemy_team], bm.player_team, GameSettings.AlertKind.COMBAT,
-					false, [bm.team_nations.get(bm.enemy_team, -1)], enemy_spawn_point, -1)
+					false, [bm.team_nations.get(bm.enemy_team, -1)], warn_pos, -1)
 			warning_text = "⚠ %s %d 秒后抵达" % [label, secs]
 	if _zone_hold_need > 0.0 and hold_seconds < _zone_hold_need and _zone_enemy_inside:
 		warning_text = "⚠ 控制区被敌军压住，计时倒退！快把兵调回去"
