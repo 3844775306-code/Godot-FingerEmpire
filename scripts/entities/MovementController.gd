@@ -77,6 +77,11 @@ const COLLISION_INTERVAL: float = 0.15
 # 缓坡/台地基础成本高于平原，避免部队为了抄近路随意翻山。
 const SLOPE_BASE_COST: float = 1.35
 const PLATEAU_BASE_COST: float = 1.1
+# 山体边缘惩罚：格子中心离普通山壁只有 0.5~0.7 米，刚好等于/小于大多数
+# 单位的碰撞半径。A* 若沿山脚直线抄近路，单位会擦着山体拐角卡住。
+# 给紧贴普通山壁的格子加高成本（不封死，缓坡/窄道仍可走），让 A* 优先
+# 从至少一格开外绕过去。
+const MOUNTAIN_EDGE_COST: float = 6.0
 var _last_recalc_frame: int = -99  # prevent recalc spam
 # A* 预算按“渲染帧”计数，但一个渲染帧里可能补跑多个物理步。低帧率时如果每个
 # 物理步都重试 pending 请求，几百个单位会把直路检测和预算查询重复做 4~8 次，
@@ -667,6 +672,11 @@ func _is_cliff_between_positions(bm: RTSBattleManager, from_pos: Vector3, to_pos
 	return _is_cliff_between_tiles(bm, from_tile, to_tile)
 
 func _is_cliff_between_tiles(bm: RTSBattleManager, from_tile: Vector2i, to_tile: Vector2i) -> bool:
+	# 斜向跨格不能从两格障碍的角尖上抄近路：A* 的 8 方向邻居和直线采样
+	# 以前只检查终点格，山体拐角处会出现“起点和终点都是平地，但中间擦着
+	# 山角过去”的路径；单位实际碰撞半径过不去，就会顶着山角原地踏步。
+	if _is_diagonal_corner_blocked(bm, from_tile, to_tile, _wall_set):
+		return true
 	# 普通山壁整格封闭：哪怕高差看起来不大，也不允许直接踏上山体。
 	if _is_blocked_mountain_tile(bm, from_tile) or _is_blocked_mountain_tile(bm, to_tile):
 		return true
@@ -700,6 +710,30 @@ func _is_plateau_transition_blocked(bm: RTSBattleManager, from_tile: Vector2i, t
 	var from_high := from_ov == 4 or from_ov == 5
 	var to_high := to_ov == 4 or to_ov == 5
 	return not from_high or not to_high
+
+# 斜向跨格时检查两侧正交格。两格宽度里只要有一侧不可站人，从格心到格心
+# 的直线就会擦过山体/建筑/城墙的凸角；单位半径约 0.4~0.9 米，正好卡在角上。
+# 要求两侧都可通行，相当于给斜向路线留出至少一格净宽，A* 会改成绕角走。
+func _is_diagonal_corner_blocked(bm: RTSBattleManager, from_tile: Vector2i,
+		to_tile: Vector2i, wall_cache: Dictionary) -> bool:
+	var dx: int = to_tile.x - from_tile.x
+	var dy: int = to_tile.y - from_tile.y
+	if dx == 0 or dy == 0:
+		return false
+	var side_a := Vector2i(from_tile.x + dx, from_tile.y)
+	var side_b := Vector2i(from_tile.x, from_tile.y + dy)
+	if _is_corner_side_blocked(bm, side_a, wall_cache):
+		return true
+	if _is_corner_side_blocked(bm, side_b, wall_cache):
+		return true
+	return false
+
+func _is_corner_side_blocked(bm: RTSBattleManager, tile: Vector2i, wall_cache: Dictionary) -> bool:
+	if tile.x < 0 or tile.y < 0 or tile.x >= RTSConfig.MAP_SIZE or tile.y >= RTSConfig.MAP_SIZE:
+		return true
+	if wall_cache.has(tile) and not _ladder_set.has(tile):
+		return true
+	return _get_terrain_cost(tile, bm, wall_cache) >= 999.0
 
 # ==================== Collision separation ====================
 
@@ -1005,6 +1039,8 @@ static var _transport_frame: int = -1
 static var _transport_team: int = -1
 # 每个队伍、每一帧的运载船水域缓存；避免双方交替时反复扫描运载船。
 static var _team_transport: Dictionary = {}  # team -> {frame, water}
+static var _mountain_edge: Dictionary = {}   # 紧贴普通山壁的格子，见 MOUNTAIN_EDGE_COST
+static var _mountain_edge_bm_id: int = -1
 
 # 静态障碍缓存：建筑/资源/墙/桥/梯子只在布局变化时重建；
 # 运载船周围可通行水域因为船会移动，按帧缓存。
@@ -1018,6 +1054,9 @@ func _ensure_static_caches(bm: RTSBattleManager) -> void:
 		_team_transport.clear()
 		_wall_bm_id = bm_id
 		_wall_ver = bm._wall_cache_version
+	if _mountain_edge_bm_id != bm_id:
+		_rebuild_mountain_edge(bm)
+		_mountain_edge_bm_id = bm_id
 	var team: int = _army.team
 	var pack = _team_static.get(team)
 	if pack == null:
@@ -1080,6 +1119,26 @@ func _ensure_static_caches(bm: RTSBattleManager) -> void:
 	_transport_frame = frame
 	_transport_team = team
 
+# 标记普通山壁周围一圈格子。山体格子本身在 A* 里已经不可通行，这里主要
+# 标记“山脚平地”：这些格子离山壁只有半格，单位沿格心走会擦到山角。
+# 只加成本不封死，保证缓坡/山顶台地/窄道仍然可通行。
+func _rebuild_mountain_edge(bm: RTSBattleManager) -> void:
+	_mountain_edge.clear()
+	var size: int = RTSConfig.MAP_SIZE
+	for y in range(size):
+		for x in range(size):
+			if bm.get_terrain_at_grid(x, y) != 1:
+				continue
+			var ov: int = bm.get_overlay_at_grid(x, y)
+			if ov == 4 or ov == 5:
+				continue  # 缓坡/台地本身可走，不算封闭山壁
+			for dx in range(-1, 2):
+				for dy in range(-1, 2):
+					var tx: int = x + dx
+					var ty: int = y + dy
+					if tx >= 0 and ty >= 0 and tx < size and ty < size:
+						_mountain_edge[Vector2i(tx, ty)] = true
+
 # 直线可达时直接返回目标点，不跑 A*。
 # 后期大规模交战时绝大多数单位都在开阔地追击，真正需要绕墙/绕水的只是少数；
 # 如果每个单位都跑 A*，固定预算很快被填满，后面的请求只能无限排队。
@@ -1113,6 +1172,9 @@ func _try_direct_path(bm: RTSBattleManager, target_pos: Vector3, stop_range: flo
 		if tile == prev_tile:
 			continue
 		if _is_cliff_between_tiles(bm, prev_tile, tile):
+			return []
+		# 中间格若紧贴山壁，直线走过去会擦山角；交给 A* 按山脚成本绕开。
+		if tile != goal_tile and _mountain_edge.has(tile):
 			return []
 		# 终点格允许是墙/资源中心（近战会在攻击距离停下）；中间格必须可通行。
 		if tile != goal_tile:
@@ -1281,6 +1343,10 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 				# Single terrain cost lookup (merged passability + cost, was 2-3 calls)
 				var terrain_cost = _get_terrain_cost(neighbor, bm, wall_cache)
 				if terrain_cost >= 999.0: continue
+				# 斜向不能贴着一侧山体/建筑/城墙的角切过去，否则实际移动会被
+				# CharacterBody 的碰撞半径卡在拐角。
+				if dx != 0 and dy != 0 and _is_diagonal_corner_blocked(bm, cur_tile, neighbor, wall_cache):
+					continue
 				# 台地边缘必须接缓坡/台地；平地不能直接斜着踏上台地。
 				if _is_plateau_transition_blocked(bm, cur_tile, neighbor): continue
 
@@ -1347,6 +1413,9 @@ func _get_terrain_cost(tile: Vector2i, bm: RTSBattleManager, wall_cache: Diction
 				1: cost = 999.0
 				2: cost = 1.5 if _bridge_set.has(tile) or _transport_water.has(tile) else 999.0
 				_: cost = 999.0
+	# 山脚平地加高成本，避免格心路线贴着山壁擦角；缓坡/台地仍能通过。
+	if not _army.water_capable and cost < 999.0 and _mountain_edge.has(tile):
+		cost += MOUNTAIN_EDGE_COST
 	return cost
 
 func _get_tile_height(tile: Vector2i, bm: RTSBattleManager) -> float:

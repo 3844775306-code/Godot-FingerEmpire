@@ -875,7 +875,7 @@ func work_on_building(b) -> bool:
 		combat_state = CombatState.IDLE
 	_work_target_id = b.get_instance_id()
 	_work_slot = slot
-	_work_slot_pos = b.get_builder_slot_for(global_position, slot)
+	_work_slot_pos = b.get_builder_slot_for(global_position, slot, self)
 	if _work_slot_pos == Vector3.ZERO:
 		_work_slot_pos = b.get_builder_slot(slot)
 	_at_work_site = false
@@ -2535,7 +2535,7 @@ func _tick_building_action(delta: float, bm) -> void:
 		_finish_work()
 		return
 	if _work_slot_pos == Vector3.ZERO:
-		_work_slot_pos = b.get_builder_slot_for(global_position, _work_slot)
+		_work_slot_pos = b.get_builder_slot_for(global_position, _work_slot, self)
 		if _work_slot_pos == Vector3.ZERO:
 			_work_slot_pos = b.get_builder_slot(_work_slot)
 	var slot: Vector3 = _work_slot_pos

@@ -434,7 +434,12 @@ func active_builder_count() -> int:
 		# _at_work_site 由 Army 在真正走到施工位（1 米内）时置位，
 		# 比每帧重算到建筑中心的距离更准确，也避免施工位在外圈时误判。
 		if bool(u._at_work_site):
-			n += 1
+			# 双保险：施工位本身也必须在建筑外缘附近。异常回退到建筑中心、
+			# 或旧存档/旧客户端留下的远施工位不能推进建造/修理。
+			var edge_gap: float = Vector2(u.global_position.x - global_position.x,
+				u.global_position.z - global_position.z).length() - body_radius
+			if edge_gap <= 1.8:
+				n += 1
 	return n
 
 func _refresh_builder_cache(delta: float) -> void:
@@ -470,7 +475,12 @@ func get_builder_slot(index: int) -> Vector3:
 # 给某个农民挑最近的合法建筑外缘：从农民所在方向开始绕一圈采样，
 # 比较所有能站人的边缘点到农民的距离，取代以前按编号固定朝向的站位。
 # 农民从哪边来就站哪边，不用绕到建筑背面，长条建筑/城墙也不会被固定点坑到。
-func get_builder_slot_for(from_pos: Vector3, index: int = 0) -> Vector3:
+#
+# 关键：只在“最靠近建筑的第一圈可站点”里挑，不能把所有半径都扫一遍再取
+# 离农民最近的点。后者在数学上总会选到最外圈（r 越大离农民越近），
+# 结果就是农民隔着好几米就开始建造/修理。只有第一圈全被水/山/别的建筑
+# 挡住时才逐圈向外退，保证施工位贴着建筑外缘。
+func get_builder_slot_for(from_pos: Vector3, index: int = 0, for_unit = null) -> Vector3:
 	var bm = _get_bm()
 	if bm == null:
 		return global_position
@@ -482,10 +492,25 @@ func get_builder_slot_for(from_pos: Vector3, index: int = 0) -> Vector3:
 	var max_r: float = body_radius + (4.5 if entity_id == 7 else 3.2)
 	var min_r: float = maxf(body_radius + 0.8, 1.2)
 	var samples: int = 48 if entity_id == 7 else 36
-	var best := global_position
-	var best_d := INF
+	# 已经登记的其他农民占住的施工位：三个农民从同一侧过来时不要挤到同一个点，
+	# 否则后面的人会被前一个人顶在圈外，看起来像“站在远处施工”。
+	var reserved: Array = []
+	for ref in builders:
+		if not (ref is WeakRef):
+			continue
+		var u = ref.get_ref()
+		if u == null or not is_instance_valid(u) or not (u is Army) or u == for_unit:
+			continue
+		if int(u._work_target_id) != get_instance_id():
+			continue
+		var used_pos: Vector3 = u._work_slot_pos
+		if used_pos != Vector3.ZERO:
+			reserved.append(used_pos)
 	var r := min_r
 	while r <= max_r:
+		var ring_best := Vector3.ZERO
+		var ring_best_d := INF
+		var ring_found := false
 		for k in range(samples):
 			var ang: float = start_ang + TAU * float(k) / float(samples)
 			var p: Vector3 = global_position + Vector3(cos(ang), 0.0, sin(ang)) * r
@@ -494,17 +519,25 @@ func get_builder_slot_for(from_pos: Vector3, index: int = 0) -> Vector3:
 				continue
 			var wp: Vector3 = bm.grid_to_world(g.x, g.y)
 			wp.y = bm.get_height_at_grid(g.x, g.y)
+			var occupied := false
+			for rp in reserved:
+				if Vector2(wp.x - rp.x, wp.z - rp.z).length_squared() < 0.81:
+					occupied = true
+					break
+			if occupied:
+				continue
 			var dx: float = wp.x - from_pos.x
 			var dz: float = wp.z - from_pos.z
 			var d: float = dx * dx + dz * dz
-			if d < best_d:
-				best_d = d
-				best = wp
+			if d < ring_best_d:
+				ring_best_d = d
+				ring_best = wp
+				ring_found = true
+		if ring_found:
+			return ring_best
 		r += 0.7
-	if best_d == INF:
-		# 没有合法边缘（被水/山/其他建筑围死）时退回旧逻辑，至少给个可达目标
-		return get_builder_slot(index)
-	return best
+	# 没有合法边缘（被水/山/其他建筑围死）时退回旧逻辑，至少给个可达目标
+	return get_builder_slot(index)
 
 func _is_builder_tile_valid(bm, gx: int, gy: int) -> bool:
 	if gx < 0 or gy < 0 or gx >= RTSConfig.MAP_SIZE or gy >= RTSConfig.MAP_SIZE:
