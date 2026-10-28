@@ -959,12 +959,13 @@ func _1v1_right_click(team: int, data: Dictionary):
 				else:
 					entity.move_to(target.global_position)
 			else:
-				# 点到空地：移动到目标坐标（多单位按编队偏移散开）
-				var fp = pos
+				# 点到空地：移动到目标坐标（多单位按编队偏移散开）。
+				# 服务端权威校验每个落点，避免陆军被编队送到水里/山上。
+				var fp: Vector3 = pos
 				if offsets.size() > fi:
 					var off = offsets[fi]
 					fp = pos + Vector3(off.x, off.y, off.z)
-				entity.move_to(fp)
+				entity.move_to(find_legal_formation_pos(entity, fp))
 			fi += 1
 
 func _1v1_build(team: int, data: Dictionary):
@@ -1092,12 +1093,13 @@ func _2v2_right_click(peer_id: int, data: Dictionary):
 				else:
 					entity.move_to(target.global_position)
 			else:
-				# 点到空地：移动到目标坐标（多单位按编队偏移散开）
-				var fp = pos
+				# 点到空地：移动到目标坐标（多单位按编队偏移散开）。
+				# 服务端权威校验每个落点，避免陆军被编队送到水里/山上。
+				var fp: Vector3 = pos
 				if offsets.size() > fi:
 					var off = offsets[fi]
 					fp = pos + Vector3(off.x, off.y, off.z)
-				entity.move_to(fp)
+				entity.move_to(find_legal_formation_pos(entity, fp))
 			fi += 1
 
 func _2v2_build(peer_id: int, data: Dictionary):

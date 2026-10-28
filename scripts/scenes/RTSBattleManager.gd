@@ -671,6 +671,65 @@ func is_bridge_at(world_pos: Vector3) -> bool:
 	_ensure_cache_fresh()
 	return _bridge_entity_grid.has(world_to_grid(world_pos))
 
+# 编队落点合法性：陆军只落在平地/桥面，水军只落在可航行水面；
+# 目标点若在建筑/资源/山体/水里，就在附近找最近的可站立点。
+# 大量军队编队时每个单位目标点独立检查，避免方阵边缘掉进水里或山上。
+func find_legal_formation_pos(unit: Army, desired: Vector3) -> Vector3:
+	if unit == null:
+		return desired
+	var base := Vector3(desired.x, 0.0, desired.z)
+	if _is_formation_slot_legal(unit, base):
+		return _formation_slot_world(base)
+	# 从目标点向外一圈圈找，优先最近的可站立点；12 格足够让方阵边缘
+	# 从河道/山脚退到岸上或平地，又不会把整支部队拉回主城。
+	var max_ring: int = 12
+	for ring in range(1, max_ring + 1):
+		var steps: int = maxi(8, ring * 8)
+		for i in range(steps):
+			var a: float = TAU * float(i) / float(steps)
+			var cand := base + Vector3(cos(a), 0.0, sin(a)) * float(ring)
+			if _is_formation_slot_legal(unit, cand):
+				return _formation_slot_world(cand)
+	# 实在找不到合法点时不要发出“下水/上山”命令，原地待命。
+	return unit.global_position
+
+func _is_formation_slot_legal(unit: Army, flat_pos: Vector3) -> bool:
+	var half: float = RTSConfig.MAP_SIZE / 2.0
+	var gx: int = int(round(flat_pos.x + half))
+	var gz: int = int(round(flat_pos.z + half))
+	if gx < 1 or gz < 1 or gx >= RTSConfig.MAP_SIZE - 1 or gz >= RTSConfig.MAP_SIZE - 1:
+		return false
+	var terr: int = get_terrain_at_grid(gx, gz)
+	var on_bridge: bool = is_bridge_at(flat_pos)
+	if unit.water_capable:
+		# 水军只能待在水面，桥面不能开上去。
+		if terr != 2 or on_bridge:
+			return false
+	else:
+		# 陆军不能下水；山体(terrain=1)即使是缓坡/台地也不作为方阵落点，
+		# 避免大部队挤在窄坡上。桥面是水面上的合法陆地落点。
+		if terr == 1:
+			return false
+		# 浅滩(overlay=3)和桥面一样是陆军可通行的过河点，允许作为落点。
+		var ov: int = get_overlay_at_grid(gx, gz)
+		if terr == 2 and not on_bridge and ov != 3:
+			return false
+	# 落点不能压建筑/资源/城墙；只检查静态障碍，其他会移动的军队不算。
+	var nearby: Array = get_nearby_entities(flat_pos, 5.0)
+	for e in nearby:
+		if not (e is Building or e is WorldResource) or e.health <= 0:
+			continue
+		if e is Building and e.entity_id == 7 and on_bridge:
+			continue  # 桥面本身允许陆军站立
+		var d: float = Vector2(flat_pos.x - e.global_position.x, flat_pos.z - e.global_position.z).length()
+		if d < float(e.body_radius) + float(unit.body_radius) + 0.35:
+			return false
+	return true
+
+func _formation_slot_world(flat_pos: Vector3) -> Vector3:
+	var g: Vector2i = world_to_grid(flat_pos)
+	return Vector3(flat_pos.x, get_height_at_grid(g.x, g.y), flat_pos.z)
+
 func _ensure_cache_fresh():
 	if _entity_cache_dirty:
 		_rebuild_entity_cache()
@@ -3487,8 +3546,11 @@ func _command_selected_units_impl(screen_pos: Vector2, mode: String = ""):
 				var dest: Vector3 = pos
 				if target != null:
 					dest = target.global_position
-				elif formation_offsets.size() > 1:
-					dest = pos + formation_offsets[fi]
+				else:
+					if formation_offsets.size() > fi:
+						dest = pos + formation_offsets[fi]
+					# 方阵落点必须对陆军/水军各自合法，不能把边缘单位送到水里或山上。
+					dest = find_legal_formation_pos(u, dest)
 				u.move_to(dest)
 				fi += 1
 				continue
@@ -3501,7 +3563,10 @@ func _command_selected_units_impl(screen_pos: Vector2, mode: String = ""):
 					else:
 						u.attack_move_to(target.global_position)
 				else:
-					u.attack_move_to(pos)
+					var attack_pos: Vector3 = pos
+					if formation_offsets.size() > fi:
+						attack_pos += formation_offsets[fi]
+					u.attack_move_to(find_legal_formation_pos(u, attack_pos))
 				fi += 1
 				continue
 			if target:
@@ -3532,10 +3597,10 @@ func _command_selected_units_impl(screen_pos: Vector2, mode: String = ""):
 				else:
 					u.move_to(target.global_position)
 			else:
-				var fp = pos
-				if formation_offsets.size() > 1:
+				var fp: Vector3 = pos
+				if formation_offsets.size() > fi:
 					fp = pos + formation_offsets[fi]
-				u.move_to(fp)
+				u.move_to(find_legal_formation_pos(u, fp))
 			fi += 1
 
 func _try_open_build_menu(screen_pos: Vector2):
