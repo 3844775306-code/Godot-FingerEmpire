@@ -1081,7 +1081,8 @@ func build_building(building_id: int, pos: Vector3, facing: Vector3 = Vector3.ZE
 	if builder == null:
 		return false
 	var cost = cfg.get("cost", {})
-	if _research_age_reserve_active() and not _can_pay_with_reserve(cost, _research_age_reserve_cost()):
+	if _research_age_reserve_active() and not (building_id == 22 and _resource_overflow()) \
+			and not _can_pay_with_reserve(cost, _research_age_reserve_cost()):
 		return false
 	if not _deduct_resources(cost): return false
 	cfg["owner_peer_id"] = my_peer_id
@@ -1498,7 +1499,7 @@ func _state_production(_delta):
 					built_shipyard_pos.append(cached_shipyard_pos)
 		if count_building(23) > 0 and count_unit(14) < 3 and can_afford(14) and _can_train_unit():
 			produce_unit(14)
-		if warehouses < WAREHOUSE_MAX_COUNT and not _resource_overflow() and can_afford_building(22):
+		if warehouses < WAREHOUSE_MAX_COUNT and can_afford_building(22):
 			var castle = get_peer_castle(my_peer_id)
 			if castle:
 				var near_count = 0
@@ -2220,49 +2221,65 @@ func _should_build_or_upgrade(b_id: int) -> bool:
 	return false
 
 # ═══ Warehouse ═══
+func _can_afford_warehouse() -> bool:
+	if not _resource_overflow():
+		return can_afford_building(22)
+	var cfg = EntityDatabase.get_config(22)
+	if not cfg: return false
+	var res = _get_resources()
+	for k in cfg.get("cost", {}):
+		if int(res.get(k, 0)) < int(cfg["cost"][k]): return false
+	# 资源已经到上限时，时代预算继续囤也存不进去；仓库抬高上限反而有利于后续攒钱。
+	return true
+
 func consider_warehouse_near_farmer():
-	if _resource_overflow():
-		# 仓库只会抬高上限，不能把资源变成军队；已经接近上限时优先泄压，
-		# 否则 AI 会一边堆满仓、一边继续造仓库，资源仍然没有转化为实力。
+	if count_building(22) >= WAREHOUSE_MAX_COUNT:
 		return
+	var overflow: bool = _resource_overflow()
 	var castle = get_peer_castle(my_peer_id)
 	if not castle: return
-	if count_building(22) >= WAREHOUSE_MAX_COUNT: return
 	var res = _get_resources(); var limits = _get_limits()
 	var farmer_data = []
 	for entity in battle.entities.get_children():
 		if entity is Army and entity.health > 0 and entity.entity_id == 10 and entity_belongs_to_me(entity):
 			var tgt = entity.current_target
 			if is_instance_valid(tgt) and tgt is WorldResource: farmer_data.append({"farmer": entity, "resource": tgt})
-	if farmer_data.is_empty(): return
-	var best_score = -999.0; var best_pos = Vector3.ZERO
-	for item in farmer_data:
-		var rn = item.resource; var rp = rn.global_position; var rt = rn.resource_type
-		var s1 = min(rp.distance_to(castle.global_position) / 30.0, 1.0) * 5.0
-		var s2 = max(0.0, 1.0 - float(res.get(rt,0)) / max(limits.get(rt,500), 1)) * 3.0
-		var nf = 0
-		for other in farmer_data:
-			if other.resource.global_position.distance_to(rp) < 5.0: nf += 1
-		var s3 = min(float(nf)/5.0, 1.0) * 1.0
-		var nr = 0
-		for e in battle.entities.get_children():
-			if e is WorldResource and e.health > 0 and e.global_position.distance_to(rp) < 6.0: nr += 1
-		var s4 = min(float(nr)/5.0, 1.0) * 1.0
-		# Heavily penalize proximity to existing warehouses (<20m → -10 score)
-		var wh_penalty = 0.0
-		for ew in battle.entities.get_children():
-			if ew is Building and ew.entity_id == 22 and ew.team == my_team and ew.health > 0:
-				var wd = ew.global_position.distance_to(rp)
-				if wd < 25.0: wh_penalty += max(0.0, 10.0 - wd * 0.4)  # closer = bigger penalty
-		var score = s1 + s2 + s3 + s4 - wh_penalty
-		if score > best_score:
+	if not farmer_data.is_empty():
+		var best_score = -999.0; var best_pos = Vector3.ZERO
+		for item in farmer_data:
+			var rn = item.resource; var rp = rn.global_position; var rt = rn.resource_type
+			var s1 = min(rp.distance_to(castle.global_position) / 30.0, 1.0) * 5.0
+			var s2 = max(0.0, 1.0 - float(res.get(rt,0)) / max(limits.get(rt,500), 1)) * 3.0
+			var nf = 0
+			for other in farmer_data:
+				if other.resource.global_position.distance_to(rp) < 5.0: nf += 1
+			var s3 = min(float(nf)/5.0, 1.0) * 1.0
+			var nr = 0
+			for e in battle.entities.get_children():
+				if e is WorldResource and e.health > 0 and e.global_position.distance_to(rp) < 6.0: nr += 1
+			var s4 = min(float(nr)/5.0, 1.0) * 1.0
+			# Heavily penalize proximity to existing warehouses (<20m → -10 score)
+			var wh_penalty = 0.0
+			for ew in battle.entities.get_children():
+				if ew is Building and ew.entity_id == 22 and ew.team == my_team and ew.health > 0:
+					var wd = ew.global_position.distance_to(rp)
+					if wd < 25.0: wh_penalty += max(0.0, 10.0 - wd * 0.4)  # closer = bigger penalty
+			var score = s1 + s2 + s3 + s4 - wh_penalty
+			if score > best_score:
 				best_score = score
 				for _t in range(5):
 					var tp = rp + Vector3(randf_range(-2.5,2.5), 0, randf_range(-2.5,2.5))
 					if _is_valid_build_ground(tp): best_pos = tp; break
 				if best_pos == Vector3.ZERO: best_pos = rp + Vector3(randf_range(-2,2), 0, randf_range(-2,2))
-	# Only build if score is acceptable (>= 2.0)
-	if best_pos != Vector3.ZERO and best_score >= 2.0 and can_afford_building(22): build_building(22, best_pos)
+		if best_pos != Vector3.ZERO and (best_score >= 2.0 or overflow) and _can_afford_warehouse():
+			build_building(22, best_pos)
+			return
+	# 资源已经溢出但附近没有可跟随的农民资源点时，也要在城堡附近补仓库抬上限，
+	# 否则采集队继续交资源会被满仓截断，玩家会看到 AI 永远不造仓库。
+	if overflow and _can_afford_warehouse():
+		var wpos: Vector3 = find_valid_build_position(castle.global_position, 22)
+		if wpos != Vector3.ZERO:
+			build_building(22, wpos)
 
 func _is_valid_build_ground(world_pos: Vector3) -> bool:
 	var gx = int(world_pos.x + RTSConfig.MAP_SIZE / 2); var gz = int(world_pos.z + RTSConfig.MAP_SIZE / 2)
@@ -3285,6 +3302,9 @@ func _process_line_upgrade():
 func _relieve_resource_pressure() -> void:
 	if not _resource_overflow():
 		return
+	# 先补仓库：溢出时仓库直接抬高存储上限，比把资源排成兵更能解决“满仓后白采”。
+	# 必须放在泄压支出之前，否则几轮兵/升级花完后资源已低于阈值，又不会造仓库。
+	consider_warehouse_near_farmer()
 	_process_line_3()
 	_upgrade_any_affordable_building()
 	if _resource_critical():
@@ -3302,7 +3322,10 @@ func _train_overflow_units() -> void:
 			continue
 		if u_id == TRADE_CART_ID and count_unit(TRADE_CART_ID) >= _count_merchants():
 			continue
-		while budget > 0 and _can_train_unit_with_queue() and can_afford(u_id) and produce_unit(u_id):
+		var cap: int = _effective_army_target()
+		while budget > 0 and count_unit(u_id) < cap and _can_train_unit_with_queue() and can_afford(u_id):
+			if not produce_unit(u_id):
+				break
 			budget -= 1
 
 func _can_pay_with_reserves(cost: Dictionary, building_id: int = -1) -> bool:
@@ -3330,8 +3353,9 @@ func _upgrade_any_affordable_building() -> bool:
 			continue
 		if not entity_belongs_to_me(entity):
 			continue
-		# 仓库升级只把上限继续抬高，不产生战斗力；泄压时优先军营/民居/塔等。
-		if entity.entity_id == 22:
+		# 仓库升级只把上限继续抬高；平时泄压优先军营/民居/塔，但资源已经溢出时
+		# 升级仓库正是最直接的“把资源转成上限”手段。
+		if entity.entity_id == 22 and not _resource_overflow():
 			continue
 		if not entity.can_upgrade():
 			continue
@@ -3391,7 +3415,8 @@ func _process_line_military():
 		if count_unit(u_id) < army_target and can_afford(u_id) and _can_train_unit_with_queue():
 			# 普通情况每轮补 1 个；资源临界满仓时一次多排几个，尽快把收入转成兵力。
 			var trained: int = 0
-			while trained < train_budget and _can_train_unit_with_queue() and can_afford(u_id) and produce_unit(u_id):
+			while trained < train_budget and count_unit(u_id) < army_target \
+					and _can_train_unit_with_queue() and can_afford(u_id) and produce_unit(u_id):
 				trained += 1
 
 func _process_line_3():
