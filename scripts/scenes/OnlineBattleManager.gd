@@ -939,6 +939,9 @@ func _1v1_right_click(team: int, data: Dictionary):
 	for entity in entities.get_children():
 		if entity is Army and entity.team == team and entity.get_instance_id() in selected_ids:
 			if not is_instance_valid(entity): continue
+			# 与单机右键保持一致：先解除上墙/自动上船安排，
+			# 否则墙顶守军会继续按 _think_wall_guard 打旧目标，无视玩家新命令。
+			_clear_wall_guard_assignment(entity)
 			if not shift_held:
 				entity._clear_command_queue()
 			entity._force_queue_next = shift_held
@@ -1073,6 +1076,8 @@ func _2v2_right_click(peer_id: int, data: Dictionary):
 	for entity in entities.get_children():
 		if entity is Army and entity.get("owner_peer_id") == peer_id and entity.get_instance_id() in selected_ids:
 			if not is_instance_valid(entity): continue
+			# 同 1v1：玩家命令优先，解除墙顶守军/自动上船安排。
+			_clear_wall_guard_assignment(entity)
 			if not shift_held:
 				entity._clear_command_queue()
 			entity._force_queue_next = shift_held

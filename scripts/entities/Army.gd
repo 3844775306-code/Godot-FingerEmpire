@@ -1358,6 +1358,20 @@ func _release_invalid_wall_guard() -> bool:
 	stop_movement()
 	return true
 
+# 玩家主动下达移动/攻击命令时，必须解除此前的墙顶守军/自动上船身份。
+# 否则 _think_combat 会先走 _think_wall_guard，把玩家新指定的目标丢掉，
+# 表现就是“选中军队攻击新目标，它仍然在打原来锁定的敌人”。
+func _release_player_guard_orders() -> void:
+	if has_meta("ai_wall_guard"):
+		remove_meta("ai_wall_guard")
+	if has_meta("ai_wall_guard_slot"):
+		remove_meta("ai_wall_guard_slot")
+	if has_meta("ai_wall_guard_pos"):
+		remove_meta("ai_wall_guard_pos")
+	if has_meta("_auto_board_ship"):
+		remove_meta("_auto_board_ship")
+	hold_position = false
+
 # 目标是否已经失效：节点被释放或血量归零（死亡动画期间节点仍可能存在）。
 func _is_target_gone(target) -> bool:
 	if target == null:
@@ -2234,8 +2248,13 @@ func _process_combat_target_cleanup(delta, bm) -> void:
 
 func _process_combat_action(delta, bm) -> void:
 	if _is_effective_wall_guard():
-		_process_wall_guard_action(delta, bm)
-		return
+		# 玩家已手动指定攻击目标：解除守墙身份，立即按普通战斗处理，
+		# 不能停在墙顶继续打射程内的旧目标。
+		if current_target != null and _is_commanded_attack_target(current_target):
+			_release_player_guard_orders()
+		else:
+			_process_wall_guard_action(delta, bm)
+			return
 	if current_target != null and is_instance_valid(current_target) and combat_state == CombatState.IDLE:
 		_set_combat_target(current_target)
 	match combat_state:
@@ -3020,6 +3039,12 @@ func _think_combat(delta, bm) -> void:
 		_find_enemy_in_range()
 
 func _think_wall_guard(bm) -> void:
+	# 玩家手动指定的攻击目标优先于墙顶守军职责：解除守墙身份并交回普通战斗逻辑。
+	# 之前只给驻扎单位加了这条豁免，漏了墙顶守军，导致玩家点新目标后
+	# 单位仍按射程内旧目标继续打。
+	if current_target != null and _is_commanded_attack_target(current_target):
+		_release_player_guard_orders()
+		return
 	if current_target != null and is_instance_valid(current_target) \
 			and _combat_edge_distance(current_target) <= attack_range:
 		return
@@ -4151,6 +4176,10 @@ func move_to(pos: Vector3):
 	_queue_command({"type": "move", "pos": pos})
 
 func attack_target(p_target, forced: bool = false):
+	# 玩家手动攻击命令必须立即解除墙顶守军/自动上船安排，
+	# 否则墙顶单位的 _think_wall_guard 会无视新目标、继续打射程内的旧目标。
+	if forced:
+		_release_player_guard_orders()
 	if p_target is GameEntity:
 		p_target = _resolve_melee_wall_target(p_target)
 	if not _is_valid_command_target(p_target):
