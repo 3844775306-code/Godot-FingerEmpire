@@ -322,21 +322,40 @@ func reserve_astar_request(is_retry: bool = false, force: bool = false) -> bool:
 	# 把所有帧时间都耗在寻路上。
 	var boost: int = clampi(_astar_pending_estimate / ASTAR_BACKLOG_STEP, 0, ASTAR_BACKLOG_MAX_BOOST)
 	var max_count: int = ASTAR_REQUESTS_PER_FRAME + boost * ASTAR_BOOST_REQUESTS
-	var max_usec: int = ASTAR_TIME_BUDGET_USEC + boost * ASTAR_BOOST_USEC
+	var base_usec: int = _astar_frame_budget_usec()
+	var max_usec: int = base_usec + boost * ASTAR_BOOST_USEC
+	if base_usec < ASTAR_TIME_BUDGET_USEC:
+		# 后期总量大时预算已经收紧，积压再多也只额外放 4ms，防止 A* 反向
+		# 把整帧吃光。单位暂时排队比每帧 30ms+ 的卡顿更容易接受。
+		max_usec = mini(max_usec, base_usec + 4000)
 	if not is_retry:
 		var reserve_count: int = ASTAR_RETRY_RESERVE_REQUESTS
-		var reserve_usec: int = ASTAR_RETRY_RESERVE_USEC
+		var reserve_usec: int = mini(ASTAR_RETRY_RESERVE_USEC, base_usec / 3)
 		# 队列已经很长时，进一步压缩新请求配额，把更多预算让给 pending 队尾。
 		if _astar_pending_estimate >= ASTAR_BACKLOG_PRESSURE:
 			reserve_count += 8
-			reserve_usec += 4000
+			reserve_usec = mini(reserve_usec + 2000, base_usec / 2)
 		max_count -= reserve_count
 		max_usec -= reserve_usec
+	if max_usec <= 0:
+		return false
 	if _astar_budget_count >= max_count or _astar_budget_usec >= max_usec:
 		return false
 	_astar_budget_count += 1
 	_astar_alloc_total += 1
 	return true
+
+# 按实体规模收紧单帧 A* 总预算：小规模对局保留原 32ms，保证寻路及时；
+# 后期 400+ 实体时降到 10ms，把剩余帧时间留给单位物理/AI，避免长路径叠加成卡顿。
+func _astar_frame_budget_usec() -> int:
+	var total: int = _all_entities.size()
+	if total >= 420:
+		return 10000
+	if total >= 300:
+		return 14000
+	if total >= 180:
+		return 20000
+	return ASTAR_TIME_BUDGET_USEC
 
 # 每次真正进入 A* 计算时调用（包括不走预算的 recalculate 直算）。
 func note_astar_path_call() -> void:

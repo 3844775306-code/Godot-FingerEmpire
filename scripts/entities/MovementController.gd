@@ -24,6 +24,11 @@ const ATTACK_TARGET_MOVE_TOLERANCE: float = 3.0
 # 队列压力阈值：与 RTSBattleManager.ASTAR_BACKLOG_PRESSURE 保持一致。
 # 排队多时进一步降低追击重算频率、放大目标移动容差，先让现有路径继续走。
 const A_STAR_PRESSURE_THRESHOLD: int = 30
+# 单条路径的 CPU 上限。后期 GDScript 里 12k 节点最坏可到 20ms+，
+# 一条长路径就能吃掉整帧；超过软上限且已经找到更接近目标的格子时先返回
+# 部分路径，完全没有进展（例如找桥）才允许继续到硬上限。
+const A_STAR_SOFT_LIMIT_USEC: int = 6000
+const A_STAR_HARD_LIMIT_USEC: int = 10000
 # 路径预览最多采样多少个点。贴地指引带内部会再按 1.1 米加密并逐顶点贴地，
 # 这里只限制单条路径的顶点总量，避免超长路径生成过大的网格。
 const MAX_PATH_PREVIEW_POINTS: int = 200
@@ -1362,11 +1367,22 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 	var tile_span: int = absi(start_tile.x - goal_tile.x) + absi(start_tile.y - goal_tile.y)
 	max_nodes = clampi(2000 + tile_span * 80, 2000, 12000)
 	var nodes_explored := 0
+	var path_start_usec: int = Time.get_ticks_usec()
 	var from_height := _get_tile_height(start_tile, bm)
 	var best_partial_tile: Vector2i = start_tile
 	var best_partial_h: float = _heuristic(start_tile, goal_tile)
 
 	while not open_list.is_empty() and nodes_explored < max_nodes:
+		# 单条 A* 不能无限展开：12k 节点在 GDScript 里最坏要 20ms+，一帧只要
+		# 混进一条这种长路径就会直接掉帧。展开到软上限后，只要已经找到“更接近
+		# 目标的可达格”就先返回这段部分路径，单位继续走、下一段再算；真的还没
+		# 有进展（例如正在找桥）则允许最多跑到硬上限，避免把可绕行的目标误判死。
+		if nodes_explored % 32 == 0 and nodes_explored > 0:
+			var path_elapsed: int = Time.get_ticks_usec() - path_start_usec
+			if path_elapsed >= A_STAR_HARD_LIMIT_USEC:
+				break
+			if path_elapsed >= A_STAR_SOFT_LIMIT_USEC and best_partial_tile != start_tile:
+				break
 		var current_entry = open_list.pop()
 		if current_entry.is_empty(): break
 		var cur_tile: Vector2i = current_entry.tile

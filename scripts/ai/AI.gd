@@ -1578,11 +1578,13 @@ func _process(delta):
 		var interval: float = think_interval
 		var entity_count: int = battle._all_entities.size() if battle else 0
 		if entity_count > 450:
-			interval *= 2.4
+			interval *= 3.4
 		elif entity_count > 360:
-			interval *= 1.9
+			interval *= 2.6
 		elif entity_count > 260:
-			interval *= 1.5
+			interval *= 1.9
+		elif entity_count > 180:
+			interval *= 1.4
 		timer = interval
 		decide(interval)
 		if battle != null and battle.has_method("is_research_mode") and battle.is_research_mode():

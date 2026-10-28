@@ -166,6 +166,16 @@ var _current_move_queued: bool = false # Current move originated from queue
 var think_timer: float = 0.0
 const THINK_INTERVAL: float = 0.3
 
+# 非战斗单位（农民/建造工/商队/官员）行为逻辑节流：
+# 目标搜索已有 think_timer 节流，但交付/建造/采集状态机仍是每个物理帧都跑，
+# 后期几百个农民会形成稳定 CPU 热点。行为决策不需要 60Hz，按实体总数
+# 降到 8~16Hz，移动与碰撞仍保持每帧执行，手感不受影响。
+var _legacy_action_timer: float = 0.0
+var _legacy_action_accum: float = 0.0
+# 采集接近：不要每次行为更新都重发 A* 请求。资源是静止的，只要当前路径
+# 仍指向同一个站位点就继续走；路径走完/目标明显偏移时才重算。
+var _gather_repath_timer: float = 0.0
+
 # 目标重选：锁定目标不在攻击范围时，每秒找一次更近的敌人
 const TARGET_RETARGET_INTERVAL: float = 1.0
 var _retarget_timer: float = TARGET_RETARGET_INTERVAL
@@ -1718,7 +1728,7 @@ func _physics_process(delta):
 			else:                  # Õ½¶·µ¥Î»£¬Á¢¿ÌËÑË÷µÐÈË
 				_find_enemy_in_range()
 	# ÐÐÎª´¦Àí
-	_process_action(delta, bm)
+	_tick_legacy_action(delta, bm)
 
 	# ÒÆ¶¯£¨ÊÖ¶¯ÉèÖÃ global_position£©
 	# 已经在攻击射程内站定的单位不必每帧再跑 process_move：后者会重复算一次
@@ -1770,6 +1780,32 @@ func _physics_process(delta):
 	
 	# 决策节流
 	_tick_think(delta, bm)
+
+# 非战斗单位的行为状态机不需要每个物理帧都跑：建造/交付/采集的计时器都在
+# _process_action 内部按累计 delta 推进，因此这里只降低调用频率，不改变时长。
+func _tick_legacy_action(delta: float, bm) -> void:
+	_legacy_action_accum += delta
+	_legacy_action_timer -= delta
+	if _legacy_action_timer > 0.0:
+		return
+	var interval: float = 0.0
+	if bm:
+		var total: int = bm._all_entities.size()
+		if total >= 420:
+			interval = 0.12
+		elif total >= 300:
+			interval = 0.09
+		elif total >= 180:
+			interval = 0.06
+	if interval <= 0.0:
+		# 小规模对局保持原来的逐帧行为，避免改变 1v1 手感。
+		_legacy_action_timer = 0.0
+	else:
+		# 按 instance id 错开，避免几百个农民在同一帧集中跑建造/交付逻辑。
+		_legacy_action_timer = interval + float(get_instance_id() % 11) * 0.004
+	var action_delta: float = _legacy_action_accum
+	_legacy_action_accum = 0.0
+	_process_action(action_delta, bm)
 
 func _tick_think(delta, bm) -> void:
 	think_timer -= delta
@@ -2977,7 +3013,16 @@ func _process_action(delta, bm):
 				# 寻路终点用「资源边缘外 GATHER_STANDOFF_GAP 米」的站位点，而不是资源中心：
 				# 资源格本身是 A* 阻挡格，直接寻路到中心会停在旁边几米处，
 				# 单位于是站在远处“假采集”（资源血量不掉），采集停靠间距也就不受控。
-				_movement.set_move_target(_gather_standoff_position(current_target))
+				# 但资源静止，已有路径仍指向同一站位时不要重发 A*：后期几十个农民
+				# 每次行为更新都重算一次路径，会把 A* 线程/主线程一起拖满。
+				_gather_repath_timer -= delta
+				var gather_goal: Vector3 = _gather_standoff_position(current_target)
+				var need_gather_path: bool = _movement.astar_path.is_empty()
+				if not need_gather_path:
+					need_gather_path = _movement.astar_target.distance_to(gather_goal) > 1.5
+				if need_gather_path and _gather_repath_timer <= 0.0:
+					_gather_repath_timer = 0.6
+					_movement.set_move_target(gather_goal)
 		elif _order_is(UnitState.GATHERING):
 			# 采集状态却锁着非资源目标（命令误给/资源点被替换）：清掉回空闲，避免永久假采集
 			current_target = null
