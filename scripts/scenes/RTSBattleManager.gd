@@ -4137,12 +4137,18 @@ func is_position_visible_to_team(team: int, world_pos: Vector3) -> bool:
 # 远程攻城/箭矢不能隔着一道完整城墙打另一侧；以下情况放行：
 # 1) 观察者或目标站在城墙顶上（墙顶对墙下、墙下对墙顶都能打）；
 # 2) 观察者是箭塔/炮塔/墙顶炮台（高塔射界越过墙头）；
-# 3) 目标就是城墙本身（玩家手动拆墙）。
-func _is_wall_shot_exempt(entity) -> bool:
+# 3) 目标就是城墙本身（玩家手动拆墙）；
+# 4) 投石车/巨型投石机发射的是抛物线巨石，可以越过墙头砸到另一侧。
+# 只有“观察者”能享受石头抛物线豁免；目标在墙后时，普通箭矢仍看不见它。
+const WALL_PARABOLIC_UNIT_IDS := [17, 59]
+
+func _is_wall_shot_exempt(entity, as_viewer: bool) -> bool:
 	if entity is Building:
 		return int(entity.entity_id) in [25, 26, 64]
 	if entity is Army:
-		return entity._is_unit_on_wall()
+		if entity._is_unit_on_wall():
+			return true
+		return as_viewer and int(entity.entity_id) in WALL_PARABOLIC_UNIT_IDS
 	return false
 
 func is_wall_blocking_shot(viewer, target) -> bool:
@@ -4152,7 +4158,7 @@ func is_wall_blocking_shot(viewer, target) -> bool:
 		return false
 	if target is Building and int(target.entity_id) == 27:
 		return false
-	if _is_wall_shot_exempt(viewer) or _is_wall_shot_exempt(target):
+	if _is_wall_shot_exempt(viewer, true) or _is_wall_shot_exempt(target, false):
 		return false
 	return is_wall_between_positions(viewer.global_position, target.global_position)
 
