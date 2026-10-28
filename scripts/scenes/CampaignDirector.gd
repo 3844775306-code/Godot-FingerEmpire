@@ -437,6 +437,17 @@ func _wave_centers(number: int) -> Array:
 	var secondary: int = (primary + offset) % size
 	return [_defense_wave_lanes[primary], _defense_wave_lanes[secondary]]
 
+# 战役波次等级：固定波次表默认按波次递增（第 1 波 1 级、第 5 波 5 级封顶），
+# 关卡可在单波里用 level 字段覆盖；无尽模式沿用 _endless_wave_data 自带的成长曲线。
+func _wave_army_level(wave: Dictionary, unit: Dictionary, number: int) -> int:
+	var base: int = clampi(int(unit.get("level", 1)), 1, 5)
+	var forced: int = int(wave.get("level", 0))
+	if forced > 0:
+		return clampi(maxi(base, forced), 1, 5)
+	if _endless_on:
+		return base
+	return clampi(maxi(base, number), 1, 5)
+
 # 隘口通常只有几格宽：沿“玩家→隘口”的径向偏移很容易直接顶到山壁，
 # 因此在隘口周围再找一圈仍在通道里的平地，优先取靠敌方一侧的点。
 func _find_pass_wave_lane(pass_pos: Vector3, center: Vector3) -> Vector3:
@@ -488,8 +499,9 @@ func _build_defense_wave_lanes() -> Array:
 		if lane != Vector3.ZERO:
 			_append_wave_lane(lanes, lane)
 	# 隘口太少（或这张图没有隘口）时，从敌方方向展开扇形：
-	# 普通防守关保证至少两路；无尽挑战要求“四面八方”，补到四路。
-	var min_lanes: int = 4 if _endless_on else 2
+	# 普通防守关至少三路（正面主攻 + 侧翼），第10关这类双隘口地图也有侧翼突袭；
+	# 无尽挑战要求“四面八方”，补到四路。
+	var min_lanes: int = 4 if _endless_on else 3
 	if lanes.size() < min_lanes:
 		var base := Vector3(enemy_anchor.x - center.x, 0.0, enemy_anchor.z - center.z)
 		if base.length() < 1.0:
@@ -1355,7 +1367,8 @@ func _fire_wave(wave: Dictionary, number: int) -> void:
 			spawn_index += 1
 			if pos == Vector3.ZERO:
 				continue
-			var unit = bm.spawn_entity(EntityDatabase.get_config(unit_id), bm.enemy_team, pos, int(u.get("level", 1)))
+			var unit = bm.spawn_entity(EntityDatabase.get_config(unit_id), bm.enemy_team, pos,
+				_wave_army_level(wave, u, number))
 			if unit != null:
 				spawned.append(unit)
 				_hook_enemy_kill(unit, unit_id)
