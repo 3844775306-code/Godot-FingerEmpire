@@ -1083,6 +1083,13 @@ func build_building(building_id: int, pos: Vector3, facing: Vector3 = Vector3.ZE
 			if battle.has_method("find_nearest_idle_builder") else null
 	if builder == null:
 		return false
+	# 农民脚下到建造点没有陆路（被水隔开）时，不要先拍一个永远修不完的地基：
+	# 让渡水模块从农民所在岸边规划短桥，桥修通后 AI 的下一次建造会自然成功。
+	# 桥本身（7）不适用这条规则，它本来就要建在水上。
+	if building_id != 7 and _water_crossing != null \
+			and not _water_crossing.can_builder_reach(builder.global_position, pos):
+		_water_crossing.plan_bridge_to(pos, builder.global_position)
+		return false
 	var cost = cfg.get("cost", {})
 	if _research_age_reserve_active() and not (building_id == 22 and _resource_overflow()) \
 			and not _can_pay_with_reserve(cost, _research_age_reserve_cost()):

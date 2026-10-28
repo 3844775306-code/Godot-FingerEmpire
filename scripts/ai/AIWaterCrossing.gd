@@ -59,6 +59,9 @@ var battle = null
 var mode: int = MODE_NONE
 var bridge_plan: Array = []
 var _resource_bridges_started: int = 0
+# 己方主城所在陆地的连通格集合。农民到建造点的可达性先用它做快速判断，
+# 只有目标不在同一块陆地时才启动小范围 BFS，避免每次 AI 造建筑都扫全图。
+var _reachable_land: Dictionary = {}
 
 var _plan_timer: float = 2.0
 var _bridge_fail_count: int = 0
@@ -135,6 +138,7 @@ func _refresh_plan():
 	var target: Vector2i = battle.world_to_grid(enemy_castle.global_position)
 	var bridges: Dictionary = _collect_bridges()
 	var own_set: Dictionary = _bfs_land(start, bridges)
+	_reachable_land = own_set
 	if own_set.has(target):
 		# 陆军已经能走到敌方城堡（陆地或浅滩/桥），不需要为了进攻渡水；
 		# 但如果对岸还有农民够不着的资源，仍然可以修一条短桥把经济接过去。
@@ -184,6 +188,7 @@ func _stop_all():
 	bridge_plan.clear()
 	_bridge_fail_count = 0
 	_transport_shores_valid = false
+	_reachable_land.clear()
 	mode = MODE_NONE
 
 func _abort_transport():
@@ -317,6 +322,92 @@ func _try_resource_bridge(own_set: Dictionary, bridges: Dictionary, own_grid: Ve
 
 func has_pending_bridge() -> bool:
 	return mode == MODE_BRIDGE and not bridge_plan.is_empty()
+
+# 农民从 from_pos 到 target_pos 是否有陆路（含已建成的桥）。
+# 主城陆地集合是缓存；只有起点/终点不在这块陆地时才做一次带早停的 BFS。
+func can_builder_reach(from_pos: Vector3, target_pos: Vector3) -> bool:
+	if battle == null:
+		return true
+	var start: Vector2i = battle.world_to_grid(from_pos)
+	var goal: Vector2i = battle.world_to_grid(target_pos)
+	if start == goal:
+		return true
+	var bridges: Dictionary = _collect_bridges()
+	if _reachable_land.is_empty():
+		# 渡水规划还没跑过（刚开局/防守关没有敌方城堡）时，用己方主城补一次
+		# 连通集，避免 AI 每造一座建筑都做一次全图 BFS。
+		var castle = ai.get_peer_castle(ai.my_peer_id)
+		if is_instance_valid(castle):
+			_reachable_land = _bfs_land(battle.world_to_grid(castle.global_position), bridges)
+	if _reachable_land.has(start) and _reachable_land.has(goal):
+		return true
+	return _bfs_reach(start, goal, bridges)
+
+func _bfs_reach(start: Vector2i, goal: Vector2i, bridges: Dictionary) -> bool:
+	if not _land_passable(start, bridges) or not _land_passable(goal, bridges):
+		return false
+	var visited: Dictionary = {start: true}
+	var queue: Array = [start]
+	var head: int = 0
+	var dirs: Array = [
+		Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1),
+		Vector2i(1, 1), Vector2i(1, -1), Vector2i(-1, 1), Vector2i(-1, -1)
+	]
+	while head < queue.size():
+		var c: Vector2i = queue[head]
+		head += 1
+		if c == goal:
+			return true
+		for d in dirs:
+			var n: Vector2i = c + d
+			if visited.has(n) or not _land_passable(n, bridges):
+				continue
+			visited[n] = true
+			queue.append(n)
+	return false
+
+# AI 要在一座农民走不到的岛上造建筑时，先规划一条从农民脚下到该岛的短桥。
+# 桥仍然复用现有 _find_bridge_plan / _tick_bridge，保证只是一次“请求”，
+# 不绕过木材、桥数上限、敌军视野和正常施工流程。
+func plan_bridge_to(target_pos: Vector3, from_pos: Vector3 = Vector3.ZERO) -> bool:
+	if battle == null:
+		return false
+	if mode == MODE_BRIDGE and not bridge_plan.is_empty():
+		return false
+	# 正在组织登陆船队时不强行改道；等这波登陆结束再考虑为建造搭桥。
+	if mode == MODE_TRANSPORT:
+		return false
+	if _bridge_fail_count >= 3 and Time.get_ticks_msec() < _bridge_retry_at_ms:
+		return false
+	var start_pos: Vector3 = from_pos if not from_pos.is_zero_approx() else Vector3.ZERO
+	if start_pos == Vector3.ZERO:
+		var castle = ai.get_peer_castle(ai.my_peer_id)
+		if not is_instance_valid(castle):
+			return false
+		start_pos = castle.global_position
+	var start: Vector2i = battle.world_to_grid(start_pos)
+	var goal: Vector2i = battle.world_to_grid(target_pos)
+	if start == goal:
+		return false
+	var bridges: Dictionary = _collect_bridges()
+	var own_set: Dictionary = _bfs_land(start, bridges)
+	if own_set.has(goal):
+		return false
+	var goal_set: Dictionary = _bfs_land(goal, bridges)
+	if goal_set.has(start):
+		return false
+	var plan: Array = _find_bridge_plan(own_set, goal_set, bridges, start, goal)
+	if plan.is_empty():
+		return false
+	bridge_plan = plan
+	mode = MODE_BRIDGE
+	_transport_state = STATE_IDLE
+	_transport_units.clear()
+	_bridge_fail_count = 0
+	_bridge_retry_at_ms = 0
+	if OS.is_debug_build():
+		print("[AI] 农民到不了建造点，先搭 %d 段桥：%s" % [plan.size(), str(target_pos)])
+	return true
 
 # AI 已经规划好的桥段不受玩家“必须看得见才能建”的限制：
 # 这座桥是 AI 为了让自己农民够到对岸资源而主动规划的基础设施，
