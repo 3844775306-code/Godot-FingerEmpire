@@ -95,6 +95,9 @@ const DELIVERY_ABSOLUTE_TIMEOUT: float = 150.0
 const TARGET_VALIDATE_INTERVAL: float = 0.5
 var _attack_stall_time: float = 0.0
 var _attack_watch_target_id: int = -1
+# 玩家手动目标暂时无法寻路时的重试时间戳：避免每 1.2 秒反复重算 A*，
+# 但也不能因为一次失败就改打旧目标。
+var _commanded_unreachable_retry_at_ms: int = 0
 var _target_validate_timer: float = 0.0
 # 五状态分支的地形高度平滑每 0.25 秒做一次，避免全军每帧取地图高度。
 var _combat_ground_timer: float = 0.0
@@ -1174,6 +1177,8 @@ func _set_combat_target(target, from_advance: bool = false, manual: bool = false
 	if _commanded_attack_target_id != -1 \
 			and _commanded_attack_target_id != target.get_instance_id():
 		_commanded_attack_target_id = -1
+	if manual:
+		_commanded_unreachable_retry_at_ms = 0
 	current_target = target
 	if from_advance and combat_destination != Vector3.ZERO:
 		combat_resume_destination = combat_destination
@@ -1303,6 +1308,9 @@ func _return_to_garrison() -> void:
 	_start_combat_march(garrison_point)
 
 func _on_combat_target_lost() -> void:
+	# 若玩家指定目标仍然有效，说明刚才丢的只是挡路物/临时目标，恢复原目标。
+	if _try_resume_commanded_attack():
+		return
 	current_target = null
 	_commanded_attack_target_id = -1
 	is_attack_moving = false
@@ -1907,6 +1915,38 @@ func _fallback_route_destination() -> Vector3:
 		return combat_destination
 	return Vector3.ZERO
 
+# 玩家指定的目标被墙/建筑挡住时，先拆挡路物，但保留“打完继续打原目标”的
+# 手动锁定，不能在拆墙途中或拆完墙后自动改回旧目标。
+func _attack_blocking_target_keep_command(blocker) -> bool:
+	if blocker == null or not is_instance_valid(blocker) or not _can_attack_target(blocker):
+		return false
+	var keep_id: int = _commanded_attack_target_id
+	_set_combat_target(blocker)
+	if current_target != blocker:
+		return false
+	_commanded_attack_target_id = keep_id
+	if _movement:
+		_movement.set_move_target(blocker.global_position, attack_range)
+	return true
+
+# 拆掉挡路物后恢复玩家手动目标；目标已经死亡/不可攻击时清掉锁定。
+func _try_resume_commanded_attack() -> bool:
+	if _commanded_attack_target_id == -1:
+		return false
+	var target = instance_from_id(_commanded_attack_target_id)
+	if target == null or not is_instance_valid(target) or not _is_target_attackable_now(target):
+		_commanded_attack_target_id = -1
+		return false
+	_set_combat_target(target, false, true)
+	if current_target != target:
+		_commanded_attack_target_id = -1
+		return false
+	hold_position = false
+	if _movement:
+		_movement.clear_blacklist_at(target.global_position)
+		_movement.set_move_target(target.global_position, attack_range)
+	return true
+
 # 只有城墙真的横在“当前位置→目标/攻击移动终点”的直线上时，才把它作为
 # 兜底拆墙目标。这样空闲部队不会看到附近有墙就去啃，路线被封死时又能破墙。
 func _find_blocking_wall_fallback(bm: RTSBattleManager) -> Building:
@@ -1981,6 +2021,26 @@ func _handle_unreachable_attack_target(bm: RTSBattleManager, preserve_attack_mov
 		var old_target = current_target
 		if old_target != null and is_instance_valid(old_target):
 			_mark_target_unreachable(old_target)
+		# 玩家手动指定的目标打不到时，只能改拆真正挡路的城墙；
+		# 绝不能因为寻路失败就自动改打附近另一座建筑（常见表现就是
+		# 玩家点新建筑后，部队又回头打原来锁定的旧建筑）。
+		if _is_commanded_attack_target(old_target):
+			var blocking_wall: Building = _find_blocking_wall_fallback(bm)
+			if blocking_wall != null and blocking_wall != old_target \
+					and _attack_blocking_target_keep_command(blocking_wall):
+				return
+			current_target = old_target
+			_attack_watch_target_id = old_target.get_instance_id()
+			_attack_stall_time = 0.0
+			var now_ms: int = Time.get_ticks_msec()
+			if _movement and now_ms >= _commanded_unreachable_retry_at_ms:
+				# 逐步重试寻路；失败期间绝不放掉手动锁定。
+				_commanded_unreachable_retry_at_ms = now_ms + 4000
+				_movement.attack_path_failed = false
+				_movement.move_path_failed = false
+				_movement.clear_blacklist_at(old_target.global_position)
+				_movement.set_move_target(old_target.global_position, attack_range)
+			return
 		var combat_fallback: Building = _find_attack_fallback_building(bm)
 		if combat_fallback != null and is_instance_valid(combat_fallback) \
 				and _can_attack_target(combat_fallback):
@@ -2452,6 +2512,10 @@ func _process_combat_attack(delta, bm) -> void:
 			and global_position.distance_to(blocker.global_position) <= body_radius + blocker.body_radius + 1.0:
 		# 当前目标被墙/建筑实际挡住、无法接近时，先拆挡路建筑；
 		# 这是“目标不可达”的例外，不是按距离/价值主动改锁。
+		# 玩家手动目标要保留锁定，挡路物拆掉后继续打原目标。
+		if _is_commanded_attack_target(current_target) \
+				and _attack_blocking_target_keep_command(blocker):
+			return
 		_mark_target_unreachable(current_target)
 		_set_combat_target(blocker)
 		_movement.set_move_target(blocker.global_position, attack_range)

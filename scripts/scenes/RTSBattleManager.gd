@@ -3294,7 +3294,10 @@ func is_special_move_target(target) -> bool:
 	if target is Building:
 		var bid := int(target.entity_id)
 		if bid == 7:
-			return true
+			# 只有己方桥才是“上桥移动”目标；敌方桥必须走攻击分支，
+			# 否则右键敌桥会被吞成普通移动，部队继续打原来的目标。
+			return target.team == get_host_team() \
+				and is_local_player_owned(int(target.owner_peer_id), int(target.team))
 		if bid == 27:
 			return target.team == get_host_team() and target.build_timer <= 0.0 \
 				and is_local_player_owned(int(target.owner_peer_id), int(target.team))
