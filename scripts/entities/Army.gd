@@ -300,11 +300,10 @@ func _apply_nation_bonus():
 	var nation = _get_nation_for_bonus()
 	if nation < 0:
 		# 无国家加成（中立/特殊单位）也要记录基础值并套用科研加成。
-		if bm.has_method("_capture_research_base"):
-			_capture_research_base()
-			_capture_stats_before_official()
-			if bm.has_method("apply_research_bonuses"):
-				bm.apply_research_bonuses(self)
+		_capture_research_base()
+		_capture_stats_before_official()
+		if bm.has_method("apply_research_bonuses"):
+			bm.apply_research_bonuses(self)
 		return
 	var mults = NationBonuses.get_all_unit_multipliers(nation)
 	if mults.has("health"):
@@ -334,11 +333,10 @@ func _apply_nation_bonus():
 	_sync_range_rings()
 	# 科研模式：国家加成之后再做一次科技加成；基础值此刻已包含国家加成，
 	# 因此后续科技完成时从该基础值重算，不会重复叠加。
-	if bm.has_method("_capture_research_base"):
-		_capture_research_base()
-		_capture_stats_before_official()
-		if bm.has_method("apply_research_bonuses"):
-			bm.apply_research_bonuses(self)
+	_capture_research_base()
+	_capture_stats_before_official()
+	if bm.has_method("apply_research_bonuses"):
+		bm.apply_research_bonuses(self)
 	  # ²»Ö÷¶¯×·»÷£¬Ö»¹¥»÷½øÈëÉä³ÌµÄµÐÈË
 	# Ô­ÓÐ×·»÷Âß¼­...
 func _ready():
