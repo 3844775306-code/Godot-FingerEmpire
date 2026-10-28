@@ -2016,6 +2016,11 @@ func _is_official_host_building(b: Building) -> bool:
 	return b.entity_id not in OFFICIAL_HOST_EXCLUDE_IDS
 
 func _same_owner_or_team(entity_owner: int, entity_team: int, owner_peer_id: int, team: int) -> bool:
+	# 1v1/战役的开局实体只登记队伍、没有 owner_peer_id；
+	# 玩家科研按 owner=1 查询时，必须把这类实体按同队算进来，
+	# 否则“已完成主城”和升时代建筑条件永远不满足。
+	if entity_owner < 0:
+		return entity_team == team
 	if owner_peer_id != -1:
 		return entity_owner == owner_peer_id
 	return entity_team == team
@@ -2240,6 +2245,10 @@ func _init_entities_deferred():
 	castle_cfg["team"] = get_host_team()
 	var player_castle = spawn_entity(castle_cfg, get_host_team(), player_castle_pos)
 	if player_castle:
+		# 单机 1v1 的玩家实体在旧流程里没有 owner_peer_id，导致科研的
+		# “已完成主城”检查和兵种解锁按 owner=-1 查不到玩家科技状态；
+		# 玩家主城和初始农民统一补上 player_owner_id，和玩家自建建筑保持一致。
+		player_castle.owner_peer_id = player_owner_id
 		player_castle.died.connect(_on_castle_died.bind(get_host_team()))
 		var start_lv = NationBonuses.get_castle_start_level(player_nation)
 		player_castle.upgrade_level = start_lv
@@ -2266,10 +2275,12 @@ func _init_entities_deferred():
 		var fx = player_castle_pos.x + randf_range(-3, 3)
 		var fz = player_castle_pos.z + randf_range(-3, 3)
 		var ft = get_terrain_at(Vector3(fx, 0, fz))
+		var cfg = peasant_cfg.duplicate()
+		cfg["owner_peer_id"] = player_owner_id
 		if ft == 0:
-			spawn_entity(peasant_cfg, get_host_team(), Vector3(fx, 0, fz))
+			spawn_entity(cfg, get_host_team(), Vector3(fx, 0, fz))
 		else:
-			spawn_entity(peasant_cfg, get_host_team(), player_castle_pos + Vector3(randf_range(-3,3), 0, randf_range(-3,3)))
+			spawn_entity(cfg, get_host_team(), player_castle_pos + Vector3(randf_range(-3,3), 0, randf_range(-3,3)))
 	for _i in range(3):
 		var fx = enemy_castle_pos.x + randf_range(-3, 3)
 		var fz = enemy_castle_pos.z + randf_range(-3, 3)
@@ -6204,7 +6215,11 @@ func is_research_mode() -> bool:
 	return GameSettings.progression_mode == GameSettings.ProgressionMode.RESEARCH
 
 func research_key(owner_peer_id: int, team: int) -> int:
-	return owner_peer_id if owner_peer_id >= 0 else team
+	if owner_peer_id >= 0:
+		return owner_peer_id
+	# 无 owner 的队伍级科研状态必须用负键：1v1 里玩家 owner=1，
+	# 若再用 team(0/1) 当键，会和玩家状态撞在一起（敌方 AI 的科技/时代会覆盖玩家）。
+	return -1000 - team
 
 func research_team(owner_peer_id: int, team: int) -> int:
 	if team >= 0:
