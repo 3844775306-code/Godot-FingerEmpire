@@ -438,6 +438,7 @@ func _wave_centers(number: int) -> Array:
 	return [_defense_wave_lanes[primary], _defense_wave_lanes[secondary]]
 
 # 战役波次等级：固定波次表默认按波次递增（第 1 波 1 级、第 5 波 5 级封顶），
+# 防守类关卡放慢到每两波升 1 级（第 1~2 波 1 级、第 3~4 波 2 级，依此类推）；
 # 关卡可在单波里用 level 字段覆盖；无尽模式沿用 _endless_wave_data 自带的成长曲线。
 func _wave_army_level(wave: Dictionary, unit: Dictionary, number: int) -> int:
 	var base: int = clampi(int(unit.get("level", 1)), 1, 5)
@@ -446,6 +447,8 @@ func _wave_army_level(wave: Dictionary, unit: Dictionary, number: int) -> int:
 		return clampi(maxi(base, forced), 1, 5)
 	if _endless_on:
 		return base
+	if _is_defense_wave_level():
+		return clampi(maxi(base, 1 + (number - 1) / 2), 1, 5)
 	return clampi(maxi(base, number), 1, 5)
 
 # 隘口通常只有几格宽：沿“玩家→隘口”的径向偏移很容易直接顶到山壁，
