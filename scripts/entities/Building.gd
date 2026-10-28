@@ -618,6 +618,7 @@ func _ready():
 	call_deferred("_add_selection_ring")
 	call_deferred("_spawn_ground_patch")
 	call_deferred("_apply_nation_start_bonus")
+	call_deferred("_capture_initial_stats")
 
 # ==================== 建筑脚下的土色地面 ====================
 # 建筑压住的那块地面泛出土色，范围比实际占地略大一圈，
@@ -747,6 +748,16 @@ func _apply_nation_start_bonus():
 		if upgrade_level >= 3 and entity_id == 53:
 			_unlock_nation_units(nation)
 		refresh_level_visual()
+
+# 开局自带的建筑（主城/城堡）没有走 _finish_construction，必须补一次快照，
+# 否则信息面板无法把后续科研、官员和基础属性拆开显示。
+func _capture_initial_stats() -> void:
+	if build_timer > 0.0:
+		return
+	_capture_base_stats()
+	_capture_research_base()
+	_capture_stats_before_official()
+
 # ====================== 修复：建筑选择环 水平贴地 ======================
 func _add_selection_ring():
 	if not has_node("SelectionRing"):
