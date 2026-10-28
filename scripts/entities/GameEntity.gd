@@ -963,6 +963,8 @@ func try_produce(unit_id: int) -> bool:
 	if bm.has_method("is_research_mode") and bm.is_research_mode() \
 			and bm.has_method("is_unit_unlocked") and not bm.is_unit_unlocked(unit_id, owner_peer_id, team):
 		return false
+	if bm.has_method("is_training_unit_allowed") and not bm.is_training_unit_allowed(unit_id):
+		return false
 
 	# 根据建筑所属队伍和 owner_peer_id 选择资源库
 	var res_dict = null

@@ -12,6 +12,8 @@ extends Node
 
 const CampaignDataScript = preload("res://scripts/data/CampaignData.gd")
 const CampaignProgressScript = preload("res://scripts/core/CampaignProgress.gd")
+const TrainingDataScript = preload("res://scripts/data/TrainingData.gd")
+const TrainingProgressScript = preload("res://scripts/core/TrainingProgress.gd")
 const CampaignHUDScript = preload("res://scripts/ui/CampaignHUD.gd")
 const UIThemeScript = preload("res://scripts/ui/UITheme.gd")
 
@@ -124,12 +126,24 @@ var _three_star_time: float = 0.0
 var _three_star_warned: bool = false
 
 func _ready() -> void:
-	if not GameSettings.campaign_mode or GameSettings.campaign_level_id.is_empty():
+	if not (GameSettings.campaign_mode or GameSettings.training_mode):
+		queue_free()
+		return
+	if GameSettings.campaign_level_id.is_empty() and GameSettings.training_level_id.is_empty():
 		queue_free()
 		return
 	# 等战斗管理器把 UI / 面板都建好再开局
 	set_process(false)
 	call_deferred("_setup")
+
+func _is_training() -> bool:
+	return GameSettings.training_mode
+
+func _data_source():
+	return TrainingDataScript if _is_training() else CampaignDataScript
+
+func _progress_source():
+	return TrainingProgressScript if _is_training() else CampaignProgressScript
 
 # ==================== 开局生成 ====================
 
@@ -139,9 +153,13 @@ func _setup() -> void:
 		push_error("CampaignDirector: 父节点不是 RTSBattleManager")
 		queue_free()
 		return
-	level = CampaignDataScript.get_level(GameSettings.campaign_level_id)
+	var level_id := GameSettings.training_level_id if _is_training() else GameSettings.campaign_level_id
+	if _is_training():
+		level = _data_source().get_level(level_id, GameSettings.training_nation)
+	else:
+		level = _data_source().get_level(level_id)
 	if level.is_empty():
-		push_warning("CampaignDirector: 找不到关卡 %s，按普通对局继续" % GameSettings.campaign_level_id)
+		push_warning("CampaignDirector: 找不到关卡 %s，按普通对局继续" % level_id)
 		queue_free()
 		return
 
@@ -267,6 +285,14 @@ func _spawn_side(cfg: Dictionary, team: int, anchor: Vector3, is_player: bool) -
 		else:
 			enemy_castle = castle
 		if castle != null:
+			# 训练营用 castle_level 让不同关卡从合适的经典科技阶段开始。
+			# 国家加成可能给更高初始等级，这里取二者较大值。
+			var want_lv: int = int(cfg.get("castle_level", 0))
+			if want_lv > int(castle.upgrade_level):
+				castle.upgrade_level = clampi(want_lv, 1, 5)
+				castle.level = castle.upgrade_level
+				if castle.has_method("_sync_production_unlocks"):
+					castle._sync_production_unlocks()
 			castle.died.connect(_on_castle_died.bind(is_player))
 	# 城墙线段
 	for line in cfg.get("walls", []):
@@ -1913,11 +1939,13 @@ func _finish(won: bool) -> void:
 	var stars := 0
 	if won:
 		stars = _compute_stars()
-		CampaignProgressScript.record_win(String(level.get("id", "")), stars, elapsed)
+		_progress_source().record_win(String(level.get("id", "")), stars, elapsed)
+		if _is_training() and String(level.get("id", "")) == "t24":
+			TrainingProgressScript.mark_nation_seen(GameSettings.training_nation)
 	elif _endless_on:
 		stars = _endless_stars()
-		CampaignProgressScript.record_win(String(level.get("id", "")), stars, elapsed)
-		CampaignProgressScript.record_endless(String(level.get("id", "")), _endless_waves, _endless_score)
+		_progress_source().record_win(String(level.get("id", "")), stars, elapsed)
+		_progress_source().record_endless(String(level.get("id", "")), _endless_waves, _endless_score)
 	_show_result(won, stars)
 
 func _compute_stars() -> int:
@@ -1980,16 +2008,16 @@ func _show_result(won: bool, stars: int) -> void:
 	if _endless_on:
 		title.text = "🏁 挑战结束"
 	elif won:
-		title.text = "🎉 任务完成"
+		title.text = "🎓 训练完成" if _is_training() else "🎉 任务完成"
 	else:
-		title.text = "💀 任务失败"
+		title.text = "💀 训练失败" if _is_training() else "💀 任务失败"
 	UIThemeScript.apply_label(title, UILayout.font_dp(22.0) if mobile else UIThemeScript.FONT_XXL,
 		UIThemeScript.EMERALD if won else (UIThemeScript.GOLD if _endless_on else UIThemeScript.VERMILION))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vb.add_child(title)
 
 	var name_label := Label.new()
-	name_label.text = CampaignDataScript.display_name(level)
+	name_label.text = _data_source().display_name(level)
 	UIThemeScript.apply_label(name_label, UILayout.font_dp(13.0) if mobile else UIThemeScript.FONT_LG,
 		UIThemeScript.PARCHMENT)
 	name_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
@@ -2014,11 +2042,11 @@ func _show_result(won: bool, stars: int) -> void:
 	if _endless_on:
 		lines.append("坚持到第 %d 波 · 得分 %d" % [_endless_waves, _endless_score])
 		lines.append("历史最高：第 %d 波 / %d 分" % [
-			CampaignProgressScript.best_wave(String(level.get("id", ""))),
-			CampaignProgressScript.best_score(String(level.get("id", "")))])
+			_progress_source().best_wave(String(level.get("id", ""))),
+			_progress_source().best_score(String(level.get("id", "")))])
 	lines.append("本关最好成绩：%s / %d 星" % [
-		_fmt_time(CampaignProgressScript.best_time(String(level.get("id", "")))),
-		CampaignProgressScript.best_stars(String(level.get("id", "")))])
+		_fmt_time(_progress_source().best_time(String(level.get("id", "")))),
+		_progress_source().best_stars(String(level.get("id", "")))])
 	stats.text = "\n".join(lines)
 	UIThemeScript.apply_label(stats, UILayout.font_dp(11.0) if mobile else UIThemeScript.FONT_MD,
 		UIThemeScript.PARCHMENT)
@@ -2029,7 +2057,7 @@ func _show_result(won: bool, stars: int) -> void:
 	buttons.add_theme_constant_override("separation", 10)
 	buttons.alignment = BoxContainer.ALIGNMENT_CENTER
 	vb.add_child(buttons)
-	var next_id := CampaignDataScript.next_level_id(String(level.get("id", "")))
+	var next_id := String(_data_source().next_level_id(String(level.get("id", ""))))
 	if won and not next_id.is_empty():
 		var next_btn := _make_button("下一关 ▸", true, mobile)
 		next_btn.pressed.connect(_on_next_pressed.bind(next_id))
@@ -2037,7 +2065,7 @@ func _show_result(won: bool, stars: int) -> void:
 	var retry_btn := _make_button("重试", not (won and not next_id.is_empty()), mobile)
 	retry_btn.pressed.connect(_on_retry_pressed)
 	buttons.add_child(retry_btn)
-	var back_btn := _make_button("返回战役", false, mobile)
+	var back_btn := _make_button("返回训练营" if _is_training() else "返回战役", false, mobile)
 	back_btn.pressed.connect(_on_back_pressed)
 	buttons.add_child(back_btn)
 	var menu_btn := _make_button("主菜单", false, mobile)
@@ -2063,16 +2091,30 @@ func _on_retry_pressed() -> void:
 	get_tree().change_scene_to_file("res://scenes/rts_battle.tscn")
 
 func _on_next_pressed(next_id: String) -> void:
-	GameSettings.campaign_mode = true
-	GameSettings.campaign_level_id = next_id
+	if _is_training():
+		GameSettings.training_level_id = next_id
+		GameSettings.campaign_mode = false
+	else:
+		GameSettings.campaign_mode = true
+		GameSettings.campaign_level_id = next_id
 	get_tree().change_scene_to_file("res://scenes/rts_battle.tscn")
 
 func _on_back_pressed() -> void:
+	if _is_training():
+		GameSettings.training_mode = false
+		GameSettings.training_level_id = ""
+		get_tree().change_scene_to_file("res://scenes/training_menu.tscn")
+		return
 	GameSettings.campaign_mode = false
 	get_tree().change_scene_to_file("res://scenes/campaign_menu.tscn")
 
 func _on_menu_pressed() -> void:
+	var was_training := _is_training()
 	GameSettings.campaign_mode = false
+	GameSettings.training_mode = false
+	GameSettings.training_level_id = ""
+	if was_training:
+		GameSettings.progression_mode = GameSettings.training_prev_progression
 	get_tree().change_scene_to_file("res://scenes/main_menu.tscn")
 
 # ==================== 小工具 ====================
@@ -2171,7 +2213,7 @@ func _update_progress_text() -> void:
 			"endless":
 				parts.append("已坚持 %d 波 · 得分 %d（历史最高 %d 波）" % [
 					_endless_waves, _endless_score,
-					CampaignProgressScript.best_wave(String(level.get("id", "")))])
+					_progress_source().best_wave(String(level.get("id", "")))])
 			"defend_targets":
 				parts.append("目标建筑 %d/%d 座 · 撑过 %s / %s" % [
 					_defend_alive, maxi(_defend_initial, _defend_min_alive),

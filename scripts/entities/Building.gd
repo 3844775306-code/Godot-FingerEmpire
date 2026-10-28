@@ -839,6 +839,8 @@ func _sync_production_unlocks():
 			var prod: Dictionary = full[i]
 			var uid: int = int(prod.get("unit_id", -1))
 			if uid >= 0 and bm.is_unit_unlocked(uid, owner_peer_id, team):
+				if bm.has_method("is_training_unit_allowed") and not bm.is_training_unit_allowed(uid):
+					continue
 				production_list.append(prod.duplicate())
 		return
 	for i in range(full.size()):
@@ -847,6 +849,8 @@ func _sync_production_unlocks():
 		if unlock_lv > upgrade_level:
 			continue
 		var uid: int = int(prod.get("unit_id", -1))
+		if bm and bm.has_method("is_training_unit_allowed") and not bm.is_training_unit_allowed(uid):
+			continue
 		var exists: bool = false
 		for old in production_list:
 			if int(old.get("unit_id", -1)) == uid:
@@ -1342,6 +1346,8 @@ func _unlock_nation_units(nation: int):
 				exists = true
 				break
 		if not exists:
+			if bm and bm.has_method("is_training_unit_allowed") and not bm.is_training_unit_allowed(int(u["unit_id"])):
+				continue
 			production_list.append({"unit_id": u["unit_id"], "cooldown": u.get("cooldown", 5.0), "queue_limit": u.get("queue_limit", 5)})
 
 # ==================== Garrison Marker ====================

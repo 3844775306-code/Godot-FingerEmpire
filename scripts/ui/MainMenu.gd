@@ -203,7 +203,7 @@ func _build_desktop_layout() -> void:
 
 	var secondary_data = [
 		["📘", "操作指南", "鼠标键盘与进阶技巧", "book", Callable(self, "_on_guide_pressed")],
-		["🎓", "新手教程", "从零开始的第一课", "muted", Callable(self, "_on_tutorial_pressed")],
+		["🎓", "新兵训练营", "26 关渐进教学 · 经典模式", "muted", Callable(self, "_on_tutorial_pressed")],
 		["📜", "科技总览", "四时代科技树", "book", Callable(self, "_on_tech_overview_pressed")],
 		["📜", "更新日志", "版本改动一览", "muted", Callable(self, "_on_changelog_pressed")],
 	]
@@ -483,14 +483,14 @@ func _on_tech_overview_pressed() -> void:
 func _on_guide_pressed() -> void:
 	GuidePanel.open(self, GuidePanel.Mode.GUIDE)
 
-# 新手教程：五步上手 + 一键开始简单 1v1（进局后左上角继续显示动态目标）
+# 新兵训练营：打开独立选关界面（基础 15 关 + 进阶 9 关 + 2 关演习）
 func _on_tutorial_pressed() -> void:
-	var panel := GuidePanel.open(self, GuidePanel.Mode.TUTORIAL)
-	if panel == null:
-		return
-	panel.tutorial_start_requested.connect(_start_tutorial_battle)
-	panel.guide_requested.connect(func():
-		GuidePanel.open(self, GuidePanel.Mode.GUIDE))
+	GameSettings.training_prev_progression = GameSettings.progression_mode
+	GameSettings.tutorial_mode = false
+	GameSettings.training_mode = false
+	GameSettings.training_level_id = ""
+	GameSettings.campaign_mode = false
+	get_tree().change_scene_to_file("res://scenes/training_menu.tscn")
 
 func _start_tutorial_battle() -> void:
 	var player_nation: int = GameSettings.player_nation
@@ -869,7 +869,7 @@ func _build_mobile_layout() -> void:
 		["📖", "单位图鉴", _on_units_pressed, "book"],
 		["📜", "科技总览", _on_tech_overview_pressed, "book"],
 		["📘", "操作指南", _on_guide_pressed, "book"],
-		["🎓", "新手教程", _on_tutorial_pressed, "muted"],
+		["🎓", "新兵训练", _on_tutorial_pressed, "muted"],
 		["⚙️", "设  置", _on_settings_pressed, "muted"],
 		["📜", "更新日志", _on_changelog_pressed, "muted"],
 		["🚪", "退出游戏", _on_quit_pressed, "danger"],

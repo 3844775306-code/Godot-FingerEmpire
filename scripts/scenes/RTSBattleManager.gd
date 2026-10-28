@@ -18,6 +18,9 @@ var _builder_dispatch_timer: float = 0.0
 const BattleStatsPanelScript = preload("res://scripts/ui/BattleStatsPanel.gd")
 const MapPresets = preload("res://scripts/map/MapPresets.gd")
 const TutorialHintScript = preload("res://scripts/ui/TutorialHint.gd")
+const TrainingHintScript = preload("res://scripts/ui/TrainingHint.gd")
+const TrainingDataScript = preload("res://scripts/data/TrainingData.gd")
+const TrainingMultiDirectorScript = preload("res://scripts/scenes/TrainingMultiDirector.gd")
 const CampaignDirectorScript = preload("res://scripts/scenes/CampaignDirector.gd")
 const LevelVisualScript = preload("res://scripts/effects/BuildingLevelVisual.gd")
 var previous_emulate_mouse: bool
@@ -1370,6 +1373,10 @@ func _on_castle_died(team: int):
 
 # 战役模式：team -> 固定人口上限（空 = 按主城/民居计算）
 var campaign_pop_caps: Dictionary = {}
+# 新兵训练营白名单：进入训练关时在 _init_building_defs 之前建立。
+var training_active: bool = false
+var training_units: Dictionary = {}
+var training_buildings: Dictionary = {}
 
 # ==================== 人口上限更新 ====================
 func update_population_limits():
@@ -1422,6 +1429,11 @@ func _ready():
 	# 战役可由选关界面选择科研模式，不再在这里强制回经典。
 	if GameSettings.tutorial_mode:
 		GameSettings.progression_mode = GameSettings.ProgressionMode.CLASSIC
+	# 训练营只针对经典模式；强制经典并建立本关累计白名单。
+	if GameSettings.training_mode:
+		GameSettings.progression_mode = GameSettings.ProgressionMode.CLASSIC
+		GameSettings.campaign_mode = true
+		_init_training_whitelist()
 	# 暂停时整局仍要接收建造/生产/升级/右键指令，所以管理器保持运行；
 	# 真正的单位、建筑、弹丸会在 spawn 时显式设为 PAUSABLE，由 SceneTree.paused 冻结。
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -1456,13 +1468,16 @@ func _ready():
 			# 闯关模式：固定玩家蓝方、敌国红方，开局生成与胜负全部交给战役导演
 			player_team = RTSConfig.Team.BLUE
 			enemy_team = RTSConfig.Team.RED
-			var campaign_ai = get_node_or_null("AIController")
-			if campaign_ai:
-				campaign_ai.my_team = enemy_team
-			var director = CampaignDirectorScript.new()
-			director.name = "CampaignDirector"
-			director.process_mode = Node.PROCESS_MODE_PAUSABLE
-			add_child(director)
+			if GameSettings.training_mode and TrainingDataScript.is_multi_level(GameSettings.training_level_id):
+				_init_training_multi(TrainingDataScript.multi_mode(GameSettings.training_level_id))
+			else:
+				var campaign_ai = get_node_or_null("AIController")
+				if campaign_ai:
+					campaign_ai.my_team = enemy_team
+				var director = CampaignDirectorScript.new()
+				director.name = "CampaignDirector"
+				director.process_mode = Node.PROCESS_MODE_PAUSABLE
+				add_child(director)
 		elif GameSettings.is_ffa:
 			_init_ffa_single(GameSettings.ffa_nation_count)
 		elif game_mode_2v2:
@@ -1486,6 +1501,20 @@ func _ready():
 	# 新手教程对局：等实体初始化后显示左上角动态目标卡（仅单机）
 	if GameSettings.tutorial_mode and not is_online:
 		call_deferred("_spawn_tutorial_hint")
+	if GameSettings.training_mode and not is_online:
+		call_deferred("_spawn_training_hint")
+
+func _spawn_training_hint() -> void:
+	if not GameSettings.training_mode or is_online:
+		return
+	if TrainingDataScript.is_multi_level(GameSettings.training_level_id):
+		return
+	if get_node_or_null("TrainingHint") != null:
+		return
+	var hint = TrainingHintScript.new()
+	hint.name = "TrainingHint"
+	hint.process_mode = Node.PROCESS_MODE_PAUSABLE
+	add_child(hint)
 
 func _spawn_tutorial_hint() -> void:
 	if not GameSettings.tutorial_mode or is_online:
@@ -1878,6 +1907,134 @@ func _init_multi_single(mode: int):
 		var cam = get_viewport().get_camera_3d()
 		if cam:
 			cam.global_position = Vector3(player_castle.global_position.x, cam.global_position.y, player_castle.global_position.z)
+# 训练营 2v2 / 1v2：复用单机团队战的 owner_peer_id / ai_players 体系，
+# 但固定阵营、固定国家，不随机交换红蓝，也不创建多余的 AI 盟友。
+func _init_training_multi(mode: String) -> void:
+	var map = $Map
+	if map == null:
+		return
+	var layout: Array = map.get_four_castle_positions()
+	if layout.size() < 4:
+		push_error("TrainingMulti: 当前地图没有四个城堡位")
+		return
+	game_mode_2v2 = true
+	player_team = RTSConfig.Team.BLUE
+	enemy_team = RTSConfig.Team.RED
+	player_owner_id = 1
+	player_resources = {"gold": 1200, "wood": 1200, "stone": 900, "food": 1200, "oil": 300}
+	player_pop = 0
+	player_max_pop = 70
+	campaign_pop_caps = {player_team: 70, enemy_team: 70}
+	player_resource_limits = {"gold": 1500, "wood": 1500, "stone": 1500, "food": 1500, "oil": 600}
+	var player_nation := RTSConfig.Nation.VIKING
+	var ally_nation := RTSConfig.Nation.ENGLAND
+	var enemy_nations := [RTSConfig.Nation.FRANCE, RTSConfig.Nation.CHINA]
+	if mode == "1v2":
+		enemy_nations = [RTSConfig.Nation.MONGOL, RTSConfig.Nation.JAPAN]
+	team_nations = {player_team: player_nation, enemy_team: enemy_nations[0]}
+	_owner_nations[player_owner_id] = player_nation
+	_player_colors[player_owner_id] = RTSConfig.get_nation_color(player_nation)
+	_team_castle_count[player_team] = 1 if mode == "1v2" else 2
+	_team_castle_count[enemy_team] = 2
+	# 训练营固定维京；每局开始前由 TrainingMenu 写入，避免玩家上次选的国家影响训练。
+	GameSettings.player_nation = player_nation
+	GameSettings.enemy_nation = enemy_nations[0]
+	GameSettings.ai_difficulty = GameSettings.AIDifficulty.EASY
+	GameSettings.blue_ai_difficulty = GameSettings.AIDifficulty.EASY
+	GameSettings.red_ai_difficulty = GameSettings.AIDifficulty.EASY
+
+	var player_pos: Vector3 = layout[0]
+	player_castle_pos = player_pos
+	enemy_castle_pos = layout[2]
+	var player_castle = _spawn_training_team_castle(player_pos, player_team, player_owner_id, player_nation)
+	_spawn_training_units(player_team, player_owner_id, player_pos + Vector3(-5, 0, 5),
+		[{"id": 10, "count": 5}, {"id": 11, "count": 6}, {"id": 12, "count": 4}])
+	ai_players[player_owner_id] = {"castle": player_castle, "team": player_team, "slot": 0, "nation": player_nation}
+
+	# 2v2 盟友
+	if mode != "1v2":
+		var ally_pid := 1000
+		_owner_nations[ally_pid] = ally_nation
+		_player_colors[ally_pid] = RTSConfig.get_nation_color(ally_nation)
+		ai_resources[ally_pid] = {"gold": 1000, "wood": 1000, "stone": 800, "food": 1000, "oil": 200}
+		ai_population[ally_pid] = {"current": 0, "max": 70}
+		ai_limits[ally_pid] = {"gold": 1500, "wood": 1500, "stone": 1500, "food": 1500, "oil": 600}
+		var ally_pos: Vector3 = layout[1]
+		var ally_castle = _spawn_training_team_castle(ally_pos, player_team, ally_pid, ally_nation)
+		_spawn_training_units(player_team, ally_pid, ally_pos + Vector3(-5, 0, 5),
+			[{"id": 10, "count": 5}, {"id": 11, "count": 5}, {"id": 12, "count": 3}])
+		ai_players[ally_pid] = {"castle": ally_castle, "team": player_team, "slot": 1, "nation": ally_nation}
+		_create_training_ai(ally_pid, player_team, ally_nation)
+
+	# 两个敌人：layout[2]、layout[3]
+	for i in range(2):
+		var pid := 2000 + i
+		var nation: int = int(enemy_nations[i])
+		var pos: Vector3 = layout[2 + i]
+		_owner_nations[pid] = nation
+		_player_colors[pid] = RTSConfig.get_nation_color(nation)
+		ai_resources[pid] = {"gold": 1000, "wood": 1000, "stone": 800, "food": 1000, "oil": 200}
+		ai_population[pid] = {"current": 0, "max": 70}
+		ai_limits[pid] = {"gold": 1500, "wood": 1500, "stone": 1500, "food": 1500, "oil": 600}
+		var castle = _spawn_training_team_castle(pos, enemy_team, pid, nation)
+		_spawn_training_units(enemy_team, pid, pos + Vector3(-5, 0, 5),
+			[{"id": 10, "count": 4}, {"id": 11, "count": 4}, {"id": 12, "count": 2}])
+		ai_players[pid] = {"castle": castle, "team": enemy_team, "slot": 2 + i, "nation": nation}
+		_create_training_ai(pid, enemy_team, nation)
+		team_nations[enemy_team] = nation
+
+	var static_ai = get_node_or_null("AIController")
+	if static_ai:
+		static_ai.set_process(false)
+		static_ai.set_physics_process(false)
+		static_ai.queue_free()
+	update_population_limits()
+	for res in map.resource_positions:
+		spawn_entity(EntityDatabase.get_config(int(res.type)), RTSConfig.Team.NEUTRAL, res.pos)
+	_init_fog_grid()
+	var cam = get_viewport().get_camera_3d()
+	if cam and player_castle:
+		cam.global_position = Vector3(player_castle.global_position.x, cam.global_position.y, player_castle.global_position.z)
+	var director = TrainingMultiDirectorScript.new()
+	director.name = "TrainingMultiDirector"
+	director.process_mode = Node.PROCESS_MODE_PAUSABLE
+	add_child(director)
+
+func _spawn_training_team_castle(pos: Vector3, team: int, owner: int, nation: int):
+	var cfg = EntityDatabase.get_config(20)
+	cfg["owner_peer_id"] = owner
+	cfg["team"] = team
+	var castle = spawn_entity(cfg, team, pos, 4)
+	if castle:
+		castle.owner_peer_id = owner
+		castle.upgrade_level = 4
+		castle.level = 4
+		if castle.has_method("_sync_production_unlocks"):
+			castle._sync_production_unlocks()
+		if owner == player_owner_id:
+			castle.died.connect(_on_2v2_castle_died.bind(team))
+		else:
+			castle.died.connect(_on_2v2_castle_died.bind(team, owner))
+	return castle
+
+func _spawn_training_units(team: int, owner: int, center: Vector3, units: Array) -> void:
+	for entry in units:
+		var uid := int(entry.get("id", 10))
+		for i in range(int(entry.get("count", 1))):
+			var cfg = EntityDatabase.get_config(uid)
+			cfg["owner_peer_id"] = owner
+			var a := TAU * float(i) / float(maxi(int(entry.get("count", 1)), 1))
+			var pos := center + Vector3(cos(a) * 4.0, 0.0, sin(a) * 4.0)
+			spawn_entity(cfg, team, pos, 1)
+
+func _create_training_ai(pid: int, team: int, nation: int) -> void:
+	var ai = AIController.new()
+	ai.my_peer_id = pid
+	ai.my_team = team
+	ai.nation = nation
+	ai.name = "AIController_%d" % pid
+	add_child(ai)
+
 # 获取房主队伍的统一入口（子类 OnlineBattleManager 重写为实际队伍）
 func get_host_team() -> int:
 	return player_team
@@ -2209,10 +2366,38 @@ func upgrade_building_type(team: int, building_id: int, from_building: Building)
 		update_resource_limits(team)
 		update_population_limits()
 
+func _init_training_whitelist():
+	training_active = GameSettings.training_mode
+	training_units.clear()
+	training_buildings.clear()
+	if not training_active:
+		return
+	var level_id := GameSettings.training_level_id
+	var nation := -1
+	if level_id == "t24":
+		nation = GameSettings.training_nation
+	for uid in TrainingDataScript.allowed_units(level_id, nation):
+		training_units[int(uid)] = true
+	# 2v2/1v2 毕业演习会展示各国特色兵，玩家固定维京；把十国特色兵也放进白名单，
+	# 否则 AI 盟友/敌军的特色兵生产队列会被训练过滤器误杀。
+	if TrainingDataScript.is_multi_level(level_id):
+		for n in TrainingDataScript.NATION_UNITS:
+			training_units[int(TrainingDataScript.NATION_UNITS[n])] = true
+	for bid in TrainingDataScript.allowed_buildings(level_id):
+		training_buildings[int(bid)] = true
+
+func is_training_unit_allowed(unit_id: int) -> bool:
+	return (not training_active) or training_units.has(int(unit_id))
+
+func is_training_building_allowed(building_id: int) -> bool:
+	return (not training_active) or training_buildings.has(int(building_id))
+
 func _init_building_defs():
 	building_defs.clear()
 	for cfg in EntityDatabase.configs.values():
 		if cfg.type == 1 and cfg.id != 20:
+			if training_active and not training_buildings.has(int(cfg.id)):
+				continue
 			building_defs.append(cfg.duplicate())
 
 func _init_entities_deferred():
@@ -4018,6 +4203,19 @@ func confirm_mobile_build() -> void:
 func cancel_mobile_build() -> void:
 	if build_mode:
 		_exit_build_mode()
+
+# 手机端右下角「建造」按钮：以屏幕中心为锚点打开建造菜单
+func open_build_menu_for_mobile() -> void:
+	var vp: Vector2 = get_viewport().get_visible_rect().size
+	var center: Vector2 = vp * 0.5
+	_try_open_build_menu(center)
+	if current_build_menu != null:
+		return
+	# 屏幕中心没打到地面时兜底：用相机前方 30 米作为菜单位置，菜单本身会夹回屏幕内
+	var cam := get_viewport().get_camera_3d()
+	if cam:
+		var pos: Vector3 = cam.project_ray_origin(center) + cam.project_ray_normal(center) * 30.0
+		_show_build_menu(pos)
 
 func _show_build_menu(world_pos: Vector3):
 	if current_build_menu: current_build_menu.queue_free()
