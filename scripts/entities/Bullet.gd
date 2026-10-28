@@ -29,7 +29,7 @@ const BALLISTIC_HIT_RADIUS: float = 0.45
 # 弹丸绕障：路径上有建筑/山体时抬高抛物线，尽量避免从模型内部穿过去。
 # 检查按固定间隔做，避免每帧对每发箭都扫一遍建筑格。
 const OBSTACLE_CLEARANCE: float = 0.32
-const OBSTACLE_CHECK_INTERVAL: float = 0.06
+const OBSTACLE_CHECK_INTERVAL: float = 0.12
 const MAX_ARC_APEX: float = 16.0
 var _obstacle_timer: float = 0.0
 var _avoidance_checked: bool = false
@@ -428,22 +428,17 @@ func _get_bm():
 		_cached_bm = get_tree().get_first_node_in_group("battle_manager")
 	return _cached_bm
 
-func _start_arc(goal: Vector3, required_apex: float = -1.0,
-		pure_avoidance: bool = false) -> void:
+func _start_arc(goal: Vector3, required_apex: float = -1.0) -> void:
 	_arc_active = true
 	_arc_start = global_position
 	var flat_vec := Vector3(goal.x - _arc_start.x, 0.0, goal.z - _arc_start.z)
 	_arc_span = maxf(flat_vec.length(), 0.5)
 	if required_apex < 0.0:
 		required_apex = _required_arc_apex(goal)
-	if pure_avoidance:
-		# 直射箭矢/炮弹平时保持直线，只有确实被挡时才改成低抛物线绕障。
-		_arc_apex = clampf(maxf(required_apex, 0.35), 0.35, MAX_ARC_APEX)
-	else:
-		# 巨石比炮弹抛得更高；限制顶点高度，避免远程弹道飞出画面。
-		var apex_ratio: float = 0.42 if source_entity_id in [17, 59] else 0.30
-		var base_apex: float = clampf(_arc_span * apex_ratio, 0.9, 6.0)
-		_arc_apex = clampf(maxf(base_apex, required_apex), 0.9, MAX_ARC_APEX)
+	# 巨石比炮弹抛得更高；限制顶点高度，避免远程弹道飞出画面。
+	var apex_ratio: float = 0.42 if source_entity_id in [17, 59] else 0.30
+	var base_apex: float = clampf(_arc_span * apex_ratio, 0.9, 6.0)
+	_arc_apex = clampf(maxf(base_apex, required_apex), 0.9, MAX_ARC_APEX)
 	_prev_pos = global_position
 
 # 沿“起点到目标”的直线采样地形和建筑顶，算出抛物线至少要多高才能不穿模。
@@ -456,17 +451,18 @@ func _required_arc_apex(goal: Vector3) -> float:
 	var flat_span := Vector2(goal.x - start_pos.x, goal.z - start_pos.z).length()
 	if flat_span < 1.0:
 		return 0.0
-	var samples: int = clampi(int(flat_span / 1.6), 4, 20)
+	var samples: int = clampi(int(flat_span / 3.0), 3, 10)
+	var goal_clear: float = _goal_obstacle_clearance()
 	var apex: float = 0.0
 	for i in range(1, samples):
 		var t := float(i) / float(samples)
 		if t > 0.92:
 			break
 		var sample := start_pos.lerp(goal, t)
-		if sample.distance_to(start_pos) < 1.5 or sample.distance_to(goal) < 2.0:
+		if sample.distance_to(start_pos) < 1.5 or sample.distance_to(goal) < goal_clear:
 			continue
 		var obstacle_top: float = bm.get_projectile_obstacle_height(
-			sample, 0.3, source, target
+			sample, 0.3
 		)
 		if obstacle_top <= -100000.0:
 			continue
@@ -480,36 +476,37 @@ func _required_arc_apex(goal: Vector3) -> float:
 		apex = maxf(apex, (needed_y - base_y) / denom)
 	return apex
 
-# 当前这一步是否会撞进建筑/山体。用中点+终点采样，低帧率大步长也不会直接穿过去。
+# 目标自身（尤其是主城/城堡）的模型半径可能大于 2 米；靠近终点的采样要按
+# 目标体型放宽，否则弹丸会把“目标建筑本人的外墙”当成路障而提前消失。
+func _goal_obstacle_clearance() -> float:
+	if target is Building:
+		return maxf(2.0, float(target.body_radius) + 0.8)
+	return 2.0
+
+# 当前这一步是否会撞进建筑/山体。只查中点：检查间隔 0.12s，8m/s 的箭也只前进
+# 不到 1 米，建筑/城墙直径普遍在 2 米以上，不会被整段跨过去。
 func _segment_hits_obstacle(from_pos: Vector3, to_pos: Vector3, goal: Vector3) -> bool:
 	var bm = _get_bm()
 	if bm == null or not bm.has_method("get_projectile_obstacle_height"):
 		return false
-	var mid := from_pos.lerp(to_pos, 0.5)
-	for p in [mid, to_pos]:
-		var point: Vector3 = p
-		if point.distance_to(goal) < 2.0:
-			continue
-		var obstacle_top: float = bm.get_projectile_obstacle_height(
-			point, 0.25, source, target
-		)
-		if obstacle_top <= -100000.0:
-			continue
-		if point.y < obstacle_top + OBSTACLE_CLEARANCE:
-			return true
-	return false
+	var point := from_pos.lerp(to_pos, 0.5)
+	if point.distance_to(goal) < _goal_obstacle_clearance():
+		return false
+	var obstacle_top: float = bm.get_projectile_obstacle_height(
+		point, 0.25
+	)
+	if obstacle_top <= -100000.0:
+		return false
+	return point.y < obstacle_top + OBSTACLE_CLEARANCE
 
-# 直线弹丸首次飞行前检查一次；被建筑/山体挡住且高度允许时，改成绕障抛物线。
+# 只有投石车/巨型投石机需要预先计算绕障抛物线。普通箭矢和直射炮弹保持直线，
+# 由 _segment_hits_obstacle 在撞上建筑/山体时停止；这样不会给每发箭都做路径采样。
 func _maybe_start_avoidance_arc(goal: Vector3) -> void:
 	if _arc_active or _avoidance_checked:
 		return
 	_avoidance_checked = true
 	if _is_ballistic_projectile():
 		_start_arc(goal)
-		return
-	var required := _required_arc_apex(goal)
-	if required > 0.05 and required <= MAX_ARC_APEX:
-		_start_arc(goal, required, true)
 
 # 弹丸撞到路径上的建筑/山体：只播放落点特效并回收，不对障碍物造成伤害，
 # 避免自动索敌/普通箭矢意外拆建筑；真正命中目标仍走 _on_hit/_on_hit_pos。

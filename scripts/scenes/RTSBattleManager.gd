@@ -161,6 +161,11 @@ var _entity_lookup: Dictionary = {}     # instance_id → GameEntity (O(1) 查�
 var _global_wall_cache: Dictionary = {}  # cached entity positions for pathfinding
 var _wall_cache_dirty: bool = true
 var _cache_refresh_timer: float = 0.0
+# 弹丸避障查询非常频繁；建筑缓存最多每 0.5 秒刷新一次，避免每发箭都触发
+# _rebuild_entity_cache（单位死亡/出生时 dirty，全量重建会形成帧尖峰）。
+var _projectile_cache_refresh_ms: int = -100000
+const PROJECTILE_CACHE_REFRESH_MS: int = 500
+var _projectile_building_top_cells: Dictionary = {}
 # ==================== 空间索引（网格分桶，消除 O(n²) 近邻扫描） ====================
 const _SPATIAL_CELL_SIZE: float = 4.0
 var _spatial_cells: Dictionary = {}  # Vector2i -> Array[GameEntity]，随实体缓存重建
@@ -2736,41 +2741,56 @@ func get_wall_top_height(wall: Building) -> float:
 
 # 弹丸路径上方需要越过的最低顶面：地形高度，以及附近建筑/城墙的实际模型顶。
 # 投石车用它抬高抛物线；其它直射弹丸用它判断是否已经撞到建筑或山体。
-func get_projectile_obstacle_height(world_pos: Vector3, radius: float = 0.25,
-		ignore_a = null, ignore_b = null, ignore_c = null) -> float:
-	_ensure_cache_fresh()
+func get_projectile_obstacle_height(world_pos: Vector3, radius: float = 0.25) -> float:
+	var now_ms: int = Time.get_ticks_msec()
+	if now_ms - _projectile_cache_refresh_ms >= PROJECTILE_CACHE_REFRESH_MS:
+		_projectile_cache_refresh_ms = now_ms
+		# 只刷新弹丸自己的轻量建筑顶缓存，不在弹丸查询里触发 _rebuild_entity_cache；
+		# 单位出生/死亡会让实体缓存变 dirty，全量重建放在正常战斗循环里做。
+		_refresh_projectile_building_top_cells()
 	var top: float = -INF
 	if $Map and $Map.has_method("get_height_at"):
 		top = maxf(top, float($Map.get_height_at(world_pos)))
 	var csize: float = _SPATIAL_CELL_SIZE
-	var cx: int = int(floor(world_pos.x / csize))
-	var cz: int = int(floor(world_pos.z / csize))
-	for dx in range(-1, 2):
-		for dz in range(-1, 2):
-			var bucket = _building_cells.get(Vector2i(cx + dx, cz + dz))
-			if bucket == null:
-				continue
-			for b in bucket:
-				if b == ignore_a or b == ignore_b or b == ignore_c:
-					continue
-				if not is_instance_valid(b) or b.health <= 0:
-					continue
-				var br: float = float(b.body_radius)
-				if b.has_method("_model_horizontal_radius"):
-					br = maxf(br, float(b._model_horizontal_radius()))
-				var flat := Vector2(
-					world_pos.x - b.global_position.x,
-					world_pos.z - b.global_position.z
-				)
-				if flat.length() > br + radius:
-					continue
-				var btop: float = b.global_position.y
-				if int(b.entity_id) == 27:
-					btop += get_wall_top_height(b)
-				else:
-					btop += maxf(float(b.get_vision_head_height()), float(b.body_radius) * 1.5)
-				top = maxf(top, btop)
+	var key := Vector2i(
+		int(floor(world_pos.x / csize)), int(floor(world_pos.z / csize))
+	)
+	var entries = _projectile_building_top_cells.get(key)
+	if entries != null:
+		for item in entries:
+			var entry: Vector4 = item
+			var dx: float = world_pos.x - entry.x
+			var dz: float = world_pos.z - entry.z
+			var reach: float = entry.z + radius
+			if dx * dx + dz * dz <= reach * reach:
+				top = maxf(top, entry.w)
 	return top
+
+# 每 0.5 秒把所有建筑/城墙按 4 米空间格缓存成“中心 x/z、碰撞半径、模型顶”。
+# 弹丸查询只查所在格并做一次平方距离比较，不再为每个采样点遍历建筑列表和模型 AABB。
+func _refresh_projectile_building_top_cells() -> void:
+	_projectile_building_top_cells.clear()
+	var csize: float = _SPATIAL_CELL_SIZE
+	for b in _buildings:
+		if not is_instance_valid(b) or b.health <= 0:
+			continue
+		var btop: float = b.global_position.y
+		if int(b.entity_id) == 27:
+			btop += get_wall_top_height(b)
+		else:
+			btop += maxf(float(b.get_vision_head_height()), float(b.body_radius) * 1.5)
+		var br: float = maxf(float(b.body_radius), 0.8)
+		var entry := Vector4(b.global_position.x, b.global_position.z, br, btop)
+		var min_x: int = int(floor((b.global_position.x - br) / csize))
+		var max_x: int = int(floor((b.global_position.x + br) / csize))
+		var min_z: int = int(floor((b.global_position.z - br) / csize))
+		var max_z: int = int(floor((b.global_position.z + br) / csize))
+		for cx in range(min_x, max_x + 1):
+			for cz in range(min_z, max_z + 1):
+				var key := Vector2i(cx, cz)
+				if not _projectile_building_top_cells.has(key):
+					_projectile_building_top_cells[key] = []
+				_projectile_building_top_cells[key].append(entry)
 
 # 计算模型自身坐标系里的最低点：动物模型的原点常不在脚底，
 # 用它把模型最低点对齐到实体原点（实体原点就是地面高度）。
