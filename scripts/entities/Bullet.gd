@@ -26,6 +26,13 @@ var _arc_span: float = 1.0
 var _arc_apex: float = 1.0
 var _prev_pos: Vector3 = Vector3.ZERO
 const BALLISTIC_HIT_RADIUS: float = 0.45
+# 弹丸绕障：路径上有建筑/山体时抬高抛物线，尽量避免从模型内部穿过去。
+# 检查按固定间隔做，避免每帧对每发箭都扫一遍建筑格。
+const OBSTACLE_CLEARANCE: float = 0.32
+const OBSTACLE_CHECK_INTERVAL: float = 0.06
+const MAX_ARC_APEX: float = 16.0
+var _obstacle_timer: float = 0.0
+var _avoidance_checked: bool = false
 
 # 箭矢命中后不立即消失：插在目标身上保留一段时间，让中箭有个明确的视觉反馈。
 const ARROW_STICK_TIME: float = 1.5
@@ -67,6 +74,8 @@ func _reset_ballistic_state() -> void:
 	_arc_span = 1.0
 	_arc_apex = 1.0
 	_prev_pos = Vector3.ZERO
+	_obstacle_timer = 0.0
+	_avoidance_checked = false
 
 # 弓箭类弹丸：命中后要插在目标身上。弓手 12/31/33/37/58、箭塔 25、战船 13。
 func _is_arrow_bullet() -> bool:
@@ -419,15 +428,98 @@ func _get_bm():
 		_cached_bm = get_tree().get_first_node_in_group("battle_manager")
 	return _cached_bm
 
-func _start_arc(goal: Vector3) -> void:
+func _start_arc(goal: Vector3, required_apex: float = -1.0,
+		pure_avoidance: bool = false) -> void:
 	_arc_active = true
 	_arc_start = global_position
 	var flat_vec := Vector3(goal.x - _arc_start.x, 0.0, goal.z - _arc_start.z)
 	_arc_span = maxf(flat_vec.length(), 0.5)
-	# 巨石比炮弹抛得更高；限制顶点高度，避免远程弹道飞出画面。
-	var apex_ratio: float = 0.42 if source_entity_id in [17, 59] else 0.30
-	_arc_apex = clampf(_arc_span * apex_ratio, 0.9, 6.0)
+	if required_apex < 0.0:
+		required_apex = _required_arc_apex(goal)
+	if pure_avoidance:
+		# 直射箭矢/炮弹平时保持直线，只有确实被挡时才改成低抛物线绕障。
+		_arc_apex = clampf(maxf(required_apex, 0.35), 0.35, MAX_ARC_APEX)
+	else:
+		# 巨石比炮弹抛得更高；限制顶点高度，避免远程弹道飞出画面。
+		var apex_ratio: float = 0.42 if source_entity_id in [17, 59] else 0.30
+		var base_apex: float = clampf(_arc_span * apex_ratio, 0.9, 6.0)
+		_arc_apex = clampf(maxf(base_apex, required_apex), 0.9, MAX_ARC_APEX)
 	_prev_pos = global_position
+
+# 沿“起点到目标”的直线采样地形和建筑顶，算出抛物线至少要多高才能不穿模。
+# 距离起点/终点太近的采样跳过：那是发射者脚下或目标身上的建筑。
+func _required_arc_apex(goal: Vector3) -> float:
+	var bm = _get_bm()
+	if bm == null or not bm.has_method("get_projectile_obstacle_height"):
+		return 0.0
+	var start_pos: Vector3 = _arc_start if _arc_active else global_position
+	var flat_span := Vector2(goal.x - start_pos.x, goal.z - start_pos.z).length()
+	if flat_span < 1.0:
+		return 0.0
+	var samples: int = clampi(int(flat_span / 1.6), 4, 20)
+	var apex: float = 0.0
+	for i in range(1, samples):
+		var t := float(i) / float(samples)
+		if t > 0.92:
+			break
+		var sample := start_pos.lerp(goal, t)
+		if sample.distance_to(start_pos) < 1.5 or sample.distance_to(goal) < 2.0:
+			continue
+		var obstacle_top: float = bm.get_projectile_obstacle_height(
+			sample, 0.3, source, target
+		)
+		if obstacle_top <= -100000.0:
+			continue
+		var base_y: float = start_pos.y + (goal.y - start_pos.y) * t
+		var needed_y: float = obstacle_top + OBSTACLE_CLEARANCE
+		if needed_y <= base_y:
+			continue
+		var denom: float = 4.0 * t * (1.0 - t)
+		if denom < 0.05:
+			continue
+		apex = maxf(apex, (needed_y - base_y) / denom)
+	return apex
+
+# 当前这一步是否会撞进建筑/山体。用中点+终点采样，低帧率大步长也不会直接穿过去。
+func _segment_hits_obstacle(from_pos: Vector3, to_pos: Vector3, goal: Vector3) -> bool:
+	var bm = _get_bm()
+	if bm == null or not bm.has_method("get_projectile_obstacle_height"):
+		return false
+	var mid := from_pos.lerp(to_pos, 0.5)
+	for p in [mid, to_pos]:
+		var point: Vector3 = p
+		if point.distance_to(goal) < 2.0:
+			continue
+		var obstacle_top: float = bm.get_projectile_obstacle_height(
+			point, 0.25, source, target
+		)
+		if obstacle_top <= -100000.0:
+			continue
+		if point.y < obstacle_top + OBSTACLE_CLEARANCE:
+			return true
+	return false
+
+# 直线弹丸首次飞行前检查一次；被建筑/山体挡住且高度允许时，改成绕障抛物线。
+func _maybe_start_avoidance_arc(goal: Vector3) -> void:
+	if _arc_active or _avoidance_checked:
+		return
+	_avoidance_checked = true
+	if _is_ballistic_projectile():
+		_start_arc(goal)
+		return
+	var required := _required_arc_apex(goal)
+	if required > 0.05 and required <= MAX_ARC_APEX:
+		_start_arc(goal, required, true)
+
+# 弹丸撞到路径上的建筑/山体：只播放落点特效并回收，不对障碍物造成伤害，
+# 避免自动索敌/普通箭矢意外拆建筑；真正命中目标仍走 _on_hit/_on_hit_pos。
+func _on_obstacle_hit() -> void:
+	if hit:
+		return
+	hit = true
+	if damage_radius > 0.0:
+		_spawn_impact_effect(global_position, source_entity_id in STONE_SOURCE_IDS)
+	recycle()
 
 # 水平方向匀速逼近目标，竖直方向按抛物线偏移。
 # 返回当前到目标的水平距离，供命中判定使用。
@@ -466,17 +558,30 @@ func _physics_process(delta):
 		return
 
 	# 固定目标点模式（投石车/巨型投石机）：飞向固定位置
+	var check_obstacles := false
+	_obstacle_timer -= delta
+	if _obstacle_timer <= 0.0:
+		_obstacle_timer = OBSTACLE_CHECK_INTERVAL
+		check_obstacles = true
 	if target_pos != Vector3.ZERO:
-		if _is_ballistic_projectile():
-			if not _arc_active:
-				_start_arc(target_pos)
-			if _step_ballistic(target_pos, delta) < BALLISTIC_HIT_RADIUS:
+		_maybe_start_avoidance_arc(target_pos)
+		if _arc_active:
+			var prev := global_position
+			var remaining := _step_ballistic(target_pos, delta)
+			if check_obstacles and _segment_hits_obstacle(prev, global_position, target_pos):
+				_on_obstacle_hit()
+				return
+			if remaining < BALLISTIC_HIT_RADIUS:
 				global_position = target_pos
 				_on_hit_pos()
 		else:
 			if _saved_dir == Vector3.ZERO:
 				_saved_dir = (target_pos - global_position).normalized()
-			global_position += _saved_dir * speed * delta
+			var next_pos: Vector3 = global_position + _saved_dir * speed * delta
+			if check_obstacles and _segment_hits_obstacle(global_position, next_pos, target_pos):
+				_on_obstacle_hit()
+				return
+			global_position = next_pos
 			_orient_to_dir(_saved_dir)
 			# 到达目标点 → 原目标 100% 直击，周围敌人 30% 溅射
 			if global_position.distance_to(target_pos) < 0.5:
@@ -486,18 +591,27 @@ func _physics_process(delta):
 	# 后期几十上百发弹丸如果每帧都做一次空间查询，会扫描周围整片单位，
 	# 是战斗帧率最大的 CPU 热点；路径上的顺带命中改为由锁定目标承受。
 	elif target and is_instance_valid(target):
-		if _is_ballistic_projectile():
-			if not _arc_active:
-				_start_arc(target.global_position)
-			if _step_ballistic(target.global_position, delta) < BALLISTIC_HIT_RADIUS:
-				global_position = target.global_position
+		var goal: Vector3 = target.global_position
+		_maybe_start_avoidance_arc(goal)
+		if _arc_active:
+			var prev := global_position
+			var remaining := _step_ballistic(goal, delta)
+			if check_obstacles and _segment_hits_obstacle(prev, global_position, goal):
+				_on_obstacle_hit()
+				return
+			if remaining < BALLISTIC_HIT_RADIUS:
+				global_position = goal
 				_on_hit(target)
 		else:
-			var dir = (target.global_position - global_position).normalized()
-			global_position += dir * speed * delta
+			var dir = (goal - global_position).normalized()
+			var next_pos: Vector3 = global_position + dir * speed * delta
+			if check_obstacles and _segment_hits_obstacle(global_position, next_pos, goal):
+				_on_obstacle_hit()
+				return
+			global_position = next_pos
 			_orient_to_dir(dir)
 			# 检查是否足够近（命中）
-			if global_position.distance_to(target.global_position) < 0.3:
+			if global_position.distance_to(goal) < 0.3:
 				_on_hit(target)
 	else:
 		recycle()
