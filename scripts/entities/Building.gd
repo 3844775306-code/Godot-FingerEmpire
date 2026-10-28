@@ -293,7 +293,7 @@ func _reload_wall_model(bm, path):
 				var target_size: float = body_radius * 2.0
 				var current_size: float = maxf(aabb.size.x, maxf(aabb.size.y, aabb.size.z))
 				if current_size > 0.01:
-					inst.scale = Vector3.ONE * (target_size / current_size * RTSConfig.get_model_scale(entity_id))
+					inst.scale = RTSConfig.get_model_scale_vector(entity_id, target_size / current_size * RTSConfig.get_model_scale(entity_id))
 			add_child(inst); set_meta("_model_instance", inst)
 			# 换模型后视觉尺寸可能变化，土色贴花跟着重算
 			_refresh_ground_patch_size()

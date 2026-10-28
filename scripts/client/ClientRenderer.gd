@@ -309,7 +309,8 @@ func start_build_placement(bid: int):
 	else:
 		var target_size = effective_radius * 2.0 * RTSConfig.get_model_scale(bid)
 		var current_size = max(aabb.size.x, max(aabb.size.y, aabb.size.z))
-		if current_size > 0.01: placement_preview.scale = Vector3.ONE * (target_size / current_size)
+		if current_size > 0.01:
+			placement_preview.scale = RTSConfig.get_model_scale_vector(bid, target_size / current_size)
 	if bid in [22, 27, 28]: placement_preview.rotation.y = deg_to_rad(90)
 	if bid == 18: placement_preview.rotation.y = deg_to_rad(-90)
 	_tint_preview(placement_preview, Color(0, 1, 0))
@@ -579,7 +580,7 @@ func _process_snapshot(data: Dictionary):
 									var lt = Color(0.5 + info_color.r * 0.5, 0.5 + info_color.g * 0.5, 0.5 + info_color.b * 0.5)
 									_apply_model_tint(inst, lt)
 								# 毁坏模型随本体一起放大，否则塔倒后残骸会明显偏小
-								if eid == 41: inst.scale = Vector3.ONE * (0.5 * RTSConfig.get_model_scale(eid))
+								if eid == 41: inst.scale = RTSConfig.get_model_scale_vector(eid, 0.5 * RTSConfig.get_model_scale(eid))
 								node.add_child(inst)
 							var t = Timer.new(); t.one_shot = true; t.wait_time = 0.3
 							t.timeout.connect(node.queue_free); node.add_child(t); t.start()
@@ -1511,7 +1512,7 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 			var current_size = max(aabb.size.x, max(aabb.size.y, aabb.size.z))
 			if current_size > 0.01:
 				scale_factor = target_size / current_size
-				loaded_model.scale = Vector3.ONE * scale_factor
+				loaded_model.scale = RTSConfig.get_model_scale_vector(eid, scale_factor)
 		# Special rotations
 		if info.get("entity_id", 0) == 16: loaded_model.rotation.y = deg_to_rad(180)
 		elif info.get("entity_id", 0) == 17: loaded_model.rotation.y = deg_to_rad(90)

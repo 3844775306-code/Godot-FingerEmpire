@@ -2497,7 +2497,9 @@ func _model_scale_for(entity_id: int, body_radius: float, aabb: AABB) -> Vector3
 	var model_scale: float = RTSConfig.get_model_scale(entity_id)
 	if entity_id == 27:
 		return RTSConfig.get_wall_model_scale(body_radius, aabb) * model_scale
-	return Vector3.ONE * (target_size / current_size * model_scale)
+	# 普通模型按最大边等比缩放；瞭望塔等特殊模型只在 Y 轴再乘高度倍率。
+	var base_scale: float = target_size / current_size * model_scale
+	return RTSConfig.get_model_scale_vector(entity_id, base_scale)
 
 func _apply_entity_model(entity: GameEntity) -> bool:
 	var model_path = RTSConfig.get_entity_model(entity.entity_id, entity.level)

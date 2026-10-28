@@ -227,6 +227,20 @@ const ENTITY_MODEL_SCALE := {
 static func get_model_scale(entity_id: int) -> float:
 	return float(ENTITY_MODEL_SCALE.get(entity_id, 1.0))
 
+# 只放大模型高度、不改变横向占地的特殊缩放。
+# 瞭望塔当前整体放大 3 倍，再乘 1.5 后实际塔高为原来的 4.5 倍，
+# 但塔基占道宽度仍是 3 倍，避免拉高时把路口挤得更窄。
+const ENTITY_MODEL_HEIGHT_SCALE := {
+	41: 1.5,  # 瞭望塔
+}
+
+static func get_model_height_scale(entity_id: int) -> float:
+	return float(ENTITY_MODEL_HEIGHT_SCALE.get(entity_id, 1.0))
+
+# 服务端生成、客户端渲染、建造预览共用的模型缩放向量。
+static func get_model_scale_vector(entity_id: int, uniform_scale: float) -> Vector3:
+	return Vector3(uniform_scale, uniform_scale * get_model_height_scale(entity_id), uniform_scale)
+
 # 城墙横向咬合余量：墙段中心间距是 body_radius*2，模型横向略放大一点，
 # 让相邻墙段边缘真正重叠。服务端生成、客户端渲染、建造预览必须共用。
 const WALL_JOIN_OVERLAP: float = 0.12

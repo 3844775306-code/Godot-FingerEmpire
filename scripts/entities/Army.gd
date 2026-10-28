@@ -3776,7 +3776,7 @@ func _spawn_effect_marker(target, color: Color):
 	var sphere = SphereMesh.new()
 	sphere.radius = 0.3; sphere.height = 0.6
 	marker.mesh = sphere
-	marker.position = target.global_position + Vector3(0, target.body_radius * RTSConfig.get_model_scale(target.entity_id) * 3.0, 0)
+	marker.position = target.global_position + Vector3(0, target.body_radius * RTSConfig.get_model_scale(target.entity_id) * RTSConfig.get_model_height_scale(target.entity_id) * 3.0, 0)
 	var mat = StandardMaterial3D.new()
 	mat.albedo_color = color
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -4714,7 +4714,7 @@ func _do_garrison(building: Building) -> bool:
 	# Move to top of building instead of hiding
 	# 建筑模型会再乘 ENTITY_MODEL_SCALE（主城/巨型投石机等），这里要按放大后的
 	# 实际高度抬高，否则官员会陷进大建筑里
-	var top_height: float = building.body_radius * RTSConfig.get_model_scale(building.entity_id)
+	var top_height: float = building.body_radius * RTSConfig.get_model_scale(building.entity_id) * RTSConfig.get_model_height_scale(building.entity_id)
 	global_position = building.global_position + Vector3(0, top_height * 1.8, 0)
 	collision_layer = 0
 	stop_movement()
