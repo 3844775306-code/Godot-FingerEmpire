@@ -11,8 +11,8 @@ extends RefCounted
 #   3.0.0（2026-07）混战模式、3 个新国家、Steam 联机与 UI 大改；
 #   4.0.0（2026-10-25 起）画面重制、动画特效、错峰计算、Web/APK/EXE 三端与自动更新。
 # 同一时代内继续用中版本/小版本记录功能批次和修复批次，历史旧版本保留在更新日志里。
-const VERSION: String = "v4.0.20"
-const RELEASE_DATE: String = "2026-10-28"
+const VERSION: String = "v4.0.21"
+const RELEASE_DATE: String = "2026-10-29"
 
 # 面板标题、入口按钮上显示用："v4.0.0 (2026-10-25)"
 static func display() -> String:
