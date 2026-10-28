@@ -488,6 +488,7 @@ func _make_tile_button(icon_text: String, title_text: String, sub_text: String, 
 	content.add_child(vb)
 
 	var primary := kind == "primary"
+	var big_tile := min_size.y >= 200.0
 	var icon_color := UITheme.GOLD_TEXT if primary else UITheme.GOLD
 	var title_color := UITheme.GOLD_TEXT if primary else UITheme.PARCHMENT
 	var sub_color := Color(UITheme.GOLD_TEXT, 0.78) if primary else Color(UITheme.PARCHMENT, 0.72)
@@ -495,7 +496,7 @@ func _make_tile_button(icon_text: String, title_text: String, sub_text: String, 
 	var icon = Label.new()
 	icon.text = icon_text
 	icon.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	icon.add_theme_font_size_override("font_size", 42)
+	icon.add_theme_font_size_override("font_size", 58 if big_tile else 42)
 	icon.add_theme_color_override("font_color", icon_color)
 	icon.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	vb.add_child(icon)
@@ -503,7 +504,7 @@ func _make_tile_button(icon_text: String, title_text: String, sub_text: String, 
 	var title = Label.new()
 	title.text = title_text
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	title.add_theme_font_size_override("font_size", 28)
+	title.add_theme_font_size_override("font_size", 34 if big_tile else 28)
 	title.add_theme_color_override("font_color", title_color)
 	title.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	vb.add_child(title)
@@ -512,7 +513,7 @@ func _make_tile_button(icon_text: String, title_text: String, sub_text: String, 
 	sub.text = sub_text
 	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	sub.add_theme_font_size_override("font_size", 15)
+	sub.add_theme_font_size_override("font_size", 17 if big_tile else 15)
 	sub.add_theme_color_override("font_color", sub_color)
 	sub.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	vb.add_child(sub)
