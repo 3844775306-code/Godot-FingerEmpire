@@ -2876,10 +2876,14 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 		var tint: Color = get_entity_color(entity)
 		tint = Color(0.2 + tint.r * 0.8, 0.2 + tint.g * 0.8, 0.2 + tint.b * 0.8)
 		_apply_team_tint(entity, tint)
-	# 有坐骑的单位抬高模型
-	if entity.entity_id in [15, 19, 34, 38] and entity.has_meta("_model_instance"):
+	# 有坐骑的单位抬高主模型；侦察兵坐骑按固定倍率缩放，狗背比 0.5*体半径更高，
+	# 需要按坐骑包围盒顶面继续抬高，否则士兵会整个人陷进坐骑里。
+	if RTSConfig.is_mounted(entity.entity_id) and entity.has_meta("_model_instance"):
 		var mi = entity.get_meta("_model_instance")
-		if is_instance_valid(mi): mi.position.y += entity.body_radius * 0.5
+		if is_instance_valid(mi):
+			var mount_node := entity.get_node_or_null("Mount") as Node3D
+			var mount_top: float = RTSConfig.get_model_top_in_parent(entity, mount_node) if mount_node != null else 0.0
+			mi.position.y = RTSConfig.get_rider_base_y(entity.entity_id, entity.body_radius, mount_top)
 	# 动物模型的原点很多时候不在脚底，直接把 y 设成地面高度就会浮空或陷进地里。
 	# 这里按模型包围盒把最低点对齐到实体原点（原点即地面高度）。
 	if entity is Army and str(entity.get("_animal_type")) != "" and entity.has_meta("_model_instance"):

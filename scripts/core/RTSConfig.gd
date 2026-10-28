@@ -269,6 +269,39 @@ const ANIMAL_IDS := [60, 61, 62, 63]
 static func is_animal(entity_id: int) -> bool:
 	return entity_id in ANIMAL_IDS
 
+# 骑乘单位：主模型是士兵，坐骑（狗/象）作为子节点。动物 GLB 的朝向是 +Z，
+# 而游戏单位前方是 -Z；坐骑必须绕 Y 轴转 180°，否则单位向前走时坐骑看起来在倒退。
+const MOUNTED_ENTITY_IDS := [15, 19, 34, 38, 66, 67]
+const MOUNT_YAW_DEG := 180.0
+
+static func is_mounted(entity_id: int) -> bool:
+	return entity_id in MOUNTED_ENTITY_IDS
+
+# 坐骑顶面高度（相对 parent 的局部 Y）。坐骑按固定 0.7 缩放、位置又随体半径下压，
+# 小体半径的侦察兵不能只按 0.5*body_radius 抬人，否则士兵整个人会陷进狗身体里。
+static func get_model_top_in_parent(parent: Node3D, model: Node3D) -> float:
+	if parent == null or model == null:
+		return 0.0
+	var inv := parent.global_transform.affine_inverse()
+	var top := -INF
+	for n in model.find_children("*", "MeshInstance3D", true, false):
+		var mi := n as MeshInstance3D
+		if mi == null or mi.mesh == null:
+			continue
+		var a: AABB = (inv * mi.global_transform) * mi.get_aabb()
+		top = maxf(top, a.position.y + a.size.y)
+	return top if top > -INF else 0.0
+
+# 骑乘单位主模型（士兵）的局部 Y：默认抬高半个体半径；侦察兵这类坐骑顶面
+# 高于默认值，按坐骑顶面继续抬高，只让小腿略微陷进坐骑，避免整个人卡进去。
+static func get_rider_base_y(entity_id: int, body_radius: float, mount_top: float) -> float:
+	if not is_mounted(entity_id):
+		return 0.0
+	var base: float = body_radius * 0.5
+	if mount_top > 0.0:
+		base = maxf(base, mount_top - body_radius * 0.25)
+	return base
+
 const DEMOLISHED_MODELS = {
 	17: "res://models/castle/siege-catapult-demolished.glb",
 	18: "res://models/castle/siege-ram-demolished.glb",

@@ -1575,7 +1575,23 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 		elif eid2 == 34: mpath = "res://models/pets/animal-elephant.glb"
 		if mpath != "" and ResourceLoader.exists(mpath):
 			var ms = load(mpath)
-			if ms: var m = ms.instantiate(); if m: m.position = Vector3(0, -br*1.2, 0); m.scale = Vector3.ONE*0.7; entity.add_child(m)
+			if ms:
+				var m = ms.instantiate()
+				if m:
+					# 快照里的 body_radius 已是服务端乘 1.2 后的有效半径；服务端坐骑下压
+					# 用的是放大前的半径，所以这里用 -br 才能和服务端高度一致。
+					m.name = "Mount"
+					m.position = Vector3(0, -br, 0)
+					m.scale = Vector3.ONE * 0.7
+					# 与服务端一致：动物模型 +Z 朝前，需要转 180° 对齐单位前方 -Z。
+					m.rotation.y = deg_to_rad(RTSConfig.MOUNT_YAW_DEG)
+					entity.add_child(m)
+		# 与服务端一致地抬高骑手：先抬半个体半径，再按坐骑顶面兜底，
+		# 避免侦察兵的小体半径下整名士兵陷进狗身体。
+		if RTSConfig.is_mounted(eid2) and loaded_model != null:
+			var mount_node := entity.get_node_or_null("Mount") as Node3D
+			var mount_top: float = RTSConfig.get_model_top_in_parent(entity, mount_node) if mount_node != null else 0.0
+			loaded_model.position.y = RTSConfig.get_rider_base_y(eid2, br, mount_top)
 	else:
 		# 回退：程序化网格
 		match info["type"]:

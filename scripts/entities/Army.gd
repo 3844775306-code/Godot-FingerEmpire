@@ -813,7 +813,15 @@ func _add_weapon():
 	elif entity_id == 34: mpath = "res://models/pets/animal-elephant.glb"
 	if mpath != "" and ResourceLoader.exists(mpath):
 		var ms = load(mpath)
-		if ms: var m = ms.instantiate(); if m: m.position = Vector3(0, -body_radius * 1.2, 0); m.scale = Vector3.ONE * 0.7; add_child(m)
+		if ms:
+			var m = ms.instantiate()
+			if m:
+				m.name = "Mount"
+				m.position = Vector3(0, -body_radius * 1.2, 0)
+				m.scale = Vector3.ONE * 0.7
+				# 动物模型默认朝 +Z，单位前方是 -Z；不转 180° 会变成倒着跑。
+				m.rotation.y = deg_to_rad(RTSConfig.MOUNT_YAW_DEG)
+				add_child(m)
 		body_radius *= 1.2  # make cavalry visibly larger
 
 func _add_collision_shape():
