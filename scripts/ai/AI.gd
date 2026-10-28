@@ -132,7 +132,7 @@ const WALL_COUNT_MAX: int = 160
 const WALL_SPACING: float = 1.3       # 旧版直线防线间距（build_defense_line 仍在用）
 const WALL_STEP: float = 1.5          # 连续墙线的中心距：必须 < 墙直径 2.0，段段重叠才不留缝
 const WALL_MAX_HALF_SPAN: float = 11.0  # 墙线从正中向两侧各延伸的最大距离
-# 远程单位上墙：墙未破时免疫伤害，因此优先把闲置远程兵铺到墙格上；
+# 远程单位上墙：墙未破时只吃远程伤害，近战必须先拆墙，因此优先把闲置远程兵铺到墙格上；
 # 每面城墙独立选择“墙顶炮台”或“远程驻军”，赶路中的单位用 ai_wall_guard 预留墙格。
 const WALL_DEPLOY_INTERVAL: float = 10.0
 const WALL_DEPLOY_MAX_DISTANCE: float = 60.0
@@ -3582,7 +3582,7 @@ func _rally_land_army_to_castle():
 		entity.attack_move_to(rally_point)
 
 # ═══ Wall Defense Deployment ═══
-# 把闲置远程单位送上前线城墙。城墙未破时单位免疫伤害，且站得高射界好；
+# 把闲置远程单位送上前线城墙。城墙未破时单位只吃远程伤害，且站得高射界好；
 # 每面墙独立决定炮台/驻军，小型远程单位可派 2~3 个，移动中的单位保留
 # ai_wall_guard 元数据防止重复派人。
 func _is_valid_wall_slot(wall) -> bool:

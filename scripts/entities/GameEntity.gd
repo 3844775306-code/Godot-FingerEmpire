@@ -226,8 +226,14 @@ func _refresh_damage_visual() -> void:
 	elif self is WorldResource:
 		EntityDamageVisual.update_resource(self, ratio)
 
+# 远程判定：攻击距离超过近战上限的单位可以射击墙顶/船上的目标。
+# 近战单位（步兵、骑兵、攻城车等）必须先拆掉保护物。
+func is_ranged_attacker() -> bool:
+	return attack_range > 1.5
+
 # 子类覆盖：运载船上的单位、城墙上的单位在保护物存活时免疫伤害。
-func is_immune_to_damage() -> bool:
+# source 用于区分攻击类型：远程攻击可以打墙顶单位，近战不行。
+func is_immune_to_damage(_source = null) -> bool:
 	return false
 
 func _capture_research_base() -> void:
@@ -249,7 +255,7 @@ func take_damage(amount: float, source = null):
 	# source 可能来自已经消失的弹丸/旧目标；先清空失效引用，避免后面强类型属性访问
 	if source != null and not is_instance_valid(source):
 		source = null
-	if is_immune_to_damage():
+	if is_immune_to_damage(source):
 		return
 	# Officials are immune while garrisoned
 	if entity_id >= 46 and entity_id <= 50:

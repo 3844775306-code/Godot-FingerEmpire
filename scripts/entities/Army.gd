@@ -1146,6 +1146,9 @@ func _blocked_by_high_ground(target) -> bool:
 		return false
 	if entity_id == 17 or entity_id == 59:
 		return false
+	# 远程单位仰射墙顶目标时不被“低处打高处”的高度差挡住。
+	if is_ranged_attacker() and target is Army and target._is_unit_on_wall():
+		return false
 	var is_melee: bool = attack_range <= 2.0 and damage_radius <= 0.0
 	var limit: float = MELEE_HIGH_GROUND_MAX_RISE if is_melee else HIGH_GROUND_MAX_RISE
 	return (_target_height_base(target) - global_position.y) > limit
@@ -1153,8 +1156,11 @@ func _blocked_by_high_ground(target) -> bool:
 func _set_combat_target(target, from_advance: bool = false, manual: bool = false) -> void:
 	if target == null or not is_instance_valid(target):
 		return
-	# 墙上/运载船上的单位受保护，任何索敌、追击、攻击移动和手动指定都不能锁定。
-	# 统一在写 current_target 之前拦掉，避免后续攻击日志/弹丸/伤害逻辑再补救。
+	# 近战锁定墙顶目标时改成锁定脚下城墙；远程直接锁定墙顶目标。
+	target = _resolve_melee_wall_target(target)
+	if target == null or not is_instance_valid(target):
+		return
+	# 运载船上的目标仍不可锁定；墙顶目标只对近战免疫。
 	if _is_protected_army(target):
 		return
 	# 水上军队追击前先筛掉离岸太远的地面目标，避免写进 current_target 后
@@ -4097,6 +4103,8 @@ func move_to(pos: Vector3):
 	_queue_command({"type": "move", "pos": pos})
 
 func attack_target(p_target, forced: bool = false):
+	if p_target is GameEntity:
+		p_target = _resolve_melee_wall_target(p_target)
 	if not _is_valid_command_target(p_target):
 		return
 	# 手动指定目标时也拒绝陆军近战攻击海军，避免单位一直追到岸边
@@ -4828,10 +4836,13 @@ func _is_naval_chase_target_blocked(target) -> bool:
 		return false
 	return shore_dist > max_shore_dist
 
-# 墙上/运载船上的单位受保护，攻击者必须先摧毁城墙或运载船。
-# 统一用这个入口判断，避免各处索敌/锁定/攻击校验漏掉其中一种保护。
+# 墙顶/运载船上的目标是否对本单位免疫：近战对墙顶单位免疫，
+# 远程可以打墙顶单位；运载船保护不受攻击类型影响。
+# 统一用这个入口判断，避免各处索敌/锁定/攻击校验漏掉保护规则。
 func _is_protected_army(target) -> bool:
-	return target is Army and target.is_immune_to_damage()
+	if target == null or not is_instance_valid(target) or not (target is GameEntity):
+		return false
+	return target.is_immune_to_damage(self)
 
 func _is_animal_unit(target) -> bool:
 	if target == null or not is_instance_valid(target):
@@ -4845,7 +4856,9 @@ func _can_attack_target(target: GameEntity) -> bool:
 	# 不能手动/自动攻击敌方军队或建筑；狩猎动物是唯一例外。
 	if target_type <= 0 and not _is_animal_unit(target):
 		return false
-	# 在运载船/城墙保护下的单位不能直接攻击，必须先把船或城墙打掉
+	# 近战把墙顶单位/墙顶炮台的目标改写成脚下城墙；远程保留墙顶目标。
+	target = _resolve_melee_wall_target(target)
+	# 运载船上的单位仍不可直接攻击；墙顶目标只对近战免疫。
 	if _is_protected_army(target):
 		return false
 	# 僧侣不参与任何攻击（包括手动指派的敌人目标）
@@ -4858,15 +4871,6 @@ func _can_attack_target(target: GameEntity) -> bool:
 	# 远程陆军和海军单位仍可正常攻击。
 	if _is_land_melee() and target is Army and target.water_capable:
 		return false
-	# 近战不能攻击城墙上的敌人（包括墙顶炮台）。
-	# 用战斗管理器的墙顶网格 O(1) 判断；旧实现每次候选都遍历全场建筑，
-	# 混战锁敌时会形成明显的 CPU 峰值。
-	if attack_range <= 1.0 and target is not Building:
-		var bm = _get_bm()
-		if bm:
-			var wall_top = bm._wall_top_entity_grid.get(bm.world_to_grid(target.global_position))
-			if wall_top != null and is_instance_valid(wall_top) and wall_top.health > 0:
-				return false
 	# 不在城墙上的单位不能攻击梯子
 	if target is Building and target.entity_id == 8:
 		var on_wall = _is_unit_on_wall()
@@ -4884,13 +4888,42 @@ func _can_attack_target(target: GameEntity) -> bool:
 	return true
 
 func _is_unit_on_wall() -> bool:
+	return _get_wall_under() != null
+
+# 取某个坐标下方、属于指定队伍的已完工城墙。墙顶单位与墙顶炮台都用这个关联。
+func _get_wall_at_world(world_pos: Vector3, wall_team: int) -> Building:
 	var bm = _get_bm()
-	if not bm or bm._wall_entity_grid.is_empty():
-		return false
-	var wall = bm._wall_entity_grid.get(bm.world_to_grid(global_position))
-	if wall == null or not is_instance_valid(wall):
-		return false
-	return wall.health > 0 and wall.build_timer <= 0.0 and wall.team == team
+	if bm == null:
+		return null
+	# 墙/炮台可能刚建好或刚被毁，先确保实体缓存是最新的，避免免疫判定滞后半秒。
+	bm._ensure_cache_fresh()
+	if bm._wall_entity_grid.is_empty():
+		return null
+	var wall = bm._wall_entity_grid.get(bm.world_to_grid(world_pos))
+	if wall == null or not is_instance_valid(wall) or not (wall is Building):
+		return null
+	if wall.health <= 0 or wall.build_timer > 0.0 or wall.team != wall_team:
+		return null
+	return wall
+
+func _get_wall_under() -> Building:
+	return _get_wall_at_world(global_position, team)
+
+# 近战只能先拆墙：把“墙顶单位/墙顶炮台”解析成脚下的城墙。
+# 远程保持原目标，可以直接射击墙顶目标。
+func _resolve_melee_wall_target(target: GameEntity) -> GameEntity:
+	if target == null or not is_instance_valid(target) or is_ranged_attacker():
+		return target
+	if target is Army:
+		if target._is_unit_on_wall():
+			var wall: Building = _get_wall_at_world(target.global_position, target.team)
+			if wall != null:
+				return wall
+	elif target is Building and target.entity_id == 64:
+		var cannon_wall: Building = _get_wall_at_world(target.global_position, target.team)
+		if cannon_wall != null:
+			return cannon_wall
+	return target
 
 # 城墙模型 wall.glb 的顶面高度会随生成时的自动缩放变化（原始 1.31 米，
 # 实际通常约 2 米），因此必须通过 BattleManager.get_wall_top_height() 计算。
@@ -4972,12 +5005,20 @@ func _update_wall_height(delta: float) -> void:
 		return
 	global_position.y = move_toward(global_position.y, target_y, 5.0 * delta)
 
-# 运载船上的单位随船免疫；城墙上的单位随墙免疫。保护物被摧毁后自动失效。
-func is_immune_to_damage() -> bool:
+# 运载船上的单位始终随船免疫；城墙上的单位只免疫近战，
+# 远程攻击（弓箭、弩、投石车、防御塔、墙顶炮台等）仍可击中墙顶单位。
+# 保护物被摧毁后免疫自动失效。
+func is_immune_to_damage(source = null) -> bool:
 	if _boarded_on != -1:
 		var transport = instance_from_id(_boarded_on)
 		return is_instance_valid(transport) and transport.health > 0
-	return _is_unit_on_wall()
+	if not _is_unit_on_wall():
+		return false
+	if source == null:
+		return true
+	if source is GameEntity:
+		return not source.is_ranged_attacker()
+	return true
 
 # ==================== Garrison System ====================
 func _find_nearest_enemy_in_vision():

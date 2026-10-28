@@ -159,7 +159,7 @@ func _process(delta):
 		if not is_instance_valid(current_target):
 			current_target = null
 			_target_scan_timer = 0.0
-		if is_instance_valid(current_target) and current_target is Army and current_target.is_immune_to_damage():
+		if is_instance_valid(current_target) and current_target is Army and current_target.is_immune_to_damage(self):
 			current_target = null
 			_target_scan_timer = 0.0
 		if current_target == null:
@@ -191,14 +191,36 @@ func _find_enemy_in_range():
 			if entity.team == team: continue
 		# Buildings don't attack animals
 		if str(entity.get("_animal_type")) != "": continue
-		# 船/墙保护下的单位免疫，防御塔直接忽略，避免把炮弹浪费在无敌目标上
-		if entity.is_immune_to_damage(): continue
+		# 船上的单位仍免疫；墙顶单位对远程防御塔不再免疫，可以被射击。
+		if entity.is_immune_to_damage(self): continue
 		var dist = global_position.distance_to(entity.global_position) - body_radius - entity.body_radius
 		if dist <= attack_range and dist < best_dist:
 			best_dist = dist
 			best = entity
 	if best:
 		current_target = best
+
+# 墙顶炮台：脚下城墙存活时只吃远程伤害；近战必须先拆墙。
+# 墙被摧毁后由 die() 里的 _destroy_wall_cannons() 连带拆除。
+func is_immune_to_damage(source = null) -> bool:
+	if entity_id != 64:
+		return false
+	var bm = _get_bm()
+	if bm == null:
+		return false
+	bm._ensure_cache_fresh()
+	if bm._wall_entity_grid.is_empty():
+		return false
+	var wall = bm._wall_entity_grid.get(bm.world_to_grid(global_position))
+	if wall == null or not is_instance_valid(wall) or not (wall is Building):
+		return false
+	if wall.health <= 0 or wall.build_timer > 0.0 or wall.team != team:
+		return false
+	if source == null:
+		return true
+	if source is GameEntity:
+		return not source.is_ranged_attacker()
+	return true
 
 func _attack(target, delta):
 	if attack_timer > 0:
@@ -1378,9 +1400,27 @@ func _find_land_nearby(map) -> Vector3:
 			return pos
 	return global_position + Vector3(2, 0, 2)  # 兜底位置
 
+# 一面墙最多挂一座炮台，位置与墙同格；墙体消失时炮台不能悬空。
+func _destroy_wall_cannons() -> void:
+	var bm = _get_bm()
+	if bm == null or bm.entities == null:
+		return
+	var wall_grid: Vector2i = bm.world_to_grid(global_position)
+	for e in bm.entities.get_children():
+		if e == self or not (e is Building) or e.health <= 0:
+			continue
+		if int(e.entity_id) != 64 or e.team != team:
+			continue
+		if bm.world_to_grid(e.global_position) != wall_grid:
+			continue
+		e.die()
+
 func die():
 	if _is_dead:
 		return
+	# 城墙被摧毁时，墙顶炮台失去支撑，自动一起摧毁。
+	if entity_id == 27:
+		_destroy_wall_cannons()
 	# 先释放所有进驻单位，再执行死亡逻辑
 	release_all_garrisoned()
 	# 修理中被打掉：清掉施工脚手架，别让残骸挂着木头架子
