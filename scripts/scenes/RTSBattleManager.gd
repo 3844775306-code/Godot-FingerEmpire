@@ -240,6 +240,7 @@ var _wall_signature_initialized: bool = false
 const GROUP_ATTACK_PATH_CACHE_MAX: int = 48
 var _group_attack_path_cache: Dictionary = {}  # Vector3i(team, cell_x, cell_z) -> {"path": Array, "start": Vector3}
 var _wall_entity_grid: Dictionary = {}    # Vector2i -> Building(城墙 id==27)，供 process_move 高度平滑 O(1) 查询
+var _wall_shot_grid: Dictionary = {}      # Vector2i -> true，城墙墙格及段间接缝，远程跨墙射击遮挡
 var _wall_top_entity_grid: Dictionary = {} # Vector2i -> Building(城墙/墙顶炮台)，近战锁敌时 O(1) 判断目标是否在墙顶
 var _ladder_entity_grid: Dictionary = {}  # Vector2i -> Building(梯子 id==8)，供 _has_adjacent_ladder O(8) 查询
 var _bridge_entity_grid: Dictionary = {}  # Vector2i -> Building(桥 id==7)，供落水判定 O(1) 查询
@@ -632,21 +633,44 @@ func _rebuild_entity_cache():
 		_building_cells[bkey].append(b)
 	# 同步构建墙体/梯子网格（MovementController 寻路与高度平滑的 O(1)/O(8) 缓存）
 	_wall_entity_grid.clear()
+	_wall_shot_grid.clear()
 	_wall_top_entity_grid.clear()
 	_ladder_entity_grid.clear()
 	_bridge_entity_grid.clear()
+	var wall_cells: Array = []
 	for b in _buildings:
 		if b.health <= 0:
 			continue
 		if b.entity_id == 27:
-			_wall_entity_grid[world_to_grid(b.global_position)] = b
-			_wall_top_entity_grid[world_to_grid(b.global_position)] = b
+			var wc: Vector2i = world_to_grid(b.global_position)
+			_wall_entity_grid[wc] = b
+			_wall_shot_grid[wc] = true
+			_wall_top_entity_grid[wc] = b
+			wall_cells.append(wc)
 		elif b.entity_id == 64:
 			_wall_top_entity_grid[world_to_grid(b.global_position)] = b
 		elif b.entity_id == 8:
 			_ladder_entity_grid[world_to_grid(b.global_position)] = b
 		elif b.entity_id == 7:
 			_bridge_entity_grid[world_to_grid(b.global_position)] = b
+	# 相邻墙段中心距约 1.5~2 米，落在两格之间时接缝格本身不是墙格；
+	# 远程弹道只检查中心格会从接缝“漏射”，这里把段间中点也标成墙体。
+	# 只查每面墙周围 2 格，避免几千面墙两两配对形成 O(n²) 的卡顿。
+	for wc in wall_cells:
+		for dx in range(-2, 3):
+			for dy in range(-2, 3):
+				if dx == 0 and dy == 0:
+					continue
+				# 每对墙只处理一次：只看向右/向下的偏移。
+				if dx < 0 or (dx == 0 and dy < 0):
+					continue
+				if not _wall_entity_grid.has(Vector2i(wc.x + dx, wc.y + dy)):
+					continue
+				var gap: Vector2i = Vector2i(
+					roundi(float(wc.x) + float(dx) * 0.5),
+					roundi(float(wc.y) + float(dy) * 0.5)
+				)
+				_wall_shot_grid[gap] = true
 	# 只有建筑/资源布局真的变化时才让寻路墙缓存失效。实体缓存本身每 0.5s
 	# 会因刷新而重建，若这里无条件 +1，所有单位每 0.5s 都会重新扫描全图建墙集合。
 	var layout_sig: int = 0
@@ -4110,6 +4134,37 @@ func is_position_visible_to_team(team: int, world_pos: Vector3) -> bool:
 	var idx: int = g.x * RTSConfig.MAP_SIZE + g.y
 	return idx >= 0 and idx < mask.size() and mask[idx] == 1
 
+# 远程攻城/箭矢不能隔着一道完整城墙打另一侧；以下情况放行：
+# 1) 观察者或目标站在城墙顶上（墙顶对墙下、墙下对墙顶都能打）；
+# 2) 观察者是箭塔/炮塔/墙顶炮台（高塔射界越过墙头）；
+# 3) 目标就是城墙本身（玩家手动拆墙）。
+func _is_wall_shot_exempt(entity) -> bool:
+	if entity is Building:
+		return int(entity.entity_id) in [25, 26, 64]
+	if entity is Army:
+		return entity._is_unit_on_wall()
+	return false
+
+func is_wall_blocking_shot(viewer, target) -> bool:
+	if viewer == null or not is_instance_valid(viewer) or target == null or not is_instance_valid(target):
+		return false
+	if int(viewer.get("target_type") if viewer.get("target_type") != null else 2) != 3:
+		return false
+	if target is Building and int(target.entity_id) == 27:
+		return false
+	if _is_wall_shot_exempt(viewer) or _is_wall_shot_exempt(target):
+		return false
+	if $Map == null:
+		return false
+	var cells: Array = VisionSystem.ray_cells(
+		$Map, viewer.global_position, target.global_position, RTSConfig.MAP_SIZE
+	)
+	# 两端格不参与遮挡：观察者/目标可能已经贴着墙脚。
+	for i in range(1, cells.size() - 1):
+		if _wall_shot_grid.has(cells[i]):
+			return true
+	return false
+
 # 单个单位到目标的真实视线：自动索敌用这个，避免“队友在山上看见”就让
 # 山脚单位隔山开火。除了地形/森林，也会按该单位自己的有效视野半径收口。
 func is_target_visible_from(viewer, target) -> bool:
@@ -4126,6 +4181,9 @@ func is_target_visible_from(viewer, target) -> bool:
 			).length()
 			if flat_d > float(eff) + float(target.get("body_radius") if target.get("body_radius") != null else 0.5):
 				return false
+	# 城墙遮挡只限制箭矢/炮弹类远程单位；近战无弹道，不受这条影响。
+	if is_wall_blocking_shot(viewer, target):
+		return false
 	if not $Map:
 		return true
 	return VisionSystem.has_line_of_sight($Map, viewer.get_vision_origin(), target.global_position)

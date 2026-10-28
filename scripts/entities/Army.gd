@@ -39,8 +39,6 @@ var _cached_terrain: int = 0
 var _cached_speed_mod: float = 1.0
 # 落水伤害：陆地单位在深水、且未上桥/运载船时，每秒损失 20% 最大生命
 # 自动索敌时城墙的距离惩罚（米）：等于让城墙"看起来远 300 米"，
-# 有别的活目标就绝不选墙，只有在范围内只剩城墙时才会拆墙开路。
-const WALL_TARGET_PENALTY: float = 300.0
 const WATER_DAMAGE_INTERVAL: float = 1.0
 const WATER_DAMAGE_RATIO: float = 0.2
 var _water_damage_timer: float = WATER_DAMAGE_INTERVAL
@@ -1901,6 +1899,9 @@ func _find_attack_fallback_building(bm: RTSBattleManager) -> Building:
 			continue
 		if not (e is Building) or e == current_target:
 			continue
+		# 城墙不参与自动兜底索敌：只有玩家手动指定，或移动路径被它实际挡住时才拆墙。
+		if int(e.entity_id) == 27:
+			continue
 		if not _can_attack_target(e):
 			continue
 		if _is_target_marked_unreachable(e):
@@ -1908,9 +1909,6 @@ func _find_attack_fallback_building(bm: RTSBattleManager) -> Building:
 		var h_diff = Vector2(e.global_position.x - global_position.x,
 							e.global_position.z - global_position.z)
 		var dist: float = h_diff.length() - body_radius - e.body_radius
-		# 兜底目标也把城墙排到最后
-		if int(e.entity_id) == 27:
-			dist += WALL_TARGET_PENALTY
 		if dist < best_dist:
 			best_dist = dist
 			best = e
@@ -2495,6 +2493,9 @@ func _find_combat_enemy(radius: float, attack_only: bool) -> GameEntity:
 			continue
 		if entity is WorldResource:
 			continue
+		# 城墙不参与主动索敌：只有玩家手动指定，或移动路径被它实际挡住时才攻击。
+		if entity is Building and int(entity.entity_id) == 27:
+			continue
 		if entity.get("_animal_type") != null and str(entity.get("_animal_type")) != "":
 			continue
 		if not _is_target_attackable_now(entity) or _is_target_marked_unreachable(entity):
@@ -2516,10 +2517,9 @@ func _find_combat_enemy(radius: float, attack_only: bool) -> GameEntity:
 
 # 目标分数：普通单位一律越近越优先；攻城单位仍保留“建筑优先”的兵种特性。
 func _combat_target_score(target, dist: float, self_prefers_buildings: bool) -> float:
-	# 城墙的优先级低于所有目标：不管是不是攻城单位，都先打别的，
-	# 只有视野里只剩城墙时才会去拆墙（否则 AI 会围着城墙啃一整局）。
+	# 城墙不参与自动索敌：只有玩家手动指定，或移动路径被它实际挡住时才拆墙。
 	if target is Building and int(target.entity_id) == 27:
-		return -5000.0 - dist * 0.01
+		return -1.0e20
 	if target is Building:
 		return (-dist) if self_prefers_buildings else (-1000.0 - dist * 0.01)
 	return (-1000.0 - dist * 0.01) if self_prefers_buildings else (-dist)
@@ -3279,6 +3279,14 @@ func _attack(target, delta):
 		if current_target == target:
 			current_target = null
 			_attack_move_search_timer = 0.0
+		return
+	# 箭矢/炮弹不能隔墙出手：塔、墙顶单位由 is_wall_blocking_shot 放行。
+	# 手动锁定的目标保留，让单位停在墙前；自动目标则放弃并继续攻击移动。
+	if _shot_blocked_by_wall(target):
+		if current_target == target and not _is_commanded_attack_target(target):
+			current_target = null
+			_attack_move_search_timer = 0.0
+			_attack_watch_target_id = -1
 		return
 
 	# 没瞄准不能出手：转身要时间，重器械绕过来更慢。
@@ -4846,6 +4854,15 @@ func _is_protected_army(target) -> bool:
 		return false
 	return target.is_immune_to_damage(self)
 
+# 箭矢/炮弹类单位隔着城墙不能出手。塔类/墙顶位置由 BattleManager 放行。
+func _shot_blocked_by_wall(target) -> bool:
+	if target_type != 3 or target == null or not is_instance_valid(target):
+		return false
+	var bm = _get_bm()
+	if bm == null or not bm.has_method("is_wall_blocking_shot"):
+		return false
+	return bm.is_wall_blocking_shot(self, target)
+
 func _is_animal_unit(target) -> bool:
 	if target == null or not is_instance_valid(target):
 		return false
@@ -5041,6 +5058,8 @@ func _find_nearest_enemy_near(center: Vector3, radius: float):
 		if bm != null and bm.has_method("is_target_visible_from") and not bm.is_target_visible_from(self, entity): continue
 		if not (entity is GameEntity): continue
 		if entity is WorldResource: continue
+		# 城墙不参与驻军/守军的自动索敌，避免闲着没事拆墙。
+		if entity is Building and int(entity.entity_id) == 27: continue
 		if not _is_hostile_to(entity): continue
 		if entity.get("_animal_type") != null and str(entity.get("_animal_type")) != "": continue  # 不自动攻击动物
 		if not _can_attack_target(entity): continue
@@ -5049,12 +5068,8 @@ func _find_nearest_enemy_near(center: Vector3, radius: float):
 		var dist = h_diff.length() - body_radius - entity.body_radius
 		if dist > radius:
 			continue
-		# 城墙在所有目标里优先级最低：自动索敌时给城墙加一个很大的距离惩罚，
-		# 部队会优先打主城/兵营/单位，只有方圆内确实没有别的目标时才拆墙，
-		# 避免"围着城墙啃一整局、主城却没人去"。
-		var wall_penalty: float = WALL_TARGET_PENALTY if (entity is Building and entity.entity_id == 27) else 0.0
-		if dist + wall_penalty < best_dist:
-			best_dist = dist + wall_penalty
+		if dist < best_dist:
+			best_dist = dist
 			best_target = entity
 	return best_target
 

@@ -390,8 +390,11 @@ func _can_direct_chase(bm: RTSBattleManager) -> bool:
 	var edge: float = _army._combat_edge_distance(_army.current_target)
 	if edge > _army.attack_range + CHASE_DIRECT_APPROACH_MARGIN:
 		return false
-	return not _is_cliff_between_positions(
-		bm, _army.global_position, _army.current_target.global_position)
+	if _is_cliff_between_positions(bm, _army.global_position, _army.current_target.global_position):
+		return false
+	# 追击的最后几米也不能直接跨墙：隔墙目标等 A* 绕路，不能靠直线硬挤。
+	var direct: Array = _try_direct_path(bm, _army.current_target.global_position, 0.0)
+	return not direct.is_empty()
 
 # 当前移动命令使用的寻路 stop_range：追击目标用攻击距离，其它命令用 0。
 func _current_move_stop_range() -> float:
@@ -487,7 +490,9 @@ func process_move(delta, bm: RTSBattleManager):
 		if _army.current_target is WorldResource and h_dist <= Army.GATHER_STANDOFF_GAP:
 			_stop_velocity()
 			return
-		elif _army.current_target is GameEntity and h_dist <= _army.attack_range:
+		elif _army.current_target is GameEntity and h_dist <= _army.attack_range \
+				and not _army._shot_blocked_by_wall(_army.current_target):
+			# 射程够了但城墙挡住弹道：不要停在这里干等，继续沿路线绕到有射界的位置。
 			_stop_velocity()
 			return
 
@@ -804,6 +809,10 @@ func _can_push_to(pos: Vector3, bm: RTSBattleManager) -> bool:
 	if bm == null:
 		return true
 	var g: Vector2i = bm.world_to_grid(pos)
+	_ensure_current_team_static_caches(bm)
+	# 推挤/分离也不能把单位挤进敌方城墙或建筑；梯子格放行。
+	if (_wall_set.has(g) or _footprint_set.has(g)) and not _ladder_set.has(g):
+		return false
 	var terrain: int = bm.get_terrain_at_grid(g.x, g.y)
 	if _army.water_capable:
 		# 海军只能待在可航行水域；桥面虽然是水格，但船不能开上去。
@@ -1082,6 +1091,8 @@ func _ensure_static_caches(bm: RTSBattleManager) -> void:
 		_footprint_set = {}
 		_bridge_set = {}
 		_ladder_set = {}
+		var wall_centers: Array = []
+		var ladder_centers: Array = []
 		for e in bm.entities.get_children():
 			if not (e is GameEntity) or e.health <= 0: continue
 			if not (e is Building or e is WorldResource): continue
@@ -1092,6 +1103,8 @@ func _ensure_static_caches(bm: RTSBattleManager) -> void:
 				continue
 			# 梯子不阻挡通行，且使其相邻敌方城墙可通行
 			if e is Building and e.entity_id == 8:
+				ladder_centers.append(eg)
+				_ladder_set[eg] = true
 				for dx in range(-1, 2):
 					for dy in range(-1, 2):
 						if dx == 0 and dy == 0: continue
@@ -1102,10 +1115,41 @@ func _ensure_static_caches(bm: RTSBattleManager) -> void:
 			if e is Building and e.entity_id == 27:
 				if e.team == team: continue
 				_wall_set[eg] = true
+				# 城墙也加入 footprint：终点落在墙格时先调整到墙外，
+				# 近战在攻击距离内拆墙，远程停在墙脚，不再把墙当可穿过的地面。
+				_footprint_set[eg] = true
+				wall_centers.append(eg)
 			elif e is Building:
 				_add_blocked_footprint(eg, e.body_radius)
 			else:
 				_wall_set[eg] = true
+		# 墙段中心距 1.5~2 米，中心格之间可能隔着一格“缝”；把两段墙的
+		# 中点补成墙，A* 才不会从接缝钻过去。只查周围 2 格，避免 O(n²)。
+		for wc in wall_centers:
+			for dx in range(-2, 3):
+				for dy in range(-2, 3):
+					if dx == 0 and dy == 0:
+						continue
+					if dx < 0 or (dx == 0 and dy < 0):
+						continue
+					var other_wall = bm._wall_entity_grid.get(Vector2i(wc.x + dx, wc.y + dy))
+					if other_wall == null or other_wall.team == team:
+						continue
+					var gap := Vector2i(
+						roundi(float(wc.x) + float(dx) * 0.5),
+						roundi(float(wc.y) + float(dy) * 0.5)
+					)
+					_wall_set[gap] = true
+					_footprint_set[gap] = true
+		# 梯子通道：梯子自身格以及它周围被补成墙的接缝格都要放行，
+		# 否则补缝后敌墙虽然“能爬”却走不到梯子脚下。
+		for lg in ladder_centers:
+			for dx in range(-1, 2):
+				for dy in range(-1, 2):
+					var lt := Vector2i(lg.x + dx, lg.y + dy)
+					_wall_set.erase(lt)
+					_footprint_set.erase(lt)
+					_ladder_set[lt] = true
 		pack = {
 			"wall": _wall_set,
 			"footprint": _footprint_set,
@@ -1168,7 +1212,7 @@ func _try_direct_path(bm: RTSBattleManager, target_pos: Vector3, stop_range: flo
 	var path_goal_pos := target_pos
 	# 建筑中心格在 footprint 内：直接走到中心会卡进建筑。
 	# 改成走向建筑外沿最近的可走格，最后一段交给 process_move 的最终接近/攻击距离判定。
-	if _footprint_set.has(goal_tile):
+	if _footprint_set.has(goal_tile) and not _ladder_set.has(goal_tile):
 		var approach_tile := _find_approach_tile(goal_tile, bm, _wall_set)
 		if approach_tile == goal_tile:
 			return []
@@ -1283,7 +1327,7 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 	# 做最终接近/攻击，不会因此丢失目标。
 	var goal_tile: Vector2i = end_tile
 	var goal_adjusted := false
-	if _footprint_set.has(goal_tile):
+	if _footprint_set.has(goal_tile) and not _ladder_set.has(goal_tile):
 		var approach_tile := _find_approach_tile(goal_tile, bm, wall_cache)
 		if approach_tile != goal_tile:
 			goal_tile = approach_tile

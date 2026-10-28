@@ -223,6 +223,13 @@ func is_immune_to_damage(source = null) -> bool:
 	return true
 
 func _attack(target, delta):
+	# 箭塔/炮塔/墙顶炮台由 is_wall_blocking_shot 放行；普通远程建筑不能隔墙开火。
+	if target_type == 3:
+		var bm_wall = _get_bm()
+		if bm_wall != null and bm_wall.has_method("is_wall_blocking_shot") \
+				and bm_wall.is_wall_blocking_shot(self, target):
+			current_target = null
+			return
 	if attack_timer > 0:
 		attack_timer -= delta
 		return
