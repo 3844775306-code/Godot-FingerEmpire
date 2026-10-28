@@ -323,8 +323,8 @@ func _finish_construction():
 		var loc_str = "(%d,%d)" % [int(global_position.x), int(global_position.z)]
 		bm._show_hud_alert("建造完成: %s%s %s" % [display_name, group_str, loc_str], Color(0.2, 1.0, 0.3), [team], team, GameSettings.AlertKind.BUILD, false, bm.get_alert_nations(self), global_position, owner_peer_id)
 	# 城堡建成立刻解锁民族兵种
-	if entity_id == 53 and bm and bm.has_method("get_team_nation"):
-		var nation = bm.get_team_nation(team)
+	if entity_id == 53 and bm:
+		var nation := _get_nation_for_bonus()
 		if nation >= 0:
 			_unlock_nation_units(nation)
 	# 科研模式：先记录基础数值，再套用全玩家科技加成；最后按科技解锁重排生产列表。
@@ -335,9 +335,7 @@ func _finish_construction():
 		_sync_production_unlocks()
 		# 科研模式的生产列表会被上面的 sync 重置，特色兵种要在重置之后再补一次。
 		if entity_id == 53 and bm.has_method("_unlock_nation_units"):
-			var rn: int = bm.get_entity_nation(self) if bm.has_method("get_entity_nation") else -1
-			if rn < 0 and bm.has_method("get_team_nation"):
-				rn = bm.get_team_nation(team)
+			var rn: int = _get_nation_for_bonus()
 			if rn >= 0:
 				_unlock_nation_units(rn)
 	# 建造期间视野为 0，完成后恢复；若建筑正被选中，立即补上视野/射程圈
@@ -655,6 +653,18 @@ func _fade_ground_patch() -> void:
 	tw.tween_callback(Callable(decal, "queue_free"))
 	
 	
+func _get_nation_for_bonus() -> int:
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if bm == null:
+		return -1
+	if bm.has_method("get_entity_nation"):
+		var n = int(bm.get_entity_nation(self))
+		if n >= 0:
+			return n
+	if bm.has_method("get_team_nation"):
+		return int(bm.get_team_nation(team))
+	return -1
+
 func _apply_nation_start_bonus():
 	# 仅对主城(id=20)和城堡(id=53)应用
 	if entity_id not in [20, 53] and entity_id != 53:
@@ -662,7 +672,7 @@ func _apply_nation_start_bonus():
 	var bm = get_tree().get_first_node_in_group("battle_manager")
 	if not bm or not bm.has_method("get_team_nation"):
 		return
-	var nation = bm.get_team_nation(team)
+	var nation := _get_nation_for_bonus()
 	if nation < 0:
 		return
 	var start_lv = NationBonuses.get_castle_start_level(nation)

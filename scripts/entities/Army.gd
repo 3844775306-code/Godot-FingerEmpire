@@ -276,11 +276,27 @@ func setup(config: Dictionary):
 	_animal_type = config.get("animal_type", "")
 	_animal_food_reward = config.get("food_reward", 0)
 	call_deferred("_apply_nation_bonus")
+func _get_nation_for_bonus(bm = null) -> int:
+	if bm == null:
+		bm = get_tree().get_first_node_in_group("battle_manager")
+	if bm == null:
+		return -1
+	# 单位加成必须按“这个单位所属玩家”的国家算，不能只看队伍：
+	# 2v2/3v3 中同队玩家可以选不同国家，FFA 更是每个 AI 一个国家；
+	# 旧逻辑用 get_team_nation(team)，会让队友全部继承玩家国家的加成。
+	if bm.has_method("get_entity_nation"):
+		var n = int(bm.get_entity_nation(self))
+		if n >= 0:
+			return n
+	if bm.has_method("get_team_nation"):
+		return int(bm.get_team_nation(team))
+	return -1
+
 func _apply_nation_bonus():
 	var bm = get_tree().get_first_node_in_group("battle_manager")
 	if not bm or not bm.has_method("get_team_nation"):
 		return
-	var nation = bm.get_team_nation(team)
+	var nation = _get_nation_for_bonus()
 	if nation < 0:
 		# 无国家加成（中立/特殊单位）也要记录基础值并套用科研加成。
 		if bm.has_method("_capture_research_base"):
@@ -3609,9 +3625,10 @@ func _gather(resource_node, delta):
 		var amount = int(attack)
 		if GameSettings.fast_mode: amount *= 3
 		var bm = get_tree().get_first_node_in_group("battle_manager")
-		if bm and bm.has_method("get_team_nation"):
-			var nation = bm.get_team_nation(team)
-			amount = int(amount * NationBonuses.get_gather_mult(nation, res_type))
+		if bm:
+			var nation = _get_nation_for_bonus(bm)
+			if nation >= 0:
+				amount = int(amount * NationBonuses.get_gather_mult(nation, res_type))
 		if bm and bm.has_method("research_gather_mult"):
 			amount = int(amount * bm.research_gather_mult(owner_peer_id, team, res_type))
 		if bm and bm.has_method("get_research_mods"):
