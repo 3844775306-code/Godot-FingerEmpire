@@ -55,19 +55,33 @@ func _ready():
 	if old: old.visible = false
 
 	# 场景根节点在 online_menu.tscn 里没有设尺寸（默认 0×0）。
-	# 桌面版内容全是绝对坐标，看不出问题；手机端布局全用 anchor（背景/滚动区分半屏），
-	# 根节点 0×0 会把整屏压成空白。这里先把根节点铺满视口，窗口旋转/缩放也会跟着变。
-	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	# 桌面版按 2400×1400 设计画布缩放；手机端用锚点铺满，避免根节点 0×0 压成空白。
+	var vs = get_viewport().get_visible_rect().size
+	var s = min(vs.x / 2400.0, vs.y / 1400.0)
+	scale = Vector2(s, s)
+	position = (vs - Vector2(2400, 1400) * s) / 2.0
 
 	# 手机端：桌面版 2400×1400 绝对布局在 393dp 屏上只有 4~14dp 字，
 	# 直接改用竖排滚动布局；桌面路径完全不动。
 	if InputSource.use_mobile_ui():
+		scale = Vector2.ONE
+		position = Vector2.ZERO
+		set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		size = UILayout.view_size()
 		# 横竖屏切换后重建表单，避免按钮/字号仍按旧方向计算。
 		add_child(OrientationReload.new())
 		_build_mobile_ui()
 		_apply_web_defaults()
 		return
 
+	# 桌面/网页：按实际画布铺满，不再把表单缩在中间 1300×700 的面板里。
+	var design_size = Vector2(ceil(vs.x / s), maxf(1400.0, ceil(vs.y / s)))
+	size = design_size
+	position = Vector2.ZERO
+	_build_desktop_ui()
+	_apply_web_defaults()
+
+func _build_desktop_ui() -> void:
 	# 全屏暖黑背景（羊皮纸皇庭底色）
 	var bg = ColorRect.new(); bg.color = Color(0.10, 0.08, 0.06)
 	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
@@ -75,74 +89,121 @@ func _ready():
 
 	# 顶部皇庭金饰横条
 	var bar = ColorRect.new(); bar.color = Color(UITheme.GOLD)
-	bar.position = Vector2(0, 0); bar.size = Vector2(2400, 6)
+	bar.size = Vector2(size.x, 6)
 	add_child(bar)
 	var bar2 = ColorRect.new(); bar2.color = Color(UITheme.GOLD, 0.35)
-	bar2.position = Vector2(0, 6); bar2.size = Vector2(2400, 3)
+	bar2.position = Vector2(0, 6); bar2.size = Vector2(size.x, 3)
 	add_child(bar2)
 
-	# Title
-	var t = Label.new(); t.text = "👑 联机对战 👑"; t.position = Vector2(0, 40)
-	t.size = Vector2(2400, 70); t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	t.add_theme_font_size_override("font_size", 52)
-	t.add_theme_color_override("font_color", UITheme.GOLD.lightened(0.15))
-	t.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.9))
-	t.add_theme_constant_override("shadow_offset_x", 3)
-	t.add_theme_constant_override("shadow_offset_y", 3)
-	t.add_theme_constant_override("shadow_size", 8)
-	add_child(t)
+	var frame = MarginContainer.new()
+	frame.name = "DesktopFrame"
+	frame.size = size
+	frame.add_theme_constant_override("margin_left", 28)
+	frame.add_theme_constant_override("margin_right", 28)
+	frame.add_theme_constant_override("margin_top", 20)
+	frame.add_theme_constant_override("margin_bottom", 20)
+	add_child(frame)
 
-	# 标题下金色装饰线
-	var gold_line = ColorRect.new()
-	gold_line.color = Color(UITheme.GOLD, 0.7)
-	gold_line.position = Vector2(880, 118)
-	gold_line.size = Vector2(640, 3)
-	add_child(gold_line)
+	var layout = VBoxContainer.new()
+	layout.add_theme_constant_override("separation", 12)
+	frame.add_child(layout)
 
-	# Center panel
-	var panel = Panel.new()
-	panel.position = Vector2(550, 140); panel.size = Vector2(1300, 700)
-	panel.add_theme_stylebox_override("panel", UITheme.card_style(UITheme.GOLD))
-	add_child(panel)
+	# ---------- 顶部标题栏 ----------
+	var header = HBoxContainer.new()
+	header.custom_minimum_size = Vector2(0, 132)
+	header.add_theme_constant_override("separation", 18)
+	layout.add_child(header)
 
-	var x0 = 50; var y = 30
-	var _lb = func(txt, yy):
-		var l = UITheme.make_section_title(txt, UITheme.GOLD, 20)
-		l.position = Vector2(x0, yy); l.size = Vector2(500, 32)
-		panel.add_child(l)
+	var ret_btn = _make_btn("← 返回主菜单", Color(0.25, 0.25, 0.35), Vector2.ZERO, Vector2(250, 64), "muted")
+	ret_btn.name = "BackButton"
+	ret_btn.custom_minimum_size = Vector2(250, 64)
+	ret_btn.pressed.connect(_on_return_pressed)
+	header.add_child(ret_btn)
 
-	# Left column - Game Config
-	_lb.call("⚔️ 游戏模式", y)
-	mode_1v1_btn = _make_btn("1V1", Color(0.15, 0.4, 0.15), Vector2(x0, y + 38), Vector2(160, 50))
+	var title_box = VBoxContainer.new()
+	title_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title_box.alignment = BoxContainer.ALIGNMENT_CENTER
+	title_box.add_theme_constant_override("separation", 2)
+	header.add_child(title_box)
+
+	var title = Label.new()
+	title.text = "👑 联机对战"
+	title.add_theme_font_size_override("font_size", 62)
+	title.add_theme_color_override("font_color", UITheme.GOLD.lightened(0.15))
+	title.add_theme_color_override("font_shadow_color", Color(0, 0, 0, 0.9))
+	title.add_theme_constant_override("shadow_offset_x", 3)
+	title.add_theme_constant_override("shadow_offset_y", 3)
+	title.add_theme_constant_override("shadow_size", 10)
+	title_box.add_child(title)
+
+	var subtitle = Label.new()
+	subtitle.text = "创建主机、加入局域网，或通过 Steam / WebSocket 跨平台联机"
+	UITheme.apply_label(subtitle, 23, UITheme.PARCHMENT)
+	title_box.add_child(subtitle)
+
+	var header_tip = Label.new()
+	header_tip.text = "ENet · WebSocket · Steam\n主机保持运行，等待玩家加入"
+	header_tip.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	header_tip.custom_minimum_size = Vector2(500, 0)
+	UITheme.apply_label(header_tip, 17, Color(UITheme.STONE).lightened(0.3))
+	header.add_child(header_tip)
+
+	# ---------- 三栏主体 ----------
+	var body = HBoxContainer.new()
+	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	body.add_theme_constant_override("separation", 16)
+	layout.add_child(body)
+
+	# 左栏：对局设置
+	var col1 = _online_panel()
+	col1.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	col1.size_flags_stretch_ratio = 0.94
+	body.add_child(col1)
+	var c1 = _online_panel_body(col1)
+	c1.add_child(UITheme.make_section_title("⚔ 对局设置", UITheme.GOLD, 30))
+	c1.add_child(_online_label("游戏模式", 18))
+	var mode_row = HBoxContainer.new()
+	mode_row.add_theme_constant_override("separation", 8)
+	c1.add_child(mode_row)
+	mode_1v1_btn = _make_btn("1V1", Color(0.15, 0.4, 0.15), Vector2.ZERO, Vector2(0, 60))
 	mode_1v1_btn.toggle_mode = true; mode_1v1_btn.button_pressed = true
+	mode_1v1_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	mode_1v1_btn.custom_minimum_size = Vector2(0, 60)
 	mode_1v1_btn.pressed.connect(func(): _select_mode(NetworkManager.GameMode.ONEvONE))
-	panel.add_child(mode_1v1_btn)
-	mode_2v2_btn = _make_btn("2V2", Color(0.15, 0.4, 0.15), Vector2(x0 + 175, y + 38), Vector2(160, 50))
+	mode_row.add_child(mode_1v1_btn)
+	mode_2v2_btn = _make_btn("2V2", Color(0.15, 0.4, 0.15), Vector2.ZERO, Vector2(0, 60))
 	mode_2v2_btn.toggle_mode = true
+	mode_2v2_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	mode_2v2_btn.custom_minimum_size = Vector2(0, 60)
 	mode_2v2_btn.pressed.connect(func(): _select_mode(NetworkManager.GameMode.TWOVTWO))
-	panel.add_child(mode_2v2_btn)
-	mode_3v3_btn = _make_btn("3V3", Color(0.15, 0.4, 0.15), Vector2(x0 + 350, y + 38), Vector2(160, 50))
+	mode_row.add_child(mode_2v2_btn)
+	mode_3v3_btn = _make_btn("3V3", Color(0.15, 0.4, 0.15), Vector2.ZERO, Vector2(0, 60))
 	mode_3v3_btn.toggle_mode = true
+	mode_3v3_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	mode_3v3_btn.custom_minimum_size = Vector2(0, 60)
 	mode_3v3_btn.pressed.connect(func(): _select_mode(NetworkManager.GameMode.THREEvTHREE))
-	panel.add_child(mode_3v3_btn)
+	mode_row.add_child(mode_3v3_btn)
 
-	y += 115
-	_lb.call("🤖 AI 玩家", y)
+	c1.add_child(_online_label("AI 玩家", 18))
+	var ai_row = HBoxContainer.new()
+	ai_row.add_theme_constant_override("separation", 10)
+	c1.add_child(ai_row)
 	red_ai_spin = SpinBox.new()
-	red_ai_spin.position = Vector2(x0, y + 38); red_ai_spin.size = Vector2(500, 44)
 	red_ai_spin.min_value = 0; red_ai_spin.max_value = 2; red_ai_spin.value = 0
-	red_ai_spin.prefix = "红方 AI:   "
+	red_ai_spin.prefix = "红方 AI  "
+	red_ai_spin.custom_minimum_size = Vector2(0, 52)
+	red_ai_spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_style_spin(red_ai_spin)
-	panel.add_child(red_ai_spin)
+	ai_row.add_child(red_ai_spin)
 	blue_ai_spin = SpinBox.new()
-	blue_ai_spin.position = Vector2(x0, y + 92); blue_ai_spin.size = Vector2(500, 44)
 	blue_ai_spin.min_value = 0; blue_ai_spin.max_value = 2; blue_ai_spin.value = 0
-	blue_ai_spin.prefix = "蓝方 AI:  "
+	blue_ai_spin.prefix = "蓝方 AI  "
+	blue_ai_spin.custom_minimum_size = Vector2(0, 52)
+	blue_ai_spin.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_style_spin(blue_ai_spin)
-	panel.add_child(blue_ai_spin)
+	ai_row.add_child(blue_ai_spin)
 
-	y += 165
-	_lb.call("🏳️ 选择国家", y)
+	c1.add_child(_online_label("选择国家", 18))
 	nation_select = OptionButton.new()
 	nation_select.add_item("  维京    +25%生命  +10%速度")
 	nation_select.add_item("  英格兰  +15%攻击  +20%视野  采木+10%")
@@ -154,91 +215,121 @@ func _ready():
 	nation_select.add_item("  蒙古    速度+20%  攻速+10%  视野+20%")
 	nation_select.add_item("  波斯    生命+15%  盾甲+1  黄金+15%  人口+5")
 	nation_select.add_item("  西班牙  攻击+10%  铠甲+1  黄金+15%")
-	nation_select.position = Vector2(x0, y + 38); nation_select.size = Vector2(500, 44)
-	_style_option(nation_select, 16)
-	panel.add_child(nation_select)
+	nation_select.custom_minimum_size = Vector2(0, 54)
+	nation_select.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_style_option(nation_select, 18)
+	c1.add_child(nation_select)
 
-	y += 100
-	_lb.call("🗺️ 战场地形（房主）", y)
-	map_btn = _make_btn(" 经典大陆 ▸", Color(0.2, 0.28, 0.2), Vector2(x0, y + 38), Vector2(500, 44), "muted")
+	c1.add_child(_online_label("战场地形（房主）", 18))
+	map_btn = _make_btn(" 经典大陆 ▸", Color(0.2, 0.28, 0.2), Vector2.ZERO, Vector2(0, 54), "muted")
+	map_btn.custom_minimum_size = Vector2(0, 54)
+	map_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	map_btn.pressed.connect(_open_map_dialog)
-	panel.add_child(map_btn)
+	c1.add_child(map_btn)
 	_update_map_availability(true)
 
-	y += 100
-	_lb.call("📡 传输方式", y)
-	enet_toggle_btn = _make_btn("ENet (UDP:9000)", Color(0.15, 0.3, 0.55), Vector2(x0, y + 38), Vector2(240, 40))
-	enet_toggle_btn.toggle_mode = true; enet_toggle_btn.button_pressed = true
-	enet_toggle_btn.pressed.connect(func(): _on_transport_changed(false))
-	panel.add_child(enet_toggle_btn)
-	ws_toggle_btn = _make_btn("WebSocket (TCP:8080)", Color(0.4, 0.3, 0.2), Vector2(x0 + 255, y + 38), Vector2(240, 40))
-	ws_toggle_btn.toggle_mode = true; ws_toggle_btn.button_pressed = false
-	ws_toggle_btn.pressed.connect(func(): _on_transport_changed(true))
-	panel.add_child(ws_toggle_btn)
-
-	# 发展模式（主机权威；客户端进局时由主机 RPC 同步）
 	var research_check := CheckBox.new()
 	research_check.name = "ResearchCheck"
 	research_check.text = "科研模式（四时代·科技树）"
-	research_check.position = Vector2(30, 610)
-	research_check.size = Vector2(570, 40)
+	research_check.custom_minimum_size = Vector2(0, 40)
 	research_check.add_theme_font_size_override("font_size", 18)
 	research_check.add_theme_color_override("font_color", UITheme.PARCHMENT)
 	research_check.add_theme_color_override("font_hover_color", UITheme.GOLD)
 	research_check.add_theme_color_override("icon_normal_color", UITheme.GOLD)
 	research_check.button_pressed = GameSettings.progression_mode == GameSettings.ProgressionMode.RESEARCH
 	research_check.toggled.connect(func(on): GameSettings.progression_mode = GameSettings.ProgressionMode.RESEARCH if on else GameSettings.ProgressionMode.CLASSIC)
-	panel.add_child(research_check)
+	c1.add_child(research_check)
 
-	# Right column - Connection
-	var rx = 680; var ry = 30
-	var _lb2 = func(txt, yy):
-		var l = UITheme.make_section_title(txt, UITheme.GOLD, 20)
-		l.position = Vector2(rx, yy); l.size = Vector2(570, 32)
-		panel.add_child(l)
+	var c1_spacer = Control.new()
+	c1_spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	c1.add_child(c1_spacer)
 
-	_lb2.call("🏰 创建主机", ry)
-	host_btn = _make_btn("创建服务器", Color(0.15, 0.5, 0.2), Vector2(rx, ry + 45), Vector2(570, 65), "primary")
+	c1.add_child(_online_label("传输方式", 18))
+	var trans_row = HBoxContainer.new()
+	trans_row.add_theme_constant_override("separation", 8)
+	c1.add_child(trans_row)
+	enet_toggle_btn = _make_btn("ENet (UDP:9000)", Color(0.15, 0.3, 0.55), Vector2.ZERO, Vector2(0, 50))
+	enet_toggle_btn.toggle_mode = true; enet_toggle_btn.button_pressed = true
+	enet_toggle_btn.custom_minimum_size = Vector2(0, 50)
+	enet_toggle_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	enet_toggle_btn.pressed.connect(func(): _on_transport_changed(false))
+	trans_row.add_child(enet_toggle_btn)
+	ws_toggle_btn = _make_btn("WebSocket (TCP:8080)", Color(0.4, 0.3, 0.2), Vector2.ZERO, Vector2(0, 50))
+	ws_toggle_btn.toggle_mode = true; ws_toggle_btn.button_pressed = false
+	ws_toggle_btn.custom_minimum_size = Vector2(0, 50)
+	ws_toggle_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	ws_toggle_btn.pressed.connect(func(): _on_transport_changed(true))
+	trans_row.add_child(ws_toggle_btn)
+
+	# 中栏：创建 / 加入
+	var col2 = _online_panel()
+	col2.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	col2.size_flags_stretch_ratio = 0.93
+	body.add_child(col2)
+	var c2 = _online_panel_body(col2)
+	c2.add_child(UITheme.make_section_title("🏰 创建主机", UITheme.GOLD, 30))
+	host_btn = _make_btn("创建服务器", Color(0.15, 0.5, 0.2), Vector2.ZERO, Vector2(0, 76), "primary")
+	host_btn.custom_minimum_size = Vector2(0, 76)
+	host_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	host_btn.pressed.connect(_on_create_server_pressed)
-	panel.add_child(host_btn)
-	# Host instructions
+	c2.add_child(host_btn)
 	var hi = Label.new()
 	hi.text = "WebSocket 房会自动生成网页 wss 链接。\n把链接发给网页玩家即可加入；主机需保持运行。"
-	hi.position = Vector2(rx, ry + 120); hi.size = Vector2(570, 50)
-	UITheme.apply_label(hi, 14, Color(UITheme.STONE).lightened(0.25))
-	panel.add_child(hi)
+	hi.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UITheme.apply_label(hi, 16, Color(UITheme.STONE).lightened(0.25))
+	c2.add_child(hi)
 
-	ry += 190
-	_lb2.call("📡 加入游戏", ry)
+	var sep = HSeparator.new()
+	sep.custom_minimum_size = Vector2(0, 16)
+	c2.add_child(sep)
+
+	c2.add_child(UITheme.make_section_title("📡 加入游戏", UITheme.GOLD, 30))
 	ip_label = Label.new()
 	ip_label.text = "服务器 IP 地址:"
-	ip_label.position = Vector2(rx, ry + 40); ip_label.size = Vector2(570, 24)
-	UITheme.apply_label(ip_label, 16, UITheme.PARCHMENT)
-	panel.add_child(ip_label)
+	UITheme.apply_label(ip_label, 17, UITheme.PARCHMENT)
+	c2.add_child(ip_label)
 	ip_input = LineEdit.new()
-	ip_input.text = "127.0.0.1"; ip_input.position = Vector2(rx, ry + 70); ip_input.size = Vector2(570, 48)
+	ip_input.text = "127.0.0.1"
+	ip_input.custom_minimum_size = Vector2(0, 54)
+	ip_input.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	_style_line_edit(ip_input, 20)
-	panel.add_child(ip_input)
-	var join_btn = _make_btn("加入服务器", Color(0.15, 0.3, 0.55), Vector2(rx, ry + 135), Vector2(570, 65), "primary")
+	c2.add_child(ip_input)
+	var join_btn = _make_btn("加入服务器", Color(0.15, 0.3, 0.55), Vector2.ZERO, Vector2(0, 76), "primary")
+	join_btn.custom_minimum_size = Vector2(0, 76)
+	join_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	join_btn.pressed.connect(_on_join_game_pressed)
-	panel.add_child(join_btn)
+	c2.add_child(join_btn)
 
-	# Status bar at bottom
-	ry += 230
 	status_label = Label.new()
-	status_label.position = Vector2(rx, ry); status_label.size = Vector2(570, 80)
-	status_label.add_theme_font_size_override("font_size", 16)
+	status_label.add_theme_font_size_override("font_size", 17)
 	status_label.add_theme_color_override("font_color", UITheme.ALERT_INFO)
 	status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	panel.add_child(status_label)
+	status_label.text = "状态：等待操作…"
+	status_label.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	c2.add_child(status_label)
 
-	# Steam lobby section
+	# 右栏：Steam 房间
+	var col3 = _online_panel()
+	col3.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	col3.size_flags_stretch_ratio = 0.98
+	body.add_child(col3)
+	var c3 = _online_panel_body(col3)
+	c3.add_child(UITheme.make_section_title("🎮 Steam 房间", UITheme.GOLD, 30))
 	steam_status = Label.new()
 	steam_status.text = "Steam: 初始化中..."
-	steam_status.position = Vector2(rx, ry + 80); steam_status.size = Vector2(570, 30)
-	steam_status.add_theme_font_size_override("font_size", 14)
+	steam_status.add_theme_font_size_override("font_size", 16)
 	steam_status.add_theme_color_override("font_color", Color(UITheme.STONE).lightened(0.25))
-	panel.add_child(steam_status)
+	steam_status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	c3.add_child(steam_status)
+
+	steam_lobby_list = ItemList.new()
+	steam_lobby_list.custom_minimum_size = Vector2(0, 220)
+	steam_lobby_list.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	steam_lobby_list.add_theme_font_size_override("font_size", 15)
+	steam_lobby_list.add_theme_color_override("font_color", UITheme.PARCHMENT)
+	steam_lobby_list.add_theme_color_override("font_selected_color", UITheme.INK)
+	steam_lobby_list.item_selected.connect(_on_steam_lobby_selected)
+	c3.add_child(steam_lobby_list)
 
 	# 主动检查 Steam 当前状态（弥补 Autoload 信号先于本节点发出的时序问题）
 	if SteamManager.steam_initialized:
@@ -248,44 +339,67 @@ func _ready():
 	elif SteamManager.steam_initialized == false:
 		_on_steam_failed("Steam 初始化失败 - 请确认 Steam 客户端正在运行")
 
-	steam_lobby_list = ItemList.new()
-	steam_lobby_list.position = Vector2(rx, ry + 115); steam_lobby_list.size = Vector2(570, 120)
-	steam_lobby_list.add_theme_font_size_override("font_size", 14)
-	steam_lobby_list.add_theme_color_override("font_color", UITheme.PARCHMENT)
-	steam_lobby_list.add_theme_color_override("font_selected_color", UITheme.INK)
-	steam_lobby_list.item_selected.connect(_on_steam_lobby_selected)
-	panel.add_child(steam_lobby_list)
-
-	var steam_create = _make_btn("创建 Steam 房间", Color(0.15, 0.4, 0.5), Vector2(rx, ry + 245), Vector2(275, 45), "muted")
+	var steam_grid = GridContainer.new()
+	steam_grid.columns = 2
+	steam_grid.add_theme_constant_override("h_separation", 8)
+	steam_grid.add_theme_constant_override("v_separation", 8)
+	c3.add_child(steam_grid)
+	var steam_create = _make_btn("创建 Steam 房间", Color(0.15, 0.4, 0.5), Vector2.ZERO, Vector2(0, 48), "muted")
+	steam_create.custom_minimum_size = Vector2(0, 48)
+	steam_create.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	steam_create.pressed.connect(_on_steam_create_lobby)
-	panel.add_child(steam_create)
-	var steam_search = _make_btn("搜索房间", Color(0.3, 0.3, 0.45), Vector2(rx + 295, ry + 245), Vector2(275, 45), "muted")
+	steam_grid.add_child(steam_create)
+	var steam_search = _make_btn("搜索房间", Color(0.3, 0.3, 0.45), Vector2.ZERO, Vector2(0, 48), "muted")
+	steam_search.custom_minimum_size = Vector2(0, 48)
+	steam_search.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	steam_search.pressed.connect(_on_steam_search_lobbies)
-	panel.add_child(steam_search)
-	steam_join_btn = _make_btn("加入房间", Color(0.15, 0.5, 0.2), Vector2(rx, ry + 300), Vector2(570, 45), "primary")
-	steam_join_btn.pressed.connect(_on_steam_join_lobby)
+	steam_grid.add_child(steam_search)
+	steam_join_btn = _make_btn("加入房间", Color(0.15, 0.5, 0.2), Vector2.ZERO, Vector2(0, 48), "primary")
+	steam_join_btn.custom_minimum_size = Vector2(0, 48)
+	steam_join_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	steam_join_btn.disabled = true
-	panel.add_child(steam_join_btn)
-	steam_leave_btn = _make_btn("离开房间", Color(0.5, 0.2, 0.2), Vector2(rx, ry + 355), Vector2(570, 45), "danger")
-	steam_leave_btn.pressed.connect(_on_steam_leave_lobby)
+	steam_join_btn.pressed.connect(_on_steam_join_lobby)
+	steam_grid.add_child(steam_join_btn)
+	steam_leave_btn = _make_btn("离开房间", Color(0.5, 0.2, 0.2), Vector2.ZERO, Vector2(0, 48), "danger")
+	steam_leave_btn.custom_minimum_size = Vector2(0, 48)
+	steam_leave_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	steam_leave_btn.visible = false
-	panel.add_child(steam_leave_btn)
+	steam_leave_btn.pressed.connect(_on_steam_leave_lobby)
+	steam_grid.add_child(steam_leave_btn)
 
-	# Start Game button (host only)
-	start_game_btn = _make_btn("开始游戏", Color(0.15, 0.6, 0.2), Vector2(rx, ry + 415), Vector2(570, 55), "primary")
+	start_game_btn = _make_btn("开始游戏", Color(0.15, 0.6, 0.2), Vector2.ZERO, Vector2(0, 64), "primary")
+	start_game_btn.custom_minimum_size = Vector2(0, 64)
+	start_game_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	start_game_btn.pressed.connect(_on_start_game_pressed)
 	start_game_btn.disabled = true
 	start_game_btn.visible = false
-	panel.add_child(start_game_btn)
+	c3.add_child(start_game_btn)
+
 	NetworkManager.player_count_updated.connect(_on_player_count_changed)
+	UITheme.fade_in(body, 0.35)
 
-	# Return button
-	var ret_btn = _make_btn("← 返回", Color(0.25, 0.25, 0.35), Vector2(30, 30), Vector2(150, 45), "muted")
-	ret_btn.pressed.connect(_on_return_pressed)
-	add_child(ret_btn)
+func _online_panel() -> PanelContainer:
+	var panel := PanelContainer.new()
+	panel.add_theme_stylebox_override("panel", UITheme.card_style(UITheme.GOLD))
+	return panel
 
-	UITheme.fade_in(panel, 0.35)
-	_apply_web_defaults()
+func _online_panel_body(panel: PanelContainer) -> VBoxContainer:
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", 24)
+	margin.add_theme_constant_override("margin_right", 24)
+	margin.add_theme_constant_override("margin_top", 18)
+	margin.add_theme_constant_override("margin_bottom", 18)
+	panel.add_child(margin)
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 8)
+	margin.add_child(vb)
+	return vb
+
+func _online_label(text: String, font_size: int) -> Label:
+	var lbl := Label.new()
+	lbl.text = text
+	UITheme.apply_label(lbl, font_size, UITheme.PARCHMENT)
+	return lbl
 
 # ==================== 手机端竖排布局 ====================
 # 桌面版的绝对坐标布局在手机上会整体缩成 1/3 大小；这里按 dp 重建一套可滚动表单，

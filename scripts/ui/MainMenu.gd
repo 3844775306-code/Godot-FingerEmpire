@@ -157,223 +157,32 @@ func _build_desktop_layout() -> void:
 	UITheme.apply_label(version_top, 18, Color(UITheme.STONE).lightened(0.25))
 	header_right.add_child(version_top)
 
-	# ---------- 中央主体：左配置 / 右行动卡片 ----------
+	# ---------- 中央主体：整屏行动卡片（单人配置已移入专属界面） ----------
 	var body = HBoxContainer.new()
 	body.name = "Body"
 	body.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	body.add_theme_constant_override("separation", 18)
 	layout.add_child(body)
 
-	# 左：战役配置面板
-	var left_panel = PanelContainer.new()
-	left_panel.name = "ConfigPanel"
-	left_panel.custom_minimum_size = Vector2(760, 0)
-	left_panel.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	left_panel.size_flags_stretch_ratio = 0.88
-	left_panel.add_theme_stylebox_override("panel", UITheme.card_style(UITheme.GOLD))
-	body.add_child(left_panel)
-
-	var cfg_margin = MarginContainer.new()
-	cfg_margin.add_theme_constant_override("margin_left", 26)
-	cfg_margin.add_theme_constant_override("margin_right", 26)
-	cfg_margin.add_theme_constant_override("margin_top", 20)
-	cfg_margin.add_theme_constant_override("margin_bottom", 20)
-	left_panel.add_child(cfg_margin)
-
-	var cfg = VBoxContainer.new()
-	cfg.name = "ConfigVBox"
-	cfg.add_theme_constant_override("separation", 8)
-	cfg_margin.add_child(cfg)
-
-	var section = UITheme.make_section_title("⚔️ 战役配置 ⚔️", UITheme.GOLD, 32)
-	section.horizontal_alignment = HORIZONTAL_ALIGNMENT_LEFT
-	cfg.add_child(section)
-
-	var nation_caption = _make_field_label("选择国家 / 文明", 19)
-	cfg.add_child(nation_caption)
-
-	nation_select = OptionButton.new()
-	nation_select.name = "NationSelect"
-	nation_select.add_item("  维京    +25%生命  +10%速度")
-	nation_select.add_item("  英格兰  +15%攻击  +20%视野  采木+10%")
-	nation_select.add_item("  法兰西  +25护甲  城堡2级起始")
-	nation_select.add_item("  中国    食物+20%  黄金+10%  人口+10")
-	nation_select.add_item("  匈牙利  +15护甲  石材+15%  黄金+10%  人口+5")
-	nation_select.add_item("  日本    +15%攻速  +10%攻击")
-	nation_select.add_item("  拜占庭  +2双护甲  黄金+10%")
-	nation_select.add_item("  蒙古    速度+20%  攻速+10%  视野+20%")
-	nation_select.add_item("  波斯    生命+15%  盾甲+1  黄金+15%  人口+5")
-	nation_select.add_item("  西班牙  攻击+10%  铠甲+1  黄金+15%")
-	nation_select.selected = clampi(GameSettings.player_nation, 0, 9)
-	nation_select.custom_minimum_size = Vector2(0, 62)
-	nation_select.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_style_option(nation_select, 20)
-	nation_select.item_selected.connect(_on_nation_selected)
-	cfg.add_child(nation_select)
-
-	_nation_detail = Label.new()
-	_nation_detail.custom_minimum_size = Vector2(0, 72)
-	_nation_detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	UITheme.apply_label(_nation_detail, 16, Color(UITheme.PARCHMENT, 0.78))
-	cfg.add_child(_nation_detail)
-	_on_nation_selected(nation_select.selected)
-
-	# 难度 / 模式：左右两个大方块字段
-	var selectors = HBoxContainer.new()
-	selectors.add_theme_constant_override("separation", 14)
-	cfg.add_child(selectors)
-
-	var diff_box = VBoxContainer.new()
-	diff_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	diff_box.add_theme_constant_override("separation", 4)
-	selectors.add_child(diff_box)
-	diff_box.add_child(_make_field_label("AI 难度", 18))
-
-	var diff_select = OptionButton.new()
-	diff_select.name = "DiffSelect"
-	diff_select.add_item("  简单")
-	diff_select.add_item("  普通（AI资源×2）")
-	diff_select.add_item("  困难（AI资源×3+额外资源）")
-	diff_select.add_item("  地狱（困难+速度+20%）")
-	diff_select.custom_minimum_size = Vector2(0, 54)
-	diff_select.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_style_option(diff_select, 17)
-	diff_box.add_child(diff_select)
-
-	var mode_box = VBoxContainer.new()
-	mode_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	mode_box.add_theme_constant_override("separation", 4)
-	selectors.add_child(mode_box)
-	mode_box.add_child(_make_field_label("游戏模式", 18))
-
-	var mode_select = OptionButton.new()
-	mode_select.name = "ModeSelect"
-	mode_select.add_item("  1V1")
-	mode_select.add_item("  2V2")
-	mode_select.add_item("  3V3")
-	mode_select.add_item("  乱斗·3国")
-	mode_select.add_item("  乱斗·4国")
-	mode_select.add_item("  乱斗·5国")
-	mode_select.selected = 0
-	mode_select.custom_minimum_size = Vector2(0, 54)
-	mode_select.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_style_option(mode_select, 17)
-	mode_box.add_child(mode_select)
-
-	# 战场地形：所有模式（含乱斗）都可以选择特殊地图
-	cfg.add_child(_make_field_label("战场地形", 18))
-	var map_btn = Button.new()
-	map_btn.name = "MapButton"
-	map_btn.custom_minimum_size = Vector2(0, 52)
-	map_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	UITheme.apply_muted_button(map_btn, 18)
-	map_btn.pressed.connect(_open_map_dialog)
-	cfg.add_child(map_btn)
-	_map_button = map_btn
-	_refresh_map_button()
-	mode_select.item_selected.connect(_update_map_availability)
-	_update_map_availability(mode_select.selected)
-
-	# 两个模式开关：放在配置面板里，不再散落在按钮区
-	var fast_check = CheckBox.new()
-	fast_check.name = "FastCheck"
-	fast_check.text = "快速模式（采集/科研 ×3）"
-	fast_check.custom_minimum_size = Vector2(0, 34)
-	fast_check.add_theme_font_size_override("font_size", 18)
-	fast_check.add_theme_color_override("font_color", UITheme.PARCHMENT)
-	fast_check.add_theme_color_override("font_hover_color", UITheme.GOLD)
-	fast_check.add_theme_color_override("icon_normal_color", UITheme.GOLD)
-	fast_check.add_theme_color_override("icon_hover_color", UITheme.GOLD.lightened(0.2))
-	cfg.add_child(fast_check)
-
-	var research_check = CheckBox.new()
-	research_check.name = "ResearchCheck"
-	research_check.text = "科研模式（四时代 · 科技树）"
-	research_check.custom_minimum_size = Vector2(0, 34)
-	research_check.add_theme_font_size_override("font_size", 18)
-	research_check.add_theme_color_override("font_color", UITheme.PARCHMENT)
-	research_check.add_theme_color_override("font_hover_color", UITheme.GOLD)
-	research_check.add_theme_color_override("icon_normal_color", UITheme.GOLD)
-	research_check.tooltip_text = "关闭为经典模式（原升级模式）；开启后通过时代与科技树解锁建筑/单位。科研模式支持单人、联机、乱斗与战役；新手教程固定经典模式。"
-	research_check.button_pressed = GameSettings.is_research_mode()
-	research_check.toggled.connect(_on_research_toggled)
-	cfg.add_child(research_check)
-
-	# 当前对局说明：把配置区中部的留白变成有用的战局摘要
-	var mode_card = PanelContainer.new()
-	mode_card.custom_minimum_size = Vector2(0, 190)
-	mode_card.add_theme_stylebox_override("panel", UITheme.card_style(UITheme.SAPPHIRE))
-	cfg.add_child(mode_card)
-
-	var mode_margin = MarginContainer.new()
-	mode_margin.add_theme_constant_override("margin_left", 18)
-	mode_margin.add_theme_constant_override("margin_right", 18)
-	mode_margin.add_theme_constant_override("margin_top", 12)
-	mode_margin.add_theme_constant_override("margin_bottom", 12)
-	mode_card.add_child(mode_margin)
-
-	var mode_vb = VBoxContainer.new()
-	mode_vb.add_theme_constant_override("separation", 4)
-	mode_margin.add_child(mode_vb)
-
-	var mode_title = Label.new()
-	mode_title.text = "🗺️ 当前对局"
-	mode_title.add_theme_font_size_override("font_size", 19)
-	mode_title.add_theme_color_override("font_color", UITheme.GOLD)
-	mode_vb.add_child(mode_title)
-
-	_mode_detail = Label.new()
-	_mode_detail.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	_mode_detail.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	UITheme.apply_label(_mode_detail, 16, Color(UITheme.PARCHMENT, 0.82))
-	mode_vb.add_child(_mode_detail)
-	mode_select.item_selected.connect(_on_mode_selected)
-	_on_mode_selected(mode_select.selected)
-
-	var spacer = Control.new()
-	spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	cfg.add_child(spacer)
-
-	# 主 CTA：长方形，占满左面板底部
-	var start_btn = _make_menu_button("⚔  开始单人游戏", Vector2.ZERO, "primary")
-	start_btn.name = "StartGameButton"
-	start_btn.custom_minimum_size = Vector2(0, 86)
-	start_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	start_btn.add_theme_font_size_override("font_size", 30)
-	start_btn.pressed.connect(_on_play_pressed)
-	UITheme.pulse(start_btn, 1.02, 1.2)
-	cfg.add_child(start_btn)
-
-	var cfg_hint = Label.new()
-	cfg_hint.text = "提示：配置会带入单人、联机与战役；进局后可按 F1 全选军队"
-	cfg_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	UITheme.apply_label(cfg_hint, 14, Color(UITheme.STONE).lightened(0.25))
-	cfg.add_child(cfg_hint)
-
-	# 右：行动区。上方 2×2 大方块，下面一排小方块，最底一条宽按钮。
-	var right_area = VBoxContainer.new()
-	right_area.name = "ActionArea"
-	right_area.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	right_area.size_flags_stretch_ratio = 1.42
-	right_area.add_theme_constant_override("separation", 14)
-	body.add_child(right_area)
-
+	# 左：2×2 主行动大卡片，占满主体大部分面积
 	var primary_grid = GridContainer.new()
 	primary_grid.name = "PrimaryGrid"
 	primary_grid.columns = 2
+	primary_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	primary_grid.size_flags_vertical = Control.SIZE_EXPAND_FILL
-	primary_grid.add_theme_constant_override("h_separation", 14)
-	primary_grid.add_theme_constant_override("v_separation", 14)
-	right_area.add_child(primary_grid)
+	primary_grid.size_flags_stretch_ratio = 1.48
+	primary_grid.add_theme_constant_override("h_separation", 16)
+	primary_grid.add_theme_constant_override("v_separation", 16)
+	body.add_child(primary_grid)
 
 	var primary_data = [
-		["⚔️", "单人游戏", "配置国家、难度与地图，立即开战", "primary", Callable(self, "_on_play_pressed")],
+		["⚔️", "单人游戏", "进入专属界面配置文明、难度与地图", "primary", Callable(self, "_on_play_pressed")],
 		["🌐", "联机对战", "ENet / WebSocket / Steam 房间", "primary", Callable(self, "_on_multiplayer_pressed")],
 		["🏰", "战役闯关", "固定关卡 · 任务目标 · 星级挑战", "book", Callable(self, "_on_campaign_pressed")],
 		["📖", "单位图鉴", "10 国兵种、建筑与科技资料", "book", Callable(self, "_on_units_pressed")],
 	]
 	for data in primary_data:
-		var card = _make_tile_button(data[0], data[1], data[2], data[3], Vector2(0, 245))
+		var card = _make_tile_button(data[0], data[1], data[2], data[3], Vector2(0, 300))
 		card.pressed.connect(data[4])
 		primary_grid.add_child(card)
 		if data[1] == "单人游戏":
@@ -383,13 +192,14 @@ func _build_desktop_layout() -> void:
 		if data[1] == "战役闯关":
 			card.tooltip_text = "闯关模式：固定地图与任务目标，完成后获得星级评价"
 
-	# 次级入口：四个小方块横排
-	var secondary_row = HBoxContainer.new()
-	secondary_row.name = "SecondaryRow"
-	secondary_row.custom_minimum_size = Vector2(0, 142)
-	secondary_row.add_theme_constant_override("separation", 12)
-	secondary_row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	right_area.add_child(secondary_row)
+	# 右：竖向排列的辅助入口 + 底部设置/退出
+	var side_area = VBoxContainer.new()
+	side_area.name = "SideArea"
+	side_area.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	side_area.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	side_area.size_flags_stretch_ratio = 0.82
+	side_area.add_theme_constant_override("separation", 14)
+	body.add_child(side_area)
 
 	var secondary_data = [
 		["📘", "操作指南", "鼠标键盘与进阶技巧", "book", Callable(self, "_on_guide_pressed")],
@@ -398,32 +208,32 @@ func _build_desktop_layout() -> void:
 		["📜", "更新日志", "版本改动一览", "muted", Callable(self, "_on_changelog_pressed")],
 	]
 	for data in secondary_data:
-		var card = _make_tile_button(data[0], data[1], data[2], data[3], Vector2(0, 142))
+		var card = _make_tile_button(data[0], data[1], data[2], data[3], Vector2(0, 170))
 		card.pressed.connect(data[4])
-		secondary_row.add_child(card)
+		card.size_flags_vertical = Control.SIZE_EXPAND_FILL
+		side_area.add_child(card)
 		UITheme.hover_scale(card)
 		if data[1] == "更新日志":
 			_changelog_btn = card
 			_attach_new_badge(card, UITheme.FONT_SM)
 
-	# 最底部宽按钮：设置 / 退出
 	var bottom_row = HBoxContainer.new()
 	bottom_row.name = "BottomRow"
-	bottom_row.custom_minimum_size = Vector2(0, 78)
+	bottom_row.custom_minimum_size = Vector2(0, 80)
 	bottom_row.add_theme_constant_override("separation", 14)
-	right_area.add_child(bottom_row)
+	side_area.add_child(bottom_row)
 
 	var settings_btn = _make_menu_button("⚙  设  置", Vector2.ZERO, "muted")
-	settings_btn.custom_minimum_size = Vector2(0, 78)
+	settings_btn.custom_minimum_size = Vector2(0, 80)
 	settings_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	settings_btn.size_flags_stretch_ratio = 1.3
+	settings_btn.size_flags_stretch_ratio = 1.2
 	settings_btn.add_theme_font_size_override("font_size", 26)
 	settings_btn.pressed.connect(_on_settings_pressed)
 	settings_btn.tooltip_text = "音量、画质、相机与游戏设置"
 	bottom_row.add_child(settings_btn)
 
 	var quit_btn = _make_menu_button("🚪  退出游戏", Vector2.ZERO, "danger")
-	quit_btn.custom_minimum_size = Vector2(0, 78)
+	quit_btn.custom_minimum_size = Vector2(0, 80)
 	quit_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	quit_btn.add_theme_font_size_override("font_size", 26)
 	quit_btn.pressed.connect(_on_quit_pressed)
@@ -642,45 +452,17 @@ func _find_ui(node_name: String) -> Node:
 	return get_node_or_null(node_name)
 
 func _on_play_pressed():
-	GameSettings.tutorial_mode = false
-	GameSettings.campaign_mode = false
-	GameSettings.campaign_level_id = ""
-	GameSettings.player_nation = nation_select.selected
-	# 单机敌国避开玩家国家：国家色是主要识别手段，同国会撞色。
-	var enemy_nation = randi() % (RTSConfig.Nation.size() - 1)
-	if enemy_nation >= GameSettings.player_nation:
-		enemy_nation += 1
-	GameSettings.enemy_nation = enemy_nation
-	var ds = _find_ui("DiffSelect")
-	if ds: GameSettings.ai_difficulty = ds.selected
-	var ms = _find_ui("ModeSelect")
-	var mode_idx = ms.selected if ms else 0
-	GameSettings.is_ffa = mode_idx >= 3   # 3/4/5 国乱斗
-	if GameSettings.is_ffa:
-		# 乱斗项自 index 3 起，index 值恰好等于国家数（3/4/5）
-		GameSettings.ffa_nation_count = mode_idx
-		GameSettings.ai_mode = 1   # 乱斗不套用 1v1/2v2 语义
-	else:
-		GameSettings.ffa_nation_count = 3
-		GameSettings.ai_mode = mode_idx + 1
-	# 战场地形对所有模式生效（包括乱斗）
-	var fc = _find_ui("FastCheck")
-	GameSettings.fast_mode = fc.button_pressed if fc else false
-	var rc = _find_ui("ResearchCheck")
-	GameSettings.progression_mode = GameSettings.ProgressionMode.RESEARCH if (rc and rc.button_pressed) else GameSettings.ProgressionMode.CLASSIC
-	get_tree().change_scene_to_file("res://scenes/rts_battle.tscn")
+	# 单机配置改到专属界面，主菜单只负责入口。
+	get_tree().change_scene_to_file("res://scenes/single_player_menu.tscn")
 
 func _on_multiplayer_pressed():
 	GameSettings.tutorial_mode = false
 	GameSettings.campaign_mode = false
 	GameSettings.campaign_level_id = ""
-	var ds = _find_ui("DiffSelect")
-	if ds: GameSettings.ai_difficulty = ds.selected
 	GameSettings.ai_mode = 1   # 联机模式不使用单机模式
 	GameSettings.is_ffa = false
 	GameSettings.map_id = "classic"   # 联机选图在联机大厅里选
-	var fc = _find_ui("FastCheck")
-	GameSettings.fast_mode = fc.button_pressed if fc else false
+	GameSettings.fast_mode = false
 	get_tree().change_scene_to_file("res://scenes/online_menu.tscn")
 
 func _on_units_pressed():
@@ -711,7 +493,7 @@ func _on_tutorial_pressed() -> void:
 		GuidePanel.open(self, GuidePanel.Mode.GUIDE))
 
 func _start_tutorial_battle() -> void:
-	var player_nation: int = nation_select.selected if nation_select != null else 0
+	var player_nation: int = GameSettings.player_nation
 	if player_nation < 0 or player_nation >= RTSConfig.Nation.size():
 		player_nation = RTSConfig.Nation.VIKING
 	GameSettings.tutorial_mode = true
@@ -733,10 +515,7 @@ func _on_campaign_pressed() -> void:
 	GameSettings.tutorial_mode = false
 	GameSettings.campaign_mode = true
 	GameSettings.campaign_level_id = ""
-	# 把主菜单当前勾选的发展模式带进战役；选关界面里还可以再切换。
-	var rc = _find_ui("ResearchCheck")
-	if rc != null:
-		GameSettings.progression_mode = GameSettings.ProgressionMode.RESEARCH if rc.button_pressed else GameSettings.ProgressionMode.CLASSIC
+	# 发展模式沿用单人配置界面/上次选择；选关界面里还可以再切换。
 	get_tree().change_scene_to_file("res://scenes/campaign_menu.tscn")
 
 # 打开更新日志面板（已打开则关掉，形成"按钮开关"）
@@ -1073,114 +852,46 @@ func _build_mobile_layout() -> void:
 	vb.add_theme_constant_override("separation", int(UILayout.dp(6.0)))
 	scroll.add_child(vb)
 
-	# 国家选择（选项文本较长，字号用 10dp 防止截断过多）
-	var nation_title := _mobile_section("⚔️ 战役配置 ⚔️", UITheme.GOLD)
-	vb.add_child(nation_title)
+	# 主菜单不再放配置表单：单人配置进入专属界面，这里用 2 列行动卡片铺满
+	vb.add_child(_mobile_section("⚔️ 开始你的帝国 ⚔️", UITheme.GOLD))
 
-	nation_select = OptionButton.new()
-	nation_select.add_item("  维京    +25%生命  +10%速度")
-	nation_select.add_item("  英格兰  +15%攻击  +20%视野  采木+10%")
-	nation_select.add_item("  法兰西  +25护甲  城堡2级起始")
-	nation_select.add_item("  中国    食物+20%  黄金+10%  人口+10")
-	nation_select.add_item("  匈牙利  +15护甲  石材+15%  黄金+10%  人口+5")
-	nation_select.add_item("  日本    +15%攻速  +10%攻击")
-	nation_select.add_item("  拜占庭  +2双护甲  黄金+10%")
-	nation_select.add_item("  蒙古    速度+20%  攻速+10%  视野+20%")
-	nation_select.add_item("  波斯    生命+15%  盾甲+1  黄金+15%  人口+5")
-	nation_select.add_item("  西班牙  攻击+10%  铠甲+1  黄金+15%")
-	nation_select.custom_minimum_size = Vector2(0, UILayout.dp(38.0))
-	nation_select.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_style_option(nation_select, UILayout.font_dp(10.0))
-	vb.add_child(nation_select)
-
-	var diff_select := OptionButton.new()
-	diff_select.name = "DiffSelect"
-	diff_select.add_item("  AI 难度：简单")
-	diff_select.add_item("  AI 难度：普通（资源×2）")
-	diff_select.add_item("  AI 难度：困难（资源×3+额外）")
-	diff_select.add_item("  AI 难度：地狱（困难+速度+20%）")
-	diff_select.custom_minimum_size = Vector2(0, UILayout.dp(36.0))
-	diff_select.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_style_option(diff_select, UILayout.font_dp(10.0))
-	vb.add_child(diff_select)
-
-	var mode_select := OptionButton.new()
-	mode_select.name = "ModeSelect"
-	mode_select.add_item("  模式：1V1")
-	mode_select.add_item("  模式：2V2")
-	mode_select.add_item("  模式：3V3")
-	mode_select.add_item("  乱斗·3国")
-	mode_select.add_item("  乱斗·4国")
-	mode_select.add_item("  乱斗·5国")
-	mode_select.selected = 0
-	mode_select.custom_minimum_size = Vector2(0, UILayout.dp(36.0))
-	mode_select.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_style_option(mode_select, UILayout.font_dp(10.0))
-	vb.add_child(mode_select)
-
-	var map_btn := Button.new()
-	map_btn.name = "MapButton"
-	map_btn.custom_minimum_size = Vector2(0, UILayout.dp(36.0))
-	map_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	UITheme.apply_muted_button(map_btn, UILayout.font_dp(10.0))
-	map_btn.pressed.connect(_open_map_dialog)
-	vb.add_child(map_btn)
-	_map_button = map_btn
-	_refresh_map_button()
-	mode_select.item_selected.connect(_update_map_availability)
-	_update_map_availability(mode_select.selected)
-
-	var fast_check := CheckBox.new()
-	fast_check.name = "FastCheck"
-	fast_check.text = "快速模式（采集/科研×3）"
-	fast_check.custom_minimum_size = Vector2(0, UILayout.dp(34.0))
-	fast_check.add_theme_font_size_override("font_size", UILayout.font_dp(10.0))
-	fast_check.add_theme_color_override("font_color", UITheme.PARCHMENT)
-	fast_check.add_theme_color_override("font_hover_color", UITheme.GOLD)
-	fast_check.add_theme_color_override("icon_normal_color", UITheme.GOLD)
-	vb.add_child(fast_check)
-
-	var research_check := CheckBox.new()
-	research_check.name = "ResearchCheck"
-	research_check.text = "科研模式（四时代·科技树）"
-	research_check.custom_minimum_size = Vector2(0, UILayout.dp(34.0))
-	research_check.add_theme_font_size_override("font_size", UILayout.font_dp(10.0))
-	research_check.add_theme_color_override("font_color", UITheme.PARCHMENT)
-	research_check.add_theme_color_override("font_hover_color", UITheme.GOLD)
-	research_check.add_theme_color_override("icon_normal_color", UITheme.GOLD)
-	research_check.tooltip_text = "关闭为经典模式；开启后通过时代与科技树解锁建筑/单位。科研模式支持单人、联机、乱斗与战役；新手教程固定经典模式。"
-	vb.add_child(research_check)
-	research_check.button_pressed = GameSettings.is_research_mode()
-	research_check.toggled.connect(func(on): GameSettings.progression_mode = GameSettings.ProgressionMode.RESEARCH if on else GameSettings.ProgressionMode.CLASSIC)
-
-	var sep := HSeparator.new()
-	vb.add_child(sep)
+	var action_grid := GridContainer.new()
+	action_grid.columns = 2
+	action_grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	action_grid.add_theme_constant_override("h_separation", int(UILayout.dp(6.0)))
+	action_grid.add_theme_constant_override("v_separation", int(UILayout.dp(6.0)))
+	vb.add_child(action_grid)
 
 	var btn_data := [
-		["⚔️ 单人游戏", _on_play_pressed, "primary"],
-		["🌐 联机对战", _on_multiplayer_pressed, "primary"],
-		["📖 单位图鉴", _on_units_pressed, "book"],
-		["📜 科技总览", _on_tech_overview_pressed, "book"],
-		["📘 操作指南", _on_guide_pressed, "book"],
-		["🎓 新手教程", _on_tutorial_pressed, "primary"],
-		["⚔️ 战役闯关", _on_campaign_pressed, "primary"],
-		["⚙️ 设  置", _on_settings_pressed, "muted"],
-		["📜 更新日志（%s）" % AppVersion.version(), _on_changelog_pressed, "muted"],
-		["🚪 退出游戏", _on_quit_pressed, "danger"],
+		["⚔️", "单人游戏", _on_play_pressed, "primary"],
+		["🌐", "联机对战", _on_multiplayer_pressed, "primary"],
+		["🏰", "战役闯关", _on_campaign_pressed, "primary"],
+		["📖", "单位图鉴", _on_units_pressed, "book"],
+		["📜", "科技总览", _on_tech_overview_pressed, "book"],
+		["📘", "操作指南", _on_guide_pressed, "book"],
+		["🎓", "新手教程", _on_tutorial_pressed, "muted"],
+		["⚙️", "设  置", _on_settings_pressed, "muted"],
+		["📜", "更新日志", _on_changelog_pressed, "muted"],
+		["🚪", "退出游戏", _on_quit_pressed, "danger"],
 	]
 	for data in btn_data:
 		var btn := Button.new()
-		btn.text = data[0]
-		btn.custom_minimum_size = Vector2(0, UILayout.dp(42.0))
+		btn.text = "%s\n%s" % [data[0], data[1]]
+		btn.custom_minimum_size = Vector2(0, UILayout.dp(60.0))
 		btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-		_mobile_style_button(btn, data[2], UILayout.font_dp(13.0))
-		# 更新日志：长按/点击都走同一个回调，NEW 徽章贴在按钮右侧
-		btn.pressed.connect(data[1])
-		vb.add_child(btn)
-		if String(data[0]).begins_with("📜 更新日志"):
+		_mobile_style_button(btn, data[3], UILayout.font_dp(11.0))
+		btn.pressed.connect(data[2])
+		action_grid.add_child(btn)
+		if String(data[1]) == "更新日志":
 			_changelog_btn = btn
-			# 手机按钮是整行宽，NEW 徽章用锚点贴右上角
 			_attach_new_badge_mobile(btn)
+
+	var action_hint := Label.new()
+	action_hint.text = "单人游戏会进入专属配置界面：文明 / 难度 / 模式 / 地图"
+	action_hint.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	action_hint.add_theme_font_size_override("font_size", UILayout.font_dp(8.0))
+	action_hint.add_theme_color_override("font_color", Color(UITheme.PARCHMENT, 0.7))
+	vb.add_child(action_hint)
 
 	var tip := Label.new()
 	tip.text = "手机操作：点按选择·指挥 / 拖动平移 / 双指缩放 / ↻ 按住旋转视角 / 长按空地建造 / 右上角小地图切换统计"
