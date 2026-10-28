@@ -16,9 +16,19 @@ signal box_select_mode_changed(active: bool)
 
 enum Mode { IDLE, TAP_CANDIDATE, PAN, BOX, BUILD_PREVIEW, LONG_PRESS }
 
-const TAP_MOVE_LIMIT: float = 26.0      # 约 8dp，设计空间单位
+const TAP_MOVE_LIMIT: float = 26.0      # 设计空间兜底值；实际按 dp 换算，见 _tap_slop()
 const TAP_TIME_LIMIT: float = 0.45      # 秒；超时不再算点按
 const LONG_PRESS_MS: int = 500          # 长按阈值：呼出建造菜单（等价桌面右键空地）
+# 手指落点允许的抖动（dp）。早期阈值固定 26 设计单位（约 7dp），
+# 真机上轻轻一按就会超过，表现为「按钮点不动」「长按永远打不开建造菜单」。
+const TAP_SLOP_DP: float = 12.0
+const HOLD_SLOP_DP: float = 20.0
+
+static func _tap_slop() -> float:
+	return maxf(TAP_MOVE_LIMIT, UILayout.dp(TAP_SLOP_DP))
+
+static func _hold_slop() -> float:
+	return maxf(_tap_slop(), UILayout.dp(HOLD_SLOP_DP))
 
 var enabled: bool = true
 var box_select_mode: bool = false
@@ -73,7 +83,7 @@ func _process(_delta: float) -> void:
 		return
 	if Time.get_ticks_msec() - _start_msec < LONG_PRESS_MS:
 		return
-	if (_last_pos - _start_pos).length() > TAP_MOVE_LIMIT:
+	if (_last_pos - _start_pos).length() > _hold_slop():
 		return
 	_mode = Mode.LONG_PRESS
 	_emit_right_click(_start_pos)
@@ -215,7 +225,7 @@ func _handle_drag(event: InputEventScreenDrag) -> void:
 			return
 		var dx: float = event.position.x - _ui_start_pos.x
 		var dy: float = event.position.y - _ui_start_pos.y
-		if (Vector2(dx, dy)).length() > TAP_MOVE_LIMIT:
+		if (Vector2(dx, dy)).length() > _tap_slop():
 			_ui_dragged = true
 		if absf(dx) > absf(dy) and absf(dx) > SLIDE_TRIGGER and ui_slide_hit.is_valid():
 			var ctrl = ui_slide_hit.call(_ui_start_pos)
@@ -239,7 +249,7 @@ func _handle_drag(event: InputEventScreenDrag) -> void:
 	_last_pos = pos
 
 	if _mode == Mode.TAP_CANDIDATE:
-		if moved <= TAP_MOVE_LIMIT:
+		if moved <= _hold_slop():
 			return
 		_begin_drag()
 
@@ -288,7 +298,7 @@ func _finish_gesture(pos: Vector2) -> void:
 	match mode:
 		Mode.TAP_CANDIDATE:
 			# 居中建造只认浮层上的勾叉，点地图不放置建筑
-			if dist <= TAP_MOVE_LIMIT and elapsed <= TAP_TIME_LIMIT and not centered_build_mode:
+			if dist <= _tap_slop() and elapsed <= TAP_TIME_LIMIT and not centered_build_mode:
 				_emit_tap(pos)
 		Mode.BOX:
 			_push_motion(pos, Vector2.ZERO)

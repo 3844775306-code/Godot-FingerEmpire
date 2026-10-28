@@ -240,28 +240,35 @@ func _draw():
 		draw_rect(Rect2(pos - Vector2(3, 3), Vector2(7, 7)), Color(0, 0, 0, 0.55))
 		draw_rect(Rect2(pos - Vector2(2, 2), Vector2(5, 5)), dot_color)
 
-	# —— 友方主城：国家色圆环 + 白外弧单独特标，混在单位点里也能一眼找到 ——
+	# —— 所有国家的主城：各国国家色圆环，友方再加白色外弧 ——
+	# 旧逻辑只画友方主城，敌方主城退化成 5x5 小点；组队模式下同队玩家又共用
+	# 队伍色，于是「不同国家的主城颜色都一样」。这里改为全部主城都画，
+	# 颜色优先取国家色，其次快照颜色 / 玩家色，最后才退回队伍色。
 	for ent in entity_snapshots:
 		if int(ent.get("entity_id", -1)) != 20: continue
-		if int(ent.get("team", -2)) != player_team: continue
 		var cgx = int(ent["x"] + ms / 2)
 		var cgz = int(ent["z"] + ms / 2)
 		if cgx < 0 or cgx >= ms or cgz < 0 or cgz >= ms: continue
+		var cteam: int = int(ent.get("team", -2))
+		if cteam != player_team:
+			var cshow: bool = false
+			if cteam == RTSConfig.Team.NEUTRAL:
+				cshow = explored_grid[cgx][cgz] if cgx < explored_grid.size() and cgz < explored_grid[cgx].size() else false
+			else:
+				cshow = visible_grid[cgx][cgz] if cgx < visible_grid.size() and cgz < visible_grid[cgx].size() else false
+			if not cshow: continue
 		var cpos = Vector2(cgx * cell, cgz * cell)
-		# 主城标记取所属势力的国家色，与单位点同色系、靠更大圆环 + 白色外弧区分
-		var ccolor: Color = UITheme.GOLD
-		if ent.has("color"):
-			ccolor = ent["color"]
-		elif int(ent.get("nation", -1)) >= 0:
-			ccolor = RTSConfig.get_nation_color(int(ent["nation"]))
-		elif bm and bm.has_method("get_team_nation"):
-			var nn: int = int(bm.get_team_nation(player_team))
-			if nn >= 0:
-				ccolor = RTSConfig.get_nation_color(nn)
-		var cr = 8.0
+		var ccolor: Color = _castle_color(ent, bm, pc, cteam)
+		var cr: float = 8.0 if cteam == player_team else 7.0
 		draw_circle(cpos, cr + 3.0, Color(0, 0, 0, 0.6))
-		draw_circle(cpos, cr, Color(ccolor.lightened(0.1), 0.95))
-		draw_arc(cpos, cr + 4.0, 0.0, TAU, 28, Color(1.0, 1.0, 1.0, 0.85), 1.5)
+		draw_circle(cpos, cr, Color(ccolor.lightened(0.1), 0.98))
+		if cteam == player_team:
+			# 自己的主城：白色完整外弧，最容易定位
+			draw_arc(cpos, cr + 4.0, 0.0, TAU, 28, Color(1.0, 1.0, 1.0, 0.85), 1.5)
+		else:
+			# 敌方/其他国家：细白环 + 中心白点，和单位小方点区分开
+			draw_arc(cpos, cr + 3.0, 0.0, TAU, 24, Color(1.0, 1.0, 1.0, 0.55), 1.0)
+			draw_circle(cpos, 1.8, Color(1.0, 1.0, 1.0, 0.9))
 
 	# 战事警报
 	for alert in alert_signals:
@@ -284,6 +291,27 @@ func _draw():
 
 	# 复位变换，避免影响同一帧后续可能追加的绘制
 	draw_set_transform(Vector2.ZERO, 0.0, Vector2.ONE)
+
+# 主城颜色：国家色优先，保证 3v3/同队不同国时各自主城颜色不同；
+# 老快照没有 nation 时才退回实体颜色、玩家色和队伍色。
+func _castle_color(ent: Dictionary, bm, pc: Dictionary, team: int) -> Color:
+	var nation: int = int(ent.get("nation", -1))
+	if nation >= 0 and RTSConfig.has_nation_color(nation):
+		return RTSConfig.get_nation_color(nation)
+	if ent.has("color"):
+		return ent["color"]
+	var owner: int = int(ent.get("owner_peer_id", -1))
+	if owner != -1 and pc.has(owner):
+		return pc[owner]
+	if bm and bm.has_method("get_team_nation"):
+		var nn: int = int(bm.get_team_nation(team))
+		if nn >= 0 and RTSConfig.has_nation_color(nn):
+			return RTSConfig.get_nation_color(nn)
+	if team == RTSConfig.Team.BLUE:
+		return UITheme.SAPPHIRE
+	if team == RTSConfig.Team.RED:
+		return UITheme.VERMILION
+	return UITheme.GOLD
 
 # 在小地图上标出屏幕中心对应的地面位置：一个白色十字准星
 func _draw_view_frame(ms: float, cell: float) -> void:

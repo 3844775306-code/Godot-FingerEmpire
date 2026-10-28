@@ -7,6 +7,7 @@ extends RefCounted
 # 开发期开关：桌面端用 `-- --mobile-ui` 启动即可预览触屏界面
 static var force_mobile_ui: bool = false
 static var _web_touch_logged: bool = false
+static var _web_touch_cached: int = -1   # -1 未检测，0 否，1 是；Web 触屏能力不会中途变化
 
 # 是否移动平台（导出目标本身是手机/平板）
 static func is_mobile_platform() -> bool:
@@ -25,12 +26,18 @@ static func use_mobile_ui() -> bool:
 	if force_mobile_ui or is_mobile_platform():
 		return true
 	if OS.has_feature("web"):
+		if _web_touch_cached != -1:
+			return _web_touch_cached == 1
 		var touch := DisplayServer.is_touchscreen_available()
 		if not touch:
 			# 部分 iPad/移动浏览器只暴露 maxTouchPoints，不提供 DisplayServer 触摸能力。
 			var js = Engine.get_singleton("JavaScriptBridge")
 			if js != null:
-				touch = bool(js.eval("navigator.maxTouchPoints > 0 || 'ontouchstart' in window"))
+				touch = bool(js.eval(
+					"(navigator.maxTouchPoints || 0) > 0" +
+					" || ('ontouchstart' in window)" +
+					" || (window.matchMedia && window.matchMedia('(pointer: coarse)').matches)"))
+		_web_touch_cached = 1 if touch else 0
 		if not _web_touch_logged:
 			_web_touch_logged = true
 			print("[InputSource] web touch=", touch, " mobile_ui=", touch)

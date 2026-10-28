@@ -855,7 +855,24 @@ func update_info(entity):
 		if repair_btn: repair_btn.visible = false
 		if cancel_build_btn: cancel_build_btn.visible = false
 	hp_bar.visible = true
+	_promote_mobile_actions()
 	_apply_detail_mode()
+
+# 手机竖屏/横屏信息面板高度只有 200dp，属性文字较长时升级/生产按钮会被挤到可视区外。
+# 把玩法操作提到属性前面，至少保证「升级」和第一批生产卡不用滚动就能点到。
+func _promote_mobile_actions() -> void:
+	if not _is_mobile() or _vb == null:
+		return
+	var idx: int = 2
+	if upgrade_btn != null and is_instance_valid(upgrade_btn) and upgrade_btn.visible:
+		_vb.move_child(upgrade_btn, idx)
+		idx += 1
+	var box := _vb.get_node_or_null("UpgradeInfoBox")
+	if box != null:
+		_vb.move_child(box, idx)
+		idx += 1
+	if produce_vbox != null and is_instance_valid(produce_vbox) and produce_vbox.visible:
+		_vb.move_child(produce_vbox, idx)
 
 func _on_upgrade_pressed():
 	if not observed_entity or not is_instance_valid(observed_entity): return

@@ -654,7 +654,24 @@ func update_info(entity_id: int):
 		if repair_btn: repair_btn.visible = false
 		if cancel_build_btn: cancel_build_btn.visible = false
 		hp_bar.visible = false
+	_promote_mobile_actions()
 	_apply_detail_mode()
+
+# 手机信息面板可视高度有限，把升级/生产放在属性文字之前，
+# 避免玩家点开主城后只看到一屏属性，误以为没有生产/升级入口。
+func _promote_mobile_actions() -> void:
+	if not _is_mobile() or _vb == null:
+		return
+	var idx: int = 2
+	if upgrade_btn != null and is_instance_valid(upgrade_btn) and upgrade_btn.visible:
+		_vb.move_child(upgrade_btn, idx)
+		idx += 1
+	var box := _vb.get_node_or_null("UpgradeInfoBox")
+	if box != null:
+		_vb.move_child(box, idx)
+		idx += 1
+	if produce_vbox != null and is_instance_valid(produce_vbox) and produce_vbox.visible:
+		_vb.move_child(produce_vbox, idx)
 
 func _update_repair_ui(info: Dictionary, readonly: bool) -> void:
 	if repair_btn == null:
