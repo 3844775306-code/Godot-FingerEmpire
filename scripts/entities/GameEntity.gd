@@ -8,6 +8,11 @@ const BuildingDeathEffect = preload("res://scripts/effects/BuildingDeathEffect.g
 const BuildingConstructionVisual = preload("res://scripts/effects/BuildingConstructionVisual.gd")
 const TreeFallEffect = preload("res://scripts/effects/TreeFallEffect.gd")
 const EntityDamageVisual = preload("res://scripts/effects/EntityDamageVisual.gd")
+# 生产单位出生点搜索：从建筑外缘开始，按距离由近到远做细环采样，找到第一个
+# 合法点就停。比纯随机采样更稳定，也不会因为随机 30 次都撞空就跳到远处格子。
+const SPAWN_NEAR_MAX_RADIUS: float = 8.0
+const SPAWN_NEAR_RING_STEP: float = 0.45
+const SPAWN_NEAR_ANGLE_STEPS: int = 24
 
 var entity_id: int = 0
 var entity_type: int = 0        # 0=资源, 1=建筑, 2=军队
@@ -877,24 +882,29 @@ func _spawn_pos_blocked(pos: Vector3) -> bool:
 # Find spawn position on LAND (terrain must be walkable, never mountain or water)
 func _find_land_spawn_pos(margin: float = 1.2) -> Vector3:
 	var bm = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
-	var attempts = 0
-	var max_attempts = 30
 	# 起始距离要盖过建筑自身的视觉半径 + 单位自身半径，否则单位会生成在建筑模型里
 	var min_dist: float = _spawn_self_clearance() + maxf(0.8, body_radius) + 0.4
-	while attempts < max_attempts:
-		var angle = randf_range(0, TAU)
-		var dist = randf_range(min_dist, min_dist + 2.0)
-		var test_pos = _clamp_spawn_to_map(global_position + Vector3(cos(angle) * dist, 0, sin(angle) * dist), margin)
-		# 地形：山和水都不能用来出生
-		if bm and _is_spawn_blocked_terrain(bm.get_terrain_at(test_pos)):
-			attempts += 1; continue
-		# 落点周围必须是平地，避免单位卡在斜坡上
-		if bm and not _is_flat_spawn_pos(bm, test_pos):
-			attempts += 1; continue
-		# 和已有实体（含自己这栋建筑）保持体积间距
-		if _spawn_pos_blocked(test_pos):
-			attempts += 1; continue
-		return test_pos
+	# 先按“距离由近到远”的细环找最近落点；随机采样在拥挤基地里容易反复撞空，
+	# 退到格子搜索后可能把新单位丢到离建筑很远的位置。
+	var ring_count: int = int(ceil(SPAWN_NEAR_MAX_RADIUS / SPAWN_NEAR_RING_STEP)) + 1
+	var angle_offset: float = float((get_instance_id() + Engine.get_process_frames()) % SPAWN_NEAR_ANGLE_STEPS) \
+			* TAU / float(SPAWN_NEAR_ANGLE_STEPS)
+	for ring in range(ring_count):
+		var dist: float = min_dist + float(ring) * SPAWN_NEAR_RING_STEP
+		for i in range(SPAWN_NEAR_ANGLE_STEPS):
+			var angle: float = angle_offset + (float(i) + float(ring) * 0.5) \
+					* TAU / float(SPAWN_NEAR_ANGLE_STEPS)
+			var test_pos = _clamp_spawn_to_map(global_position + Vector3(cos(angle) * dist, 0, sin(angle) * dist), margin)
+			# 地形：山和水都不能用来出生
+			if bm and _is_spawn_blocked_terrain(bm.get_terrain_at(test_pos)):
+				continue
+			# 落点周围必须是平地，避免单位卡在斜坡上
+			if bm and not _is_flat_spawn_pos(bm, test_pos):
+				continue
+			# 和已有实体（含自己这栋建筑）保持体积间距
+			if _spawn_pos_blocked(test_pos):
+				continue
+			return test_pos
 	return _find_nearest_spawn_tile(global_position, false, margin)
 func _find_outside_spawn_pos() -> Vector3:
 	var best_pos = Vector3.ZERO
@@ -1000,13 +1010,20 @@ func _find_water_spawn_near(center: Vector3, margin: float = 1.5) -> Vector3:
 	var bm = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
 	if not bm:
 		return _clamp_spawn_to_map(center + Vector3(0, 0, 2), margin)
-	
-	for radius in [3, 5, 7]:
-		for _try in range(30):
-			var angle = randf_range(0, TAU)
-			var dist = randf_range(1, radius)
+	# 同样优先贴着船坞找最近水面，避免随机采样失败后把船刷到远处。
+	var min_dist: float = _spawn_self_clearance() + maxf(0.8, body_radius) + 0.4
+	var ring_count: int = int(ceil(SPAWN_NEAR_MAX_RADIUS / SPAWN_NEAR_RING_STEP)) + 1
+	var angle_offset: float = float((get_instance_id() + Engine.get_process_frames()) % SPAWN_NEAR_ANGLE_STEPS) \
+			* TAU / float(SPAWN_NEAR_ANGLE_STEPS)
+	for ring in range(ring_count):
+		var dist: float = min_dist + float(ring) * SPAWN_NEAR_RING_STEP
+		for i in range(SPAWN_NEAR_ANGLE_STEPS):
+			var angle: float = angle_offset + (float(i) + float(ring) * 0.5) \
+					* TAU / float(SPAWN_NEAR_ANGLE_STEPS)
 			var test_pos = _clamp_spawn_to_map(center + Vector3(cos(angle) * dist, 0, sin(angle) * dist), margin)
-			var terrain = bm.get_terrain_at(test_pos)
-			if terrain == 2:
-				return test_pos
+			if bm.get_terrain_at(test_pos) != 2:
+				continue
+			if _spawn_pos_blocked(test_pos):
+				continue
+			return test_pos
 	return _find_nearest_spawn_tile(center, true, margin)
