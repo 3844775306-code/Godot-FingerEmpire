@@ -2765,7 +2765,8 @@ func _has_nearby_terrain(x, y, terr_type, radius, size) -> bool:
 func _create_visual_and_texture():
 	var size: int = _get_map_size()
 	# 细分到每格 4 段（移动端 3 段）：顶点越密，山坡轮廓越顺，不会被切成大三角面
-	var mobile := InputSource.is_mobile_platform()
+	# 移动端/触屏 Web 同时走更保守的地表材质（见下方 ground_mat 分支）
+	var mobile := InputSource.is_mobile_platform() or InputSource.use_mobile_ui()
 	var n: int = maxi(80, int(round(float(size) * (3.0 if mobile else 4.0))))
 	var half: float = float(size) * 0.5
 	var step: float = float(size) / float(n)
@@ -2840,22 +2841,33 @@ func _create_visual_and_texture():
 	terrain_mesh_instance.material_override = null
 	add_child(terrain_mesh_instance)
 
-	# 地表材质：贴图给颜色，着色器按坡度混岩壁；裙边单独一份岩石材质
+	# 地表材质：桌面用噪声着色器做轻微法线扰动；移动端/触屏 Web 改用
+	# 不透明标准材质。部分手机 GLES3 驱动对“运行时生成、无 mipmap 的贴图 +
+	# 自定义 spatial 着色器”处理不一致，会出现地表完全不显示（只剩单位和建筑）。
+	# 标准材质牺牲一点法线细节，换取地面在所有移动端稳定可见。
 	var ground_mat: Material = null
-	var terrain_shader = load("res://resources/terrain_noise.gdshader")
-	if terrain_shader:
-		var tmat = ShaderMaterial.new()
-		tmat.shader = terrain_shader
-		tmat.set_shader_parameter("albedo_tex", terrain_texture)
-		_terrain_mat = tmat
-		ground_mat = tmat
+	if mobile:
+		var smat = StandardMaterial3D.new()
+		smat.albedo_texture = terrain_texture
+		smat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
+		smat.roughness = 1.0
+		smat.metallic = 0.0
+		smat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+		ground_mat = smat
 	else:
-		var mat = StandardMaterial3D.new()
-		mat.albedo_texture = terrain_texture
-		mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR_WITH_MIPMAPS
-		mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-		mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
-		ground_mat = mat
+		var terrain_shader = load("res://resources/terrain_noise.gdshader")
+		if terrain_shader:
+			var tmat = ShaderMaterial.new()
+			tmat.shader = terrain_shader
+			tmat.set_shader_parameter("albedo_tex", terrain_texture)
+			_terrain_mat = tmat
+			ground_mat = tmat
+		else:
+			var mat = StandardMaterial3D.new()
+			mat.albedo_texture = terrain_texture
+			mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
+			mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+			ground_mat = mat
 
 	var cliff_mat: Material = null
 	var cliff_shader = load("res://resources/terrain_cliff.gdshader")

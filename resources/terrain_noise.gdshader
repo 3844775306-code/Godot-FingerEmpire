@@ -3,7 +3,10 @@ shader_type spatial;
 // 让整块地面在光照下有细微的凹凸感，而不是一张贴平的贴图。
 render_mode blend_mix, depth_draw_opaque, cull_back;
 
-uniform sampler2D albedo_tex : source_color, filter_linear_mipmap;
+// 地形贴图由 ImageTexture 在运行时生成，没有 mipmap 链。
+// 这里不能用 filter_linear_mipmap：部分 GLES3 / WebGL 驱动会把它当成不完整纹理，
+// 采样返回全黑或全透明，表现就是“地面消失，只剩主城和农民”。
+uniform sampler2D albedo_tex : source_color, filter_linear;
 // 起伏幅度：地表顶点位移多少米。取 0.04 米级别，几乎不影响单位站立高度
 // 起伏流动速度：比水面慢得多，地面是"缓慢呼吸"而不是翻滚
 uniform float wave_speed : hint_range(0.0, 1.0) = 0.12;
