@@ -2260,6 +2260,9 @@ func _land_combat_units() -> Array:
 			continue
 		if int(e.entity_id) in [10, 14, 43, 44, 45, 46, 47, 48, 49, 50, 51]:
 			continue
+		# 侦察兵由 AI 的探图逻辑单独调度，不参与守军/资源守卫。
+		if int(e.entity_id) == 19:
+			continue
 		if e.water_capable:
 			continue
 		# 正在登船/坐船渡水的单位由 AIWaterCrossing 管理，不能被守军调度拉回

@@ -1224,7 +1224,7 @@ func _clean_transport_units():
 
 func _pick_units(max_count: int) -> Array:
 	var candidates: Array = []
-	var exclusions: Array = [5, 6, 9, 10, 13, 14, 39, 40, 43, 44, 45, 46, 47, 48, 49, 50, 51, 55, 56, 57]
+	var exclusions: Array = [5, 6, 9, 10, 13, 14, 19, 39, 40, 43, 44, 45, 46, 47, 48, 49, 50, 51, 55, 56, 57]
 	for e in battle.entities.get_children():
 		if not (e is Army) or e.health <= 0:
 			continue
