@@ -20,6 +20,13 @@ const DEFENSE_ANCHOR_MIN_DIST: int = 7
 const DEFENSE_ANCHOR_MAX_DIST: int = 14
 const DEFENSE_ANCHOR_LATERAL: int = 7
 const DEFENSE_LANE_MAX_WIDTH: int = 9
+# 战略隘口：白垩山脊这类地图的关口离主城可能 30~40 米，
+# 不能只按主城门口 7~14 米范围找防线，否则 AI 永远看不到山口的价值。
+const CHOKE_MIN_DIST: float = 12.0
+const CHOKE_MAX_DIST: float = 48.0
+const CHOKE_MIN_WIDTH: int = 2
+const CHOKE_MAX_WIDTH: int = 9
+const CHOKE_RETRY_INTERVAL: float = 32.0
 const DEFENSE_GAP_INTERVAL: float = 25.0
 const DEFENSE_BUILD_MAX_PER_TICK: int = 3
 const DEFENSE_UPGRADE_INTERVAL: float = 9.0
@@ -97,6 +104,10 @@ var wall_positions: Array = []
 var tower_positions: Array = []
 var _defense_anchor: Dictionary = {}   # 选中的隘口/浅滩防线锚点
 var _defense_terrain_text: String = "" # 调试面板显示的地形类型
+# 战略隘口防线：优先占住主城与敌军之间的山口，而不是只在主城门口修一圈。
+var _choke_planned: bool = false
+var _choke_anchor: Dictionary = {}
+var _next_choke_try: float = 0.0
 # 塔圈状态
 var _castle_ring_planned: bool = false
 var _castle_ring_radius: int = 0
@@ -359,6 +370,9 @@ func _manage_early_defense(castle, delta: float) -> void:
 			_next_layout_try = now + 8.0
 
 func _manage_defense(castle, delta: float) -> void:
+	# 先看能不能占住主城与敌军之间的天然山口；这一步与塔圈互不冲突，
+	# 山口防线会一直留在建造队列里，后面升级主城再补塔圈。
+	_ensure_chokepoint(castle)
 	_wall_ring_target = _required_wall_ring_count(castle)
 	if _wall_ring_target <= 0:
 		_manage_early_defense(castle, delta)
@@ -529,7 +543,10 @@ func _find_ford_near(pos: Vector3, radius: float = 3.5) -> Vector3:
 				best = wp
 	return best
 
-func _find_defense_anchor(castle, enemy_dir: Vector3) -> Dictionary:
+func _find_defense_anchor(castle, enemy_dir: Vector3,
+		min_dist: int = DEFENSE_ANCHOR_MIN_DIST,
+		max_dist: int = DEFENSE_ANCHOR_MAX_DIST,
+		lateral_max: int = DEFENSE_ANCHOR_LATERAL) -> Dictionary:
 	var forward: Vector3 = enemy_dir
 	forward.y = 0.0
 	if forward.length_squared() < 0.01:
@@ -541,9 +558,9 @@ func _find_defense_anchor(castle, enemy_dir: Vector3) -> Dictionary:
 
 	var best: Dictionary = {}
 	var best_score: float = -INF
-	for dist_i in range(DEFENSE_ANCHOR_MIN_DIST, DEFENSE_ANCHOR_MAX_DIST + 1):
+	for dist_i in range(min_dist, max_dist + 1):
 		var dist: float = float(dist_i)
-		for lateral_i in range(-DEFENSE_ANCHOR_LATERAL, DEFENSE_ANCHOR_LATERAL + 1):
+		for lateral_i in range(-lateral_max, lateral_max + 1):
 			var lateral: float = float(lateral_i)
 			var p: Vector3 = castle.global_position + forward * dist + perp * lateral
 			if not _is_valid_defense_ground(p, 1.0, true):
@@ -571,7 +588,7 @@ func _find_defense_anchor(castle, enemy_dir: Vector3) -> Dictionary:
 					continue
 			# 通道太宽不算隘口；5 格左右最理想，过窄可能是城墙/资源夹出的假通道
 			var width_score: float = 5.0 - absf(float(width) - 5.0) * 1.25
-			var center_bonus: float = 1.0 - absf(lateral) / float(DEFENSE_ANCHOR_LATERAL + 1)
+			var center_bonus: float = 1.0 - absf(lateral) / float(lateral_max + 1)
 			var score: float = width_score * 2.0 + float(barriers) * 0.45 + center_bonus * 3.0 + align * 5.0
 			score -= absf(dist - 10.0) * 0.22
 			if is_ford:
@@ -589,7 +606,207 @@ func _find_defense_anchor(castle, enemy_dir: Vector3) -> Dictionary:
 				}
 	return best
 
-func _find_anchor_spot(center: Vector3, b_id: int, search: float) -> Vector3:
+# ═══════════════════════════════════════════════════════════════
+# 战略隘口：在白垩山脊这类“山脊横贯、只有几处山口”的地图上，
+# 主动把墙线横在己方与敌军之间的山口上，而不是等敌人冲到主城门口。
+# ═══════════════════════════════════════════════════════════════
+
+func _fort_tech_ready(castle) -> bool:
+	if ai.battle != null and ai.battle.has_method("is_research_mode") and ai.battle.is_research_mode():
+		var st: Dictionary = ai.battle.get_research_state(ai.my_peer_id, ai.my_team)
+		return int(st.get("age", 0)) >= 1
+	return int(castle.upgrade_level) >= 2
+
+func _enemy_dir_for_pass(castle) -> Vector3:
+	var enemy_team: int = ai._primary_enemy_team()
+	var ec = ai.get_team_castle(enemy_team)
+	if ec != null and is_instance_valid(ec):
+		var d: Vector3 = ec.global_position - castle.global_position
+		d.y = 0.0
+		if d.length_squared() > 1.0:
+			return d.normalized()
+	return _enemy_castle_dir(castle)
+
+# 地图生成器会把“隘口中心”记在 Map 节点的 _pass_centers 里；
+# 优先用这些真实地图数据，找不到时再退回地形扇形搜索。
+func _map_pass_centers() -> Array:
+	var map = ai.battle.get_node_or_null("Map")
+	if map == null:
+		return []
+	var raw = map.get("_pass_centers")
+	if raw is Array:
+		return raw.duplicate()
+	return []
+
+# 山口墙线单段：只在通道横向左右微调，不沿通道大幅前后跳，
+# 否则同一条墙会被资源挤成前后错开的两截，看起来像断墙。
+func _find_pass_line_spot(base: Vector3, perp: Vector3, lateral: float) -> Vector3:
+	for dd in [0.0, 0.6, -0.6, 1.2, -1.2]:
+		var p: Vector3 = base + perp * lateral + _defense_dir * float(dd)
+		if not _is_valid_defense_ground(p, 1.0, true, false, false, true):
+			continue
+		# 直接用 AI 的实际建造校验，避免规划通过、建造时因为坡度/资源重叠反复失败。
+		if ai.has_method("_can_place_ai_building") and not ai._can_place_ai_building(27, p):
+			continue
+		if _defense_slot_clear(p, 1.0, 27):
+			return p
+	return Vector3.ZERO
+
+# 统计某个候选墙线位置上能放下几段墙，不写入建造队列。
+func _count_clear_wall_spots(base: Vector3, dir: Vector3, perp: Vector3, width: int) -> int:
+	var half: float = maxf(3.0, float(width) * 0.5 + 3.0)
+	var clear: int = 0
+	var lateral: float = -half
+	while lateral <= half + 0.01:
+		for dd in [0.0, 0.6, -0.6, 1.2, -1.2]:
+			var p: Vector3 = base + perp * lateral + dir * float(dd)
+			if not _is_valid_defense_ground(p, 1.0, true, false, false, true):
+				continue
+			if ai.has_method("_can_place_ai_building") and not ai._can_place_ai_building(27, p):
+				continue
+			if _defense_slot_clear(p, 1.0, 27):
+				clear += 1
+				break
+		lateral += 1.5
+	return clear
+
+func _find_pass_anchor_spot(pass_pos: Vector3, dir: Vector3, perp: Vector3) -> Vector3:
+	# 白垩山脊的隘口中心通常被金矿/石矿占满，沿通道往己方一侧多退几米，
+	# 直到退出资源占地；墙线仍然横在同一个 4 格宽的山口里。
+	# 多个候选里选“能放下最多完整墙段”的位置，而不是第一个勉强可站人的点。
+	var first_valid: Vector3 = Vector3.ZERO
+	var best_pos: Vector3 = Vector3.ZERO
+	var best_clear: int = -1
+	for forward_off in [0.0, -1.8, -3.6, -5.4, -7.2, -9.0, -12.0, -15.0, -18.0, 1.8, 3.6]:
+		for lateral_off in [0.0, 1.2, -1.2, 2.4, -2.4]:
+			var cand: Vector3 = pass_pos + dir * float(forward_off) + perp * float(lateral_off)
+			# 山口可能在 30 米外、当前没有视野；先规划，瞭望塔链会先把视野铺过去。
+			# 锚点本身只要求可通行；真正的墙位/塔位再检查平整度。
+			if not _is_valid_defense_ground(cand, 1.0, true, false, false):
+				continue
+			var w: int = _lane_width(cand, perp)
+			if w < CHOKE_MIN_WIDTH or w > CHOKE_MAX_WIDTH:
+				continue
+			if first_valid == Vector3.ZERO:
+				first_valid = cand
+			var clear: int = _count_clear_wall_spots(cand - dir * 0.8, dir, perp, w)
+			if clear > best_clear:
+				best_clear = clear
+				best_pos = cand
+			if best_clear >= 4:
+				return best_pos
+	if best_clear >= 3:
+		return best_pos
+	return first_valid
+
+func _find_pass_anchor(castle) -> Dictionary:
+	var base: Vector3 = castle.global_position
+	var enemy_dir: Vector3 = _enemy_dir_for_pass(castle)
+	enemy_dir.y = 0.0
+	if enemy_dir.length_squared() < 0.01:
+		return {}
+	enemy_dir = enemy_dir.normalized()
+	var pass_centers: Array = _map_pass_centers()
+	if pass_centers.is_empty():
+		# 没有“隘口”地图数据的地图仍由原来的近主城防线/工事逻辑处理，
+		# 避免在经典大陆的普通狭窄地形上误判成战略山口。
+		return {}
+	var best: Dictionary = {}
+	var best_score: float = -INF
+	var seen: Dictionary = {}
+	for pc in pass_centers:
+		if not (pc is Vector2i):
+			continue
+		# 平台台地/峡谷地图可能把同一处隘口记多次，6 格内去重。
+		var key := Vector2i(pc.x / 6, pc.y / 6)
+		if seen.has(key):
+			continue
+		seen[key] = true
+		var p: Vector3 = ai.battle.grid_to_world(pc.x, pc.y)
+		p.y = ai.battle.get_height_at_grid(pc.x, pc.y)
+		var delta: Vector3 = p - base
+		delta.y = 0.0
+		var dist: float = delta.length()
+		if dist < CHOKE_MIN_DIST or dist > CHOKE_MAX_DIST:
+			continue
+		var align: float = delta.normalized().dot(enemy_dir)
+		# 只占主城与敌人之间的山口；敌人背后的山口没有防守价值。
+		if align < 0.15:
+			continue
+		var perp: Vector3 = Vector3(-delta.z, 0.0, delta.x).normalized()
+		var anchor_pos: Vector3 = _find_pass_anchor_spot(p, delta.normalized(), perp)
+		if anchor_pos == Vector3.ZERO:
+			continue
+		var width: int = _lane_width(anchor_pos, perp)
+		if width < CHOKE_MIN_WIDTH or width > CHOKE_MAX_WIDTH:
+			continue
+		var barriers: int = _count_nearby_barriers(anchor_pos, 3)
+		if barriers < 2:
+			continue
+		# 山口再战略，落不下墙也没用；把“该山口能放几段墙”直接算进评分。
+		var wall_info: Dictionary = _find_pass_wall_base(anchor_pos, delta.normalized(), perp)
+		var wall_clear: int = int(wall_info.get("clear", 0))
+		delta = anchor_pos - base
+		delta.y = 0.0
+		var lateral: float = absf(delta.x * enemy_dir.z - delta.z * enemy_dir.x)
+		var score: float = align * 30.0 - absf(float(width) - 4.0) * 1.5 \
+				- lateral * 0.55 - absf(dist - 28.0) * 0.2 + float(barriers) * 0.6 \
+				+ float(wall_clear) * 2.5
+		if score > best_score:
+			best_score = score
+			best = {
+				"pos": anchor_pos,
+				"dir": delta.normalized(),
+				"perp": perp,
+				"dist": delta.length(),
+				"width": float(width),
+				"kind": "pass",
+			}
+	return best
+
+func _ensure_chokepoint(castle) -> bool:
+	if _choke_planned:
+		return true
+	if not _fort_tech_ready(castle):
+		return false
+	var now: float = float(ai.battle.game_time)
+	if now < _next_choke_try:
+		return false
+	_next_choke_try = now + CHOKE_RETRY_INTERVAL
+	var anchor: Dictionary = _find_pass_anchor(castle)
+	if anchor.is_empty():
+		return false
+	var old_dir: Vector3 = _defense_dir
+	_defense_dir = anchor["dir"]
+	var queue_before: int = _defense_queue.size()
+	var slots_before: int = _defense_slots.size()
+	var walls_before: int = wall_positions.size()
+	var towers_before: int = tower_positions.size()
+	var walls: int = _plan_anchor_defense(castle, anchor, 8.0, true)
+	var towers_added: int = tower_positions.size() - towers_before
+	# 窄口两段墙（每段直径 2 米）就能封死；4~5 格宽至少 3 段。
+	# 资源点本身也是天然障碍，墙段只需要补住可通行缝隙。
+	# 山口地形经常只剩塔位没有整段平地：先保证瞭望塔链/箭塔占住山口，
+	# 能落几段墙就落几段；完全没有墙位时也不放弃整个战略点。
+	var min_walls: int = 0 if towers_added >= 2 else 2
+
+	if walls < min_walls or towers_added < 1:
+		_defense_queue.resize(queue_before)
+		_defense_slots.resize(slots_before)
+		wall_positions.resize(walls_before)
+		tower_positions.resize(towers_before)
+		_defense_dir = old_dir
+		return false
+	_choke_planned = true
+	_choke_anchor = anchor
+	_defense_anchor = anchor
+	_defense_terrain_text = "隘口"
+	defense_initialized = true
+	_next_layout_try = now + 5.0
+	return true
+
+func _find_anchor_spot(center: Vector3, b_id: int, search: float,
+		require_vision: bool = true, require_flat: bool = false) -> Vector3:
 	var cfg: Dictionary = EntityDatabase.get_config(b_id)
 	if cfg.is_empty():
 		return Vector3.ZERO
@@ -598,71 +815,150 @@ func _find_anchor_spot(center: Vector3, b_id: int, search: float) -> Vector3:
 		for i in range(8):
 			var a: float = TAU * float(i) / 8.0
 			var p: Vector3 = center + Vector3(cos(a) * float(r), 0.0, sin(a) * float(r))
-			if not _is_valid_defense_ground(p, radius, true):
+			if not _is_valid_defense_ground(p, radius, true, false, require_vision, require_flat):
 				continue
 			if not _defense_slot_clear(p, radius, b_id):
 				continue
 			return p
 	return Vector3.ZERO
 
-func _find_defense_line_spot(base: Vector3, perp: Vector3, lateral: float, b_id: int, max_off: float) -> Vector3:
+func _find_defense_line_spot(base: Vector3, perp: Vector3, lateral: float,
+		b_id: int, max_off: float, require_vision: bool = true,
+		require_flat: bool = false) -> Vector3:
 	var cfg: Dictionary = EntityDatabase.get_config(b_id)
 	if cfg.is_empty():
 		return Vector3.ZERO
 	var radius: float = float(cfg.get("body_radius", 1.0))
 	for dl in [0.0, 0.6, -0.6, 1.2, -1.2]:
-		for dd in [0.0, 0.8, -0.8, max_off, -max_off]:
+		for dd in [0.0, 0.8, -0.8, 1.6, -1.6, 2.4, -2.4, 3.6, -3.6, max_off, -max_off]:
 			var p: Vector3 = base + perp * (lateral + float(dl)) + _defense_dir * float(dd)
-			if not _is_valid_defense_ground(p, radius, true):
+			if not _is_valid_defense_ground(p, radius, true, false, require_vision, require_flat):
 				continue
 			if not _defense_slot_clear(p, radius, b_id):
 				continue
 			return p
 	return Vector3.ZERO
 
-# 在隘口/浅滩两侧布置箭塔，并把墙线横向排开；返回实际可用的墙段数
-func _plan_anchor_defense(castle, anchor: Dictionary) -> int:
+# 山口中心经常被金矿占住，把整条墙线沿通道往己方一侧后退，
+# 在能放下最多墙段的横向位置落墙；宽度仍按该位置的实际通道宽。
+func _find_pass_wall_base(anchor_pos: Vector3, dir: Vector3, perp: Vector3) -> Dictionary:
+	var best: Dictionary = {}
+	var best_clear: int = -1
+	# 除了沿通道前后退，还要左右平移整条墙线：金矿经常压在通道正中，
+	# 墙线整体偏半格就能从资源缝里落下去。
+	for off in [0.0, 2.0, 4.0, 6.0, 8.0, 10.0, 12.0, 14.0, 16.0, 18.0, 20.0]:
+		for lateral_off in [0.0, -1.5, 1.5, -3.0, 3.0, -4.5, 4.5]:
+			var base: Vector3 = anchor_pos - dir * (0.8 + float(off)) + perp * float(lateral_off)
+			var w: int = _lane_width(base, perp)
+			if w < CHOKE_MIN_WIDTH or w > CHOKE_MAX_WIDTH:
+				continue
+			var clear: int = _count_clear_wall_spots(base, dir, perp, w)
+			if clear > best_clear:
+				best_clear = clear
+				best = {"base": base, "width": float(w), "clear": clear}
+			if best_clear >= 4:
+				break
+		if best_clear >= 4:
+			break
+	return best
+
+# 在隘口/浅滩两侧布置箭塔，并把墙线横向排开；返回实际可用的墙段数。
+# priority_base < 10 时用于“主动守山口”，塔/墙会比普通主城防线更早开工；
+# vision_chain 会在城堡到山口的路上铺瞭望塔，保证 30 米外的墙不会因无视野被拒绝。
+func _plan_anchor_defense(castle, anchor: Dictionary,
+		priority_base: float = 20.0, vision_chain: bool = false) -> int:
 	var dir: Vector3 = anchor["dir"]
 	var perp: Vector3 = anchor["perp"]
 	if perp.length_squared() < 0.01:
 		perp = dir.cross(Vector3.UP).normalized()
 	var anchor_pos: Vector3 = anchor["pos"]
-	var half_width: float = maxf(2.2, float(anchor["width"]) * 0.5)
+	var wall_base: Vector3 = anchor_pos - dir * 0.8
+	var wall_width: float = float(anchor["width"])
+	if vision_chain:
+		var wall_info: Dictionary = _find_pass_wall_base(anchor_pos, dir, perp)
+		if not wall_info.is_empty():
+			wall_base = wall_info["base"]
+			wall_width = float(wall_info["width"])
+	# 3~4 格宽的山口不能把塔放到山壁上；塔位收进通道内侧，
+	# 大范围防线仍用原来的半宽。
+	var half_width: float = clampf(wall_width * 0.35, 1.2, 3.0) if vision_chain \
+			else maxf(2.2, wall_width * 0.5)
+	var vision_prio: float = 2.0 if priority_base < 10.0 else 9.0
+	var arrow_prio: float = 6.0 if priority_base < 10.0 else 12.0
+	var cannon_prio: float = 7.0 if priority_base < 10.0 else 15.0
 
-	# 锚点较远时先在城堡前方补一座视野塔，保证后续墙/塔能落在己方视野内
-	if float(anchor["dist"]) > 10.0:
-		var vision_pos: Vector3 = castle.global_position + dir * 8.0
-		var vision_spot: Vector3 = _find_anchor_spot(vision_pos, 25, 1.5)
-		if vision_spot != Vector3.ZERO:
-			_add_defense_slot(25, vision_spot, 9.0, "tower")
+	# 锚点较远时先在城堡到山口的路上补瞭望塔，保证后续墙/塔能落在己方视野内。
+	if vision_chain:
+		var total_dist: float = castle.global_position.distance_to(wall_base)
+		var step: float = 8.0
+		var d: float = step
+		while d < total_dist - 1.0:
+			var vision_pos: Vector3 = castle.global_position + dir * d
+			var vs: Vector3 = _find_anchor_spot(vision_pos, 41, 2.2, false, true)
+			if vs != Vector3.ZERO:
+				_add_defense_slot(41, vs, vision_prio, "tower", false, false, true)
+			d += step
+	elif float(anchor["dist"]) > 10.0:
+		var vision_pos2: Vector3 = castle.global_position + dir * 8.0
+		var vision_spot2: Vector3 = _find_anchor_spot(vision_pos2, 25, 1.5)
+		if vision_spot2 != Vector3.ZERO:
+			_add_defense_slot(25, vision_spot2, vision_prio, "tower")
 
-	var tower_base: Vector3 = anchor_pos - dir * 1.8
+	# 山口塔位要退到墙后 4.5 米，否则规划塔时会把墙位挤掉，
+	# 最后只剩塔没有墙（塔和墙的规划最小间距是 2.8 米）。
+	var tower_base: Vector3 = wall_base - dir * (4.5 if vision_chain else 1.0)
+	var require_tower_vision: bool = not vision_chain
+	if vision_chain:
+		# 山口正中先补一座箭塔，保证不是只有瞭望塔没有火力；
+		# 资源/坡度把它挤开时再试两侧。
+		var center_tower: Vector3 = wall_base - dir * 4.2
+		var center_spot: Vector3 = _find_anchor_spot(center_tower, 25, 4.0, false, true)
+		if center_spot != Vector3.ZERO:
+			_add_defense_slot(25, center_spot, arrow_prio, "tower", false, false, true)
 	for side in [-1.0, 1.0]:
 		if _count_planned(25) >= 7:
 			break
 		var tower_pos: Vector3 = tower_base + perp * side * half_width
-		var tower_spot: Vector3 = _find_anchor_spot(tower_pos, 25, 2.2)
+		var tower_spot: Vector3 = _find_anchor_spot(tower_pos, 25, 2.2,
+				require_tower_vision, vision_chain)
 		if tower_spot != Vector3.ZERO:
-			_add_defense_slot(25, tower_spot, 12.0 + absf(float(side)) * 0.5, "tower")
+			_add_defense_slot(25, tower_spot, arrow_prio + absf(float(side)) * 0.5, "tower",
+					false, require_tower_vision, vision_chain)
 
 	if _count_planned(26) < 3:
 		var cannon_pos: Vector3 = tower_base - dir * 1.2
-		var cannon_spot: Vector3 = _find_anchor_spot(cannon_pos, 26, 2.0)
+		var cannon_spot: Vector3 = _find_anchor_spot(cannon_pos, 26, 2.0,
+				require_tower_vision, vision_chain)
 		if cannon_spot != Vector3.ZERO:
-			_add_defense_slot(26, cannon_spot, 15.0, "tower")
+			_add_defense_slot(26, cannon_spot, cannon_prio, "tower",
+					false, require_tower_vision, vision_chain)
 
-	var wall_base: Vector3 = anchor_pos - dir * 0.8
 	# 城墙半径 1.0（直径 2.0）：中心距必须 < 2.0 才能首尾重叠，
 	# 旧值 2.0 只是刚好相切，任何一段被微调/漏建就会露出能钻人的缝。
 	var spacing: float = 1.5
-	var wall_count: int = clampi(int(ceil(float(anchor["width"]) / spacing)) + 2, 6, 16)
 	var walls: int = 0
-	for i in range(wall_count):
-		var lateral: float = (float(i) - float(wall_count - 1) * 0.5) * spacing
-		var wall_spot: Vector3 = _find_defense_line_spot(wall_base, perp, lateral, 27, 1.6)
-		if wall_spot != Vector3.ZERO:
-			_add_defense_slot(27, wall_spot, 20.0 + absf(lateral) * 0.35, "wall")
-			walls += 1
+	if vision_chain:
+		# 山口：横向扫一整排墙位，资源/山壁占住的格子自然跳过；
+		# 资源点本身也是不可通行的天然障碍，墙段和资源一起封口。
+		var half: float = maxf(3.0, wall_width * 0.5 + 3.0)
+		var lateral: float = -half
+		while lateral <= half + 0.01 and walls < 16:
+			var wall_spot: Vector3 = _find_pass_line_spot(wall_base, perp, lateral)
+			if wall_spot != Vector3.ZERO:
+				if _add_defense_slot(27, wall_spot, priority_base + absf(lateral) * 0.35,
+						"wall", false, false, true):
+					walls += 1
+			lateral += spacing
+	else:
+		# 普通主城防线至少 6 段；宽一点的正面才需要更多。
+		var wall_count: int = clampi(int(ceil(wall_width / spacing)) + 1, 6, 16)
+		for i in range(wall_count):
+			var lateral2: float = (float(i) - float(wall_count - 1) * 0.5) * spacing
+			var wall_spot2: Vector3 = _find_defense_line_spot(wall_base, perp, lateral2, 27, 1.6)
+			if wall_spot2 != Vector3.ZERO:
+				if _add_defense_slot(27, wall_spot2, priority_base + absf(lateral2) * 0.35,
+						"wall"):
+					walls += 1
 	return walls
 
 # ═══════════════════════════════════════════════════════════════
@@ -1348,22 +1644,28 @@ func _defense_slot_clear(pos: Vector3, radius: float, b_id: int) -> bool:
 			return false
 	return true
 
-func _add_defense_slot(b_id: int, pos: Vector3, priority: float, kind: String, ignore_armies: bool = false) -> void:
+func _add_defense_slot(b_id: int, pos: Vector3, priority: float, kind: String,
+		ignore_armies: bool = false, require_vision: bool = true,
+		require_flat: bool = false) -> bool:
 	var cfg: Dictionary = EntityDatabase.get_config(b_id)
 	if cfg.is_empty():
-		return
+		return false
 	var radius: float = float(cfg.get("body_radius", 1.0))
 	# 防线塔位在规划阶段不受敌军距离影响；建好之后敌方靠近也不会把已有计划清空。
-	if not _is_valid_defense_ground(pos, radius, true, ignore_armies):
-		return
+	# 山口防线在 30 米外时当前没有视野，先按 require_vision=false 规划，
+	# 由优先建造的瞭望塔链在实际建造前把视野铺过去。
+	if not _is_valid_defense_ground(pos, radius, true, ignore_armies,
+			require_vision, require_flat):
+		return false
 	if not _defense_slot_clear(pos, radius, b_id):
-		return
+		return false
 	_defense_slots.append({"id": b_id, "pos": pos})
 	_defense_queue.append({"id": b_id, "pos": pos, "priority": priority, "tries": 0})
 	if kind == "wall":
 		wall_positions.append(pos)
 	else:
 		tower_positions.append({"id": b_id, "pos": pos})
+	return true
 
 func _build_defense_step() -> void:
 	if _defense_queue.is_empty():
@@ -1395,6 +1697,14 @@ func _build_defense_step() -> void:
 				if ai.battle.has_method("find_nearest_idle_builder") else null
 		if idle_builder == null:
 			break
+		# 敌人临时站在山口、或瞭望塔链还没把视野铺到时，不要把这一个队列项
+		# 当成“失败”消耗掉；等下一轮条件满足再建，否则山口防线会被敌人一次路过清空。
+		if ai._enemy_army_within(b_pos):
+			i += 1
+			continue
+		if not _defense_pos_visible(b_pos):
+			i += 1
+			continue
 		var facing: Vector3 = _defense_dir if b_id in TOWER_IDS else Vector3.ZERO
 		if ai.build_building(b_id, b_pos, facing):
 			built += 1
@@ -2150,7 +2460,9 @@ func _maybe_build_outpost(castle) -> void:
 # 通用判定
 # ═══════════════════════════════════════════════════════════════
 
-func _is_valid_defense_ground(pos: Vector3, radius: float = 1.0, allow_under_fire: bool = false, ignore_armies: bool = false) -> bool:
+func _is_valid_defense_ground(pos: Vector3, radius: float = 1.0,
+		allow_under_fire: bool = false, ignore_armies: bool = false,
+		require_vision: bool = true, require_flat: bool = false) -> bool:
 	var half: float = RTSConfig.MAP_SIZE / 2.0
 	if absf(pos.x) >= half - 2.0 or absf(pos.z) >= half - 2.0:
 		return false
@@ -2160,6 +2472,11 @@ func _is_valid_defense_ground(pos: Vector3, radius: float = 1.0, allow_under_fir
 		return false
 	if ai.battle.get_terrain_at_grid(gx, gz) != 0:
 		return false
+	# 山口/山脊边缘常见“中心格是平地、脚下实际是斜坡”的位置；
+	# 建造校验 _can_place_ai_building 会检查平整度，规划阶段先过滤掉，避免反复失败。
+	if require_flat and ai.battle.has_method("_is_terrain_flat"):
+		if not ai.battle._is_terrain_flat(pos, maxf(0.5, radius * 0.5)):
+			return false
 	for e in ai.battle.entities.get_children():
 		if not (e is GameEntity) or e.health <= 0:
 			continue
@@ -2187,7 +2504,9 @@ func _is_valid_defense_ground(pos: Vector3, radius: float = 1.0, allow_under_fir
 				continue
 			if e.global_position.distance_to(pos) < 5.0:
 				return false
-	return _has_friendly_vision(pos)
+	if require_vision and not _has_friendly_vision(pos):
+		return false
+	return true
 
 func _has_friendly_vision(pos: Vector3) -> bool:
 	# 主城默认视野 10m，而外墙在 12m 外；先按“防线包络”允许规划，
@@ -2198,6 +2517,16 @@ func _has_friendly_vision(pos: Vector3) -> bool:
 	for e in ai.battle.entities.get_children():
 		if e is GameEntity and e.health > 0 and ai.entity_belongs_to_me(e):
 			if e.global_position.distance_to(pos) <= float(e.vision_range):
+				return true
+	return false
+
+# 和 AI.build_building 的实际建造视野校验保持一致：
+# 只认已存在己方实体的视野，不使用规划用的 18 米城堡包络。
+func _defense_pos_visible(pos: Vector3) -> bool:
+	var world_pos := Vector3(pos.x, 0.0, pos.z)
+	for e in ai.battle.entities.get_children():
+		if e is GameEntity and e.health > 0 and ai.entity_belongs_to_me(e):
+			if e.global_position.distance_to(world_pos) <= float(e.vision_range):
 				return true
 	return false
 
