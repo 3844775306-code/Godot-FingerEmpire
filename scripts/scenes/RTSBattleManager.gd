@@ -2118,6 +2118,8 @@ func upgrade_building_type(team: int, building_id: int, from_building: Building)
 			e.melee_armor += upgrade.get("melee_armor_bonus", upgrade.get("armor_bonus", 0))
 			e.shield_armor += upgrade.get("shield_armor_bonus", upgrade.get("armor_bonus", 0))
 			e.attack += upgrade.get("attack_bonus", 0)
+			# 升级属于基础值，不把增量算进科研/官员分项
+			e.apply_upgrade_stat_delta(upgrade)
 			# 按 unlock_level / 当前等级同步生产列表，支持同一级解锁多个单位
 			e._sync_production_unlocks()
 			# 等级外观随全局升级同步刷新（同类型所有建筑一起升）
@@ -6693,6 +6695,7 @@ func apply_research_bonuses(e) -> void:
 			e.volley_count = int(mods.get("volley_count", 1))
 			e.volley_mult = float(mods.get("volley_mult", 1.0))
 		e.health = minf(e.max_health, e.max_health * health_ratio) if health_ratio > 0.0 else e.max_health
+		e._capture_stats_before_official()
 		return
 	# 单位
 	var hp := _mod_class(mods, uid, "class_hp_pct") + _mod_unit(mods, uid, "unit_hp_pct") + _mod_pct(mods, "all_hp_pct")
@@ -6734,6 +6737,7 @@ func apply_research_bonuses(e) -> void:
 		e.spell_power_mult = 1.0 + _mod_pct(mods, "spell_power_pct")
 		e.spell_resist = _mod_pct(mods, "spell_resist_pct")
 	e.health = e.max_health * health_ratio
+	e._capture_stats_before_official()
 
 # 数值变更后刷新一次可见血条；联机客户端靠快照同步，不存在客户端调用。
 func _research_refresh_entity_bars() -> void:

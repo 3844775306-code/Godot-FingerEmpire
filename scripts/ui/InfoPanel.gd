@@ -346,10 +346,20 @@ func _entity_detail_state(entity) -> Dictionary:
 		"health": entity.health,
 		"max_health": entity.max_health,
 		"attack": entity.attack,
+		"attack_speed": entity.attack_speed,
 		"attack_range": entity.attack_range,
 		"speed": entity.speed,
+		"melee_armor": entity.melee_armor,
+		"shield_armor": entity.shield_armor,
 		"level": entity.level,
 		"nation": _entity_nation(entity),
+		"max_health_breakdown": EntityBonusText.stat_breakdown_text(entity, "max_health"),
+		"attack_breakdown": EntityBonusText.stat_breakdown_text(entity, "attack"),
+		"attack_range_breakdown": EntityBonusText.stat_breakdown_text(entity, "attack_range", 1),
+		"speed_breakdown": EntityBonusText.stat_breakdown_text(entity, "speed", 1),
+		"melee_armor_breakdown": EntityBonusText.stat_breakdown_text(entity, "melee_armor"),
+		"shield_armor_breakdown": EntityBonusText.stat_breakdown_text(entity, "shield_armor"),
+		"attack_speed_breakdown": EntityBonusText.attack_speed_breakdown_text(entity),
 	}
 	if entity is Army:
 		d["task"] = _army_task_text(entity)
@@ -428,11 +438,10 @@ func _nation_display(entity) -> String:
 func _bonus_text(entity) -> String:
 	var nation: int = _entity_nation(entity)
 	var out: String = EntityBonusText.nation_block(nation)
-	if nation < 0:
-		return out
 	var bm = battle if battle else get_tree().get_first_node_in_group("battle_manager")
-	if bm != null and bm.has_method("is_research_mode") and bm.is_research_mode():
+	if nation >= 0 and bm != null and bm.has_method("is_research_mode") and bm.is_research_mode():
 		out += EntityBonusText.research_block_from_entity(entity)
+	out += EntityBonusText.official_block(entity)
 	return out
 
 func _hc(pct: float) -> String:
@@ -694,15 +703,22 @@ func update_info(entity):
 	var t := _nation_display(entity)
 	if t != "":
 		t += "\n"
-	t += "❤️ [color=%s]HP[/color]:  [color=white]%d / %d[/color]\n" % [hc, entity.health, entity.max_health]
-	t += "⚔️ [color=%s]ATK[/color]:  [color=white]%d[/color]" % [UITheme.hex_str(UITheme.GOLD), entity.attack]
+	t += "❤️ [color=%s]HP[/color]:  [color=white]%d[/color] / %s\n" % [
+		hc, entity.health, EntityBonusText.stat_breakdown_text(entity, "max_health")]
+	t += "⚔️ [color=%s]ATK[/color]:  %s" % [
+		UITheme.hex_str(UITheme.GOLD), EntityBonusText.stat_breakdown_text(entity, "attack")]
 	if entity.melee_armor > 0 or entity.shield_armor > 0:
-		t += "
-	⛓️ [color=%s]铠甲[/color]:  [color=white]%d[/color]  🛡️ [color=%s]盾牌[/color]:  [color=white]%d[/color]" % [
-		UITheme.hex_str(UITheme.SAPPHIRE), entity.melee_armor,
-		UITheme.hex_str(UITheme.STONE), entity.shield_armor]
-	t += "\n🎯 [color=%s]RANGE[/color]:  [color=white]%.1f[/color]" % [UITheme.hex_str(UITheme.GOLD), entity.attack_range]
-	t += "\n👟 [color=%s]SPEED[/color]:  [color=white]%.1f[/color]" % [UITheme.hex_str(UITheme.EMERALD), entity.speed]
+		t += "\n⛓️ [color=%s]铠甲[/color]:  %s  🛡️ [color=%s]盾牌[/color]:  %s" % [
+			UITheme.hex_str(UITheme.SAPPHIRE), EntityBonusText.stat_breakdown_text(entity, "melee_armor"),
+			UITheme.hex_str(UITheme.STONE), EntityBonusText.stat_breakdown_text(entity, "shield_armor")]
+	t += "\n🎯 [color=%s]RANGE[/color]:  %s" % [
+		UITheme.hex_str(UITheme.GOLD), EntityBonusText.stat_breakdown_text(entity, "attack_range", 1)]
+	t += "\n👟 [color=%s]SPEED[/color]:  %s" % [
+		UITheme.hex_str(UITheme.EMERALD), EntityBonusText.stat_breakdown_text(entity, "speed", 1)]
+	if entity.attack > 0.0:
+		t += "\n⚡ [color=%s]攻速[/color]:  %s [color=%s]次/秒[/color]" % [
+			UITheme.hex_str(UITheme.ALERT_WARNING), EntityBonusText.attack_speed_breakdown_text(entity),
+			UITheme.hex_str(UITheme.STONE)]
 	if entity is Building:
 		if entity.build_timer > 0.0:
 			var bp := clampf(1.0 - entity.build_timer / maxf(entity.max_build_time, 0.001), 0.0, 1.0)

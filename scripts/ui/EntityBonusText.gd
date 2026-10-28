@@ -1,13 +1,147 @@
 # scripts/ui/EntityBonusText.gd
-# 单位信息面板的“加成来源”文本：国家特色 + 已生效科研。
-# 单机版直接对比实体科研前的基础属性，准确反映实际套用的科研结果；
-# 联机版只能拿到本地玩家的科研快照，因此按同一套公式概括适用加成。
+# 单位信息面板的“加成来源”文本：国家特色 + 已生效科研 + 官员效果。
+# 属性数值按“基础（白）+ 国家（橙）+ 科研（绿）+ 官员（黄）”分项显示；
+# 单机版直接对比实体快照，准确反映实际套用的加成。
 class_name EntityBonusText
 extends RefCounted
 
-const C_NATION_TITLE := Color(0.80, 0.68, 0.36)
-const C_RESEARCH_TITLE := Color(0.55, 0.78, 1.0)
+const C_NATION_TITLE := Color(1.0, 0.62, 0.26)
+const C_RESEARCH_TITLE := Color(0.49, 0.86, 0.53)
 const C_BODY := Color(0.84, 0.79, 0.70)
+# 属性分项：基础白、国家橙、科研绿、官员黄
+const C_BASE := Color(1.0, 1.0, 1.0)
+const C_NATION := Color(1.0, 0.62, 0.26)
+const C_RESEARCH := Color(0.49, 0.86, 0.53)
+const C_OFFICIAL := Color(1.0, 0.84, 0.30)
+
+# 把当前属性拆成“基础 + 国家 + 科研 + 官员”四段带色数值。
+# 快照缺失时退回单段当前值，保证旧实体/联机快照也能正常显示。
+static func stat_breakdown_text(e, key: String, decimals: int = 0) -> String:
+	var br := _stat_breakdown(e, key)
+	if not bool(br.get("ok", false)):
+		return _colored_number(float(br.get("current", 0.0)), decimals, C_BASE, false)
+	var out := _colored_number(float(br["base"]), decimals, C_BASE, false)
+	out = _append_component(out, float(br["nation"]), decimals, C_NATION)
+	out = _append_component(out, float(br["research"]), decimals, C_RESEARCH)
+	out = _append_component(out, float(br["official"]), decimals, C_OFFICIAL)
+	return out
+
+# 攻速按“次/秒”显示，避免攻击间隔越小越快造成误读。
+static func attack_speed_breakdown_text(e) -> String:
+	var br := _stat_breakdown(e, "attack_speed")
+	if not bool(br.get("ok", false)):
+		var cur := float(br.get("current", 0.0))
+		if cur <= 0.001:
+			return _colored_number(0.0, 2, C_BASE, false)
+		return _colored_number(1.0 / cur, 2, C_BASE, false)
+	var base_i := float(br["base"])
+	var nation_i := base_i + float(br["nation"])
+	var research_i := nation_i + float(br["research"])
+	var current_i := research_i + float(br["official"])
+	if base_i <= 0.001 or nation_i <= 0.001 or research_i <= 0.001 or current_i <= 0.001:
+		return _colored_number(0.0, 2, C_BASE, false)
+	var base_aps := 1.0 / base_i
+	var nation_aps := 1.0 / nation_i
+	var research_aps := 1.0 / research_i
+	var current_aps := 1.0 / current_i
+	var out := _colored_number(base_aps, 2, C_BASE, false)
+	out = _append_component(out, nation_aps - base_aps, 2, C_NATION)
+	out = _append_component(out, research_aps - nation_aps, 2, C_RESEARCH)
+	out = _append_component(out, current_aps - research_aps, 2, C_OFFICIAL)
+	return out
+
+# 值得优先展示的官员效果（不含已经进入属性分项的光环）。
+static func official_block(e) -> String:
+	if e == null or not is_instance_valid(e):
+		return ""
+	var parts: Array = []
+	var meta_list: Array = e.get_meta_list()
+	for m in meta_list:
+		var key := String(m)
+		if key.begins_with("_cmd_aura_"):
+			parts.append("指挥官光环：攻速提升")
+		elif key.begins_with("_clerk_bonus_"):
+			parts.append("书记官光环：采集速度提升")
+	# 官员自身：说明他能提供什么效果
+	var eid := int(_num(e, "entity_id", 0))
+	if eid >= 46 and eid <= 50:
+		var own := _official_effect_text(eid)
+		if own != "":
+			parts.append(own)
+	# 建筑：列出正在驻扎的官员，覆盖护甲之外的仓储/生产/宰相倍率
+	if int(_num(e, "entity_type", 0)) == 1:
+		var tree: SceneTree = e.get_tree()
+		if tree != null:
+			for n in tree.get_nodes_in_group("entities"):
+				if n is Army and int(n.entity_id) >= 46 and int(n.entity_id) <= 50 and bool(n.get("_official_active")):
+					var gb = n.get("_garrison_building")
+					if gb != null and gb.get_ref() == e:
+						var txt := _official_effect_text(int(n.entity_id), int(_num(e, "entity_id", 0)))
+						if txt != "" and not parts.has(txt):
+							parts.append(txt)
+	if parts.is_empty():
+		return ""
+	return "\n\n[color=#%s]👑 官员效果[/color]  [color=#%s]%s[/color]" % [
+		C_OFFICIAL.to_html(false), C_BODY.to_html(false), " · ".join(parts)]
+
+static func _official_effect_text(eid: int, building_id: int = -1) -> String:
+	match eid:
+		46:
+			if building_id >= 0:
+				return "书记官：仓储 +50%" if building_id == 22 else ""
+			return "书记官：农民采集 +25%，仓库仓储 +50%"
+		47:
+			return "校尉：驻守建筑双护甲 +5"
+		48:
+			return "大臣：驻守建筑生产速度 +50%"
+		49:
+			return "指挥官：周围友军攻速 +25%"
+		50:
+			return "宰相：同建筑其他官员效果 ×2"
+	return ""
+
+static func _stat_breakdown(e, key: String) -> Dictionary:
+	var current := _num(e, key, 0.0)
+	var base_snap = e.get("_base_stats_raw")
+	var pre_snap = e.get("_stats_before_official")
+	var nation_snap = e.get("_research_base_stats")
+	if not (base_snap is Dictionary) or not (pre_snap is Dictionary):
+		return {"ok": false, "current": current}
+	var base_d: Dictionary = base_snap
+	var pre_d: Dictionary = pre_snap
+	var nation_d: Dictionary = nation_snap if nation_snap is Dictionary else {}
+	if base_d.is_empty() or pre_d.is_empty() or not base_d.has(key):
+		return {"ok": false, "current": current}
+	var base := float(base_d.get(key, current))
+	var nation_base := base
+	if nation_d.has(key):
+		nation_base = float(nation_d.get(key, base))
+	var before_official := float(pre_d.get(key, current))
+	return {
+		"ok": true,
+		"base": base,
+		"nation": nation_base - base,
+		"research": before_official - nation_base,
+		"official": current - before_official,
+		"current": current,
+	}
+
+static func _append_component(out: String, value: float, decimals: int, color: Color) -> String:
+	var epsilon := 0.005 if decimals > 0 else 0.5
+	if absf(value) < epsilon:
+		return out
+	return out + _colored_number(value, decimals, color, true)
+
+static func _colored_number(value: float, decimals: int, color: Color, signed: bool) -> String:
+	var txt := ""
+	if decimals <= 0:
+		txt = ("%+d" % int(round(value))) if signed else ("%d" % int(round(value)))
+	elif decimals == 1:
+		txt = ("%+.1f" % value) if signed else ("%.1f" % value)
+	else:
+		txt = ("%+.2f" % value) if signed else ("%.2f" % value)
+	return "[color=#%s]%s[/color]" % [color.to_html(false), txt]
+
 
 # 国家特色：直接从 NationBonuses 的实际数值生成，避免描述文案和结算数值不一致。
 static func nation_block(nation: int) -> String:
@@ -96,14 +230,25 @@ static func _research_section(body: String) -> String:
 
 static func _entity_research_parts(e, base: Dictionary) -> Array:
 	var parts: Array = []
-	_add_pct(parts, "生命", float(base.get("max_health", 0.0)), _num(e, "max_health", 0.0))
-	_add_pct(parts, "攻击", float(base.get("attack", 0.0)), _num(e, "attack", 0.0))
-	_add_attack_speed(parts, float(base.get("attack_speed", 0.0)), _num(e, "attack_speed", 0.0))
-	_add_flat(parts, "射程", float(base.get("attack_range", 0.0)), _num(e, "attack_range", 0.0), 1)
-	_add_pct(parts, "移速", float(base.get("speed", 0.0)), _num(e, "speed", 0.0))
-	_add_pct(parts, "视野", float(base.get("vision_range", 0.0)), _num(e, "vision_range", 0.0))
-	_add_flat(parts, "近战护甲", float(base.get("melee_armor", 0.0)), _num(e, "melee_armor", 0.0), 0)
-	_add_flat(parts, "盾甲", float(base.get("shield_armor", 0.0)), _num(e, "shield_armor", 0.0), 0)
+	# 科研结果按“官员生效前”的快照对比，避免把指挥官光环等官员效果算进科研。
+	var pre = e.get("_stats_before_official")
+	var observed: Dictionary = pre if pre is Dictionary and not pre.is_empty() else {}
+	var max_hp_now := float(observed.get("max_health", _num(e, "max_health", 0.0)))
+	var attack_now := float(observed.get("attack", _num(e, "attack", 0.0)))
+	var attack_speed_now := float(observed.get("attack_speed", _num(e, "attack_speed", 0.0)))
+	var attack_range_now := float(observed.get("attack_range", _num(e, "attack_range", 0.0)))
+	var speed_now := float(observed.get("speed", _num(e, "speed", 0.0)))
+	var vision_now := float(observed.get("vision_range", _num(e, "vision_range", 0.0)))
+	var melee_armor_now := float(observed.get("melee_armor", _num(e, "melee_armor", 0.0)))
+	var shield_armor_now := float(observed.get("shield_armor", _num(e, "shield_armor", 0.0)))
+	_add_pct(parts, "生命", float(base.get("max_health", 0.0)), max_hp_now)
+	_add_pct(parts, "攻击", float(base.get("attack", 0.0)), attack_now)
+	_add_attack_speed(parts, float(base.get("attack_speed", 0.0)), attack_speed_now)
+	_add_flat(parts, "射程", float(base.get("attack_range", 0.0)), attack_range_now, 1)
+	_add_pct(parts, "移速", float(base.get("speed", 0.0)), speed_now)
+	_add_pct(parts, "视野", float(base.get("vision_range", 0.0)), vision_now)
+	_add_flat(parts, "近战护甲", float(base.get("melee_armor", 0.0)), melee_armor_now, 0)
+	_add_flat(parts, "盾甲", float(base.get("shield_armor", 0.0)), shield_armor_now, 0)
 
 	var shield_pierce := _num(e, "shield_pierce", 0.0)
 	if shield_pierce > 0.001:

@@ -261,6 +261,7 @@ func setup(config: Dictionary):
 	attack = int(attack * scale)
 	if melee_armor > 0: melee_armor = (melee_armor * scale)
 	if shield_armor > 0: shield_armor = (shield_armor * scale)
+	_capture_base_stats()
 
 	# ÉèÖÃÀàÐÍ£ºÅ©Ãñ=0£¬Õ½¶·µ¥Î»=1
 	if entity_id in [10, 14]:
@@ -301,6 +302,7 @@ func _apply_nation_bonus():
 		# 无国家加成（中立/特殊单位）也要记录基础值并套用科研加成。
 		if bm.has_method("_capture_research_base"):
 			_capture_research_base()
+			_capture_stats_before_official()
 			if bm.has_method("apply_research_bonuses"):
 				bm.apply_research_bonuses(self)
 		return
@@ -334,6 +336,7 @@ func _apply_nation_bonus():
 	# 因此后续科技完成时从该基础值重算，不会重复叠加。
 	if bm.has_method("_capture_research_base"):
 		_capture_research_base()
+		_capture_stats_before_official()
 		if bm.has_method("apply_research_bonuses"):
 			bm.apply_research_bonuses(self)
 	  # ²»Ö÷¶¯×·»÷£¬Ö»¹¥»÷½øÈëÉä³ÌµÄµÐÈË

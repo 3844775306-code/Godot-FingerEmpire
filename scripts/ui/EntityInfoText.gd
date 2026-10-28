@@ -82,36 +82,44 @@ static func _add_stats(lines: Array[String], cfg: Dictionary, current: Dictionar
 	var max_hp := float(current.get("max_health", cfg.get("max_health", 0)))
 	var hp := float(current.get("health", max_hp))
 	if max_hp > 0.0:
-		var hp_txt := "%s / %s" % [_num(hp), _num(max_hp)]
+		var hp_max_txt: String = str(current.get("max_health_breakdown", _num(max_hp)))
+		var hp_txt := "%s / %s" % [_num(hp), hp_max_txt]
 		if absf(hp - max_hp) > 0.01:
 			hp_txt += "  (%d%%)" % int(round(100.0 * hp / max(max_hp, 1.0)))
 		lines.append(_pair("生命", hp_txt))
 	var atk := float(current.get("attack", cfg.get("attack", 0)))
-	var atk_speed := float(cfg.get("attack_speed", 0.0))
+	var atk_speed := float(current.get("attack_speed", cfg.get("attack_speed", 0.0)))
 	var dps := 0.0
 	if atk > 0.0 and atk_speed > 0.0:
 		dps = atk / atk_speed
-	lines.append(_pair("攻击", _num(atk) if atk > 0.0 else "—"))
+	var atk_txt: String = str(current.get("attack_breakdown", _num(atk) if atk > 0.0 else "—"))
+	lines.append(_pair("攻击", atk_txt))
 	if atk_speed > 0.0:
 		lines.append(_pair("攻击间隔", "%s 秒/次" % _num(atk_speed)))
+		if current.has("attack_speed_breakdown"):
+			lines.append(_pair("攻速（次/秒）", str(current["attack_speed_breakdown"])))
 	if dps > 0.0:
 		lines.append(_pair("秒伤 DPS", "%.1f" % dps))
 	var atk_range := float(current.get("attack_range", cfg.get("attack_range", 0.0)))
 	if atk_range > 0.0:
-		lines.append(_pair("攻击距离", _num(atk_range)))
+		var range_txt: String = str(current.get("attack_range_breakdown", _num(atk_range)))
+		lines.append(_pair("攻击距离", range_txt))
 	var vision := float(cfg.get("vision_range", 0.0))
 	if vision > 0.0:
 		lines.append(_pair("视野", _num(vision)))
 	var armor_parts: Array[String] = []
-	if int(cfg.get("melee_armor", 0)) > 0:
-		armor_parts.append("近战 %s" % _num(cfg["melee_armor"]))
-	if int(cfg.get("shield_armor", 0)) > 0:
-		armor_parts.append("远程 %s" % _num(cfg["shield_armor"]))
+	if float(current.get("melee_armor", cfg.get("melee_armor", 0))) > 0:
+		var melee_txt: String = str(current.get("melee_armor_breakdown", _num(cfg.get("melee_armor", 0))))
+		armor_parts.append("近战 %s" % melee_txt)
+	if float(current.get("shield_armor", cfg.get("shield_armor", 0))) > 0:
+		var shield_txt: String = str(current.get("shield_armor_breakdown", _num(cfg.get("shield_armor", 0))))
+		armor_parts.append("远程 %s" % shield_txt)
 	if not armor_parts.is_empty():
 		lines.append(_pair("护甲", "，".join(armor_parts)))
 	var speed := float(current.get("speed", cfg.get("speed", 0.0)))
 	if speed > 0.0:
-		lines.append(_pair("移动速度", _num(speed)))
+		var speed_txt: String = str(current.get("speed_breakdown", _num(speed)))
+		lines.append(_pair("移动速度", speed_txt))
 	if cfg.has("damage_radius") and float(cfg["damage_radius"]) > 0.0:
 		lines.append(_pair("溅射半径", _num(cfg["damage_radius"])))
 	if cfg.has("body_radius"):

@@ -75,6 +75,10 @@ var splash_damage_mult: float = 0.0          # 炮弹溅射倍率；0 = 沿用�
 var volley_count: int = 1                    # 主城/城堡齐射箭数
 var volley_mult: float = 1.0                 # 每支箭的伤害倍率
 var _research_base_stats: Dictionary = {}    # 科研加成前的基础数值快照
+# 信息面板分项显示用：基础值快照（等级/升级已计入，国家加成之前）
+var _base_stats_raw: Dictionary = {}
+# 套用科研、但尚未套用官员效果时的属性快照；当前值减它 = 官员加成
+var _stats_before_official: Dictionary = {}
 var _base_attack: float = 0.0               # 驻军前原始攻击力（用于还原）
 var _base_attack_speed: float = 0.0         # 驻军前原始攻速（攻城车专用）
 var _base_speed: float = 0.0                # 驻军前原始移速（攻城车专用）
@@ -236,8 +240,8 @@ func is_ranged_attacker() -> bool:
 func is_immune_to_damage(_source = null) -> bool:
 	return false
 
-func _capture_research_base() -> void:
-	_research_base_stats = {
+func _stat_snapshot() -> Dictionary:
+	return {
 		"max_health": max_health,
 		"attack": attack,
 		"attack_speed": attack_speed,
@@ -248,6 +252,33 @@ func _capture_research_base() -> void:
 		"shield_armor": shield_armor,
 		"damage_radius": damage_radius,
 	}
+
+func _capture_research_base() -> void:
+	_research_base_stats = _stat_snapshot()
+
+# 等级缩放后的原始基础值。必须在国家加成之前调用。
+func _capture_base_stats() -> void:
+	_base_stats_raw = _stat_snapshot()
+
+# 科研之后、官员光环之前。官员加成 = 当前值 - 该快照。
+func _capture_stats_before_official() -> void:
+	_stats_before_official = _stat_snapshot()
+
+# 建筑升级会直接加基础属性：把升级增量同步进三份快照，
+# 这样面板里的“基础/国家/科研/官员”分项不会把升级算进科研或官员。
+func apply_upgrade_stat_delta(upgrade: Dictionary) -> void:
+	var delta := {
+		"max_health": float(upgrade.get("health_bonus", 0)),
+		"attack": float(upgrade.get("attack_bonus", 0)),
+		"melee_armor": float(upgrade.get("melee_armor_bonus", upgrade.get("armor_bonus", 0))),
+		"shield_armor": float(upgrade.get("shield_armor_bonus", upgrade.get("armor_bonus", 0))),
+	}
+	for snap in [_base_stats_raw, _research_base_stats, _stats_before_official]:
+		if not (snap is Dictionary) or snap.is_empty():
+			continue
+		for key in delta:
+			if snap.has(key):
+				snap[key] = float(snap[key]) + float(delta[key])
 
 func take_damage(amount: float, source = null):
 	if _is_dead or health <= 0.0:

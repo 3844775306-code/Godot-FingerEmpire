@@ -350,6 +350,9 @@ func _finish_construction():
 		if nation >= 0:
 			_unlock_nation_units(nation)
 	# 科研模式：先记录基础数值，再套用全玩家科技加成；最后按科技解锁重排生产列表。
+	_capture_base_stats()
+	_capture_research_base()
+	_capture_stats_before_official()
 	if bm and bm.has_method("is_research_mode") and bm.is_research_mode():
 		_capture_research_base()
 		if bm.has_method("apply_research_bonuses"):
