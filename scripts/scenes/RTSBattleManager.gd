@@ -4803,7 +4803,7 @@ func _tick_animation_lod(delta: float) -> void:
 
 # 500 单位级战斗：每个物理 tick 的 Army 逻辑已经接近 16ms，再乘上帧末
 # 追赶的多个 physics tick 就会把帧时间推到几百毫秒。渲染保持 60FPS，
-# 单机大规模战斗把模拟降到 30Hz，并限制每帧追赶步数，打断“越卡越追”。
+# 单机大规模战斗把模拟降到 30Hz；低于 20FPS 时再降到 20Hz，减少每帧补跑步数。
 func _tick_physics_rate(delta: float) -> void:
 	if game_over:
 		return
@@ -4823,18 +4823,22 @@ func _tick_physics_rate(delta: float) -> void:
 		_set_physics_rate_low(false)
 
 func _set_physics_rate_low(low: bool) -> void:
-	# 低帧率时必须允许引擎按真实时间补跑足够的物理步：30Hz 模拟在 10FPS
-	# 每帧需要 3 步。以前大兵团只允许 1 步、普通规模 2 步，10FPS 下物理
-	# 时间只推进 1/3 或 2/3 真实时间，表现就是单位动作和游戏时间整体变慢。
-	# 这里放宽到默认的 8 步上限：只有真正掉帧时才会补跑，正常帧率不会多跑；
-	# 8 步仍能限制极端卡顿后的无限追赶，但足以让 10FPS 保持接近实时。
-	var want_steps: int = maxi(_physics_max_steps_original, 8)
+	# 低帧率时既要保持游戏时间接近真实，又不能一帧补跑太多物理步：
+	# 30Hz 模拟在 10FPS 下每帧要补 3 步，Army 逻辑重时会把帧时间继续推高，
+	# 表现为画面一阵一阵地卡。低于 20FPS 时把模拟降到 20Hz，10FPS 只需补 2 步，
+	# 总模拟时间仍然是 1 秒，但每帧少跑一步；正常帧率仍保持 30Hz 手感。
+	var fps: float = Engine.get_frames_per_second()
+	var want_hz: int = 20 if (low and fps < 20.0) else 30
+	# 最多补 4 步：20Hz 下足以支撑到 5FPS，30Hz 下足以支撑到 7.5FPS；
+	# 更极端的掉帧宁可让游戏稍微慢一点，也不制造更长的卡顿尖峰。
+	var want_steps: int = 4
 	if _physics_rate_low == low \
-			and (not low or Engine.max_physics_steps_per_frame == want_steps):
+			and (not low or (Engine.physics_ticks_per_second == want_hz \
+				and Engine.max_physics_steps_per_frame == want_steps)):
 		return
 	_physics_rate_low = low
 	if low:
-		Engine.physics_ticks_per_second = 30
+		Engine.physics_ticks_per_second = want_hz
 		Engine.max_physics_steps_per_frame = want_steps
 	else:
 		Engine.physics_ticks_per_second = maxi(_physics_tick_original, 30)
