@@ -9,8 +9,13 @@ const UIThemeScript = preload("res://scripts/ui/UITheme.gd")
 
 var _mobile := false
 var _vb: VBoxContainer = null
+var _level_area: VBoxContainer = null
 var _dialog_layer: Control = null
 var _mode_check: CheckBox = null
+var _free_banner: Label = null
+var _progress_label: Label = null
+var _free_tick := 0.0
+var _free_expiry_rebuilt := false
 
 func _ready() -> void:
 	# 触屏滑动误点守卫：选关卡片列表滑动后不误进关卡
@@ -21,7 +26,33 @@ func _ready() -> void:
 		add_child(OrientationReload.new())
 	GameSettings.campaign_mode = true
 	AudioManager.play_music("menu")
+
+	# 桌面按 2400×1400 设计画布缩放；手机端铺满实际视口。
+	var vs = get_viewport().get_visible_rect().size
+	var s = min(vs.x / 2400.0, vs.y / 1400.0)
+	if _mobile:
+		scale = Vector2.ONE
+		position = Vector2.ZERO
+		set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		size = UILayout.view_size()
+	else:
+		# 场景根节点在 tscn 里是 FULL_RECT；先改成左上锚点，
+		# 否则 _ready 设置的 2400 设计尺寸会在下一帧被锚点覆盖成视口大小。
+		set_anchors_and_offsets_preset(Control.PRESET_TOP_LEFT)
+		scale = Vector2(s, s)
+		position = Vector2.ZERO
+		size = Vector2(ceil(vs.x / s), maxf(1400.0, ceil(vs.y / s)))
 	_build()
+	set_process(true)
+
+func _process(delta: float) -> void:
+	if _free_banner == null:
+		return
+	_free_tick += delta
+	if _free_tick < 1.0:
+		return
+	_free_tick = 0.0
+	_update_free_banner()
 
 func _build() -> void:
 	var bg := ColorRect.new()
@@ -30,104 +61,369 @@ func _build() -> void:
 	bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(bg)
 
+	var frame := MarginContainer.new()
+	frame.name = "CampaignFrame"
+	frame.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	frame.add_theme_constant_override("margin_left", UILayout.dp(10.0) if _mobile else 32)
+	frame.add_theme_constant_override("margin_right", UILayout.dp(10.0) if _mobile else 32)
+	frame.add_theme_constant_override("margin_top", UILayout.dp(8.0) if _mobile else 24)
+	frame.add_theme_constant_override("margin_bottom", UILayout.dp(6.0) if _mobile else 22)
+	add_child(frame)
+
+	var layout := VBoxContainer.new()
+	layout.add_theme_constant_override("separation", UILayout.dp(6.0) if _mobile else 12)
+	frame.add_child(layout)
+
+	_mode_check = _make_mode_check()
+	layout.add_child(_make_header())
+	layout.add_child(_make_free_banner())
+	if _mobile and _mode_check != null:
+		layout.add_child(_mode_check)
+
+	var scroll := ScrollContainer.new()
+	scroll.name = "LevelScroll"
+	scroll.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	layout.add_child(scroll)
+
+	_level_area = VBoxContainer.new()
+	_level_area.name = "LevelArea"
+	_level_area.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_level_area.add_theme_constant_override("separation", UILayout.dp(14.0) if _mobile else 22)
+	scroll.add_child(_level_area)
+
+	_free_expiry_rebuilt = not CampaignProgressScript.is_free_unlock_active()
+	_populate_levels()
+	_update_free_banner()
+	_refresh_progress()
+
+func _make_header() -> Control:
+	if _mobile:
+		var box := VBoxContainer.new()
+		box.name = "Header"
+		box.add_theme_constant_override("separation", UILayout.dp(2.0))
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", UILayout.dp(8.0))
+		box.add_child(row)
+		row.add_child(_make_back_button())
+		var title_box := VBoxContainer.new()
+		title_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		title_box.alignment = BoxContainer.ALIGNMENT_CENTER
+		title_box.add_theme_constant_override("separation", 1)
+		row.add_child(title_box)
+		var title := Label.new()
+		title.text = "⚔ 帝国远征"
+		UIThemeScript.apply_label(title, UILayout.font_dp(19.0), UIThemeScript.GOLD.lightened(0.1))
+		title_box.add_child(title)
+		var sub := Label.new()
+		sub.text = "固定地图 · 每关一个任务 · 全 %d 关" % CampaignDataScript.playable_levels().size()
+		UIThemeScript.apply_label(sub, UILayout.font_dp(8.0), Color(UIThemeScript.STONE).lightened(0.35))
+		title_box.add_child(sub)
+		_progress_label = Label.new()
+		_progress_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		UIThemeScript.apply_label(_progress_label, UILayout.font_dp(8.0), UIThemeScript.PARCHMENT)
+		box.add_child(_progress_label)
+		return box
+
+	var header := HBoxContainer.new()
+	header.name = "Header"
+	header.custom_minimum_size = Vector2(0, 118)
+	header.add_theme_constant_override("separation", 22)
+	header.add_child(_make_back_button())
+
+	var title_box := VBoxContainer.new()
+	title_box.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	title_box.alignment = BoxContainer.ALIGNMENT_CENTER
+	title_box.add_theme_constant_override("separation", 2)
+	header.add_child(title_box)
+
 	var title := Label.new()
 	title.text = "⚔ 帝国远征"
-	UIThemeScript.apply_label(title, UILayout.font_dp(24.0) if _mobile else 40, UIThemeScript.GOLD)
-	title.position = Vector2(UILayout.dp(16.0) if _mobile else 48.0, UILayout.dp(10.0) if _mobile else 24.0)
-	add_child(title)
+	UIThemeScript.apply_label(title, 50, UIThemeScript.GOLD.lightened(0.1))
+	title_box.add_child(title)
 
 	var sub := Label.new()
-	sub.text = "闯关模式 · 固定地图 · 每关一个任务 · 支持经典/科研两种发展模式"
-	UIThemeScript.apply_label(sub, UILayout.font_dp(9.0) if _mobile else UIThemeScript.FONT_SM,
-		Color(UIThemeScript.STONE).lightened(0.35))
-	sub.position = Vector2(UILayout.dp(16.0) if _mobile else 50.0,
-		(UILayout.dp(40.0) if _mobile else 76.0))
-	add_child(sub)
+	sub.text = "固定地图 · 每关一个任务 · 全 %d 关" % CampaignDataScript.playable_levels().size()
+	UIThemeScript.apply_label(sub, 19, Color(UIThemeScript.STONE).lightened(0.35))
+	title_box.add_child(sub)
 
-	# 星级与通关进度
-	var total_levels: int = CampaignDataScript.playable_levels().size()
+	var right := VBoxContainer.new()
+	right.name = "HeaderRight"
+	right.alignment = BoxContainer.ALIGNMENT_CENTER
+	right.add_theme_constant_override("separation", 8)
+	header.add_child(right)
+
+	_progress_label = Label.new()
+	_progress_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	UIThemeScript.apply_label(_progress_label, 21, UIThemeScript.PARCHMENT)
+	right.add_child(_progress_label)
+
+	if _mode_check != null:
+		right.add_child(_mode_check)
+	return header
+
+func _make_back_button() -> Button:
+	var back := Button.new()
+	back.name = "BackButton"
+	back.text = "← 返回"
+	back.custom_minimum_size = Vector2(UILayout.dp(78.0) if _mobile else 210, UILayout.dp(32.0) if _mobile else 56)
+	if _mobile:
+		UIThemeScript.apply_muted_button(back, UILayout.font_dp(9.0))
+	else:
+		UIThemeScript.apply_muted_button(back, UIThemeScript.FONT_MD)
+	back.pressed.connect(_on_back_pressed)
+	return back
+
+
+func _make_free_banner() -> Control:
+	var panel := PanelContainer.new()
+	panel.name = "FreeTrialBanner"
+	panel.custom_minimum_size = Vector2(0, UILayout.dp(50.0) if _mobile else 76)
+	panel.add_theme_stylebox_override("panel", UIThemeScript.card_style(UIThemeScript.GOLD))
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", UILayout.dp(10.0) if _mobile else 22)
+	margin.add_theme_constant_override("margin_right", UILayout.dp(10.0) if _mobile else 22)
+	margin.add_theme_constant_override("margin_top", UILayout.dp(5.0) if _mobile else 10)
+	margin.add_theme_constant_override("margin_bottom", UILayout.dp(5.0) if _mobile else 10)
+	panel.add_child(margin)
+
+	var row := HBoxContainer.new()
+	row.add_theme_constant_override("separation", UILayout.dp(8.0) if _mobile else 18)
+	margin.add_child(row)
+
+	var icon := Label.new()
+	icon.text = "🎁"
+	UIThemeScript.apply_label(icon, UILayout.font_dp(18.0) if _mobile else 34, UIThemeScript.GOLD)
+	row.add_child(icon)
+
+	_free_banner = Label.new()
+	_free_banner.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_free_banner.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_free_banner.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UIThemeScript.apply_label(_free_banner, UILayout.font_dp(9.0) if _mobile else 21,
+		UIThemeScript.GOLD)
+	row.add_child(_free_banner)
+	return panel
+
+func _update_free_banner() -> void:
+	if _free_banner == null:
+		return
+	var left := CampaignProgressScript.free_unlock_remaining()
+	if left > 0:
+		_free_banner.text = "全关卡体验期 · %d 关全部开放 ｜ 剩余 %s" % [
+			CampaignDataScript.playable_levels().size(), CampaignProgressScript.free_unlock_text()]
+		_free_banner.add_theme_color_override("font_color", UIThemeScript.GOLD.lightened(0.12))
+		return
+	_free_banner.text = "全关卡体验期已结束 · 关卡按通关进度解锁"
+	_free_banner.add_theme_color_override("font_color", Color(UIThemeScript.STONE).lightened(0.35))
+	if not _free_expiry_rebuilt:
+		_free_expiry_rebuilt = true
+		_rebuild_levels()
+
+func _refresh_progress() -> void:
+	if _progress_label == null:
+		return
+	var levels: Array = CampaignDataScript.playable_levels()
+	var total := levels.size()
 	var cleared := 0
-	for lv in CampaignDataScript.playable_levels():
+	for lv in levels:
 		if CampaignProgressScript.is_cleared(String(lv.get("id", ""))):
 			cleared += 1
-	var star_total: int = CampaignProgressScript.total_stars()
-	var progress := Label.new()
-	progress.text = "通关 %d / %d ｜ 累计 ★ %d / %d" % [cleared, total_levels, star_total, total_levels * 3]
-	UIThemeScript.apply_label(progress, UILayout.font_dp(10.0) if _mobile else UIThemeScript.FONT_MD,
-		UIThemeScript.PARCHMENT)
-	progress.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
-	progress.set_anchors_and_offsets_preset(Control.PRESET_TOP_RIGHT)
-	progress.offset_left = -(UILayout.dp(220.0) if _mobile else 420.0)
-	progress.offset_right = -(UILayout.dp(16.0) if _mobile else 48.0)
-	progress.offset_top = UILayout.dp(14.0) if _mobile else 36.0
-	progress.offset_bottom = progress.offset_top + 30.0
-	add_child(progress)
+	var stars := CampaignProgressScript.total_stars()
+	_progress_label.text = "通关 %d / %d ｜ ★ %d / %d" % [cleared, total, stars, total * 3]
 
-	# 战役也支持科研模式；选关界面直接切换，开始关卡时沿用当前选择。
-	_mode_check = _make_mode_check()
-	if _mobile:
-		# 手机端放在滚动列表最上方，避免和标题、进度重叠。
-		pass
-	else:
-		_mode_check.position = Vector2(520, 26)
-		_mode_check.size = Vector2(520, 32)
-		add_child(_mode_check)
-
-	# 关卡列表（可滚动）
-	var scroll := ScrollContainer.new()
-	scroll.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
-	scroll.offset_left = UILayout.dp(10.0) if _mobile else 48.0
-	scroll.offset_right = -(UILayout.dp(10.0) if _mobile else 48.0)
-	scroll.offset_top = UILayout.dp(62.0) if _mobile else 120.0
-	scroll.offset_bottom = -(UILayout.dp(58.0) if _mobile else 96.0)
-	scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
-	add_child(scroll)
-
-	_vb = VBoxContainer.new()
-	_vb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	_vb.add_theme_constant_override("separation", 10)
-	scroll.add_child(_vb)
-
-	if _mobile and _mode_check != null:
-		_vb.add_child(_mode_check)
-
+func _populate_levels() -> void:
+	if _level_area == null:
+		return
 	for chapter in CampaignDataScript.all_chapters():
-		_vb.add_child(_make_chapter_header(chapter))
+		var section := VBoxContainer.new()
+		section.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		section.add_theme_constant_override("separation", UILayout.dp(5.0) if _mobile else 10)
+
+		var head := VBoxContainer.new()
+		head.add_theme_constant_override("separation", 1)
+		section.add_child(head)
+
+		var chapter_title := Label.new()
+		chapter_title.text = String(chapter.get("name", ""))
+		UIThemeScript.apply_label(chapter_title, UILayout.font_dp(12.0) if _mobile else 30,
+			UIThemeScript.GOLD)
+		head.add_child(chapter_title)
+
+		var chapter_desc := Label.new()
+		chapter_desc.text = String(chapter.get("desc", ""))
+		chapter_desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		UIThemeScript.apply_label(chapter_desc, UILayout.font_dp(8.0) if _mobile else 17,
+			Color(UIThemeScript.STONE).lightened(0.3))
+		head.add_child(chapter_desc)
+
+		var grid := GridContainer.new()
+		grid.columns = 2 if _mobile else 4
+		grid.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		grid.add_theme_constant_override("h_separation", UILayout.dp(6.0) if _mobile else 16)
+		grid.add_theme_constant_override("v_separation", UILayout.dp(6.0) if _mobile else 16)
+		section.add_child(grid)
+
 		var has_level := false
 		for lv in CampaignDataScript.playable_levels():
 			if int(lv.get("chapter", 0)) != int(chapter.get("id", 0)):
 				continue
 			has_level = true
-			_vb.add_child(_make_level_card(lv))
+			grid.add_child(_make_level_card(lv))
 		if not has_level:
 			var coming := Label.new()
-			coming.text = "　本章正在开发中，先通关第一章吧。"
+			coming.text = "本章正在开发中。"
 			UIThemeScript.apply_label(coming, UILayout.font_dp(9.0) if _mobile else UIThemeScript.FONT_SM,
 				Color(UIThemeScript.STONE).lightened(0.2))
-			_vb.add_child(coming)
+			section.add_child(coming)
+		_level_area.add_child(section)
 
-	# 返回主菜单
-	var back := Button.new()
-	back.text = "← 返回主菜单"
-	if _mobile:
-		back.custom_minimum_size = Vector2(UILayout.dp(160.0), UILayout.dp(40.0))
-		UIThemeScript.apply_button(back, UILayout.font_dp(11.0))
-		back.position = Vector2(UILayout.dp(12.0), size.y - UILayout.dp(50.0))
-		back.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-		back.offset_left = UILayout.dp(12.0)
-		back.offset_bottom = -UILayout.dp(10.0)
-		back.offset_top = -UILayout.dp(50.0)
-		back.offset_right = UILayout.dp(172.0)
+func _rebuild_levels() -> void:
+	if _level_area == null:
+		return
+	for child in _level_area.get_children():
+		_level_area.remove_child(child)
+		child.queue_free()
+	_populate_levels()
+	_refresh_progress()
+
+func _make_level_card(level: Dictionary) -> Control:
+	var level_id := String(level.get("id", ""))
+	var unlocked := CampaignProgressScript.is_unlocked(level_id)
+	var stars := CampaignProgressScript.best_stars(level_id)
+	var cleared := CampaignProgressScript.is_cleared(level_id)
+	var free_active := CampaignProgressScript.is_free_unlock_active()
+	var accent: Color = UIThemeScript.GOLD if unlocked else UIThemeScript.STONE
+	var card := Button.new()
+	card.name = "Level_" + level_id
+	card.text = ""
+	card.custom_minimum_size = Vector2(0, UILayout.dp(170.0) if _mobile else 320)
+	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	card.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	card.disabled = not unlocked
+	card.focus_mode = Control.FOCUS_NONE
+	card.mouse_default_cursor_shape = Control.CURSOR_POINTING_HAND if unlocked else Control.CURSOR_ARROW
+	card.tooltip_text = "进入关卡查看简报" if unlocked else "通关上一关后解锁"
+	card.add_theme_stylebox_override("normal", _card_style(accent, unlocked))
+	card.add_theme_stylebox_override("hover", _card_style(UIThemeScript.GOLD, true, true))
+	card.add_theme_stylebox_override("pressed", _card_style(UIThemeScript.GOLD, true, true, true))
+	card.add_theme_stylebox_override("disabled", _card_style(UIThemeScript.STONE, false))
+	card.pressed.connect(_open_brief.bind(level))
+
+	var margin := MarginContainer.new()
+	margin.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	margin.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	margin.add_theme_constant_override("margin_left", UILayout.dp(8.0) if _mobile else 22)
+	margin.add_theme_constant_override("margin_right", UILayout.dp(8.0) if _mobile else 22)
+	margin.add_theme_constant_override("margin_top", UILayout.dp(6.0) if _mobile else 16)
+	margin.add_theme_constant_override("margin_bottom", UILayout.dp(6.0) if _mobile else 16)
+	card.add_child(margin)
+
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", UILayout.dp(2.0) if _mobile else 6)
+	vb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	margin.add_child(vb)
+
+	var top := HBoxContainer.new()
+	top.add_theme_constant_override("separation", 4)
+	vb.add_child(top)
+
+	var badge := Label.new()
+	var chapter := int(level.get("chapter", 1))
+	var index := int(level.get("index", 1))
+	if chapter == 5:
+		badge.text = "挑战 %d" % (index - 100)
 	else:
-		back.custom_minimum_size = Vector2(180.0, 46.0)
-		UIThemeScript.apply_button(back, UIThemeScript.FONT_MD)
-		back.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
-		back.offset_left = 48.0
-		back.offset_top = -78.0
-		back.offset_right = 228.0
-		back.offset_bottom = -30.0
-	back.pressed.connect(_on_back_pressed)
-	add_child(back)
+		badge.text = "第 %d 关" % index
+	badge.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	UIThemeScript.apply_label(badge, UILayout.font_dp(9.0) if _mobile else 18,
+		accent if unlocked else Color(UIThemeScript.STONE).lightened(0.2))
+	top.add_child(badge)
+
+	var star_label := Label.new()
+	if stars > 0:
+		star_label.text = "★".repeat(stars) + "☆".repeat(3 - stars)
+	else:
+		star_label.text = "☆☆☆" if not (free_active and unlocked) else "🎁 体验"
+	UIThemeScript.apply_label(star_label, UILayout.font_dp(9.0) if _mobile else 19,
+		UIThemeScript.GOLD if stars > 0 else Color(UIThemeScript.STONE).lightened(0.2))
+	top.add_child(star_label)
+
+	var title := Label.new()
+	title.text = String(level.get("name", ""))
+	title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UIThemeScript.apply_label(title, UILayout.font_dp(12.0) if _mobile else 30,
+		UIThemeScript.PARCHMENT if unlocked else Color(UIThemeScript.STONE).lightened(0.15))
+	vb.add_child(title)
+
+	var sub := Label.new()
+	sub.text = String(level.get("subtitle", ""))
+	sub.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	UIThemeScript.apply_label(sub, UILayout.font_dp(8.0) if _mobile else 16,
+		Color(UIThemeScript.PARCHMENT, 0.82) if unlocked else Color(UIThemeScript.STONE).lightened(0.15))
+	vb.add_child(sub)
+
+	var objective := Label.new()
+	objective.text = _card_objective(level)
+	objective.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	objective.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	UIThemeScript.apply_label(objective, UILayout.font_dp(8.0) if _mobile else 15,
+		Color(UIThemeScript.PARCHMENT, 0.7) if unlocked else Color(UIThemeScript.STONE).lightened(0.2))
+	vb.add_child(objective)
+
+	var foot := HBoxContainer.new()
+	foot.add_theme_constant_override("separation", 4)
+	vb.add_child(foot)
+
+	var status := Label.new()
+	status.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	status.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	if not unlocked:
+		status.text = "🔒 未解锁"
+	elif cleared:
+		status.text = "最佳 ★%d" % stars
+	elif free_active:
+		status.text = "🎁 体验期开放"
+	else:
+		status.text = "任务待完成"
+	UIThemeScript.apply_label(status, UILayout.font_dp(8.0) if _mobile else 16,
+		Color(UIThemeScript.STONE).lightened(0.3) if not unlocked else (UIThemeScript.GOLD if free_active else UIThemeScript.PARCHMENT))
+	foot.add_child(status)
+
+	if unlocked:
+		var go := Label.new()
+		go.text = "进入 ▸" if not cleared else "再战 ▸"
+		go.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+		UIThemeScript.apply_label(go, UILayout.font_dp(9.0) if _mobile else 18,
+			UIThemeScript.GOLD)
+		foot.add_child(go)
+	return card
+
+func _card_objective(level: Dictionary) -> String:
+	var labels: Array = []
+	for o in level.get("objectives", []):
+		labels.append(str(o.get("label", "")))
+	var text := "；".join(labels)
+	var limit := float(level.get("time_limit", 0.0))
+	if limit > 0.0:
+		text += " · 限时 %d 分钟" % int(limit / 60.0)
+	return text
+
+func _card_style(accent: Color, unlocked: bool, hover: bool = false, pressed: bool = false) -> StyleBoxFlat:
+	var s := UIThemeScript.panel_style(UIThemeScript.RADIUS_MD, UIThemeScript.BORDER_MED, 0.96)
+	s.bg_color = Color(0.105, 0.09, 0.075, 0.97) if unlocked else Color(0.075, 0.07, 0.065, 0.95)
+	if hover:
+		s.bg_color = Color(0.16, 0.13, 0.09, 0.98)
+	if pressed:
+		s.bg_color = Color(0.2, 0.16, 0.1, 0.99)
+	s.border_color = Color(accent, 0.9 if (hover or pressed) else (0.55 if unlocked else 0.25))
+	s.set_border_width_all(UIThemeScript.BORDER_MED if unlocked else UIThemeScript.BORDER_THIN)
+	s.set_corner_radius_all(UIThemeScript.RADIUS_MD)
+	s.shadow_size = 8 if unlocked else 3
+	s.shadow_color = Color(0, 0, 0, 0.45)
+	s.shadow_offset = Vector2(2, 3)
+	return s
 
 func _make_mode_check() -> CheckBox:
 	var cb := CheckBox.new()
@@ -141,89 +437,21 @@ func _make_mode_check() -> CheckBox:
 	cb.add_theme_color_override("icon_normal_color", UIThemeScript.GOLD)
 	cb.toggled.connect(_on_mode_toggled)
 	if _mobile:
-		cb.custom_minimum_size = Vector2(0, UILayout.dp(34.0))
+		cb.custom_minimum_size = Vector2(0, UILayout.dp(30.0))
+		cb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	else:
+		cb.custom_minimum_size = Vector2(0, 32)
 		cb.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	return cb
 
 func _on_mode_toggled(on: bool) -> void:
 	GameSettings.progression_mode = GameSettings.ProgressionMode.RESEARCH if on else GameSettings.ProgressionMode.CLASSIC
 
-func _make_chapter_header(chapter: Dictionary) -> Control:
-	var box := VBoxContainer.new()
-	box.add_theme_constant_override("separation", 2)
-	var title := Label.new()
-	title.text = String(chapter.get("name", ""))
-	UIThemeScript.apply_label(title, UILayout.font_dp(13.0) if _mobile else UIThemeScript.FONT_XL,
-		UIThemeScript.GOLD)
-	box.add_child(title)
-	var desc := Label.new()
-	desc.text = String(chapter.get("desc", ""))
-	desc.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	UIThemeScript.apply_label(desc, UILayout.font_dp(8.0) if _mobile else UIThemeScript.FONT_SM,
-		Color(UIThemeScript.STONE).lightened(0.3))
-	box.add_child(desc)
-	return box
-
-func _make_level_card(level: Dictionary) -> Control:
-	var level_id := String(level.get("id", ""))
-	var unlocked: bool = CampaignProgressScript.is_unlocked(level_id)
-	var stars: int = CampaignProgressScript.best_stars(level_id)
-	var accent: Color = UIThemeScript.GOLD if unlocked else UIThemeScript.STONE
-	var card := PanelContainer.new()
-	card.add_theme_stylebox_override("panel", UIThemeScript.card_style(accent))
-	card.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	var vb := VBoxContainer.new()
-	vb.add_theme_constant_override("separation", 4)
-	card.add_child(vb)
-
-	var head := HBoxContainer.new()
-	head.add_theme_constant_override("separation", 8)
-	vb.add_child(head)
-
-	var name_label := Label.new()
-	name_label.text = CampaignDataScript.display_name(level)
-	UIThemeScript.apply_label(name_label, UILayout.font_dp(12.0) if _mobile else UIThemeScript.FONT_XL,
-		UIThemeScript.PARCHMENT if unlocked else Color(UIThemeScript.STONE).lightened(0.2))
-	name_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	head.add_child(name_label)
-
-	var star_label := Label.new()
-	star_label.text = ("★".repeat(stars) + "☆".repeat(3 - stars)) if stars > 0 else "☆☆☆"
-	UIThemeScript.apply_label(star_label, UILayout.font_dp(12.0) if _mobile else UIThemeScript.FONT_LG,
-		UIThemeScript.GOLD if stars > 0 else Color(UIThemeScript.STONE).lightened(0.1))
-	head.add_child(star_label)
-
-	var sub := Label.new()
-	sub.text = String(level.get("subtitle", ""))
-	UIThemeScript.apply_label(sub, UILayout.font_dp(9.0) if _mobile else UIThemeScript.FONT_SM,
-		Color(UIThemeScript.PARCHMENT, 0.85))
-	vb.add_child(sub)
-
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 8)
-	vb.add_child(row)
-
-	if unlocked:
-		var go := Button.new()
-		go.text = "进入关卡" if stars <= 0 else "再次挑战"
-		if _mobile:
-			go.custom_minimum_size = Vector2(UILayout.dp(110.0), UILayout.dp(34.0))
-			UIThemeScript.apply_primary_button(go, UILayout.font_dp(10.0))
-		else:
-			go.custom_minimum_size = Vector2(130.0, 38.0)
-			UIThemeScript.apply_primary_button(go, UIThemeScript.FONT_MD)
-		go.pressed.connect(_open_brief.bind(level))
-		row.add_child(go)
-	else:
-		var lock := Label.new()
-		lock.text = "🔒 通关上一关后解锁"
-		UIThemeScript.apply_label(lock, UILayout.font_dp(9.0) if _mobile else UIThemeScript.FONT_SM,
-			Color(UIThemeScript.STONE).lightened(0.3))
-		row.add_child(lock)
-	return card
-
 # 关卡简报弹窗：完整背景故事 + 3 条提示 + 开始
 func _open_brief(level: Dictionary) -> void:
+	var level_id := String(level.get("id", ""))
+	if not CampaignProgressScript.is_unlocked(level_id):
+		return
 	if _dialog_layer != null and is_instance_valid(_dialog_layer):
 		_dialog_layer.queue_free()
 	_dialog_layer = Control.new()
@@ -250,9 +478,16 @@ func _open_brief(level: Dictionary) -> void:
 	card.grow_vertical = Control.GROW_DIRECTION_BOTH
 	_dialog_layer.add_child(card)
 
+	var margin := MarginContainer.new()
+	margin.add_theme_constant_override("margin_left", UILayout.dp(14.0) if _mobile else 26)
+	margin.add_theme_constant_override("margin_right", UILayout.dp(14.0) if _mobile else 26)
+	margin.add_theme_constant_override("margin_top", UILayout.dp(12.0) if _mobile else 22)
+	margin.add_theme_constant_override("margin_bottom", UILayout.dp(12.0) if _mobile else 22)
+	card.add_child(margin)
+
 	var vb := VBoxContainer.new()
 	vb.add_theme_constant_override("separation", 8)
-	card.add_child(vb)
+	margin.add_child(vb)
 
 	var title := Label.new()
 	title.text = CampaignDataScript.display_name(level)
@@ -338,8 +573,11 @@ func _objective_text(level: Dictionary) -> String:
 	return text
 
 func _start_level(level: Dictionary) -> void:
+	var level_id := String(level.get("id", ""))
+	if not CampaignProgressScript.is_unlocked(level_id):
+		return
 	GameSettings.campaign_mode = true
-	GameSettings.campaign_level_id = String(level.get("id", ""))
+	GameSettings.campaign_level_id = level_id
 	GameSettings.tutorial_mode = false
 	if _mode_check != null and is_instance_valid(_mode_check):
 		GameSettings.progression_mode = GameSettings.ProgressionMode.RESEARCH if _mode_check.button_pressed else GameSettings.ProgressionMode.CLASSIC

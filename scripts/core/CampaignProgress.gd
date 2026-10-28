@@ -8,8 +8,27 @@ extends RefCounted
 
 const PATH := "user://campaign_progress.json"
 const FORMAT_VERSION := 1
+# 全关卡体验期：2026-10-28 20:03:20（+08:00）起 24 小时。
+# 体验期内所有关卡临时解锁，不写存档；到期后自动回到按通关进度解锁。
+const FREE_UNLOCK_START := 1793189000
+const FREE_UNLOCK_END := 1793275400
 # 实际读写路径；正常运行时等于 PATH，自动化测试可以临时指向别的文件
 static var store_path: String = PATH
+
+# 体验期剩余秒数（0 = 已结束）
+static func free_unlock_remaining() -> int:
+	return maxi(0, FREE_UNLOCK_END - int(Time.get_unix_time_from_system()))
+
+static func is_free_unlock_active() -> bool:
+	return free_unlock_remaining() > 0
+
+# 顶部横幅用：HH:MM:SS
+static func free_unlock_text() -> String:
+	var left := free_unlock_remaining()
+	if left <= 0:
+		return "已结束"
+	return "%02d:%02d:%02d" % [left / 3600, (left % 3600) / 60, left % 60]
+
 
 # 读取全部进度；文件不存在/损坏时返回空结构（不报错，避免坏档卡住游戏）
 static func load_all() -> Dictionary:
@@ -59,8 +78,10 @@ static func best_time(level_id: String) -> float:
 static func is_cleared(level_id: String) -> bool:
 	return best_stars(level_id) > 0
 
-# 关卡是否解锁：第一关永远解锁，其余需要上一关已通关
+# 关卡是否解锁：体验期内全部解锁；平时第一关永远解锁，其余需要上一关已通关
 static func is_unlocked(level_id: String) -> bool:
+	if is_free_unlock_active():
+		return true
 	var data := preload("res://scripts/data/CampaignData.gd")
 	var order: int = int(data.level_order(level_id))
 	if order <= 0:
