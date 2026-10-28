@@ -2549,9 +2549,10 @@ func _tick_building_action(delta: float, bm) -> void:
 	var dx: float = slot.x - global_position.x
 	var dz: float = slot.z - global_position.z
 	var dist: float = sqrt(dx * dx + dz * dz)
-	# 农民要真正走到建筑外缘的施工位旁边才算到场；以前按“到施工位还有
-	# 一个建筑半径+2.2m”就停下，实际离建筑还有 5~6 米，建筑却开始推进。
-	var reach: float = 1.0
+	# 农民要真正走到建筑外缘的施工位旁边才算到场；如果只走到施工位 1 米内
+	# 就停下，斜向施工位本身可能已经在建筑外缘 1 米外，建筑端按外缘距离
+	# 复核时会判定“没到场”，出现农民播放施工动作但进度条一直 0。
+	var reach: float = 0.6
 	if not _at_work_site:
 		if dist <= reach:
 			_at_work_site = true

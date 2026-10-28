@@ -456,14 +456,20 @@ func active_builder_count() -> int:
 			continue
 		if int(u._work_target_id) != get_instance_id():
 			continue
-		# _at_work_site 由 Army 在真正走到施工位（1 米内）时置位，
-		# 比每帧重算到建筑中心的距离更准确，也避免施工位在外圈时误判。
-		if bool(u._at_work_site):
-			# 双保险：施工位本身也必须在建筑外缘附近。异常回退到建筑中心、
-			# 或旧存档/旧客户端留下的远施工位不能推进建造/修理。
-			var edge_gap: float = Vector2(u.global_position.x - global_position.x,
-				u.global_position.z - global_position.z).length() - body_radius
-			if edge_gap <= 1.8:
+		# _at_work_site 由 Army 在真正走到施工位附近时置位。到场半径本身
+		# 允许农民离施工位还有约 0.6 米，不能再用“农民到建筑中心的距离”
+		# 卡一次：斜向施工位本来就在外缘外约 1 米，双重距离叠加后会把
+		# 正常到场的农民误判成没到场，出现播放施工动作但进度条为 0。
+		# 这里改为校验“施工位本身贴着外缘”+“农民就在施工位旁边”，
+		# 既允许正常的施工位半径，也能挡住异常回退到建筑中心的远施工位。
+		if bool(u._at_work_site) and u._work_slot_pos != Vector3.ZERO:
+			var slot_dx: float = u._work_slot_pos.x - global_position.x
+			var slot_dz: float = u._work_slot_pos.z - global_position.z
+			var slot_edge_gap: float = sqrt(slot_dx * slot_dx + slot_dz * slot_dz) - body_radius
+			var unit_dx: float = u.global_position.x - u._work_slot_pos.x
+			var unit_dz: float = u.global_position.z - u._work_slot_pos.z
+			var unit_to_slot: float = sqrt(unit_dx * unit_dx + unit_dz * unit_dz)
+			if slot_edge_gap <= 1.8 and unit_to_slot <= 1.2:
 				n += 1
 	return n
 
