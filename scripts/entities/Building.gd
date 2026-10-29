@@ -626,7 +626,8 @@ func get_builder_slot(index: int) -> Vector3:
 # 离农民最近的点。后者在数学上总会选到最外圈（r 越大离农民越近），
 # 结果就是农民隔着好几米就开始建造/修理。只有第一圈全被水/山/别的建筑
 # 挡住时才逐圈向外退，保证施工位贴着建筑外缘。
-func get_builder_slot_for(from_pos: Vector3, index: int = 0, for_unit = null) -> Vector3:
+func get_builder_slot_for(from_pos: Vector3, index: int = 0, for_unit = null,
+		exclude_pos: Vector3 = Vector3.ZERO) -> Vector3:
 	var bm = _get_bm()
 	if bm == null:
 		return global_position
@@ -672,6 +673,9 @@ func get_builder_slot_for(from_pos: Vector3, index: int = 0, for_unit = null) ->
 					break
 			if occupied:
 				continue
+			if exclude_pos != Vector3.ZERO \
+					and Vector2(wp.x - exclude_pos.x, wp.z - exclude_pos.z).length_squared() < 0.81:
+				continue
 			var dx: float = wp.x - from_pos.x
 			var dz: float = wp.z - from_pos.z
 			var d: float = dx * dx + dz * dz
@@ -714,10 +718,21 @@ func _is_builder_tile_valid(bm, gx: int, gy: int) -> bool:
 	if not bm.has_method("get_nearby_entities"):
 		return true
 	for e in bm.get_nearby_entities(wp, 2.0):
-		if e == self or not (e is Building) or e.health <= 0:
+		if e == self or not is_instance_valid(e) or e.health <= 0:
+			continue
+		# 资源（树/石/矿）在 A* 里会占住中心格，施工位落到资源格上时
+		# A* 无法把终点改到外沿，农民会在资源旁反复寻路走不进去。
+		if e is WorldResource:
+			if bm.world_to_grid(e.global_position) == Vector2i(gx, gy):
+				return false
+			continue
+		if not (e is Building):
 			continue
 		var d: float = Vector2(e.global_position.x - wp.x, e.global_position.z - wp.z).length()
-		if d < maxf(0.8, e.body_radius * 0.75):
+		# 必须和寻路用的建筑占格半径一致：A* 按 body_radius 把整圈格子标成
+		# 障碍，施工位如果只离别的建筑 0.75B，会落在它的占格里，A* 只能把
+		# 终点改到外沿，农民永远走不到真正的施工位。
+		if d < e.body_radius + 0.55:
 			return false
 	return true
 

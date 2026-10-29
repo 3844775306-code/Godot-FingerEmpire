@@ -2954,7 +2954,7 @@ func _tick_building_action(delta: float, bm) -> void:
 				if _work_stuck_time >= 1.5:
 					_work_stuck_time = 0.0
 					_work_last_dist = -1.0
-					var retry_slot: Vector3 = b.get_builder_slot_for(global_position, _work_slot, self)
+					var retry_slot: Vector3 = b.get_builder_slot_for(global_position, _work_slot, self, _work_slot_pos)
 					if retry_slot != Vector3.ZERO:
 						_work_slot_pos = retry_slot
 					if _movement:

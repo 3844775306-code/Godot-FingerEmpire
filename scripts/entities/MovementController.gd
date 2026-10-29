@@ -464,9 +464,11 @@ func process_move(delta, bm: RTSBattleManager):
 	# 攻击追目标时旧路径通常仍指向同一目标，可以边沿旧路径推进边等新路径。
 	if _pending_path:
 		if not _army.is_attack_moving and not _army._order_is(_army.UnitState.MOVING) \
-				and not _army._order_is(_army.UnitState.ATTACKING):
-			# 只有真正不需要寻路的命令才丢弃待处理请求；攻击索敌必须保留，
-			# 否则 A* 预算连续几帧排不到时会表现为“锁着目标却一步不走”。
+				and not _army._order_is(_army.UnitState.ATTACKING) \
+				and not _army._order_is(_army.UnitState.BUILDING):
+			# 只有真正不需要寻路的命令才丢弃待处理请求；施工和攻击索敌一样
+			# 必须有终点，A* 预算连续几帧排不到时不能把请求丢掉，否则农民
+			# 会在半路彻底失去路径，表现为原地卡住。
 			_pending_path = false
 			_pending_since_ms = 0
 		else:
