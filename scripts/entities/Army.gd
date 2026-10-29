@@ -18,6 +18,11 @@ const TARGET_LOST_GRACE_MS: int = 3000
 # 不能用 target_type 判断：Army._init 会把所有战斗单位的 target_type 统一设为 1，
 # 这会让步兵/弓兵/骑兵也误以为自己是攻城单位，锁敌时无脑优先建筑。
 const SIEGE_UNIT_IDS := [16, 17, 18, 59]
+# 木牛流马：无攻击的后勤单位，只维修攻城器械，不维修建筑。
+const SUPPORT_UNIT_ID := 33
+const SUPPORT_REPAIR_IDS := [16, 17, 18, 58, 59]
+const SUPPORT_REPAIR_INTERVAL := 0.5
+var _support_repair_timer := 0.0
 # 只能拆建筑、不能攻击任何军队的攻城单位。18 = 冲车/攻城车。
 const BUILDING_ONLY_ATTACKER_IDS := [18]
 var _target_lost_since_ms: int = 0
@@ -139,7 +144,7 @@ var _merchant_trade_volume: int = 0  # 本轮交易量（显示用）
 # 驻扎系统
 var garrison_point: Vector3 = Vector3.ZERO   # 驻扎点（零向量=无驻扎）
 var _garrison_marker: Node3D = null  # 驻扎点标记
-const NON_MILITARY_IDS = [10, 14, 43, 44, 45, 51, 46, 47, 48, 49, 50]
+const NON_MILITARY_IDS = [10, 14, 33, 43, 44, 45, 51, 46, 47, 48, 49, 50]
 
 func _is_military() -> bool:
 	return entity_id not in NON_MILITARY_IDS
@@ -302,6 +307,8 @@ func setup(config: Dictionary):
 	# ÉèÖÃÀàÐÍ£ºÅ©Ãñ=0£¬Õ½¶·µ¥Î»=1
 	if entity_id in [10, 14]:
 		target_type = 0
+	elif entity_id == SUPPORT_UNIT_ID:
+		target_type = -1
 	else:
 		target_type = 1
 	# 农民自动找资源点的半径 = 视野 × 0.7，比整段视野更贴身，采集不会散得太开；
@@ -514,6 +521,11 @@ func _update_walk_dust(delta: float) -> void:
 # 攻城器械行走动画：轮子按实际位移滚动，火炮没有轮子就靠炮架腿摆动表现拖行。
 # 只驱动 GLB 内部节点，不碰实体位置，因此不会和攻击动画抢同一属性。
 func _update_siege_walk(delta: float) -> void:
+	if entity_id == SUPPORT_UNIT_ID:
+		var support_model := _get_entity_model()
+		if support_model != null:
+			SupportCartAnim.update(support_model, delta, _visual_speed)
+		return
 	if not SiegeWalkAnim.is_walker(entity_id):
 		return
 	var model := _get_entity_model()
@@ -1678,6 +1690,11 @@ func _physics_process(delta):
 	if shock_timer > 0: speed = 0
 	elif freeze_timer > 0: speed = max(base_speed * 0.5, 0.1)
 	else: speed = base_speed
+	# 农民在木牛流马光环内获得移速加成；只影响农民，不叠加。
+	if entity_id == 10 and bm and bm.has_method("get_supply_speed_mult"):
+		speed *= float(bm.get_supply_speed_mult(self))
+	if entity_id == SUPPORT_UNIT_ID:
+		_tick_support_aura(delta, bm)
 
 	# 完全空闲且没有队列/路径的单位只需要按决策节流跑 _think；
 	# 后期大量待命部队如果仍然每帧走 _process_action + process_move + 碰撞，
@@ -3744,7 +3761,7 @@ func _attack(target, delta):
 # 每秒尝试播放几千次音效，同时反复刷新动画状态。
 func _play_attack_feedback() -> void:
 	var _sfx = ""
-	if entity_id in [12, 26, 33, 58]: _sfx = "arrow_shoot"
+	if entity_id in [12, 26, 58]: _sfx = "arrow_shoot"
 	elif entity_id == 16 or entity_id in [13, 39]: _sfx = "cannon_fire"
 	elif entity_id in [17, 59]: _sfx = "treb_fire"
 	elif entity_id in [15]: _sfx = "sword_swing"
@@ -3990,6 +4007,35 @@ func _gather_standoff_position(res) -> Vector3:
 	return Vector3(res.global_position.x, global_position.y, res.global_position.z) + dir.normalized() * dist
 
 
+func _tick_support_aura(delta: float, bm) -> void:
+	if bm == null:
+		return
+	_support_repair_timer -= delta
+	if _support_repair_timer > 0.0:
+		return
+	_support_repair_timer = SUPPORT_REPAIR_INTERVAL
+	if not bm.has_method("get_supply_aura_radius") or not bm.has_method("get_supply_repair_rate"):
+		return
+	var radius: float = float(bm.get_supply_aura_radius(self))
+	var amount: float = float(bm.get_supply_repair_rate(self)) * SUPPORT_REPAIR_INTERVAL
+	if radius <= 0.0 or amount <= 0.0:
+		return
+	bm._ensure_cache_fresh()
+	var frame := Engine.get_physics_frames()
+	for e in bm._armies:
+		if e == self or not is_instance_valid(e) or e.health <= 0:
+			continue
+		if e.team != team or int(e.entity_id) not in SUPPORT_REPAIR_IDS:
+			continue
+		if e.global_position.distance_to(global_position) > radius:
+			continue
+		# 多个木牛流马的光环不叠加：同一物理帧只允许一个来源维修。
+		if int(e.get_meta("_support_repair_frame", -1)) == frame:
+			continue
+		e.set_meta("_support_repair_frame", frame)
+		e.health = minf(float(e.max_health), float(e.health) + amount)
+
+
 func _gather(resource_node, delta):
 	if resource_node == null or not is_instance_valid(resource_node) or resource_node.health <= 0:
 		current_target = null
@@ -4021,6 +4067,8 @@ func _gather(resource_node, delta):
 				amount = int(amount * NationBonuses.get_gather_mult(nation, res_type))
 		if bm and bm.has_method("research_gather_mult"):
 			amount = int(amount * bm.research_gather_mult(owner_peer_id, team, res_type))
+		if bm and bm.has_method("get_supply_gather_mult"):
+			amount = int(round(float(amount) * float(bm.get_supply_gather_mult(self))))
 		if bm and bm.has_method("get_research_mods"):
 			var rmods: Dictionary = bm.get_research_mods(owner_peer_id, team)
 			if float(rmods.get("animal_damage_pct", 0.0)) > 0.0 and resource_node is Army \

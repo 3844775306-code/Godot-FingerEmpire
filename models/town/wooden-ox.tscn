@@ -1,0 +1,12 @@
+[gd_scene load_steps=3 format=3]
+
+[ext_resource type="PackedScene" path="res://models/pets/animal-cow.glb" id="1_cow"]
+[ext_resource type="PackedScene" path="res://models/town/cart-high.glb" id="2_cart"]
+
+[node name="WoodenOx" type="Node3D"]
+
+[node name="Cow" parent="." instance=ExtResource("1_cow")]
+transform = Transform3D(0.8, 0, 0, 0, 0.8, 0, 0, 0, 0.8, 0, 0, 0)
+
+[node name="Cart" parent="." instance=ExtResource("2_cart")]
+transform = Transform3D(0.8, 0, 0, 0, 0.8, 0, 0, 0, 0.8, 0, 0, 1.12)

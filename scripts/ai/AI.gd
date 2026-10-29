@@ -1217,6 +1217,8 @@ func produce_unit(unit_id: int) -> bool:
 	if not can_afford(unit_id):
 		return false
 	# 贸易车没有商人可跟就是废单位；生产时严格保证“车 < 商人”
+	if unit_id == 33 and count_unit(33) >= 2:
+		return false
 	if unit_id == TRADE_CART_ID and count_unit(TRADE_CART_ID) >= _count_merchants():
 		return false
 
@@ -1641,9 +1643,9 @@ func _repair_has_spare_resources(cost: Dictionary) -> bool:
 
 # ═══ Counter matrix ═══
 const COUNTER_MATRIX = {
-	11: [12,16,17,33,37], 15: [11,34,35,36], 12: [15,16,17,13,38],
-	33: [15,16,17,13,38], 16: [15,13,38], 17: [15,13,38], 18: [11,34,36],
-	13: [16,17,39], 34: [12,33,37], 35: [12,33,37], 36: [12,33,37,39],
+	11: [12,16,17,37], 15: [11,34,35,36], 12: [15,16,17,13,38],
+	16: [15,13,38], 17: [15,13,38], 18: [11,34,36],
+	13: [16,17,39], 34: [12,37], 35: [12,37], 36: [12,37,39],
 	37: [15,13,38,40], 38: [36,11,34,35], 39: [13,40,17], 40: [13,16,17],
 		58: [36,38,25,26,64], 59: [25,26,36,37,64], 9: [13,39,40], 64: [16,17,18,59],
 }
@@ -2806,7 +2808,7 @@ func attack_move(target_position: Vector3, max_units: int):
 	var sent = 0
 	for entity in battle.entities.get_children():
 		if sent >= max_units: break
-		if entity is Army and entity.health > 0 and int(entity.entity_id) not in [5,6,9,10,14,43,44,45,46,47,48,49,50,51] and entity_belongs_to_me(entity):
+		if entity is Army and entity.health > 0 and int(entity.entity_id) not in [5,6,9,10,14,33,43,44,45,46,47,48,49,50,51] and entity_belongs_to_me(entity):
 			if _is_scout_unit(entity):
 				continue
 			if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass") or entity.has_meta("ai_transporting") or entity.has_meta("ai_escorting") or entity.has_meta("ai_wall_guard"):
@@ -3283,7 +3285,7 @@ func execute_overwhelm():
 	# 第一波：召集全军到敌方集结点（取消距离限制，确保全军参与）
 	for entity in battle.entities.get_children():
 		if entity is Army and entity_belongs_to_me(entity) and entity.health > 0:
-			if int(entity.entity_id) in [5,6,10,14,43,44,45,46,47,48,49,50,51]: continue
+			if int(entity.entity_id) in [5,6,10,14,33,43,44,45,46,47,48,49,50,51]: continue
 			if _is_scout_unit(entity): continue
 			if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass") or entity.has_meta("ai_wall_guard"): continue
 			if _is_held_by_garrison(entity): continue
@@ -3298,7 +3300,7 @@ func execute_overwhelm():
 	# 第二波：全军压上敌方城堡
 	for entity in battle.entities.get_children():
 		if entity is Army and entity_belongs_to_me(entity) and entity.health > 0:
-			if int(entity.entity_id) in [5,6,10,14,43,44,45,46,47,48,49,50,51]: continue
+			if int(entity.entity_id) in [5,6,10,14,33,43,44,45,46,47,48,49,50,51]: continue
 			if _is_scout_unit(entity): continue
 			if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass") or entity.has_meta("ai_wall_guard"): continue
 			if _is_held_by_garrison(entity): continue
@@ -3321,6 +3323,9 @@ func execute_raid():
 	var special_uid = RAID_UNIT
 	if NationData.NATION_UNITS.has(nation) and NationData.NATION_UNITS.get(nation).size() >= 2:
 		special_uid = NationData.NATION_UNITS.get(nation)[1]["unit_id"]
+	# 木牛流马不参与偷袭，改用普通步兵。
+	if int(special_uid) == 33:
+		special_uid = 11
 	var _raid_attempts = 0
 	while count_unit(special_uid) < RAID_MIN_SPECIAL_TROOPS and _raid_attempts < 10:
 		if can_afford(special_uid) and _can_train_unit(): produce_unit(special_uid)
@@ -3334,7 +3339,7 @@ func execute_raid():
 		waypoint = enemy_pos + enemy_dir.rotated(Vector3.UP, deg_to_rad(-90*side)) * (flank + 12)
 	var raid_army = []
 	for e in battle.entities.get_children():
-		if e is Army and e.team == my_team and e.health > 0 and (int(e.entity_id) not in [5,6,9,10,14,43,44,45,46,47,48,49,50,51]) and entity_belongs_to_me(e):
+		if e is Army and e.team == my_team and e.health > 0 and (int(e.entity_id) not in [5,6,9,10,14,33,43,44,45,46,47,48,49,50,51]) and entity_belongs_to_me(e):
 			if _is_scout_unit(e):
 				continue
 			if e.has_meta("ai_home_guard") or e.has_meta("ai_resource_guard") or e.has_meta("ai_harass") or e.has_meta("ai_wall_guard"):
@@ -4578,7 +4583,7 @@ func _is_ranged_wall_candidate(e) -> bool:
 		return false
 	if float(e.attack_range) < 2.0 or int(e.target_type) <= 0:
 		return false
-	if int(e.entity_id) in [5, 6, 9, 10, 14, 16, 17, 43, 44, 45, 46, 47, 48, 49, 50, 51, 55, 56, 57, 59]:
+	if int(e.entity_id) in [5, 6, 9, 10, 14, 16, 17, 33, 43, 44, 45, 46, 47, 48, 49, 50, 51, 55, 56, 57, 59]:
 		return false
 	var animal_type = e.get("_animal_type")
 	if animal_type != null and str(animal_type) != "":
@@ -5071,7 +5076,7 @@ func update_debug_label():
 	if _eco_title: _eco_title.text = "[color=#7cc4ff]▸ 💰 经济 %d[/color]" % eco_total
 
 	var mil_units = [[11,"步"],[12,"弓"],[13,"战船"],[15,"骑"],[16,"炮"],[17,"投石"],[18,"攻城"],[19,"侦察"],
-		[30,"狂战"],[31,"长弓"],[32,"法骑"],[33,"诸弩"],[34,"象骑"],[35,"长枪"],[36,"重步"],[37,"重弓"],[38,"重骑"],[39,"炮艇"],[40,"爆破"],
+		[30,"狂战"],[31,"长弓"],[32,"法骑"],[33,"木牛"],[34,"象骑"],[35,"长枪"],[36,"重步"],[37,"重弓"],[38,"重骑"],[39,"炮艇"],[40,"爆破"],
 		[58,"连弩"],[59,"巨投"],[55,"僧侣"],[56,"长老"],[57,"宗师"],[65,"武士"],[66,"甲骑"],
 		[67,"蒙弓"],[68,"长生"],[69,"方阵"]]
 	var mil_lines = []

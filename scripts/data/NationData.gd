@@ -23,7 +23,7 @@ static func _static_init():
 		],
 		3: [ # CHINA
 			{ "unit_id": 10, "cooldown": 3.0, "queue_limit": 10 },
-			{ "unit_id": 33, "cooldown": 3.5, "queue_limit": 10 }
+			{ "unit_id": 33, "cooldown": 6.0, "queue_limit": 1 }
 		],
 		4: [ # Hungary
 			{ "unit_id": 10, "cooldown": 3.0, "queue_limit": 10 },

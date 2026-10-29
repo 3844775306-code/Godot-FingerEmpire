@@ -33,7 +33,7 @@ const NATION_UNIT_TECH: Dictionary = {
 	0: ["C2"],
 	1: ["B2"],
 	2: ["D2"],
-	3: ["B3"],
+	3: ["N10"],
 	4: ["D3"],
 	5: ["C2"],
 	6: ["D4"],
@@ -59,7 +59,7 @@ const UNIT_CLASSES: Dictionary = {
 	30: ["infantry"],
 	31: ["archer"],
 	32: ["cavalry"],
-	33: ["archer"],
+	33: ["support"],
 	34: ["cavalry"],
 	35: ["infantry"],
 	36: ["infantry", "heavy"],
@@ -165,7 +165,7 @@ const RAW_NATION_TECHS: Array = [
 	[2, "N08", "铁骑冲锋", 2, 2, ["D2"], {"food": 400, "gold": 250}, 30, "骑兵攻击 +15%，对弓箭类伤害 +20%", "强化法兰西骑兵对远程部队的压制。", {"class_attack_pct:cavalry": 15, "class_vs_archer_pct:cavalry": 20}],
 	[2, "N09", "百合王旗", 3, 3, ["N08"], {"food": 700, "gold": 400, "oil": 150}, 40, "骑兵近战/盾甲 +1，城堡攻击 +20%", "让法兰西的骑兵与城堡形成终局支点。", {"building_attack_pct:53": 20, "class_melee_armor:cavalry": 1, "class_shield_armor:cavalry": 1}],
 	[3, "N10", "井田劝农", 1, 1, [], {"food": 150, "wood": 100}, 20, "农田食物 +15%，农民移速 +10%", "强化中国粮食经济与农民调度。", {"gather_food_pct": 15, "unit_speed_pct:10": 10}],
-	[3, "N11", "连弩机括", 2, 2, ["B3"], {"gold": 300, "wood": 400}, 30, "连弩/诸葛连弩攻速 +15%，伤害 +10%", "强化中国连弩的持续输出。", {"unit_attack_pct:33": 10, "unit_attack_pct:58": 10, "unit_attack_speed_pct:33": 15, "unit_attack_speed_pct:58": 15}],
+	[3, "N11", "木牛流马", 2, 2, ["N10"], {"gold": 300, "wood": 400}, 30, "木牛流马光环范围 +2 米，维修速度 +50%，存活上限 +1", "强化中国的后勤补给体系；木牛流马只维修攻城器械，不维修建筑。", [], {"support_aura_radius": 2.0, "support_repair_pct": 50, "support_limit": 1}],
 	[3, "N12", "长城烽燧", 3, 3, ["N11"], {"gold": 300, "oil": 150, "stone": 600}, 40, "城墙/城堡生命 +20%，箭塔射程 +1", "强化中国的城防与塔防体系。", {"building_hp_pct:27": 20, "building_hp_pct:53": 20, "tower_range": 1}],
 	[4, "N13", "喀尔巴阡牧马", 1, 1, [], {"food": 200, "gold": 50}, 20, "骑兵移速 +10%，训练时间 -10%", "强化匈牙利骑兵的机动与成型速度。", {"class_speed_pct:cavalry": 10, "class_training_speed_pct:cavalry": 10}],
 	[4, "N14", "象背战堡", 2, 2, ["D3"], {"food": 450, "gold": 250}, 30, "象骑兵生命 +20%，伤害 +15%", "让象骑兵成为匈牙利的重型前排。", {"unit_attack_pct:34": 15, "unit_hp_pct:34": 20}],
@@ -308,7 +308,7 @@ static func unlocked_units(bits: int, nation_mask: int, nation: int) -> Dictiona
 			if not (int(uid) in BUILDING_IDS):
 				out[int(uid)] = true
 	var nu: int = int(NATION_UNIT_ID.get(nation, -1))
-	if nu >= 0 and nation_unit_unlocked(bits, nation):
+	if nu >= 0 and nation_unit_unlocked(bits, nation, nation_mask):
 		out[nu] = true
 	return out
 
@@ -323,13 +323,18 @@ static func unlocked_buildings(bits: int, nation_mask: int, nation: int) -> Dict
 				out[int(uid)] = true
 	return out
 
-static func nation_unit_unlocked(bits: int, nation: int) -> bool:
+static func nation_unit_unlocked(bits: int, nation: int, nation_mask: int = 0) -> bool:
 	_ensure()
 	var req: Array = NATION_UNIT_TECH.get(nation, [])
 	if req.is_empty():
 		return false
 	for tid in req:
-		if not has_bit(bits, tid):
+		var id := String(tid)
+		# 国家特色科技（N 开头）走国家科技位，通用科技走普通科技位。
+		if id.begins_with("N"):
+			if not has_nation_bit(nation_mask, nation, id):
+				return false
+		elif not has_bit(bits, id):
 			return false
 	return true
 

@@ -1186,6 +1186,10 @@ func _update_entity_animation(node: Node3D, info: Dictionary):
 			node.set_meta("_weapon_attack_seq", weapon_seq)
 			if int(info.get("health", 0)) > 0:
 				WeaponAttachment.play_attack(node, entity_id)
+	if entity_id == 33:
+		var support_model = node.get_meta("_model_instance", null)
+		if support_model is Node3D:
+			SupportCartAnim.update(support_model, 0.1, float(node.get_meta("_visual_speed", 0.0)))
 
 # 联机客户端没有 Army/真实目标引用，只能根据 attack_seq 按朝向和射程
 # 放一枚视觉法术弹；伤害/治疗仍由服务端在命中时结算，客户端只负责表现。
@@ -1615,11 +1619,6 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 		if RTSConfig.model_needs_flip(model_path):
 			loaded_model.rotation.y = deg_to_rad(180)
 		# 炮塔/箭塔尺寸统一走 RTSConfig.ENTITY_MODEL_SCALE，避免联机端与服务端不一致
-		# 诸葛连弩保持原有放大倍率
-		if info.get("entity_id", 0) == 33:
-			loaded_model.scale *= 2.0
-			loaded_model.scale *= 1.5
-			loaded_model.scale *= 1.5
 		entity.add_child(loaded_model)
 		entity.set_meta("_model_instance", loaded_model)
 		# 快照里的 body_radius 已经是服务端放大后的有效半径，模型按它缩放到目标尺寸即可。
@@ -1780,8 +1779,8 @@ func _create_bullet_node(info: Dictionary) -> Node3D:
 				if ball:
 					n.add_child(ball)
 					loaded = true
-	# 连弩/诸葛连弩：使用 ballista 模型自带的弩箭网格，和服务器端一致。
-	if not loaded and eid in [33, 58]:
+	# 连弩：使用 ballista 模型自带的弩箭网格，和服务器端一致。
+	if not loaded and eid == 58:
 		var bolt_mesh: Mesh = Bullet._model_arrow_mesh(RTSConfig.get_entity_model(eid))
 		if bolt_mesh != null:
 			var bolt := MeshInstance3D.new()

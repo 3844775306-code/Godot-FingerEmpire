@@ -39,6 +39,8 @@ var water_capable: bool = false
 var _animal_is_baby: bool = false
 var speed: float = 0.0
 var body_radius: float = 0.5
+# 占用的基础人口：常规单位 1，木牛流马 2；死亡/回溯人口时按这个值扣。
+var population_cost: int = 1
 # 推挤质量：0 表示按体半径自动推导（体积近似）；配置里可填 mass 覆盖
 var mass: float = 0.0
 var can_move: bool = false
@@ -188,6 +190,7 @@ func setup(config: Dictionary):
 	water_capable = config.get("water_capable", false)
 	speed = config.get("speed", 0.0)
 	body_radius = config.get("body_radius", 0.5)
+	population_cost = maxi(1, int(config.get("population_cost", 1)))
 	mass = config.get("mass", 0.0)
 	can_move = config.get("can_move", false)
 	vision_range = config.get("vision_range", 10.0)
@@ -532,13 +535,14 @@ func die():
 	# 只有“占用人口额度”的实体死亡才扣人口（动物 id>=60 是 Army 但从不占人口，见 spawn 口径）
 	if (self is Army and entity_id < 60) or (self is Building and (entity_id == 25 or entity_id == 26)):
 		var bm = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
+		var pop_cost: int = maxi(1, population_cost)
 		if owner_peer_id != -1:
 			if bm.has_method("decrease_player_population"):
-				bm.decrease_player_population(owner_peer_id, 1)
+				bm.decrease_player_population(owner_peer_id, pop_cost)
 			elif bm.has_method("decrease_population"):
-				bm.decrease_population(team, 1)
+				bm.decrease_population(team, pop_cost)
 		else:
-			bm.decrease_population(team, 1)
+			bm.decrease_population(team, pop_cost)
 	_hide_garrison_marker()
 	# 建筑统一走程序化倒塌：模型倾斜下沉、碎屑尘土，动画结束后再释放实体。
 	# 死亡状态、人口扣除和缓存失效已在上面立即完成，动画不会影响战斗判定。
@@ -1002,6 +1006,8 @@ func try_produce(unit_id: int) -> bool:
 			and bm.has_method("is_unit_unlocked") and not bm.is_unit_unlocked(unit_id, owner_peer_id, team):
 		return false
 	if bm.has_method("is_training_unit_allowed") and not bm.is_training_unit_allowed(unit_id):
+		return false
+	if bm.has_method("is_unit_at_cap") and bm.is_unit_at_cap(unit_id, owner_peer_id, team):
 		return false
 
 	# 根据建筑所属队伍和 owner_peer_id 选择资源库

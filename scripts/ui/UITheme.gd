@@ -476,7 +476,7 @@ static func entity_emoji(entity_id: int, entity_type: int = -1) -> String:
 		30: return "💪"    # 狂战士
 		31: return "🏹"    # 长弓兵
 		32: return "🐴"    # 法式骑兵
-		33: return "🎯"    # 诸葛连弩
+		33: return "🐂"    # 木牛流马
 		34: return "🐘"    # 象骑兵
 		35: return "🔱"    # 长枪兵
 		36: return "🛡️"    # 重装步兵

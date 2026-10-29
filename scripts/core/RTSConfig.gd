@@ -137,7 +137,7 @@ const ENTITY_MODELS = {
 	30: "res://models/arena/soldier.glb",
 	31: "res://models/arena/soldier.glb",
 	32: "res://models/arena/soldier.glb",
-	33: "res://models/castle/ballista.glb",
+	33: "res://models/town/wooden-ox.tscn",
 	34: "res://models/arena/soldier.glb",
 	35: "res://models/arena/soldier.glb",
 	36: "res://models/arena/soldier.glb",

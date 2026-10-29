@@ -2521,12 +2521,13 @@ func recount_current_population():
 			continue
 		if not _occupies_population(e):
 			continue
+		var pop_cost: int = maxi(1, int(e.population_cost))
 		if e.owner_peer_id != -1:
-			counts[e.owner_peer_id] = counts.get(e.owner_peer_id, 0) + 1
+			counts[e.owner_peer_id] = counts.get(e.owner_peer_id, 0) + pop_cost
 		elif e.team == get_host_team():
-			team_blue += 1
+			team_blue += pop_cost
 		elif e.team == get_enemy_team():
-			team_red += 1
+			team_red += pop_cost
 	if ai_players.is_empty():
 		# 纯队伍制（离线 1v1）：玩家/敌方各维护一份
 		player_pop = team_blue
@@ -3456,10 +3457,11 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 
 	# 人口管理（单机多AI按 owner 增加，1v1 沿用团队级）
 	if entity is Army and entity.entity_id < 60:
+		var pop_cost: int = maxi(1, int(entity.population_cost))
 		if entity.owner_peer_id != -1:
-			increase_population_for(entity.owner_peer_id, 1)
+			increase_population_for(entity.owner_peer_id, pop_cost)
 		else:
-			increase_population(team, 1)
+			increase_population(team, pop_cost)
 	elif entity is Building and (entity.entity_id == 25 or entity.entity_id == 26):
 		if entity.owner_peer_id != -1:
 			increase_population_for(entity.owner_peer_id, 1)
@@ -7377,6 +7379,78 @@ func is_unit_unlocked(unit_id: int, owner_peer_id: int = -1, team: int = -1) -> 
 	var st := get_research_state(owner_peer_id, team)
 	return bool(st.get("unlocked_units", {}).get(unit_id, false))
 
+# ==================== 木牛流马后勤光环 ====================
+const SUPPORT_UNIT_ID := 33
+const SUPPORT_BASE_RADIUS := 6.5
+const SUPPORT_GATHER_BONUS := 0.12
+const SUPPORT_SPEED_BONUS := 0.08
+const SUPPORT_BASE_REPAIR := 5.0
+const SUPPORT_BASE_LIMIT := 2
+
+func get_supply_aura_radius(support) -> float:
+	var radius := SUPPORT_BASE_RADIUS
+	if support == null or not is_instance_valid(support):
+		return radius
+	var mods := get_research_mods(support.owner_peer_id, support.team)
+	return radius + float(mods.get("support_aura_radius", 0.0))
+
+func get_supply_gather_mult(unit) -> float:
+	_ensure_cache_fresh()
+	var best := 1.0
+	for e in _armies:
+		if not is_instance_valid(e) or e == unit or e.health <= 0:
+			continue
+		if e.entity_id != SUPPORT_UNIT_ID or e.team != unit.team:
+			continue
+		if e.owner_peer_id != -1 and unit.owner_peer_id != -1 \
+				and e.owner_peer_id != unit.owner_peer_id:
+			continue
+		if e.global_position.distance_to(unit.global_position) <= get_supply_aura_radius(e):
+			best = maxf(best, 1.0 + SUPPORT_GATHER_BONUS)
+	return best
+
+func get_supply_speed_mult(unit) -> float:
+	_ensure_cache_fresh()
+	var best := 1.0
+	for e in _armies:
+		if not is_instance_valid(e) or e == unit or e.health <= 0:
+			continue
+		if e.entity_id != SUPPORT_UNIT_ID or e.team != unit.team:
+			continue
+		if e.owner_peer_id != -1 and unit.owner_peer_id != -1 \
+				and e.owner_peer_id != unit.owner_peer_id:
+			continue
+		if e.global_position.distance_to(unit.global_position) <= get_supply_aura_radius(e):
+			best = maxf(best, 1.0 + SUPPORT_SPEED_BONUS)
+	return best
+
+func get_supply_repair_rate(support) -> float:
+	if support == null or not is_instance_valid(support):
+		return SUPPORT_BASE_REPAIR
+	var mods := get_research_mods(support.owner_peer_id, support.team)
+	return SUPPORT_BASE_REPAIR * (1.0 + float(mods.get("support_repair_pct", 0.0)) / 100.0)
+
+func get_support_limit(owner_peer_id: int, team: int) -> int:
+	var mods := get_research_mods(owner_peer_id, team)
+	return SUPPORT_BASE_LIMIT + int(mods.get("support_limit", 0.0))
+
+func is_unit_at_cap(unit_id: int, owner_peer_id: int = -1, team: int = -1) -> bool:
+	if unit_id != SUPPORT_UNIT_ID:
+		return false
+	if team < 0:
+		team = get_host_team()
+	_ensure_cache_fresh()
+	var count := 0
+	for e in _armies:
+		if not is_instance_valid(e) or e.health <= 0 or e.entity_id != SUPPORT_UNIT_ID:
+			continue
+		if e.team != team:
+			continue
+		if owner_peer_id != -1 and e.owner_peer_id != -1 and e.owner_peer_id != owner_peer_id:
+			continue
+		count += 1
+	return count >= get_support_limit(owner_peer_id, team)
+
 func get_building_unlock_text(building_id: int, owner_peer_id: int = -1, team: int = -1) -> String:
 	if not is_research_mode():
 		return ""
@@ -7515,13 +7589,13 @@ func apply_research_bonuses(e) -> void:
 		e.shield_armor += int(mods.get("class_shield_armor:%s" % cls, 0))
 	e.melee_armor += int(mods.get("unit_melee_armor:%d" % uid, 0))
 	e.shield_armor += int(mods.get("unit_shield_armor:%d" % uid, 0))
-	e.shield_pierce = maxf(_mod_class_raw(mods, uid, "class_shield_pierce"), float(mods.get("archer_shield_pierce", 0.0)) if uid in [12, 31, 33, 37, 58] else 0.0)
+	e.shield_pierce = maxf(_mod_class_raw(mods, uid, "class_shield_pierce"), float(mods.get("archer_shield_pierce", 0.0)) if uid in [12, 31, 37, 58] else 0.0)
 	e.melee_pierce = _mod_class_raw(mods, uid, "class_melee_pierce")
 	e.building_damage_pct = float(base.get("building_damage_pct", 0.0)) + _mod_class(mods, uid, "class_building_damage_pct")
 	e.vs_archer_pct = _mod_class(mods, uid, "class_vs_archer_pct")
 	e.vs_cavalry_pct = _mod_class(mods, uid, "class_vs_cavalry_pct")
 	e.vs_ship_pct = _mod_unit(mods, uid, "unit_vs_ship_pct")
-	if uid in [12, 31, 33, 37, 58]:
+	if uid in [12, 31, 37, 58]:
 		e.attack_range = float(base.get("attack_range", e.attack_range)) + float(mods.get("archer_range", 0.0))
 	if uid in TechTreeData.CANNON_UNIT_IDS:
 		e.attack *= 1.0 + _mod_pct(mods, "cannon_damage_pct")

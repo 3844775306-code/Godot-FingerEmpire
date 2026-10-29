@@ -61,7 +61,7 @@ static func _cached_scene(path: String) -> PackedScene:
 	_scene_cache[path] = ps
 	return ps
 
-# 连弩/诸葛连弩的弹丸直接复用 ballista 模型自带的 arrow 子节点网格，
+# 连弩的弹丸直接复用 ballista 模型自带的 arrow 子节点网格，
 # 这样发射出去的就是模型里那支弩箭；只取 Mesh，不把整台弩机一起实例化。
 static func _model_arrow_mesh(path: String) -> Mesh:
 	if path == "":
@@ -80,9 +80,9 @@ static func _model_arrow_mesh(path: String) -> Mesh:
 	return mesh
 
 # 只有炮弹/巨石这一类推重弹走抛物线；弓箭、弩矢无论配置是否带溅射都保持直线。
-# 弓手 12/31/33/37/58、箭塔 25、战船 13 是箭矢来源，显式排除。
+# 弓手 12/31/37/58、箭塔 25、战船 13 是箭矢来源，显式排除。
 func _is_ballistic_projectile() -> bool:
-	if source_entity_id in [12, 13, 25, 31, 33, 37, 58]:
+	if source_entity_id in [12, 13, 25, 31, 37, 58]:
 		return false
 	# 只有石头类（投石车 17、巨型投石机 59）走抛物线；
 	# 火炮 16、炮塔 26、炮艇 39、炮台 64 的炮弹一律直射
@@ -97,9 +97,9 @@ func _reset_ballistic_state() -> void:
 	_obstacle_timer = 0.0
 	_avoidance_checked = false
 
-# 弓箭类弹丸：命中后要插在目标身上。弓手 12/31/33/37/58、箭塔 25、战船 13。
+# 弓箭类弹丸：命中后要插在目标身上。弓手 12/31/37/58、箭塔 25、战船 13。
 func _is_arrow_bullet() -> bool:
-	return source_entity_id in [12, 13, 25, 31, 33, 37, 58]
+	return source_entity_id in [12, 13, 25, 31, 37, 58]
 
 # 投石车/巨型投石机保留距离线性衰减；其它炮弹类只让直击目标吃满伤害，
 # 其余溅射目标固定 30%。普通箭矢 damage_radius=0，仍由命中目标承受 100%。
@@ -348,7 +348,7 @@ func _ready():
 	if source_valid:
 		source_entity_id = source_id
 	var used_model_arrow := false
-	if source_id in [33, 58]:
+	if source_id == 58:
 		var bolt_mesh := _model_arrow_mesh(RTSConfig.get_entity_model(source_id))
 		if bolt_mesh != null:
 			var bolt := MeshInstance3D.new()

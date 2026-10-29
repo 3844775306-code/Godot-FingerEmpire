@@ -355,7 +355,7 @@ static func _unit_mods_parts(parts: Array, uid: int, mods: Dictionary) -> void:
 	_add_flat_ratio(parts, "近战护甲", melee)
 	_add_flat_ratio(parts, "盾甲", shield)
 
-	if uid in [12, 31, 33, 37, 58]:
+	if uid in [12, 31, 37, 58]:
 		_add_flat_ratio(parts, "射程", float(mods.get("archer_range", 0.0)), true)
 	if uid in TechTreeData.CANNON_UNIT_IDS:
 		_add_pct_ratio(parts, "炮伤", _pct(mods, "cannon_damage_pct"))
@@ -371,7 +371,7 @@ static func _unit_mods_parts(parts: Array, uid: int, mods: Dictionary) -> void:
 			parts.append("投石精度 %+.0f%%" % ((1.0 - acc_mult) * 100.0))
 
 	var shield_pierce := _raw_pct(mods, "class_shield_pierce", classes)
-	if uid in [12, 31, 33, 37, 58]:
+	if uid in [12, 31, 37, 58]:
 		shield_pierce = maxf(shield_pierce, float(mods.get("archer_shield_pierce", 0.0)))
 	if shield_pierce > 0.001:
 		parts.append("破盾 %+.0f%%" % (shield_pierce * 100.0))

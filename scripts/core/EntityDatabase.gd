@@ -288,11 +288,12 @@ func _init_data():
 			"melee_armor": 2, "shield_armor": 4, "can_move": true
 		},
 		{
-			"id": 33, "type": 2, "name": "诸葛连弩", "team": 0,
-			"cost": {"food": 30, "wood": 30, "gold": 40},
-			"max_health": 75, "attack": 3, "attack_speed": 0.75, "speed": 1.3,
-			"vision_range": 12.6, "attack_range": 5.0, "damage_radius": 0, "target_type": 3, "body_radius": 0.4,
-			"melee_armor": 0, "shield_armor": 2, "can_move": true,"multiple_process": [8, 3, 30, 6, 2]
+			"id": 33, "type": 2, "name": "木牛流马", "team": 0,
+			"cost": {"food": 90, "wood": 120},
+			"max_health": 300, "attack": 0, "attack_speed": 1.0, "speed": 1.10,
+			"vision_range": 9.0, "attack_range": 0.0, "damage_radius": 0, "target_type": -1, "body_radius": 0.9,
+			"aura_radius": 6.5,
+			"melee_armor": 4, "shield_armor": 4, "can_move": true, "population_cost": 2
 		},
 		# ==================== 象骑兵 (id 34) ====================
 		{
