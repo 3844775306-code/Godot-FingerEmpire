@@ -188,6 +188,10 @@ const NAVAL_VALUE_BFS_LIMIT: int = 6000
 const NAVAL_VALUE_BUILDING_RANGE: float = 18.0
 const NAVAL_VALUE_CASTLE_RANGE: float = 55.0
 var _naval_value_cache: Dictionary = {}
+# 闲置战船可以猎鱼补食物，但必须给鱼群留够繁殖数量；每次巡逻最多按
+# “当前鱼数 - 保留数”派出猎手，避免几艘船把整片水域的鱼一次清空。
+const NAVAL_MIN_FISH_POPULATION: int = 5
+const NAVAL_FISH_ATTACK_RANGE: float = 32.0
 
 # ── 建筑修理（AI 也会修残破建筑）──
 # 修理机制本身在 Building 内实现：按已损比例扣费 + 计时，主城(20/53)不可修；
@@ -4459,7 +4463,19 @@ func _patrol_navy_around_water():
 		if entity.current_order != "" or entity.current_target != null: continue
 		idle_naval.append(entity)
 	if idle_naval.is_empty(): return
+	# 统计全图活鱼，留够繁殖基数后才允许战船猎鱼；否则继续正常巡逻。
+	var fish_targets: Array = []
+	for e in battle.entities.get_children():
+		if e is Army and e.health > 0 and str(e.get("_animal_type")) == "fish":
+			fish_targets.append(e)
+	var hunt_budget: int = maxi(0, fish_targets.size() - NAVAL_MIN_FISH_POPULATION)
 	for unit in idle_naval:
+		if hunt_budget > 0:
+			var fish = _find_nearby_fish(unit.global_position, fish_targets)
+			if fish != null:
+				unit.attack_target(fish)
+				hunt_budget -= 1
+				continue
 		var best_sy = shipyards[0]
 		var best_dist = unit.global_position.distance_to(best_sy.global_position)
 		for sy in shipyards:
@@ -4470,6 +4486,18 @@ func _patrol_navy_around_water():
 		var patrol_point = _find_water_patrol_point(best_sy.global_position)
 		if patrol_point != Vector3.ZERO:
 			unit.attack_move_to(patrol_point)
+
+func _find_nearby_fish(pos: Vector3, fish_list: Array) -> Army:
+	var best: Army = null
+	var best_dist: float = NAVAL_FISH_ATTACK_RANGE
+	for f in fish_list:
+		if not is_instance_valid(f) or f.health <= 0:
+			continue
+		var d: float = pos.distance_to(f.global_position)
+		if d < best_dist:
+			best_dist = d
+			best = f
+	return best
 
 func _find_water_patrol_point(near_pos: Vector3) -> Vector3:
 	for radius in [8, 15, 25, 35]:
