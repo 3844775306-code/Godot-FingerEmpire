@@ -281,7 +281,10 @@ var _anim_lod_off: bool = false
 
 func setup(config: Dictionary):
 	super.setup(config)
-	_add_weapon()  # now entity_id is set
+	# 坐骑必须在 setup 阶段就创建：body_radius 要按坐骑放大，后面的碰撞体和模型缩放都依赖它。
+	_add_mount()
+	# 武器要挂到手部骨骼，必须等战斗管理器加载完模型后再处理；
+	# 由 RTSBattleManager.spawn_entity 在 _apply_entity_model 之后调用 _add_weapon。
 	original_speed = speed
 	gatherable_resources = config.get("gatherable_resources", [])
 	max_cargo = config.get("max_cargo", 50)
@@ -809,26 +812,12 @@ func set_animation_lod(disable: bool) -> void:
 	_anim_player.active = not disable
 
 func _add_weapon():
-	var wpath = ""
-	# Bow: archers only
-	if entity_id in [12, 31, 37, 67]: wpath = "res://models/forest/weapon-bow.glb"
-	# Spear
-	elif entity_id in [35, 69]: wpath = "res://models/arena/weapon-spear.glb"
-	# Sword: all infantry + cavalry + specials
-	elif entity_id in [11, 15, 19, 30, 32, 34, 36, 38, 65, 66, 68]:
-		wpath = "res://models/arena/weapon-sword.glb"
-	if wpath != "" and ResourceLoader.exists(wpath):
-		var ws = load(wpath)
-		if ws:
-			var w = ws.instantiate()
-			if w:
-				w.position = Vector3(body_radius * 1.2, body_radius * 0.4, 0)
-				w.scale = Vector3.ONE 
-				if entity_id in [12, 31, 37, 67]: w.rotation_degrees = Vector3(0, 180, 0)
-				add_child(w)
-	if entity_id in [36, 37, 38, 68, 69] and ResourceLoader.exists("res://models/arena/shield-round.glb"):
-		var sh = load("res://models/arena/shield-round.glb")
-		if sh: var s = sh.instantiate(); if s: s.position = Vector3(-0.3, body_radius * 0.6, 0); s.scale = Vector3.ONE * 0.8; add_child(s)
+	# 武器/盾牌挂到手部骨骼；没有骨骼的模型由工具回退到根节点。
+	WeaponAttachment.attach(self, entity_id, body_radius)
+
+func _add_mount():
+	if has_node("Mount"):
+		return
 	var mpath = ""
 	if entity_id in [15, 19, 38, 66, 67]: mpath = "res://models/pets/animal-dog.glb"
 
@@ -5310,6 +5299,10 @@ func _can_attack_target(target: GameEntity) -> bool:
 		if at != null and str(at) != "": return false
 	# 水上军队不把深入内陆的地面目标设为追击目标；目标在射程内仍可攻击。
 	if _is_naval_chase_target_blocked(target):
+		return false
+	# 箭矢/弩矢/炮弹类远程单位（不含投石车/巨投等抛射器械）不能锁定城墙另一侧的目标：
+	# 子弹会被城墙挡住，锁定了也打不到，只会在墙前反复尝试。
+	if _shot_blocked_by_wall(target):
 		return false
 	return true
 
