@@ -382,6 +382,8 @@ func _init_1v1():
 	for i in range(peers.size()):
 		var team = RTSConfig.Team.RED
 		player_teams[peers[i]] = team
+		player_resources[peers[i]] = {"gold":100, "wood":100, "stone":100, "food":100, "oil":0}
+		player_population[peers[i]] = {"current": 3, "max": 20}
 		if NetworkManager.pending_nations.has(peers[i]):
 			pending_nations[peers[i]] = NetworkManager.pending_nations[peers[i]]
 		if pending_nations.has(peers[i]):
@@ -412,16 +414,17 @@ func _init_1v1():
 	_player_colors.clear()
 	for pid in player_teams.keys():
 		_player_colors[pid] = RTSConfig.COLOR_POOL[player_teams[pid]]
-	set_process(true)
-	set_physics_process(true)
-	broadcast_enabled = true
-	# 发送城堡位置
+	# 先发初始资源/人口/主城位置，等客户端确认收到后再解除暂停
 	await get_tree().process_frame
 	for pid in peers:
 		var team = player_teams[pid]
 		var castle = get_castle_by_team(team)
-		if castle:
-			NetworkManager.notify_castle_pos.rpc_id(pid, castle.global_position)
+		var cpos = castle.global_position if castle else Vector3.ZERO
+		NetworkManager.notify_initial_state.rpc_id(pid, player_resources.get(pid, {}), player_population.get(pid, {}), cpos)
+	await NetworkManager.wait_clients_initial_ready(peers)
+	set_process(true)
+	set_physics_process(true)
+	broadcast_enabled = true
 # ---- 颜色调试 ----
 var _color_debug_done: bool = false
 func _debug_print_colors():
@@ -567,15 +570,16 @@ func _init_team_mode():
 
 	_init_all_castles_team()
 	_debug_print_colors()
+	# 等客户端收齐初始资源/人口/主城位置后再开始跑逻辑
+	await get_tree().process_frame
+	for pid in real_pids:
+		var castle = player_castles.get(pid)
+		var cpos = castle.global_position if castle else Vector3.ZERO
+		NetworkManager.notify_initial_state.rpc_id(pid, player_resources.get(pid, {}), player_population.get(pid, {}), cpos)
+	await NetworkManager.wait_clients_initial_ready(real_pids)
 	set_process(true)
 	set_physics_process(true)
 	broadcast_enabled = true
-
-	await get_tree().process_frame
-	for pid in player_info.keys():
-		var castle = player_castles.get(pid)
-		if castle:
-			NetworkManager.notify_castle_pos.rpc_id(pid, castle.global_position)
 # 辅助函数
 func _count_human_players(team: int) -> int:
 	var count = 0

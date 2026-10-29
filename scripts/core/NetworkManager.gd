@@ -79,8 +79,10 @@ var _cached_map = null
 # 开局握手：客户端战斗场景就绪后才发地图/队伍，避免数据早到被丢弃（表现为客户端黑屏）
 var _scene_ready_peers: Dictionary = {}
 var _map_ready_peers: Dictionary = {}
+var _initial_ready_peers: Dictionary = {}
 var pending_map_data: Dictionary = {}   # 场景未就绪时暂存的地图数据
 var map_data_applied: bool = false      # 本次战斗的地图是否已应用到客户端
+var initial_state_received: bool = false # 初始资源/人口/城堡位置是否已收到
 # 地图分块接收：一次性 RPC 会超过 WebSocket 默认 64KB 缓冲，拆成 16KB 小块。
 var _map_chunk_transfer: int = -1
 var _map_chunk_total: int = 0
@@ -416,6 +418,7 @@ func start_game():
 	game_started = true
 	_scene_ready_peers.clear()
 	_map_ready_peers.clear()
+	_initial_ready_peers.clear()
 	_apply_map_size_for_mode()
 	print("[NetworkManager] Starting game, use_steam=", use_steam, " peers=", multiplayer.get_peers().size())
 	if use_steam:
@@ -489,6 +492,7 @@ func _load_battle_scene(progression_mode: int = 0):
 		_invalidate_cache()
 		pending_map_data = {}
 		map_data_applied = false
+		initial_state_received = false
 		_map_chunk_transfer = -1
 		_map_chunk_total = 0
 		_map_chunk_raw_size = 0
@@ -544,6 +548,24 @@ func wait_clients_map_ready(peers: Array, timeout_sec: float = 15.0) -> void:
 		await get_tree().create_timer(0.05).timeout
 	if not pending.is_empty():
 		print("[NetworkManager] 等待客户端地图就绪超时，仍继续开局: ", str(pending))
+
+@rpc("any_peer", "call_remote", "reliable")
+func client_initial_ready():
+	if mode == Mode.SERVER:
+		var sender := multiplayer.get_remote_sender_id()
+		if sender == 0: sender = 1
+		_initial_ready_peers[sender] = true
+
+func wait_clients_initial_ready(peers: Array, timeout_sec: float = 10.0) -> void:
+	var deadline := Time.get_ticks_msec() + int(timeout_sec * 1000.0)
+	var pending: Array = peers.duplicate()
+	while not pending.is_empty() and Time.get_ticks_msec() < deadline:
+		pending = pending.filter(func(pid): return not _initial_ready_peers.has(pid))
+		if pending.is_empty():
+			break
+		await get_tree().create_timer(0.05).timeout
+	if not pending.is_empty():
+		print("[NetworkManager] 等待客户端初始状态超时，仍继续开局: ", str(pending))
 
 # 客户端场景就绪后的兜底：先吃暂存地图，迟一点还没收到就主动补请（最多 3 次）
 func _client_map_ready() -> void:
@@ -697,6 +719,17 @@ func notify_castle_pos(pos: Vector3):
 	if mode == Mode.CLIENT:
 		var renderer = _get_renderer()
 		if renderer: renderer.set_castle_pos(pos)
+
+# 开局同步包：初始资源、人口和主城位置；客户端收齐后再确认，服务器才解除暂停。
+@rpc("authority", "call_remote", "reliable")
+func notify_initial_state(resources: Dictionary, population: Dictionary, castle_pos: Vector3):
+	if mode != Mode.CLIENT:
+		return
+	var renderer = _get_renderer()
+	if renderer and renderer.has_method("apply_initial_state"):
+		renderer.apply_initial_state(resources, population, castle_pos)
+	initial_state_received = true
+	client_initial_ready.rpc_id(1)
 @rpc("any_peer", "call_remote", "reliable")
 func ping_server(client_time: int):
 	pong_client.rpc_id(multiplayer.get_remote_sender_id(), client_time)

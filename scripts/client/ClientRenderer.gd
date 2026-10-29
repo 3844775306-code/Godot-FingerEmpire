@@ -353,6 +353,11 @@ func set_castle_pos(pos: Vector3):
 	if cam:
 		cam.global_position = Vector3(pos.x, cam.global_position.y, pos.z)
 
+func apply_initial_state(resources: Dictionary, population: Dictionary, castle_pos: Vector3) -> void:
+	last_resources = resources
+	last_population = population
+	set_castle_pos(castle_pos)
+
 func get_population() -> Dictionary:
 	return last_population
 
