@@ -1326,7 +1326,54 @@ func update_data(resources: Dictionary, population: Dictionary, limits: Dictiona
 		_stats_pop_bar.value = clampf(float(population.get("current", 1)) / maxf(float(population.get("max", 1)), 1.0) * 100.0, 0.0, 100.0)
 	if _mobile_hud and is_instance_valid(_mobile_hud):
 		_mobile_hud.update_data(resources, population, limits, gather_counts, income_rate)
+var _stutter_last_usec: int = 0
+var _stutter_window_count: int = 0
+var _stutter_window_max: float = 0.0
+var _stutter_window_timer: float = 30.0
+var _stutter_file: FileAccess = null
+
+# 卡顿诊断：单帧超过 60ms 就记一条到 user://stutter.log（含游戏时间/实体数/物理帧率），
+# 每 30 秒再写一条汇总。用来定位“帧率不低但每隔一段时间一顿”的具体时刻。
+func _tick_stutter_log(delta: float) -> void:
+	_stutter_window_timer -= delta
+	var now := Time.get_ticks_usec()
+	if _stutter_last_usec == 0:
+		_stutter_last_usec = now
+		return
+	var ms := float(now - _stutter_last_usec) / 1000.0
+	_stutter_last_usec = now
+	if _stutter_file == null:
+		_stutter_file = FileAccess.open("user://stutter.log", FileAccess.WRITE)
+		if _stutter_file:
+			print("[Stutter] 日志: ", ProjectSettings.globalize_path("user://stutter.log"))
+	var bm = _get_bm()
+	if ms > 60.0:
+		_stutter_window_count += 1
+		_stutter_window_max = maxf(_stutter_window_max, ms)
+		if _stutter_file:
+			var gt: float = float(bm.game_time) if bm else 0.0
+			var ents: int = bm._all_entities.size() if bm and "_all_entities" in bm else 0
+			var armies: int = bm._armies.size() if bm and "_armies" in bm else 0
+			_stutter_file.store_line("SPIKE ms=%.1f game_time=%.1f entities=%d armies=%d phys_hz=%d procs_ms=%.1f phys_ms=%.1f draws=%d" % [
+				ms, gt, ents, armies, Engine.physics_ticks_per_second,
+				float(Performance.get_monitor(Performance.TIME_PROCESS)) * 1000.0,
+				float(Performance.get_monitor(Performance.TIME_PHYSICS_PROCESS)) * 1000.0,
+				int(Performance.get_monitor(Performance.RENDER_TOTAL_DRAW_CALLS_IN_FRAME)),
+			])
+	if _stutter_window_timer <= 0.0:
+		_stutter_window_timer = 30.0
+		if _stutter_file:
+			var bm2 = _get_bm()
+			_stutter_file.store_line("SUMMARY 30s spikes=%d max_ms=%.1f game_time=%.1f entities=%d" % [
+				_stutter_window_count, _stutter_window_max,
+				float(bm2.game_time) if bm2 else 0.0,
+				bm2._all_entities.size() if bm2 and "_all_entities" in bm2 else 0,
+			])
+		_stutter_window_count = 0
+		_stutter_window_max = 0.0
+
 func _process(delta):
+	_tick_stutter_log(delta)
 	_update_pause_overlay()
 	_tick_ffa_diplo(delta)
 	_unit_stats_timer -= delta

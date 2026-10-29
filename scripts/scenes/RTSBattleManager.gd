@@ -5383,7 +5383,8 @@ func _set_physics_rate_low(low: bool) -> void:
 	var want_hz: int = 15 if (low and (fps < 20.0 or _physics_entity_heavy)) else 30
 	# 最多补 4 步：20Hz 下足以支撑到 5FPS，30Hz 下足以支撑到 7.5FPS；
 	# 更极端的掉帧宁可让游戏稍微慢一点，也不制造更长的卡顿尖峰。
-	var want_steps: int = 3
+	# 每帧最多补 2 步：尖峰帧少跑一步，宁可游戏时间稍微落后，也避免越卡越补步的抖动
+	var want_steps: int = 2
 	if _physics_rate_low == low \
 			and (not low or (Engine.physics_ticks_per_second == want_hz \
 				and Engine.max_physics_steps_per_frame == want_steps)):
