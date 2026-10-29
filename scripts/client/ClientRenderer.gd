@@ -350,10 +350,21 @@ func set_player_team(team: int):
 	print("客户端队伍设置为：", team)
 
 func set_castle_pos(pos: Vector3):
-	await get_tree().process_frame
-	var cam = get_viewport().get_camera_3d()
+	if pos == Vector3.ZERO:
+		return
+	# 初始状态 RPC 可能比相机节点更早到达；多等几帧拿到当前相机再定位，
+	# 并用 focus_on_ground 让主城落在屏幕中心，而不是只把相机眼睛挪到主城上方。
+	var cam = null
+	for _i in range(20):
+		await get_tree().process_frame
+		cam = get_viewport().get_camera_3d()
+		if cam != null:
+			break
 	if cam:
-		cam.global_position = Vector3(pos.x, cam.global_position.y, pos.z)
+		if cam.has_method("focus_on_ground"):
+			cam.call("focus_on_ground", pos)
+		else:
+			cam.global_position = Vector3(pos.x, cam.global_position.y, pos.z)
 
 func apply_initial_state(resources: Dictionary, population: Dictionary, castle_pos: Vector3) -> void:
 	last_resources = resources
