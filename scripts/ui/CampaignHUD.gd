@@ -12,6 +12,9 @@ var _warning: Label = null
 var _director = null
 var _last_signature := ""
 var _mobile := false
+var _content: VBoxContainer = null
+var _toggle_btn: Button = null
+var _expanded := true
 
 func setup(director) -> void:
 	_director = director
@@ -36,26 +39,54 @@ func _ready() -> void:
 	var vb := VBoxContainer.new()
 	vb.add_theme_constant_override("separation", 4 if _mobile else 6)
 	add_child(vb)
+	# 标题行：关卡名 + 折叠按钮；折叠后只保留这一行，避免挡住战场。
+	var header := HBoxContainer.new()
+	header.add_theme_constant_override("separation", 6)
+	vb.add_child(header)
 	_title = Label.new()
 	UIThemeScript.apply_label(_title, UILayout.font_dp(11.0) if _mobile else UIThemeScript.FONT_MD, UIThemeScript.GOLD)
 	_title.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	vb.add_child(_title)
+	_title.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	header.add_child(_title)
+	_toggle_btn = Button.new()
+	_toggle_btn.text = "▾"
+	_toggle_btn.flat = true
+	_toggle_btn.focus_mode = Control.FOCUS_NONE
+	_toggle_btn.custom_minimum_size = Vector2(UILayout.dp(22.0), UILayout.dp(22.0))
+	_toggle_btn.add_theme_font_size_override("font_size", UILayout.font_dp(13.0))
+	_toggle_btn.add_theme_color_override("font_color", UIThemeScript.GOLD)
+	_toggle_btn.tooltip_text = "折叠/展开任务栏"
+	_toggle_btn.pressed.connect(_on_toggle_pressed)
+	header.add_child(_toggle_btn)
+	_content = VBoxContainer.new()
+	_content.add_theme_constant_override("separation", 3)
+	vb.add_child(_content)
 	_objective_box = VBoxContainer.new()
 	_objective_box.add_theme_constant_override("separation", 2)
-	vb.add_child(_objective_box)
+	_content.add_child(_objective_box)
 	_progress = Label.new()
 	UIThemeScript.apply_label(_progress, UILayout.font_dp(10.0) if _mobile else UIThemeScript.FONT_SM, UIThemeScript.PARCHMENT)
 	_progress.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
-	vb.add_child(_progress)
+	_content.add_child(_progress)
 	_warning = Label.new()
 	UIThemeScript.apply_label(_warning, UILayout.font_dp(10.0) if _mobile else UIThemeScript.FONT_SM, UIThemeScript.VERMILION)
 	_warning.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	_warning.visible = false
-	vb.add_child(_warning)
+	_content.add_child(_warning)
 	_refresh()
 	# 战役面板只是只读信息，必须让所有子控件彻底忽略鼠标/触摸，
 	# 否则手机横屏时它会盖住左下信息面板，生产/升级/修理等按钮全部点不到。
 	_ignore_mouse_recursive(self)
+	# 折叠按钮是面板里唯一需要接收点击的控件。
+	_toggle_btn.mouse_filter = Control.MOUSE_FILTER_STOP
+	_toggle_btn.focus_mode = Control.FOCUS_ALL
+
+
+func _on_toggle_pressed() -> void:
+	_expanded = not _expanded
+	_content.visible = _expanded
+	_toggle_btn.text = "▾" if _expanded else "▸"
+	reset_size()
 
 
 func _ignore_mouse_recursive(node: Node) -> void:
