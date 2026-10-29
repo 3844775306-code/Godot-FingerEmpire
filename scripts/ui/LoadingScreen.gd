@@ -15,6 +15,8 @@ const BACKGROUNDS: Array[Texture2D] = [
 	preload("res://map_previews/maze.png"),
 	preload("res://map_previews/ring.png"),
 	preload("res://map_previews/ruins_ingame.png"),
+	preload("res://map_previews/loading_battle.png"),
+	preload("res://map_previews/loading_mobile.png"),
 	preload("res://map_previews/strait.png"),
 	preload("res://map_previews/terrace.png"),
 	preload("res://map_previews/tworivers.png"),
