@@ -91,12 +91,26 @@ var attack_move_target: Vector3 = Vector3.ZERO
 # 攻击目标寻路持续失败（目标在墙后/河对岸/山崖上）时，不要一直原地播放走路，
 # 改为尝试攻击最近的敌方建筑（拆墙）或放弃该目标。
 const ATTACK_APPROACH_STUCK_TIME: float = 1.2
+# 有路径但长期没有实际接近目标（常见于 A* 反复返回岸边部分路径）时，
+# 也不能一直锁着原目标；按实际距离进展触发不可达处理。
+const ATTACK_NO_PROGRESS_TIME: float = 4.0
+const ATTACK_PROGRESS_EPS: float = 1.5
+# 攻击移动走到岸边/障碍后反复重算部分路径的兜底时间。
+const ADVANCE_NO_PROGRESS_TIME: float = 6.0
+# 玩家手动目标不可达时，临时打附近敌人的冷却，避免两个目标之间来回切换。
+const SELF_DEFENSE_COOLDOWN_MS: int = 5000
 const UNREACHABLE_TARGET_MEMORY_MS: int = 5000
 const DELIVERY_FAILED_MEMORY_MS: int = 15000
 const DELIVERY_ABSOLUTE_TIMEOUT: float = 150.0
 const TARGET_VALIDATE_INTERVAL: float = 0.5
 var _attack_stall_time: float = 0.0
 var _attack_watch_target_id: int = -1
+var _attack_progress_target_id: int = -1
+var _attack_progress_last_dist: float = INF
+var _attack_progress_time: float = 0.0
+var _advance_progress_last_dist: float = INF
+var _advance_progress_time: float = 0.0
+var _self_defense_until_ms: int = 0
 # 玩家手动目标暂时无法寻路时的重试时间戳：避免每 1.2 秒反复重算 A*，
 # 但也不能因为一次失败就改打旧目标。
 var _commanded_unreachable_retry_at_ms: int = 0
@@ -1227,6 +1241,9 @@ func _set_combat_target(target, from_advance: bool = false, manual: bool = false
 	_out_of_range_anchor = target.global_position
 	_attack_watch_target_id = target.get_instance_id()
 	_attack_stall_time = 0.0
+	_reset_attack_progress()
+	_attack_progress_target_id = target.get_instance_id()
+	_attack_progress_last_dist = _combat_edge_distance(target)
 	_target_validate_timer = TARGET_VALIDATE_INTERVAL
 	_set_combat_state(CombatState.ATTACK if _combat_edge_distance(target) <= attack_range else CombatState.PURSUE)
 
@@ -1287,6 +1304,8 @@ func _start_combat_advance(pos: Vector3) -> void:
 	_combat_repath_timer = 0.5
 	_advance_path_fail_time = 0.0
 	_advance_path_recovering = false
+	_advance_progress_last_dist = INF
+	_advance_progress_time = 0.0
 	_set_combat_state(CombatState.ADVANCE)
 	if _movement:
 		_movement.move_path_failed = false
@@ -1302,6 +1321,9 @@ func _finish_combat_move() -> void:
 	attack_move_target = Vector3.ZERO
 	_advance_path_fail_time = 0.0
 	_advance_path_recovering = false
+	_advance_progress_last_dist = INF
+	_advance_progress_time = 0.0
+	_reset_attack_progress()
 	_march_path_fail_since_ms = 0
 	if _movement:
 		_movement.stop()
@@ -1322,6 +1344,8 @@ func _resume_advance() -> void:
 	_combat_repath_timer = 0.5
 	_advance_path_fail_time = 0.0
 	_advance_path_recovering = false
+	_advance_progress_last_dist = INF
+	_advance_progress_time = 0.0
 	_set_combat_state(CombatState.ADVANCE)
 	if _movement:
 		_movement.move_path_failed = false
@@ -1353,6 +1377,7 @@ func _on_combat_target_lost() -> void:
 	_target_lost_since_ms = 0
 	_attack_watch_target_id = -1
 	_attack_stall_time = 0.0
+	_reset_attack_progress()
 	_retarget_target_id = -1
 	if _movement:
 		_movement.stop()
@@ -2081,6 +2106,79 @@ func _find_attack_fallback_building(bm: RTSBattleManager) -> Building:
 			best = e
 	return best
 
+func _reset_attack_progress() -> void:
+	_attack_progress_target_id = -1
+	_attack_progress_last_dist = INF
+	_attack_progress_time = 0.0
+
+# 目标明明有路径却长时间没有实际接近（典型是 A* 反复返回岸边部分路径），
+# 用“距离是否真的缩短”做看门狗，而不是只看 astar_path 是否为空。
+func _update_attack_target_progress(delta: float) -> bool:
+	if current_target == null or not is_instance_valid(current_target):
+		_reset_attack_progress()
+		return false
+	var tid: int = current_target.get_instance_id()
+	var dist: float = _combat_edge_distance(current_target)
+	if tid != _attack_progress_target_id:
+		_attack_progress_target_id = tid
+		_attack_progress_last_dist = dist
+		_attack_progress_time = 0.0
+		return false
+	if dist <= attack_range:
+		_attack_progress_last_dist = dist
+		_attack_progress_time = 0.0
+		return false
+	if dist < _attack_progress_last_dist - ATTACK_PROGRESS_EPS:
+		_attack_progress_last_dist = dist
+		_attack_progress_time = 0.0
+		return false
+	if dist < _attack_progress_last_dist:
+		_attack_progress_last_dist = dist
+	_attack_progress_time += delta
+	if _attack_progress_time < ATTACK_NO_PROGRESS_TIME:
+		return false
+	if _movement == null:
+		return true
+	# 只在确实存在“路径给不出/只给部分路径/寻路失败”时判定不可达，
+	# 普通绕路或排队等 A* 不能误触发。
+	if _movement._pending_path:
+		return false
+	if not (_movement.astar_path.is_empty() or _movement.path_partial \
+			or _movement.attack_path_failed or _movement.move_path_failed):
+		return false
+	_attack_progress_time = 0.0
+	return true
+
+# 玩家手动目标在河对岸/墙后打不到时，先临时打附近真正够得着的敌人；
+# 保留 _commanded_attack_target_id，附近敌人清掉后可由 _try_resume...
+# 恢复原目标，不取消玩家指令。
+func _try_temporary_self_defense(bm: RTSBattleManager, old_target) -> bool:
+	if bm == null or old_target == null or not is_instance_valid(old_target):
+		return false
+	var now_ms: int = Time.get_ticks_msec()
+	if now_ms < _self_defense_until_ms:
+		return false
+	var rescue = _find_combat_enemy(vision_range, false)
+	if rescue == null or not is_instance_valid(rescue) or rescue == old_target:
+		return false
+	if _is_target_marked_unreachable(rescue):
+		return false
+	if _combat_edge_distance(rescue) > vision_range:
+		return false
+	var keep_id: int = _commanded_attack_target_id
+	_set_combat_target(rescue)
+	if current_target != rescue:
+		_commanded_attack_target_id = keep_id
+		return false
+	# _set_combat_target 会因为目标不同清掉手动锁定，这里恢复它；
+	# 附近敌人死亡后 _on_combat_target_lost 会调用 _try_resume_commanded_attack。
+	_commanded_attack_target_id = keep_id
+	_self_defense_until_ms = now_ms + SELF_DEFENSE_COOLDOWN_MS
+	if _movement:
+		_movement.clear_blacklist_at(rescue.global_position)
+		_movement.set_move_target(rescue.global_position, attack_range)
+	return true
+
 func _handle_unreachable_attack_target(bm: RTSBattleManager, preserve_attack_move: bool = false) -> void:
 	if _uses_combat_state():
 		if hold_position:
@@ -2100,6 +2198,9 @@ func _handle_unreachable_attack_target(bm: RTSBattleManager, preserve_attack_mov
 		# 绝不能因为寻路失败就自动改打附近另一座建筑（常见表现就是
 		# 玩家点新建筑后，部队又回头打原来锁定的旧建筑）。
 		if _is_commanded_attack_target(old_target):
+			# 先看附近有没有够得着的敌人；有就临时自卫，原目标仍保留。
+			if _try_temporary_self_defense(bm, old_target):
+				return
 			var blocking_wall: Building = _find_blocking_wall_fallback(bm)
 			if blocking_wall != null and blocking_wall != old_target \
 					and _attack_blocking_target_keep_command(blocking_wall):
@@ -2264,6 +2365,8 @@ func _clear_attack_move_state() -> void:
 	_attack_move_stale_time = 0.0
 	_advance_path_fail_time = 0.0
 	_advance_path_recovering = false
+	_advance_progress_last_dist = INF
+	_advance_progress_time = 0.0
 	if combat_state == CombatState.IDLE:
 		_clear_combat_destination()
 
@@ -2460,6 +2563,20 @@ func _process_combat_advance(delta, bm) -> void:
 		attack_move_target = combat_destination
 		if _movement:
 			_movement.set_move_target(combat_destination)
+	# A* 反复给岸边部分路径时，_retry_partial_combat_path 会一直“成功”，
+	# 但单位实际没有接近目的地；超过宽限就结束攻击移动，交给普通索敌/待命。
+	var advance_dist: float = global_position.distance_to(combat_destination)
+	if _advance_progress_last_dist == INF or advance_dist < _advance_progress_last_dist - ATTACK_PROGRESS_EPS:
+		_advance_progress_last_dist = advance_dist
+		_advance_progress_time = 0.0
+	elif advance_dist < _advance_progress_last_dist:
+		_advance_progress_last_dist = advance_dist
+	else:
+		_advance_progress_time += delta
+	if _advance_progress_time >= ADVANCE_NO_PROGRESS_TIME and _movement != null \
+			and (_movement.path_partial or _movement.attack_path_failed or _movement.move_path_failed):
+		_finish_combat_move()
+		return
 	if _movement.move_path_failed:
 		var fallback: Building = _find_attack_fallback_building(bm)
 		if fallback != null and is_instance_valid(fallback) and _can_attack_target(fallback):
@@ -2575,6 +2692,11 @@ func _process_combat_attack(delta, bm) -> void:
 		return
 	if hold_position:
 		_on_combat_target_lost()
+		return
+	# 有路径但长时间没有实际接近目标：按不可达处理，避免 A* 反复返回
+	# 岸边部分路径时永久锁着河对岸目标。
+	if _update_attack_target_progress(delta):
+		_handle_unreachable_attack_target(bm, false)
 		return
 	# 目标在视野内但还没走到射程内：至少追击 5 秒，且目标比 5 秒前移动超过
 	# 5 米时，才复查并改打更近的目标；否则继续追当前目标。
@@ -4188,6 +4310,7 @@ func _execute_command(cmd: Dictionary):
 				current_target = null
 				var manual: bool = bool(cmd.get("forced", false))
 				_commanded_attack_target_id = attack_cmd_target.get_instance_id() if manual else -1
+				_self_defense_until_ms = 0
 				# 玩家手动目标允许先接近再打（高度差等限制在接近后自然消失）。
 				_set_combat_target(attack_cmd_target, false, manual)
 				if current_target == null:
