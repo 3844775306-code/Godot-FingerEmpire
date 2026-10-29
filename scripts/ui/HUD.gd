@@ -70,6 +70,10 @@ var _capsule_res_labels: Dictionary = {}
 var _capsule_row: HBoxContainer = null
 const TributePanelScript = preload("res://scripts/ui/TributePanel.gd")
 var _tribute_panel: Control = null
+# 开发者倍速：仅调试构建 + 单机模式可用，F9/点击循环 1→2→4→8 倍。
+const DEV_SPEEDS: Array = [1.0, 2.0, 4.0, 8.0]
+var _dev_speed_index: int = 0
+var _dev_speed_btn: Button = null
 # 全局指令按钮底板（6 个按钮排两行）
 var _cmd_panel: Panel = null
 var _cmd_research_btn: Button = null
@@ -159,6 +163,8 @@ func hide_stat_panels() -> void:
 		unit_stats_panel.visible = false
 	if _stats_capsule:
 		_stats_capsule.visible = false
+	if _dev_speed_btn:
+		_dev_speed_btn.visible = false
 	if _diplo_panel:
 		_diplo_panel.visible = false
 
@@ -169,6 +175,8 @@ func _set_stats_collapsed(collapsed: bool) -> void:
 		unit_stats_panel.visible = (not collapsed) and unit_stats_visible
 	if _stats_capsule:
 		_stats_capsule.visible = collapsed and unit_stats_visible
+	if _dev_speed_btn != null and is_instance_valid(_dev_speed_btn):
+		_dev_speed_btn.visible = collapsed and _dev_speed_available()
 
 func _on_stats_collapse_pressed() -> void:
 	_set_stats_collapsed(true)
@@ -255,6 +263,47 @@ func _create_stats_capsule() -> void:
 	row.move_child(tribute_btn, 0)
 	_stats_capsule.gui_input.connect(_on_stats_capsule_input)
 	add_child(_stats_capsule)
+	_create_dev_speed_button()
+
+# 开发者倍速按钮：只在调试构建 + 单机对局出现，不污染正式版和联机。
+func _create_dev_speed_button() -> void:
+	if not _dev_speed_available():
+		return
+	_dev_speed_btn = Button.new()
+	_dev_speed_btn.name = "DevSpeedButton"
+	_dev_speed_btn.position = Vector2(10, 70)
+	_dev_speed_btn.size = Vector2(118, 32)
+	_dev_speed_btn.z_index = 100
+	_dev_speed_btn.focus_mode = Control.FOCUS_NONE
+	_dev_speed_btn.text = "⏩ 1x"
+	_dev_speed_btn.tooltip_text = "开发者倍速：F9 或点击循环 1→2→4→8 倍（仅单机调试）"
+	UITheme.apply_muted_button(_dev_speed_btn, UITheme.FONT_SM)
+	_dev_speed_btn.pressed.connect(_cycle_dev_speed)
+	add_child(_dev_speed_btn)
+	_update_dev_speed_button()
+
+func _dev_speed_available() -> bool:
+	return OS.is_debug_build() and NetworkManager.mode == NetworkManager.Mode.NONE
+
+func _update_dev_speed_button() -> void:
+	if _dev_speed_btn == null or not is_instance_valid(_dev_speed_btn):
+		return
+	var speed: float = float(DEV_SPEEDS[_dev_speed_index])
+	_dev_speed_btn.text = "⏩ %dx" % int(speed)
+	_dev_speed_btn.add_theme_color_override("font_color", UITheme.GOLD if speed > 1.0 else Color(0.8, 0.82, 0.86))
+
+func _cycle_dev_speed() -> void:
+	if not _dev_speed_available():
+		return
+	_dev_speed_index = (_dev_speed_index + 1) % DEV_SPEEDS.size()
+	var speed: float = float(DEV_SPEEDS[_dev_speed_index])
+	Engine.time_scale = speed
+	_update_dev_speed_button()
+	if speed > 1.0:
+		show_alert_message("开发者倍速：%dx（仅调试模式）" % int(speed), UITheme.GOLD)
+	else:
+		show_alert_message("开发者倍速：已恢复 1x", Color(0.8, 0.82, 0.86))
+
 
 func _open_tribute_panel() -> void:
 	var bm = _get_bm()
@@ -677,6 +726,8 @@ func _toggle_battle_pause():
 	_update_pause_overlay()
 
 func _exit_tree():
+	# 离开对局必须恢复时间倍率，避免影响主菜单/下一局。
+	Engine.time_scale = 1.0
 	if get_tree() != null and get_tree().paused:
 		get_tree().paused = false
 
@@ -687,6 +738,11 @@ func _input(event):
 		if is_p_key and not event.ctrl_pressed and not event.alt_pressed and not event.shift_pressed:
 			if not event.echo and NetworkManager.mode == NetworkManager.Mode.NONE:
 				_toggle_battle_pause()
+			get_viewport().set_input_as_handled()
+			return
+		# F9：开发者倍速（仅调试构建 + 单机对局）
+		if event.keycode == KEY_F9 and not event.echo and _dev_speed_available():
+			_cycle_dev_speed()
 			get_viewport().set_input_as_handled()
 			return
 		match event.keycode:
