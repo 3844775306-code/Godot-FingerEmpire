@@ -397,7 +397,10 @@ func _input(event):
 			if _pending_command_mode != "":
 				var pending_mode := _pending_command_mode
 				_pending_command_mode = ""
-				_send_left_click(event, pending_mode)
+				if pending_mode == "garrison":
+					_send_garrison_click(event)
+				else:
+					_send_left_click(event, pending_mode)
 				get_viewport().set_input_as_handled()
 				return
 			# Ctrl+Alt+左键 → 清除驻扎点（仅己方单位）
@@ -1483,6 +1486,39 @@ func _can_afford_building(build_id: int) -> bool:
 
 
 
+# 信息面板“进驻”按钮：先把鼠标点到的建筑校验一遍，再作为一次进驻指令发给服务端。
+func _send_garrison_click(event):
+	if not renderer or client_selected_ids.is_empty():
+		return
+	if not _selection_all_local():
+		_notify_readonly()
+		return
+	var target_id := _get_entity_id_under_mouse(event.position)
+	if target_id == -1:
+		_show_command_hint("请点击己方箭塔/炮塔/城堡或攻城车", Color(1.0, 0.5, 0.3))
+		return
+	var info := _get_entity_info(target_id)
+	if info.is_empty() or not _is_own_id(target_id):
+		_show_command_hint("只能进驻己方建筑", Color(1.0, 0.5, 0.3))
+		return
+	var selected_official := false
+	for sid in client_selected_ids:
+		var si := _get_entity_info(sid)
+		var seid := int(si.get("entity_id", -1)) if si else -1
+		if seid >= 46 and seid <= 50:
+			selected_official = true
+			break
+	var eid := int(info.get("entity_id", -1))
+	var valid := false
+	if int(info.get("type", -1)) == 1:
+		valid = float(info.get("build_timer", 0.0)) <= 0.0 and (selected_official or eid in [25, 26, 53])
+	elif eid == 18 and not selected_official:
+		valid = true
+	if not valid:
+		_show_command_hint("该目标不能进驻：请选择箭塔/炮塔/城堡或攻城车", Color(1.0, 0.5, 0.3))
+		return
+	_send_left_click(event, "garrison")
+
 # 进驻最近的可用建筑/攻城车。普通军队只能进箭塔、炮塔、城堡和攻城车；
 # 官员仍可进任意已完工己方建筑，具体占用/改派由服务端 command_garrison 处理。
 func _garrison_nearest():
@@ -1524,13 +1560,15 @@ func _get_avg_selected_pos() -> Vector3:
 		if node: pos += node.global_position; cnt += 1
 	return pos / cnt if cnt > 0 else Vector3.ZERO
 
-# A/M 一次性下令模式
+# A/M/进驻按钮 一次性下令模式
 func _set_pending_command_mode(mode: String):
-	if mode != "attack" and mode != "move":
+	if mode != "attack" and mode != "move" and mode != "garrison":
 		return
 	_pending_command_mode = mode
 	if mode == "attack":
 		_show_command_hint("攻击模式：左键选择目标，右键或 Esc 取消", Color(0.4, 0.8, 1.0))
+	elif mode == "garrison":
+		_show_command_hint("进驻模式：左键点击己方箭塔/炮塔/城堡或攻城车，右键或 Esc 取消", Color(0.4, 0.9, 0.7))
 	else:
 		_show_command_hint("移动模式：左键选择落点，右键或 Esc 取消", Color(0.4, 0.8, 1.0))
 

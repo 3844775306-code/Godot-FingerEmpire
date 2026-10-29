@@ -16,6 +16,7 @@ var renderer: ClientRenderer = null
 var demolish_btn: Button = null
 var repair_btn: Button = null
 var cancel_build_btn: Button = null
+var _ungarrison_btn: Button = null
 var _portrait: TextureRect = null
 var _header_row: HBoxContainer = null
 var _produce_grid: GridContainer = null
@@ -111,6 +112,16 @@ func _ready():
 	cancel_build_btn.pressed.connect(_on_cancel_build_pressed)
 	UITheme.apply_danger_button(cancel_build_btn, UITheme.FONT_SM)
 	_vb.add_child(cancel_build_btn)
+
+	_ungarrison_btn = Button.new()
+	_ungarrison_btn.name = "UngarrisonBtn"
+	_ungarrison_btn.text = "🚪 取消进驻"
+	_ungarrison_btn.custom_minimum_size = Vector2(UILayout.dp(160.0) if _is_mobile() else 180.0,
+		UILayout.dp(30.0) if _is_mobile() else 36.0)
+	_ungarrison_btn.visible = false
+	_ungarrison_btn.pressed.connect(_on_ungarrison_pressed)
+	UITheme.apply_muted_button(_ungarrison_btn, UITheme.FONT_SM)
+	_vb.add_child(_ungarrison_btn)
 
 	set_process(true)
 	renderer = get_tree().get_first_node_in_group("client_renderer")
@@ -510,10 +521,18 @@ func _unit_goods_text(info: Dictionary) -> String:
 			int(info.get("merchant_volume", 0)), int(info.get("merchant_state", 0)))
 	return ""
 
+func _building_garrison_limit(eid: int) -> int:
+	match eid:
+		53: return 10
+		25, 26: return 5
+		_: return 0
+
 func update_info(entity_id: int):
 	if not renderer: renderer = get_tree().get_first_node_in_group("client_renderer")
 	if not renderer: return
 	observed_entity_id = entity_id
+	if _multi_garrison_btn and is_instance_valid(_multi_garrison_btn):
+		_multi_garrison_btn.visible = false
 	var info = renderer.get_entity_info(entity_id)
 	if info.is_empty(): visible = false; return
 	visible = true
@@ -551,6 +570,7 @@ func update_info(entity_id: int):
 	hp_bar.anchor_right = pct
 	if hp_bar_bg: hp_bar_bg.visible = true
 	hp_bar.visible = true
+	if _ungarrison_btn: _ungarrison_btn.visible = false
 
 	# Construction / upgrade progress
 	var hc = _hc(pct)
@@ -584,6 +604,20 @@ func update_info(entity_id: int):
 	t += "\n🎯 [color=%s]RANGE[/color]:  [color=white]%.1f[/color]" % [UITheme.hex_str(UITheme.GOLD), info.get("attack_range", 0.0)]
 	t += "\n👟 [color=%s]SPEED[/color]:  [color=white]%.1f[/color]" % [UITheme.hex_str(UITheme.EMERALD), info.get("speed", 0.0)]
 	t += _unit_goods_text(info)
+	if int(info.get("type", -1)) == 1:
+		var gids: Array = info.get("garrison_unit_ids", [])
+		if not gids.is_empty():
+			var gcounts: Dictionary = {}
+			for gid in gids:
+				gcounts[int(gid)] = int(gcounts.get(int(gid), 0)) + 1
+			var gparts: Array[String] = []
+			for gid in gcounts:
+				var gcfg: Dictionary = EntityDatabase.get_config(int(gid))
+				gparts.append("%s%s×%d" % [UITheme.entity_emoji(int(gid), 2),
+					str(gcfg.get("name", "单位")), int(gcounts[gid])])
+			t += "\n🛡️ [color=%s]驻军[/color] (%d/%d):  %s" % [
+				UITheme.hex_str(UITheme.EMERALD), gids.size(),
+				_building_garrison_limit(int(info.get("entity_id", -1))), "、".join(gparts)]
 	t += _bonus_text(info)
 	stats_rtl.text = t
 
@@ -596,6 +630,10 @@ func update_info(entity_id: int):
 		# 拆除按钮（城堡不可拆；队友建筑只读）
 		if demolish_btn:
 			demolish_btn.visible = (info.get("entity_id", 0) != 20) and not readonly
+		if _ungarrison_btn:
+			var gc := int(info.get("garrisoned_soldier_count", 0))
+			_ungarrison_btn.visible = gc > 0 and not readonly
+			_ungarrison_btn.text = "🚪 取消进驻 (%d)" % gc
 		_update_repair_ui(info, readonly)
 		if cancel_build_btn:
 			var btl := float(info.get("build_timer", 0.0))
@@ -775,6 +813,13 @@ func _on_upgrade_pressed():
 	for _i in range(n):
 		NetworkManager.send_command.rpc_id(1, {"action": "upgrade", "building_id": observed_entity_id, "ctrl_held": false, "shift_held": Input.is_key_pressed(KEY_SHIFT)})
 
+func _on_ungarrison_pressed():
+	if observed_entity_id == -1:
+		return
+	NetworkManager.send_command.rpc_id(1, {"action": "ungarrison_soldiers", "selected_ids": [observed_entity_id]})
+	if _ungarrison_btn:
+		_ungarrison_btn.visible = false
+
 func _on_produce_pressed(unit_id: int):
 	if observed_entity_id == -1: return
 	if not _is_local_owned_info(renderer.get_entity_info(observed_entity_id)): return
@@ -829,8 +874,41 @@ const ROW_COLORS = [
 ]
 
 var _multi_vbox: VBoxContainer = null
+var _multi_garrison_btn: Button = null
 var _pending_multi_ids: Array = []         # IDs being accumulated via Ctrl+click
 var _pending_multi_btns: Dictionary = {}   # btn -> true for tracking pressed state
+
+func _ensure_multi_garrison_btn() -> void:
+	if _multi_garrison_btn and is_instance_valid(_multi_garrison_btn):
+		if _multi_garrison_btn.get_parent() == _vb:
+			_vb.move_child(_multi_garrison_btn, _vb.get_child_count() - 1)
+		return
+	_multi_garrison_btn = Button.new()
+	_multi_garrison_btn.name = "MultiGarrisonBtn"
+	_multi_garrison_btn.custom_minimum_size = Vector2(0, UILayout.dp(38.0)) if _is_mobile() else Vector2(200, 34)
+	_multi_garrison_btn.add_theme_font_size_override("font_size", UILayout.font_dp(12.0) if _is_mobile() else UITheme.FONT_SM)
+	UITheme.apply_primary_button(_multi_garrison_btn, UITheme.FONT_SM)
+	_multi_garrison_btn.pressed.connect(_on_multi_garrison_pressed)
+	_vb.add_child(_multi_garrison_btn)
+
+func _refresh_multi_garrison_btn(ids: Array) -> void:
+	_ensure_multi_garrison_btn()
+	var count := 0
+	for sid in ids:
+		var si := renderer.get_entity_info(sid) if renderer else {}
+		if si.is_empty() or int(si.get("type", -1)) != 0:
+			continue
+		if _is_local_owned_info(si):
+			count += 1
+	_multi_garrison_btn.visible = count > 0
+	_multi_garrison_btn.disabled = count == 0
+	_multi_garrison_btn.text = "🛡️ 进驻建筑 (%d)" % count
+	_multi_garrison_btn.tooltip_text = "点击后再点己方箭塔/炮塔/城堡或攻城车，把所选军队派去进驻"
+
+func _on_multi_garrison_pressed() -> void:
+	var ci = get_tree().get_first_node_in_group("client_input")
+	if ci and ci.has_method("_set_pending_command_mode"):
+		ci._set_pending_command_mode("garrison")
 
 func show_multi_selection(ids: Array):
 	visible = true
@@ -839,6 +917,7 @@ func show_multi_selection(ids: Array):
 	if demolish_btn: demolish_btn.visible = false
 	if repair_btn: repair_btn.visible = false
 	if cancel_build_btn: cancel_build_btn.visible = false
+	if _ungarrison_btn: _ungarrison_btn.visible = false
 	produce_vbox.visible = true
 	hp_bar.visible = false
 	if hp_bar_bg: hp_bar_bg.visible = false
@@ -909,6 +988,7 @@ func show_multi_selection(ids: Array):
 
 	# Start monitoring Ctrl key release
 	set_process_input(true)
+	_refresh_multi_garrison_btn(ids)
 	_apply_detail_mode()
 # Detect Ctrl release to commit pending multi-selection
 func _input(event):

@@ -8,7 +8,7 @@ const LevelVisualScript = preload("res://scripts/effects/BuildingLevelVisual.gd"
 const TreeFallEffect = preload("res://scripts/effects/TreeFallEffect.gd")
 const EntityDamageVisual = preload("res://scripts/effects/EntityDamageVisual.gd")
 enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ATTACK_SPEED, MELEE_ARMOR, SHIELD_ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH, GARRISONED, NATION, IN_ACTION_RANGE, ATTACK_SEQ, UNIT_EXTRA }
-enum EB { UPGRADE=0, MAX_UPGRADE, CAN_UPGRADE, BUILD_TIMER, MAX_BUILD, PROD_CURRENT, PROD_PROGRESS, PROD_QSIZE, UPGRADE_TIMER, MAX_UPGRADE_TIME, GARRISON_COUNT, REPAIR_TIMER, MAX_REPAIR, CAN_REPAIR, REPAIR_PENDING, BUILDER_COUNT, AWAITING_BUILDER }
+enum EB { UPGRADE=0, MAX_UPGRADE, CAN_UPGRADE, BUILD_TIMER, MAX_BUILD, PROD_CURRENT, PROD_PROGRESS, PROD_QSIZE, UPGRADE_TIMER, MAX_UPGRADE_TIME, GARRISON_COUNT, REPAIR_TIMER, MAX_REPAIR, CAN_REPAIR, REPAIR_PENDING, BUILDER_COUNT, AWAITING_BUILDER, GARRISON_UNITS }
 # 与 RTSBattleManager.get_nation_name() 保持一致；客户端不跑服务端脚本，血条文字单独查表
 const NATION_LABELS := ["维京", "英格兰", "法兰西", "中国", "匈牙利", "日本", "拜占庭", "蒙古", "波斯", "西班牙"]
 var last_applied_seq = -1
@@ -854,6 +854,7 @@ func _update_single_entity(info):
 				info["upgrade_timer"] = ba[EB.UPGRADE_TIMER]
 				info["max_upgrade_time"] = ba[EB.MAX_UPGRADE_TIME]
 				info["garrisoned_soldier_count"] = ba[EB.GARRISON_COUNT] if ba.size() > EB.GARRISON_COUNT else 0
+				info["garrison_unit_ids"] = ba[EB.GARRISON_UNITS] if ba.size() > EB.GARRISON_UNITS else []
 				# 修理状态（老版本快照没有这几格，缺省当 0）
 				info["repair_timer"] = ba[EB.REPAIR_TIMER] if ba.size() > EB.REPAIR_TIMER else 0.0
 				info["max_repair_time"] = ba[EB.MAX_REPAIR] if ba.size() > EB.MAX_REPAIR else 0.0

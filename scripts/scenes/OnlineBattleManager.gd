@@ -6,7 +6,7 @@ var game_mode: int = NetworkManager.GameMode.ONEvONE
 
 # Compact entity array indices (no string keys = faster + smaller)
 enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ATTACK_SPEED, MELEE_ARMOR, SHIELD_ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH, GARRISONED, NATION, IN_ACTION_RANGE, ATTACK_SEQ, UNIT_EXTRA }
-enum EB { UPGRADE=0, MAX_UPGRADE, CAN_UPGRADE, BUILD_TIMER, MAX_BUILD, PROD_CURRENT, PROD_PROGRESS, PROD_QSIZE, UPGRADE_TIMER, MAX_UPGRADE_TIME, GARRISON_COUNT, REPAIR_TIMER, MAX_REPAIR, CAN_REPAIR, REPAIR_PENDING, BUILDER_COUNT, AWAITING_BUILDER }
+enum EB { UPGRADE=0, MAX_UPGRADE, CAN_UPGRADE, BUILD_TIMER, MAX_BUILD, PROD_CURRENT, PROD_PROGRESS, PROD_QSIZE, UPGRADE_TIMER, MAX_UPGRADE_TIME, GARRISON_COUNT, REPAIR_TIMER, MAX_REPAIR, CAN_REPAIR, REPAIR_PENDING, BUILDER_COUNT, AWAITING_BUILDER, GARRISON_UNITS }
 const SNAP_VERSION = 9  # 9 = 建筑施工/修理增加农民登记状态（等待农民/赶路中）
 
 # 1v1 专用
@@ -1740,6 +1740,8 @@ func _compute_entity_hash(entity: GameEntity) -> int:
 		h = ((h << 5) ^ (h >> 27)) ^ int(entity.production_timer * 100)
 		h = ((h << 5) ^ (h >> 27)) ^ int(entity.upgrade_timer * 100)
 		h = ((h << 5) ^ (h >> 27)) ^ entity.get_garrison_count()
+		for gid in entity.get_garrison_unit_ids():
+			h = ((h << 5) ^ (h >> 27)) ^ int(gid)
 	if entity.current_target and is_instance_valid(entity.current_target):
 		h = ((h << 5) ^ (h >> 27)) ^ entity.current_target.get_instance_id()
 	# 进驻状态
@@ -2250,6 +2252,7 @@ func _serialize_entity_compact(entity: GameEntity, snapshot_key: String) -> Arra
 		ba[EB.UPGRADE_TIMER] = entity.upgrade_timer
 		ba[EB.MAX_UPGRADE_TIME] = entity.max_upgrade_time
 		ba[EB.GARRISON_COUNT] = entity.get_garrison_count()
+		ba[EB.GARRISON_UNITS] = entity.get_garrison_unit_ids()
 		# 修理状态：客户端据此画修理进度条 + 施工外观
 		ba[EB.REPAIR_TIMER] = entity.repair_timer
 		ba[EB.MAX_REPAIR] = entity.max_repair_time

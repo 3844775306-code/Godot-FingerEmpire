@@ -49,6 +49,8 @@ func _get_res() -> Dictionary:
 # 移动端字号：设计空间 2400x1400 直接写 14 号字在手机上只有约 4dp。
 var repair_btn: Button = null
 var cancel_build_btn: Button = null
+# 选中被驻军建筑时的“取消进驻”按钮
+var _ungarrison_btn: Button = null
 # 选中资源点时出现的“采集 / 停止采集”操作区
 var _resource_box: VBoxContainer = null
 var _resource_gather_btn: Button = null
@@ -152,6 +154,16 @@ func _ready():
 	cancel_build_btn.pressed.connect(_on_cancel_build_pressed)
 	UITheme.apply_danger_button(cancel_build_btn, UITheme.FONT_SM)
 	_vb.add_child(cancel_build_btn)
+
+	# 取消进驻：释放该建筑里的全部驻军
+	_ungarrison_btn = Button.new()
+	_ungarrison_btn.name = "UngarrisonBtn"
+	_ungarrison_btn.text = "🚪 取消进驻"
+	_ungarrison_btn.custom_minimum_size = Vector2(180, 36)
+	_ungarrison_btn.visible = false
+	_ungarrison_btn.pressed.connect(_on_ungarrison_pressed)
+	UITheme.apply_muted_button(_ungarrison_btn, UITheme.FONT_SM)
+	_vb.add_child(_ungarrison_btn)
 
 	# 资源点操作区：两个按钮并排，手机端也放得下。
 	_resource_box = VBoxContainer.new()
@@ -744,8 +756,9 @@ func update_info(entity):
 		observed_entity = null
 		visible = false
 		return
-	# 单选时不该留着框选多选的登船按钮
+	# 单选时不该留着框选多选的操作按钮
 	_hide_multi_board_btn()
+	_hide_multi_garrison_btn()
 	_multi_entities.clear()
 	observed_entity = entity; visible = true
 
@@ -798,6 +811,8 @@ func update_info(entity):
 
 	_hide_resource_box()
 	_hide_attack_box()
+	if _ungarrison_btn:
+		_ungarrison_btn.visible = false
 
 	var hc = _hc(pct)
 	var t := _nation_display(entity)
@@ -820,6 +835,19 @@ func update_info(entity):
 			UITheme.hex_str(UITheme.ALERT_WARNING), EntityBonusText.attack_speed_breakdown_text(entity),
 			UITheme.hex_str(UITheme.STONE)]
 	if entity is Building:
+		var gids: Array = entity.get_garrison_unit_ids() if entity.has_method("get_garrison_unit_ids") else []
+		if not gids.is_empty():
+			var gcounts: Dictionary = {}
+			for gid in gids:
+				gcounts[int(gid)] = int(gcounts.get(int(gid), 0)) + 1
+			var gparts: Array[String] = []
+			for gid in gcounts:
+				var cfg: Dictionary = EntityDatabase.get_config(int(gid))
+				gparts.append("%s%s×%d" % [UITheme.entity_emoji(int(gid), 2),
+					str(cfg.get("name", "单位")), int(gcounts[gid])])
+			t += "\n🛡️ [color=%s]驻军[/color] (%d/%d):  %s" % [
+				UITheme.hex_str(UITheme.EMERALD), entity.get_garrison_count(),
+				entity.get_garrison_limit(), "、".join(gparts)]
 		if entity.build_timer > 0.0:
 			var bp := clampf(1.0 - entity.build_timer / maxf(entity.max_build_time, 0.001), 0.0, 1.0)
 			if entity.awaiting_builder and entity.builder_count_cache == 0:
@@ -873,6 +901,10 @@ func update_info(entity):
 		# 拆除按钮（城堡不可拆；队友建筑只读）
 		if demolish_btn:
 			demolish_btn.visible = (entity.entity_id != 20) and not readonly
+		if _ungarrison_btn:
+			var gc := int(entity.get_garrison_count())
+			_ungarrison_btn.visible = gc > 0 and not readonly
+			_ungarrison_btn.text = "🚪 取消进驻 (%d)" % gc
 		_update_repair_ui(entity, readonly)
 		_update_builder_ui(entity, readonly)
 		if cancel_build_btn:
@@ -1008,9 +1040,11 @@ func _hide_all_action_buttons() -> void:
 	if demolish_btn: demolish_btn.visible = false
 	if repair_btn: repair_btn.visible = false
 	if cancel_build_btn: cancel_build_btn.visible = false
+	if _ungarrison_btn: _ungarrison_btn.visible = false
 	_hide_builder_box()
 	_hide_attack_box()
 	_hide_multi_board_btn()
+	_hide_multi_garrison_btn()
 	_clear_produce_area()
 	var old_box = _vb.get_node_or_null("UpgradeInfoBox")
 	if old_box:
@@ -1262,6 +1296,18 @@ func _on_repair_pressed():
 		bm.repair_building(observed_entity)
 	update_info(observed_entity)
 
+func _on_ungarrison_pressed():
+	if not observed_entity or not is_instance_valid(observed_entity):
+		return
+	if not (observed_entity is Building):
+		return
+	if not _is_local_owned_entity(observed_entity):
+		return
+	var bm = battle if battle else get_tree().get_first_node_in_group("battle_manager")
+	if bm and bm.has_method("release_garrisoned"):
+		bm.release_garrisoned(observed_entity)
+	update_info(observed_entity)
+
 func _on_produce_pressed(unit_id: int):
 	if not observed_entity or not is_instance_valid(observed_entity): return
 	if not _is_local_owned_entity(observed_entity): return
@@ -1426,6 +1472,7 @@ var _pending_multi_btns: Dictionary = {}
 # 框选多选时底部的「陆地单位上附近运载船」按钮
 const MULTI_BOARD_SEARCH_RADIUS: float = 120.0
 var _multi_board_btn: Button = null
+var _multi_garrison_btn: Button = null
 var _multi_entities: Array = []
 var _multi_refresh_accum: float = 0.0
 
@@ -1446,6 +1493,48 @@ func _ensure_multi_board_btn() -> void:
 func _hide_multi_board_btn() -> void:
 	if _multi_board_btn and is_instance_valid(_multi_board_btn):
 		_multi_board_btn.visible = false
+
+func _ensure_multi_garrison_btn() -> void:
+	if _multi_garrison_btn and is_instance_valid(_multi_garrison_btn):
+		if _multi_garrison_btn.get_parent() == _vb:
+			_vb.move_child(_multi_garrison_btn, _vb.get_child_count() - 1)
+		return
+	_multi_garrison_btn = Button.new()
+	_multi_garrison_btn.name = "MultiGarrisonBtn"
+	_multi_garrison_btn.custom_minimum_size = Vector2(0, UILayout.dp(38.0)) if _is_mobile() else Vector2(200, 34)
+	_multi_garrison_btn.add_theme_font_size_override("font_size", UILayout.font_dp(12.0) if _is_mobile() else UITheme.FONT_SM)
+	UITheme.apply_primary_button(_multi_garrison_btn, UITheme.FONT_SM)
+	_multi_garrison_btn.pressed.connect(_on_multi_garrison_pressed)
+	_vb.add_child(_multi_garrison_btn)
+
+func _hide_multi_garrison_btn() -> void:
+	if _multi_garrison_btn and is_instance_valid(_multi_garrison_btn):
+		_multi_garrison_btn.visible = false
+
+func _refresh_multi_garrison_btn() -> void:
+	_ensure_multi_garrison_btn()
+	var count := 0
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	var all_local := true
+	for u in _multi_entities:
+		if not is_instance_valid(u) or not (u is Army) or u.health <= 0:
+			continue
+		if bm and bm.has_method("get_host_team") and int(u.team) != int(bm.get_host_team()):
+			all_local = false
+			break
+		count += 1
+	if count == 0 or not all_local:
+		_multi_garrison_btn.visible = false
+		return
+	_multi_garrison_btn.visible = true
+	_multi_garrison_btn.disabled = false
+	_multi_garrison_btn.text = "🛡️ 进驻建筑 (%d)" % count
+	_multi_garrison_btn.tooltip_text = "点击后再点己方箭塔/炮塔/城堡或攻城车，把所选部队派去进驻"
+
+func _on_multi_garrison_pressed() -> void:
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if bm and bm.has_method("set_pending_command_mode"):
+		bm.set_pending_command_mode("garrison")
 
 # 刷新「上附近运载船」按钮：有可上船的陆地单位、且附近有停靠岸边且没装满的运载船才能点
 func _refresh_multi_board_btn() -> void:
@@ -1552,6 +1641,7 @@ func show_multi_selection(entities: Array):
 	if demolish_btn: demolish_btn.visible = false
 	if repair_btn: repair_btn.visible = false
 	if cancel_build_btn: cancel_build_btn.visible = false
+	if _ungarrison_btn: _ungarrison_btn.visible = false
 	produce_vbox.visible = true
 	hp_bar.visible = false
 	if hp_bar_bg: hp_bar_bg.visible = false
@@ -1628,6 +1718,7 @@ func show_multi_selection(entities: Array):
 	# 框选面板底部：一键让选中的陆地单位上附近的运载船
 	_multi_entities = entities.duplicate()
 	_refresh_multi_board_btn()
+	_refresh_multi_garrison_btn()
 	_apply_detail_mode()
 
 # Detect Ctrl release to commit pending multi-selection

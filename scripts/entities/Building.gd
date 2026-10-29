@@ -1423,6 +1423,14 @@ func can_garrison_soldier() -> bool:
 func get_garrison_count() -> int:
 	return _count_valid_garrisoned()
 
+# 驻军兵种组成（返回 entity_id 数组），联机快照与信息面板共用。
+func get_garrison_unit_ids() -> Array:
+	var ids: Array = []
+	for ref in garrisoned_soldiers:
+		if ref is WeakRef and ref.get_ref() and is_instance_valid(ref.get_ref()):
+			ids.append(int(ref.get_ref().entity_id))
+	return ids
+
 func _count_valid_garrisoned() -> int:
 	var cnt = 0
 	var clean = []
