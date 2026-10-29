@@ -32,6 +32,8 @@ const A_STAR_HARD_LIMIT_USEC: int = 10000
 # 路径预览最多采样多少个点。贴地指引带内部会再按 1.1 米加密并逐顶点贴地，
 # 这里只限制单条路径的顶点总量，避免超长路径生成过大的网格。
 const MAX_PATH_PREVIEW_POINTS: int = 200
+# 沿浅滩距离场走的最大步数（100×100 地图对角线 140 格，留足余量）
+const FORD_ROUTE_MAX_STEPS: int = 320
 # 路径指引带排头跟随单位的步长：单位每走这么远才重建一次网格，
 # 既保证「走一段收一段」的实时感，又不至于每帧重新贴地。
 const PATH_HEAD_STEP: float = 0.45
@@ -1420,13 +1422,25 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 			goal_tile = approach_tile
 			goal_adjusted = true
 
-	# 起终点之间隔着深水、且脚下不是浅滩时，先把路径目标改成最近的可涉水点。
-	# 桥头堡的浅滩在地图南北边缘，直接对敌方城堡寻路会在 6ms 预算内只展开
-	# 河岸的一小段，单位拿到局部路径后停在岸边，看起来就是“AI 不知道浅滩能过”。
-	# 先走到浅滩；下一步从浅滩起算时不再重定向，就能正常过河。
-	if not goal_adjusted and not _is_ford_tile(start_tile, bm) \
-			and _path_crosses_deep_water(start_tile, goal_tile, bm):
-		var ford_cell: Vector2i = _pick_ford_cell(start_tile, goal_tile, bm)
+	# 起终点之间隔着深水、且脚下不是浅滩：先沿“浅滩距离场”走到最近的浅滩。
+	# 以前是把 A* 目标改成浅滩格，但浅滩常在南北边缘，动辄 40~60 格；
+	# 6ms 软预算根本展开不完，A* 只返回一段贴着河岸的部分路径，
+	# 单位走到岸边又重算、又贴回岸边，于是全军堵在河岸过不去。
+	# 距离场是一张多源 BFS 梯度图（每张地图只算一次），沿梯度走不消耗 A* 预算，
+	# 任何数量的部队都能稳定走到渡口。
+	# 注意：这里必须用原始目标 end_tile 判定，不能用 goal_tile。
+	# AI 的主攻目标是敌方城堡，城堡中心落在 _footprint_set 里，
+	# 先一步把 goal_adjusted 置成 true；若这里再判断 goal_adjusted，
+	# 过河重定向就永远不会触发——AI 全军只会贴着河岸拿到一段局部路径。
+	if not _is_ford_tile(start_tile, bm) \
+			and _path_crosses_deep_water(start_tile, end_tile, bm):
+		var ford_route: Array = _ford_gradient_path(start_tile, bm)
+		if ford_route.size() > 0:
+			_last_path_partial = false
+			_last_path_closest = false
+			return ford_route
+		# 距离场里没有起点（例如卡在封闭洼地）：退回“目标改成浅滩格”的老做法。
+		var ford_cell: Vector2i = _pick_ford_cell(start_tile, end_tile, bm)
 		if ford_cell.x >= 0:
 			goal_tile = ford_cell
 			goal_adjusted = true
@@ -1586,6 +1600,85 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 		_last_path_closest = true
 		return [Vector3(start_tile.x - half_map_c, 0.0, start_tile.y - half_map_c)]
 	return []
+
+# 浅滩距离场：以所有浅滩格为源做一次多源 BFS，得到“每个陆地格到最近浅滩的距离”。
+# 结果缓存在 battle 的 meta 上，每张地图只算一次。沿值递减的邻格走即可到渡口。
+func _ford_field(bm: RTSBattleManager) -> Dictionary:
+	var field: Dictionary = bm.get_meta("_ford_field", {})
+	if not field.is_empty():
+		return field
+	var queue: Array = []
+	var size: int = RTSConfig.MAP_SIZE
+	for x in range(size):
+		for y in range(size):
+			if bm.get_terrain_at_grid(x, y) == 2 and bm.get_overlay_at_grid(x, y) == 3:
+				var c := Vector2i(x, y)
+				field[c] = 0
+				queue.append(c)
+	var head: int = 0
+	while head < queue.size():
+		var cur: Vector2i = queue[head]
+		head += 1
+		var d: int = int(field[cur])
+		for dx in range(-1, 2):
+			for dy in range(-1, 2):
+				if dx == 0 and dy == 0:
+					continue
+				var nb := Vector2i(cur.x + dx, cur.y + dy)
+				if nb.x < 0 or nb.y < 0 or nb.x >= size or nb.y >= size:
+					continue
+				if field.has(nb):
+					continue
+				# 距离场只按地形算，不掺建筑/城墙：它们会被拆建，
+				# 掺进去会让缓存失效；实际走路时再逐格用 _get_terrain_cost 校验。
+				# 缓坡/台地(terrain=1 + ov4/5)、浅滩都算可走，否则站在台地上的
+				# 单位会被判成“不在距离场里”，一条路都拿不到。
+				if _get_terrain_cost(nb, bm, {}) >= 999.0:
+					continue
+				field[nb] = d + 1
+				queue.append(nb)
+	bm.set_meta("_ford_field", field)
+	return field
+
+# 沿浅滩距离场下坡生成一条到渡口的路线（不跑 A*，不受 6ms 预算限制）。
+func _ford_gradient_path(start_tile: Vector2i, bm: RTSBattleManager) -> Array:
+	var field: Dictionary = _ford_field(bm)
+	if not field.has(start_tile):
+		return []
+	var out: Array = []
+	var half: float = RTSConfig.MAP_SIZE / 2.0
+	var cur: Vector2i = start_tile
+	var cur_d: int = int(field[cur])
+	var wall_cache = {}
+	_ensure_static_caches(bm)
+	wall_cache = _wall_set
+	for _i in range(FORD_ROUTE_MAX_STEPS):
+		if cur_d <= 0:
+			break
+		var best: Vector2i = Vector2i(-1, -1)
+		var best_d: int = cur_d
+		for dx in range(-1, 2):
+			for dy in range(-1, 2):
+				if dx == 0 and dy == 0:
+					continue
+				var nb := Vector2i(cur.x + dx, cur.y + dy)
+				if not field.has(nb):
+					continue
+				var nd: int = int(field[nb])
+				if nd >= best_d:
+					continue
+				if nd > 0 and _get_terrain_cost(nb, bm, wall_cache) >= 999.0:
+					continue
+				best_d = nd
+				best = nb
+		if best.x < 0:
+			return []
+		cur = best
+		cur_d = best_d
+		out.append(Vector3(cur.x - half, 0.0, cur.y - half))
+	if out.is_empty():
+		return []
+	return out
 
 func _is_ford_tile(cell: Vector2i, bm: RTSBattleManager) -> bool:
 	if bm == null:
