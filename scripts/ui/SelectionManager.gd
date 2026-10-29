@@ -183,6 +183,12 @@ func _input(event):
 				get_viewport().set_input_as_handled()
 			return
 
+		# 逗号：闲农快捷键。单击循环任选 1 个，双击全选，Shift+逗号最多选 5 个。
+		if key == KEY_COMMA and not ctrl and not event.echo:
+			_handle_idle_peasant_hotkey(shift)
+			get_viewport().set_input_as_handled()
+			return
+
 		# U键升级
 		if key == KEY_U:
 			_upgrade_selected()
@@ -907,6 +913,52 @@ func _jump_to_castle_sp():
 			if cam: cam.global_position = Vector3(e.global_position.x, cam.global_position.y, e.global_position.z); return
 
 var _sp_last_space: float = 0.0
+var _last_idle_comma_time: float = 0.0
+var _idle_peasant_cursor: int = -1
+
+# 逗号闲农：单击循环任选 1 个；双击全选；Shift+逗号最多选 5 个。
+func _handle_idle_peasant_hotkey(shift: bool) -> void:
+	var candidates: Array = _collect_idle_peasants()
+	if candidates.is_empty():
+		return
+	var now: float = Time.get_ticks_msec() / 1000.0
+	if shift:
+		_last_idle_comma_time = 0.0
+		_select_idle_peasants(candidates, 5)
+		return
+	if now - _last_idle_comma_time < DOUBLE_CLICK_THRESHOLD:
+		_last_idle_comma_time = 0.0
+		_idle_peasant_cursor = -1
+		_select_idle_peasants(candidates, -1)
+		return
+	_last_idle_comma_time = now
+	_idle_peasant_cursor = (_idle_peasant_cursor + 1) % candidates.size()
+	_select_idle_peasants([candidates[_idle_peasant_cursor]], -1)
+
+func _collect_idle_peasants() -> Array:
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if not bm:
+		return []
+	bm._ensure_cache_fresh()
+	var result: Array = []
+	for e in bm._armies:
+		if not is_instance_valid(e) or e.health <= 0:
+			continue
+		if e.entity_id != 10 or not _is_local_owned(e):
+			continue
+		if e.current_order in ["idle", ""]:
+			result.append(e)
+	return result
+
+func _select_idle_peasants(candidates: Array, max_count: int) -> void:
+	if candidates.is_empty():
+		return
+	var count: int = candidates.size() if max_count < 0 else mini(max_count, candidates.size())
+	_clear_selection()
+	for i in range(count):
+		_add_to_selection(candidates[i])
+	_refresh_selection_rings()
+
 func _handle_space_sp() -> bool:
 	var now = Time.get_ticks_msec()/1000.0
 	if now-_sp_last_space < 0.3 and not selected_entities.is_empty():

@@ -260,6 +260,11 @@ func _input(event):
 			toggle_quartermaster()
 			get_viewport().set_input_as_handled(); return
 
+		# 逗号：闲农快捷键。单击循环任选 1 个，双击全选，Shift+逗号最多选 5 个。
+		if key == KEY_COMMA and not ctrl and not event.echo:
+			_handle_idle_peasant_hotkey(shift)
+			get_viewport().set_input_as_handled(); return
+
 		# 无选中时 → 全局面板/镜头快捷键（建造统一走右键空地菜单）
 		if client_selected_ids.is_empty() and not ctrl and not shift:
 			# F5 统计面板
@@ -282,9 +287,6 @@ func _input(event):
 				get_viewport().set_input_as_handled(); return
 			if key == KEY_M and not ctrl:
 				_jump_to_castle()
-				get_viewport().set_input_as_handled(); return
-			if key == KEY_COMMA:
-				_cycle_idle(10)
 				get_viewport().set_input_as_handled(); return
 			if key == KEY_PERIOD:
 				_cycle_idle(-1)
@@ -1606,6 +1608,54 @@ func _handle_space() -> bool:
 	if chud and chud.has_method("_on_jump_to_alert"):
 		chud._on_jump_to_alert()
 	return true
+
+# 逗号闲农：单击循环任选 1 个；双击全选；Shift+逗号最多选 5 个。
+var _last_idle_comma_time: float = 0.0
+var _idle_peasant_cursor: int = -1
+
+func _handle_idle_peasant_hotkey(shift: bool) -> void:
+	var candidates: Array = _collect_idle_peasants()
+	if candidates.is_empty():
+		return
+	var now: float = Time.get_ticks_msec() / 1000.0
+	if shift:
+		_last_idle_comma_time = 0.0
+		_select_idle_peasants(candidates, 5)
+		return
+	if now - _last_idle_comma_time < DOUBLE_CLICK_THRESHOLD:
+		_last_idle_comma_time = 0.0
+		_idle_peasant_cursor = -1
+		_select_idle_peasants(candidates, -1)
+		return
+	_last_idle_comma_time = now
+	_idle_peasant_cursor = (_idle_peasant_cursor + 1) % candidates.size()
+	_select_idle_peasants([candidates[_idle_peasant_cursor]], -1)
+
+func _collect_idle_peasants() -> Array:
+	var result: Array = []
+	if renderer == null:
+		return result
+	for node in renderer.entity_nodes.values():
+		if not node.has_meta("snapshot_info"): continue
+		var inf = node.get_meta("snapshot_info")
+		if inf.get("type") != 2: continue
+		if inf.get("health", 0) <= 0: continue
+		if int(inf.get("entity_id", -1)) != 10: continue
+		if renderer.my_peer_id != -1:
+			if inf.get("owner_peer_id", -1) != renderer.my_peer_id: continue
+		elif inf.get("team", -1) != renderer.player_team:
+			continue
+		if inf.get("current_order", "") in ["idle", ""]:
+			result.append(inf["id"])
+	return result
+
+func _select_idle_peasants(ids: Array, max_count: int) -> void:
+	if ids.is_empty():
+		return
+	var count: int = ids.size() if max_count < 0 else mini(max_count, ids.size())
+	client_selected_ids = ids.slice(0, count)
+	_update_selection_visuals()
+	emit_signal("selection_changed", client_selected_ids.duplicate())
 
 # , 循环闲置农民 / . 循环闲置军事
 var _idle_idx: Dictionary = {}
