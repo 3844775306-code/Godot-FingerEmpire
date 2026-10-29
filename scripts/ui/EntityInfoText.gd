@@ -8,6 +8,8 @@ const UV = preload("res://scripts/ui/UnitView.gd")
 
 const TYPE_NAMES := { 0: "资源", 1: "建筑", 2: "单位" }
 const NATION_NAMES := ["维京", "英格兰", "法兰西", "中国", "匈牙利", "日本", "拜占庭", "蒙古", "波斯", "西班牙"]
+const MERCHANT_RES_BY_ID := { 43: "oil", 44: "wood", 45: "stone", 51: "food" }
+const MERCHANT_STATE_NAMES := { 0: "寻找集市", 1: "买入货物", 2: "前往集市", 3: "出售货物", 4: "返回" }
 const CLASS_CN := {
 	"military": "军事单位",
 	"siege": "攻城单位",
@@ -359,6 +361,39 @@ static func _cost_string(cfg: Dictionary) -> String:
 			continue
 		parts.append("%s %s" % [str(UITheme.RESOURCE_ICONS.get(key, "·")), _num(cost[key])])
 	return "　".join(parts)
+
+# 农民背包：按资源列出携带量，并给出总量/容量；空背包也明确显示“空”。
+static func peasant_cargo_text(cargo: Dictionary, max_cargo: int) -> String:
+	var cap: int = max_cargo if max_cargo > 0 else 50
+	var total: int = 0
+	var parts: Array[String] = []
+	for key in ["gold", "wood", "stone", "food", "oil"]:
+		var amount: int = int(cargo.get(key, 0))
+		if amount <= 0:
+			continue
+		total += amount
+		parts.append("%s%d" % [str(UITheme.RESOURCE_ICONS.get(key, "")), amount])
+	var head := "\n🎒 [color=%s]背包[/color]:  " % UITheme.hex_str(UITheme.GOLD)
+	if total <= 0:
+		return head + "[color=%s]空[/color]  [color=%s]0/%d[/color]" % [
+			UITheme.hex_str(UITheme.STONE), UITheme.hex_str(UITheme.PARCHMENT), cap]
+	return head + "  ".join(parts) + "  [color=%s](%d/%d)[/color]" % [
+		UITheme.hex_str(UITheme.EMERALD), total, cap]
+
+# 商人货物：显示经营资源、本轮计划交易量和当前贸易状态。
+static func merchant_goods_text(entity_id: int, resource: String, volume: int, state: int) -> String:
+	var res: String = resource
+	if res == "":
+		res = str(MERCHANT_RES_BY_ID.get(entity_id, ""))
+	var icon: String = str(UITheme.RESOURCE_ICONS.get(res, ""))
+	var res_name: String = str(UITheme.RESOURCE_NAMES.get(res, res))
+	var state_name: String = str(MERCHANT_STATE_NAMES.get(state, "空闲"))
+	var vol_text: String = str(volume) if volume > 0 else "待定"
+	var line1 := "\n📦 [color=%s]货物[/color]:  %s %s   [color=%s]%s[/color]" % [
+		UITheme.hex_str(UITheme.GOLD), icon, res_name,
+		UITheme.hex_str(UITheme.SAPPHIRE), state_name]
+	var line2 := "\n   本轮交易量:  [color=%s]%s[/color]" % [UITheme.hex_str(UITheme.EMERALD), vol_text]
+	return line1 + line2
 
 static func _nation_name(nation: int) -> String:
 	if nation >= 0 and nation < NATION_NAMES.size():

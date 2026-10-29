@@ -7,7 +7,7 @@ const BuildingConstructionVisual = preload("res://scripts/effects/BuildingConstr
 const LevelVisualScript = preload("res://scripts/effects/BuildingLevelVisual.gd")
 const TreeFallEffect = preload("res://scripts/effects/TreeFallEffect.gd")
 const EntityDamageVisual = preload("res://scripts/effects/EntityDamageVisual.gd")
-enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ATTACK_SPEED, MELEE_ARMOR, SHIELD_ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH, GARRISONED, NATION, IN_ACTION_RANGE, ATTACK_SEQ }
+enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ATTACK_SPEED, MELEE_ARMOR, SHIELD_ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH, GARRISONED, NATION, IN_ACTION_RANGE, ATTACK_SEQ, UNIT_EXTRA }
 enum EB { UPGRADE=0, MAX_UPGRADE, CAN_UPGRADE, BUILD_TIMER, MAX_BUILD, PROD_CURRENT, PROD_PROGRESS, PROD_QSIZE, UPGRADE_TIMER, MAX_UPGRADE_TIME, GARRISON_COUNT, REPAIR_TIMER, MAX_REPAIR, CAN_REPAIR, REPAIR_PENDING, BUILDER_COUNT, AWAITING_BUILDER }
 # 与 RTSBattleManager.get_nation_name() 保持一致；客户端不跑服务端脚本，血条文字单独查表
 const NATION_LABELS := ["维京", "英格兰", "法兰西", "中国", "匈牙利", "日本", "拜占庭", "蒙古", "波斯", "西班牙"]
@@ -834,6 +834,11 @@ func _update_single_entity(info):
 			"in_action_range": arr[E.IN_ACTION_RANGE] if arr.size() > E.IN_ACTION_RANGE else 0,
 			"attack_seq": arr[E.ATTACK_SEQ] if arr.size() > E.ATTACK_SEQ else 0,
 		}
+		# 农民背包 / 商人货物（服务端只在对应兵种上附带）
+		if arr.size() > E.UNIT_EXTRA and arr[E.UNIT_EXTRA] is Dictionary:
+			var ux: Dictionary = arr[E.UNIT_EXTRA]
+			for k in ux:
+				info[k] = ux[k]
 		# Building extras
 		if arr.size() > E.size() and arr[E.size()] is Array:
 			var ba = arr[E.size()]

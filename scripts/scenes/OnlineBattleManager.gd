@@ -5,7 +5,7 @@ extends RTSBattleManager
 var game_mode: int = NetworkManager.GameMode.ONEvONE
 
 # Compact entity array indices (no string keys = faster + smaller)
-enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ATTACK_SPEED, MELEE_ARMOR, SHIELD_ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH, GARRISONED, NATION, IN_ACTION_RANGE, ATTACK_SEQ }
+enum E { ID=0, EID, TYPE, TEAM, X, Y, Z, HEALTH, MAX_HEALTH, ATTACK, ATTACK_SPEED, MELEE_ARMOR, SHIELD_ARMOR, SPEED, VISION, BODY_R, TARGET_TYPE, OWNER, LEVEL, ORDER, HOLD, NAME, ENTITY_ID, WAYPOINTS, ROT_Y, ASTAR_PATH, GARRISONED, NATION, IN_ACTION_RANGE, ATTACK_SEQ, UNIT_EXTRA }
 enum EB { UPGRADE=0, MAX_UPGRADE, CAN_UPGRADE, BUILD_TIMER, MAX_BUILD, PROD_CURRENT, PROD_PROGRESS, PROD_QSIZE, UPGRADE_TIMER, MAX_UPGRADE_TIME, GARRISON_COUNT, REPAIR_TIMER, MAX_REPAIR, CAN_REPAIR, REPAIR_PENDING, BUILDER_COUNT, AWAITING_BUILDER }
 const SNAP_VERSION = 9  # 9 = 建筑施工/修理增加农民登记状态（等待农民/赶路中）
 
@@ -1742,6 +1742,15 @@ func _compute_entity_hash(entity: GameEntity) -> int:
 		h = ((h << 5) ^ (h >> 27)) ^ (1 if _is_entity_in_action_range(entity as Army) else 0)
 		# 攻击序号变化必须立即触发一次增量，客户端才能一次攻击播一次动画
 		h = ((h << 5) ^ (h >> 27)) ^ entity.attack_seq
+		# 农民背包 / 商人货物变化必须进入哈希，否则选中面板不会刷新
+		if entity.entity_id == 10:
+			for rk in ["gold", "wood", "stone", "food", "oil"]:
+				h = ((h << 5) ^ (h >> 27)) ^ int(entity.cargo.get(rk, 0))
+			h = ((h << 5) ^ (h >> 27)) ^ int(entity.max_cargo)
+		elif MerchantMarker.is_merchant(entity.entity_id):
+			h = ((h << 5) ^ (h >> 27)) ^ hash(str(entity._merchant_resource))
+			h = ((h << 5) ^ (h >> 27)) ^ int(entity._merchant_trade_volume)
+			h = ((h << 5) ^ (h >> 27)) ^ int(entity._merchant_state)
 	return h & 0x7FFFFFFF
 
 # 建造/升级是"一次性状态切换"：完工瞬间只产生一条增量，丢包/跳帧会让客户端
@@ -2204,6 +2213,18 @@ func _serialize_entity_compact(entity: GameEntity, snapshot_key: String) -> Arra
 	a[E.IN_ACTION_RANGE] = 1 if (entity is Army and _is_entity_in_action_range(entity as Army)) else 0
 	# 每次真实出手递增；客户端只在序号变化时播放一次攻击动画
 	a[E.ATTACK_SEQ] = entity.attack_seq
+	# 农民背包 / 商人货物：只在对应兵种上附带字典，避免所有单位增加带宽
+	var unit_extra = null
+	if entity is Army:
+		if entity.entity_id == 10:
+			unit_extra = {"cargo": entity.cargo.duplicate(), "max_cargo": entity.max_cargo}
+		elif MerchantMarker.is_merchant(entity.entity_id):
+			unit_extra = {
+				"merchant_resource": entity._merchant_resource,
+				"merchant_volume": entity._merchant_trade_volume,
+				"merchant_state": entity._merchant_state,
+			}
+	a[E.UNIT_EXTRA] = unit_extra
 	# Building extra
 	if entity is Building:
 		var ba = []

@@ -829,6 +829,10 @@ func update_info(entity):
 			else:
 				t += "\n🔨 [color=%s]建造中[/color]:  [color=white]%d%%[/color]  农民:%d" % [
 					UITheme.hex_str(UITheme.BUILD_PROGRESS), int(bp * 100.0), entity.builder_count_cache]
+		if entity.upgrade_timer > 0.0 and entity.max_upgrade_time > 0.0:
+			var up_pct := clampf(1.0 - entity.upgrade_timer / entity.max_upgrade_time, 0.0, 1.0)
+			t += "\n⬆️ [color=%s]升级中[/color]:  [color=white]%d%%[/color]" % [
+				UITheme.hex_str(UITheme.UPGRADE_PROGRESS), int(up_pct * 100.0)]
 	if entity is Building and entity.has_method("repair_damage_ratio"):
 		if entity.repair_pending:
 			t += "\n🔧 [color=%s]等待农民修理[/color]" % UITheme.hex_str(UITheme.REPAIR_PROGRESS)
@@ -840,6 +844,12 @@ func update_info(entity):
 			t += "\n🔧 [color=%s]已损[/color]:  [color=white]%d%%[/color]" % [
 				UITheme.hex_str(UITheme.ALERT_WARNING), int(entity.repair_damage_ratio() * 100.0)]
 	if entity is Army:
+		if entity.entity_id == 10:
+			t += EntityInfoText.peasant_cargo_text(entity.cargo, entity.max_cargo)
+		elif MerchantMarker.is_merchant(entity.entity_id):
+			t += EntityInfoText.merchant_goods_text(
+				entity.entity_id, str(entity._merchant_resource),
+				int(entity._merchant_trade_volume), int(entity._merchant_state))
 		t += "\n🧭 [color=%s]任务[/color]:  [color=white]%s[/color]" % [
 			UITheme.hex_str(UITheme.SAPPHIRE), _army_task_text(entity)]
 	t += _bonus_text(entity)

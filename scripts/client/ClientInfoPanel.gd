@@ -500,6 +500,16 @@ func _repair_status_str(info: Dictionary) -> String:
 		out += "  [color=%s]（暂不可修）[/color]" % UITheme.hex_str(UITheme.VERMILION)
 	return out
 
+func _unit_goods_text(info: Dictionary) -> String:
+	var eid: int = int(info.get("entity_id", -1))
+	if eid == 10:
+		return EntityInfoText.peasant_cargo_text(info.get("cargo", {}), int(info.get("max_cargo", 50)))
+	if MerchantMarker.is_merchant(eid):
+		return EntityInfoText.merchant_goods_text(
+			eid, str(info.get("merchant_resource", "")),
+			int(info.get("merchant_volume", 0)), int(info.get("merchant_state", 0)))
+	return ""
+
 func update_info(entity_id: int):
 	if not renderer: renderer = get_tree().get_first_node_in_group("client_renderer")
 	if not renderer: return
@@ -573,6 +583,7 @@ func update_info(entity_id: int):
 		t += "\n⛓️ [color=%s]铠甲[/color]:  [color=white]%d[/color]  🛡️ [color=%s]盾牌[/color]:  [color=white]%d[/color]" % [UITheme.hex_str(UITheme.SAPPHIRE), info.get("melee_armor", 0), UITheme.hex_str(UITheme.STONE), info.get("shield_armor", 0)]
 	t += "\n🎯 [color=%s]RANGE[/color]:  [color=white]%.1f[/color]" % [UITheme.hex_str(UITheme.GOLD), info.get("attack_range", 0.0)]
 	t += "\n👟 [color=%s]SPEED[/color]:  [color=white]%.1f[/color]" % [UITheme.hex_str(UITheme.EMERALD), info.get("speed", 0.0)]
+	t += _unit_goods_text(info)
 	t += _bonus_text(info)
 	stats_rtl.text = t
 
