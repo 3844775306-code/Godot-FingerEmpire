@@ -1382,6 +1382,17 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 			goal_tile = approach_tile
 			goal_adjusted = true
 
+	# 起终点之间隔着深水、且脚下不是浅滩时，先把路径目标改成最近的可涉水点。
+	# 桥头堡的浅滩在地图南北边缘，直接对敌方城堡寻路会在 6ms 预算内只展开
+	# 河岸的一小段，单位拿到局部路径后停在岸边，看起来就是“AI 不知道浅滩能过”。
+	# 先走到浅滩；下一步从浅滩起算时不再重定向，就能正常过河。
+	if not goal_adjusted and not _is_ford_tile(start_tile, bm) \
+			and _path_crosses_deep_water(start_tile, goal_tile, bm):
+		var ford_cell: Vector2i = _pick_ford_cell(start_tile, goal_tile, bm)
+		if ford_cell.x >= 0:
+			goal_tile = ford_cell
+			goal_adjusted = true
+
 	# 终点本身就在深水/普通山壁里时，A* 永远到不了。必须在展开前直接判死：
 	# 否则搜索会沿着河岸/山脚展开到节点上限，然后返回一段“最近可达”的部分
 	# 路径，单位走过去才失败，正是“走到水边/山边停下并丢命令”的成因。
@@ -1519,6 +1530,47 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 			_last_path_partial = true
 			return partial
 	return []
+
+func _is_ford_tile(cell: Vector2i, bm: RTSBattleManager) -> bool:
+	if bm == null:
+		return false
+	return bm.get_terrain_at_grid(cell.x, cell.y) == 2 \
+		and bm.get_overlay_at_grid(cell.x, cell.y) == 3
+
+# 粗略判断起终点连线是否被深水截断；桥面按可通行处理。
+func _path_crosses_deep_water(start: Vector2i, goal: Vector2i, bm: RTSBattleManager) -> bool:
+	if bm == null:
+		return false
+	for i in range(1, 48):
+		var t: float = float(i) / 48.0
+		var gx: int = int(round(lerpf(float(start.x), float(goal.x), t)))
+		var gz: int = int(round(lerpf(float(start.y), float(goal.y), t)))
+		if gx < 0 or gx >= RTSConfig.MAP_SIZE or gz < 0 or gz >= RTSConfig.MAP_SIZE:
+			continue
+		if bm.get_terrain_at_grid(gx, gz) != 2 or bm.get_overlay_at_grid(gx, gz) == 3:
+			continue
+		if bm.has_method("is_bridge_at") and bm.is_bridge_at(bm.grid_to_world(gx, gz)):
+			continue
+		return true
+	return false
+
+# 选一条绕行代价最小的浅滩格。结果缓存在 battle 上，避免每个单位重复扫全图。
+func _pick_ford_cell(start: Vector2i, goal: Vector2i, bm: RTSBattleManager) -> Vector2i:
+	var cells: Array = bm.get_meta("_ford_cells_cache", [])
+	if cells.is_empty():
+		for gx in range(RTSConfig.MAP_SIZE):
+			for gz in range(RTSConfig.MAP_SIZE):
+				if bm.get_terrain_at_grid(gx, gz) == 2 and bm.get_overlay_at_grid(gx, gz) == 3:
+					cells.append(Vector2i(gx, gz))
+		bm.set_meta("_ford_cells_cache", cells)
+	var best := Vector2i(-1, -1)
+	var best_score: float = INF
+	for cell in cells:
+		var score: float = float(_heuristic(start, cell)) + float(_heuristic(cell, goal)) * 1.15
+		if score < best_score:
+			best_score = score
+			best = cell
+	return best
 
 func _heuristic(a: Vector2i, b: Vector2i) -> float:
 	return abs(a.x - b.x) + abs(a.y - b.y)
