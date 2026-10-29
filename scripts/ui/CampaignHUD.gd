@@ -53,6 +53,18 @@ func _ready() -> void:
 	_warning.visible = false
 	vb.add_child(_warning)
 	_refresh()
+	# 战役面板只是只读信息，必须让所有子控件彻底忽略鼠标/触摸，
+	# 否则手机横屏时它会盖住左下信息面板，生产/升级/修理等按钮全部点不到。
+	_ignore_mouse_recursive(self)
+
+
+func _ignore_mouse_recursive(node: Node) -> void:
+	if node is Control:
+		var ctrl := node as Control
+		ctrl.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		ctrl.focus_mode = Control.FOCUS_NONE
+	for child in node.get_children():
+		_ignore_mouse_recursive(child)
 
 func _process(_delta: float) -> void:
 	_refresh()
