@@ -92,9 +92,10 @@ func _init_data():
 		{
 			"id": 12, "type": 2, "name": "弓箭手", "team": 0,
 			"cost": {"food": 30, "wood": 40},
-			"max_health": 70, "attack": 8, "attack_speed": 0.69, "speed": 1.5,
+			"max_health": 70, "attack": 16, "attack_speed": 1.38, "speed": 1.5,
 			"vision_range": 12.6, "attack_range": 5.0, "damage_radius": 0, "target_type": 3,
-			"body_radius": 0.35, "melee_armor": 0, "shield_armor": 2, "can_move": true
+			"body_radius": 0.35, "melee_armor": 0, "shield_armor": 2, "can_move": true,
+			"building_damage_pct": -0.5
 		},
 		{
 			"id": 13, "type": 2, "name": "战船", "team": 0,
@@ -594,9 +595,10 @@ func _init_data():
 		{
 			"id": 58, "type": 2, "name": "连弩", "team": 0,
 			"cost": {"wood": 60, "gold": 50},
-			"max_health": 60, "attack": 5.5, "attack_speed": 0.25, "speed": 1.2,
+			"max_health": 60, "attack": 11, "attack_speed": 0.5, "speed": 1.2,
 			"vision_range": 15.4, "attack_range": 11.0, "target_type": 3, "body_radius": 0.4,
 			"melee_armor": 0, "shield_armor": 3, "can_move": true,
+			"building_damage_pct": -0.5
 		},
 		# ==================== 巨型投石机 (ID 59) ====================
 		{

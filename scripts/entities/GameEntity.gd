@@ -195,6 +195,7 @@ func setup(config: Dictionary):
 	piercing = config.get("piercing", false)
 	ignore_building_armor = config.get("ignore_building_armor", false)
 	ignore_armor = config.get("ignore_armor", false)
+	building_damage_pct = float(config.get("building_damage_pct", 0.0))
 	# 加入遍历分组 (Godot group)，避免每帧全量扫描 entities.get_children()
 	if entity_type != 0 and vision_range > 0:
 		add_to_group("vision_providers")
@@ -302,8 +303,8 @@ func take_damage(amount: float, source = null):
 	if source:
 		_last_damager = source
 		# 科研模式目标类型加成：对建筑/弓箭/骑兵/船只的额外伤害。
-		if self is Building and source.building_damage_pct > 0.0:
-			amount *= 1.0 + source.building_damage_pct
+		if self is Building and source.building_damage_pct != 0.0:
+			amount *= maxf(0.0, 1.0 + source.building_damage_pct)
 		elif self is Army:
 			if source.vs_archer_pct > 0.0 and TechTreeData.unit_has_class(entity_id, "archer"):
 				amount *= 1.0 + source.vs_archer_pct

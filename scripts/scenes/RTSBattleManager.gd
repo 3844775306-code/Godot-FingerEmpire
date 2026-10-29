@@ -7240,7 +7240,7 @@ func apply_research_bonuses(e) -> void:
 	e.shield_armor += int(mods.get("unit_shield_armor:%d" % uid, 0))
 	e.shield_pierce = maxf(_mod_class_raw(mods, uid, "class_shield_pierce"), float(mods.get("archer_shield_pierce", 0.0)) if uid in [12, 31, 33, 37, 58] else 0.0)
 	e.melee_pierce = _mod_class_raw(mods, uid, "class_melee_pierce")
-	e.building_damage_pct = _mod_class(mods, uid, "class_building_damage_pct")
+	e.building_damage_pct = float(base.get("building_damage_pct", 0.0)) + _mod_class(mods, uid, "class_building_damage_pct")
 	e.vs_archer_pct = _mod_class(mods, uid, "class_vs_archer_pct")
 	e.vs_cavalry_pct = _mod_class(mods, uid, "class_vs_cavalry_pct")
 	e.vs_ship_pct = _mod_unit(mods, uid, "unit_vs_ship_pct")
