@@ -259,7 +259,7 @@ func _attack(target, delta):
 		bullet.team = team
 		bullet.owner_peer_id = owner_peer_id
 		bullet.damage = attack * (volley_mult if volley_count > 1 else 1.0)
-		bullet.speed = 6.0
+		bullet.speed = 12.0
 		bullet.target = target
 		bullet.source = self
 		bullet.damage_radius = damage_radius
@@ -273,7 +273,7 @@ func _attack(target, delta):
 			extra.team = team
 			extra.owner_peer_id = owner_peer_id
 			extra.damage = attack * volley_mult
-			extra.speed = 6.0
+			extra.speed = 12.0
 			extra.target = target
 			extra.source = self
 			extra.damage_radius = damage_radius

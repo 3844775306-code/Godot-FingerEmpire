@@ -3710,7 +3710,8 @@ func _attack(target, delta):
 			bullet.team = team
 			bullet.owner_peer_id = owner_peer_id
 			bullet.damage = attack
-			bullet.speed = 8.0
+			# 除投石车/巨型投石机的石头外，所有弹丸飞行速度翻倍。
+			bullet.speed = 8.0 if entity_id in [17, 59] else 16.0
 			bullet.source = self
 			bullet.damage_radius = damage_radius
 
