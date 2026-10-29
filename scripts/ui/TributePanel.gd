@@ -216,4 +216,9 @@ func _on_send() -> void:
 		_status.text = "已进贡 %d %s，对方实收 %d" % [int(result["sent"]), RES_LABELS.get(rk, rk), int(result["received"])]
 		refresh()
 	else:
-		_status.text = "进贡失败：%s" % String(result.get("reason", "未知原因"))
+		var reason: String = String(result.get("reason", "未知原因"))
+		_status.text = "进贡失败：%s" % reason
+		# 本地进贡失败也写入战况栏，和服务器/远程路径保持一致。
+		if _bm.has_method("_show_hud_alert"):
+			_bm._show_hud_alert("进贡失败：%s" % reason, Color(1.0, 0.8, 0.1),
+				[_local_team], _local_team, 0, false, [], Vector3.ZERO, _local_owner)

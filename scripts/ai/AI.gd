@@ -4099,10 +4099,7 @@ func _tribute_to_human_teammate() -> bool:
 		return false
 	_last_spend_block = "tribute_player_%d" % target
 	_last_spend_block_time = battle.game_time
-	var label: String = String({"gold":"黄金","wood":"木材","stone":"石头","food":"食物"}.get(best_rk, best_rk))
-	battle._show_hud_alert("AI 队友进贡 %d %s，你实收 %d（税 %d）" % [
-		int(result["sent"]), label, int(result["received"]), int(result["tax"])],
-		Color(0.35, 0.9, 0.65), [my_team], my_team, 0, false, [], Vector3.ZERO, my_peer_id)
+	# 成功播报统一由 battle.tribute_resources 写入战况/警报栏，这里不再重复提示。
 	return true
 
 func _owner_resource_ratio(owner: int, rk: String) -> float:

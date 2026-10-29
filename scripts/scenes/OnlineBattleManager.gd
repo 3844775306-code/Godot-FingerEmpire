@@ -954,12 +954,7 @@ func _2v2_tribute(peer_id: int, data: Dictionary) -> void:
 	var amount: int = int(data.get("amount", 0))
 	var result: Dictionary = tribute_resources(peer_id, target, rk, amount)
 	var team: int = int(player_info.get(peer_id, {}).get("team", -1))
-	var label: String = String({"gold":"黄金","wood":"木材","stone":"石头","food":"食物","oil":"石油"}.get(rk, rk))
-	if bool(result.get("ok", false)):
-		var msg := "队友进贡 %d %s：对方实收 %d（税 %d）" % [
-			int(result["sent"]), label, int(result["received"]), int(result["tax"])]
-		_show_hud_alert(msg, Color(0.35, 0.9, 0.65), [team], team, 0, false, [], Vector3.ZERO, peer_id)
-	else:
+	if not bool(result.get("ok", false)):
 		_show_hud_alert("进贡失败：%s" % String(result.get("reason", "未知原因")),
 			Color(1.0, 0.8, 0.1), [team], team, 0, false, [], Vector3.ZERO, peer_id)
 

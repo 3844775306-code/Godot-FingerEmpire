@@ -2204,7 +2204,28 @@ func tribute_resources(from_owner: int, to_owner: int, rk: String, amount: int) 
 		return {"ok": false, "reason": "对方仓库已满"}
 	from_res[rk] = int(from_res.get(rk, 0)) - amount
 	to_res[rk] = int(to_res.get(rk, 0)) + received
+	# 所有进贡成功都写进战况/警报栏：玩家主动进贡、AI 队友自动进贡、
+	# 联机命令结算共用这一条路径，避免只在 UI 状态文字里提示。
+	var team: int = get_team_of_owner(from_owner)
+	var res_name: String = String({
+		"gold": "黄金", "wood": "木材", "stone": "石头", "food": "食物", "oil": "石油",
+	}.get(rk, rk))
+	_show_hud_alert("进贡：%s → %s，%d %s，实收 %d（税 %d）" % [
+		_tribute_owner_label(from_owner), _tribute_owner_label(to_owner),
+		amount, res_name, received, amount - received],
+		Color(0.35, 0.9, 0.65), [team], team, 0, false, [], Vector3.ZERO, from_owner)
 	return {"ok": true, "reason": "", "sent": amount, "received": received, "tax": amount - received}
+
+func _tribute_owner_label(owner: int) -> String:
+	var info: Dictionary = get_player_roster().get(owner, {})
+	if info.is_empty():
+		return "P%d" % owner
+	var is_ai: bool = bool(info.get("is_ai", false))
+	var label: String = "AI队友" if is_ai else "队友"
+	var nation: int = int(info.get("nation", -1))
+	if nation >= 0 and nation < BattleStats.NATION_NAMES.size():
+		return "%s·%s" % [label, String(BattleStats.NATION_NAMES[nation])]
+	return "%s P%d" % [label, owner]
 
 # 根据owner_id获取资源字典
 func get_resources_for(owner_id: int) -> Dictionary:
