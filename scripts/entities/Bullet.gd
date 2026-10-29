@@ -539,15 +539,10 @@ func _maybe_start_avoidance_arc(goal: Vector3) -> void:
 	if _is_ballistic_projectile():
 		_start_arc(goal)
 
-# 弹丸撞到路径上的建筑/山体：只播放落点特效并回收，不对障碍物造成伤害，
-# 避免自动索敌/普通箭矢意外拆建筑；真正命中目标仍走 _on_hit/_on_hit_pos。
+# 弹丸撞到路径上的建筑/山体：按玩家要求不销毁、不造成伤害，继续飞向原目标。
+# 障碍检测仍保留，供后续需要“绕障/穿模修正”时使用。
 func _on_obstacle_hit() -> void:
-	if hit:
-		return
-	hit = true
-	if damage_radius > 0.0:
-		_spawn_impact_effect(global_position, source_entity_id in STONE_SOURCE_IDS)
-	recycle()
+	pass
 
 # 水平方向匀速逼近目标，竖直方向按抛物线偏移。
 # 返回当前到目标的水平距离，供命中判定使用。
