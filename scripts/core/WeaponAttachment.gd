@@ -233,12 +233,14 @@ static func _play_sword_attack(sword: Node3D) -> void:
 	sword.set_meta("_wa_tween", tw)
 	# 蓄力：剑向右后方抬起；随后沿正前方斜劈下去。
 	# 只绕 Z 轴左右摆会变成横向平移，必须叠加 X 轴的前倾/下劈和向前的位移。
-	tw.tween_property(sword, "rotation", base_rot + Vector3(-0.24, 0.0, -0.58), 0.09)
-	tw.parallel().tween_property(sword, "position", base_pos + Vector3(0.0, 0.03, -0.05), 0.09)
-	tw.tween_property(sword, "rotation", base_rot + Vector3(0.58, 0.0, 0.34), 0.12)
-	tw.parallel().tween_property(sword, "position", base_pos + Vector3(0.0, -0.01, 0.09), 0.12)
-	tw.tween_property(sword, "rotation", base_rot, 0.20)
-	tw.parallel().tween_property(sword, "position", base_pos, 0.20)
+	# 近战停止距离约等于双方半径 + 攻击距离，剑还要再向前探一段才够得着敌方，
+	# 所以劈砍段把剑压到接近水平并向前送，让剑尖真正扫到目标身上。
+	tw.tween_property(sword, "rotation", base_rot + Vector3(-0.24, 0.0, -0.58), 0.07)
+	tw.parallel().tween_property(sword, "position", base_pos + Vector3(0.0, 0.03, -0.05), 0.07)
+	tw.tween_property(sword, "rotation", base_rot + Vector3(1.35, 0.0, 0.18), 0.10)
+	tw.parallel().tween_property(sword, "position", base_pos + Vector3(0.02, -0.02, 0.60), 0.10)
+	tw.tween_property(sword, "rotation", base_rot, 0.18)
+	tw.parallel().tween_property(sword, "position", base_pos, 0.18)
 
 static func _play_spear_attack(spear: Node3D) -> void:
 	var base := _begin_weapon_anim(spear)

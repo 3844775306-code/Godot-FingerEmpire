@@ -14,7 +14,15 @@ func _ready() -> void:
 func _process(_delta: float) -> void:
 	if not is_instance_valid(owner_entity) or not is_instance_valid(hand_marker):
 		return
+	# 有攻击目标时直接朝目标，避免单位朝向仍有小偏差时剑/弓砍在目标旁边；
+	# 没有目标才回到单位正前方。
 	var yaw: float = owner_entity.global_rotation.y + PI
+	var target = owner_entity.get("current_target")
+	if target is Node3D and is_instance_valid(target):
+		var to_target: Vector3 = target.global_position - owner_entity.global_position
+		to_target.y = 0.0
+		if to_target.length_squared() > 0.0001:
+			yaw = atan2(to_target.x, to_target.z)
 	var hand_scale: Vector3 = hand_marker.global_transform.basis.get_scale()
 	# 只取朝向和模型缩放，不继承手臂骨骼的俯仰/翻滚，否则拉弓时弓会甩向侧面。
 	global_transform = Transform3D(
