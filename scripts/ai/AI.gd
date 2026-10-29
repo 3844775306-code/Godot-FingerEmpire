@@ -1670,10 +1670,15 @@ func _process(delta):
 			interval *= 1.9
 		elif entity_count > 180:
 			interval *= 1.4
-		timer = interval
-		decide(interval)
-		if battle != null and battle.has_method("is_research_mode") and battle.is_research_mode():
-			_tick_research()
+		if battle != null and battle.has_method("acquire_ai_decide_slot") \
+				and not bool(battle.acquire_ai_decide_slot(my_peer_id)):
+			# 本帧已有别的 AI 在决策：顺延 0.1s，避免多个 decide 叠在同一帧。
+			timer = 0.1
+		else:
+			timer = interval
+			decide(interval)
+			if battle != null and battle.has_method("is_research_mode") and battle.is_research_mode():
+				_tick_research()
 
 	worker_allocate_timer -= delta
 	if worker_allocate_timer <= 0:

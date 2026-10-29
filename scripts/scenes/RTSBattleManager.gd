@@ -719,6 +719,17 @@ func _rebuild_entity_cache():
 func mark_entity_cache_dirty():
 	_entity_cache_dirty = true
 
+# 同一帧最多让一个 AI 进入 decide：实测单次 decide 18~42ms（3v3 后期），
+# 5 个 AI 的计时器偶尔撞在同一帧，会直接造成 40~200ms 的单帧卡顿；
+# 拿不到槽位的 AI 顺延 0.1s，把尖峰摊到后续帧。
+var _ai_decide_frame: int = -1
+func acquire_ai_decide_slot(_peer_id: int) -> bool:
+	var f := Engine.get_process_frames()
+	if _ai_decide_frame == f:
+		return false
+	_ai_decide_frame = f
+	return true
+
 # 梯子完工后，墙/梯子通行缓存必须立刻重建：施工期间 `_ladder_entity_grid`
 # 不会收录这把梯子，若只标脏而不递增版本，MovementController 的静态缓存
 # 会一直沿用“不能翻墙”的旧版本，直到下一次建筑布局变化。
@@ -5130,20 +5141,37 @@ func _process(delta):
 	_tick_physics_rate(delta)
 
 # ==================== 后期自动画质 ====================
-# 默认画质固定为“极致”，并锁定档位；玩家在设置面板手动选择其他画质时仍会覆盖该档位。
+# 实测（单机 3v3 科研，核显 2400x1400）：默认「极致」档后期只有 18~23fps；
+# 关 SSAO +17~19%、关阴影 +31%、关水面平面反射 +18~25%、3D 分辨率 0.7 再 +85~107%。
+# 所以默认从「中档」起步并保留自动降档，玩家在设置面板手动选择后再锁定档位。
 func _apply_default_quality() -> void:
-	hand_quality_mode = true
-	_perf_quality_level = 0
+	hand_quality_mode = false
+	_perf_quality_level = 1
 	var vp := get_viewport()
 	if vp:
-		vp.scaling_3d_scale = 1.0
+		_perf_viewport = vp
+		_perf_base_scale = vp.scaling_3d_scale
+		vp.scaling_3d_scale = clampf(_perf_base_scale * PERF_LEVEL_SCALES[_perf_quality_level], 0.5, 2.0)
 	var light := _find_directional_light()
 	if light:
+		_perf_light = light
+		_perf_light_shadow_original = light.shadow_enabled
+		_perf_light_shadow_distance_original = light.directional_shadow_max_distance
+		_perf_light_shadow_mode_original = light.directional_shadow_mode
+		# 阴影是实测第二大项：中档先收到 70m + 2 分裂，升级到 0 档时再恢复。
 		light.shadow_enabled = true
-		light.directional_shadow_max_distance = 120.0
+		light.directional_shadow_max_distance = 70.0
+		if light.directional_shadow_mode == DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS:
+			light.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
 	var env := _find_world_environment()
 	if env:
-		env.ssao_enabled = true
+		_perf_env = env
+		_perf_ssao_original = env.ssao_enabled
+		env.ssao_enabled = false
+	var map_node := get_node_or_null("Map")
+	if map_node and map_node.has_method("set_water_quality"):
+		map_node.set_water_quality(_perf_quality_level)
+	_perf_initialized = true
 
 func _tick_adaptive_quality(delta: float) -> void:
 	if game_over or DisplayServer.get_name() == "headless":
@@ -5242,7 +5270,8 @@ func _apply_perf_quality() -> void:
 				distance_scale *= 0.85
 			_perf_light.directional_shadow_max_distance = maxf(_perf_light_shadow_distance_original * distance_scale, 12.0)
 			if _perf_light_shadow_mode_original == DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS:
-				_perf_light.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS if _perf_quality_level >= 2 else _perf_light_shadow_mode_original
+				# 实测 4 分裂阴影在 3v3 后期很贵；除最高档外统一降到 2 分裂。
+				_perf_light.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS if _perf_quality_level >= 1 else _perf_light_shadow_mode_original
 			else:
 				_perf_light.directional_shadow_mode = _perf_light_shadow_mode_original
 	if _perf_env and is_instance_valid(_perf_env):
@@ -6870,7 +6899,7 @@ func _research_complete(st: Dictionary) -> void:
 		update_population_limits()
 	_apply_research_to_owned_entities(st)
 	_refresh_research_production(st)
-	_research_refresh_entity_bars()
+	_research_refresh_entity_bars(st)
 	# 1v1 的 state key 是队伍号（0/1），不能当 owner 传给按 peer 统计的人口接口。
 	_update_player_population(int(st.get("owner", -1)))
 	var owner := int(st.get("owner", -1))
@@ -7263,8 +7292,16 @@ func apply_research_bonuses(e) -> void:
 	e._capture_stats_before_official()
 
 # 数值变更后刷新一次可见血条；联机客户端靠快照同步，不存在客户端调用。
-func _research_refresh_entity_bars() -> void:
-	for e in get_tree().get_nodes_in_group("entities"):
+# 只刷本次完成科研的那个玩家：以前 6 个玩家共用一次全场景遍历，实测一次要
+# 多扫几百个实体，属于科研完成尖峰的一部分。
+func _research_refresh_entity_bars(st: Dictionary = {}) -> void:
+	var key := int(st.get("_key", -999999))
+	_ensure_cache_fresh()
+	for e in _all_entities:
+		if not is_instance_valid(e) or e.health <= 0:
+			continue
+		if key != -999999 and research_key(int(e.owner_peer_id), int(e.team)) != key:
+			continue
 		if e is GameEntity and e.has_method("_refresh_damage_visual"):
 			e._refresh_damage_visual()
 
