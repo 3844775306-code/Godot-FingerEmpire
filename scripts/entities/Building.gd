@@ -22,6 +22,9 @@ var max_upgrade_time: float = 0.0
 var assigned_merchants: int = 0                    # 集市分配的商人数量（仅entity_id==52时使用）
 var garrison_point: Vector3 = Vector3.ZERO         # 新生产单位的驻扎点
 var _garrison_marker: Node3D = null
+# 驻军建筑头顶的识别牌：有驻军时显示“驻军 N”，让战场上能一眼看到。
+var _garrison_badge: Label3D = null
+var _garrison_badge_count: int = -1
 
 # 士兵/农民进驻系统
 var garrisoned_soldiers: Array = []      # Array of WeakRef — 进驻的单位
@@ -184,6 +187,37 @@ func _process(delta):
 				_attack(current_target, delta)
 			else:
 				current_target = null
+
+	_update_garrison_badge()
+
+# 有驻军时在建筑头顶显示识别牌；没人时隐藏。比信息面板更直观，扫一眼战场就能看到。
+func _update_garrison_badge() -> void:
+	var count := get_garrison_count()
+	if count <= 0:
+		if _garrison_badge != null and is_instance_valid(_garrison_badge):
+			_garrison_badge.visible = false
+		_garrison_badge_count = 0
+		return
+	if _garrison_badge == null or not is_instance_valid(_garrison_badge):
+		_garrison_badge = Label3D.new()
+		_garrison_badge.name = "GarrisonBadge"
+		_garrison_badge.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+		_garrison_badge.no_depth_test = true
+		_garrison_badge.font_size = 48
+		_garrison_badge.pixel_size = 0.014
+		_garrison_badge.outline_size = 12
+		_garrison_badge.outline_modulate = Color(0.0, 0.0, 0.0, 0.92)
+		_garrison_badge.modulate = Color(0.35, 1.0, 0.55, 1.0)
+		_garrison_badge.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		_garrison_badge.visibility_range_begin = 0.0
+		_garrison_badge.visibility_range_end = 80.0
+		add_child(_garrison_badge)
+		_garrison_badge.position = Vector3(0.0, body_radius * 2.0 + 1.2, 0.0)
+		_garrison_badge_count = -1
+	if count != _garrison_badge_count:
+		_garrison_badge.text = "驻军 %d" % count
+		_garrison_badge_count = count
+	_garrison_badge.visible = health > 0
 
 # 收集射程内所有可攻击的敌军，按距离从近到远排序。
 # 驻军齐射时每颗子弹从这里独立挑目标，不再全部锁死 current_target。
