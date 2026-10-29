@@ -241,7 +241,12 @@ var _advance_path_recovering: bool = false
 # 说明路径被其他逻辑清掉或状态残留。短暂等待后重发一次目的地，仍无路就结束，
 # 避免单位永远停在“攻击移动但无路径且原地不动”。
 const ATTACK_MOVE_STALE_GRACE: float = 1.5
+# 长途行军（隔河/绕远路）中途路径走空时会重新补发目的地。只有反复补发、
+# 且距离一直没有实质缩短（目标真的不可达）时才放弃，避免“走到河岸就丢命令”。
+const ATTACK_MOVE_MAX_REISSUE: int = 12
 var _attack_move_stale_time: float = 0.0
+var _attack_move_reissue_count: int = 0
+var _attack_move_best_dist: float = -1.0
 
 # 驻扎防御：驻扎点附近这个半径内的敌人优先清掉，再返回驻扎点
 const GARRISON_DEFEND_RADIUS: float = 10.0
@@ -2381,12 +2386,24 @@ func _recover_stale_attack_move(delta: float) -> void:
 	if _attack_move_stale_time < ATTACK_MOVE_STALE_GRACE:
 		return
 	_attack_move_stale_time = 0.0
-	# 没有路径也没有 A* 记录：先补发一次目的地。若 A* 仍然给不出路径，
-	# 下一轮宽限期结束时结束攻击移动，而不是继续无限重试。
-	if _movement.astar_target.distance_to(combat_destination) > 0.5:
-		_movement.clear_blacklist_at(combat_destination)
-		_movement.set_move_target(combat_destination)
-		return
+	# 还在赶往目的地的路上（隔河/绕远路时单段路径走完是常态）：
+	# 必须继续补发目的地，不能因为“astar_target 已经是目的地”就判定到达，
+	# 否则部队走到河岸/渡口就被清掉攻击移动命令，原地站死。
+	var dist_now: float = global_position.distance_to(combat_destination)
+	if dist_now > 4.0:
+		# 有实质推进（靠近 1 米以上）就清零重试计数，只有原地打转才累积
+		if _attack_move_best_dist < 0.0 or dist_now < _attack_move_best_dist - 1.0:
+			_attack_move_best_dist = dist_now
+			_attack_move_reissue_count = 0
+		else:
+			_attack_move_reissue_count += 1
+		if _attack_move_reissue_count <= ATTACK_MOVE_MAX_REISSUE:
+			_movement.clear_blacklist_at(combat_destination)
+			_movement.set_move_target(combat_destination)
+			return
+	# 反复补发仍到不了（目标本身不可达）：结束攻击移动，交给其它逻辑选新目标。
+	_attack_move_reissue_count = 0
+	_attack_move_best_dist = -1.0
 	_finish_combat_move()
 
 func _clear_attack_move_state() -> void:
@@ -2397,6 +2414,8 @@ func _clear_attack_move_state() -> void:
 	combat_resume_advance = false
 	combat_resume_destination = Vector3.ZERO
 	_attack_move_stale_time = 0.0
+	_attack_move_reissue_count = 0
+	_attack_move_best_dist = -1.0
 	_advance_path_fail_time = 0.0
 	_advance_path_recovering = false
 	_advance_progress_last_dist = INF

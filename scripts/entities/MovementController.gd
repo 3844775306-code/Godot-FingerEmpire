@@ -34,6 +34,8 @@ const A_STAR_HARD_LIMIT_USEC: int = 10000
 const MAX_PATH_PREVIEW_POINTS: int = 200
 # 沿浅滩距离场走的最大步数（100×100 地图对角线 140 格，留足余量）
 const FORD_ROUTE_MAX_STEPS: int = 320
+# 横渡浅滩带的最大步数（河宽 14 格，留足余量）
+const FORD_CROSS_MAX_STEPS: int = 48
 # 路径指引带排头跟随单位的步长：单位每走这么远才重建一次网格，
 # 既保证「走一段收一段」的实时感，又不至于每帧重新贴地。
 const PATH_HEAD_STEP: float = 0.45
@@ -52,6 +54,8 @@ var _last_path_partial: bool = false
 # 目标确实不可达（整块可达区域都已展开）时为 true：此时返回的是“最近可达格”的路径，
 # 单位走到那里就算本次移动完成，不再出现“走到岸边/山脚后丢命令发呆”。
 var _last_path_closest: bool = false
+# 同一路径被逐帧坡度检查连续否掉的次数，用于打破“清路径↔重算”死循环
+var _cliff_block_streak: int = 0
 # 大量单位同时移动/攻击移动时 A* 预算可能连续多帧排不到某个单位。
 # 以前等 4~8 秒后直接判“无路”再重发，结果队尾单位反复经历
 # “排队→超时失败→换目标/重发→继续排队”，永远拿不到路径。
@@ -581,14 +585,24 @@ func process_move(delta, bm: RTSBattleManager):
 	# 尤其禁止从高地/台地边缘直接走下悬崖；发现后立即重算，而不是停下等 Army 的
 	# 0.75~1.2 秒重试计时器（那会表现为行军途中突然站住一两秒）。
 	if bm != null and astar_path.size() > 0 and _is_cliff_between_positions(bm, _army.global_position, move_target):
-		_stop_velocity()
-		astar_path.clear()
-		clear_blacklist_at(target_pos)
-		var stop_range: float = _current_move_stop_range()
-		set_move_target(target_pos, stop_range)
-		if astar_path.is_empty() and not _pending_path:
-			move_path_failed = true
-		return
+		# 同一条路径被逐帧坡度检查连续否掉时不要无限“清路径→重算”：
+		# A* 展开时用的是同一套判定，重算通常得到完全相同的路径，于是单位
+		# 原地冻住（实测桥头堡单兵 70 秒不动、路径长度一直不变）。
+		# 连续 3 次就放行，让坡度减速与地面高度吸附兜底，宁可走慢也不能站死。
+		_cliff_block_streak += 1
+		if _cliff_block_streak > 3:
+			_cliff_block_streak = 0
+		else:
+			_stop_velocity()
+			astar_path.clear()
+			clear_blacklist_at(target_pos)
+			var stop_range: float = _current_move_stop_range()
+			set_move_target(target_pos, stop_range)
+			if astar_path.is_empty() and not _pending_path:
+				move_path_failed = true
+			return
+	else:
+		_cliff_block_streak = 0
 	# Build horizontal direction
 	var horizontal_target = Vector3(move_target.x, _army.global_position.y, move_target.z)
 	var move_dir = (horizontal_target - _army.global_position).normalized()
@@ -734,6 +748,12 @@ func _is_cliff_between_tiles(bm: RTSBattleManager, from_tile: Vector2i, to_tile:
 	if step_len < 0.001:
 		return false
 	var dh: float = _get_tile_height(to_tile, bm) - _get_tile_height(from_tile, bm)
+	# 只挡“往上爬绝壁”，不挡“往下走”。主城台基/城堡地基边缘通常有 2~4 米高差，
+	# 原来上下都判悬崖，于是单位在家门口就被逐帧拦下：清路径 → 重算 → 又判悬崖，
+	# 470 次/分钟的 _stop_velocity 全部来自这一条，全军永远出不了基地（实测桥头堡
+	# 地图单兵 35 秒原地不动、路径长度一直 47~48 不变）。下坡只按坡度扣速度。
+	if dh <= 0.0:
+		return false
 	return RTSConfig.is_cliff_slope(dh, step_len)
 
 # terrain=1 且没有缓坡(4)/台地(5)标记的格子就是不可通行的山壁。
@@ -782,9 +802,19 @@ func _is_diagonal_corner_blocked(bm: RTSBattleManager, from_tile: Vector2i,
 func _is_corner_side_blocked(bm: RTSBattleManager, tile: Vector2i, wall_cache: Dictionary) -> bool:
 	if tile.x < 0 or tile.y < 0 or tile.x >= RTSConfig.MAP_SIZE or tile.y >= RTSConfig.MAP_SIZE:
 		return true
-	if wall_cache.has(tile) and not _ladder_set.has(tile):
+	# 注意：不能把“城墙/建筑占格”当成拐角障碍。_get_terrain_cost 对它们在
+	# 1798 行返回的是 5.0（可走但很贵），A* 会正常穿过基地内部；这里若按
+	# 5.0 判成“挡拐角”，主城里每一格斜向移动都会被否掉，单位就在自家基地
+	# 里反复“清路径→重算”，A* 永远给出同一条被拒的路径 —— 全军出不了门。
+	if _get_terrain_cost(tile, bm, wall_cache) >= 999.0:
+		# 陆军斜向进出浅滩时，水里的侧格不构成“实体拐角”：水是规则禁行而不是
+		# 碰撞体，斜着从岸上踏进浅滩是安全的。若不放开，单位在渡口边缘会卡死：
+		# 逐帧判悬崖 → 清路径 → 重算 → 又判悬崖，永远下不了水（实测桥头堡
+		# 单兵在 (64,14) 对着浅滩 (63,13) 站了 35 秒没动）。
+		if not _army.water_capable and bm.get_terrain_at_grid(tile.x, tile.y) == 2:
+			return false
 		return true
-	return _get_terrain_cost(tile, bm, wall_cache) >= 999.0
+	return false
 
 # ==================== Collision separation ====================
 
@@ -1435,7 +1465,7 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 	# 过河重定向就永远不会触发——AI 全军只会贴着河岸拿到一段局部路径。
 	if not _is_ford_tile(start_tile, bm) \
 			and _path_crosses_deep_water(start_tile, end_tile, bm):
-		var ford_route: Array = _ford_gradient_path(start_tile, bm)
+		var ford_route: Array = _ford_gradient_path(start_tile, end_tile, bm)
 		if ford_route.size() > 0:
 			_last_path_partial = false
 			_last_path_closest = false
@@ -1642,7 +1672,7 @@ func _ford_field(bm: RTSBattleManager) -> Dictionary:
 	return field
 
 # 沿浅滩距离场下坡生成一条到渡口的路线（不跑 A*，不受 6ms 预算限制）。
-func _ford_gradient_path(start_tile: Vector2i, bm: RTSBattleManager) -> Array:
+func _ford_gradient_path(start_tile: Vector2i, goal_tile: Vector2i, bm: RTSBattleManager) -> Array:
 	var field: Dictionary = _ford_field(bm)
 	if not field.has(start_tile):
 		return []
@@ -1679,6 +1709,49 @@ func _ford_gradient_path(start_tile: Vector2i, bm: RTSBattleManager) -> Array:
 		out.append(Vector3(cur.x - half, 0.0, cur.y - half))
 	if out.is_empty():
 		return []
+	# 到达浅滩后必须继续横渡整条浅滩带：只走到渡口边上就返回的话，
+	# 单位会停在浅滩带入口，下一次 A* 又只在浅滩带上展开一小段，
+	# 表现为“到了渡口又开始沿河岸绕”。这里沿目标方向贪心穿过水上浅滩，
+	# 直到重新踩上对岸陆地（最多 48 格）。
+	var crossed: Array = _ford_crossing(cur, goal_tile, bm)
+	out.append_array(crossed)
+	return out
+
+# 从浅滩带入口沿“朝目标”的方向穿过整条浅滩（浅滩格可走，深水不可走）。
+func _ford_crossing(entry: Vector2i, goal_tile: Vector2i, bm: RTSBattleManager) -> Array:
+	var out: Array = []
+	var half: float = RTSConfig.MAP_SIZE / 2.0
+	var cur: Vector2i = entry
+	var cur_h: float = _heuristic(cur, goal_tile)
+	var touched_ford: bool = false
+	for _i in range(FORD_CROSS_MAX_STEPS):
+		var best: Vector2i = Vector2i(-1, -1)
+		var best_h: float = cur_h
+		for dx in range(-1, 2):
+			for dy in range(-1, 2):
+				if dx == 0 and dy == 0:
+					continue
+				var nb := Vector2i(cur.x + dx, cur.y + dy)
+				if nb.x < 0 or nb.y < 0 or nb.x >= RTSConfig.MAP_SIZE or nb.y >= RTSConfig.MAP_SIZE:
+					continue
+				var h: float = _heuristic(nb, goal_tile)
+				if h >= best_h:
+					continue
+				if _get_terrain_cost(nb, bm, {}) >= 999.0:
+					continue
+				best_h = h
+				best = nb
+		if best.x < 0:
+			break
+		cur = best
+		cur_h = best_h
+		out.append(Vector3(cur.x - half, 0.0, cur.y - half))
+		if _is_ford_tile(cur, bm):
+			touched_ford = true
+			continue
+		# 踩过浅滩、又回到陆地：横渡完成
+		if touched_ford and bm.get_terrain_at_grid(cur.x, cur.y) != 2:
+			break
 	return out
 
 func _is_ford_tile(cell: Vector2i, bm: RTSBattleManager) -> bool:
