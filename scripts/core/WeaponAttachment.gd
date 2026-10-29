@@ -16,10 +16,11 @@ const BOW_PATH := "res://models/forest/weapon-bow.glb"
 const SHIELD_PATH := "res://models/arena/shield-round.glb"
 const ARROW_PATH := "res://models/forest/weapon-arrow.glb"
 # 搭在弓上的待发箭：跟随弓移动，射击瞬间隐藏，拉弓动作结束后再补一支。
-const NOCKED_ARROW_POS := Vector3(-0.035, 0.239, -0.08)
+# 箭模型自身箭尖朝 +Z，弓模型前方也是 +Z；弓由 WeaponAim 固定朝向单位正前方，
+# 所以箭不用再掉头，箭尾留在弓弦附近、箭尖朝前即可。
+const NOCKED_ARROW_POS := Vector3(-0.035, 0.239, 0.18)
 const NOCKED_ARROW_SCALE := 0.72
-# 箭模型自身箭尖朝 +Z，而单位模型正面是 -Z；掉头 180° 才能和射击方向一致。
-const NOCKED_ARROW_ROT := Vector3(0.0, PI, 0.0)
+const NOCKED_ARROW_ROT := Vector3.ZERO
 
 # 士兵模型的骨骼是“手臂沿 X 轴伸出”的，肩到手约 0.29；挂点必须沿骨骼
 # 局部 X 轴偏移，不能沿 Y 轴往下压，否则武器会挂到脚边而不是手上。
@@ -41,14 +42,14 @@ static func attach(entity: Node3D, entity_id: int, _body_radius: float) -> void:
 	var skeleton := _find_skeleton(entity)
 	if entity_id in BOW_IDS:
 		_attach_weapon(entity, skeleton, BOW_PATH, "arm-left",
-				Vector3(HAND_REACH, 0.0, 0.02), Vector3.ZERO, 1.0, BOW_GRIP_OFFSET)
+				Vector3(HAND_REACH, 0.0, 0.02), Vector3.ZERO, 1.0, BOW_GRIP_OFFSET, true)
 		_add_nocked_arrow(_find_weapon(entity, "arm-left"))
 	elif entity_id in SPEAR_IDS:
 		_attach_weapon(entity, skeleton, SPEAR_PATH, "arm-right",
 				Vector3(-HAND_REACH, 0.0, 0.02), SPEAR_ROT, 1.0, SPEAR_GRIP_OFFSET)
 	elif entity_id in SWORD_IDS:
 		_attach_weapon(entity, skeleton, SWORD_PATH, "arm-right",
-				Vector3(-HAND_REACH, 0.0, 0.02), SWORD_ROT, 1.0, Vector3.ZERO)
+				Vector3(-HAND_REACH, 0.0, 0.02), SWORD_ROT, 1.0, Vector3.ZERO, true)
 	if entity_id in SHIELD_IDS:
 		# 弓手左手持弓，盾改挂右前臂；近战右手持武器，盾挂左前臂。
 		var shield_bone := "arm-right" if entity_id in BOW_IDS else "arm-left"
@@ -68,13 +69,12 @@ static func projectile_origin(source: Node3D, entity_id: int, target_pos: Vector
 	else:
 		dir = dir.normalized()
 	if entity_id in BOW_IDS:
-		var bow := source.find_child("WeaponBone_arm_left", true, false)
-		if bow is Node3D and bow.get_child_count() > 0:
-			var weapon := bow.get_child(0) as Node3D
+		var bow := _find_weapon(source, "arm-left")
+		if bow != null:
 			# 刚生成的那一帧骨骼姿态可能还没刷新，弓还在原点；此时走模型包围盒兜底。
-			if weapon != null and weapon.global_position.distance_to(source.global_position) > 0.05:
+			if bow.global_position.distance_to(source.global_position) > 0.05:
 				# 箭从弓身前方一点出，既贴着弓又不从手心里钻出来。
-				return weapon.global_position + dir * 0.20 + Vector3.UP * 0.04
+				return bow.global_position + dir * 0.20 + Vector3.UP * 0.04
 	var model := _find_entity_model(source)
 	if model != null:
 		var box := _model_local_aabb(model)
@@ -137,10 +137,12 @@ static func _find_weapon(entity: Node3D, bone_name: String) -> Node3D:
 	if entity == null or not is_instance_valid(entity):
 		return null
 	var attachment := entity.find_child("WeaponBone_" + bone_name.replace("-", "_"), true, false)
-	if attachment is Node3D and attachment.get_child_count() > 0:
-		var weapon := attachment.get_child(0)
-		if weapon is Node3D:
-			return weapon as Node3D
+	if attachment == null:
+		return null
+	# 弓的挂点下多了 WeaponHand/WeaponAim 两层，不能再假设武器是 attachment 的第一个子节点。
+	var weapon := attachment.find_child("Weapon", true, false)
+	if weapon is Node3D:
+		return weapon as Node3D
 	return null
 
 static func _add_nocked_arrow(bow: Node3D) -> void:
@@ -190,7 +192,9 @@ static func _weapon_base(weapon: Node3D) -> Array:
 	return weapon.get_meta("_wa_base")
 
 static func _kill_weapon_tween(weapon: Node3D) -> void:
-	var old = weapon.get_meta("_wa_tween", null)
+	if not weapon.has_meta("_wa_tween"):
+		return
+	var old = weapon.get_meta("_wa_tween")
 	if old is Tween and old.is_valid():
 		old.kill()
 
@@ -227,11 +231,14 @@ static func _play_sword_attack(sword: Node3D) -> void:
 	var base_rot: Vector3 = base[1]
 	var tw := sword.create_tween()
 	sword.set_meta("_wa_tween", tw)
-	tw.tween_property(sword, "rotation", base_rot + Vector3(0.0, 0.0, -0.62), 0.10)
-	tw.parallel().tween_property(sword, "position", base_pos + Vector3(0.0, 0.02, -0.06), 0.10)
-	tw.tween_property(sword, "rotation", base_rot + Vector3(0.10, 0.0, 0.24), 0.14)
-	tw.parallel().tween_property(sword, "position", base_pos, 0.14)
-	tw.tween_property(sword, "rotation", base_rot, 0.22)
+	# 蓄力：剑向右后方抬起；随后沿正前方斜劈下去。
+	# 只绕 Z 轴左右摆会变成横向平移，必须叠加 X 轴的前倾/下劈和向前的位移。
+	tw.tween_property(sword, "rotation", base_rot + Vector3(-0.24, 0.0, -0.58), 0.09)
+	tw.parallel().tween_property(sword, "position", base_pos + Vector3(0.0, 0.03, -0.05), 0.09)
+	tw.tween_property(sword, "rotation", base_rot + Vector3(0.58, 0.0, 0.34), 0.12)
+	tw.parallel().tween_property(sword, "position", base_pos + Vector3(0.0, -0.01, 0.09), 0.12)
+	tw.tween_property(sword, "rotation", base_rot, 0.20)
+	tw.parallel().tween_property(sword, "position", base_pos, 0.20)
 
 static func _play_spear_attack(spear: Node3D) -> void:
 	var base := _begin_weapon_anim(spear)
@@ -267,27 +274,45 @@ static func _find_skeleton(node: Node) -> Skeleton3D:
 
 static func _attach_weapon(entity: Node3D, skeleton: Skeleton3D, path: String,
 		bone_name: String, offset: Vector3, rotation: Vector3,
-		weapon_scale: float, grip_offset: Vector3 = Vector3.ZERO) -> void:
+		weapon_scale: float, grip_offset: Vector3 = Vector3.ZERO,
+		aim_forward: bool = false) -> Node3D:
 	if not ResourceLoader.exists(path):
-		return
+		return null
 	var scene := load(path)
 	if scene == null:
-		return
+		return null
 	var weapon = scene.instantiate()
 	if weapon == null:
-		return
+		return null
+	weapon.name = "Weapon"
 	weapon.scale = Vector3.ONE * weapon_scale
 	# BoneAttachment3D 每帧会被骨骼姿态覆盖，偏移/旋转必须写在武器本身上，
 	# 写在 attachment 上会被重置，表现为武器永远卡在肩膀。
-	weapon.position = grip_offset + offset
 	weapon.rotation = rotation
 	if skeleton != null and skeleton.find_bone(bone_name) >= 0:
 		var attachment := BoneAttachment3D.new()
 		attachment.name = "WeaponBone_" + bone_name.replace("-", "_")
 		attachment.bone_name = bone_name
 		skeleton.add_child(attachment)
-		attachment.add_child(weapon)
+		if aim_forward:
+			# 手部只提供位置；武器朝向由 WeaponAim 固定到单位正前方。
+			var hand := Node3D.new()
+			hand.name = "WeaponHand"
+			hand.position = offset
+			attachment.add_child(hand)
+			var pivot := Node3D.new()
+			pivot.name = "WeaponAim"
+			pivot.set_script(WeaponAim)
+			pivot.set("owner_entity", entity)
+			pivot.set("hand_marker", hand)
+			hand.add_child(pivot)
+			weapon.position = grip_offset
+			pivot.add_child(weapon)
+		else:
+			weapon.position = grip_offset + offset
+			attachment.add_child(weapon)
 	else:
 		# 无骨骼模型回退：保持原来的固定挂点，至少不会消失。
 		weapon.position = Vector3(0.6, 0.2, 0.0) + grip_offset
 		entity.add_child(weapon)
+	return weapon as Node3D
