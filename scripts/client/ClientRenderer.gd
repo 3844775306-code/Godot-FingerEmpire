@@ -1533,6 +1533,9 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 		if info.get("entity_id", 0) == 16: loaded_model.rotation.y = deg_to_rad(180)
 		elif info.get("entity_id", 0) == 17: loaded_model.rotation.y = deg_to_rad(90)
 		elif info.get("entity_id", 0) == 18: loaded_model.rotation.y = deg_to_rad(90)
+		elif info.get("entity_id", 0) == 58:
+			# 连弩：与服务端一致，ballista 模型 +X 转到实体前方 -Z
+			loaded_model.rotation.y = deg_to_rad(90)
 		elif info.get("entity_id", 0) == 59:
 			# 巨型投石机：与服务端一致，顺时针旋转 90°
 			loaded_model.rotation.y = deg_to_rad(-90)

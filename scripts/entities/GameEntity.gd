@@ -575,6 +575,24 @@ func die():
 		if s:
 			var inst = s.instantiate()
 			inst.name = "DemolishedModel"
+			# 连弩：毁坏模型沿用活模型的朝向，并按两者原始尺寸比例缩放，
+			# 避免死亡后大小/方向突变（毁坏模型 1.75m 宽，活模型 1.33m）。
+			if entity_id == 58 and has_meta("_model_instance"):
+				var live_model = get_meta("_model_instance")
+				if is_instance_valid(live_model) and live_model is Node3D:
+					var live_3d := live_model as Node3D
+					var live_scale := live_3d.scale
+					var size_bm = _get_bm()
+					if size_bm != null and size_bm.has_method("_get_model_aabb"):
+						var live_size: float = maxf(size_bm._get_model_aabb(live_3d).size.x,
+							maxf(size_bm._get_model_aabb(live_3d).size.y, size_bm._get_model_aabb(live_3d).size.z))
+						var dead_aabb: AABB = size_bm._get_model_aabb(inst)
+						var dead_size: float = maxf(dead_aabb.size.x, maxf(dead_aabb.size.y, dead_aabb.size.z))
+						if live_size > 0.01 and dead_size > 0.01:
+							live_scale *= live_size / dead_size
+					inst.scale = live_scale
+					inst.rotation = live_3d.rotation
+					inst.position = live_3d.position
 			add_child(inst)
 			# 毁坏模型也要按国家/队伍色染色，和正常模型保持一致
 			var bm_tint = _get_bm()

@@ -2649,6 +2649,9 @@ func _apply_entity_model(entity: GameEntity) -> bool:
 	if entity.entity_id == 16: model_instance.rotation.y = deg_to_rad(180)
 	elif entity.entity_id == 17: model_instance.rotation.y = deg_to_rad(90)
 	elif entity.entity_id == 18: model_instance.rotation.y = deg_to_rad(90)
+	elif entity.entity_id == 58:
+		# 连弩：ballista 模型炮口/弩箭沿局部 +X，顺时针转 90° 让 +X 对齐实体前方 -Z
+		model_instance.rotation.y = deg_to_rad(90)
 	elif entity.entity_id == 59:
 		# 巨型投石机：模型默认朝向与单位前方垂直，顺时针旋转 90° 校正
 		model_instance.rotation.y = deg_to_rad(-90)
@@ -5361,14 +5364,14 @@ func _tick_physics_rate(delta: float) -> void:
 
 func _set_physics_rate_low(low: bool) -> void:
 	# 低帧率时既要保持游戏时间接近真实，又不能一帧补跑太多物理步：
-	# 30Hz 模拟在 10FPS 下每帧要补 3 步，Army 逻辑重时会把帧时间继续推高，
-	# 表现为画面一阵一阵地卡。低于 20FPS 时把模拟降到 20Hz，10FPS 只需补 2 步，
-	# 总模拟时间仍然是 1 秒，但每帧少跑一步；正常帧率仍保持 30Hz 手感。
+	# 实测快速模式 5 分钟 700 实体时实体物理占单帧 50ms+，30/20Hz 下每帧要补 2~3 步。
+	# 低于 20FPS 时把模拟降到 15Hz，14FPS 只需补 1 步，物理开销近似减半；
+	# 帧率恢复后自动回到 30Hz。15Hz 对 RTS 的指令响应仍然可接受，优先保证画面不卡死。
 	var fps: float = Engine.get_frames_per_second()
-	var want_hz: int = 20 if (low and fps < 20.0) else 30
+	var want_hz: int = 15 if (low and fps < 20.0) else 30
 	# 最多补 4 步：20Hz 下足以支撑到 5FPS，30Hz 下足以支撑到 7.5FPS；
 	# 更极端的掉帧宁可让游戏稍微慢一点，也不制造更长的卡顿尖峰。
-	var want_steps: int = 4
+	var want_steps: int = 3
 	if _physics_rate_low == low \
 			and (not low or (Engine.physics_ticks_per_second == want_hz \
 				and Engine.max_physics_steps_per_frame == want_steps)):
