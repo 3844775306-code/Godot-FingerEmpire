@@ -2752,6 +2752,10 @@ func find_best_resource_for_worker(worker: Army, priority_score: Dictionary) -> 
 			# 之前只按 AI 权重找最近资源，导致农民被派去油井后原地空站。
 			if worker.gatherable_resources.size() > 0 and not type in worker.gatherable_resources:
 				continue
+			# 玩家在资源面板点“停止采集”后，本队农民（含同队 AI）两分钟内不再选它。
+			if battle.has_method("is_resource_gather_blacklisted") \
+					and battle.is_resource_gather_blacklisted(entity, worker.team):
+				continue
 			if type in priority_score:
 				var score = priority_score[type] - worker.global_position.distance_to(entity.global_position) * 0.01
 				var threat_penalty: float = float(_worker_threat_cache.get(entity, -1.0))

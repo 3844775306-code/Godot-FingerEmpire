@@ -3995,6 +3995,14 @@ func _gather(resource_node, delta):
 		current_target = null
 		_set_order(UnitState.IDLE)
 		return
+	var blacklist_bm = _get_bm()
+	if blacklist_bm != null and blacklist_bm.has_method("is_resource_gather_blacklisted") \
+			and blacklist_bm.is_resource_gather_blacklisted(resource_node, team):
+		# 资源被本队手动拉黑：正在采集的农民也要立刻换点。
+		current_target = null
+		_set_order(UnitState.IDLE)
+		_find_nearest_resource()
+		return
 	if gather_timer <= 0:
 		var res_type = resource_node.resource_type
 		if gatherable_resources.size() > 0 and not res_type in gatherable_resources:
@@ -4149,7 +4157,9 @@ func _pick_gather_resource(bm, radius: float) -> WorldResource:
 	var nearest = bm.get_nearest_resource(global_position, radius, gatherable_resources)
 	if nearest == null:
 		return null
-	if not _is_target_marked_unreachable(nearest):
+	var nearest_blacklisted: bool = bm.has_method("is_resource_gather_blacklisted") \
+		and bm.is_resource_gather_blacklisted(nearest, team)
+	if not _is_target_marked_unreachable(nearest) and not nearest_blacklisted:
 		return nearest
 	# get_nearest_resource 只返回一个点，最近的恰好不可达时无法换目标。
 	# 此时才遍历 battle 的资源缓存（数量远小于单位），筛出范围内可达的次近点。
@@ -4162,6 +4172,8 @@ func _pick_gather_resource(bm, radius: float) -> WorldResource:
 		if gatherable_resources.size() > 0 and not entity.resource_type in gatherable_resources:
 			continue
 		if _is_target_marked_unreachable(entity):
+			continue
+		if bm.has_method("is_resource_gather_blacklisted") and bm.is_resource_gather_blacklisted(entity, team):
 			continue
 		var dist: float = global_position.distance_squared_to(entity.global_position)
 		if dist > radius_sq:
@@ -4511,6 +4523,11 @@ func gather_at(source):
 	# 在命令入口就拒绝，避免单位先跑到井边、到了才发现采不了而发呆。
 	if source is WorldResource and gatherable_resources.size() > 0 \
 			and not source.resource_type in gatherable_resources:
+		return
+	var bm_blacklist = _get_bm()
+	if source is WorldResource and bm_blacklist != null \
+			and bm_blacklist.has_method("is_resource_gather_blacklisted") \
+			and bm_blacklist.is_resource_gather_blacklisted(source, team):
 		return
 	# 玩家手动点采集时解除“不可达”标记，让命令立即生效；失败次数保留用于退避
 	_clear_resource_mark(source)

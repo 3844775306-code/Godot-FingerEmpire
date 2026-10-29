@@ -49,6 +49,10 @@ func _get_res() -> Dictionary:
 # 移动端字号：设计空间 2400x1400 直接写 14 号字在手机上只有约 4dp。
 var repair_btn: Button = null
 var cancel_build_btn: Button = null
+# 选中资源点时出现的“采集 / 停止采集”操作区
+var _resource_box: VBoxContainer = null
+var _resource_gather_btn: Button = null
+var _resource_stop_btn: Button = null
 # 注意 RichTextLabel 的字号主题项是 normal_font_size，只设 font_size 不会生效。
 func _is_mobile() -> bool:
 	return InputSource.use_mobile_ui()
@@ -138,6 +142,31 @@ func _ready():
 	cancel_build_btn.pressed.connect(_on_cancel_build_pressed)
 	UITheme.apply_danger_button(cancel_build_btn, UITheme.FONT_SM)
 	_vb.add_child(cancel_build_btn)
+
+	# 资源点操作区：两个按钮并排，手机端也放得下。
+	_resource_box = VBoxContainer.new()
+	_resource_box.name = "ResourceBox"
+	_resource_box.visible = false
+	_resource_box.add_theme_constant_override("separation", 4)
+	var res_row := HBoxContainer.new()
+	res_row.add_theme_constant_override("separation", 6)
+	_resource_gather_btn = Button.new()
+	_resource_gather_btn.text = "⛏ 采集"
+	_resource_gather_btn.custom_minimum_size = Vector2(0, UILayout.dp(30.0) if _is_mobile() else 34.0)
+	_resource_gather_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_resource_gather_btn.pressed.connect(_on_resource_gather_pressed)
+	UITheme.apply_primary_button(_resource_gather_btn, UITheme.FONT_SM)
+	_resource_stop_btn = Button.new()
+	_resource_stop_btn.text = "🚫 停止采集"
+	_resource_stop_btn.tooltip_text = "本队农民 2 分钟内不再采集这个资源点"
+	_resource_stop_btn.custom_minimum_size = Vector2(0, UILayout.dp(30.0) if _is_mobile() else 34.0)
+	_resource_stop_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_resource_stop_btn.pressed.connect(_on_resource_stop_pressed)
+	UITheme.apply_danger_button(_resource_stop_btn, UITheme.FONT_SM)
+	res_row.add_child(_resource_gather_btn)
+	res_row.add_child(_resource_stop_btn)
+	_resource_box.add_child(res_row)
+	_vb.add_child(_resource_box)
 
 	set_process(true)
 	if _is_mobile():
@@ -679,7 +708,8 @@ func update_info(entity):
 		UITheme.entity_emoji(entity.entity_id, entity.entity_type),
 		unit_name,
 		UITheme.hex_str(UITheme.GOLD), entity.level]
-	var readonly := not _is_local_owned_entity(entity)
+	# 中立资源虽然不属于玩家，但采集是玩家可执行的操作，不能按“仅查看”处理。
+	var readonly := not _is_local_owned_entity(entity) and not (entity is WorldResource)
 	var readonly_label := "队友"
 	if _is_enemy_entity(entity):
 		readonly_label = "敌方"
@@ -698,6 +728,15 @@ func update_info(entity):
 	hp_bar.anchor_right = pct
 	if hp_bar_bg: hp_bar_bg.visible = true
 	hp_bar.visible = true
+
+	# 资源点：只展示资源种类/剩余量和采集人数，不再显示 ATK/RANGE 等战斗属性。
+	if entity is WorldResource:
+		_hide_all_action_buttons()
+		_update_resource_ui(entity)
+		_apply_detail_mode()
+		return
+
+	_hide_resource_box()
 
 	var hc = _hc(pct)
 	var t := _nation_display(entity)
@@ -873,6 +912,78 @@ func _promote_mobile_actions() -> void:
 		idx += 1
 	if produce_vbox != null and is_instance_valid(produce_vbox) and produce_vbox.visible:
 		_vb.move_child(produce_vbox, idx)
+
+# 切到资源点时把建筑/单位操作全部收起，避免残留“升级/生产/拆除”按钮。
+func _hide_all_action_buttons() -> void:
+	if upgrade_btn: upgrade_btn.visible = false
+	if produce_vbox: produce_vbox.visible = false
+	if demolish_btn: demolish_btn.visible = false
+	if repair_btn: repair_btn.visible = false
+	if cancel_build_btn: cancel_build_btn.visible = false
+	_hide_multi_board_btn()
+	_clear_produce_area()
+	var old_box = _vb.get_node_or_null("UpgradeInfoBox")
+	if old_box:
+		_vb.remove_child(old_box)
+		old_box.queue_free()
+
+func _hide_resource_box() -> void:
+	if _resource_box != null:
+		_resource_box.visible = false
+
+func _update_resource_ui(entity) -> void:
+	if _resource_box == null or battle == null:
+		return
+	var team: int = battle.get_host_team()
+	var n: int = 0
+	if battle.has_method("count_gatherers_on_resource"):
+		n = battle.count_gatherers_on_resource(entity, team)
+	var remaining: float = 0.0
+	if battle.has_method("resource_gather_blacklist_remaining"):
+		remaining = battle.resource_gather_blacklist_remaining(entity, team)
+	var rtype: String = str(entity.resource_type)
+	var rname: String = str(UITheme.RESOURCE_NAMES.get(rtype, rtype))
+	var hp: int = int(entity.health)
+	var max_hp: int = int(entity.max_health)
+	var txt: String = "🌿 [color=%s]%s[/color]\n" % [
+		UITheme.hex_str(UITheme.RESOURCE_COLORS.get(rtype, UITheme.PARCHMENT)), rname]
+	txt += "📦 剩余:  [color=white]%d / %d[/color]\n" % [hp, max_hp]
+	txt += "⛏ 采集中:  [color=%s]%d[/color] 人" % [
+		UITheme.hex_str(UITheme.EMERALD), n]
+	if remaining > 0.0:
+		txt += "\n[color=%s]🚫 已停止采集：剩余 %d 秒[/color]" % [
+			UITheme.hex_str(UITheme.VERMILION), int(ceil(remaining))]
+	stats_rtl.text = txt
+	_resource_box.visible = true
+	_resource_gather_btn.disabled = false
+	_resource_gather_btn.text = "⛏ 采集"
+	_resource_stop_btn.disabled = false
+	_resource_stop_btn.text = "🚫 停止采集"
+	if remaining > 0.0:
+		_resource_stop_btn.text = "🚫 停止中 (%ds)" % int(ceil(remaining))
+
+func _on_resource_gather_pressed() -> void:
+	if observed_entity == null or not is_instance_valid(observed_entity):
+		return
+	if not (observed_entity is WorldResource) or battle == null:
+		return
+	var ok: bool = false
+	if battle.has_method("assign_gatherer_to_resource"):
+		ok = bool(battle.assign_gatherer_to_resource(observed_entity))
+	if not ok and battle.has_method("_show_hud_alert"):
+		battle._show_hud_alert("附近没有可采集的我方农民", UITheme.ALERT_WARNING)
+	update_info(observed_entity)
+
+func _on_resource_stop_pressed() -> void:
+	if observed_entity == null or not is_instance_valid(observed_entity):
+		return
+	if not (observed_entity is WorldResource) or battle == null:
+		return
+	if battle.has_method("blacklist_resource_gathering"):
+		battle.blacklist_resource_gathering(observed_entity, battle.get_host_team(), 120.0)
+	if battle.has_method("_show_hud_alert"):
+		battle._show_hud_alert("已停止采集该资源点 2 分钟", UITheme.ALERT_INFO)
+	update_info(observed_entity)
 
 func _on_upgrade_pressed():
 	if not observed_entity or not is_instance_valid(observed_entity): return

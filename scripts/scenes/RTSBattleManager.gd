@@ -2130,6 +2130,94 @@ func get_team_resources(team: int) -> Dictionary:
 func get_team_resource_limits(team: int) -> Dictionary:
 	return player_resource_limits if is_host_team(team) else enemy_resource_limits
 
+# ==================== 资源点选中操作：派农民 / 停止采集 ====================
+# 停止采集是“按队伍”记在资源点上的：敌方 AI 不受玩家黑名单影响。
+func _resource_blacklist_key(team: int) -> String:
+	return "_gather_blacklist_team_%d" % team
+
+func is_resource_gather_blacklisted(res, team: int) -> bool:
+	if res == null or not is_instance_valid(res) or not (res is WorldResource):
+		return false
+	var key := _resource_blacklist_key(team)
+	if not res.has_meta(key):
+		return false
+	if float(res.get_meta(key)) > float(game_time):
+		return true
+	res.remove_meta(key)
+	return false
+
+func resource_gather_blacklist_remaining(res, team: int) -> float:
+	if res == null or not is_instance_valid(res) or not (res is WorldResource):
+		return 0.0
+	var key := _resource_blacklist_key(team)
+	if not res.has_meta(key):
+		return 0.0
+	return maxf(0.0, float(res.get_meta(key)) - float(game_time))
+
+func blacklist_resource_gathering(res, team: int, duration: float = 120.0) -> void:
+	if res == null or not is_instance_valid(res) or not (res is WorldResource):
+		return
+	res.set_meta(_resource_blacklist_key(team), float(game_time) + duration)
+	# 已经在采这个点的农民要立即停手；否则“黑名单”只对新命令生效，
+	# 现有农民还会继续挖两分钟。
+	_ensure_cache_fresh()
+	for u in _armies:
+		if not is_instance_valid(u) or u.health <= 0 or u.team != team:
+			continue
+		if u.current_target != res:
+			continue
+		u.current_target = null
+		u._set_order(0)
+		if u.has_method("_find_nearest_resource"):
+			u._find_nearest_resource()
+
+func count_gatherers_on_resource(res, team: int) -> int:
+	if res == null or not is_instance_valid(res):
+		return 0
+	_ensure_cache_fresh()
+	var n: int = 0
+	for u in _armies:
+		if not is_instance_valid(u) or u.health <= 0 or u.team != team:
+			continue
+		if u.current_order == "gather" and u.current_target == res:
+			n += 1
+	return n
+
+# 选中资源点后“采集”按钮：优先空闲农民，其次距离最近的农民。
+func assign_gatherer_to_resource(res, team: int = -1) -> bool:
+	if res == null or not is_instance_valid(res) or not (res is WorldResource) or res.health <= 0:
+		return false
+	if team < 0:
+		team = get_host_team()
+	# 玩家主动点“采集”视为解除该资源的停止采集状态。
+	if res.has_meta(_resource_blacklist_key(team)):
+		res.remove_meta(_resource_blacklist_key(team))
+	_ensure_cache_fresh()
+	var best_idle = null
+	var best_idle_dist: float = INF
+	var nearest_any = null
+	var nearest_any_dist: float = INF
+	for u in _armies:
+		if not is_instance_valid(u) or u.health <= 0 or u.team != team:
+			continue
+		if int(u.entity_id) != 10:
+			continue
+		if u.gatherable_resources.size() > 0 and not res.resource_type in u.gatherable_resources:
+			continue
+		var d: float = u.global_position.distance_to(res.global_position)
+		var idle: bool = (u.current_order in ["", "idle"]) and u.current_target == null
+		if idle and d < best_idle_dist:
+			best_idle_dist = d
+			best = u
+		if d < best_any_dist:
+			best_any_dist = d
+			if best == null:
+				best = u
+	if best == null:
+		return false
+	best.gather_at(res)
+	return true
+
 # 按队伍找主城（单机 2v2/3v3 同队多城时只取第一座；调用方需要 owner 精度时自行过滤）
 func get_castle_by_team(team: int) -> Building:
 	_ensure_cache_fresh()
