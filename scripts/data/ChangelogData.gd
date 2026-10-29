@@ -79,6 +79,15 @@ static func milestones() -> Array:
 static func entries() -> Array:
 	return [
 		{
+			"version": "v4.0.26",
+			"date": "2026-10-29",
+			"title": "卡顿诊断与帧时间稳定",
+			"items": [
+				"优化：低帧率时每帧最多补 2 个物理步（原 3 步），减少“越卡越补步”造成的周期性顿挫。",
+				"新增：内置卡顿日志，单帧超过 60ms 会记录当时的游戏时间、实体数、物理帧率和耗时，方便定位偶发卡顿（user://stutter.log）。",
+			],
+		},
+		{
 			"version": "v4.0.25",
 			"date": "2026-10-29",
 			"title": "网页移动端与战役体验修复",
