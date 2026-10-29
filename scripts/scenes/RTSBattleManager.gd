@@ -2205,18 +2205,78 @@ func assign_gatherer_to_resource(res, team: int = -1) -> bool:
 		if u.gatherable_resources.size() > 0 and not res.resource_type in u.gatherable_resources:
 			continue
 		var d: float = u.global_position.distance_to(res.global_position)
+		if d < nearest_any_dist:
+			nearest_any_dist = d
+			nearest_any = u
 		var idle: bool = (u.current_order in ["", "idle"]) and u.current_target == null
 		if idle and d < best_idle_dist:
 			best_idle_dist = d
-			best = u
-		if d < best_any_dist:
-			best_any_dist = d
-			if best == null:
-				best = u
+			best_idle = u
+	var best = best_idle if best_idle != null else nearest_any
 	if best == null:
 		return false
 	best.gather_at(res)
 	return true
+
+# 选中资源时给“正在采这个点的农民”画头顶 ❌；team < 0 表示不限队伍。
+func get_gatherers_on_resource(res, team: int = -1) -> Array:
+	var out: Array = []
+	if res == null or not is_instance_valid(res):
+		return out
+	_ensure_cache_fresh()
+	for u in _armies:
+		if not is_instance_valid(u) or u.health <= 0:
+			continue
+		if team >= 0 and u.team != team:
+			continue
+		if u.current_order == "gather" and u.current_target == res:
+			out.append(u)
+	return out
+
+# 选中建筑时给“建造/修理此建筑的农民”画头顶 ❌。
+func get_builders_on_building(b) -> Array:
+	var out: Array = []
+	if b == null or not is_instance_valid(b) or not (b is Building):
+		return out
+	b.builder_count()
+	for ref in b.builders:
+		if not (ref is WeakRef):
+			continue
+		var u = ref.get_ref()
+		if u != null and is_instance_valid(u) and u is Army and u.health > 0:
+			out.append(u)
+	return out
+
+# 建筑信息面板“加人建造 / 加人修理”：优先空闲农民，其次最近的农民。
+func assign_builder_to_building(b, team: int = -1) -> bool:
+	if b == null or not is_instance_valid(b) or not (b is Building) or b.health <= 0:
+		return false
+	if not b.is_waiting_for_builder() and b.build_timer <= 0.0 and not b.is_under_repair():
+		return false
+	if team < 0:
+		team = int(b.team)
+	_ensure_cache_fresh()
+	var best_idle = null
+	var best_idle_dist: float = INF
+	var nearest_any = null
+	var nearest_any_dist: float = INF
+	for u in _armies:
+		if not is_instance_valid(u) or u.health <= 0 or u.team != team:
+			continue
+		if int(u.entity_id) != 10:
+			continue
+		var d: float = u.global_position.distance_to(b.global_position)
+		if d < nearest_any_dist:
+			nearest_any_dist = d
+			nearest_any = u
+		var idle: bool = (u.current_order in ["", "idle"]) and u.current_target == null
+		if idle and d < best_idle_dist:
+			best_idle_dist = d
+			best_idle = u
+	var best = best_idle if best_idle != null else nearest_any
+	if best == null:
+		return false
+	return bool(best.work_on_building(b))
 
 # 按队伍找主城（单机 2v2/3v3 同队多城时只取第一座；调用方需要 owner 精度时自行过滤）
 func get_castle_by_team(team: int) -> Building:

@@ -53,6 +53,11 @@ var cancel_build_btn: Button = null
 var _resource_box: VBoxContainer = null
 var _resource_gather_btn: Button = null
 var _resource_stop_btn: Button = null
+# 选中施工中/修理中的建筑时出现的“加人建造 / 加人修理”操作区
+var _builder_box: VBoxContainer = null
+var _builder_info_rtl: RichTextLabel = null
+var _add_builder_btn: Button = null
+var _add_repairer_btn: Button = null
 # 注意 RichTextLabel 的字号主题项是 normal_font_size，只设 font_size 不会生效。
 func _is_mobile() -> bool:
 	return InputSource.use_mobile_ui()
@@ -167,6 +172,38 @@ func _ready():
 	res_row.add_child(_resource_stop_btn)
 	_resource_box.add_child(res_row)
 	_vb.add_child(_resource_box)
+
+	# 建筑施工现场操作区：只在建造中/修理中显示。
+	_builder_box = VBoxContainer.new()
+	_builder_box.name = "BuilderBox"
+	_builder_box.visible = false
+	_builder_box.add_theme_constant_override("separation", 4)
+	_builder_info_rtl = RichTextLabel.new()
+	_builder_info_rtl.bbcode_enabled = true
+	_builder_info_rtl.fit_content = true
+	_builder_info_rtl.scroll_active = false
+	_builder_info_rtl.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_builder_info_rtl.add_theme_font_size_override("normal_font_size", UITheme.FONT_SM)
+	_builder_info_rtl.add_theme_color_override("default_color", UITheme.PARCHMENT)
+	_builder_box.add_child(_builder_info_rtl)
+	var build_row := HBoxContainer.new()
+	build_row.add_theme_constant_override("separation", 6)
+	_add_builder_btn = Button.new()
+	_add_builder_btn.text = "➕ 加人建造"
+	_add_builder_btn.custom_minimum_size = Vector2(0, UILayout.dp(30.0) if _is_mobile() else 34.0)
+	_add_builder_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_add_builder_btn.pressed.connect(_on_add_builder_pressed)
+	UITheme.apply_primary_button(_add_builder_btn, UITheme.FONT_SM)
+	_add_repairer_btn = Button.new()
+	_add_repairer_btn.text = "➕ 加人修理"
+	_add_repairer_btn.custom_minimum_size = Vector2(0, UILayout.dp(30.0) if _is_mobile() else 34.0)
+	_add_repairer_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_add_repairer_btn.pressed.connect(_on_add_repairer_pressed)
+	UITheme.apply_primary_button(_add_repairer_btn, UITheme.FONT_SM)
+	build_row.add_child(_add_builder_btn)
+	build_row.add_child(_add_repairer_btn)
+	_builder_box.add_child(build_row)
+	_vb.add_child(_builder_box)
 
 	set_process(true)
 	if _is_mobile():
@@ -794,6 +831,7 @@ func update_info(entity):
 		if demolish_btn:
 			demolish_btn.visible = (entity.entity_id != 20) and not readonly
 		_update_repair_ui(entity, readonly)
+		_update_builder_ui(entity, readonly)
 		if cancel_build_btn:
 			var can_cancel := false
 			if entity.build_timer > 0.0 and not readonly:
@@ -893,6 +931,7 @@ func update_info(entity):
 		if demolish_btn: demolish_btn.visible = false
 		if repair_btn: repair_btn.visible = false
 		if cancel_build_btn: cancel_build_btn.visible = false
+		_hide_builder_box()
 	hp_bar.visible = true
 	_promote_mobile_actions()
 	_apply_detail_mode()
@@ -912,6 +951,9 @@ func _promote_mobile_actions() -> void:
 		idx += 1
 	if produce_vbox != null and is_instance_valid(produce_vbox) and produce_vbox.visible:
 		_vb.move_child(produce_vbox, idx)
+		idx += 1
+	if _builder_box != null and is_instance_valid(_builder_box) and _builder_box.visible:
+		_vb.move_child(_builder_box, idx)
 
 # 切到资源点时把建筑/单位操作全部收起，避免残留“升级/生产/拆除”按钮。
 func _hide_all_action_buttons() -> void:
@@ -920,6 +962,7 @@ func _hide_all_action_buttons() -> void:
 	if demolish_btn: demolish_btn.visible = false
 	if repair_btn: repair_btn.visible = false
 	if cancel_build_btn: cancel_build_btn.visible = false
+	_hide_builder_box()
 	_hide_multi_board_btn()
 	_clear_produce_area()
 	var old_box = _vb.get_node_or_null("UpgradeInfoBox")
@@ -930,6 +973,66 @@ func _hide_all_action_buttons() -> void:
 func _hide_resource_box() -> void:
 	if _resource_box != null:
 		_resource_box.visible = false
+
+func _hide_builder_box() -> void:
+	if _builder_box != null:
+		_builder_box.visible = false
+	if _add_builder_btn != null:
+		_add_builder_btn.visible = false
+	if _add_repairer_btn != null:
+		_add_repairer_btn.visible = false
+
+func _update_builder_ui(entity, readonly: bool) -> void:
+	if _builder_box == null or battle == null or not (entity is Building):
+		_hide_builder_box()
+		return
+	var constructing: bool = entity.build_timer > 0.0
+	var repairing: bool = false
+	if entity.has_method("is_under_repair"):
+		repairing = entity.is_under_repair()
+	if not constructing and not repairing:
+		_hide_builder_box()
+		return
+	var count: int = 0
+	if entity.has_method("builder_count"):
+		count = entity.builder_count()
+	_builder_box.visible = true
+	if repairing:
+		_builder_info_rtl.text = "🔧 [color=%s]修理人数[/color]:  [color=white]%d[/color] 人" % [
+			UITheme.hex_str(UITheme.REPAIR_PROGRESS), count]
+		_add_builder_btn.visible = false
+		_add_repairer_btn.visible = true
+		_add_repairer_btn.disabled = readonly
+	else:
+		_builder_info_rtl.text = "🔨 [color=%s]建造人数[/color]:  [color=white]%d[/color] 人" % [
+			UITheme.hex_str(UITheme.BUILD_PROGRESS), count]
+		_add_builder_btn.visible = true
+		_add_builder_btn.disabled = readonly
+		_add_repairer_btn.visible = false
+
+func _on_add_builder_pressed() -> void:
+	if observed_entity == null or not is_instance_valid(observed_entity):
+		return
+	if not (observed_entity is Building) or battle == null:
+		return
+	var ok: bool = false
+	if battle.has_method("assign_builder_to_building"):
+		ok = bool(battle.assign_builder_to_building(observed_entity))
+	if not ok and battle.has_method("_show_hud_alert"):
+		battle._show_hud_alert("附近没有可施工的我方农民", UITheme.ALERT_WARNING)
+	update_info(observed_entity)
+
+func _on_add_repairer_pressed() -> void:
+	if observed_entity == null or not is_instance_valid(observed_entity):
+		return
+	if not (observed_entity is Building) or battle == null:
+		return
+	var ok: bool = false
+	if battle.has_method("assign_builder_to_building"):
+		ok = bool(battle.assign_builder_to_building(observed_entity))
+	if not ok and battle.has_method("_show_hud_alert"):
+		battle._show_hud_alert("附近没有可修理的我方农民", UITheme.ALERT_WARNING)
+	update_info(observed_entity)
 
 func _update_resource_ui(entity) -> void:
 	if _resource_box == null or battle == null:

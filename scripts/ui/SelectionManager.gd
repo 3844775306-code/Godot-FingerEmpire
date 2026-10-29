@@ -73,6 +73,20 @@ func _update_target_markers() -> void:
 			var req: Dictionary = _target_marker_request(e)
 			if not req.is_empty():
 				requests.append(req)
+	# 选中单个建筑/资源时，给正在为它施工/采集的农民也画 ❌，
+	# 让玩家一眼看出“加人”加的是哪个农民，而不是只看到目标点。
+	if selected_entities.size() == 1 and is_instance_valid(selected_entities[0]):
+		var sel = selected_entities[0]
+		var bm = get_tree().get_first_node_in_group("battle_manager")
+		if bm != null:
+			if sel is Building and bm.has_method("get_builders_on_building"):
+				for w in bm.get_builders_on_building(sel):
+					if is_instance_valid(w):
+						requests.append({"follow": w})
+			elif sel is WorldResource and bm.has_method("get_gatherers_on_resource"):
+				for w in bm.get_gatherers_on_resource(sel, -1):
+					if is_instance_valid(w):
+						requests.append({"follow": w})
 	_target_markers.refresh_requests(requests)
 
 # 把一个选中陆军的目标整理成 TargetMarkerManager 的请求：
