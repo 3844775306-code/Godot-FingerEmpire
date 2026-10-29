@@ -1655,10 +1655,15 @@ func _physics_process(delta):
 			global_position = transport.global_position
 		return
 
-	# 动物行为（每5帧处理一次）
+	# 动物行为：逐帧推进。以前每 5 帧才挪一次位置，虽然总速度不变，
+	# 但视觉上是一顿一顿地跳；逐帧移动后再贴地，行走动画才连续。
 	if _animal_type != "":
-		if Engine.get_process_frames() % 5 == 0:
-			_process_animal(delta * 5.0)
+		_process_animal(delta)
+		# 走/停状态一变化立即刷新动画，不用等服务端 30 帧轮询，
+		# 否则动物起步和停下会慢半拍。
+		if _animal_moving != _animal_anim_moving:
+			_animal_anim_moving = _animal_moving
+			_refresh_animation_now()
 		return
 
 	# Merchant/official special logic
@@ -5524,6 +5529,7 @@ var _animal_pause: float = 0.0
 # 供动画层用：动物不走 MovementController，velocity 恒为 0，
 # 没有这个标记服务端会一直播 idle，动物就成了滑行的贴纸。
 var _animal_moving: bool = false
+var _animal_anim_moving: bool = false
 
 func _process_animal(delta):
 	# 成长计时：升到5级后不可再成长

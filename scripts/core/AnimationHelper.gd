@@ -87,3 +87,29 @@ static func play_looped(ap: AnimationPlayer, anim_name: String, randomize_walk: 
 static func walk_speed_scale(actual_speed: float) -> float:
 	# 旧的 0.6 倍率会让脚步明显慢于实际位移，看起来像贴地滑行；提高到接近 1:1。
 	return clampf(actual_speed * 0.85, 0.35, 2.8)
+
+# 骑乘单位：士兵模型坐在坐骑上，不应播放跑步/走路动作；
+# 真正迈腿的是 Mount 子节点。服务端和联机客户端共用这套播放逻辑。
+static func update_mount(root: Node3D, moving: bool, actual_speed: float) -> void:
+	if root == null:
+		return
+	var mount := root.get_node_or_null("Mount")
+	if mount == null:
+		return
+	var ap: AnimationPlayer = null
+	if mount.has_meta("_mount_anim_player"):
+		ap = mount.get_meta("_mount_anim_player")
+	if not is_instance_valid(ap):
+		ap = configure_loops(mount)
+		if ap != null:
+			mount.set_meta("_mount_anim_player", ap)
+	if ap == null:
+		return
+	var anim := "walk" if moving else "idle"
+	if not ap.has_animation(anim):
+		return
+	if anim == "walk":
+		ap.speed_scale = walk_speed_scale(actual_speed)
+		play_looped(ap, anim, true)
+	elif ap.current_animation != anim:
+		ap.play(anim)

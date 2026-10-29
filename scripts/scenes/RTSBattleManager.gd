@@ -2843,6 +2843,16 @@ func _update_entity_animation(entity: GameEntity):
 			anim = "idle"
 	else:
 		anim = "idle"
+	# 骑乘单位：坐骑负责走路，骑手保持坐姿；否则士兵会在狗背上原地摆腿。
+	if entity is Army and RTSConfig.is_mounted(entity.entity_id):
+		var mount_army := entity as Army
+		var mount_moving: bool = anim == "walk"
+		var mount_speed: float = mount_army._visual_speed
+		if mount_speed <= 0.05:
+			mount_speed = mount_army.speed
+		AnimationHelper.update_mount(entity, mount_moving, mount_speed)
+		if mount_moving:
+			anim = "idle"
 	# 这些兵种即使模型自带 attack 动画也偏弱（挥动幅度很小），
 	# 统一强制走程序化动作，保证攻城/远程单位开火时一眼能看出来
 	var force_proc: bool = entity is Army and entity.entity_id in PROC_ATTACK_IDS
@@ -2855,7 +2865,11 @@ func _update_entity_animation(entity: GameEntity):
 			var actual_speed: float = entity.speed
 			if entity is Army:
 				var army_walk := entity as Army
-				if army_walk._visual_speed > 0.05:
+				# 动物的真实步速只有 speed 的 45%；用配置速度会把步频拉快，
+				# 看起来像脚在原地划水。
+				if army_walk._animal_type != "":
+					actual_speed = army_walk.speed * Army.ANIMAL_WALK_SCALE
+				elif army_walk._visual_speed > 0.05:
 					actual_speed = army_walk._visual_speed
 			spd = AnimationHelper.walk_speed_scale(actual_speed)
 		ap.speed_scale = spd

@@ -914,7 +914,11 @@ func _update_single_entity(info):
 		var order_changed: bool = prev_info.get("current_order", "") != info.get("current_order", "")
 		var range_changed: bool = int(prev_info.get("in_action_range", 0)) != int(info.get("in_action_range", 0))
 		var attack_changed: bool = int(prev_info.get("attack_seq", 0)) != int(info.get("attack_seq", 0))
-		if order_changed or range_changed or attack_changed:
+		# 动物靠位移判断走/停，骑乘单位靠坐骑迈腿；两者都不能等 30 帧轮询，
+		# 否则每一步都会晚半拍，看起来像脚底打滑。
+		var eid_info: int = int(info.get("entity_id", -1))
+		if order_changed or range_changed or attack_changed \
+				or RTSConfig.is_animal(eid_info) or RTSConfig.is_mounted(eid_info):
 			_update_entity_animation(node, info)
 	node.set_meta("_prev_info", info.duplicate())
 	# Update waypoint markers if present
@@ -1087,13 +1091,17 @@ func _update_entity_animation(node: Node3D, info: Dictionary):
 	if info.get("health", 0) <= 0:
 		anim = "die"
 	elif RTSConfig.is_animal(entity_id):
-		# 动物没有指令流，快照里 order 恒为 idle；只能靠位置变化判断它在不在走，
-		# 否则联机端整群动物都是滑行不迈腿。
+		# 动物没有指令流，快照里 order 恒为 idle；只能靠位置变化判断它在不在走。
+		# 这里必须用两次动画更新之间的真实时间，而不是单帧 delta，否则每 30 帧
+		# 才采样一次会把 0.5 秒位移除以一帧时间，走路/待机动画反复横跳。
+		var now_ms: int = Time.get_ticks_msec()
 		var prev_pos: Vector3 = node.get_meta("_anim_prev_pos", node.global_position)
+		var prev_ms: int = int(node.get_meta("_anim_prev_ms", now_ms))
 		var moved: float = node.global_position.distance_to(prev_pos)
+		var elapsed: float = maxf(0.03, float(now_ms - prev_ms) / 1000.0)
 		node.set_meta("_anim_prev_pos", node.global_position)
-		var move_speed: float = moved / maxf(get_process_delta_time(), 0.001)
-		anim = "walk" if move_speed > 0.06 else "idle"
+		node.set_meta("_anim_prev_ms", now_ms)
+		anim = "walk" if moved / elapsed > 0.12 else "idle"
 	elif ord in ["attack", "attack_move", "gather"]:
 		# 锁定目标后还要先走到攻击/采集距离；服务端在快照里标记是否已进入距离。
 		# 追击途中播放走路，进入距离后才播放攻击/采集动作。
@@ -1110,6 +1118,18 @@ func _update_entity_animation(node: Node3D, info: Dictionary):
 		anim = "walk"
 	else:
 		anim = "idle"
+	# 骑乘单位：坐骑迈腿，骑手保持坐姿。只让 Mount 子节点播放 walk，
+	# 避免士兵模型一边坐狗背一边摆动双腿。
+	if RTSConfig.is_mounted(entity_id):
+		var mount_moving: bool = anim == "walk"
+		var mount_speed: float = float(info.get("speed", 2.0))
+		if node.has_meta("_visual_speed"):
+			var measured_mount := float(node.get_meta("_visual_speed"))
+			if measured_mount > 0.05:
+				mount_speed = measured_mount
+		AnimationHelper.update_mount(node, mount_moving, mount_speed)
+		if mount_moving:
+			anim = "idle"
 	if ap != null:
 		if anim != "" and ap.has_animation(anim):
 			var spd := 1.0
