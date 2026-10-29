@@ -15,7 +15,18 @@ const SPEAR_PATH := "res://models/arena/weapon-spear.glb"
 const BOW_PATH := "res://models/forest/weapon-bow.glb"
 const SHIELD_PATH := "res://models/arena/shield-round.glb"
 
-static func attach(entity: Node3D, entity_id: int, body_radius: float) -> void:
+# 士兵模型的骨骼是“手臂沿 X 轴伸出”的，肩到手约 0.29；挂点必须沿骨骼
+# 局部 X 轴偏移，不能沿 Y 轴往下压，否则武器会挂到脚边而不是手上。
+const HAND_REACH := 0.29
+const SHIELD_REACH := 0.20
+# 剑模型是剑尖朝 -Y 建的；转 180° 让剑尖朝上，避免剑尖插进地面。
+const SWORD_ROT := Vector3(PI, 0.0, 0.0)
+const SPEAR_ROT := Vector3(-0.14, 0.0, 0.0)
+# 弓和矛的原点不在握把中心：往下挪一点，让手握在弓腰/矛杆中段。
+const BOW_GRIP_OFFSET := Vector3(0.0, -0.22, 0.0)
+const SPEAR_GRIP_OFFSET := Vector3(0.0, -0.10, 0.0)
+
+static func attach(entity: Node3D, entity_id: int, _body_radius: float) -> void:
 	if entity == null or not is_instance_valid(entity):
 		return
 	if entity.has_meta("_weapon_attached_for") and int(entity.get_meta("_weapon_attached_for")) == entity_id:
@@ -23,19 +34,20 @@ static func attach(entity: Node3D, entity_id: int, body_radius: float) -> void:
 	entity.set_meta("_weapon_attached_for", entity_id)
 	var skeleton := _find_skeleton(entity)
 	if entity_id in BOW_IDS:
-		_attach_weapon(entity, skeleton, BOW_PATH, "arm-left", body_radius,
-				Vector3(0.0, -body_radius * 0.50, 0.02), Vector3.ZERO, 1.0)
+		_attach_weapon(entity, skeleton, BOW_PATH, "arm-left",
+				Vector3(HAND_REACH, 0.0, 0.02), Vector3.ZERO, 1.0, BOW_GRIP_OFFSET)
 	elif entity_id in SPEAR_IDS:
-		_attach_weapon(entity, skeleton, SPEAR_PATH, "arm-right", body_radius,
-				Vector3(0.0, -body_radius * 0.52, 0.02), Vector3.ZERO, 1.0)
+		_attach_weapon(entity, skeleton, SPEAR_PATH, "arm-right",
+				Vector3(-HAND_REACH, 0.0, 0.02), SPEAR_ROT, 1.0, SPEAR_GRIP_OFFSET)
 	elif entity_id in SWORD_IDS:
-		_attach_weapon(entity, skeleton, SWORD_PATH, "arm-right", body_radius,
-				Vector3(0.0, -body_radius * 0.52, 0.02), Vector3.ZERO, 1.0)
+		_attach_weapon(entity, skeleton, SWORD_PATH, "arm-right",
+				Vector3(-HAND_REACH, 0.0, 0.02), SWORD_ROT, 1.0, Vector3.ZERO)
 	if entity_id in SHIELD_IDS:
 		# 弓手左手持弓，盾改挂右前臂；近战右手持武器，盾挂左前臂。
 		var shield_bone := "arm-right" if entity_id in BOW_IDS else "arm-left"
-		_attach_weapon(entity, skeleton, SHIELD_PATH, shield_bone, body_radius,
-				Vector3(0.0, -body_radius * 0.42, -0.03), Vector3.ZERO, 0.8)
+		var shield_side: float = -1.0 if shield_bone == "arm-right" else 1.0
+		_attach_weapon(entity, skeleton, SHIELD_PATH, shield_bone,
+				Vector3(shield_side * SHIELD_REACH, 0.0, 0.04), Vector3.ZERO, 1.0, Vector3.ZERO)
 
 static func _find_skeleton(node: Node) -> Skeleton3D:
 	if node is Skeleton3D:
@@ -47,8 +59,8 @@ static func _find_skeleton(node: Node) -> Skeleton3D:
 	return null
 
 static func _attach_weapon(entity: Node3D, skeleton: Skeleton3D, path: String,
-		bone_name: String, body_radius: float, offset: Vector3,
-		rotation: Vector3, weapon_scale: float) -> void:
+		bone_name: String, offset: Vector3, rotation: Vector3,
+		weapon_scale: float, grip_offset: Vector3 = Vector3.ZERO) -> void:
 	if not ResourceLoader.exists(path):
 		return
 	var scene := load(path)
@@ -58,15 +70,17 @@ static func _attach_weapon(entity: Node3D, skeleton: Skeleton3D, path: String,
 	if weapon == null:
 		return
 	weapon.scale = Vector3.ONE * weapon_scale
+	# BoneAttachment3D 每帧会被骨骼姿态覆盖，偏移/旋转必须写在武器本身上，
+	# 写在 attachment 上会被重置，表现为武器永远卡在肩膀。
+	weapon.position = grip_offset + offset
+	weapon.rotation = rotation
 	if skeleton != null and skeleton.find_bone(bone_name) >= 0:
 		var attachment := BoneAttachment3D.new()
 		attachment.name = "WeaponBone_" + bone_name.replace("-", "_")
 		attachment.bone_name = bone_name
-		attachment.position = offset
-		attachment.rotation = rotation
 		skeleton.add_child(attachment)
 		attachment.add_child(weapon)
 	else:
 		# 无骨骼模型回退：保持原来的固定挂点，至少不会消失。
-		weapon.position = Vector3(body_radius * 1.2, body_radius * 0.4, 0.0)
+		weapon.position = Vector3(0.6, 0.2, 0.0) + grip_offset
 		entity.add_child(weapon)
