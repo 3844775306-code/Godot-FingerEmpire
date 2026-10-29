@@ -340,7 +340,7 @@ func _start_level(lv: Dictionary) -> void:
 	GameSettings.ai_mode = 2 if String(lv.get("multi_mode", "")) != "" else 1
 	GameSettings.map_id = String(lv.get("map_id", "classic"))
 	GameSettings.map_seed = int(lv.get("map_seed", 0))
-	get_tree().change_scene_to_file("res://scenes/rts_battle.tscn")
+	LoadingScreen.goto_scene("res://scenes/rts_battle.tscn")
 
 func _add_nation_archive() -> void:
 	var intro := Label.new()

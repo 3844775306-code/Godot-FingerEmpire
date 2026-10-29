@@ -504,7 +504,7 @@ func _start_battle() -> void:
 		GameSettings.ai_mode = mode_idx + 1
 	GameSettings.fast_mode = fast_check.button_pressed if fast_check != null else false
 	GameSettings.progression_mode = GameSettings.ProgressionMode.RESEARCH if (research_check != null and research_check.button_pressed) else GameSettings.ProgressionMode.CLASSIC
-	get_tree().change_scene_to_file("res://scenes/rts_battle.tscn")
+	LoadingScreen.goto_scene("res://scenes/rts_battle.tscn")
 
 func _on_back_pressed() -> void:
 	get_tree().change_scene_to_file("res://scenes/main_menu.tscn")

@@ -508,7 +508,7 @@ func _start_tutorial_battle() -> void:
 	GameSettings.progression_mode = GameSettings.ProgressionMode.CLASSIC
 	GameSettings.map_id = "classic"
 	GameSettings.map_seed = 0
-	get_tree().change_scene_to_file("res://scenes/rts_battle.tscn")
+	LoadingScreen.goto_scene("res://scenes/rts_battle.tscn")
 
 # 闯关模式：打开选关界面（关卡数据在 scripts/data/CampaignData.gd）
 func _on_campaign_pressed() -> void:

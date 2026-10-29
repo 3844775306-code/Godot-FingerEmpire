@@ -2091,7 +2091,7 @@ func _make_button(text: String, primary: bool, mobile: bool) -> Button:
 	return btn
 
 func _on_retry_pressed() -> void:
-	get_tree().change_scene_to_file("res://scenes/rts_battle.tscn")
+	LoadingScreen.goto_scene("res://scenes/rts_battle.tscn")
 
 func _on_next_pressed(next_id: String) -> void:
 	if _is_training():
@@ -2100,7 +2100,7 @@ func _on_next_pressed(next_id: String) -> void:
 	else:
 		GameSettings.campaign_mode = true
 		GameSettings.campaign_level_id = next_id
-	get_tree().change_scene_to_file("res://scenes/rts_battle.tscn")
+	LoadingScreen.goto_scene("res://scenes/rts_battle.tscn")
 
 func _on_back_pressed() -> void:
 	if _is_training():

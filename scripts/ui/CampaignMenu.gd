@@ -591,7 +591,7 @@ func _start_level(level: Dictionary) -> void:
 	GameSettings.enemy_nation = int(enemy_cfg.get("nation", GameSettings.enemy_nation))
 	GameSettings.ai_difficulty = int(enemy_cfg.get("ai_difficulty", GameSettings.AIDifficulty.EASY))
 	GameSettings.fast_mode = false
-	get_tree().change_scene_to_file("res://scenes/rts_battle.tscn")
+	LoadingScreen.goto_scene("res://scenes/rts_battle.tscn")
 
 func _on_back_pressed() -> void:
 	GameSettings.campaign_mode = false

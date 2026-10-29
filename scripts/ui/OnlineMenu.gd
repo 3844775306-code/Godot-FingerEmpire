@@ -1170,7 +1170,7 @@ func _on_steam_game_starting():
 	if tree:
 		# 与房主同尺寸加载：客户端场景不生成地图，但客户端网格/小地图按此尺寸预分配
 		RTSConfig.MAP_SIZE = 150 if NetworkManager.selected_mode != NetworkManager.GameMode.ONEvONE else 100
-		tree.change_scene_to_file("res://scenes/rts_battle_client.tscn")
+		LoadingScreen.goto_scene("res://scenes/rts_battle_client.tscn")
 
 func _on_return_pressed():
 	if NetworkManager.mode == NetworkManager.Mode.SERVER and NetworkManager.use_websocket:

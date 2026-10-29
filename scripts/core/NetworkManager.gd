@@ -420,7 +420,7 @@ func start_game():
 		SteamManager.set_lobby_data("game_status", "starting")
 	for peer_id in multiplayer.get_peers():
 		rpc_id(peer_id, "_load_battle_scene", GameSettings.progression_mode)
-	var _t = get_tree(); if _t: _t.change_scene_to_file("res://scenes/rts_battle_online_server.tscn")
+	LoadingScreen.goto_scene("res://scenes/rts_battle_online_server.tscn")
 	return ""  # 成功
 
 @rpc("any_peer", "call_remote", "reliable")
@@ -486,7 +486,7 @@ func _load_battle_scene(progression_mode: int = 0):
 		_map_chunk_raw_size = 0
 		_map_chunks.clear()
 		_apply_map_size_for_mode()
-		var _t = get_tree(); if _t: _t.change_scene_to_file("res://scenes/rts_battle_client.tscn")
+		LoadingScreen.goto_scene("res://scenes/rts_battle_client.tscn")
 
 # 客户端战斗场景进树后主动上报；主机收到后再下发地图/队伍，避免地图数据早到被丢弃
 @rpc("any_peer", "call_remote", "reliable")

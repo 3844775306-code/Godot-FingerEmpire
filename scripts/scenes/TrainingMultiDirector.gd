@@ -172,10 +172,10 @@ func _on_next() -> void:
 	GameSettings.training_mode = true
 	GameSettings.training_level_id = "t26"
 	GameSettings.campaign_mode = true
-	get_tree().change_scene_to_file("res://scenes/rts_battle.tscn")
+	LoadingScreen.goto_scene("res://scenes/rts_battle.tscn")
 
 func _on_retry() -> void:
-	get_tree().change_scene_to_file("res://scenes/rts_battle.tscn")
+	LoadingScreen.goto_scene("res://scenes/rts_battle.tscn")
 
 func _on_back() -> void:
 	GameSettings.training_mode = false
