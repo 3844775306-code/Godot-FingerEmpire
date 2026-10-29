@@ -39,6 +39,7 @@ var auto_attack_btn: Button
 var auto_attack_on: bool = false
 var quartermaster_btn: Button
 var quartermaster_on: bool = false
+var _last_space_press: float = 0.0
 var _pause_overlay: Control = null
 var enemy_nation_label: Label
 var nation_bonus_label: Label
@@ -755,7 +756,8 @@ func _input(event):
 				if event.ctrl_pressed: _on_retreat_all_pressed()
 				else: _on_retreat_screen_pressed()
 			KEY_DELETE: _on_demolish_selected()
-			KEY_SPACE: _on_space_pressed()
+			KEY_SPACE:
+				if not event.echo: _on_space_pressed()
 			KEY_L: _toggle_unit_text()
 			KEY_T: _open_research_panel()
 
@@ -822,7 +824,27 @@ func _on_space_pressed():
 							unit._exit_soldier_garrison()
 					released = true
 			if released: return
-	# 否则：跳转到警报位置
+	# 双击空格：镜头居中当前选中；单击：跳转到最新警报
+	var sm2 = bm.get_node_or_null("SelectionManager") if bm else null
+	var now := Time.get_ticks_msec() / 1000.0
+	if sm2 and now - _last_space_press < 0.3 and not sm2.selected_entities.is_empty():
+		_last_space_press = 0.0
+		var center := Vector3.ZERO
+		var count := 0
+		for e in sm2.selected_entities:
+			if is_instance_valid(e):
+				center += e.global_position
+				count += 1
+		if count > 0:
+			var cam := get_viewport().get_camera_3d()
+			if cam:
+				center /= float(count)
+				if cam.has_method("focus_on_ground"):
+					cam.focus_on_ground(center)
+				else:
+					cam.global_position = Vector3(center.x, cam.global_position.y, center.z)
+			return
+	_last_space_press = now
 	_on_jump_to_alert()
 
 # 把镜头定位到某个世界坐标（战报点击跳转用）

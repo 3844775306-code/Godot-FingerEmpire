@@ -189,43 +189,27 @@ func _input(event):
 			get_viewport().set_input_as_handled()
 			return
 
-		# U键升级
-		if key == KEY_U:
-			_upgrade_selected()
+		# H：跳转到己方主城
+		if key == KEY_H and not ctrl and not shift and not event.echo:
+			_jump_to_castle_sp()
+			get_viewport().set_input_as_handled()
+			return
+
+		# .：循环闲置军事单位
+		if key == KEY_PERIOD and not ctrl and not shift and not event.echo:
+			_cycle_idle_sp(-1)
 			get_viewport().set_input_as_handled()
 			return
 
 		# F1~F3 全局命令交给 HUD 处理（屏幕内选择/自动进攻/撤退）
 
-		# 选中建筑 → 命令卡热键（队友建筑只读，不能生产/升级/拆除）
-		if selected_entities.size() == 1 and not ctrl and not shift and _is_local_owned(selected_entities[0]):
-			var e = selected_entities[0]
-			if is_instance_valid(e) and e is Building:
-				var produces = e.production_list
-				var bid = e.get_instance_id()
-				var handled = true
-				match key:
-					KEY_Q: if produces.size() >= 1: bm.produce_unit(e, produces[0].unit_id)
-					KEY_W: if produces.size() >= 2: bm.produce_unit(e, produces[1].unit_id)
-					KEY_E: if produces.size() >= 3: bm.produce_unit(e, produces[2].unit_id)
-					KEY_R: if produces.size() >= 4: bm.produce_unit(e, produces[3].unit_id)
-					KEY_F: if produces.size() >= 5: bm.produce_unit(e, produces[4].unit_id)
-					KEY_A: bm.upgrade_building(e)
-					KEY_G: if bm.has_method("repair_building"): bm.repair_building(e)
-					KEY_S: if e.entity_id != 20: bm.demolish_building(e)
-					KEY_D: bm.release_garrisoned(e)
-					_: handled = false
-				if handled:
-					get_viewport().set_input_as_handled(); return
-
-		# 选中军队 → 命令卡热键（只对己方单位生效）
+		# 选中军队 → A / M 一次性下令模式：下一次左键执行攻击 / 纯移动；
+		# 右键或 Esc 取消。命令卡本身不再提供 Q/W/E/R/F/G/S/D 快捷键。
 		if not selected_entities.is_empty() and not ctrl and not shift and _selection_all_local():
 			var army_selected = false
 			for e in selected_entities:
 				if is_instance_valid(e) and e is Army: army_selected = true; break
 			if army_selected and bm:
-				# A / M 进入一次性下令模式：下一次左键执行攻击 / 纯移动；
-				# 右键或 Esc 取消，避免和原来的全局进攻热键冲突。
 				if key == KEY_A:
 					bm.set_pending_command_mode("attack")
 					get_viewport().set_input_as_handled()
@@ -234,18 +218,6 @@ func _input(event):
 					bm.set_pending_command_mode("move")
 					get_viewport().set_input_as_handled()
 					return
-				var handled = true
-				match key:
-					KEY_Q: bm.clear_orders_for_selected()
-					KEY_W: bm.toggle_attack_move_for_selected()
-					KEY_E: bm.garrison_nearest_for_selected()
-					KEY_R: _select_all_of_same_type(selected_entities[0])
-					KEY_S: bm.global_retreat_selected()
-					KEY_D: bm.ungarrison_selected()
-					KEY_F: bm.toggle_patrol_mode()
-					_: handled = false
-				if handled:
-					get_viewport().set_input_as_handled(); return
 
 		# 数字键 1-9
 		if key >= KEY_1 and key <= KEY_9:
@@ -800,7 +772,7 @@ func _clear_control_groups_for_selected():
 		for e in to_remove:
 			arr.erase(e)
 
-# ---- 数字键统一处理 ----
+# ---- 数字键统一处理：只做编队，不再兼职生产 ----
 func _handle_number_key(num: int, ctrl: bool, shift: bool):
 	# 0=编队0: 仅在没有选中时使用
 	if num == 0:
@@ -811,34 +783,17 @@ func _handle_number_key(num: int, ctrl: bool, shift: bool):
 				_recall_or_jump(0)
 		return
 
-	# 1) Ctrl+单选建筑 → 批量生产5个（队友建筑只读）
-	if ctrl and selected_entities.size() == 1 and selected_entities[0] is Building and _is_local_owned(selected_entities[0]):
-		var bld = selected_entities[0] as Building
-		if bld.production_list.size() >= num:
-			var prod = bld.production_list[num - 1]
-			for _i in range(5):
-				if not bld.try_produce(prod.unit_id): break
-		return
-
-	# 2) Ctrl+多选 → 设置编队（编队只收己方单位，敌方/队友只读不编队）
+	# Ctrl+己方选择 → 设置编队（编队只收己方单位，敌方/队友只读不编队）
 	if ctrl and not selected_entities.is_empty() and _selection_all_local():
 		_set_control_group(num)
 		return
 
-	# 2) Shift+无选中 → 追加编队
+	# Shift+无选中 → 把编队成员追加进当前选择
 	if shift and selected_entities.is_empty():
 		_add_control_group(num)
 		return
 
-	# 3) 无Ctrl/Shift + 单选建筑 → 按数字生产（队友建筑只读）
-	if not ctrl and not shift and selected_entities.size() == 1 and selected_entities[0] is Building and _is_local_owned(selected_entities[0]):
-		var b = selected_entities[0] as Building
-		if b.production_list.size() >= num:
-			var prod = b.production_list[num - 1]
-			b.try_produce(prod.unit_id)
-			return
-
-	# 4) 无Ctrl/Shift → 召回编队（无论是否有选中单位）
+	# 无Ctrl/Shift → 召回编队（无论是否有选中单位）
 	if not ctrl and not shift:
 		_recall_or_jump(num)
 		return
@@ -887,34 +842,24 @@ func _upgrade_selected():
 			var bm = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
 			if bm: e.perform_upgrade(bm)
 
-# Tab/M/,/./Space helpers
-func _cycle_same_type_sp():
-	if selected_entities.is_empty(): select_all_military(); return
-	var current_eid = selected_entities[0].entity_id if selected_entities.size()==1 else -1
-	var candidates = []
-	var bm = get_tree().get_first_node_in_group("battle_manager")
-	if bm:
-		bm._ensure_cache_fresh()
-		for e in bm._armies:
-			if e.health<=0 or e.entity_id==14: continue
-			if not _is_local_owned(e): continue
-			if e.entity_id == current_eid: candidates.append(e)
-	if candidates.size()>0:
-		var idx = (candidates.find(selected_entities[0])+1) % candidates.size() if current_eid!=-1 and selected_entities.size()==1 else 0
-		_clear_selection()
-		selected_entities=[candidates[idx]]; candidates[idx].set_selected(true); _update_info_panel()
-
+# 镜头/选择辅助
 func _jump_to_castle_sp():
-	var bm = get_tree().get_first_node_in_group("battle_manager"); if not bm: return
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if not bm: return
 	bm._ensure_cache_fresh()
 	for e in bm._buildings:
-		if e.entity_id==20 and e.team==bm.get_host_team():
+		if e.entity_id == 20 and e.team == bm.get_host_team():
 			var cam = get_viewport().get_camera_3d()
-			if cam: cam.global_position = Vector3(e.global_position.x, cam.global_position.y, e.global_position.z); return
+			if cam:
+				if cam.has_method("focus_on_ground"):
+					cam.focus_on_ground(e.global_position)
+				else:
+					cam.global_position = Vector3(e.global_position.x, cam.global_position.y, e.global_position.z)
+			return
 
-var _sp_last_space: float = 0.0
 var _last_idle_comma_time: float = 0.0
 var _idle_peasant_cursor: int = -1
+var _idle_army_cursor: int = -1
 
 # 逗号闲农：单击循环任选 1 个；双击全选；Shift+逗号最多选 5 个。
 func _handle_idle_peasant_hotkey(shift: bool) -> void:
@@ -959,19 +904,6 @@ func _select_idle_peasants(candidates: Array, max_count: int) -> void:
 		_add_to_selection(candidates[i])
 	_refresh_selection_rings()
 
-func _handle_space_sp() -> bool:
-	var now = Time.get_ticks_msec()/1000.0
-	if now-_sp_last_space < 0.3 and not selected_entities.is_empty():
-		_sp_last_space = 0.0
-		var cam = get_viewport().get_camera_3d(); if not cam: return true
-		var avg=Vector3.ZERO; var cnt=0
-		for e in selected_entities:
-			if is_instance_valid(e): avg+=e.global_position; cnt+=1
-		if cnt>0: cam.global_position=Vector3(avg.x/cnt, cam.global_position.y, avg.z/cnt)
-		return true
-	_sp_last_space = now
-	return false
-
 func _cycle_idle_sp(filter_id: int):
 	var bm = get_tree().get_first_node_in_group("battle_manager"); if not bm: return
 	bm._ensure_cache_fresh()
@@ -982,6 +914,9 @@ func _cycle_idle_sp(filter_id: int):
 		if filter_id==10 and e.entity_id!=10: continue
 		if filter_id==-1 and (e.entity_id==10 or e.entity_id==14): continue
 		if e.current_order in ["idle",""]: candidates.append(e)
-	if candidates.size()==0: return
+	if candidates.size() == 0: return
+	_idle_army_cursor = (_idle_army_cursor + 1) % candidates.size()
 	_clear_selection()
-	selected_entities=[candidates[0]]; candidates[0].set_selected(true); _update_info_panel()
+	selected_entities = [candidates[_idle_army_cursor]]
+	candidates[_idle_army_cursor].set_selected(true)
+	_update_info_panel()

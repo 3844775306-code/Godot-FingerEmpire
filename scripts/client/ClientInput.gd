@@ -34,6 +34,9 @@ var last_clicked_id: int = -1
 var last_click_time: float = 0.0
 const DOUBLE_CLICK_THRESHOLD = 0.3
 
+# A/M 一次性下令模式：下一次左键执行强制攻击/纯移动
+var _pending_command_mode: String = ""
+
 # 引用客户端渲染器
 var renderer: ClientRenderer = null
 # 选中陆军的目标 ❌：联机客户端没有 SelectionManager，单独维护一个标记管理器。
@@ -198,6 +201,20 @@ func _input(event):
 	if event is InputEventMouseButton and event.pressed and _is_ui_point(event.position):
 		return
 
+	# Esc：先取消 A/M 下令/建造放置，避免建造模式下按 Esc 没反应
+	if event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+		if _pending_command_mode != "":
+			_pending_command_mode = ""
+			_show_command_hint("已取消下令模式", Color(0.7, 0.7, 0.7))
+		elif renderer.placement_mode:
+			_cancel_placement()
+		elif not client_selected_ids.is_empty():
+			client_selected_ids.clear()
+			_update_selection_visuals()
+			emit_signal("selection_changed", client_selected_ids.duplicate())
+		get_viewport().set_input_as_handled()
+		return
+
 	# 建造放置模式优先
 	if renderer.placement_mode:
 		# 手机端居中建造：世界触摸只用于平移地图（由 TouchGestureRouter 处理），
@@ -265,7 +282,22 @@ func _input(event):
 			_handle_idle_peasant_hotkey(shift)
 			get_viewport().set_input_as_handled(); return
 
-		# 无选中时 → 全局面板/镜头快捷键（建造统一走右键空地菜单）
+		# H：跳转到己方主城（对所有选择状态生效）
+		if key == KEY_H and not ctrl and not shift and not event.echo:
+			_jump_to_castle()
+			get_viewport().set_input_as_handled(); return
+
+		# .：循环闲置军事单位（对所有选择状态生效）
+		if key == KEY_PERIOD and not ctrl and not shift and not event.echo:
+			_cycle_idle(-1)
+			get_viewport().set_input_as_handled(); return
+
+		# 空格：单击跳最新警报，双击（有选中）居中选中
+		if key == KEY_SPACE and not ctrl and not shift and not event.echo:
+			_handle_space()
+			get_viewport().set_input_as_handled(); return
+
+		# 无选中时 → 全局面板快捷键（建造统一走右键空地菜单）
 		if client_selected_ids.is_empty() and not ctrl and not shift:
 			# F5 统计面板
 			if key == KEY_F5:
@@ -281,65 +313,18 @@ func _input(event):
 				print("[ClientInput] F8: 设置面板 (未实现)")
 				get_viewport().set_input_as_handled(); return
 
-			# Tab 同类循环  M 主城  ,.; 循环闲置
-			if key == KEY_TAB and not ctrl:
-				_cycle_same_type()
-				get_viewport().set_input_as_handled(); return
-			if key == KEY_M and not ctrl:
-				_jump_to_castle()
-				get_viewport().set_input_as_handled(); return
-			if key == KEY_PERIOD:
-				_cycle_idle(-1)
-				get_viewport().set_input_as_handled(); return
-
-			# 双击空格: 视角居中选中
-			if key == KEY_SPACE and not ctrl:
-				_handle_space()
-				get_viewport().set_input_as_handled(); return
-
-		# 命令卡网格热键（选中建筑时；队友建筑只读）
-		if client_selected_ids.size() == 1 and not ctrl and not shift and _is_own_id(client_selected_ids[0]):
-			var sel_info = _get_entity_info(client_selected_ids[0])
-			if sel_info.get("type") == 1:
-				# 优先用快照里已按等级解锁的 production_list，回退到配置里的完整 produces，
-				# 否则会向服务端发送尚未解锁的单位（服务端静默拒绝，表现为“按了没反应”）
-				var produces = []
-				if sel_info.has("production_list"):
-					produces = sel_info.get("production_list", [])
-				else:
-					produces = EntityDatabase.get_config(sel_info.get("entity_id", -1)).get("produces", [])
-				var bid = client_selected_ids[0]
-				match key:
-					KEY_Q: if produces.size() >= 1: _send_produce(bid, produces[0]["unit_id"])
-					KEY_W: if produces.size() >= 2: _send_produce(bid, produces[1]["unit_id"])
-					KEY_E: if produces.size() >= 3: _send_produce(bid, produces[2]["unit_id"])
-					KEY_R: if produces.size() >= 4: _send_produce(bid, produces[3]["unit_id"])
-					KEY_F: if produces.size() >= 5: _send_produce(bid, produces[4]["unit_id"])
-					KEY_A: NetworkManager.send_command.rpc_id(1, {"action":"upgrade","building_id":bid})
-					KEY_G: NetworkManager.send_command.rpc_id(1, {"action":"repair","building_id":bid,"shift_held":Input.is_key_pressed(KEY_SHIFT)})
-					KEY_S: if sel_info.get("entity_id") != 20: NetworkManager.send_command.rpc_id(1, {"action":"demolish","building_id":bid})
-					KEY_D: NetworkManager.send_command.rpc_id(1, {"action":"ungarrison_soldiers","selected_ids":[bid]})
-					_: pass
-				if key in [KEY_Q,KEY_W,KEY_E,KEY_R,KEY_F,KEY_A,KEY_G,KEY_S,KEY_D]:
-					get_viewport().set_input_as_handled(); return
-
-		# 命令卡网格热键（选中军队时；队友单位只读）
+		# 选中军队：A / M 一次性下令模式。命令卡本身不再提供 Q/W/E/R/F/G/S/D 快捷键。
 		if not client_selected_ids.is_empty() and not ctrl and not shift and _selection_all_local():
 			var army_selected = false
 			for sid in client_selected_ids:
 				if _get_entity_info(sid).get("type") == 2:
 					army_selected = true; break
 			if army_selected:
-				var handled = true
-				match key:
-					KEY_Q: NetworkManager.send_command.rpc_id(1, {"action":"clear_order","selected_ids":client_selected_ids.duplicate()})
-					KEY_W: NetworkManager.send_command.rpc_id(1, {"action":"toggle_attack_move","selected_ids":client_selected_ids.duplicate()})
-					KEY_E: _garrison_nearest()
-					KEY_R: _select_all_of_same_type(client_selected_ids[0], _get_entity_info(client_selected_ids[0]))
-					KEY_D: NetworkManager.send_command.rpc_id(1, {"action":"ungarrison_soldiers","selected_ids":client_selected_ids.duplicate()})
-					KEY_F: _toggle_patrol_mode()
-					_: handled = false
-				if handled:
+				if key == KEY_A:
+					_set_pending_command_mode("attack")
+					get_viewport().set_input_as_handled(); return
+				if key == KEY_M:
+					_set_pending_command_mode("move")
 					get_viewport().set_input_as_handled(); return
 
 		if key == KEY_DELETE:
@@ -354,38 +339,7 @@ func _input(event):
 			get_viewport().set_input_as_handled()
 			return
 
-		# U键升级选中建筑（队友建筑只读）
-		if key == KEY_U:
-			for eid in client_selected_ids.duplicate():
-				if not _is_own_id(eid): continue
-				var info = _get_entity_info(eid)
-				if info.get("type") == 1:
-					NetworkManager.send_command.rpc_id(1, {"action": "upgrade", "building_id": eid})
-			get_viewport().set_input_as_handled()
-			return
-
-		# 数字键 1-9：单选建筑 → 快速生产（只对自己的建筑）
-		if key >= KEY_1 and key <= KEY_9 and not ctrl and not shift and client_selected_ids.size() == 1 and _is_own_id(client_selected_ids[0]):
-			if client_selected_ids.size() == 1:
-				var info = _get_entity_info(client_selected_ids[0])
-				if info.get("type") == 1:  # Building
-					var b_cfg = EntityDatabase.get_config(info["entity_id"])
-					if b_cfg and b_cfg.has("produces"):
-						var produces = b_cfg["produces"]
-						var num = key - KEY_0
-						if produces.size() >= num:
-							var unit_id = produces[num - 1]["unit_id"]
-							NetworkManager.send_command.rpc_id(1, {
-								"action": "produce",
-								"building_id": client_selected_ids[0],
-								"unit_id": unit_id,
-								"ctrl_held": false,
-								"shift_held": false
-							})
-							get_viewport().set_input_as_handled()
-							return
-
-		# 数字键 0-9：编队系统（照搬 SelectionManager._handle_number_key）
+		# 数字键 0-9：编队系统（只做编队，不再兼职生产）
 		if key >= KEY_0 and key <= KEY_9:
 			var g = key - KEY_0
 			if ctrl:
@@ -412,6 +366,10 @@ func _input(event):
 					if chud and chud.has_method("show_alert_message"):
 						chud.show_alert_message("编队 %d 已设置 (%d 单位)" % [g, group_ids.size()], Color(0.3, 0.7, 1.0))
 			else:
+				# 0 与单机一致：已有选中单位时按 0 不做事，避免误召回编队 0
+				if g == 0 and not client_selected_ids.is_empty():
+					get_viewport().set_input_as_handled()
+					return
 				# 数字 → 召回编队
 				var now = Time.get_ticks_msec() / 1000.0
 				if local_groups.has(g):
@@ -435,6 +393,13 @@ func _input(event):
 		if _is_ui_point(event.position):
 			return
 		if event.pressed:
+			# A/M 下令模式：下一次左键直接执行，不再进入选择流程
+			if _pending_command_mode != "":
+				var pending_mode := _pending_command_mode
+				_pending_command_mode = ""
+				_send_left_click(event, pending_mode)
+				get_viewport().set_input_as_handled()
+				return
 			# Ctrl+Alt+左键 → 清除驻扎点（仅己方单位）
 			if event.ctrl_pressed and Input.is_key_pressed(KEY_ALT) \
 					and not client_selected_ids.is_empty() and _selection_all_local():
@@ -642,8 +607,13 @@ func _select_all_of_same_type(target_id: int, info: Dictionary):
 # ==================== 右键处理（与单机版 v2 一致） ====================
 func _unhandled_input(event):
 	if not renderer: return
-	# 右键 → 只有空地打开建造菜单；点目标按当前选择执行命令或查看信息。
+	# 右键 → 取消 A/M 下令；否则空地打开建造菜单，点目标执行命令或查看信息。
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+		if _pending_command_mode != "":
+			_pending_command_mode = ""
+			_show_command_hint("已取消下令模式", Color(0.7, 0.7, 0.7))
+			get_viewport().set_input_as_handled()
+			return
 		var hit_id = _get_entity_id_under_mouse(event.position)
 		if client_selected_ids.is_empty():
 			if hit_id != -1:
@@ -670,7 +640,7 @@ func _unhandled_input(event):
 		_send_left_click(event)
 
 # ---------- 命令发送 ----------
-func _send_left_click(event):
+func _send_left_click(event, mode: String = ""):
 	if not renderer: return
 	if client_selected_ids.is_empty():
 		return
@@ -724,7 +694,8 @@ func _send_left_click(event):
 				formation_offsets.append(Vector3(ox, 0, oy))
 
 	# 选中农民 + 右键自家在建/破损建筑：派去施工/修理
-	if target_id != -1 and _is_own_id(target_id):
+	# A/M 是纯战斗指令，不触发建造/修理派工。
+	if mode == "" and target_id != -1 and _is_own_id(target_id):
 		var tinfo := _get_entity_info(target_id)
 		if int(tinfo.get("type", -1)) == 1:
 			var needs_work: bool = float(tinfo.get("build_timer", 0.0)) > 0.0 \
@@ -747,6 +718,8 @@ func _send_left_click(event):
 		"shift_held": Input.is_key_pressed(KEY_SHIFT),
 		"formation_offsets": formation_offsets,
 	}
+	if mode != "":
+		cmd["mode"] = mode
 	NetworkManager.send_command.rpc_id(1, cmd)
 
 # ---------- 工具函数 ----------
@@ -1540,6 +1513,21 @@ func _get_avg_selected_pos() -> Vector3:
 		if node: pos += node.global_position; cnt += 1
 	return pos / cnt if cnt > 0 else Vector3.ZERO
 
+# A/M 一次性下令模式
+func _set_pending_command_mode(mode: String):
+	if mode != "attack" and mode != "move":
+		return
+	_pending_command_mode = mode
+	if mode == "attack":
+		_show_command_hint("攻击模式：左键选择目标，右键或 Esc 取消", Color(0.4, 0.8, 1.0))
+	else:
+		_show_command_hint("移动模式：左键选择落点，右键或 Esc 取消", Color(0.4, 0.8, 1.0))
+
+func _show_command_hint(msg: String, color: Color):
+	var chud = _get_client_hud()
+	if chud and chud.has_method("show_alert_message"):
+		chud.show_alert_message(msg, color)
+
 # 巡逻模式切换
 var _patrol_mode: bool = false
 func _toggle_patrol_mode():
@@ -1555,28 +1543,7 @@ func _send_produce(bid: int, uid: int):
 		return
 	NetworkManager.send_command.rpc_id(1, {"action":"produce","building_id":bid,"unit_id":uid,"ctrl_held":false,"shift_held":false})
 
-# Tab: 同类循环选择
-func _cycle_same_type():
-	if client_selected_ids.is_empty():
-		select_all_military()
-		return
-	var current_eid = -1
-	if client_selected_ids.size() == 1:
-		current_eid = _get_entity_info(client_selected_ids[0]).get("entity_id", -1)
-	var candidates = []
-	for node in renderer.entity_nodes.values():
-		if not node.has_meta("snapshot_info"): continue
-		var inf = node.get_meta("snapshot_info")
-		if inf.get("type") != 2: continue
-		if inf.get("health",0) <= 0: continue
-		if renderer.my_peer_id != -1 and inf.get("owner_peer_id",-1) != renderer.my_peer_id: continue
-		if inf.get("entity_id") == current_eid: candidates.append(inf["id"])
-	if candidates.size() > 0:
-		client_selected_ids = [candidates[0] if current_eid == -1 else candidates[(candidates.find(client_selected_ids[0])+1) % candidates.size()]]
-		_update_selection_visuals()
-		emit_signal("selection_changed", client_selected_ids.duplicate())
-
-# M: 跳转主城
+# H: 跳转主城
 func _jump_to_castle():
 	var cam = get_viewport().get_camera_3d(); if not cam: return
 	for node in renderer.entity_nodes.values():
@@ -1584,11 +1551,23 @@ func _jump_to_castle():
 		var inf = node.get_meta("snapshot_info")
 		if inf.get("entity_id") == 20 and inf.get("type") == 1:
 			if renderer.my_peer_id != -1 and inf.get("owner_peer_id",-1) != renderer.my_peer_id: continue
-			cam.global_position = Vector3(node.global_position.x, cam.global_position.y, node.global_position.z); return
+			if cam.has_method("focus_on_ground"):
+				cam.focus_on_ground(node.global_position)
+			else:
+				cam.global_position = Vector3(node.global_position.x, cam.global_position.y, node.global_position.z)
+			return
 
-# Space: 单击跳警报 / 双击居中选中
+# Space: 选中进驻建筑先释放；否则单击跳警报，双击居中选中
 var _last_space_time: float = 0.0
 func _handle_space() -> bool:
+	if client_selected_ids.size() == 1 and _is_own_id(client_selected_ids[0]):
+		var sel_info := _get_entity_info(client_selected_ids[0])
+		if int(sel_info.get("type", -1)) == 1 and int(sel_info.get("garrisoned_soldier_count", 0)) > 0:
+			NetworkManager.send_command.rpc_id(1, {
+				"action": "ungarrison_soldiers",
+				"selected_ids": [client_selected_ids[0]]
+			})
+			return true
 	var now = Time.get_ticks_msec() / 1000.0
 	if now - _last_space_time < DOUBLE_TAP_THRESHOLD and not client_selected_ids.is_empty():
 		_last_space_time = 0.0
@@ -1600,10 +1579,6 @@ func _handle_space() -> bool:
 		if cnt > 0: cam.global_position = Vector3(avg.x/cnt, cam.global_position.y, avg.z/cnt)
 		return true
 	_last_space_time = now
-	# 单击：跳警报
-	var minimap = renderer.get_node_or_null("../Minimap")
-	if minimap and minimap.has_method("_on_jump_to_alert"):
-		return false  # let HUD handle it
 	var chud = _get_client_hud()
 	if chud and chud.has_method("_on_jump_to_alert"):
 		chud._on_jump_to_alert()

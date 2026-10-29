@@ -1001,6 +1001,7 @@ func _1v1_right_click(team: int, data: Dictionary):
 	var pos = Vector3(data.get("pos_x",0), data.get("pos_y",0), data.get("pos_z",0))
 	var selected_ids = data.get("selected_ids", [])
 	var shift_held = data.get("shift_held", false)
+	var mode: String = str(data.get("mode", ""))
 	var target: GameEntity = _find_entity_by_id(target_id) if target_id != -1 else null
 	var offsets = data.get("formation_offsets", [])
 
@@ -1014,6 +1015,33 @@ func _1v1_right_click(team: int, data: Dictionary):
 			if not shift_held:
 				entity._clear_command_queue()
 			entity._force_queue_next = shift_held
+			# A/M 一次性下令：mode=attack 强制攻击/攻击移动，mode=move 纯移动。
+			if mode == "move":
+				var move_dest: Vector3 = pos
+				if target != null:
+					move_dest = target.global_position
+				elif offsets.size() > fi:
+					var move_off = offsets[fi]
+					move_dest = pos + Vector3(move_off.x, move_off.y, move_off.z)
+				entity.move_to(find_legal_formation_pos(entity, move_dest))
+				fi += 1
+				continue
+			if mode == "attack":
+				if target is WorldResource:
+					entity.attack_move_to(target.global_position)
+				elif target != null:
+					if entity.has_method("_can_attack_target") and entity._can_attack_target(target):
+						entity.attack_target(target, true)
+					else:
+						entity.attack_move_to(target.global_position)
+				else:
+					var attack_dest: Vector3 = pos
+					if offsets.size() > fi:
+						var attack_off = offsets[fi]
+						attack_dest = pos + Vector3(attack_off.x, attack_off.y, attack_off.z)
+					entity.attack_move_to(find_legal_formation_pos(entity, attack_dest))
+				fi += 1
+				continue
 			if target:
 				if target is WorldResource:
 					entity.gather_at(target)
@@ -1134,6 +1162,7 @@ func _2v2_right_click(peer_id: int, data: Dictionary):
 	var target_id = data.get("target_id", -1)
 	var pos = Vector3(data.get("pos_x",0), data.get("pos_y",0), data.get("pos_z",0))
 	var shift_held = data.get("shift_held", false)
+	var mode: String = str(data.get("mode", ""))
 	var target: GameEntity = _find_entity_by_id(target_id) if target_id != -1 else null
 	var offsets = data.get("formation_offsets", [])
 
@@ -1146,6 +1175,33 @@ func _2v2_right_click(peer_id: int, data: Dictionary):
 			if not shift_held:
 				entity._clear_command_queue()
 			entity._force_queue_next = shift_held
+			# A/M 一次性下令：mode=attack 强制攻击/攻击移动，mode=move 纯移动。
+			if mode == "move":
+				var move_dest: Vector3 = pos
+				if target != null:
+					move_dest = target.global_position
+				elif offsets.size() > fi:
+					var move_off = offsets[fi]
+					move_dest = pos + Vector3(move_off.x, move_off.y, move_off.z)
+				entity.move_to(find_legal_formation_pos(entity, move_dest))
+				fi += 1
+				continue
+			if mode == "attack":
+				if target is WorldResource:
+					entity.attack_move_to(target.global_position)
+				elif target != null:
+					if entity.has_method("_can_attack_target") and entity._can_attack_target(target):
+						entity.attack_target(target, true)
+					else:
+						entity.attack_move_to(target.global_position)
+				else:
+					var attack_dest: Vector3 = pos
+					if offsets.size() > fi:
+						var attack_off = offsets[fi]
+						attack_dest = pos + Vector3(attack_off.x, attack_off.y, attack_off.z)
+					entity.attack_move_to(find_legal_formation_pos(entity, attack_dest))
+				fi += 1
+				continue
 			if target:
 				if target is WorldResource:
 					entity.gather_at(target)

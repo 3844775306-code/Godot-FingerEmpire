@@ -1,5 +1,5 @@
 # scripts/client/CommandCard.gd
-# 独立命令卡覆盖层 — O 键切换显示/隐藏，4×5 网格，全部建造热键
+# 独立命令卡覆盖层 — O 键切换显示/隐藏，4×5 网格；只做鼠标操作，不再绑定字母快捷键
 class_name CommandCard
 extends Control
 
@@ -7,6 +7,7 @@ const BTN_W = 130; const BTN_H = 48; const COLS = 5; const ROWS = 4
 var _buttons: Array[Button] = []
 var _grid: GridContainer
 var _bg: Panel
+var _bm = null    # RTSBattleManager 或 ClientRenderer，供军队按钮点击操作
 
 func _ready():
 	_bg = Panel.new(); _bg.size = Vector2(BTN_W*COLS + 16, BTN_H*ROWS + 16)
@@ -42,23 +43,23 @@ func _can_build(bid: int, res: Dictionary, castle_lv: int, bm) -> bool:
 	if bm and bm.has_method("is_building_unlocked"): return bm.is_building_unlocked(bid)
 	return true
 
-# ==================== 无选中：全部建造热键 ====================
+# ==================== 无选中：建造菜单 ====================
 func show_construct(res: Dictionary, castle_lv: int, bm):
 	var entries = [
-		["Q",28,"民居"], ["W",22,"仓库"], ["E",41,"瞭望塔"], ["R",52,"集市"], ["T",42,"书院"],
-		["Y",7,"桥"],   ["U",8,"梯子"],
-		["A",21,"兵营"], ["S",23,"船坞"], ["D",24,"攻城车间"], ["F",29,"重装厂"], ["G",54,"修道院"],
-		["H",53,"城堡"],
-		["Z",27,"城墙"], ["X",64,"炮台"], ["C",25,"箭塔"],   ["V",26,"炮塔"], ["B",8,"梯子"],
+		[28,"民居"], [22,"仓库"], [41,"瞭望塔"], [52,"集市"], [42,"书院"],
+		[7,"桥"],   [8,"梯子"],
+		[21,"兵营"], [23,"船坞"], [24,"攻城车间"], [29,"重装厂"], [54,"修道院"],
+		[53,"城堡"],
+		[27,"城墙"], [64,"炮台"], [25,"箭塔"],   [26,"炮塔"], [8,"梯子"],
 	]
 	for i in range(_buttons.size()):
 		var btn = _buttons[i]; btn.visible = true; btn.modulate = Color.WHITE; btn.tooltip_text = ""
 		if i < entries.size():
-			var e = entries[i]; var bid = e[1]
+			var e = entries[i]; var bid = e[0]
 			var cfg = EntityDatabase.get_config(bid); var cost = cfg.get("cost",{})
 			var ok = _can_build(bid, res, castle_lv, bm)
 			btn.disabled = not ok; btn.modulate = Color.WHITE if ok else Color(0.5,0.5,0.5)
-			btn.text = "[%s]%s %s" % [e[0], e[2], _cost_str(cost)]
+			btn.text = "%s %s" % [e[1], _cost_str(cost)]
 			if btn.pressed.is_connected(_d): btn.pressed.disconnect(_d)
 			btn.pressed.connect(func(): _start_build(bid), CONNECT_ONE_SHOT)
 		else:
@@ -73,25 +74,24 @@ func show_building(produces: Array, bid: int, eid: int, bm):
 			var pid = produces[i]["unit_id"]; var uc = EntityDatabase.get_config(pid)
 			# production_list 里带的是按建筑等级加成后的 current_cost，优先用它
 			var cost = produces[i].get("current_cost", uc.get("cost",{}))
-			var hk = ["Q","W","E","R","F"][min(i,4)]
 			var ok = true; for k in cost: if res.get(k,0) < cost[k]: ok = false
 			btn.disabled = not ok; btn.modulate = Color.WHITE if ok else Color(0.5,0.5,0.5)
-			btn.text = "[%s]%s %s" % [hk, uc.get("name","?"), _cost_str(cost)]
+			btn.text = "%s %s" % [uc.get("name","?"), _cost_str(cost)]
 			if btn.pressed.is_connected(_d): btn.pressed.disconnect(_d)
 			btn.pressed.connect(func(): _send_produce(bid, pid), CONNECT_ONE_SHOT)
 		elif i == 5:
 			var upg = EntityDatabase.get_config(eid).get("upgrades",[])
-			btn.text = "[A]升级"; btn.disabled = (upg.size()==0)
+			btn.text = "升级"; btn.disabled = (upg.size()==0)
 			btn.modulate = Color.WHITE if upg.size()>0 else Color(0.5,0.5,0.5)
 			if btn.pressed.is_connected(_d): btn.pressed.disconnect(_d)
 			if upg.size()>0: btn.pressed.connect(func(): _send_upgrade(bid), CONNECT_ONE_SHOT)
 		elif i == 6:
-			btn.text = "[S]拆除"; btn.disabled = (eid==20)
+			btn.text = "拆除"; btn.disabled = (eid==20)
 			btn.modulate = Color(1,0.3,0.3) if eid!=20 else Color(0.5,0.5,0.5)
 			if btn.pressed.is_connected(_d): btn.pressed.disconnect(_d)
 			if eid!=20: btn.pressed.connect(func(): _send_demolish(bid), CONNECT_ONE_SHOT)
 		elif i == 7:
-			btn.text = "[D]释放"; btn.disabled = false; btn.modulate = Color.WHITE
+			btn.text = "释放"; btn.disabled = false; btn.modulate = Color.WHITE
 			if btn.pressed.is_connected(_d): btn.pressed.disconnect(_d)
 			btn.pressed.connect(func(): _send_ungarrison(bid), CONNECT_ONE_SHOT)
 		elif i == 8:
@@ -113,9 +113,9 @@ func show_building(produces: Array, bid: int, eid: int, bm):
 			btn.modulate = Color.WHITE if can_click else Color(0.5, 0.5, 0.5)
 			if btn.pressed.is_connected(_d): btn.pressed.disconnect(_d)
 			if bool(rep["under_repair"]):
-				btn.text = "[G]修理中 %d%%" % int(float(rep["progress"]) * 100.0)
+				btn.text = "修理中 %d%%" % int(float(rep["progress"]) * 100.0)
 			else:
-				btn.text = "[G]修理 %s" % _cost_str(rep["cost"])
+				btn.text = "修理 %s" % _cost_str(rep["cost"])
 			btn.tooltip_text = _repair_tooltip(rep)
 			if can_click:
 				btn.pressed.connect(func(): _send_repair(bid), CONNECT_ONE_SHOT)
@@ -219,14 +219,76 @@ func _repair_tooltip(rep: Dictionary) -> String:
 	return "\n".join(lines)
 
 # ==================== 选中军队 ====================
-func show_army():
-	var labels = ["[Q]清除状态","[W]移动攻击","[E]进驻最近","[R]全选同类","[F]巡逻模式"]
-	var labels2 = ["[A]攻敌主城","[S]撤回主城","[D]释放进驻"]
+func show_army(bm = null):
+	if bm == null:
+		bm = get_tree().get_first_node_in_group("battle_manager")
+		if bm == null:
+			bm = get_tree().get_first_node_in_group("client_renderer")
+	_bm = bm
+	var labels = ["清除状态","移动攻击","进驻最近","全选同类","巡逻模式"]
+	var labels2 = ["攻敌主城","撤回主城","释放进驻"]
 	for i in range(_buttons.size()):
 		var btn = _buttons[i]; btn.visible = true; btn.disabled = false; btn.modulate = Color.WHITE; btn.tooltip_text = ""
-		if i < labels.size(): btn.text = labels[i]
-		elif i >= 5 and i-5 < labels2.size(): btn.text = labels2[i-5]
-		else: btn.visible = false
+		if btn.pressed.is_connected(_d): btn.pressed.disconnect(_d)
+		if i < labels.size():
+			btn.text = labels[i]
+			btn.pressed.connect(_army_action.bind(i), CONNECT_ONE_SHOT)
+		elif i >= 5 and i-5 < labels2.size():
+			btn.text = labels2[i-5]
+			btn.pressed.connect(_army_action.bind(i), CONNECT_ONE_SHOT)
+		else:
+			btn.visible = false
+
+func _selected_ids() -> Array:
+	var ci = get_tree().get_first_node_in_group("client_input")
+	if ci:
+		return ci.client_selected_ids.duplicate()
+	var sm = get_tree().get_first_node_in_group("battle_manager")
+	if sm:
+		var sel = sm.get_node_or_null("SelectionManager")
+		if sel:
+			var ids: Array = []
+			for e in sel.selected_entities:
+				if is_instance_valid(e): ids.append(e.get_instance_id())
+			return ids
+	return []
+
+func _army_action(idx: int):
+	var ids := _selected_ids()
+	if ids.is_empty(): return
+	var online := not (_bm is RTSBattleManager)
+	match idx:
+		0:
+			if online: NetworkManager.send_command.rpc_id(1, {"action":"clear_order","selected_ids":ids})
+			elif _bm and _bm.has_method("clear_orders_for_selected"): _bm.clear_orders_for_selected()
+		1:
+			if online: NetworkManager.send_command.rpc_id(1, {"action":"toggle_attack_move","selected_ids":ids})
+			elif _bm and _bm.has_method("toggle_attack_move_for_selected"): _bm.toggle_attack_move_for_selected()
+		2:
+			var ci = get_tree().get_first_node_in_group("client_input")
+			if online and ci and ci.has_method("_garrison_nearest"): ci._garrison_nearest()
+			elif _bm and _bm.has_method("garrison_nearest_for_selected"): _bm.garrison_nearest_for_selected()
+		3:
+			var ci2 = get_tree().get_first_node_in_group("client_input")
+			if online and ci2 and ci2.has_method("_select_all_of_same_type"):
+				ci2._select_all_of_same_type(ids[0], ci2._get_entity_info(ids[0]))
+			elif _bm:
+				var sel = _bm.get_node_or_null("SelectionManager")
+				if sel and not sel.selected_entities.is_empty():
+					sel._select_all_of_same_type(sel.selected_entities[0])
+		4:
+			var ci3 = get_tree().get_first_node_in_group("client_input")
+			if online and ci3 and ci3.has_method("_toggle_patrol_mode"): ci3._toggle_patrol_mode()
+			elif _bm and _bm.has_method("toggle_patrol_mode"): _bm.toggle_patrol_mode()
+		5:
+			if online: NetworkManager.send_command.rpc_id(1, {"action":"global_attack","selected_ids":ids})
+			elif _bm and _bm.has_method("global_attack"): _bm.global_attack()
+		6:
+			if online: NetworkManager.send_command.rpc_id(1, {"action":"global_retreat","selected_ids":ids})
+			elif _bm and _bm.has_method("global_retreat"): _bm.global_retreat()
+		7:
+			if online: NetworkManager.send_command.rpc_id(1, {"action":"ungarrison_soldiers","selected_ids":ids})
+			elif _bm and _bm.has_method("ungarrison_selected"): _bm.ungarrison_selected()
 
 func hide_all():
 	for btn in _buttons: btn.visible = false
