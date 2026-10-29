@@ -3657,16 +3657,10 @@ func _input(event):
 	if event is InputEventKey and event.pressed and event.keycode == KEY_O:
 		var cc = $UI.get_node_or_null("CommandCard")
 		if cc: cc.visible = not cc.visible
-	# Don't process clicks on interactive UI panels
-	if event is InputEventMouseButton:
-		if has_node("UI/InfoPanel"):
-			var ip = $UI/InfoPanel
-			if ip.visible and ip.get_global_rect().has_point(event.position):
-				return
-		if has_node("UI/BuildMenu"):
-			var bm = $UI/BuildMenu
-			if bm.visible and bm.get_global_rect().has_point(event.position):
-				return
+	# Don't process presses on interactive UI panels/buttons
+	if event is InputEventMouseButton and event.pressed:
+		if UILayout.is_point_over_interactive_ui($UI, event.position):
+			return
 
 	if build_mode:
 		# 手机端居中建造：单指滑动交给 TouchGestureRouter 平移地图，
@@ -3692,6 +3686,9 @@ func _input(event):
 func _unhandled_input(event):
 	# Game clicks - only fires when no GUI Control consumed the event
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+		# 右键落在按钮/面板上时不能穿透成战场下令
+		if UILayout.is_point_over_interactive_ui($UI, event.position):
+			return
 		_pending_left_click = false
 		_handle_right_click(event)
 
@@ -3885,11 +3882,13 @@ func _get_entity_under_click(screen_pos: Vector2):
 	return null
 
 func set_pending_command_mode(mode: String) -> void:
-	if mode != "attack" and mode != "move":
+	if mode != "attack" and mode != "move" and mode != "garrison":
 		return
 	pending_command_mode = mode
 	if mode == "attack":
 		_show_hud_alert("攻击模式：左键选择目标，右键或 Esc 取消", Color(0.4, 0.8, 1.0), get_host_team(), get_host_team())
+	elif mode == "garrison":
+		_show_hud_alert("进驻模式：左键点击己方箭塔/炮塔/城堡或攻城车，右键或 Esc 取消", Color(0.4, 0.9, 0.7), get_host_team(), get_host_team())
 	else:
 		_show_hud_alert("移动模式：左键选择落点，右键或 Esc 取消", Color(0.4, 0.8, 1.0), get_host_team(), get_host_team())
 
@@ -4232,6 +4231,11 @@ func _command_selected_units_impl(screen_pos: Vector2, mode: String = ""):
 		elif res.collider.has_meta("entity_root"):
 			target = res.collider.get_meta("entity_root")
 	var pos = res.position if res else _ray_plane_intersection(from,to,Vector3.ZERO,Vector3.UP)
+
+	# 信息面板“进驻”按钮：下一次左键只处理进驻，不攻击/不移动。
+	if mode == "garrison":
+		garrison_selected_to(target)
+		return
 
 	# 城墙/桥/运载船优先走特殊移动逻辑，不能被后面的建造/修理分支吃掉。
 	if target != null and command_special_target(target):
@@ -6106,6 +6110,26 @@ func garrison_nearest_for_selected():
 		else:
 			e.set("_garrison_target_id", best.get_instance_id())
 			e.move_to(best.global_position)
+
+# 信息面板“进驻”按钮选中目标后调用：普通军队按名额预约，官员走 command_garrison。
+func garrison_selected_to(target) -> void:
+	if target == null or not is_instance_valid(target) or target.team != get_host_team():
+		_show_hud_alert("请选择己方箭塔/炮塔/城堡或攻城车", Color(1.0, 0.5, 0.3), get_host_team(), get_host_team())
+		return
+	var assigned := 0
+	for e in selection.selected_entities:
+		if not is_instance_valid(e) or not (e is Army) or e.health <= 0:
+			continue
+		if e.entity_id >= 46 and e.entity_id <= 50 and target is Building:
+			if e.command_garrison(target):
+				assigned += 1
+		elif e.has_method("can_soldier_garrison") and e.can_soldier_garrison(target):
+			if _can_assign_garrison(e, target):
+				e._garrison_target_id = target.get_instance_id()
+				e.move_to(target.global_position)
+				assigned += 1
+	if assigned == 0:
+		_show_hud_alert("没有可进驻的单位或名额已满", Color(1.0, 0.5, 0.3), get_host_team(), get_host_team())
 
 func global_attack():
 	var castle = get_enemy_castle_pos()

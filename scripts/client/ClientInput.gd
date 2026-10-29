@@ -609,6 +609,8 @@ func _unhandled_input(event):
 	if not renderer: return
 	# 右键 → 取消 A/M 下令；否则空地打开建造菜单，点目标执行命令或查看信息。
 	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+		if _is_ui_point(event.position):
+			return
 		if _pending_command_mode != "":
 			_pending_command_mode = ""
 			_show_command_hint("已取消下令模式", Color(0.7, 0.7, 0.7))
@@ -1087,11 +1089,7 @@ func _is_ui_point(pos: Vector2) -> bool:
 	var ui := root.get_node_or_null("UI")
 	if ui == null:
 		return false
-	for node_name in ["InfoPanel", "BuildMenu", "CommandCard"]:
-		var ctrl := ui.get_node_or_null(node_name)
-		if ctrl is Control and ctrl.visible and _control_contains(ctrl, pos):
-			return true
-	return false
+	return UILayout.is_point_over_interactive_ui(ui, pos)
 
 func _control_contains(ctrl: Control, pos: Vector2) -> bool:
 	if not ctrl.visible:

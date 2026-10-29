@@ -159,22 +159,15 @@ func _input(event):
 			get_viewport().set_input_as_handled()
 		return
 
-	# Don't process clicks on interactive UI panels
-	if event is InputEventMouseButton:
+	# Don't process presses on interactive UI panels/buttons.
+	# 只拦按下：框选从战场开始、在 UI 上松手时仍要正常结束框选。
+	if event is InputEventMouseButton and event.pressed:
 		# 移动端：触屏面板上的点击交给 GUI，不做世界选择
 		if bm and bm.has_method("is_mobile_ui_point") and bm.is_mobile_ui_point(event.position):
 			return
-		if bm and bm.has_node("UI/QuickSelectPanel"):
-			var qp = bm.get_node("UI/QuickSelectPanel")
-			if qp is Control and qp.visible and qp.get_global_rect().has_point(event.position):
-				return
-		if bm and bm.has_node("UI/InfoPanel"):
-			var ip = bm.get_node("UI/InfoPanel")
-			if ip.visible and ip.get_global_rect().has_point(event.position):
-				return
-		if bm and bm.has_node("UI/BuildMenu"):
-			var bmenu = bm.get_node("UI/BuildMenu")
-			if bmenu.visible and bmenu.get_global_rect().has_point(event.position):
+		if bm and bm.has_node("UI"):
+			var ui_root = bm.get_node("UI")
+			if UILayout.is_point_over_interactive_ui(ui_root, event.position):
 				return
 
 	# 键盘快捷键

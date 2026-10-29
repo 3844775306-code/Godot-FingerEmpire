@@ -141,6 +141,10 @@ func _input(event):
 
 	# ========== PC 鼠标操作 ==========
 	if event is InputEventMouseButton:
+		# 鼠标落在按钮/面板上时不要再缩放或开始拖拽地图；中键松开仍要处理，避免拖拽状态卡住。
+		if event.button_index in [MOUSE_BUTTON_MIDDLE, MOUSE_BUTTON_WHEEL_UP, MOUSE_BUTTON_WHEEL_DOWN]:
+			if (event.pressed or event.button_index != MOUSE_BUTTON_MIDDLE) and _is_ui_point(event.position):
+				return
 		if event.button_index == MOUSE_BUTTON_MIDDLE:
 			# 按住 Ctrl 拖动中键 = 旋转视角；单独拖动中键仍是平移地图
 			if event.pressed and Input.is_key_pressed(KEY_CTRL):
@@ -223,6 +227,12 @@ func _input(event):
 			# factor > 1 表示放大（两指分开），factor < 1 表示缩小
 			# 通常放大应减小视野大小（size），缩小应增大视野
 			_apply_zoom_to(size / event.factor)
+
+func _is_ui_point(pos: Vector2) -> bool:
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if bm == null or not bm.has_node("UI"):
+		return false
+	return UILayout.is_point_over_interactive_ui(bm.get_node("UI"), pos)
 
 # 供 TouchGestureRouter 驱动触屏捏合：ratio > 1 = 两指分开（拉近），< 1 = 收拢（拉远）。
 # 只改视野大小，保持屏幕中心地面点不变，手感与滚轮缩放完全一致。

@@ -377,3 +377,23 @@ static func _find_scroll(node: Node, pos: Vector2, best: ScrollContainer) -> Scr
 	for c in node.get_children():
 		best = _find_scroll(c, pos, best)
 	return best
+
+# 判断屏幕点是否落在任意可交互 UI 上（按钮、面板、小地图、速选条等）。
+# 只统计 mouse_filter=STOP 的可见控件；透明容器通常是 IGNORE/PASS，不会误拦战场。
+static func is_point_over_interactive_ui(root: Node, pos: Vector2) -> bool:
+	if root == null:
+		return false
+	for child in root.get_children():
+		if not (child is Control):
+			continue
+		var ctrl := child as Control
+		if not ctrl.is_visible_in_tree():
+			continue
+		# 纯绘制/文字层不是交互控件；尤其框选矩形本身是 ColorRect，不能把它当成 UI 拦截。
+		if ctrl is ColorRect or ctrl is TextureRect or ctrl is Label or ctrl is RichTextLabel:
+			continue
+		if ctrl.mouse_filter == Control.MOUSE_FILTER_STOP and ctrl.get_global_rect().has_point(pos):
+			return true
+		if is_point_over_interactive_ui(ctrl, pos):
+			return true
+	return false
