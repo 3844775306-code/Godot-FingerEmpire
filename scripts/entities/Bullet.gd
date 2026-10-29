@@ -627,17 +627,40 @@ func _physics_process(delta):
 				_on_hit(target)
 		else:
 			var dir = (goal - global_position).normalized()
+			var prev_pos: Vector3 = global_position
 			var next_pos: Vector3 = global_position + dir * speed * delta
-			if check_obstacles and _segment_hits_obstacle(global_position, next_pos, goal):
+			if check_obstacles and _segment_hits_obstacle(prev_pos, next_pos, goal):
 				_on_obstacle_hit()
 				return
 			global_position = next_pos
 			_orient_to_dir(dir)
-			# 检查是否足够近（命中）
-			if global_position.distance_to(goal) < 0.3:
+			# 扫掠命中：箭速提高后，低帧率下单帧位移可能超过目标中心判定半径，
+			# 只看当前位置会整帧跨过目标、从身上穿过去，之后又回头绕圈。
+			var hit_center: Vector3 = target.global_position
+			var hit_radius: float = _tracking_hit_radius(target)
+			if _segment_point_distance(prev_pos, next_pos, hit_center) <= hit_radius:
+				global_position = _closest_point_on_segment(prev_pos, next_pos, hit_center)
 				_on_hit(target)
 	else:
 		recycle()
+
+# 追踪弹丸的命中半径：按目标体型给箭矢留出模型表面厚度，
+# 不能只用一个很小的固定半径，否则箭会从大单位身体里穿过去才判定。
+func _tracking_hit_radius(entity: GameEntity) -> float:
+	if entity is Building:
+		return clampf(float(entity.body_radius) * 0.9, 0.45, 2.0)
+	return maxf(0.45, float(entity.body_radius) + 0.2)
+
+func _segment_point_distance(a: Vector3, b: Vector3, p: Vector3) -> float:
+	return p.distance_to(_closest_point_on_segment(a, b, p))
+
+func _closest_point_on_segment(a: Vector3, b: Vector3, p: Vector3) -> Vector3:
+	var ab: Vector3 = b - a
+	var len_sq: float = ab.length_squared()
+	if len_sq < 0.000001:
+		return a
+	var t: float = clampf((p - a).dot(ab) / len_sq, 0.0, 1.0)
+	return a + ab * t
 
 func _on_hit(entity: GameEntity):
 	if hit: return
