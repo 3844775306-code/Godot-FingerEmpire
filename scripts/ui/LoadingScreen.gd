@@ -91,7 +91,7 @@ func _ready() -> void:
 
 func _apply_background() -> void:
 	_bg.texture = BACKGROUNDS[_bg_index]
-	_bg.modulate = Color(0.72, 0.72, 0.75, 1.0)
+	_bg.modulate = Color(0.85, 0.85, 0.88, 1.0)
 
 func _process(delta: float) -> void:
 	_shown_frames += 1
