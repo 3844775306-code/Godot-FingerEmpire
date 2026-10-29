@@ -15,9 +15,8 @@ const LOOPED_ANIMATIONS := [
 # 模型分别自带 32 / 32 / 25 个原生动作，这里按兵种直接挑模型原生的姿态，
 # 一律原样播放，不再改写任何动画关键帧；表里没有的仍回落到近战挥击。
 #
-# 弓箭手系（12 弓箭手 / 31 长弓兵 / 37 重装弓箭手）按玩家要求改回近战挥击动作
-# attack-melee-left：holding-left-shoot 虽然是模型原生的拉弓动作，但看着像「举弓不动」，
-# 出手瞬间没有力度，实战里不如挥击读得出来。所以不再单独映射，直接走下面的默认值。
+# 弓箭手系（12 弓箭手 / 31 长弓兵 / 37 重装弓箭手 / 67 骑射）的弓现在挂在左手骨骼上，
+# 攻击必须使用持弓动作 holding-left-shoot；继续播近战挥击会让弓跟着手乱甩。
 # 33 诸葛连弩 / 58 连弩 用的是 ballista 模型，GLB 里根本没有 AnimationPlayer，
 # 映射只是保持原状（不会播骨骼动作），开火表现靠箭矢/音效。
 const ATTACK_ANIM_BY_ID := {
@@ -26,6 +25,16 @@ const ATTACK_ANIM_BY_ID := {
 	57: "attack-melee-right",   # 宗师：右掌直击（与农民左勾拳区分开）
 	33: "holding-both-shoot",   # 诸葛连弩：ballista 模型无 AnimationPlayer，实际不播
 	58: "holding-both-shoot",   # 连弩：weapon-ballista 模型无 AnimationPlayer
+	# 武器已挂到对应手部骨骼，攻击动作必须用同一只手，否则会“手握武器却挥空手”。
+	12: "holding-left-shoot",   # 弓箭手：左手持弓
+	31: "holding-left-shoot",   # 长弓兵
+	37: "holding-left-shoot",   # 重装弓箭手
+	67: "holding-left-shoot",   # 骑射
+	11: "attack-melee-right", 15: "attack-melee-right", 19: "attack-melee-right",
+	30: "attack-melee-right", 32: "attack-melee-right", 34: "attack-melee-right",
+	35: "attack-melee-right", 36: "attack-melee-right", 38: "attack-melee-right",
+	65: "attack-melee-right", 66: "attack-melee-right", 68: "attack-melee-right",
+	69: "attack-melee-right",
 }
 
 static func attack_anim_for(entity_id: int) -> String:

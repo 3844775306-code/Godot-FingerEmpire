@@ -3197,6 +3197,10 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 		entity.think_timer = randf_range(0.0, 0.75)
 	# 尝试加载3D模型
 	var model_loaded = _apply_entity_model(entity)
+	# 武器/坐骑必须在模型加载后创建：武器需要挂到手臂骨骼上，
+	# 坐骑也要在抬高骑手之前存在。
+	if entity is Army:
+		entity._add_weapon()
 	# 国家色着色：非资源、非中立实体。颜色与阵营解耦，按国家统一。
 	if entity.entity_type != 0 and entity.team != RTSConfig.Team.NEUTRAL:
 		var tint: Color = get_entity_color(entity)

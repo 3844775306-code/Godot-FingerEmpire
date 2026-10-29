@@ -1625,18 +1625,7 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 		# Weapons and mounts (match server Army._add_weapon)
 		var eid2 = info.get("entity_id", 0)
 		var br = info.get("body_radius", 0.5)
-		if eid2 in [12, 31, 37, 67] and ResourceLoader.exists("res://models/forest/weapon-bow.glb"):
-			var ws = load("res://models/forest/weapon-bow.glb")
-			if ws: var w = ws.instantiate(); if w: w.position = Vector3(br*1.2, br*0.4, 0); w.scale = Vector3.ONE; w.rotation_degrees = Vector3(0, 180, 0); entity.add_child(w)
-		if eid2 in [35, 69] and ResourceLoader.exists("res://models/arena/weapon-spear.glb"):
-			var ws = load("res://models/arena/weapon-spear.glb")
-			if ws: var w = ws.instantiate(); if w: w.position = Vector3(br*1.2, br*0.4, 0); entity.add_child(w)
-		if eid2 in [11, 15, 19, 30, 32, 34, 36, 38, 65, 66, 68] and ResourceLoader.exists("res://models/arena/weapon-sword.glb"):
-			var ws = load("res://models/arena/weapon-sword.glb")
-			if ws: var w = ws.instantiate(); if w: w.position = Vector3(br*1.2, br*0.4, 0); w.scale = Vector3.ONE; entity.add_child(w)
-		if eid2 in [36, 37, 38, 68, 69] and ResourceLoader.exists("res://models/arena/shield-round.glb"):
-			var sh = load("res://models/arena/shield-round.glb")
-			if sh: var s = sh.instantiate(); if s: s.position = Vector3(-0.3, br*0.6, 0); s.scale = Vector3.ONE*0.8; entity.add_child(s)
+		WeaponAttachment.attach(entity, int(eid2), float(br))
 		var mpath = ""
 		if eid2 in [15, 19, 38, 66, 67]: mpath = "res://models/pets/animal-dog.glb"
 		elif eid2 == 34: mpath = "res://models/pets/animal-elephant.glb"
