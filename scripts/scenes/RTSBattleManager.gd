@@ -5144,36 +5144,33 @@ func _process(delta):
 	_tick_physics_rate(delta)
 
 # ==================== 后期自动画质 ====================
-# 实测（单机 3v3 科研，核显 2400x1400）：默认「极致」档后期只有 18~23fps；
-# 关 SSAO +17~19%、关阴影 +31%、关水面平面反射 +18~25%、3D 分辨率 0.7 再 +85~107%。
-# 所以默认从「中档」起步并保留自动降档，玩家在设置面板手动选择后再锁定档位。
+# 玩家要求：画质不是后期主要瓶颈（实测未暂停时降画质几乎不提帧），
+# 所以固定「极致」档渲染，不做自动降档，只在玩家手动选画质时覆盖。
 func _apply_default_quality() -> void:
-	hand_quality_mode = false
-	_perf_quality_level = 1
+	hand_quality_mode = true
+	_perf_quality_level = 0
 	var vp := get_viewport()
 	if vp:
 		_perf_viewport = vp
 		_perf_base_scale = vp.scaling_3d_scale
-		vp.scaling_3d_scale = clampf(_perf_base_scale * PERF_LEVEL_SCALES[_perf_quality_level], 0.5, 2.0)
+		vp.scaling_3d_scale = 1.0
 	var light := _find_directional_light()
 	if light:
 		_perf_light = light
 		_perf_light_shadow_original = light.shadow_enabled
 		_perf_light_shadow_distance_original = light.directional_shadow_max_distance
 		_perf_light_shadow_mode_original = light.directional_shadow_mode
-		# 阴影是实测第二大项：中档先收到 70m + 2 分裂，升级到 0 档时再恢复。
 		light.shadow_enabled = true
-		light.directional_shadow_max_distance = 70.0
-		if light.directional_shadow_mode == DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS:
-			light.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS
+		light.directional_shadow_max_distance = 120.0
+		light.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
 	var env := _find_world_environment()
 	if env:
 		_perf_env = env
 		_perf_ssao_original = env.ssao_enabled
-		env.ssao_enabled = false
+		env.ssao_enabled = true
 	var map_node := get_node_or_null("Map")
 	if map_node and map_node.has_method("set_water_quality"):
-		map_node.set_water_quality(_perf_quality_level)
+		map_node.set_water_quality(0)
 	_perf_initialized = true
 
 func _tick_adaptive_quality(delta: float) -> void:
@@ -5273,8 +5270,7 @@ func _apply_perf_quality() -> void:
 				distance_scale *= 0.85
 			_perf_light.directional_shadow_max_distance = maxf(_perf_light_shadow_distance_original * distance_scale, 12.0)
 			if _perf_light_shadow_mode_original == DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS:
-				# 实测 4 分裂阴影在 3v3 后期很贵；除最高档外统一降到 2 分裂。
-				_perf_light.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS if _perf_quality_level >= 1 else _perf_light_shadow_mode_original
+				_perf_light.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_2_SPLITS if _perf_quality_level >= 2 else _perf_light_shadow_mode_original
 			else:
 				_perf_light.directional_shadow_mode = _perf_light_shadow_mode_original
 	if _perf_env and is_instance_valid(_perf_env):
