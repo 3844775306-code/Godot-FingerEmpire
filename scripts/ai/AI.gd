@@ -1309,6 +1309,23 @@ func build_ladder(pos: Vector3) -> bool:
 	var b = battle.spawn_entity(cfg, team, pos) as Building
 	if b == null:
 		return false
+	# 梯子模型很薄，必须让梯面垂直于墙、薄边朝向墙体，否则横向卡进墙里。
+	# 同时把梯子中心向墙外挪 0.12 米，避免模型厚度与墙面重叠。
+	var wall_dir := Vector3.ZERO
+	for e in battle._buildings:
+		if not is_instance_valid(e) or not (e is Building) or e.health <= 0:
+			continue
+		if int(e.entity_id) != 27 or e.team == team:
+			continue
+		if e.global_position.distance_to(b.global_position) <= 2.0:
+			wall_dir = e.global_position - b.global_position
+			wall_dir.y = 0.0
+			break
+	if wall_dir.length_squared() > 0.001:
+		wall_dir = wall_dir.normalized()
+		# 局部 +Z 是梯子薄边方向；绕 Y 旋转到墙体方向即可贴墙。
+		b.rotation.y = atan2(wall_dir.x, wall_dir.z)
+		b.global_position -= wall_dir * 0.12
 	b.start_construction(5.0, cfg)
 	b.set_meta("ai_ladder", true)
 	if battle.has_method("assign_builders"):
