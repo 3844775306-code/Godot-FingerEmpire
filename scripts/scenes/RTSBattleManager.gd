@@ -5314,7 +5314,9 @@ func _tick_distant_shadows(delta: float) -> void:
 		_shadow_lod_pending = false
 		return
 	_ensure_cache_fresh()
-	var cam_pos := cam.global_position
+	# 必须用水平距离：相机在目标点后上方约 65m 处，用眼睛到单位的 3D 距离
+	# 会把屏幕正中心的单位也判成“远景”，结果开局所有单位阴影都被关掉。
+	var cam_flat := Vector2(cam.global_position.x, cam.global_position.z)
 	var limit: float = 46.0 - float(_perf_quality_level) * 6.0
 	var total: int = _armies.size()
 	var end_i: int = mini(total, _shadow_lod_cursor + 32)
@@ -5322,7 +5324,8 @@ func _tick_distant_shadows(delta: float) -> void:
 		var a = _armies[i]
 		if not is_instance_valid(a):
 			continue
-		var far: bool = cam_pos.distance_to(a.global_position) > limit
+		var unit_flat := Vector2(a.global_position.x, a.global_position.z)
+		var far: bool = cam_flat.distance_to(unit_flat) > limit
 		_toggle_shadow_recursive(a, far)
 	_shadow_lod_cursor = end_i
 	if _shadow_lod_cursor >= total:
@@ -5364,7 +5367,9 @@ func _tick_animation_lod(delta: float) -> void:
 		a.set_animation_lod(offscreen)
 		# 物理降频按到相机距离分档（不只看视锥）：近距离全速，40m 外 1/2，100m 外 1/3。
 		# 这样即使玩家拉远视角看大战场，物理成本也有上界，不会因为全屏单位一起动而爆帧。
-		var _dist: float = cam.global_position.distance_to(p)
+		# 物理降频同样按水平距离：相机自身高度会让屏幕中心单位也超过 40m，
+		# 导致视野正中的单位被误判成远景、逻辑只跑半速，走路更容易显得发飘。
+		var _dist: float = Vector2(cam.global_position.x, cam.global_position.z).distance_to(Vector2(p.x, p.z))
 		var _lod: int = 1
 		if _dist > 100.0:
 			_lod = 3
