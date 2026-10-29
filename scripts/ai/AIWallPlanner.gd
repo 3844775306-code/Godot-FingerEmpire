@@ -108,7 +108,9 @@ func _is_anchor(p: Vector3) -> bool:
 	var found: bool = false
 	for d in dirs:
 		var n: Vector2i = cell + d
-		if n.x < 0 or n.y < 0 or n.x >= RTSConfig.MAP_SIZE or n.y >= RTSConfig.MAP_SIZE:
+		# 城墙允许贴最外圈建（AIDefense 用地图边界封口），所以墙格紧邻地图
+		# 最外圈时就应该算“顶在边界上的锚点”，优先落地。
+		if n.x <= 0 or n.y <= 0 or n.x >= RTSConfig.MAP_SIZE - 1 or n.y >= RTSConfig.MAP_SIZE - 1:
 			found = true
 			break
 		if ai.battle.is_cliff_tile(n.x, n.y):

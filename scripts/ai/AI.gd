@@ -1190,6 +1190,11 @@ func _can_place_ai_building(building_id: int, pos: Vector3) -> bool:
 	if building_id not in [41, 27, 64, 7, 8, 25, 26]:
 		br_edge *= 2.0
 	var edge_limit: float = half - br_edge - 0.5
+	# 城墙是封口建筑：允许贴到地图最外圈（中心距边界 1 格），
+	# 否则墙圈两端只能停在边界内 1.5 格外，敌人能沿着地图边缘绕过墙头。
+	# 墙直径 2 米，贴边放置时模型边缘正好压在地图边界上，不会悬空。
+	if building_id == 27:
+		edge_limit = half - br_edge
 	if pos.x < -edge_limit or pos.x > edge_limit or pos.z < -edge_limit or pos.z > edge_limit:
 		return false
 	# 桥只能建在水上，使用战斗管理器与玩家共用的选址校验

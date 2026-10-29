@@ -1154,7 +1154,9 @@ func _append_ring_line(out: Array, from: Vector2i, to: Vector2i) -> void:
 # 该环格是否已被天然地形/现有建筑/资源点堵死（无需再补墙）；
 # 间距按墙真实可建造间距预留，建筑本身就可以充当一段墙。
 func _ring_cell_blocked(cell: Vector2i) -> bool:
-	if cell.x < 0 or cell.y < 0 or cell.x >= RTSConfig.MAP_SIZE or cell.y >= RTSConfig.MAP_SIZE:
+	# 地图最外圈不能放墙（_ring_exact_wall_ok 也要求 >=1），把它当作天然边界，
+	# 墙段终点落在边界内侧一格，和地图边界一起封口。
+	if cell.x <= 0 or cell.y <= 0 or cell.x >= RTSConfig.MAP_SIZE - 1 or cell.y >= RTSConfig.MAP_SIZE - 1:
 		return true
 	if _cell_blocks_land(cell.x, cell.y):
 		return true
@@ -1335,11 +1337,27 @@ func _ring_build_path(center: Vector2i, radius: int) -> Dictionary:
 				return {"ok": false}
 			wall_cells[cell] = true
 	else:
+		# 只连接“天然屏障之间的可通行段”。旧逻辑把每两个相邻屏障格都连一遍，
+		# 地图边缘会形成一整段连续的外界格，A* 在两端都出界时必然失败，
+		# 于是贴边的基地永远规划不出能借地图边界封口的墙圈。
 		for k in range(barrier_idx.size()):
 			var ia: int = int(barrier_idx[k])
 			var ib: int = int(barrier_idx[(k + 1) % barrier_idx.size()])
-			var a: Vector2i = cells[ia]
-			var b: Vector2i = cells[ib]
+			var span: int = (ib - ia + cells.size()) % cells.size()
+			if span <= 1:
+				# 两个屏障紧挨着，中间没有可建墙的缝。
+				continue
+			# 从屏障两侧的第一格可通行格开始连，而不是从屏障格本身开始：
+			# 贴地图边缘时屏障外侧就是地图外/边界，A* 从那里没有合法落脚点。
+			var start_idx: int = (ia + 1) % cells.size()
+			var end_idx: int = (ib - 1 + cells.size()) % cells.size()
+			var a: Vector2i = cells[start_idx]
+			var b: Vector2i = cells[end_idx]
+			if not _ring_exact_wall_ok(a) or not _ring_exact_wall_ok(b):
+				return {"ok": false}
+			wall_cells[a] = true
+			if a == b:
+				continue
 			var res: Dictionary = _ring_connect_a_star(a, b, center, radius)
 			if not bool(res.get("ok", false)):
 				return {"ok": false}
@@ -1402,7 +1420,9 @@ func _ring_build_spot_fallback(center: Vector2i, radius: int) -> Dictionary:
 		prev_was_wall = true
 		positions.append(wp)
 	# 环形首尾相邻：两端都没有天然屏障隔断时也要能咬合。
-	if first_is_wall and last_is_wall and last_pos.distance_to(first_pos) > 1.85:
+	# 贴地图边缘时首尾之间就是地图外（天然屏障），不需要也不应该连起来。
+	if not _ring_uses_map_edge(center, radius) and first_is_wall and last_is_wall \
+			and last_pos.distance_to(first_pos) > 1.85:
 		return {"ok": false}
 	if positions.size() < RING_WALL_MIN or positions.size() > RING_WALL_MAX:
 		return {"ok": false}
@@ -1416,12 +1436,159 @@ func _ring_build_spot_fallback(center: Vector2i, radius: int) -> Dictionary:
 		"positions": positions,
 	}
 
-# 先选一圈能闭合的半径：半径从近到远扫，第一个真正闭合的环直接采用。
+# 等半径的墙圈是否已经碰到地图边界；碰到时边界本身就是天然屏障。
+func _ring_uses_map_edge(center: Vector2i, radius: int) -> bool:
+	var sz: int = RTSConfig.MAP_SIZE
+	return center.x - radius < 1 or center.y - radius < 1 \
+			or center.x + radius >= sz - 1 or center.y + radius >= sz - 1
+
+# 规划出的墙圈即使被 BFS 判定有缺口，也先在缺口处补墙再验收。
+# 补墙从“主城泛洪第一次冲出环半径”的那条路径上取，保证补的是真实缺口，
+# 而不是在环上随便加密墙段。补不上就返回空，绝不接受漏人的墙圈。
+func _ring_fill_gaps(castle, center: Vector2i, radius: int,
+		base_blocked: Dictionary, built: Dictionary) -> Dictionary:
+	var positions: Array = built.get("positions", []).duplicate()
+	var wall_cells: Dictionary = {}
+	for p in positions:
+		wall_cells[ai.battle.world_to_grid(p)] = true
+	# 先在环线上补“本该有墙但实际缺失”的格子。A* 兜底/建造失败留下的洞，
+	# 往往就是环序列里少了一格；直接补这一格比从泛洪路径上猜位置准确得多。
+	var ring_cells: Array = built.get("cells", [])
+	for c in ring_cells:
+		if wall_cells.has(c) or _ring_cell_blocked(c):
+			continue
+		if not _ring_exact_wall_ok(c):
+			continue
+		var cp: Vector3 = ai.battle.grid_to_world(c.x, c.y)
+		var close: bool = false
+		for p in positions:
+			if (p as Vector3).distance_to(cp) < 0.9:
+				close = true
+				break
+		if close:
+			continue
+		positions.append(cp)
+		wall_cells[c] = true
+		if positions.size() > RING_WALL_MAX:
+			return {}
+	# 整圈缺失格一次性补齐后再验收，避免每补一格就全图泛洪一次。
+	if _ring_is_sealed(castle, radius, base_blocked, wall_cells):
+		var ring_sealed: Dictionary = built.duplicate(true)
+		ring_sealed["positions"] = positions
+		ring_sealed["walls"] = positions.size()
+		ring_sealed["gaps"] = positions.size() - int(built.get("walls", positions.size()))
+		return ring_sealed
+	var started_ms: int = Time.get_ticks_msec()
+	for attempt in range(6):
+		if _ring_is_sealed(castle, radius, base_blocked, wall_cells):
+			var sealed_built: Dictionary = built.duplicate(true)
+			sealed_built["positions"] = positions
+			sealed_built["walls"] = positions.size()
+			sealed_built["gaps"] = attempt
+			return sealed_built
+		if Time.get_ticks_msec() - started_ms >= RING_PLAN_BUDGET_MS:
+			break
+		var gap: Vector2i = _find_ring_gap_cell(castle, center, radius, base_blocked, wall_cells)
+		if gap == Vector2i(-9999, -9999):
+			break
+		if wall_cells.has(gap):
+			break
+		var gap_pos: Vector3 = ai.battle.grid_to_world(gap.x, gap.y)
+		positions.append(gap_pos)
+		wall_cells[gap] = true
+	if not _ring_is_sealed(castle, radius, base_blocked, wall_cells):
+		return {}
+	var sealed: Dictionary = built.duplicate(true)
+	sealed["positions"] = positions
+	sealed["walls"] = positions.size()
+	sealed["gaps"] = positions.size() - int(built.get("walls", positions.size()))
+	return sealed
+
+# 从主城附近泛洪，找到第一次冲出墙圈半径的路径，并在路径靠近环线的位置
+# 找一个能直接落墙的格子。返回 (-9999,-9999) 表示当前点位已经封死或找不到可补位置。
+func _find_ring_gap_cell(castle, center: Vector2i, radius: int,
+		base_blocked: Dictionary, wall_cells: Dictionary) -> Vector2i:
+	var sz: int = RTSConfig.MAP_SIZE
+	var edge_mode: bool = _ring_uses_map_edge(center, radius)
+	var blocked_use: Dictionary = base_blocked
+	if edge_mode:
+		# 与 _ring_is_sealed_by_far_edge 保持一致：地图最外圈不可站立，
+		# 否则找缺口时会沿着地图边界绕过墙段终点，误以为到处是缺口。
+		blocked_use = base_blocked.duplicate()
+		for i in range(sz):
+			blocked_use[Vector2i(i, 0)] = true
+			blocked_use[Vector2i(i, sz - 1)] = true
+			blocked_use[Vector2i(0, i)] = true
+			blocked_use[Vector2i(sz - 1, i)] = true
+	var start_r: int = maxi(3, int(ceil(float(castle.body_radius))) + 1)
+	var queue: Array = []
+	var seen: Dictionary = {}
+	var parent: Dictionary = {}
+	var center_cell: Vector2i = ai.battle.world_to_grid(castle.global_position)
+	for dx in range(-start_r, start_r + 1):
+		for dz in range(-start_r, start_r + 1):
+			var c := Vector2i(center_cell.x + dx, center_cell.y + dz)
+			if c.x < 0 or c.y < 0 or c.x >= sz or c.y >= sz:
+				continue
+			if blocked_use.has(c) or wall_cells.has(c) or seen.has(c):
+				continue
+			seen[c] = true
+			queue.append(c)
+	var target := Vector2i(-9999, -9999)
+	var dirs: Array = [
+		Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1),
+		Vector2i(1, 1), Vector2i(1, -1), Vector2i(-1, 1), Vector2i(-1, -1),
+	]
+	var escape_r: float = float(radius) + (4.0 if edge_mode else 2.0)
+	var bound_r: float = float(radius) + 9.0
+	var head: int = 0
+	while head < queue.size():
+		var cur: Vector2i = queue[head]
+		head += 1
+		if Vector2(cur - center).length() > escape_r:
+			target = cur
+			break
+		for d in dirs:
+			var n: Vector2i = cur + d
+			if n.x < 0 or n.y < 0 or n.x >= sz or n.y >= sz:
+				continue
+			if seen.has(n) or blocked_use.has(n) or wall_cells.has(n):
+				continue
+			if Vector2(n - center).length() > bound_r:
+				continue
+			if d.x != 0 and d.y != 0:
+				if blocked_use.has(cur + Vector2i(d.x, 0)) or wall_cells.has(cur + Vector2i(d.x, 0)) \
+						or blocked_use.has(cur + Vector2i(0, d.y)) or wall_cells.has(cur + Vector2i(0, d.y)):
+					continue
+			seen[n] = true
+			parent[n] = cur
+			queue.append(n)
+	if target == Vector2i(-9999, -9999):
+		return target
+	# 路径从外向内回溯，先挑靠近环线、且能直接落墙的格子。
+	var path: Array = []
+	var node: Vector2i = target
+	while parent.has(node):
+		path.append(node)
+		node = parent[node]
+	path.append(node)
+	for c in path:
+		var dist: float = Vector2(c - center).length()
+		if dist < float(radius) - 2.5 or dist > float(radius) + 2.0:
+			continue
+		if _ring_exact_wall_ok(c) and not wall_cells.has(c):
+			return c
+	# 环线附近没有平地时，退而求其次封住路径上第一个可落墙格。
+	for c in path:
+		if _ring_exact_wall_ok(c) and not wall_cells.has(c):
+			return c
+	return Vector2i(-9999, -9999)
+
+
 func _pick_ring_radius(castle, forced_radius: int = 0, center_override: Vector2i = Vector2i(-9999, -9999), preferred_radius: int = 0) -> Dictionary:
 	var center: Vector2i = center_override if center_override.x > -9000 else ai.battle.world_to_grid(castle.global_position)
 	var base_blocked: Dictionary = _ring_blocked_base()
 	var radii: Array = []
-	var best_open: Dictionary = {}
 	var min_r: int = maxi(RING_MIN_RADIUS, int(ceil(float(castle.body_radius) + 3.0)))
 	var seen_radii: Dictionary = {}
 	var add_radius := func(r: int) -> void:
@@ -1452,13 +1619,25 @@ func _pick_ring_radius(castle, forced_radius: int = 0, center_override: Vector2i
 		if tried > 0 and Time.get_ticks_msec() - started_ms >= RING_PLAN_BUDGET_MS:
 			break
 		tried += 1
-		if center.x - int(r) < 2 or center.y - int(r) < 2 or center.x + int(r) >= RTSConfig.MAP_SIZE - 2 or center.y + int(r) >= RTSConfig.MAP_SIZE - 2:
+		# 贴地图边缘的基地允许墙圈伸出地图：超出边界的部分天然不可通行，
+		# 只要地图内的墙段首尾接到边界，就能用地图边界当墙，省下一整段城墙。
+		if center.x < 2 or center.y < 2 \
+				or center.x >= RTSConfig.MAP_SIZE - 2 or center.y >= RTSConfig.MAP_SIZE - 2:
 			continue
 		var built: Dictionary = _ring_build_path(center, int(r))
 		if not bool(built.get("ok", false)):
 			built = _ring_build_spot_fallback(center, int(r))
 		if not bool(built.get("ok", false)):
 			continue
+		# BFS 只看最终点位，不管来自 A* 还是兜底：先算清真正能通行的缺口，
+		# 能补的墙位补上；补不上就换下一个半径，绝不把缺口环当成已闭合圈。
+		var candidate_walls: Dictionary = {}
+		for p in built["positions"]:
+			candidate_walls[ai.battle.world_to_grid(p)] = true
+		if not _ring_is_sealed(castle, int(r), base_blocked, candidate_walls):
+			built = _ring_fill_gaps(castle, center, int(r), base_blocked, built)
+			if built.is_empty():
+				continue
 		# 墙与墙至少 0.9 米，否则 build_building 会拒绝第二面墙，点位上却看不出来。
 		var pts0: Array = built.get("positions", [])
 		var spaced: bool = true
@@ -1471,24 +1650,9 @@ func _pick_ring_radius(castle, forced_radius: int = 0, center_override: Vector2i
 				break
 		if not spaced:
 			continue
-		# 用“主城周围泛洪能否到地图边界”验证；BFS 只看最终点位，
-		# 不管来自 A* 还是兜底，避免把缺口环当成闭合环。
-		var candidate_walls: Dictionary = {}
-		for p in built["positions"]:
-			candidate_walls[ai.battle.world_to_grid(p)] = true
-		var sealed: bool = _ring_is_sealed(castle, int(r), base_blocked, candidate_walls)
-		if not sealed:
-			# 有些地图（基地贴着山脚/水湾或资源密集）确实找不到完全闭合的环。
-			# 保留第一个可建造的近似圈做兜底，先立起看得见的城墙圈，
-			# 后续补缺口/升级时再逐步密封，避免 AI 到等级却完全不修墙。
-			if best_open.is_empty():
-				var open: Dictionary = built.duplicate(true)
-				open["open"] = true
-				best_open = open
-			continue
 		# 半径从小到大扫，第一个能闭合的环直接采用：墙数通常最少，规划耗时也可控。
 		return built
-	return best_open
+	return {}
 
 # 主城正好压在山脚/水湾时，环心稍微平移一两格往往就能闭合；用平移后的环心再试几次。
 func _pick_ring_radius_best(castle, forced_radius: int = 0,
@@ -1901,9 +2065,14 @@ func _ring_is_sealed(castle, radius: int, base_blocked: Dictionary = {},
 	if extra.is_empty():
 		for p in wall_positions:
 			extra[ai.battle.world_to_grid(p)] = true
+	var center: Vector2i = ai.battle.world_to_grid(castle.global_position)
+	# 墙圈伸出地图时，地图边界就是墙的一部分：这时从“远侧边界”往主城泛洪，
+	# 只要远侧进不来，主城就被墙段 + 地图边界封死了。
+	# 旧实现一律要求内圈不能碰边界，导致贴边基地永远无法用地图边缘省墙。
+	if _ring_uses_map_edge(center, radius):
+		return _ring_is_sealed_by_far_edge(castle, center, radius, blocked, extra)
 	# 从主城周围的空地开始泛洪；如果内圈和地图边界连通，说明墙圈有缺口。
 	# 反过来“从边界泛洪再查半径”会把墙圈外、名义半径内的空地误判成泄漏。
-	var center: Vector2i = ai.battle.world_to_grid(castle.global_position)
 	var seen: Dictionary = {}
 	var queue: Array = []
 	var start_r: int = maxi(3, int(ceil(float(castle.body_radius))) + 1)
@@ -1937,6 +2106,76 @@ func _ring_is_sealed(castle, radius: int, base_blocked: Dictionary = {},
 			if d.x != 0 and d.y != 0:
 				if blocked.has(cur + Vector2i(d.x, 0)) or extra.has(cur + Vector2i(d.x, 0)) \
 						or blocked.has(cur + Vector2i(0, d.y)) or extra.has(cur + Vector2i(0, d.y)):
+					continue
+			seen[n] = true
+			queue.append(n)
+	return true
+
+# 贴边墙圈的验收：墙段 + 地图边界共同围住主城时，近侧边界属于“圈内”，
+# 不能当作泄漏；只从离主城足够远的边界格子（远侧 / 侧翼）泛洪。
+# 如果远侧能一路走到主城，说明墙段没有接到边界或中间有缺口。
+func _ring_is_sealed_by_far_edge(castle, center: Vector2i, radius: int,
+		blocked: Dictionary, extra: Dictionary) -> bool:
+	var sz: int = RTSConfig.MAP_SIZE
+	var inside: Dictionary = {}
+	var seen: Dictionary = {}
+	var queue: Array = []
+	var start_r: int = maxi(3, int(ceil(float(castle.body_radius))) + 1)
+	for dx in range(-start_r, start_r + 1):
+		for dz in range(-start_r, start_r + 1):
+			var c := Vector2i(center.x + dx, center.y + dz)
+			if c.x < 0 or c.y < 0 or c.x >= sz or c.y >= sz:
+				continue
+			if blocked.has(c) or extra.has(c):
+				continue
+			inside[c] = true
+	# 地图最外圈对守军敌人来说不可站立（墙网也按边界处理），泛洪时整圈封死；
+	# 外部种子取边界内侧一格，避免敌人沿着地图边界绕过墙段终点。
+	var edge_blocked: Dictionary = blocked.duplicate()
+	for i in range(sz):
+		edge_blocked[Vector2i(i, 0)] = true
+		edge_blocked[Vector2i(i, sz - 1)] = true
+		edge_blocked[Vector2i(0, i)] = true
+		edge_blocked[Vector2i(sz - 1, i)] = true
+	# 只取远侧边界：距主城超过 radius+4 的边界内圈格。近侧边界在墙圈里面，
+	# 若也当外部种子，会把封好的贴边基地误判成漏风。
+	var perim: Array = []
+	for x in range(1, sz - 1):
+		perim.append(Vector2i(x, 1))
+		perim.append(Vector2i(x, sz - 2))
+	for y in range(2, sz - 2):
+		perim.append(Vector2i(1, y))
+		perim.append(Vector2i(sz - 2, y))
+	var far_r2: float = pow(float(radius) + 4.0, 2.0)
+	for c in perim:
+		if edge_blocked.has(c) or extra.has(c) or inside.has(c) or seen.has(c):
+			continue
+		if Vector2(c - center).length_squared() <= far_r2:
+			continue
+		seen[c] = true
+		queue.append(c)
+	if queue.is_empty():
+		# 远侧边界全被山水/建筑占住，敌人本来也进不来。
+		return true
+	var dirs: Array = [
+		Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1),
+		Vector2i(1, 1), Vector2i(1, -1), Vector2i(-1, 1), Vector2i(-1, -1),
+	]
+	var head: int = 0
+	while head < queue.size():
+		var cur: Vector2i = queue[head]
+		head += 1
+		if inside.has(cur):
+			return false
+		for d in dirs:
+			var n: Vector2i = cur + d
+			if n.x < 0 or n.y < 0 or n.x >= sz or n.y >= sz:
+				continue
+			if seen.has(n) or edge_blocked.has(n) or extra.has(n):
+				continue
+			if d.x != 0 and d.y != 0:
+				if edge_blocked.has(cur + Vector2i(d.x, 0)) or extra.has(cur + Vector2i(d.x, 0)) \
+						or edge_blocked.has(cur + Vector2i(0, d.y)) or extra.has(cur + Vector2i(0, d.y)):
 					continue
 			seen[n] = true
 			queue.append(n)
