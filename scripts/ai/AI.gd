@@ -181,6 +181,13 @@ const LAND_RALLY_INTERVAL: float = 8.0
 var _land_rally_timer: float = 0.0
 const NAVAL_PATROL_INTERVAL: float = 15.0
 var _naval_patrol_timer: float = 0.0
+# 船坞水域是否值得造战船：只有连通水域靠近敌方沿岸建筑/敌方战船才算军事水域。
+# 结果按船坞缓存，避免每次生产决策都从船坞做一次水域洪泛。
+const NAVAL_VALUE_RECHECK: float = 8.0
+const NAVAL_VALUE_BFS_LIMIT: int = 6000
+const NAVAL_VALUE_BUILDING_RANGE: float = 18.0
+const NAVAL_VALUE_CASTLE_RANGE: float = 55.0
+var _naval_value_cache: Dictionary = {}
 
 # ── 建筑修理（AI 也会修残破建筑）──
 # 修理机制本身在 Building 内实现：按已损比例扣费 + 计时，主城(20/53)不可修；
@@ -3469,6 +3476,76 @@ func _check_near_water(gx: int, gz: int) -> bool:
 				if battle.get_terrain_at_grid(nx, nz) == 2: return true
 	return false
 
+# 船坞所在连通水域是否有军事价值：
+#   · 水域能开到敌方沿岸建筑/主城附近，战船才有炮击目标；
+#   · 或敌方战船已经进入这片水域，需要己方战船对抗。
+# 纯油田小水塘通常两者都不满足，只保留采集船，不浪费资源造战船。
+func _shipyard_has_military_water(sy: Building) -> bool:
+	var key: int = sy.get_instance_id()
+	var now: float = battle.game_time
+	var cached = _naval_value_cache.get(key)
+	if cached is Dictionary and now - float(cached.get("time", -999.0)) < NAVAL_VALUE_RECHECK:
+		return bool(cached.get("value", false))
+	var value: bool = _water_body_has_military_target(sy.global_position)
+	_naval_value_cache[key] = {"time": now, "value": value}
+	return value
+
+func _water_body_has_military_target(pos: Vector3) -> bool:
+	var start: Vector2i = _find_adjacent_water_cell(pos)
+	if start.x < 0:
+		return false
+	var enemy_castle = _get_attack_target_castle()
+	var castle_pos: Vector3 = Vector3.ZERO
+	if enemy_castle and is_instance_valid(enemy_castle):
+		castle_pos = enemy_castle.global_position
+	var enemy_buildings: Array[Vector3] = []
+	var enemy_ship_cells: Dictionary = {}
+	for e in battle.entities.get_children():
+		if not (e is GameEntity) or e.health <= 0 or not _entity_is_enemy(e):
+			continue
+		if e is Building:
+			enemy_buildings.append(e.global_position)
+		elif e is Army and e.water_capable:
+			enemy_ship_cells[battle.world_to_grid(e.global_position)] = true
+	var visited: Dictionary = {start: true}
+	var queue: Array[Vector2i] = [start]
+	var head: int = 0
+	while head < queue.size() and head < NAVAL_VALUE_BFS_LIMIT:
+		var cell: Vector2i = queue[head]
+		head += 1
+		if enemy_ship_cells.has(cell):
+			return true
+		var wp: Vector3 = battle.grid_to_world(cell.x, cell.y)
+		if castle_pos != Vector3.ZERO and wp.distance_to(castle_pos) <= NAVAL_VALUE_CASTLE_RANGE:
+			return true
+		for ep in enemy_buildings:
+			if wp.distance_to(ep) <= NAVAL_VALUE_BUILDING_RANGE:
+				return true
+		for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var n: Vector2i = cell + d
+			if n.x < 0 or n.x >= RTSConfig.MAP_SIZE or n.y < 0 or n.y >= RTSConfig.MAP_SIZE:
+				continue
+			if visited.has(n) or battle.get_terrain_at_grid(n.x, n.y) != 2:
+				continue
+			visited[n] = true
+			queue.append(n)
+	return false
+
+func _find_adjacent_water_cell(pos: Vector3) -> Vector2i:
+	var center: Vector2i = battle.world_to_grid(pos)
+	for r in range(1, 4):
+		for dx in range(-r, r + 1):
+			for dz in range(-r, r + 1):
+				if absi(dx) != r and absi(dz) != r:
+					continue
+				var nx: int = center.x + dx
+				var nz: int = center.y + dz
+				if nx < 0 or nx >= RTSConfig.MAP_SIZE or nz < 0 or nz >= RTSConfig.MAP_SIZE:
+					continue
+				if battle.get_terrain_at_grid(nx, nz) == 2:
+					return Vector2i(nx, nz)
+	return Vector2i(-1, -1)
+
 func _manage_shipyards():
 	var shipyards = []
 	for e in battle.entities.get_children():
@@ -3932,16 +4009,19 @@ func _process_line_5():
 				if e.entity_id == 13: warships += 1
 				elif e.entity_id == 39: gunboats += 1
 				elif e.entity_id == 14: fishermen += 1
-		while warships < 2 and total_warships < army_target and can_afford(13) and _can_train_unit():
-			if not produce_unit(13):
-				break
-			warships += 1
-			total_warships += 1
-		while gunboats < 2 and total_gunboats < army_target and can_afford(39) and _can_train_unit():
-			if not produce_unit(39):
-				break
-			gunboats += 1
-			total_gunboats += 1
+		# 只有军事水域才造战船；油田小水塘只保留采集船，避免白耗木头/金币。
+		var military_water: bool = _shipyard_has_military_water(sy)
+		if military_water:
+			while warships < 2 and total_warships < army_target and can_afford(13) and _can_train_unit():
+				if not produce_unit(13):
+					break
+				warships += 1
+				total_warships += 1
+			while gunboats < 2 and total_gunboats < army_target and can_afford(39) and _can_train_unit():
+				if not produce_unit(39):
+					break
+				gunboats += 1
+				total_gunboats += 1
 		# 每个船坞至少保证 1 艘采集船，直接在该船坞排队，避免被别的船坞抢走产能
 		# 重装武器厂科技期间油需求很大，每个船坞临时补到 2 艘采集船
 		var fisher_target = 1
