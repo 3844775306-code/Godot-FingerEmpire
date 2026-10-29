@@ -2762,14 +2762,35 @@ func _has_nearby_terrain(x, y, terr_type, radius, size) -> bool:
 				if terrain_grid[nx][ny] == terr_type: return true
 	return false
 
+# 兼容模式（手机 / 部分网页 GPU）不跑自定义地表着色器，改用标准材质 + 噪声法线，
+# 仍保留 exe 那种细微的明暗起伏，而不是一张完全平整的贴图。
+func _make_standard_ground_material() -> StandardMaterial3D:
+	var mat := StandardMaterial3D.new()
+	mat.albedo_texture = terrain_texture
+	mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
+	mat.roughness = 1.0
+	mat.metallic = 0.0
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
+	var noise := FastNoiseLite.new()
+	noise.noise_type = FastNoiseLite.TYPE_SIMPLEX_SMOOTH
+	noise.frequency = 0.045
+	var normal_tex := NoiseTexture2D.new()
+	normal_tex.width = 256
+	normal_tex.height = 256
+	normal_tex.seamless = true
+	normal_tex.as_normal_map = true
+	normal_tex.noise = noise
+	mat.normal_enabled = true
+	mat.normal_texture = normal_tex
+	mat.normal_scale = 0.55
+	return mat
+
 func _create_visual_and_texture():
 	var size: int = _get_map_size()
 	# 细分到每格 4 段（移动端 3 段）：顶点越密，山坡轮廓越顺，不会被切成大三角面
-	# 移动端/触屏 Web 同时走更保守的地表材质（见下方 ground_mat 分支）
-	# Web 端（尤其手机浏览器）的运行时贴图 + 自定义 spatial 着色器在部分
-	# GLES3/WebGL 驱动上会整块采样失败，表现就是地面消失、只剩主城等模型。
-	# 这里让整个 Web 端都走标准材质，优先保证地形可见。
-	var mobile := InputSource.is_mobile_platform() or InputSource.use_mobile_ui() or OS.has_feature("web")
+	# 触屏设备走更保守的细分与标准材质；桌面浏览器仍用 4 段细分，
+	# 避免网页端地面法线细节明显弱于 exe。
+	var mobile := InputSource.is_mobile_platform() or InputSource.use_mobile_ui()
 	var n: int = maxi(80, int(round(float(size) * (3.0 if mobile else 4.0))))
 	var half: float = float(size) * 0.5
 	var step: float = float(size) / float(n)
@@ -2850,13 +2871,7 @@ func _create_visual_and_texture():
 	# 标准材质牺牲一点法线细节，换取地面在所有移动端稳定可见。
 	var ground_mat: Material = null
 	if mobile:
-		var smat = StandardMaterial3D.new()
-		smat.albedo_texture = terrain_texture
-		smat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
-		smat.roughness = 1.0
-		smat.metallic = 0.0
-		smat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
-		ground_mat = smat
+		ground_mat = _make_standard_ground_material()
 	else:
 		var terrain_shader = load("res://resources/terrain_noise.gdshader")
 		if terrain_shader:
@@ -2866,11 +2881,7 @@ func _create_visual_and_texture():
 			_terrain_mat = tmat
 			ground_mat = tmat
 		else:
-			var mat = StandardMaterial3D.new()
-			mat.albedo_texture = terrain_texture
-			mat.texture_filter = BaseMaterial3D.TEXTURE_FILTER_LINEAR
-			mat.shading_mode = BaseMaterial3D.SHADING_MODE_PER_PIXEL
-			ground_mat = mat
+			ground_mat = _make_standard_ground_material()
 
 	var cliff_mat: Material = null
 	var cliff_shader = load("res://resources/terrain_cliff.gdshader")
