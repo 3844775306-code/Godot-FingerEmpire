@@ -42,9 +42,12 @@ func _build(entity_id: int, body_radius: float) -> void:
 	var color: Color = color_for(entity_id)
 	# 环半径比原来的 1.25~1.75 倍大一截：俯视角下原来那圈只有 0.5 米，
 	# 旁边站两个人就完全看不见了。
-	_ring_outer = _make_ring(body_radius * 2.60, body_radius * 3.05, color, 0.55, 0.07)
+	# 地形有起伏，法阵不能再贴着 y=0.07 放：之前半个圆环埋进地表，看起来像陷进土里。
+	# 按体型抬高到约脚踝高度，并让内环略高于外环，双层结构在俯视角下仍然清楚。
+	var ring_lift: float = maxf(0.26, body_radius * 0.55)
+	_ring_outer = _make_ring(body_radius * 2.60, body_radius * 3.05, color, 0.55, ring_lift)
 	add_child(_ring_outer)
-	_ring_inner = _make_ring(body_radius * 1.50, body_radius * 1.86, color, 0.75, 0.11)
+	_ring_inner = _make_ring(body_radius * 1.50, body_radius * 1.86, color, 0.75, ring_lift + 0.07)
 	add_child(_ring_inner)
 
 	_base_height = maxf(1.45, body_radius * 3.2)

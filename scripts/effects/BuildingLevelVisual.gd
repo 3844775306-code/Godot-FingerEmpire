@@ -9,6 +9,9 @@ extends RefCounted
 # - 城墙、桥、梯子、墙顶炮台不挂装饰，否则每段墙都插旗会很乱，也会干扰拼接；
 # - 升级时整组重建，节点名固定，方便服务端和客户端反复刷新。
 
+const WindmillAnimatorScript = preload("res://scripts/effects/WindmillAnimator.gd")
+const FlagFlutterScript = preload("res://scripts/effects/FlagFlutter.gd")
+
 const NODE_NAME := "LevelVisual"
 # 城墙(27)、墙顶炮台(64)、桥(7)、梯子(8)：构件太多或与地形拼接，不显示等级装饰。
 const EXCLUDE_IDS := [7, 8, 27, 64]
@@ -60,6 +63,13 @@ static func apply(building: Node3D, level: int, fallback_radius: float = 0.0, te
 	if old != null:
 		building.remove_child(old)
 		old.queue_free()
+
+	# 仓库（22）的 unit-mill 模型带一个 rotate-x 叶片节点，挂上持续旋转的纯视觉动画。
+	# 放在等级外观刷新里，服务端、联机客户端和建造完成后的重建都会走到这里。
+	if eid == 22:
+		var mill_model = building.get_meta("_model_instance", null)
+		if mill_model is Node3D:
+			WindmillAnimatorScript.attach(mill_model as Node3D)
 
 	var bounds := _visual_bounds(building)
 	var radius := fallback_radius
@@ -191,6 +201,7 @@ static func _add_flags(root: Node3D, radius: float, top: float, team_color: Colo
 		pole_pivot.add_child(pole)
 
 		var cloth := MeshInstance3D.new()
+		cloth.name = "FlagCloth"
 		var cloth_mesh := QuadMesh.new()
 		cloth_mesh.size = FLAG_CLOTH_SIZE
 		cloth_mesh.orientation = PlaneMesh.FACE_Z
@@ -200,6 +211,10 @@ static func _add_flags(root: Node3D, radius: float, top: float, team_color: Colo
 		cloth.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_ON
 		pole_pivot.add_child(cloth)
 
+	# 所有等级旗共用一个飘动控制器：旗面 billboard 只靠旋转看不出风，
+	# 这里额外做杆头摆动和布面横向伸缩。
+	root.add_child(FlagFlutterScript.create())
+
 # 建筑倒塌时让每根旗杆朝建筑外侧倒伏。杆脚位置不动，只旋转杆身枢轴；
 # 延迟逐根增加，避免所有旗帜像一块板一样同时拍下去。
 static func play_collapse(building: Node3D, duration: float) -> void:
@@ -208,6 +223,11 @@ static func play_collapse(building: Node3D, duration: float) -> void:
 	var level_root := building.get_node_or_null(NODE_NAME) as Node3D
 	if level_root == null:
 		return
+	# 倒塌 tween 会直接写 pivot.rotation；先停掉随风摆动，避免两套动画抢同一个属性。
+	var flutter := level_root.get_node_or_null(FlagFlutterScript.NODE_NAME)
+	if flutter != null:
+		level_root.remove_child(flutter)
+		flutter.queue_free()
 	var fall_time := maxf(duration, 0.2) * 0.72
 	var flag_index := 0
 	for child in level_root.get_children():

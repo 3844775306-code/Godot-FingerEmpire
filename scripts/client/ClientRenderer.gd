@@ -1551,6 +1551,9 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 		# 船只：划艇摆桨、有帆的船按风向转帆（纯视觉，客户端自己跑）
 		if int(info.get("entity_id", 0)) in SHIP_ANIM_IDS:
 			_attach_ship_sail_animator(loaded_model)
+		# 仓库风车：模型里的 rotate-x 叶片持续旋转（等级外观刷新时也会兜底挂一次）
+		if int(info.get("entity_id", 0)) == 22:
+			WindmillAnimator.attach(loaded_model)
 		# 石油：冒黑烟 + 脚下油渍
 		if int(info.get("entity_id", 0)) == OIL_RESOURCE_ID:
 			_attach_oil_smoke(loaded_model, float(info.get("body_radius", 0.6)))
@@ -1641,6 +1644,9 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 	# 僧侣/长老/宗师同理：双层法阵 + 头顶职业符号，客户端与服务端共用 CasterMarker
 	if CasterMarker.is_caster(eid):
 		entity.add_child(CasterMarker.create(eid, float(info.get("body_radius", 0.4))))
+	# 商人：青色脚环 + 头顶金色铜钱，和农民/官员/法师都能一眼分开
+	if MerchantMarker.is_merchant(eid):
+		entity.add_child(MerchantMarker.create(float(info.get("body_radius", 0.4))))
 	# 动物：脚下接触阴影，把模型压在地面上（鱼不需要）
 	if RTSConfig.is_animal(eid) and eid != 63:
 		var animal_model: Node3D = null

@@ -8,7 +8,7 @@ extends Node3D
 # 两者都只是视觉，不参与任何战斗或移动逻辑。
 
 # ==================== 桨 ====================
-const ROW_SPEED: float = 5.2        # 划桨角速度（弧度/秒）
+const ROW_SPEED: float = 8.0        # 划桨角速度（弧度/秒）；采集船划桨更密，读作“在努力划水”
 const ROW_AMPLITUDE: float = 0.30   # 绕船体纵轴的摆幅（弧度）
 const ROW_PITCH: float = 0.12       # 绕横轴的附加俯仰，让桨看起来是插进水里划
 const ROW_BOB: float = 0.030        # 桨架的轻微上下起伏
