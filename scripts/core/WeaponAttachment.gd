@@ -49,6 +49,83 @@ static func attach(entity: Node3D, entity_id: int, _body_radius: float) -> void:
 		_attach_weapon(entity, skeleton, SHIELD_PATH, shield_bone,
 				Vector3(shield_side * SHIELD_REACH, 0.0, 0.04), Vector3.ZERO, 1.0, Vector3.ZERO)
 
+# 弹丸发射点：弓箭用弓的位置，炮弹/石头按模型朝目标一侧的上沿出手，
+# 避免所有远程单位都从身体正上方/头顶发射。
+static func projectile_origin(source: Node3D, entity_id: int, target_pos: Vector3) -> Vector3:
+	if source == null or not is_instance_valid(source):
+		return target_pos
+	var dir := target_pos - source.global_position
+	dir.y = 0.0
+	if dir.length_squared() < 0.0001:
+		dir = -source.global_transform.basis.z
+	else:
+		dir = dir.normalized()
+	if entity_id in BOW_IDS:
+		var bow := source.find_child("WeaponBone_arm_left", true, false)
+		if bow is Node3D and bow.get_child_count() > 0:
+			var weapon := bow.get_child(0) as Node3D
+			# 刚生成的那一帧骨骼姿态可能还没刷新，弓还在原点；此时走模型包围盒兜底。
+			if weapon != null and weapon.global_position.distance_to(source.global_position) > 0.05:
+				# 箭从弓身前方一点出，既贴着弓又不从手心里钻出来。
+				return weapon.global_position + dir * 0.20 + Vector3.UP * 0.04
+	var model := _find_entity_model(source)
+	if model != null:
+		var box := _model_local_aabb(model)
+		if box.size.length_squared() > 0.0001:
+			var center := box.get_center()
+			var local_target := model.to_local(target_pos)
+			var flat := Vector3(local_target.x - center.x, 0.0, local_target.z - center.z)
+			var point := center
+			if flat.length_squared() > 0.0001:
+				flat = flat.normalized()
+				var half := box.size * 0.5
+				var tx: float = half.x / maxf(absf(flat.x), 0.0001)
+				var tz: float = half.z / maxf(absf(flat.z), 0.0001)
+				point += flat * minf(tx, tz)
+				point += flat * 0.04
+			# 石头从投石臂顶端出；塔楼箭从塔身上部出；炮弹从炮口高度出。
+			var ratio: float = 0.90
+			if entity_id not in [17, 59]:
+				ratio = 0.80 if entity_id in [20, 25, 26, 53] else 0.62
+			point.y = lerpf(box.position.y, box.end.y, ratio)
+			return model.to_global(point)
+	var body_r: float = 0.5
+	var br_value = source.get("body_radius")
+	if br_value != null:
+		body_r = float(br_value)
+	var rise: float = body_r * (4.0 if entity_id in [17, 59] else 3.0)
+	return source.global_position + Vector3.UP * rise + dir * body_r * 0.6
+
+static func _find_entity_model(node: Node) -> Node3D:
+	if node.has_meta("_model_instance"):
+		var cached = node.get_meta("_model_instance")
+		if cached is Node3D and is_instance_valid(cached):
+			return cached as Node3D
+	if node.has_meta("entity_model") and node is Node3D:
+		return node as Node3D
+	for child in node.get_children():
+		var found := _find_entity_model(child)
+		if found != null:
+			return found
+	return null
+
+static func _model_local_aabb(model: Node3D) -> AABB:
+	var acc := [null]
+	_merge_world_mesh_aabb(model, acc)
+	if acc[0] == null:
+		return AABB()
+	return model.global_transform.affine_inverse() * (acc[0] as AABB)
+
+static func _merge_world_mesh_aabb(node: Node, acc: Array) -> void:
+	if node is MeshInstance3D and node.mesh != null:
+		var box: AABB = node.global_transform * node.get_aabb()
+		if acc[0] == null:
+			acc[0] = box
+		else:
+			acc[0] = (acc[0] as AABB).merge(box)
+	for child in node.get_children():
+		_merge_world_mesh_aabb(child, acc)
+
 static func _find_skeleton(node: Node) -> Skeleton3D:
 	if node is Skeleton3D:
 		return node as Skeleton3D

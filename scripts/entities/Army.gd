@@ -3727,7 +3727,8 @@ func _attack(target, delta):
 			var perpendicular = Vector3(spawn_dir.z, 0, -spawn_dir.x)
 			var offset = perpendicular * sin(angle_offset) * 0.3
 			# acquire_bullet 已把弹丸挂到 BattleManager 下，这里只设置入树后的全局坐标
-			bullet.global_position = global_position + Vector3(0, body_radius * RTSConfig.get_model_scale(entity_id) * 2.5, 0) + offset
+			# 出手点跟随武器/模型朝目标一侧，不再统一从头顶生成。
+			bullet.global_position = WeaponAttachment.projectile_origin(self, entity_id, target.global_position) + offset
 	else:
 		var _dmg_m = attack
 		# 农民对动物伤害+900%

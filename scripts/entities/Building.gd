@@ -264,8 +264,8 @@ func _attack(target, delta):
 		bullet.source = self
 		bullet.damage_radius = damage_radius
 		bullet.splash_damage_mult = splash_damage_mult
-		# 模型乘了 ENTITY_MODEL_SCALE，出手高度也要按放大后的实际尺寸算
-		bullet.global_position = global_position + Vector3(0, body_radius * RTSConfig.get_model_scale(entity_id) * 1.5, 0)
+		# 从模型朝目标一侧的上沿出手：箭塔射箭、炮塔/城墙炮台打炮都不再从建筑中心冒出。
+		bullet.global_position = WeaponAttachment.projectile_origin(self, entity_id, target.global_position)
 		# B7 三矢齐发：主城/城堡一次攻击连射 3 支，每支 100% 伤害。
 		var extra_shots: int = maxi(0, volley_count - 1) if entity_id in [20, 53] else 0
 		for _i in range(extra_shots):
