@@ -70,6 +70,7 @@ var heavy_work_index: int = 0            # 轮转索引，每帧只做一个重�
 var first_fog_done: bool = false          # 首帧标志，确保初始化立即执行所有任务
 var fog_cycle_active: bool = false        # 增量迷雾计算进行中
 var fog_units_queue: Array = []           # 待处理的单位队列
+var fog_pending_visible: Array = []       # 本轮新可见格，算完再整体替换，避免中途敌人消失
 var fog_batch_size: int = 10              # 每帧处理的单位数量（翻倍加速迷雾）
 
 var last_snapshot_time = 0
@@ -716,7 +717,12 @@ func _process_snapshot(data: Dictionary):
 					node.look_at(new_pos + dir, up)
 			node.set_meta("prev_pos", new_pos)
 			node.global_position = new_pos
-			node.visible = true
+			# 服务端已按队伍视野裁剪；客户端再兜底一次，旧服务端也不会让
+			# 敌方箭矢/炮弹漏过迷雾。
+			var viewer_team: int = my_team if my_team != -1 else player_team
+			node.visible = viewer_team == -1 \
+				or int(b.get("team", -1)) == viewer_team \
+				or is_in_player_vision(new_pos)
 
 		for id in entity_nodes.keys():
 			var n = entity_nodes[id]
@@ -1781,6 +1787,9 @@ func on_map_size_changed():
 func _init_fog_grids():
 	local_explored_grid.clear()
 	local_visible_grid.clear()
+	fog_pending_visible.clear()
+	fog_units_queue.clear()
+	fog_cycle_active = false
 	for x in range(RTSConfig.MAP_SIZE):
 		var exp_col = []
 		var vis_col = []
@@ -1816,15 +1825,19 @@ func _start_fog_cycle():
 		if belongs:
 			fog_units_queue.append(node)
 
-	# 清除本帧可见性（一次性操作）
+	# 本轮先写入待替换网格，算完再整体生效；不要先清空 local_visible_grid，
+	# 否则重算期间敌方单位和血条会周期性消失。
+	fog_pending_visible.clear()
 	var false_row = []
 	false_row.resize(RTSConfig.MAP_SIZE)
 	false_row.fill(false)
 	for x in range(RTSConfig.MAP_SIZE):
-		local_visible_grid[x] = false_row.duplicate()
+		fog_pending_visible.append(false_row.duplicate())
 
 	if fog_units_queue.is_empty():
 		# 没有己方单位，直接完成
+		local_visible_grid = fog_pending_visible
+		fog_pending_visible = []
 		var map = get_node_or_null("Map")
 		if map and map.has_method("apply_fog") and not map.base_colors.is_empty():
 			map.apply_fog(local_explored_grid, local_visible_grid)
@@ -1844,8 +1857,9 @@ func _process_fog_batch() -> bool:
 		var info = node.get_meta("snapshot_info")
 		if not info:
 			continue
-		var gx = int(info["x"] + RTSConfig.MAP_SIZE / 2)
-		var gz = int(info["z"] + RTSConfig.MAP_SIZE / 2)
+		var cell := VisionSystem.world_to_grid(Vector3(float(info["x"]), 0.0, float(info["z"])))
+		var gx: int = cell.x
+		var gz: int = cell.y
 		var vision = _effective_vision(info)
 		var map = get_node_or_null("Map")
 		if map != null and map.has_method("get_height_at_grid"):
@@ -1853,7 +1867,7 @@ func _process_fog_batch() -> bool:
 			for idx in cells:
 				var nx: int = int(idx / RTSConfig.MAP_SIZE)
 				var nz: int = idx % RTSConfig.MAP_SIZE
-				local_visible_grid[nx][nz] = true
+				fog_pending_visible[nx][nz] = true
 				local_explored_grid[nx][nz] = true
 		else:
 			# 地形还没加载时退回圆形，等下一轮迷雾再按视线重算。
@@ -1863,13 +1877,16 @@ func _process_fog_batch() -> bool:
 					var nx = gx + dx
 					var nz = gz + dz
 					if nx >= 0 and nx < RTSConfig.MAP_SIZE and nz >= 0 and nz < RTSConfig.MAP_SIZE:
-						local_visible_grid[nx][nz] = true
+						fog_pending_visible[nx][nz] = true
 						local_explored_grid[nx][nz] = true
 		processed += 1
 
 	if fog_units_queue.size() == 0:
-		# 全部完成，应用到地面纹理
+		# 全部完成：一次性切换到本轮新网格，再应用到地面纹理
 		fog_cycle_active = false
+		if fog_pending_visible.size() == local_visible_grid.size():
+			local_visible_grid = fog_pending_visible
+		fog_pending_visible = []
 		var map = get_node_or_null("Map")
 		if map and map.has_method("apply_fog") and not map.base_colors.is_empty():
 			map.apply_fog(local_explored_grid, local_visible_grid)
@@ -2128,15 +2145,15 @@ func _should_entity_be_visible(ent: Dictionary) -> bool:
 	if ent["team"] == player_team:
 		return true
 	if ent["team"] == RTSConfig.Team.NEUTRAL:
-		var gx = int(ent["x"] + RTSConfig.MAP_SIZE/2)
-		var gz = int(ent["z"] + RTSConfig.MAP_SIZE/2)
-		if gx<0 or gx>=RTSConfig.MAP_SIZE or gz<0 or gz>=RTSConfig.MAP_SIZE: return false
-		return local_explored_grid[gx][gz]
+		var cell := VisionSystem.world_to_grid(Vector3(float(ent["x"]), 0.0, float(ent["z"])))
+		if local_explored_grid.size() <= cell.x or local_explored_grid[cell.x].size() <= cell.y:
+			return false
+		return local_explored_grid[cell.x][cell.y]
 	# 敌方单位
-	var gx = int(ent["x"] + RTSConfig.MAP_SIZE/2)
-	var gz = int(ent["z"] + RTSConfig.MAP_SIZE/2)
-	if gx<0 or gx>=RTSConfig.MAP_SIZE or gz<0 or gz>=RTSConfig.MAP_SIZE: return false
-	return local_visible_grid[gx][gz]
+	var cell := VisionSystem.world_to_grid(Vector3(float(ent["x"]), 0.0, float(ent["z"])))
+	if local_visible_grid.size() <= cell.x or local_visible_grid[cell.x].size() <= cell.y:
+		return false
+	return local_visible_grid[cell.x][cell.y]
 
 func _get_valid_entities() -> Array:
 	var arr = []
@@ -2764,7 +2781,8 @@ func _process(delta):
 
 	# 5. 启动新迷雾周期
 	if fog_timer <= 0 and not fog_cycle_active:
-		fog_timer = 2.0
+		# 和主机 0.5 秒的迷雾刷新同频；旧值 2 秒会让客户端视野明显慢半拍。
+		fog_timer = 0.5
 		_start_fog_cycle()
 
 	# 6. Periodic stale entity cleanup (every 30s)

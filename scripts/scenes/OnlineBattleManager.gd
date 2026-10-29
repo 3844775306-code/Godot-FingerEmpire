@@ -1879,11 +1879,19 @@ func broadcast_snapshot():
 	var _elapsed_snap = (Time.get_ticks_usec() - _pt) / 1000.0
 	if _elapsed_snap > 5.0: print("[Profile-Snap] %.1fms" % _elapsed_snap)
 
-# Build bullet data once — reused by all players
-func _build_bullets_data() -> Array:
+# Build bullet data for one receiver. Enemy projectiles are only sent when
+# their position is inside that team's visibility mask.
+func _build_bullets_data(vis_mask: PackedByteArray = PackedByteArray(), team: int = -1) -> Array:
 	var bullets_data = []
+	var ms: int = RTSConfig.MAP_SIZE
+	var has_mask: bool = vis_mask.size() >= ms * ms
 	for bullet in _bullet_cache:
 		if is_instance_valid(bullet) and bullet.visible and not bullet.hit:
+			if has_mask and int(bullet.team) != team:
+				var g = world_to_grid(bullet.global_position)
+				var idx: int = g.x * ms + g.y
+				if idx < 0 or idx >= vis_mask.size() or vis_mask[idx] == 0:
+					continue
 			# entity_id 供客户端判断弹丸模型（箭/炮弹/巨石），damage_radius 区分范围弹
 			bullets_data.append({
 				"id": bullet.get_instance_id(),
@@ -2017,6 +2025,8 @@ func build_snapshot_for_team(team: int) -> Dictionary:
 		r["research"] = _serialize_research(_research_owner_for_team(team), team)
 	# 警报兜底：连续多帧携带最近警报，客户端按 id 去重；RPC 主通道丢包也能补上。
 	r["alerts"] = _alerts_for_team(team)
+	# 弹丸也按接收者视野裁剪，避免隔着迷雾看到敌方箭矢/炮弹。
+	r["bullets"] = _build_bullets_data(vis_mask, team)
 	return r
 
 func _serialize_research(owner_peer_id: int, team: int) -> Dictionary:
@@ -2034,14 +2044,11 @@ func _serialize_research(owner_peer_id: int, team: int) -> Dictionary:
 	}
 
 func _broadcast_1v1():
-	# Collect bullet data ONCE (reused for all players)
-	var bullets_data = _build_bullets_data()
 	for pid in player_teams.keys():
 		if int(pid) == 1: continue  # 主机自己就是服务器，不能把快照 RPC 发给自己
 		var team = player_teams[pid]
 		var _pt_build = Time.get_ticks_usec()
 		var data = build_snapshot_for_team(team)
-		data["bullets"] = bullets_data
 		data["seq"] = snapshot_seq
 		snapshot_seq += 1
 		NetworkManager._client_receive_snapshot.rpc_id(pid, data)
@@ -2293,14 +2300,11 @@ func _serialize_castles() -> Dictionary:
 	return dict
 
 func _broadcast_2v2():
-	# Collect bullet data ONCE (reused for all players)
-	var bullets_data = _build_bullets_data()
 	for pid in player_info.keys():
 		if int(pid) == 1: continue  # 主机自己就是服务器，不能把快照 RPC 发给自己
 		if player_info[pid].get("is_ai", false): continue  # 跳过 AI，无客户端
 		var _pt_build = Time.get_ticks_usec()
 		var data = build_snapshot_for_player(pid)
-		data["bullets"] = bullets_data
 		data["seq"] = snapshot_seq
 		
 		snapshot_seq += 1
@@ -2415,6 +2419,8 @@ func build_snapshot_for_player(peer_id: int) -> Dictionary:
 	result["player_castles"] = _serialize_castles()
 	# 警报兜底：组队模式 RPC 的 peer→team 映射历史上不可靠，快照多帧重发保证送达。
 	result["alerts"] = _alerts_for_team(team)
+	# 弹丸也按接收者视野裁剪，避免隔着迷雾看到敌方箭矢/炮弹。
+	result["bullets"] = _build_bullets_data(vis_mask, team)
 
 	# Granular profiling: only print when total > 2.5ms
 	var _t_total = (Time.get_ticks_usec() - _t0) / 1000.0
