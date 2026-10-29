@@ -5435,8 +5435,17 @@ func _set_physics_rate_low(low: bool) -> void:
 	# 实测快速模式 5 分钟 700 实体时实体物理占单帧 50ms+，30/20Hz 下每帧要补 2~3 步。
 	# 低于 20FPS 时把模拟降到 15Hz，14FPS 只需补 1 步，物理开销近似减半；
 	# 帧率恢复后自动回到 30Hz。15Hz 对 RTS 的指令响应仍然可接受，优先保证画面不卡死。
+	# 迟滞：已经降档后要等帧率明显恢复（>30FPS）才升回 30Hz；还没降档时要跌破
+	# 18FPS 才降。旧的单阈值（20FPS）会让帧率刚好在 20 附近抖动时每 2 秒在
+	# 15/30Hz 之间来回切一次，切换本身就会让那一帧补跑步数突变，表现为
+	# “每隔一段时间顿一下”。
 	var fps: float = Engine.get_frames_per_second()
-	var want_hz: int = 15 if (low and (fps < 20.0 or _physics_entity_heavy)) else 30
+	var want_hz: int = 30
+	if low:
+		if Engine.physics_ticks_per_second <= 15:
+			want_hz = 15 if (not _physics_entity_heavy and fps < 30.0) else 30
+		else:
+			want_hz = 15 if (_physics_entity_heavy or fps < 18.0) else 30
 	# 最多补 4 步：20Hz 下足以支撑到 5FPS，30Hz 下足以支撑到 7.5FPS；
 	# 更极端的掉帧宁可让游戏稍微慢一点，也不制造更长的卡顿尖峰。
 	# 每帧最多补 2 步：尖峰帧少跑一步，宁可游戏时间稍微落后，也避免越卡越补步的抖动

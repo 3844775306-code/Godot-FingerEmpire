@@ -775,6 +775,9 @@ func _is_corner_side_blocked(bm: RTSBattleManager, tile: Vector2i, wall_cache: D
 
 # ==================== Collision separation ====================
 
+# 每个物理步最多处理多少个邻居单位（见 apply_collision 注释）。
+const MAX_SEPARATION_CHECKS: int = 12
+
 func apply_collision(delta):
 	blocking_building = null
 	# 墙顶空间很小，守墙单位之间不能再按地面半径互相推挤，否则会被推下墙格。
@@ -792,10 +795,16 @@ func apply_collision(delta):
 		buildings_nearby = bm.get_nearby_buildings(_army.global_position, _army.body_radius + 5.0)
 	else:
 		buildings_nearby = bm._buildings
+	# 密集混战时一小片区域能有 30~40 个单位同时在推挤半径内，逐个推挤会让
+	# 该物理步的实体开销爆炸（实测 600 实体攻城时单步 30~50ms）。分离只负责
+	# 视觉上去重叠，每步处理最近的 12 个足够，剩下的下一步再处理。
+	var _checks: int = 0
 	for entity in entities_nearby:
 		if entity == _army or not is_instance_valid(entity): continue
 		if not (entity is GameEntity) or entity.health <= 0: continue
 		if entity is Building or entity is WorldResource: continue
+		if _checks >= MAX_SEPARATION_CHECKS: break
+		_checks += 1
 		_separate_from(entity, delta, bm)
 	for entity in buildings_nearby:
 		if entity == _army or not is_instance_valid(entity): continue
@@ -825,6 +834,13 @@ func _can_push_to(pos: Vector3, bm: RTSBattleManager) -> bool:
 		return true
 	var g: Vector2i = bm.world_to_grid(pos)
 	_ensure_current_team_static_caches(bm)
+	# 快速通道：绝大多数分离位移只有几厘米，落点和当前格完全相同；只要当前格
+	# 是普通平地且不在墙/建筑占格里，就不可能越过任何地形边界，直接放行。
+	# 密集人群里每个单位每步要调用十几次这里，省下的网格/悬崖查询很可观。
+	if g == bm.world_to_grid(_army.global_position) \
+			and not _wall_set.has(g) and not _footprint_set.has(g) \
+			and not _bridge_set.has(g) and bm.get_terrain_at_grid(g.x, g.y) == 0:
+		return true
 	# 推挤/分离也不能把单位挤进敌方城墙或建筑；梯子格放行。
 	if (_wall_set.has(g) or _footprint_set.has(g)) and not _ladder_set.has(g):
 		return false
