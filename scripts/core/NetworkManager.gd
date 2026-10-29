@@ -420,7 +420,13 @@ func start_game():
 		SteamManager.set_lobby_data("game_status", "starting")
 	for peer_id in multiplayer.get_peers():
 		rpc_id(peer_id, "_load_battle_scene", GameSettings.progression_mode)
-	LoadingScreen.goto_scene("res://scenes/rts_battle_online_server.tscn")
+	# 房主也停在加载界面，等所有客户端把战斗场景加载完再一起进场。
+	var gate := func() -> bool:
+		for pid in multiplayer.get_peers():
+			if not _scene_ready_peers.has(pid):
+				return false
+		return true
+	LoadingScreen.goto_scene_when("res://scenes/rts_battle_online_server.tscn", gate, 12.0)
 	return ""  # 成功
 
 @rpc("any_peer", "call_remote", "reliable")

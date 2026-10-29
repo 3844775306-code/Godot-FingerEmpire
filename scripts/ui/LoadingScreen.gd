@@ -41,8 +41,21 @@ const TIPS: Array[String] = [
 ]
 
 static var target_scene: String = "res://scenes/rts_battle.tscn"
+static var _wait_gate: Callable = Callable()
+static var _wait_timeout: float = 0.0
 
 static func goto_scene(path: String) -> void:
+	_wait_gate = Callable()
+	_wait_timeout = 0.0
+	_start(path)
+
+# 等 gate 返回 true 后再切场景；超时兜底，避免联机时房主被卡死在加载界面。
+static func goto_scene_when(path: String, gate: Callable, timeout: float = 12.0) -> void:
+	_start(path)
+	_wait_gate = gate
+	_wait_timeout = timeout
+
+static func _start(path: String) -> void:
 	target_scene = path
 	var tree := Engine.get_main_loop() as SceneTree
 	if tree == null:
@@ -57,6 +70,8 @@ var _tip_timer: float = 0.0
 var _bg_timer: float = 0.0
 var _tip_index: int = 0
 var _bg_index: int = 0
+var _fallback: bool = false
+var _shown_frames: int = 0
 
 func _ready() -> void:
 	process_mode = Node.PROCESS_MODE_ALWAYS
@@ -71,19 +86,23 @@ func _ready() -> void:
 	_tip_timer = 4.0
 	_bg_timer = 5.0
 	if ResourceLoader.load_threaded_request(target_scene) != OK:
-		get_tree().change_scene_to_file(target_scene)
-		set_process(false)
+		# 客户端场景偶尔无法走线程加载；仍保留最短展示时间，避免直接黑屏跳场景。
+		_fallback = true
 
 func _apply_background() -> void:
 	_bg.texture = BACKGROUNDS[_bg_index]
 	_bg.modulate = Color(0.72, 0.72, 0.75, 1.0)
 
 func _process(delta: float) -> void:
+	_shown_frames += 1
 	_elapsed += delta
 	var progress: Array = []
-	var status := ResourceLoader.load_threaded_get_status(target_scene, progress)
+	var status := ResourceLoader.THREAD_LOAD_FAILED if _fallback else ResourceLoader.load_threaded_get_status(target_scene, progress)
 	_progress.value = clampf(float(progress[0]) if progress.size() > 0 else 0.0, 0.0, 1.0) * 100.0
-	if status == ResourceLoader.THREAD_LOAD_LOADED and _elapsed >= MIN_SHOW_TIME:
+	var can_enter := true
+	if _wait_gate.is_valid() and _elapsed < _wait_timeout:
+		can_enter = bool(_wait_gate.call())
+	if status == ResourceLoader.THREAD_LOAD_LOADED and _elapsed >= MIN_SHOW_TIME and _shown_frames >= 2 and can_enter:
 		var packed := ResourceLoader.load_threaded_get(target_scene) as PackedScene
 		if packed:
 			get_tree().change_scene_to_packed(packed)
@@ -91,7 +110,7 @@ func _process(delta: float) -> void:
 			get_tree().change_scene_to_file(target_scene)
 		set_process(false)
 		return
-	if status == ResourceLoader.THREAD_LOAD_FAILED or status == ResourceLoader.THREAD_LOAD_INVALID_RESOURCE:
+	if (status == ResourceLoader.THREAD_LOAD_FAILED or status == ResourceLoader.THREAD_LOAD_INVALID_RESOURCE) and _elapsed >= MIN_SHOW_TIME and _shown_frames >= 2:
 		get_tree().change_scene_to_file(target_scene)
 		set_process(false)
 		return
