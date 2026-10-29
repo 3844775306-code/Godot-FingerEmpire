@@ -36,6 +36,8 @@ const DOUBLE_CLICK_THRESHOLD = 0.3
 
 # 引用客户端渲染器
 var renderer: ClientRenderer = null
+# 选中陆军的目标 ❌：联机客户端没有 SelectionManager，单独维护一个标记管理器。
+var _target_markers: TargetMarkerManager = null
 
 # 队伍（从渲染器获取）
 var player_team: int:
@@ -1007,6 +1009,7 @@ func _process(_delta):
 	# 每帧更新选择环位置（跟随目标）；范围圈挂在实体节点下自己跟随，这里只做失效清理
 	if selection_rings.size() > 0 or range_rings.size() > 0:
 		_process_selection_rings()
+	_update_target_markers()
 	_selection_cleanup_timer -= _delta
 	if _selection_cleanup_timer <= 0.0:
 		_selection_cleanup_timer = 0.25
@@ -1020,6 +1023,59 @@ func _process(_delta):
 
 func get_last_world_pos() -> Vector3:
 	return last_world_pos
+
+# 联机客户端：任何被选中的陆军都显示目标 ❌。
+# 服务端快照不携带“攻击目标实体”，但有 A* 路径和航点，终点就是它正在去的目标点。
+func _update_target_markers() -> void:
+	if renderer == null or not is_instance_valid(renderer):
+		return
+	if _target_markers == null or not is_instance_valid(_target_markers):
+		var host: Node = get_parent()
+		if not (host is Node3D):
+			return
+		_target_markers = TargetMarkerManager.new()
+		_target_markers.name = "TargetMarkerManager"
+		_target_markers.process_mode = Node.PROCESS_MODE_PAUSABLE
+		host.add_child(_target_markers)
+		_target_markers.setup(renderer)
+	var requests: Array = []
+	for sid in client_selected_ids:
+		var node = renderer.entity_nodes.get(sid)
+		if not (node is Node3D) or not node.has_meta("snapshot_info"):
+			continue
+		var info: Dictionary = node.get_meta("snapshot_info")
+		if int(info.get("type", -1)) != 2 or int(info.get("health", 0)) <= 0:
+			continue
+		var req: Dictionary = _client_target_marker_request(node, info)
+		if not req.is_empty():
+			requests.append(req)
+	_target_markers.refresh_requests(requests)
+
+func _client_target_marker_request(node: Node3D, info: Dictionary) -> Dictionary:
+	# 如果客户端节点本身挂着 current_target（例如本地预测/残留状态），优先跟随实体。
+	var target = node.get("current_target")
+	if target != null and is_instance_valid(target) and target is Node3D and target != node:
+		return {"follow": target}
+	var path_v = info.get("astar_path", [])
+	if path_v is Array and not path_v.is_empty():
+		var p: Vector3 = _client_path_point(path_v[path_v.size() - 1])
+		if is_finite(p.x) and p != Vector3.ZERO:
+			return {"pos": p}
+	var wps_v = info.get("waypoints", [])
+	if wps_v is Array and not wps_v.is_empty():
+		var p2: Vector3 = _client_path_point(wps_v[wps_v.size() - 1])
+		if is_finite(p2.x) and p2 != Vector3.ZERO:
+			return {"pos": p2}
+	return {}
+
+func _client_path_point(v) -> Vector3:
+	if v is Vector3:
+		return v
+	if v is Array and v.size() >= 3:
+		return Vector3(float(v[0]), float(v[1]), float(v[2]))
+	if v is Dictionary and v.has("x") and v.has("z"):
+		return Vector3(float(v["x"]), float(v.get("y", 0.0)), float(v["z"]))
+	return Vector3(INF, INF, INF)
 
 func _get_client_hud():
 	return get_tree().get_first_node_in_group("client_hud")

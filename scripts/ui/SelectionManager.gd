@@ -54,7 +54,8 @@ func _process(delta):
 			_update_info_panel()
 	_update_target_markers()
 
-# 只给自己的陆军画目标 ❌；敌方/中立选中查看时不展示作战目标。
+# 只要选中了陆军，就给它画目标 ❌：自己的、队友的、敌方的都显示。
+# 敌方单位允许查看但不能下命令，红叉只表示“它当前在打/去哪”，不代表可指挥。
 func _update_target_markers() -> void:
 	if _target_markers == null or not is_instance_valid(_target_markers):
 		var host: Node = get_parent()
@@ -68,7 +69,7 @@ func _update_target_markers() -> void:
 		_target_markers.setup(bm)
 	var requests: Array = []
 	for e in selected_entities:
-		if is_instance_valid(e) and e is Army and _is_local_owned(e):
+		if is_instance_valid(e) and e is Army:
 			var req: Dictionary = _target_marker_request(e)
 			if not req.is_empty():
 				requests.append(req)
