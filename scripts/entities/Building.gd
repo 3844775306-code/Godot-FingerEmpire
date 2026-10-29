@@ -328,6 +328,10 @@ func _finish_construction():
 	garrison_max = get_garrison_limit()
 	# Inherit global building type level - apply bonuses on top of base
 	var bm = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
+	# 梯子完工前不提供翻墙通道（见 RTSBattleManager._ensure_cache_fresh），
+	# 完工时必须让寻路缓存立刻失效，否则部队会继续按旧路径去拆墙。
+	if bm and int(entity_id) == 8 and bm.has_method("notify_ladder_ready"):
+		bm.notify_ladder_ready()
 	if bm and bm.has_method("get_building_type_level"):
 		var glv = bm.get_building_type_level(team, entity_id, owner_peer_id)
 		if glv > upgrade_level:

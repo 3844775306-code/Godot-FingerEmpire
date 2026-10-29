@@ -1106,8 +1106,10 @@ func _ensure_static_caches(bm: RTSBattleManager) -> void:
 			if e is Building and e.entity_id == 7:
 				_bridge_set[eg] = true
 				continue
-			# 梯子不阻挡通行，且使其相邻敌方城墙可通行
+			# 梯子不阻挡通行，且使其相邻敌方城墙可通行；施工中的梯子不能翻墙
 			if e is Building and e.entity_id == 8:
+				if e.build_timer > 0.0:
+					continue
 				ladder_centers.append(eg)
 				_ladder_set[eg] = true
 				for dx in range(-1, 2):
@@ -1573,7 +1575,7 @@ func _has_adjacent_ladder(bm: RTSBattleManager, wall_tile: Vector2i, my_team: in
 		for dy in range(-1, 2):
 			if dx == 0 and dy == 0: continue
 			var ladder_b = bm._ladder_entity_grid.get(Vector2i(wall_tile.x + dx, wall_tile.y + dy))
-			if ladder_b and ladder_b.health > 0 and ladder_b.team == my_team:
+			if ladder_b and ladder_b.health > 0 and ladder_b.build_timer <= 0.0 and ladder_b.team == my_team:
 				return true
 	return false
 

@@ -7,6 +7,7 @@ class_name AIController
 const AIDefenseScript = preload("res://scripts/ai/AIDefense.gd")
 const AIWaterCrossingScript = preload("res://scripts/ai/AIWaterCrossing.gd")
 const AIWallPlannerScript = preload("res://scripts/ai/AIWallPlanner.gd")
+const AILadderSiegeScript = preload("res://scripts/ai/AILadderSiege.gd")
 
 enum Phase { PRODUCTION, DEVELOPMENT, ASSAULT }
 enum LateTactic { NONE, HARASS, OVERWHELM, RAID, DEFEND }
@@ -62,6 +63,7 @@ const DEFENSE_STEP_MAX: int = 3         # 每个 think tick 至多尝试建造�
 var _defense = null                      # AIDefense 模块：威胁/防线/守军/资源区
 var _wall_planner = null                 # AIWallPlanner 模块：城墙施工顺序/墙顶炮选点
 var _water_crossing = null               # AIWaterCrossing 模块：搭桥/运载船渡水
+var _ladder_siege = null                 # AILadderSiege 模块：造梯子翻越敌方城墙
 var _harass_ids: Dictionary = {}         # 当前骚扰小队 instance_id -> true
 var _harass_until: float = -999.0        # 骚扰小队回收时间
 var _upgrade_cycle_timer: float = 20.0   # 每20秒切换
@@ -1252,7 +1254,76 @@ func _bridge_wood_reserve() -> int:
 		return 0
 	return int(bridge_cfg.get("cost", {}).get("wood", 0))
 
+# 梯子攻城专用建造入口：不能走普通建筑的“敌军 10 米内禁止落建筑”规则，
+# 因为梯子本来就要贴着敌方城墙造；改为要求附近有己方野战部队掩护，
+# 并且必须通过 RTSBattleManager 的裸露敌墙校验。
+func build_ladder(pos: Vector3) -> bool:
+	var cfg = EntityDatabase.get_config(8)
+	if not cfg:
+		return false
+	if not _ai_can_build(8):
+		return false
+	if battle.has_method("is_training_building_allowed") and not battle.is_training_building_allowed(8):
+		return false
+	# 同一波进攻最多保留两把梯子；被拆后由 AILadderSiege 冷却重试。
+	if count_building(8) >= 2:
+		return false
+	if not can_afford_building(8):
+		return false
+	if battle.has_method("is_valid_ladder_position"):
+		if not battle.is_valid_ladder_position(pos, my_team):
+			return false
+	else:
+		return false
+	# 墙边至少要有几名野战单位掩护，避免农民单独跑到敌墙下送死。
+	if _ladder_support_count(pos, 22.0) < 4:
+		return false
+	var builder = battle.find_nearest_idle_builder(my_team, my_peer_id, pos, 70.0) \
+			if battle.has_method("find_nearest_idle_builder") else null
+	if builder == null:
+		return false
+	if _water_crossing != null and not _water_crossing.can_builder_reach(builder.global_position, pos):
+		return false
+	var cost = cfg.get("cost", {})
+	if not _deduct_resources(cost):
+		return false
+	cfg["owner_peer_id"] = my_peer_id
+	var team: int = my_team
+	if my_peer_id != -1:
+		if battle is OnlineBattleManager:
+			team = battle.player_info[my_peer_id].team
+		else:
+			team = my_team
+	var b = battle.spawn_entity(cfg, team, pos) as Building
+	if b == null:
+		return false
+	b.start_construction(5.0, cfg)
+	b.set_meta("ai_ladder", true)
+	if battle.has_method("assign_builders"):
+		battle.assign_builders(b, [builder.get_instance_id()])
+	return true
+
+func _ladder_support_count(pos: Vector3, radius: float) -> int:
+	var count := 0
+	for e in _cached_armies():
+		if not is_instance_valid(e) or e.health <= 0:
+			continue
+		if not entity_belongs_to_me(e):
+			continue
+		if int(e.target_type) <= 0 or e.water_capable:
+			continue
+		if int(e.entity_id) in [10, 14, 43, 44, 45, 46, 47, 48, 49, 50, 51]:
+			continue
+		if e.has_meta("ai_wall_guard") or e.has_meta("ai_harass") or e.has_meta("ai_home_guard"):
+			continue
+		if e.global_position.distance_to(pos) <= radius:
+			count += 1
+	return count
+
 func build_building(building_id: int, pos: Vector3, facing: Vector3 = Vector3.ZERO) -> bool:
+	# 梯子有独立的贴墙校验与掩护规则，不能套普通建筑流程。
+	if building_id == 8:
+		return build_ladder(pos)
 	var cfg = EntityDatabase.get_config(building_id)
 	if not cfg: return false
 	# Check castle level requirement (matches RTSBattleManager.is_building_unlocked)
@@ -1535,6 +1606,7 @@ func _ready():
 		_create_debug_panel()
 	_defense = AIDefenseScript.new(self)
 	_water_crossing = AIWaterCrossingScript.new(self)
+	_ladder_siege = AILadderSiegeScript.new(self)
 
 func _process(delta):
 	# Set think interval based on difficulty (once) + 错开各 AI 的计时器。
@@ -1815,6 +1887,8 @@ func _state_development(_delta):
 	_process_line_3()
 	# 主力出击不再只等到 ASSAULT：发育阶段兵力成型且开局时间已过，也要主动发起主攻
 	_process_line_4()
+	if _ladder_siege != null:
+		_ladder_siege.tick(_delta)
 	_ensure_merchants()
 	var _did_merchant = _try_produce_merchants_or_officials()
 	_try_produce_monks()
@@ -1839,6 +1913,8 @@ func _state_assault(_delta):
 	_process_line_1()
 	_process_line_3()
 	_process_line_4()
+	if _ladder_siege != null:
+		_ladder_siege.tick(_delta)
 	_ensure_merchants()
 	_rally_land_army_to_castle()
 	_try_produce_merchants_or_officials()

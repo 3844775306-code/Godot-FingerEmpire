@@ -677,7 +677,9 @@ func _rebuild_entity_cache():
 		elif b.entity_id == 64:
 			_wall_top_entity_grid[world_to_grid(b.global_position)] = b
 		elif b.entity_id == 8:
-			_ladder_entity_grid[world_to_grid(b.global_position)] = b
+			# 施工中的梯子不能提前提供翻墙通道，完工后由 notify_ladder_ready() 刷新缓存。
+			if b.build_timer <= 0.0:
+				_ladder_entity_grid[world_to_grid(b.global_position)] = b
 		elif b.entity_id == 7:
 			_bridge_entity_grid[world_to_grid(b.global_position)] = b
 	# 相邻墙段中心距约 1.5~2 米，落在两格之间时接缝格本身不是墙格；
@@ -716,6 +718,14 @@ func _rebuild_entity_cache():
 
 func mark_entity_cache_dirty():
 	_entity_cache_dirty = true
+
+# 梯子完工后，墙/梯子通行缓存必须立刻重建：施工期间 `_ladder_entity_grid`
+# 不会收录这把梯子，若只标脏而不递增版本，MovementController 的静态缓存
+# 会一直沿用“不能翻墙”的旧版本，直到下一次建筑布局变化。
+func notify_ladder_ready() -> void:
+	mark_entity_cache_dirty()
+	_wall_cache_version += 1
+	_group_attack_path_cache.clear()
 
 # 落水判定：桥所在格视为可站立，不参与溺水伤害
 func is_bridge_at(world_pos: Vector3) -> bool:
@@ -4050,6 +4060,58 @@ func _is_terrain_flat(pos: Vector3, radius: float) -> bool:
 				if abs(h1 - h0) >= 1.0: return false
 	return true
 
+# 梯子(8)的选址校验：必须贴在一段已完工的敌方裸露城墙外侧。
+# 梯子本来就该靠在墙面上，因此与所依附城墙的重叠要放行；其它建筑/单位仍然不允许重叠。
+# 单机玩家、AI 与联机服务端共用同一套规则。
+func is_valid_ladder_position(pos: Vector3, for_team: int) -> bool:
+	if $Map == null:
+		return false
+	_ensure_cache_fresh()
+	# 梯子只能落在陆地；山地/水面都不该出现梯子。
+	var terrain := get_terrain_at(pos)
+	if terrain != 0:
+		return false
+	var g := world_to_grid(pos)
+	var target_walls: Array = []
+	for dx in [-1, 0, 1]:
+		for dy in [-1, 0, 1]:
+			if dx == 0 and dy == 0:
+				continue
+			if abs(dx) + abs(dy) != 1:
+				continue
+			var wg := Vector2i(g.x + dx, g.y + dy)
+			for e in _buildings:
+				if not is_instance_valid(e) or e.health <= 0:
+					continue
+				if int(e.entity_id) != 27 or e.team == for_team \
+						or e.team == RTSConfig.Team.NEUTRAL or e.build_timer > 0.0:
+					continue
+				if world_to_grid(e.global_position) != wg:
+					continue
+				# 反方向的同队城墙说明这段墙夹在墙体中间，不是裸露面。
+				var exposed := true
+				for e2 in _buildings:
+					if not is_instance_valid(e2) or e2 == e or e2.health <= 0:
+						continue
+					if int(e2.entity_id) != 27 or e2.team != e.team:
+						continue
+					if world_to_grid(e2.global_position) == Vector2i(wg.x - dx, wg.y - dy):
+						exposed = false
+						break
+				if exposed and not target_walls.has(e):
+					target_walls.append(e)
+	if target_walls.is_empty():
+		return false
+	# 与所有存活建筑/资源做体积重叠检查；只放行正对着的敌墙。
+	for e in entities.get_children():
+		if not (e is GameEntity) or e.health <= 0:
+			continue
+		if e is Building and target_walls.has(e):
+			continue
+		if e.global_position.distance_to(pos) < (e.body_radius + 0.5):
+			return false
+	return true
+
 # 桥(7)的选址校验：只能在水上，不能与其他实体重叠（已有桥除外），
 # 且至少有一侧正交邻格是陆地或已有桥 —— 单机与联机服务端共用同一套规则
 func is_valid_bridge_position(pos: Vector3) -> bool:
@@ -4092,31 +4154,7 @@ func _is_valid_build_position(pos: Vector3, building_id: int = -1, for_team: int
 		return is_valid_bridge_position(pos)
 	# 梯子：必须在敌方城墙裸露侧建造
 	if bid == 8:
-		if t == 2: return false
-		for e in entities.get_children():
-			if e is GameEntity and e.health > 0:
-				if e.global_position.distance_to(pos) < (e.body_radius + 0.5):
-					return false
-		# 检查是否与敌方城墙裸露侧相邻
-		var g = world_to_grid(pos)
-		for dx in [-1, 0, 1]:
-			for dy in [-1, 0, 1]:
-				if dx == 0 and dy == 0: continue
-				if abs(dx) + abs(dy) != 1: continue  # 仅正交方向
-				var wx = g.x + dx; var wy = g.y + dy
-				for e in entities.get_children():
-					if e is Building and e.entity_id == 27 and e.team != bteam and e.team != RTSConfig.Team.NEUTRAL and e.health > 0:
-						var wg = world_to_grid(e.global_position)
-						if wg.x == wx and wg.y == wy:
-							# 检查城墙在此方向是否裸露(反方向无同队城墙)
-							var exposed = true
-							for e2 in entities.get_children():
-								if e2 is Building and e2.entity_id == 27 and e2.team == e.team and e2.health > 0 and e2 != e:
-									var wg2 = world_to_grid(e2.global_position)
-									if wg2.x == wg.x - dx and wg2.y == wg.y - dy:
-										exposed = false; break
-							if exposed: return true
-		return false
+		return is_valid_ladder_position(pos, bteam)
 	if bid == 23:
 		if t != 0: return false
 		var g = world_to_grid(pos)

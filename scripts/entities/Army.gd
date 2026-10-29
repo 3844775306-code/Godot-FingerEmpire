@@ -4346,6 +4346,34 @@ func attack_move_to(pos: Vector3):
 		move_to(pos)
 		return
 	_queue_command({"type": "attack_move", "pos": pos})
+
+# AI 梯子破墙专用：城墙挡路时单位可能已经锁定“拆墙”目标，单纯再发一次
+# attack_move_to 会被命令队列/current_target 拦住。这里先彻底清掉旧目标、
+# 命令队列和失败计时，再重新发起攻击移动，让部队按新出现的梯子改道。
+func force_attack_move_to(pos: Vector3) -> void:
+	if target_type <= 0 or _is_healer():
+		move_to(pos)
+		return
+	_clear_command_queue()
+	current_target = null
+	_commanded_attack_target_id = -1
+	_target_lost_since_ms = 0
+	_attack_watch_target_id = -1
+	_attack_stall_time = 0.0
+	is_attack_moving = false
+	attack_move_target = Vector3.ZERO
+	_attack_move_search_timer = 0.0
+	_combat_repath_timer = 0.0
+	_advance_path_fail_time = 0.0
+	_advance_path_recovering = false
+	if _uses_combat_state():
+		_clear_combat_destination()
+		_set_combat_state(CombatState.IDLE)
+	else:
+		_set_order(UnitState.IDLE)
+	if _movement:
+		_movement.stop()
+	attack_move_to(pos)
 # ----------------- ¹¥»÷¡¢²É¼¯¡¢Ñ°µÐµÈ£¨±£³Ö²»±ä£¬ÂÔ£© -----------------
 # ÏÂÃæÊÇÄãÔ­ÓÐµÄ _attack, _gather, find_delivery_point, _find_nearest_resource, _find_enemy_in_range µÈº¯Êý
 # ÓÉÓÚÆª·ù£¬´Ë´¦²»ÔÙÖØ¸´£¬ÇëÖ±½Ó¸´ÖÆÖ®Ç°Ìá¹©µÄÍêÕû°æ±¾ÖÐ¶ÔÓ¦µÄº¯Êý¼´¿É¡£
