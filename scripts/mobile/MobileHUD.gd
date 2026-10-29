@@ -401,6 +401,10 @@ func is_point_over_panel(pos: Vector2) -> bool:
 	for h in _slide_handles:
 		if h is Control and h.visible and h.get_global_rect().has_point(pos):
 			return true
+	if hud:
+		var quick = hud.get("_quick_panel")
+		if quick is Control and (quick as Control).visible and (quick as Control).get_global_rect().has_point(pos):
+			return true
 	var info := _find_ui_node("InfoPanel")
 	if info is Control and info.visible and info.get_global_rect().has_point(pos):
 		return true

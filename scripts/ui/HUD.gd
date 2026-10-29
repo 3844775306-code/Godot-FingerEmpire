@@ -78,6 +78,24 @@ var _dev_speed_btn: Button = null
 # 全局指令按钮底板（6 个按钮排两行）
 var _cmd_panel: Panel = null
 var _cmd_research_btn: Button = null
+# 底部军队速选条：每类军队一个图标按钮，单击选屏幕内、双击选全部
+var _quick_panel: Panel = null
+var _quick_handle: Button = null
+var _quick_scroll: ScrollContainer = null
+var _quick_row: HBoxContainer = null
+var _quick_buttons: Dictionary = {}      # entity_id -> {button, count_label}
+var _quick_counts: Dictionary = {}       # entity_id -> [screen_count, total_count]
+var _quick_timer: float = 0.0
+var _quick_collapsed: bool = false
+var _quick_last_type: int = -1
+var _quick_last_ms: int = 0
+var _quick_drag_start_y: float = 0.0
+var _quick_drag_moved: bool = false
+var _quick_panel_w: float = 860.0
+var _quick_panel_h: float = 76.0
+const QUICK_HANDLE_H: float = 18.0
+const QUICK_DOUBLE_MS: int = 360
+const QUICK_REFRESH_INTERVAL: float = 0.4
 # 全局指令底板：6 个按钮 2 行 × 3 列
 const CMD_PANEL_W: float = 662.0
 const CMD_PANEL_H: float = 82.0
@@ -168,6 +186,8 @@ func hide_stat_panels() -> void:
 		_dev_speed_btn.visible = false
 	if _diplo_panel:
 		_diplo_panel.visible = false
+	if _quick_panel:
+		_quick_panel.visible = false
 
 # 统计面板折叠：展开是完整面板，折叠后只留一条「资源 + 人口」胶囊
 func _set_stats_collapsed(collapsed: bool) -> void:
@@ -989,6 +1009,246 @@ func _open_game_settings() -> void:
 	add_child(panel)
 	panel.call("setup", false, false)
 
+# ==================== 底部军队速选条 ====================
+# 每类军事单位一个按钮：图标 + 名称 + 屏幕内数量/总数。
+# 面板固定在底部中央，避开 InfoPanel / 手机命令栏后可以下滑收起。
+func _create_quick_select_panel() -> void:
+	_quick_panel = Panel.new()
+	_quick_panel.name = "QuickSelectPanel"
+	_quick_panel.z_index = 20
+	_quick_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	var st := StyleBoxFlat.new()
+	st.bg_color = Color(UITheme.INK, 0.62)
+	st.border_color = Color(UITheme.GOLD, 0.24)
+	st.set_border_width_all(1)
+	st.set_corner_radius_all(8)
+	_quick_panel.add_theme_stylebox_override("panel", st)
+	add_child(_quick_panel)
+
+	var outer := VBoxContainer.new()
+	outer.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	outer.offset_left = 8.0
+	outer.offset_top = 2.0
+	outer.offset_right = -8.0
+	outer.offset_bottom = -4.0
+	outer.add_theme_constant_override("separation", 2)
+	_quick_panel.add_child(outer)
+
+	_quick_handle = Button.new()
+	_quick_handle.name = "QuickSelectHandle"
+	_quick_handle.flat = true
+	_quick_handle.focus_mode = Control.FOCUS_NONE
+	_quick_handle.custom_minimum_size = Vector2(0, QUICK_HANDLE_H)
+	_quick_handle.add_theme_font_size_override("font_size", UITheme.FONT_XS)
+	_quick_handle.add_theme_color_override("font_color", Color(UITheme.PARCHMENT, 0.85))
+	_quick_handle.text = "▼ 军队速选 · 下滑收起"
+	_quick_handle.tooltip_text = "单击收起/展开；按住向下拖动收起"
+	_quick_handle.mouse_filter = Control.MOUSE_FILTER_STOP
+	_quick_handle.gui_input.connect(_on_quick_handle_gui_input)
+	outer.add_child(_quick_handle)
+
+	_quick_scroll = ScrollContainer.new()
+	_quick_scroll.name = "QuickSelectScroll"
+	_quick_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_AUTO
+	_quick_scroll.vertical_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	_quick_scroll.custom_minimum_size = Vector2(0, 46)
+	_quick_scroll.size_flags_vertical = Control.SIZE_EXPAND_FILL
+	_quick_scroll.mouse_filter = Control.MOUSE_FILTER_STOP
+	outer.add_child(_quick_scroll)
+
+	_quick_row = HBoxContainer.new()
+	_quick_row.name = "QuickSelectRow"
+	_quick_row.add_theme_constant_override("separation", 5)
+	_quick_row.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_quick_scroll.add_child(_quick_row)
+	_quick_panel.visible = false
+
+func _clear_quick_buttons() -> void:
+	for c in _quick_row.get_children():
+		_quick_row.remove_child(c)
+		c.queue_free()
+	_quick_buttons.clear()
+
+func _rebuild_quick_buttons(types: Array) -> void:
+	_clear_quick_buttons()
+	var icon_px: float = UILayout.dp(24.0) if InputSource.use_mobile_ui() else 30.0
+	var btn_h: float = UILayout.dp(38.0) if InputSource.use_mobile_ui() else 46.0
+	for uid in types:
+		var cfg: Dictionary = EntityDatabase.get_config(int(uid))
+		if cfg.is_empty():
+			continue
+		var b := Button.new()
+		b.name = "QuickUnit_%d" % int(uid)
+		b.custom_minimum_size = Vector2(UILayout.dp(96.0) if InputSource.use_mobile_ui() else 118.0, btn_h)
+		b.tooltip_text = "单击：选中屏幕内全部%s；双击：选中全部%s" % [cfg.get("name", "军队"), cfg.get("name", "军队")]
+		UITheme.apply_button(b, UITheme.FONT_SM)
+		var hb := HBoxContainer.new()
+		hb.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+		hb.offset_left = 5.0; hb.offset_right = -5.0
+		hb.offset_top = 3.0; hb.offset_bottom = -3.0
+		hb.add_theme_constant_override("separation", 4)
+		hb.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		var icon: TextureRect = EntityIcon.make_rect(int(uid), 2, icon_px)
+		if icon != null:
+			icon.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			hb.add_child(icon)
+		else:
+			var ico_label := Label.new()
+			ico_label.text = UITheme.entity_emoji(int(uid), 2)
+			ico_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+			ico_label.add_theme_font_size_override("font_size", int(icon_px * 0.8))
+			ico_label.size_flags_vertical = Control.SIZE_SHRINK_CENTER
+			hb.add_child(ico_label)
+		var texts := VBoxContainer.new()
+		texts.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		texts.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		texts.add_theme_constant_override("separation", 0)
+		var name_label := Label.new()
+		name_label.text = str(cfg.get("name", "军队"))
+		name_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		name_label.clip_text = true
+		name_label.add_theme_font_size_override("font_size", UITheme.FONT_XS if not InputSource.use_mobile_ui() else UILayout.font_dp(10.0))
+		name_label.add_theme_color_override("font_color", UITheme.PARCHMENT)
+		var count_label := Label.new()
+		count_label.text = "0/0"
+		count_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+		count_label.add_theme_font_size_override("font_size", UITheme.FONT_XS if not InputSource.use_mobile_ui() else UILayout.font_dp(10.0))
+		count_label.add_theme_color_override("font_color", UITheme.GOLD)
+		texts.add_child(name_label)
+		texts.add_child(count_label)
+		hb.add_child(texts)
+		b.add_child(hb)
+		b.pressed.connect(_on_quick_type_pressed.bind(int(uid)))
+		_quick_row.add_child(b)
+		_quick_buttons[int(uid)] = {"button": b, "count": count_label}
+
+func _refresh_quick_select() -> void:
+	if _quick_panel == null or not is_instance_valid(_quick_panel):
+		return
+	var bm = _get_bm()
+	if bm == null or bool(bm.get("game_over")):
+		_quick_panel.visible = false
+		return
+	var screen_units: Array = _get_local_military_units(true)
+	var total_units: Array = _get_local_military_units(false)
+	if total_units.is_empty():
+		_quick_panel.visible = false
+		return
+	var counts: Dictionary = {}
+	for u in total_units:
+		var uid: int = int(u.entity_id)
+		if not counts.has(uid):
+			counts[uid] = [0, 0]
+		counts[uid][1] += 1
+	for u in screen_units:
+		var uid2: int = int(u.entity_id)
+		if not counts.has(uid2):
+			counts[uid2] = [0, 0]
+		counts[uid2][0] += 1
+	_quick_counts = counts
+	var types: Array = counts.keys()
+	types.sort()
+	var need_rebuild: bool = types.size() != _quick_buttons.size()
+	if not need_rebuild:
+		for uid3 in types:
+			if not _quick_buttons.has(int(uid3)):
+				need_rebuild = true
+				break
+	if need_rebuild:
+		_rebuild_quick_buttons(types)
+	for uid4 in types:
+		var entry = _quick_buttons.get(int(uid4))
+		if entry == null:
+			continue
+		var sc: int = int(_quick_counts[uid4][0])
+		var tc: int = int(_quick_counts[uid4][1])
+		var cnt: Label = entry["count"]
+		cnt.text = "%d/%d" % [sc, tc]
+		cnt.add_theme_color_override("font_color", UITheme.ALERT_WARNING if sc <= 0 else UITheme.GOLD)
+		var btn: Button = entry["button"]
+		btn.disabled = false
+	_quick_panel.visible = true
+	_layout_quick_panel()
+
+func _layout_quick_panel() -> void:
+	if _quick_panel == null or not is_instance_valid(_quick_panel):
+		return
+	var vp: Vector2 = get_viewport().get_visible_rect().size
+	var insets: Vector4 = UILayout.safe_insets()
+	var mobile: bool = InputSource.use_mobile_ui()
+	_quick_panel_h = QUICK_HANDLE_H + (UILayout.dp(38.0) if mobile else 46.0) + 14.0
+	_quick_panel_w = clampf(vp.x * (0.86 if mobile else 0.76), 300.0, 980.0)
+	_quick_panel_w = minf(_quick_panel_w, vp.x - insets.x - insets.z - 16.0)
+	var bottom: float = vp.y - insets.w - 8.0
+	if mobile:
+		# 手机上左下是信息面板、右下是命令栏：速选条放到两者上方，避免压住按钮。
+		var bm = _get_bm()
+		if bm != null:
+			var info = bm.get_node_or_null("UI/InfoPanel")
+			if info is Control and (info as Control).visible:
+				var ir: Rect2 = (info as Control).get_global_rect()
+				if ir.size.y > 0.0:
+					bottom = minf(bottom, ir.position.y - 6.0)
+		if _mobile_hud != null and is_instance_valid(_mobile_hud):
+			var cb = _mobile_hud.get("command_bar")
+			if cb is Control and (cb as Control).visible:
+				var cr: Rect2 = (cb as Control).get_global_rect()
+				if cr.size.y > 0.0:
+					bottom = minf(bottom, cr.position.y - 6.0)
+	var y: float = bottom - (QUICK_HANDLE_H if _quick_collapsed else _quick_panel_h)
+	_quick_panel.size = Vector2(_quick_panel_w, _quick_panel_h)
+	_quick_panel.position = Vector2((vp.x - _quick_panel_w) * 0.5, y)
+	_quick_handle.text = "▲ 展开军队速选" if _quick_collapsed else "▼ 军队速选 · 下滑收起"
+
+func _set_quick_collapsed(collapsed: bool) -> void:
+	_quick_collapsed = collapsed
+	_layout_quick_panel()
+
+func _on_quick_handle_gui_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed:
+			_quick_drag_start_y = event.position.y
+			_quick_drag_moved = false
+		else:
+			if not _quick_drag_moved:
+				_set_quick_collapsed(not _quick_collapsed)
+	elif event is InputEventMouseMotion and (event.button_mask & MOUSE_BUTTON_MASK_LEFT) != 0:
+		var dy: float = event.position.y - _quick_drag_start_y
+		if dy > 14.0 and not _quick_collapsed:
+			_quick_drag_moved = true
+			_set_quick_collapsed(true)
+		elif dy < -14.0 and _quick_collapsed:
+			_quick_drag_moved = true
+			_set_quick_collapsed(false)
+	elif event is InputEventScreenDrag:
+		var dy2: float = event.position.y - _quick_drag_start_y
+		if dy2 > 14.0 and not _quick_collapsed:
+			_quick_drag_moved = true
+			_set_quick_collapsed(true)
+		elif dy2 < -14.0 and _quick_collapsed:
+			_quick_drag_moved = true
+			_set_quick_collapsed(false)
+	elif event is InputEventScreenTouch:
+		if event.pressed:
+			_quick_drag_start_y = event.position.y
+			_quick_drag_moved = false
+		elif not _quick_drag_moved:
+			_set_quick_collapsed(not _quick_collapsed)
+
+func _on_quick_type_pressed(unit_id: int) -> void:
+	var now: int = Time.get_ticks_msec()
+	var is_double: bool = unit_id == _quick_last_type and (now - _quick_last_ms) <= QUICK_DOUBLE_MS
+	_quick_last_type = unit_id
+	_quick_last_ms = now
+	var units: Array = _get_local_military_units(not is_double)
+	var filtered: Array = []
+	for u in units:
+		if is_instance_valid(u) and int(u.entity_id) == unit_id:
+			filtered.append(u)
+	if filtered.is_empty():
+		return
+	_select_units(filtered)
+
 func _ready():
 	# 血条文字默认关闭；设置面板/上一局状态由 GameSettings 统一保存。
 	show_unit_text = GameSettings.show_unit_text
@@ -1055,6 +1315,8 @@ func _ready():
 	_cmd_research_btn.visible = GameSettings.is_research_mode()
 	_cmd_panel.add_child(_cmd_research_btn)
 
+	_create_quick_select_panel()
+
 	set_process(true)
 
 	# 顶部带统一排布：资源胶囊 / 指令栏 / 小地图 / 科研入口 / 战况栏
@@ -1118,6 +1380,7 @@ func _on_stats_overlay_toggled(open: bool) -> void:
 
 func _on_viewport_size_changed() -> void:
 	_layout_top_band()
+	_layout_quick_panel()
 	if not InputSource.use_mobile_ui():
 		return
 	var now := UILayout.is_portrait()
@@ -1495,6 +1758,10 @@ func _process(delta):
 	_update_pause_overlay()
 	_tick_ffa_diplo(delta)
 	_unit_stats_timer -= delta
+	_quick_timer -= delta
+	if _quick_timer <= 0.0:
+		_quick_timer = QUICK_REFRESH_INTERVAL
+		_refresh_quick_select()
 	var bm = _get_bm()
 	if bm == null:
 		return
