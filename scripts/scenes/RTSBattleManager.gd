@@ -2148,6 +2148,64 @@ func get_host_max_pop() -> int:
 func get_host_limits() -> Dictionary:
 	return player_resource_limits
 
+# ==================== 队友进贡（多人/单机团队模式） ====================
+# 进贡按“发出量”扣税：发送方扣 amount，接收方实收 floor(amount * 0.8)。
+# 税率是资源回收（税直接消失），不是转给第三方，避免刷资源。
+const TRIBUTE_TAX_RATE: float = 0.20
+const TRIBUTE_MAX_AMOUNT: int = 5000
+
+# 返回本局的人类玩家 owner 列表；OnlineBattleManager 会覆盖成真实玩家表。
+func get_human_owners() -> Array:
+	if player_owner_id >= 0:
+		return [player_owner_id]
+	return []
+
+# 返回可在进贡 UI 中显示的玩家信息；AI 队友也包含在内。
+func get_player_roster() -> Dictionary:
+	var out: Dictionary = {}
+	for pid in ai_players.keys():
+		var info: Dictionary = ai_players.get(pid, {})
+		out[int(pid)] = {
+			"team": int(info.get("team", -1)),
+			"slot": int(info.get("slot", 0)),
+			"nation": int(info.get("nation", -1)),
+			"alive": true,
+			"is_ai": int(pid) != player_owner_id,
+		}
+	if player_owner_id >= 0 and not out.has(player_owner_id):
+		out[player_owner_id] = {
+			"team": get_host_team(), "slot": 0, "nation": get_nation_of_owner(player_owner_id),
+			"alive": true, "is_ai": false,
+		}
+	return out
+
+# 执行一次进贡：只允许同队、不同 owner、资源类型合法，接收方仓库必须装得下税后量。
+# 返回 { ok, reason, sent, received, tax }，UI/网络层直接按结果提示。
+func tribute_resources(from_owner: int, to_owner: int, rk: String, amount: int) -> Dictionary:
+	if from_owner < 0 or to_owner < 0 or from_owner == to_owner:
+		return {"ok": false, "reason": "目标无效"}
+	if not rk in ["gold", "wood", "stone", "food", "oil"]:
+		return {"ok": false, "reason": "资源类型无效"}
+	if amount <= 0 or amount > TRIBUTE_MAX_AMOUNT:
+		return {"ok": false, "reason": "数量必须在 1~%d 之间" % TRIBUTE_MAX_AMOUNT}
+	if get_team_of_owner(from_owner) != get_team_of_owner(to_owner):
+		return {"ok": false, "reason": "只能向同队队友进贡"}
+	var from_res: Dictionary = get_resources_for(from_owner)
+	if from_res.is_empty() or int(from_res.get(rk, 0)) < amount:
+		return {"ok": false, "reason": "资源不足"}
+	var received: int = int(floor(float(amount) * (1.0 - TRIBUTE_TAX_RATE)))
+	if received <= 0:
+		return {"ok": false, "reason": "数量太少"}
+	var to_res: Dictionary = get_resources_for(to_owner)
+	if to_res.is_empty():
+		return {"ok": false, "reason": "对方资源状态无效"}
+	var limit: int = int(get_limits_for(to_owner).get(rk, 99999))
+	if int(to_res.get(rk, 0)) + received > limit:
+		return {"ok": false, "reason": "对方仓库已满"}
+	from_res[rk] = int(from_res.get(rk, 0)) - amount
+	to_res[rk] = int(to_res.get(rk, 0)) + received
+	return {"ok": true, "reason": "", "sent": amount, "received": received, "tax": amount - received}
+
 # 根据owner_id获取资源字典
 func get_resources_for(owner_id: int) -> Dictionary:
 	if owner_id == player_owner_id:

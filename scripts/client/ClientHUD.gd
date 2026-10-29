@@ -53,6 +53,8 @@ var _stats_capsule: Panel = null
 var _capsule_pop_label: Label = null
 var _capsule_res_labels: Dictionary = {}
 var _capsule_row: HBoxContainer = null
+const TributePanelScript = preload("res://scripts/ui/TributePanel.gd")
+var _tribute_panel: Control = null
 
 # ==================== 警报系统 ====================
 const MapPresets = preload("res://scripts/map/MapPresets.gd")
@@ -347,8 +349,27 @@ func _create_stats_capsule() -> void:
 		l.text = "0"
 		row.add_child(l)
 		_capsule_res_labels[rk] = l
+	var tribute_btn := Button.new()
+	tribute_btn.text = "🤝 进贡"
+	tribute_btn.custom_minimum_size = Vector2(82, 32)
+	tribute_btn.vertical_icon_alignment = VERTICAL_ALIGNMENT_CENTER
+	UITheme.apply_muted_button(tribute_btn, UITheme.FONT_SM)
+	tribute_btn.tooltip_text = "向同队队友进贡资源（扣 20% 税）"
+	tribute_btn.pressed.connect(_open_tribute_panel)
+	row.add_child(tribute_btn)
 	_stats_capsule.gui_input.connect(_on_stats_capsule_input)
 	add_child(_stats_capsule)
+
+func _open_tribute_panel() -> void:
+	var renderer = get_tree().get_first_node_in_group("client_renderer")
+	if renderer == null:
+		return
+	if _tribute_panel == null or not is_instance_valid(_tribute_panel):
+		_tribute_panel = TributePanelScript.new()
+		add_child(_tribute_panel)
+	var roster: Dictionary = renderer.get("player_roster")
+	_tribute_panel.setup(null, int(renderer.my_peer_id), roster, int(renderer.my_team))
+	_tribute_panel.open()
 
 func _make_stats_rtl() -> RichTextLabel:
 	var r = RichTextLabel.new()

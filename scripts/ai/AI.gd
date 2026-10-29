@@ -135,6 +135,14 @@ var _diplo_last_propose_time: float = -999.0  # 上次发起提案的 game_time�
 var _diplo_last_tribute_time: float = -999.0  # 上次进贡续期的 game_time（最小间隔）
 var _diplo_propose_history: Dictionary = {} # owner -> game_time（冷却期内不重复骚扰同一国家）
 
+# AI 队友向真人玩家进贡：多人 2v2/3v3 时玩家不需要开口，AI 会按固定节奏补资源。
+const TRIBUTE_ALLY_INTERVAL: float = 20.0
+const TRIBUTE_ALLY_MAX_AMOUNT: int = 300
+const TRIBUTE_ALLY_MIN_AMOUNT: int = 100
+const TRIBUTE_ALLY_SOURCE_RATIO: float = 0.70
+const TRIBUTE_ALLY_TARGET_RATIO: float = 0.65
+var _tribute_to_human_timer: float = 0.0
+
 const WAREHOUSE_MAX_COUNT: int = 5
 const HOME_ASSEMBLE_RANGE: float = 50.0
 # 新版重装武器厂(29)只有在4级才会解锁巨型投石机(59)。
@@ -314,9 +322,16 @@ func _resource_pressure_ratio() -> float:
 		best = maxf(best, _resource_ratio(rk))
 	return best
 
+# 快速模式采集 3 倍、建造/生产只有 2 倍，水位阈值必须提前，否则收入先顶满。
+func _pressure_threshold() -> float:
+	var t: float = RESOURCE_PRESSURE_RATIO
+	if GameSettings.fast_mode:
+		t -= 0.10
+	return clampf(t, 0.70, 0.90)
+
 func _resource_overflow() -> bool:
 	return _resource_pressure_time >= RESOURCE_PRESSURE_GRACE \
-			and _resource_pressure_ratio() >= RESOURCE_PRESSURE_RATIO
+			and _resource_pressure_ratio() >= _pressure_threshold()
 
 func _resource_critical() -> bool:
 	return _resource_pressure_time >= RESOURCE_PRESSURE_GRACE \
@@ -325,7 +340,7 @@ func _resource_critical() -> bool:
 # 开局 AI 的金/木/粮就是满的（500/500），但这是给建造序列用的启动资金。
 # 连续高水位一小段时间仍花不出去，才说明真的在浪费收入，此时再泄压。
 func _update_resource_pressure(delta: float) -> void:
-	if _resource_pressure_ratio() >= RESOURCE_PRESSURE_RATIO:
+	if _resource_pressure_ratio() >= _pressure_threshold():
 		_resource_pressure_time += maxf(delta, 0.0)
 	else:
 		_resource_pressure_time = 0.0
@@ -340,12 +355,16 @@ func _effective_army_target() -> int:
 	var free_pop: int = maxi(0, int(pop.get("max", 0)) - int(pop.get("current", 0)))
 	var mid_game: bool = battle != null and battle.game_time >= 120.0
 	if free_pop > 2 and (mid_game or _resource_pressure_ratio() >= 0.60):
-		target = maxi(target, target_army_count + mini(free_pop - 2, 10))
+		# 快速模式收入更高，人口缺口要更积极转成军队，否则资源顶满、兵却停涨。
+		var free_cap: int = 24 if GameSettings.fast_mode else 10
+		target = maxi(target, target_army_count + mini(free_pop - 2, free_cap))
 	if _resource_overflow():
 		var extra: int = RESOURCE_PRESSURE_EXTRA_ARMY
 		if _resource_critical():
 			extra += RESOURCE_PRESSURE_EXTRA_ARMY
 		target = maxi(target, target_army_count + extra)
+		# 有资源、有人口时至少把一半人口转成军队，避免只造到固定 17 个就停手。
+		target = maxi(target, int(float(pop.get("max", 0)) * 0.5))
 	return target
 
 # 人口已满而资源还多时，先补额外民居，否则多出来的资源无处转化为军队。
@@ -1718,6 +1737,8 @@ func _process(delta):
 		_naval_patrol_timer = NAVAL_PATROL_INTERVAL * phase
 		# 修理扫描同样按相位错开，避免多个 AI 在同一帧一起扫全建筑
 		_repair_scan_timer = REPAIR_SCAN_INTERVAL * phase
+		# 进贡也错开：第一个 AI 不会在开局第 0 秒就送资源
+		_tribute_to_human_timer = TRIBUTE_ALLY_INTERVAL * phase + 5.0
 	timer -= delta
 	_ai_income_timer -= delta
 	if _ai_res_snapshot.is_empty():
@@ -1796,6 +1817,11 @@ func _process(delta):
 		_stone_share_timer = 5.0
 		_spend_surplus_stone_on_walls()
 		_share_surplus_stone_with_ally()
+	# AI 队友向真人玩家进贡：2v2/3v3 才存在同队真人，1v1/FFA 找不到目标会自动跳过。
+	_tribute_to_human_timer -= delta
+	if _tribute_to_human_timer <= 0.0:
+		_tribute_to_human_timer = TRIBUTE_ALLY_INTERVAL
+		_tribute_to_human_teammate()
 	# 决策面板刷新独立于 AI 思考间隔：展开时每秒刷新一次，收起时放慢到 5 秒。
 	# 以前挂在 decide() 的帧计数上，AI 思考间隔 1~2 秒时面板最多要等两轮 think 才更新，
 	# 看起来像数据不刷新；现在按真实 delta 计时，打开面板就是稳定每秒更新。
@@ -2537,7 +2563,7 @@ func allocate_workers():
 	# 对应资源满仓也不会被改派，于是继续把收入送进被上限截断的池子。
 	var full_types: Array = []
 	for rk in ["gold", "wood", "stone", "food"]:
-		if _resource_ratio(rk) >= RESOURCE_PRESSURE_RATIO:
+		if _resource_ratio(rk) >= _pressure_threshold():
 			full_types.append(rk)
 	if not full_types.is_empty():
 		var alt_weights: Dictionary = _worker_resource_weights()
@@ -2612,7 +2638,7 @@ func _emergency_rebalance_workers(workers: Array) -> void:
 	var overfull: Array = []
 	for rk in ["gold", "wood", "food", "stone", "oil"]:
 		var ratio: float = _resource_ratio(rk)
-		if ratio >= RESOURCE_PRESSURE_RATIO:
+		if ratio >= _pressure_threshold():
 			overfull.append(rk)
 		elif rk != "oil" and ratio <= 0.20:
 			scarce.append(rk)
@@ -2696,8 +2722,8 @@ func _get_phase_weights() -> Dictionary:
 func _worker_resource_weights() -> Dictionary:
 	var weights: Dictionary = _get_phase_weights()
 	for rk in ["gold", "wood", "stone", "food"]:
-		# 到 85% 就不再优先派农民去采，避免一边泄压一边继续堆满仓资源。
-		if _resource_ratio(rk) >= RESOURCE_PRESSURE_RATIO:
+		# 到压力阈值就不再优先派农民去采，避免一边泄压一边继续堆满仓资源。
+		if _resource_ratio(rk) >= _pressure_threshold():
 			weights.erase(rk)
 	return weights
 
@@ -4013,6 +4039,80 @@ func _share_surplus_stone_with_ally() -> bool:
 	_last_spend_block_time = battle.game_time
 	return true
 
+# AI 队友向同队真人玩家进贡：玩家资源比例低、AI 自己有富余时送一笔，
+# 统一走 battle.tribute_resources（扣 20% 税），和玩家主动进贡同一套规则。
+func _tribute_to_human_teammate() -> bool:
+	if battle == null or not battle.has_method("get_human_owners") \
+			or not battle.has_method("tribute_resources"):
+		return false
+	# FFA 每国一队，不存在“队友”，避免把外交进贡规则混进来。
+	if battle.diplomacy != null and battle.diplomacy.active:
+		return false
+	var humans: Array = battle.get_human_owners()
+	if humans.is_empty():
+		return false
+	var target: int = -1
+	var target_worst: float = TRIBUTE_ALLY_TARGET_RATIO
+	for h in humans:
+		var hid: int = int(h)
+		if hid == my_peer_id:
+			continue
+		if int(battle.get_team_of_owner(hid)) != my_team:
+			continue
+		var pressure: float = 0.0
+		for rk2 in ["gold", "wood", "stone", "food"]:
+			pressure = maxf(pressure, _owner_resource_ratio(hid, rk2))
+		if pressure < target_worst:
+			target_worst = pressure
+			target = hid
+	if target < 0:
+		return false
+	var my_res: Dictionary = _get_resources()
+	var my_lim: Dictionary = _get_limits()
+	var best_rk: String = ""
+	var best_amount: int = 0
+	for rk in ["gold", "wood", "stone", "food"]:
+		var my_cap: int = int(my_lim.get(rk, 0))
+		if my_cap <= 0:
+			continue
+		var my_ratio: float = float(my_res.get(rk, 0)) / float(my_cap)
+		if my_ratio < TRIBUTE_ALLY_SOURCE_RATIO:
+			continue
+		var t_res: Dictionary = battle.get_resources_for(target)
+		var t_lim: Dictionary = battle.get_limits_for(target)
+		var t_cap: int = int(t_lim.get(rk, 0))
+		if t_cap <= 0:
+			continue
+		var t_ratio: float = float(t_res.get(rk, 0)) / float(t_cap)
+		if t_ratio >= TRIBUTE_ALLY_TARGET_RATIO:
+			continue
+		var space: int = int(float(t_cap) * 0.80) - int(t_res.get(rk, 0))
+		var amount: int = mini(TRIBUTE_ALLY_MAX_AMOUNT, int(my_res.get(rk, 0)) - int(float(my_cap) * 0.50))
+		amount = mini(amount, int(float(space) / 0.80))
+		if amount > best_amount:
+			best_amount = amount
+			best_rk = rk
+	if best_rk == "" or best_amount < TRIBUTE_ALLY_MIN_AMOUNT:
+		return false
+	var result: Dictionary = battle.tribute_resources(my_peer_id, target, best_rk, best_amount)
+	if not bool(result.get("ok", false)):
+		return false
+	_last_spend_block = "tribute_player_%d" % target
+	_last_spend_block_time = battle.game_time
+	var label: String = String({"gold":"黄金","wood":"木材","stone":"石头","food":"食物"}.get(best_rk, best_rk))
+	battle._show_hud_alert("AI 队友进贡 %d %s，你实收 %d（税 %d）" % [
+		int(result["sent"]), label, int(result["received"]), int(result["tax"])],
+		Color(0.35, 0.9, 0.65), [my_team], my_team, 0, false, [], Vector3.ZERO, my_peer_id)
+	return true
+
+func _owner_resource_ratio(owner: int, rk: String) -> float:
+	if battle == null:
+		return 0.0
+	var lim: float = float(battle.get_limits_for(owner).get(rk, 0))
+	if lim <= 0.0:
+		return 0.0
+	return float(battle.get_resources_for(owner).get(rk, 0)) / lim
+
 # 石头高水位时优先把石头变成防线：先升级城墙，墙满级后再补一圈墙。
 # 3v3 快速模式里 5 个 AI 抢资源，会出现“石头 1800/1800、城墙等级仍 1”的
 # 情况；以前泄压先造仓库，只是把上限从 1800 抬到 2300，石头依然不花。
@@ -4135,6 +4235,8 @@ func _train_overflow_units() -> void:
 	if not _resource_overflow() or not _can_train_unit_with_queue():
 		return
 	var budget: int = RESOURCE_PRESSURE_TRAIN_BURST
+	if GameSettings.fast_mode:
+		budget += 1
 	for u_id in get_counter_priority():
 		if budget <= 0:
 			return

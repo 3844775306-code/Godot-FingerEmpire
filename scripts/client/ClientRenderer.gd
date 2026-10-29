@@ -187,6 +187,8 @@ var _prev_bullet_ids: Dictionary = {}  # id -> entity_id for sound detection
 	# 如果有最新快照待处理，且当前不忙，则开始处理
 	
 var player_colors: Dictionary = {}   # peer_id -> Color
+# 服务端全量快照下发的玩家/队友表：peer_id -> {team,slot,nation,alive,is_ai}
+var player_roster: Dictionary = {}
 func set_all_player_colors(colors: Dictionary):
 	player_colors = colors.duplicate()
 
@@ -669,6 +671,8 @@ func _process_snapshot(data: Dictionary):
 			var enemy_team = RTSConfig.Team.RED if my_team == RTSConfig.Team.BLUE else RTSConfig.Team.BLUE
 			var enemy_nation = data["team_nations"].get(enemy_team, -1)
 			$UI/HUD.set_nations(my_team_nation, enemy_nation)
+	if data.has("player_info") and data["player_info"] is Dictionary:
+		player_roster = data["player_info"].duplicate(true)
 
 	# ---- 子弹 ----
 	# ---- 服务器警报 ----

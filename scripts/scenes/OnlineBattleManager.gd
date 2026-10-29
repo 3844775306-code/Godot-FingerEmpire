@@ -194,6 +194,43 @@ var _income_calc_timer: float = 0.0
 func get_mp_shift() -> bool:
 	return _mp_shift_held
 
+# 组队模式的人类玩家表只存在 player_info 里，基类按 ai_players 会查不到。
+func get_team_of_owner(owner: int) -> int:
+	if player_info.has(owner):
+		return int(player_info[owner].get("team", -1))
+	if player_teams.has(owner):
+		return int(player_teams[owner])
+	return super.get_team_of_owner(owner)
+
+func get_human_owners() -> Array:
+	var out: Array = []
+	for pid in player_info.keys():
+		if not bool(player_info[pid].get("is_ai", false)) and bool(player_info[pid].get("alive", true)):
+			out.append(int(pid))
+	for pid in player_teams.keys():
+		if not out.has(int(pid)):
+			out.append(int(pid))
+	return out
+
+func get_player_roster() -> Dictionary:
+	var out: Dictionary = {}
+	for pid in player_info.keys():
+		var info: Dictionary = player_info[pid]
+		out[int(pid)] = {
+			"team": int(info.get("team", -1)),
+			"slot": int(info.get("slot", 0)),
+			"nation": int(info.get("nation", -1)),
+			"alive": bool(info.get("alive", true)),
+			"is_ai": bool(info.get("is_ai", false)),
+		}
+	for pid in player_teams.keys():
+		if not out.has(int(pid)):
+			out[int(pid)] = {
+				"team": int(player_teams[pid]), "slot": 0, "nation": -1,
+				"alive": true, "is_ai": false,
+			}
+	return out
+
 func get_resources_for(owner_id: int) -> Dictionary:
 	if player_resources.has(owner_id):
 		return player_resources[owner_id]
@@ -909,6 +946,22 @@ func _process_2v2_command(peer_id: int, data: Dictionary):
 		"research_age": _research_cmd(peer_id, player_info[peer_id].team, "AGE")
 		"cancel_research": research_cancel(peer_id, player_info[peer_id].team)
 		"research_auto": _research_auto_cmd(peer_id, player_info[peer_id].team, data.get("auto", {}))
+		"tribute":      _2v2_tribute(peer_id, data)
+
+func _2v2_tribute(peer_id: int, data: Dictionary) -> void:
+	var target: int = int(data.get("target_peer", -1))
+	var rk: String = String(data.get("resource", ""))
+	var amount: int = int(data.get("amount", 0))
+	var result: Dictionary = tribute_resources(peer_id, target, rk, amount)
+	var team: int = int(player_info.get(peer_id, {}).get("team", -1))
+	var label: String = String({"gold":"黄金","wood":"木材","stone":"石头","food":"食物","oil":"石油"}.get(rk, rk))
+	if bool(result.get("ok", false)):
+		var msg := "队友进贡 %d %s：对方实收 %d（税 %d）" % [
+			int(result["sent"]), label, int(result["received"]), int(result["tax"])]
+		_show_hud_alert(msg, Color(0.35, 0.9, 0.65), [team], team, 0, false, [], Vector3.ZERO, peer_id)
+	else:
+		_show_hud_alert("进贡失败：%s" % String(result.get("reason", "未知原因")),
+			Color(1.0, 0.8, 0.1), [team], team, 0, false, [], Vector3.ZERO, peer_id)
 
 func _research_cmd(owner_peer_id: int, team: int, tid: String) -> Dictionary:
 	if tid == "AGE":
