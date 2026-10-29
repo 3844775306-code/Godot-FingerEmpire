@@ -5381,11 +5381,12 @@ var _animal_attacker :GameEntity = null
 # 动物的行为只有三件事：长大、等级满了繁殖、在自己家附近游走。
 # 挨打会反击，但不会再整群逃跑——以前一有人靠近动物就成群跑开，
 # 牧区永远是空的，看起来更像一群不受控的贴纸。
-const ANIMAL_WANDER_RADIUS: float = 7.0     # 游走范围半径（以出生点为中心）
-const ANIMAL_WALK_SCALE: float = 0.55       # 实际移动速度占配置 speed 的比例
+const ANIMAL_WANDER_RADIUS: float = 12.0    # 游走范围半径（以出生点为中心）
+const ANIMAL_MIN_WALK_DIST: float = 4.0     # 单次至少走这么远，避免原地小碎步
+const ANIMAL_WALK_SCALE: float = 0.45       # 实际移动速度占配置 speed 的比例
 const ANIMAL_ARRIVE_DIST: float = 0.4       # 走到这个距离内算到达
-const ANIMAL_PAUSE_MIN: float = 1.0         # 到达后原地停留时间
-const ANIMAL_PAUSE_MAX: float = 4.0
+const ANIMAL_PAUSE_MIN: float = 3.0         # 到达后原地停留时间
+const ANIMAL_PAUSE_MAX: float = 7.0
 const ANIMAL_REPICK_DIST: float = 22.0      # 离家太远（被推挤/传送）直接重设家
 const ANIMAL_CLEARANCE: float = 0.25        # 和别的实体之间至少留这么多米，别贴着穿模
 
@@ -5480,7 +5481,7 @@ func _update_animal_wander(delta: float) -> void:
 	if not _animal_has_target:
 		_animal_has_target = _pick_animal_wander_target()
 		if not _animal_has_target:
-			_animal_pause = 0.4
+			_animal_pause = 1.5
 			_animal_moving = false
 			return
 
@@ -5497,7 +5498,7 @@ func _update_animal_wander(delta: float) -> void:
 	if not _animal_can_stand_at(next_pos):
 		# 前方是水/岸，放弃这个目标，停一下再换一个
 		_animal_has_target = false
-		_animal_pause = randf_range(0.3, 0.8)
+		_animal_pause = randf_range(1.5, 3.0)
 		_animal_moving = false
 		return
 
@@ -5511,8 +5512,8 @@ func _update_animal_wander(delta: float) -> void:
 func _pick_animal_wander_target() -> bool:
 	for i in range(8):
 		var ang: float = randf() * TAU
-		# sqrt 让采样在圆内按面积均匀，否则会全挤在圆心附近
-		var dist: float = sqrt(randf()) * ANIMAL_WANDER_RADIUS
+		# 至少走 ANIMAL_MIN_WALK_DIST，避免频繁选到脚边目标导致一走一停
+		var dist: float = ANIMAL_MIN_WALK_DIST + sqrt(randf()) * (ANIMAL_WANDER_RADIUS - ANIMAL_MIN_WALK_DIST)
 		var cand: Vector3 = _animal_home + Vector3(cos(ang) * dist, 0.0, sin(ang) * dist)
 		if not _animal_can_stand_at(cand):
 			continue
