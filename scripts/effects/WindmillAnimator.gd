@@ -8,12 +8,12 @@ extends Node3D
 
 const NODE_NAME := "WindmillAnimator"
 const BLADE_NODE := "rotate-x"
-# 约 4.7 秒转一圈：既有持续转动感，又不会快到糊成一片。
-const SPIN_SPEED: float = 1.35
+# 约 8 秒转一圈：常速缓慢旋转，不做阵风变速。
+const SPIN_SPEED: float = 0.785
 
 var _blades: Node3D = null
 var _base_rotation: Vector3 = Vector3.ZERO
-var _time: float = 0.0
+var _angle: float = 0.0
 
 # 给建筑模型挂上风车动画；重复调用不会叠加。
 static func attach(model_root: Node3D) -> void:
@@ -40,7 +40,6 @@ func setup(model_root: Node3D) -> void:
 func _process(delta: float) -> void:
 	if _blades == null or not is_instance_valid(_blades):
 		return
-	_time += delta
-	# 一点点阵风起伏：主转速不变，叠一个很慢的呼吸，避免像匀速电机。
-	var gust: float = 1.0 + sin(_time * 0.37) * 0.06
-	_blades.rotation.x = _base_rotation.x + _time * SPIN_SPEED * gust
+	# 常速缓慢旋转，不再叠加阵风起伏。
+	_angle = fposmod(_angle + SPIN_SPEED * delta, TAU)
+	_blades.rotation.x = _base_rotation.x + _angle

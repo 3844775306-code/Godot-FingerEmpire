@@ -5,7 +5,7 @@ extends RefCounted
 # 不改变实体朝向/移动，只动画模型根节点和 GLB 内部的炮臂、撞木、轮子、帆、旗。
 # 单机 RTSBattleManager 与联机 ClientRenderer 共用，保证两边手感一致。
 
-const SIEGE_IDS := [13, 16, 17, 18, 39, 59]
+const SIEGE_IDS := [13, 16, 17, 18, 39, 58, 59]
 const META_RUNNING := "_siege_anim_running"
 const META_TWEENS := "_siege_anim_tweens"
 const META_BASE := "_siege_anim_base"
@@ -41,6 +41,8 @@ static func play(entity_id: int, model: Node3D, opts: Dictionary = {}) -> bool:
 			duration = _cannon(model)
 		17:
 			duration = _catapult(model)
+		58:
+			duration = _ballista(model)
 		59:
 			duration = _trebuchet(model)
 		13:
@@ -152,6 +154,29 @@ static func _catapult(model: Node3D) -> float:
 		])
 	_wheels(model, 0.10)
 	return 1.25
+
+# 连弩：整机短促后坐，弩箭先向后蓄力再沿 +X 射出，车轮被震得轻晃。
+static func _ballista(model: Node3D) -> float:
+	var pos: Vector3 = model.position
+	_seq(model, model, "position", [
+		{"v": pos + Vector3(-0.10, 0.02, 0.0), "t": 0.10, "tr": Tween.TRANS_EXPO},
+		{"v": pos, "t": 0.34, "tr": Tween.TRANS_ELASTIC},
+	])
+	_entity_pitch(model, [
+		{"a": 0.045, "t": 0.08, "tr": Tween.TRANS_QUAD},
+		{"a": 0.0, "t": 0.36, "tr": Tween.TRANS_ELASTIC},
+	])
+	var bolt := _find(model, "arrow")
+	if bolt != null:
+		var bp: Vector3 = bolt.position
+		# ballista 的箭沿局部 +X；先向后拉，再向前弹射。
+		_seq(model, bolt, "position", [
+			{"v": bp + Vector3(-0.28, 0.0, 0.0), "t": 0.10, "tr": Tween.TRANS_SINE},
+			{"v": bp + Vector3(0.35, 0.0, 0.0), "t": 0.08, "tr": Tween.TRANS_EXPO, "e": Tween.EASE_OUT},
+			{"v": bp, "t": 0.30, "tr": Tween.TRANS_SINE},
+		])
+	_wheels(model, 0.05)
+	return 0.44
 
 # 巨型投石机：配重下坠带动投臂缓慢释放，再以低频余摆收住
 static func _trebuchet(model: Node3D) -> float:

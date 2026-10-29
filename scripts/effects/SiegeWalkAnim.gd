@@ -9,7 +9,7 @@ extends RefCounted
 #
 # 单机 RTSBattleManager 与联机 ClientRenderer 共用同一份实现，保证两端手感一致。
 
-const WALK_IDS := [16, 17, 18, 59]
+const WALK_IDS := [16, 17, 18, 58, 59]
 const META_ROLL := "_siege_walk_roll"
 
 # 轮子半径（GLB 局部坐标）：实测各轮 mesh 的 AABB 是 0.4028 × 0.4028 × 0.1332，

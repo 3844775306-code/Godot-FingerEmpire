@@ -246,6 +246,10 @@ func _attack(target, delta):
 		dir.y = 0
 		if dir.length() > 0.01:
 			rotation.y = atan2(dir.x, dir.z) + deg_to_rad(90)
+		if has_meta("_model_instance"):
+			var cannon_model = get_meta("_model_instance")
+			if cannon_model is Node3D:
+				CannonTowerAnim.play(cannon_model)
 	if damage_radius > 0 or attack_range > 1.0:
 		var bm = _get_bm()
 		if bm == null:
@@ -278,6 +282,7 @@ func _attack(target, delta):
 	else:
 		target.take_damage(attack, self)
 	attack_timer = attack_speed
+	attack_seq += 1
 
 func _reload_wall_model(bm, path):
 	if not bm or not ResourceLoader.exists(path): return

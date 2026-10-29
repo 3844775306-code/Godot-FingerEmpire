@@ -52,12 +52,31 @@ var splash_damage_mult: float = 0.0
 # 弹丸模型缓存：后期每秒会生成几十到上百发子弹，不能每发都做
 # ResourceLoader.exists + load + GLB 实例化。PackedScene 只加载一次，之后只 instantiate。
 static var _scene_cache: Dictionary = {}
+static var _ballista_arrow_cache: Dictionary = {}
 static func _cached_scene(path: String) -> PackedScene:
 	if _scene_cache.has(path):
 		return _scene_cache[path] as PackedScene
 	var ps: PackedScene = load(path) if ResourceLoader.exists(path) else null
 	_scene_cache[path] = ps
 	return ps
+
+# 连弩/诸葛连弩的弹丸直接复用 ballista 模型自带的 arrow 子节点网格，
+# 这样发射出去的就是模型里那支弩箭；只取 Mesh，不把整台弩机一起实例化。
+static func _model_arrow_mesh(path: String) -> Mesh:
+	if path == "":
+		return null
+	if _ballista_arrow_cache.has(path):
+		return _ballista_arrow_cache[path] as Mesh
+	var mesh: Mesh = null
+	var scene := _cached_scene(path)
+	if scene != null:
+		var root := scene.instantiate()
+		var arrow := root.find_child("arrow", true, false) as MeshInstance3D
+		if arrow != null and arrow.mesh != null:
+			mesh = arrow.mesh
+		root.free()
+	_ballista_arrow_cache[path] = mesh
+	return mesh
 
 # 只有炮弹/巨石这一类推重弹走抛物线；弓箭、弩矢无论配置是否带溅射都保持直线。
 # 弓手 12/31/33/37/58、箭塔 25、战船 13 是箭矢来源，显式排除。
@@ -327,7 +346,19 @@ func _ready():
 	var source_id: int = int(source.entity_id) if source_valid else -1
 	if source_valid:
 		source_entity_id = source_id
-	if damage_radius > 0 or source_id in [16,17,26,39]:
+	var used_model_arrow := false
+	if source_id in [33, 58]:
+		var bolt_mesh := _model_arrow_mesh(RTSConfig.get_entity_model(source_id))
+		if bolt_mesh != null:
+			var bolt := MeshInstance3D.new()
+			bolt.mesh = bolt_mesh
+			# ballista 模型整体会被缩放；弹丸取模型箭网格后按相近比例缩小。
+			bolt.scale = Vector3.ONE * 0.6
+			# ballista 的箭沿模型局部 +X；弹丸 look_at 的 -Z 才是飞行方向。
+			bolt.rotation.y = deg_to_rad(90)
+			add_child(bolt)
+			used_model_arrow = true
+	if not used_model_arrow and (damage_radius > 0 or source_id in [16,17,26,39]):
 		# 投石车/巨型投石机用巨石
 		if source_id in [17, 59]:
 			var boulder = _cached_scene("res://models/defense/weapon-ammo-boulder.glb")
@@ -346,7 +377,7 @@ func _ready():
 			if cannon:
 				var c = cannon.instantiate()
 				if c: add_child(c)
-	else:
+	elif not used_model_arrow:
 		var arrow_scene = _cached_scene("res://models/forest/weapon-arrow.glb")
 		if arrow_scene:
 			var arrow = arrow_scene.instantiate()

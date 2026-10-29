@@ -1110,6 +1110,16 @@ func _update_entity_animation(node: Node3D, info: Dictionary):
 		_update_client_siege_attack(node, info)
 	if CasterAttackAnim.is_caster(entity_id):
 		_update_client_caster_attack(node, info)
+	if CannonTowerAnim.is_cannon_tower(entity_id):
+		var cannon_seq := int(info.get("attack_seq", 0))
+		var cannon_prev := int(node.get_meta("_cannon_attack_seq", -1))
+		if cannon_prev == -1:
+			node.set_meta("_cannon_attack_seq", cannon_seq)
+		elif cannon_seq != cannon_prev:
+			node.set_meta("_cannon_attack_seq", cannon_seq)
+			var cannon_model = node.get_meta("_model_instance", null)
+			if cannon_model is Node3D:
+				CannonTowerAnim.play(cannon_model)
 
 # 联机客户端没有 Army/真实目标引用，只能根据 attack_seq 按朝向和射程
 # 放一枚视觉法术弹；伤害/治疗仍由服务端在命中时结算，客户端只负责表现。
@@ -1661,6 +1671,8 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 	# 攻城单位：以首次快照为动画基线，避免第一次攻击时把旧序号当成新事件
 	if SiegeAttackAnim.is_siege(int(info.get("entity_id", -1))):
 		entity.set_meta("_siege_attack_seq", int(info.get("attack_seq", 0)))
+	if CannonTowerAnim.is_cannon_tower(int(info.get("entity_id", -1))):
+		entity.set_meta("_cannon_attack_seq", int(info.get("attack_seq", 0)))
 	entities_container.add_child(entity)
 	# 建筑脚下铺一层土色贴花，让建筑看起来压在地上而不是浮着
 	_attach_ground_patch(entity, info)
@@ -1703,6 +1715,16 @@ func _create_bullet_node(info: Dictionary) -> Node3D:
 				if ball:
 					n.add_child(ball)
 					loaded = true
+	# 连弩/诸葛连弩：使用 ballista 模型自带的弩箭网格，和服务器端一致。
+	if not loaded and eid in [33, 58]:
+		var bolt_mesh: Mesh = Bullet._model_arrow_mesh(RTSConfig.get_entity_model(eid))
+		if bolt_mesh != null:
+			var bolt := MeshInstance3D.new()
+			bolt.mesh = bolt_mesh
+			bolt.scale = Vector3.ONE * 0.6
+			bolt.rotation.y = deg_to_rad(90)
+			n.add_child(bolt)
+			loaded = true
 	if not loaded and ResourceLoader.exists("res://models/forest/weapon-arrow.glb"):
 		var arrow_scene = load("res://models/forest/weapon-arrow.glb")
 		if arrow_scene:
