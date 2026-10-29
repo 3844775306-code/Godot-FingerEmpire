@@ -94,6 +94,18 @@ const SIEGE_IDS: Array = [16, 17, 18, 58, 59]
 const ECO_IDS: Array = [10, 14, 43, 44, 45, 51]
 const TOWER_IDS: Array = [25, 26]
 const OUTPOST_ID: int = 41
+# 瞭望塔是纯视野建筑（25 米视野、无攻击）。位置应该按“新增视野”选，
+# 而不是围着主城均匀撒一圈；但也要限制总数量，避免吃掉箭塔/炮塔的石头。
+const WATCHTOWER_CAP: int = 6
+const WATCHTOWER_BASE_MAX: int = 2
+const WATCHTOWER_CHAIN_MAX: int = 4
+const WATCHTOWER_RESOURCE_MAX: int = 2
+const WATCHTOWER_MIN_SEP: float = 7.5
+# 视野收益低于这个阈值时不再单独加塔，防止两座塔看到同一片区域。
+const WATCHTOWER_GAIN_MIN: float = 18.0
+# 计算视野收益时按 2 格采样；100×100 地图上每座候选约 600 个采样点，
+# 不会像逐格扫描那样把防线规划拖慢。
+const WATCHTOWER_SAMPLE_STEP: int = 2
 
 var ai = null
 
@@ -164,6 +176,8 @@ var resource_zones: Array = []        # [{"center","type","workers","nodes","ene
 var _resource_timer: float = 0.0
 var _zone_timer: float = 0.0
 var _next_outpost: float = 0.0
+# 记录已经落位的资源区瞭望塔，便于限制每片资源区只建一座。
+var watchtower_positions: Array = []
 var _resource_guard_ids: Dictionary = {}
 var _resource_guard_hold_until: float = -999.0
 
@@ -1015,16 +1029,9 @@ func _plan_anchor_defense(castle, anchor: Dictionary,
 	var cannon_prio: float = 7.0 if priority_base < 10.0 else 15.0
 
 	# 锚点较远时先在城堡到山口的路上补瞭望塔，保证后续墙/塔能落在己方视野内。
+	# 具体位置按视野收益选，不能沿直线固定每 8 米硬塞一座。
 	if vision_chain:
-		var total_dist: float = castle.global_position.distance_to(wall_base)
-		var step: float = 8.0
-		var d: float = step
-		while d < total_dist - 1.0:
-			var vision_pos: Vector3 = castle.global_position + dir * d
-			var vs: Vector3 = _find_anchor_spot(vision_pos, 41, 2.2, false, true)
-			if vs != Vector3.ZERO:
-				_add_defense_slot(41, vs, vision_prio, "tower", false, false, true)
-			d += step
+		_plan_chain_watchtowers(castle, wall_base, dir, vision_prio)
 	elif float(anchor["dist"]) > 10.0:
 		var vision_pos2: Vector3 = castle.global_position + dir * 8.0
 		var vision_spot2: Vector3 = _find_anchor_spot(vision_pos2, 25, 1.5)
@@ -1559,6 +1566,300 @@ func _plan_ring_towers(castle, radius: int) -> void:
 					break
 			if placed:
 				break
+
+# ═══════════════════════════════════════════════════════════════
+# 瞭望塔选点：按“能新增多少有效视野”打分，而不是固定围主城一圈
+# ═══════════════════════════════════════════════════════════════
+
+# 已建 + 已规划的数量。规划中的塔还没有进入 battle 的实体缓存，必须单独算。
+func _watchtower_total() -> int:
+	return maxi(ai.count_building(OUTPOST_ID), _count_planned(OUTPOST_ID))
+
+# 已建或已规划的瞭望塔是否离目标太近。太近只会重复已有的 25 米视野。
+func _watchtower_near(pos: Vector3, radius: float = WATCHTOWER_MIN_SEP) -> bool:
+	for s in _defense_slots:
+		if int(s["id"]) == OUTPOST_ID:
+			var sp: Vector3 = s["pos"]
+			if sp.distance_to(pos) < radius:
+				return true
+	if ai.battle.has_method("get_nearby_buildings"):
+		for e in ai.battle.get_nearby_buildings(pos, radius):
+			if e is Building and e.health > 0 and int(e.entity_id) == OUTPOST_ID \
+					and ai.entity_belongs_to_me(e):
+				if e.global_position.distance_to(pos) < radius:
+					return true
+	return false
+
+func _watchtower_centers() -> Array:
+	var out: Array = []
+	for s in _defense_slots:
+		if int(s["id"]) == OUTPOST_ID:
+			out.append(s["pos"])
+	return out
+
+# 一片格子值多少：敌人来路/隘口/资源区附近值钱，主城内部已经看得见的区域不值钱。
+func _watchtower_cell_weight(world_pos: Vector3, anchor: Vector3, mode: String) -> float:
+	var weight: float = 1.0
+	var castle = ai.get_peer_castle(ai.my_peer_id)
+	if castle != null and is_instance_valid(castle):
+		var rel: Vector3 = world_pos - castle.global_position
+		rel.y = 0.0
+		var dist: float = rel.length()
+		if dist < 10.0:
+			weight *= 0.2
+		elif dist < 16.0:
+			weight *= 0.65
+		if rel.length_squared() > 0.01 and _defense_dir.length_squared() > 0.01:
+			var facing: float = rel.normalized().dot(_defense_dir.normalized())
+			weight *= 1.0 + maxf(facing, 0.0) * 2.0
+	if not _choke_anchor.is_empty():
+		var cp: Vector3 = _choke_anchor.get("pos", Vector3.ZERO)
+		if cp != Vector3.ZERO:
+			var dc: float = cp.distance_to(world_pos)
+			if dc < 16.0:
+				weight += 1.2 * (1.0 - dc / 16.0)
+	for z in resource_zones:
+		if not z.has("center"):
+			continue
+		var zp: Vector3 = z["center"]
+		var dz: float = zp.distance_to(world_pos)
+		if dz < 14.0:
+			weight += 0.8 * (1.0 - dz / 14.0)
+	if mode == "resource":
+		var da: float = anchor.distance_to(world_pos)
+		if da < 18.0:
+			weight *= 1.0 + (1.0 - da / 18.0)
+	elif mode == "chain":
+		var dch: float = anchor.distance_to(world_pos)
+		if dch < 16.0:
+			weight *= 1.0 + (1.0 - dch / 16.0)
+	return weight
+
+func _watchtower_covered_by_planned(world_pos: Vector3, planned: Array) -> bool:
+	for p in planned:
+		var pp: Vector3 = p
+		if pp.distance_to(world_pos) <= 25.0:
+			return true
+	return false
+
+# 候选塔能新增的加权视野格。用队伍可见掩码，不读取玩家迷雾；
+# 同时把已经规划、但还没落成的瞭望塔算进去，避免一次规划里连续选同一片区域。
+func _watchtower_visible_gain(pos: Vector3, anchor: Vector3, mode: String) -> float:
+	var cfg: Dictionary = EntityDatabase.get_config(OUTPOST_ID)
+	if cfg.is_empty():
+		return 0.0
+	var vision: float = float(cfg.get("vision_range", 25.0))
+	var mask: PackedByteArray = PackedByteArray()
+	if ai.battle.has_method("get_team_visible_mask"):
+		mask = ai.battle.get_team_visible_mask(ai.my_team)
+	var ms: int = RTSConfig.MAP_SIZE
+	var center: Vector2i = ai.battle.world_to_grid(pos)
+	var planned: Array = _watchtower_centers()
+	var radius: int = int(ceil(vision))
+	var steps: int = int(ceil(float(radius) / float(WATCHTOWER_SAMPLE_STEP)))
+	var full_mask: bool = mask.size() == ms * ms
+	var gain: float = 0.0
+	for ix in range(-steps, steps + 1):
+		var dx: int = ix * WATCHTOWER_SAMPLE_STEP
+		for iz in range(-steps, steps + 1):
+			var dz: int = iz * WATCHTOWER_SAMPLE_STEP
+			if dx * dx + dz * dz > radius * radius:
+				continue
+			var gx: int = center.x + dx
+			var gz: int = center.y + dz
+			if gx < 0 or gz < 0 or gx >= ms or gz >= ms:
+				continue
+			if full_mask and mask[gx * ms + gz] == 1:
+				continue
+			var wp: Vector3 = ai.battle.grid_to_world(gx, gz)
+			if _watchtower_covered_by_planned(wp, planned):
+				continue
+			gain += _watchtower_cell_weight(wp, anchor, mode)
+	return gain
+
+func _score_watchtower_candidate(pos: Vector3, anchor: Vector3, mode: String) -> float:
+	if _watchtower_near(pos):
+		return -1.0
+	var gain: float = _watchtower_visible_gain(pos, anchor, mode)
+	if gain < WATCHTOWER_GAIN_MIN:
+		return -1.0
+	var score: float = gain
+	var dist: float = pos.distance_to(anchor)
+	if mode == "base":
+		# 基地塔放在 8~12 米最合适：太贴主城会和主城视野重叠，太远又容易被拆。
+		score -= absf(dist - 10.0) * 0.6
+	elif mode == "resource":
+		score -= absf(dist - 8.0) * 0.8
+	elif mode == "chain":
+		score -= dist * 0.05
+	# 纯视野建筑没有自卫能力，明显暴露在敌军面前的位置直接降权。
+	for e in ai._visible_enemies:
+		if not is_instance_valid(e) or e.health <= 0:
+			continue
+		if not (e is Army or e is Building):
+			continue
+		if not ai._entity_is_enemy(e):
+			continue
+		var ed: float = e.global_position.distance_to(pos)
+		if ed < 12.0:
+			score -= (12.0 - ed) * 3.0
+	return score
+
+func _watchtower_candidate_ok(pos: Vector3, require_vision: bool,
+		require_actual_vision: bool) -> bool:
+	var cfg: Dictionary = EntityDatabase.get_config(OUTPOST_ID)
+	if cfg.is_empty():
+		return false
+	var radius: float = float(cfg.get("body_radius", 0.6))
+	if not _is_valid_defense_ground(pos, radius, true, false, require_vision, true):
+		return false
+	if require_actual_vision and not _defense_pos_visible(pos):
+		return false
+	if not _defense_slot_clear(pos, radius, OUTPOST_ID):
+		return false
+	if _watchtower_near(pos):
+		return false
+	return true
+
+func _collect_watchtower_candidates(center: Vector3, radii: Array, angle_count: int,
+		require_vision: bool, require_actual_vision: bool) -> Array:
+	var out: Array = []
+	var seen: Dictionary = {}
+	for rad in radii:
+		var rf: float = float(rad)
+		for i in range(angle_count):
+			var a: float = TAU * float(i) / float(angle_count)
+			var p: Vector3 = center + Vector3(cos(a) * rf, 0.0, sin(a) * rf)
+			var key: Vector2i = ai.battle.world_to_grid(p)
+			if seen.has(key):
+				continue
+			seen[key] = true
+			if _watchtower_candidate_ok(p, require_vision, require_actual_vision):
+				out.append(p)
+	return out
+
+func _best_watchtower_index(candidates: Array, anchor: Vector3, mode: String) -> int:
+	var best_idx: int = -1
+	var best_score: float = -1.0
+	for i in range(candidates.size()):
+		var p: Vector3 = candidates[i]
+		var s: float = _score_watchtower_candidate(p, anchor, mode)
+		if s > best_score:
+			best_score = s
+			best_idx = i
+	return best_idx
+
+func _pick_watchtower_spot(center: Vector3, radii: Array, angle_count: int,
+		anchor: Vector3, mode: String, require_vision: bool,
+		require_actual_vision: bool) -> Vector3:
+	var candidates: Array = _collect_watchtower_candidates(center, radii, angle_count,
+			require_vision, require_actual_vision)
+	var idx: int = _best_watchtower_index(candidates, anchor, mode)
+	if idx < 0:
+		return Vector3.ZERO
+	return candidates[idx]
+
+# 主城圈：最多两座，先保证朝敌方向/外圈墙位的视野，再补侧翼。
+func _plan_base_watchtowers(castle, radius: int) -> void:
+	var left: int = WATCHTOWER_CAP - _watchtower_total()
+	if left <= 0:
+		return
+	var limit: int = mini(WATCHTOWER_BASE_MAX, left)
+	var anchor: Vector3 = castle.global_position
+	# 塔本身不参战，基地塔不要落到墙圈外侧；半径较小时只取 8 米这一档。
+	var max_base_dist: float = clampf(float(radius) - 2.0, 8.0, 12.0)
+	var radii: Array = [8.0]
+	if max_base_dist >= 9.5:
+		radii.append(10.0)
+	if max_base_dist >= 11.5:
+		radii.append(12.0)
+	var candidates: Array = _collect_watchtower_candidates(anchor,
+			radii, 12, true, true)
+	var added: int = 0
+	while added < limit and not candidates.is_empty():
+		var idx: int = _best_watchtower_index(candidates, anchor, "base")
+		if idx < 0:
+			break
+		var spot: Vector3 = candidates[idx]
+		candidates.remove_at(idx)
+		if not _add_defense_slot(OUTPOST_ID, spot, 2.0 + float(added) * 0.1,
+				"tower", false, true, true):
+			continue
+		added += 1
+	# 极端地形下评分候选全被挡掉时，才用旧的近主城四点兜底。
+	# 如果已经存在瞭望塔，说明视野不是完全没铺，不能为了兜底再重复加塔。
+	if added == 0 and _watchtower_total() == 0:
+		for i in range(4):
+			var va: float = TAU * float(i) / 4.0 + PI / 4.0
+			var vp: Vector3 = castle.global_position + Vector3(cos(va), 0.0, sin(va)) * 8.0
+			var vs: Vector3 = _find_anchor_spot(vp, OUTPOST_ID, 1.6)
+			if vs != Vector3.ZERO and not _watchtower_near(vs) \
+					and _add_defense_slot(OUTPOST_ID, vs, 2.0 + float(i) * 0.1, "tower"):
+				added += 1
+				if added >= limit:
+					break
+
+# 隘口视野链：只沿主城到山口的路线补塔，单次规划最多 4 座；
+# 已经看得见的区域不再重复加塔，但靠近墙基的最后一段保留兜底。
+func _plan_chain_watchtowers(castle, wall_base: Vector3, dir: Vector3,
+		priority: float) -> int:
+	var total_dist: float = castle.global_position.distance_to(wall_base)
+	if total_dist < 8.0:
+		return 0
+	var step: float = 8.0
+	var d: float = step
+	var added: int = 0
+	while d < total_dist - 1.0 and added < WATCHTOWER_CHAIN_MAX:
+		if _watchtower_total() >= WATCHTOWER_CAP:
+			break
+		var center: Vector3 = castle.global_position + dir * d
+		var spot: Vector3 = _pick_watchtower_spot(center, [0.0, 2.2], 8, wall_base,
+				"chain", false, false)
+		if spot != Vector3.ZERO:
+			var gain: float = _watchtower_visible_gain(spot, wall_base, "chain")
+			var near_wall: bool = spot.distance_to(wall_base) < 26.0
+			if gain >= WATCHTOWER_GAIN_MIN or near_wall:
+				if _add_defense_slot(OUTPOST_ID, spot, priority + float(added) * 0.1,
+						"tower", false, false, true):
+					added += 1
+		d += step
+	return added
+
+# 给升时代补齐建筑用：只返回位置，不走防线队列，避免和 _try_build_age_requirement
+# 的立即建造重复排队。找不到合适位置时返回 ZERO，让 AI 走普通兜底。
+func find_watchtower_build_position(castle) -> Vector3:
+	if castle == null or not is_instance_valid(castle):
+		return Vector3.ZERO
+	if _watchtower_total() >= WATCHTOWER_CAP:
+		return Vector3.ZERO
+	var spot: Vector3 = _pick_watchtower_spot(castle.global_position,
+			[8.0, 10.0, 12.0], 12, castle.global_position, "base", true, true)
+	if spot != Vector3.ZERO:
+		return spot
+	for dist in [8.0, 10.0, 12.0]:
+		for i in range(8):
+			var a: float = TAU * float(i) / 8.0
+			var p: Vector3 = castle.global_position + Vector3(cos(a) * float(dist), 0.0,
+					sin(a) * float(dist))
+			if _watchtower_candidate_ok(p, true, true):
+				return p
+	return Vector3.ZERO
+
+func _resource_watchtower_count() -> int:
+	var count: int = 0
+	for e in ai.battle.entities.get_children():
+		if not (e is Building) or e.health <= 0:
+			continue
+		if int(e.entity_id) != OUTPOST_ID or not ai.entity_belongs_to_me(e):
+			continue
+		for z in resource_zones:
+			if not z.has("center"):
+				continue
+			var zp: Vector3 = z["center"]
+			if e.global_position.distance_to(zp) < 14.0:
+				count += 1
+				break
+	return count
 
 # 山/水 + 现有建筑/资源对陆军的阻挡。同一次圈规划里这些不会变，
 # 缓存一次供所有候选半径复用，避免每个半径都扫全图地形和实体。
@@ -2606,7 +2907,9 @@ func _maybe_build_outpost(castle) -> void:
 	if now < _next_outpost:
 		return
 	_next_outpost = now + OUTPOST_INTERVAL
-	if ai.count_building(OUTPOST_ID) >= 2:
+	if _watchtower_total() >= WATCHTOWER_CAP:
+		return
+	if _resource_watchtower_count() >= WATCHTOWER_RESOURCE_MAX:
 		return
 	var best = null
 	var best_score: float = 0.0
@@ -2627,13 +2930,12 @@ func _maybe_build_outpost(castle) -> void:
 		return
 	if not _can_spend_building(OUTPOST_ID, 0.4):
 		return
-	for dist in [4.5, 6.0, 8.0]:
-		for i in range(8):
-			var a: float = TAU * float(i) / 8.0
-			var p: Vector3 = best["center"] + Vector3(cos(a) * dist, 0.0, sin(a) * dist)
-			if _is_valid_defense_ground(p, float(EntityDatabase.get_config(OUTPOST_ID).get("body_radius", 0.6))):
-				if ai.build_building(OUTPOST_ID, p):
-					return
+	var spot: Vector3 = _pick_watchtower_spot(best["center"], [5.0, 7.0, 9.0, 11.0],
+			12, best["center"], "resource", true, true)
+	if spot == Vector3.ZERO:
+		return
+	if ai.build_building(OUTPOST_ID, spot):
+		watchtower_positions.append(spot)
 
 # ═══════════════════════════════════════════════════════════════
 # 通用判定

@@ -495,7 +495,14 @@ func _try_build_age_requirement(building_id: int) -> bool:
 		return false
 	if not can_afford_building(building_id):
 		return false
-	var pos: Vector3 = _get_build_position(building_id)
+	var pos: Vector3 = Vector3.ZERO
+	# 瞭望塔是视野建筑，升时代补建筑时也不能在主城周围随机拍；
+	# 让 AIDefense 按新增视野/敌军来路选一个真正有用的位置。
+	if building_id == 41 and _defense != null \
+			and _defense.has_method("find_watchtower_build_position"):
+		pos = _defense.find_watchtower_build_position(get_peer_castle(my_peer_id))
+	if pos == Vector3.ZERO:
+		pos = _get_build_position(building_id)
 	if pos == Vector3.ZERO:
 		return false
 	return build_building(building_id, pos)
