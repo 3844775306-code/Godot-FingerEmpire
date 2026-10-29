@@ -476,6 +476,12 @@ const PERF_LEVEL_SCALES: Array[float] = [1.0, 0.85, 0.72, 0.62, 0.52]
 const PERF_SHADOW_DISTANCE_SCALES: Array[float] = [1.0, 0.9, 0.8, 0.7, 0.6]
 var _distant_shadow_timer: float = 2.0
 var _anim_lod_timer: float = 1.0
+# LOD 分帧游标：几百个单位在同一帧里递归开关阴影/动画会造成 200~400ms 的长帧，
+# 改成每帧只处理一小批（32 个），把一次长帧摊到十几帧里，消除“每隔一秒一顿”。
+var _shadow_lod_cursor: int = 0
+var _shadow_lod_pending: bool = false
+var _anim_lod_cursor: int = 0
+var _anim_lod_pending: bool = false
 # 大规模战斗自适应物理频率：渲染仍按60FPS，逻辑/物理降到30Hz，避免
 # 每帧追赶多个物理 tick 形成“越卡越追、越追越卡”的死循环。
 var _physics_tick_timer: float = 2.0
@@ -5289,26 +5295,38 @@ func _tick_distant_shadows(delta: float) -> void:
 	if DisplayServer.get_name() == "headless" or game_over:
 		return
 	_distant_shadow_timer -= delta
-	if _distant_shadow_timer > 0.0:
+	if _distant_shadow_timer <= 0.0 and not _shadow_lod_pending:
+		_distant_shadow_timer = 2.0
+		_shadow_lod_cursor = 0
+		_shadow_lod_pending = true
+	if not _shadow_lod_pending:
 		return
-	_distant_shadow_timer = 2.0
 	if not _perf_light or not is_instance_valid(_perf_light):
+		_shadow_lod_pending = false
 		return
 	if not _perf_light.shadow_enabled:
 		# 阴影已整体关闭：把之前按距离关掉的节点恢复，避免下次开阴影时状态错乱
 		_restore_shadow_casting()
+		_shadow_lod_pending = false
 		return
 	var cam := get_viewport().get_camera_3d()
 	if cam == null:
+		_shadow_lod_pending = false
 		return
 	_ensure_cache_fresh()
 	var cam_pos := cam.global_position
 	var limit: float = 46.0 - float(_perf_quality_level) * 6.0
-	for a in _armies:
+	var total: int = _armies.size()
+	var end_i: int = mini(total, _shadow_lod_cursor + 32)
+	for i in range(_shadow_lod_cursor, end_i):
+		var a = _armies[i]
 		if not is_instance_valid(a):
 			continue
 		var far: bool = cam_pos.distance_to(a.global_position) > limit
 		_toggle_shadow_recursive(a, far)
+	_shadow_lod_cursor = end_i
+	if _shadow_lod_cursor >= total:
+		_shadow_lod_pending = false
 
 # 动画 LOD：几百个角色即使屏幕外，AnimationPlayer 仍会推进骨骼动画。
 # 每秒按“是否在相机视锥内 + 距离”批量停掉远景/屏幕外单位的动画，
@@ -5317,18 +5335,25 @@ func _tick_animation_lod(delta: float) -> void:
 	if game_over:
 		return
 	_anim_lod_timer -= delta
-	if _anim_lod_timer > 0.0:
+	if _anim_lod_timer <= 0.0 and not _anim_lod_pending:
+		_anim_lod_timer = 1.0
+		_anim_lod_cursor = 0
+		_anim_lod_pending = true
+	if not _anim_lod_pending:
 		return
-	_anim_lod_timer = 1.0
 	_ensure_cache_fresh()
 	var cam := get_viewport().get_camera_3d() if is_inside_tree() else null
-	if cam == null or _armies.size() < 260:
+	var total: int = _armies.size()
+	if cam == null or total < 260:
 		for a in _armies:
 			if is_instance_valid(a):
 				a.set_animation_lod(false)
 				a.set_meta("_phys_lod", 1)
+		_anim_lod_pending = false
 		return
-	for a in _armies:
+	var end_i: int = mini(total, _anim_lod_cursor + 32)
+	for i in range(_anim_lod_cursor, end_i):
+		var a = _armies[i]
 		if not is_instance_valid(a) or a.health <= 0:
 			continue
 		var p: Vector3 = a.global_position + Vector3(0, 1.0, 0)
@@ -5346,6 +5371,9 @@ func _tick_animation_lod(delta: float) -> void:
 		elif _dist > 40.0:
 			_lod = 2
 		a.set_meta("_phys_lod", _lod)
+	_anim_lod_cursor = end_i
+	if _anim_lod_cursor >= total:
+		_anim_lod_pending = false
 
 # 500 单位级战斗：每个物理 tick 的 Army 逻辑已经接近 16ms，再乘上帧末
 # 追赶的多个 physics tick 就会把帧时间推到几百毫秒。渲染保持 60FPS，
