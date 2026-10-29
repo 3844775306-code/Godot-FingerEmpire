@@ -78,6 +78,7 @@ var _cached_map = null
 
 # 开局握手：客户端战斗场景就绪后才发地图/队伍，避免数据早到被丢弃（表现为客户端黑屏）
 var _scene_ready_peers: Dictionary = {}
+var _map_ready_peers: Dictionary = {}
 var pending_map_data: Dictionary = {}   # 场景未就绪时暂存的地图数据
 var map_data_applied: bool = false      # 本次战斗的地图是否已应用到客户端
 # 地图分块接收：一次性 RPC 会超过 WebSocket 默认 64KB 缓冲，拆成 16KB 小块。
@@ -414,6 +415,7 @@ func start_game():
 		return reason  # 返回阻止原因给调用方
 	game_started = true
 	_scene_ready_peers.clear()
+	_map_ready_peers.clear()
 	_apply_map_size_for_mode()
 	print("[NetworkManager] Starting game, use_steam=", use_steam, " peers=", multiplayer.get_peers().size())
 	if use_steam:
@@ -513,6 +515,35 @@ func wait_clients_scene_ready(peers: Array, timeout_sec: float = 8.0) -> void:
 		await get_tree().create_timer(0.05).timeout
 	if not pending.is_empty():
 		print("[NetworkManager] 等待客户端场景就绪超时，仍继续开局: ", str(pending))
+
+# 客户端地图真正应用完成后的确认：服务器等到所有客户端画面就绪再开始跑逻辑
+@rpc("any_peer", "call_remote", "reliable")
+func client_map_ready():
+	if mode == Mode.SERVER:
+		var sender := multiplayer.get_remote_sender_id()
+		if sender == 0: sender = 1
+		_map_ready_peers[sender] = true
+
+func notify_map_ready() -> void:
+	if mode != Mode.CLIENT:
+		return
+	var peer = multiplayer.multiplayer_peer
+	if peer == null or peer is OfflineMultiplayerPeer:
+		return
+	if peer.get_connection_status() != MultiplayerPeer.CONNECTION_CONNECTED:
+		return
+	client_map_ready.rpc_id(1)
+
+func wait_clients_map_ready(peers: Array, timeout_sec: float = 15.0) -> void:
+	var deadline := Time.get_ticks_msec() + int(timeout_sec * 1000.0)
+	var pending: Array = peers.duplicate()
+	while not pending.is_empty() and Time.get_ticks_msec() < deadline:
+		pending = pending.filter(func(pid): return not _map_ready_peers.has(pid))
+		if pending.is_empty():
+			break
+		await get_tree().create_timer(0.05).timeout
+	if not pending.is_empty():
+		print("[NetworkManager] 等待客户端地图就绪超时，仍继续开局: ", str(pending))
 
 # 客户端场景就绪后的兜底：先吃暂存地图，迟一点还没收到就主动补请（最多 3 次）
 func _client_map_ready() -> void:
@@ -631,6 +662,7 @@ func _apply_received_map_data(payload: Dictionary) -> void:
 		return
 	map.apply_received_map(terrain, height_data, resources, overlay, map_id)
 	map_data_applied = true
+	notify_map_ready()
 	var renderer = _get_renderer()
 	if renderer and renderer.has_method("_add_water_box"):
 		var fog_tex = null

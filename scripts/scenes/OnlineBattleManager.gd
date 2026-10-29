@@ -343,6 +343,9 @@ func _ready():
 	
 	is_online = true
 	super._ready()                         # 父类 _ready 因 is_online=true 不会生成实体
+	# 客户端画面同步前先冻结服务器：避免客户端还在等地图时，服务器已经跑了一段游戏逻辑。
+	set_process(false)
+	set_physics_process(false)
 	add_to_group("online_battle_manager")
 	#set_process_input(false)
 
@@ -389,6 +392,8 @@ func _init_1v1():
 	await NetworkManager.wait_clients_scene_ready(peers)
 	# 发送地图数据
 	_send_map_data(peers)
+	# 等所有客户端真正把地图应用完再开始跑服务器逻辑，避免双方画面不同步
+	await NetworkManager.wait_clients_map_ready(peers)
 	# 通知队伍
 	for pid in peers:
 		NetworkManager._notify_team.rpc_id(pid, player_teams[pid])
@@ -408,6 +413,7 @@ func _init_1v1():
 	for pid in player_teams.keys():
 		_player_colors[pid] = RTSConfig.COLOR_POOL[player_teams[pid]]
 	set_process(true)
+	set_physics_process(true)
 	broadcast_enabled = true
 	# 发送城堡位置
 	await get_tree().process_frame
@@ -551,6 +557,7 @@ func _init_team_mode():
 		NetworkManager.notify_all_player_colors.rpc_id(pid, all_player_colors)
 
 	_send_map_data(real_pids)
+	await NetworkManager.wait_clients_map_ready(real_pids)
 	for pid in real_pids:
 		var info = player_info[pid]
 		NetworkManager.notify_team_info.rpc_id(pid, pid, info.team, info.slot, info.color)
@@ -561,6 +568,7 @@ func _init_team_mode():
 	_init_all_castles_team()
 	_debug_print_colors()
 	set_process(true)
+	set_physics_process(true)
 	broadcast_enabled = true
 
 	await get_tree().process_frame
