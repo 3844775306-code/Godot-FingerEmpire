@@ -980,6 +980,7 @@ func _update_wall_orientation(wall_node: Node3D, info: Dictionary):
 						if cs > 0.01: inst.scale = Vector3.ONE * (target_size / cs)
 					wall_node.add_child(inst)
 					wall_node.set_meta("_model_instance", inst)
+					WallTierVisual.apply(wall_node, int(info.get("upgrade_level", 1)), _get_entity_color(info))
 					BuildingConstructionVisual.rebind(wall_node)
 	
 	# Rotation — matches server exactly
@@ -1263,6 +1264,8 @@ func _refresh_client_level_visual(node: Node3D, info: Dictionary) -> void:
 		node.set_meta("_level_visual_color", team_color)
 	else:
 		LevelVisualScript.set_visible(node, visible)
+	if int(info.get("entity_id", 0)) == 27:
+		WallTierVisual.apply(node, lv, team_color)
 
 func _refresh_client_damage_visual(node: Node3D, info: Dictionary) -> void:
 	var max_hp := float(info.get("max_health", 0.0))
@@ -1622,6 +1625,8 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 		if info.get("type", -1) != 0:
 			var lt = Color(0.5 + entity_color.r * 0.5, 0.5 + entity_color.g * 0.5, 0.5 + entity_color.b * 0.5)
 			_apply_model_tint(loaded_model, lt)
+			if int(info.get("entity_id", 0)) == 27:
+				WallTierVisual.apply(entity, int(info.get("upgrade_level", 1)), entity_color)
 		# Weapons and mounts (match server Army._add_weapon)
 		var eid2 = info.get("entity_id", 0)
 		var br = info.get("body_radius", 0.5)

@@ -312,6 +312,7 @@ func _reload_wall_model(bm, path):
 			BuildingConstructionVisual.rebind(self)
 			var tint: Color = bm.get_entity_color(self) if bm.has_method("get_entity_color") else (Color(0.3, 0.6, 1.0) if team == RTSConfig.Team.BLUE else Color(1.0, 0.4, 0.4))
 			bm._apply_team_tint(self, tint)
+			WallTierVisual.apply(self, maxi(upgrade_level, level), tint)
 
 func _finish_construction():
 	BuildingConstructionVisual.finish(self)
@@ -404,6 +405,8 @@ func refresh_level_visual() -> void:
 	if bm != null and bm.has_method("get_entity_color"):
 		color = bm.get_entity_color(self)
 	LevelVisualScript.apply(self, maxi(upgrade_level, level), 0.0, color, build_timer <= 0.0)
+	# 城墙按等级换木/粗石/精石材质；普通建筑由 LevelVisual 处理。
+	WallTierVisual.apply(self, maxi(upgrade_level, level), color)
 
 	
 func is_under_construction() -> bool:
