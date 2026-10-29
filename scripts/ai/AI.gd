@@ -51,6 +51,10 @@ const HOUSE_BUILD_LEAD_MINUTES: int = 1
 var target_house_count: int = HOUSE_TARGET_MAX
 var desired_worker_count: int = 8
 var _resource_pressure_time: float = 0.0
+# 最近一次“泄压但买不起”的阻塞原因，便于面板/日志定位是金、木还是食物不足。
+var _last_spend_block: String = ""
+var _last_spend_block_time: float = -999.0
+var _last_emergency_rebalance_time: float = -999.0
 
 # ═══ 资源溢出治理 ═══
 # 旧逻辑里军队/建筑都有固定上限（每兵种 7 个、民居 8 座、兵营 3 座…），
@@ -325,20 +329,36 @@ func _update_resource_pressure(delta: float) -> void:
 		_resource_pressure_time = 0.0
 
 # 资源堆积时临时放宽每兵种数量上限，避免“每个兵种都 7 个”之后军队停止增长。
+# 实战里还出现过四资源顶满、人口 83/100、目标仍为 7 的情况：资源没溢出时
+# 只按固定值补兵，人口空着也不花。这里在进入中后期或资源偏高时按人口缺口
+# 抬高目标，真正把收入转成人口和兵力。
 func _effective_army_target() -> int:
-	if not _resource_overflow():
-		return target_army_count
-	var extra: int = RESOURCE_PRESSURE_EXTRA_ARMY
-	if _resource_critical():
-		extra += RESOURCE_PRESSURE_EXTRA_ARMY
-	return target_army_count + extra
+	var target: int = target_army_count
+	var pop: Dictionary = _get_population()
+	var free_pop: int = maxi(0, int(pop.get("max", 0)) - int(pop.get("current", 0)))
+	var mid_game: bool = battle != null and battle.game_time >= 120.0
+	if free_pop > 2 and (mid_game or _resource_pressure_ratio() >= 0.60):
+		target = maxi(target, target_army_count + mini(free_pop - 2, 10))
+	if _resource_overflow():
+		var extra: int = RESOURCE_PRESSURE_EXTRA_ARMY
+		if _resource_critical():
+			extra += RESOURCE_PRESSURE_EXTRA_ARMY
+		target = maxi(target, target_army_count + extra)
+	return target
 
 # 人口已满而资源还多时，先补额外民居，否则多出来的资源无处转化为军队。
+# 不一定非要“溢出”：人口接近上限且资源已经超过 60% 时就应继续补房，
+# 否则会出现“人口 90/90、资源 1700/2300、军队目标掉回 7”的中期停摆。
 func _effective_house_target() -> int:
-	if not _resource_overflow():
-		return target_house_count
 	var pop: Dictionary = _get_population()
-	if int(pop.get("current", 0)) < int(pop.get("max", 0)) - 2:
+	var current: int = int(pop.get("current", 0))
+	var max_pop: int = int(pop.get("max", 0))
+	var near_cap: bool = max_pop > 0 and current >= max_pop - 2
+	if not _resource_overflow():
+		if near_cap and _resource_pressure_ratio() >= 0.60:
+			return maxi(target_house_count, HOUSE_TARGET_MAX + RESOURCE_PRESSURE_EXTRA_HOUSES)
+		return target_house_count
+	if current < max_pop - 2:
 		return target_house_count
 	return maxi(target_house_count, HOUSE_TARGET_MAX + RESOURCE_PRESSURE_EXTRA_HOUSES)
 
@@ -2475,6 +2495,11 @@ func allocate_workers():
 	if pause_gather:
 		return
 
+	# 先救急：石油/石头已经满仓、但金/木/食物见底时，把正在采满仓资源的
+	# 农民强行拉去采稀缺资源。旧的 97% 阈值要等资源几乎完全满仓才动，
+	# 而 85% 泄压又早就开始了，中间这段收入会一直堆在不能造兵的资源上。
+	_emergency_rebalance_workers(workers)
+
 	if workers.size() < desired_worker_count and not _all_gather_resources_full():
 		if can_afford(10) and _can_train_unit(): produce_unit(10)
 		var train_weights: Dictionary = _worker_resource_weights()
@@ -2503,7 +2528,7 @@ func allocate_workers():
 	# 对应资源满仓也不会被改派，于是继续把收入送进被上限截断的池子。
 	var full_types: Array = []
 	for rk in ["gold", "wood", "stone", "food"]:
-		if _resource_ratio(rk) >= RESOURCE_CRITICAL_RATIO:
+		if _resource_ratio(rk) >= RESOURCE_PRESSURE_RATIO:
 			full_types.append(rk)
 	if not full_types.is_empty():
 		var alt_weights: Dictionary = _worker_resource_weights()
@@ -2565,6 +2590,61 @@ func allocate_workers():
 				var target = find_best_resource_for_worker(w, {best_rk: 100})
 				if target: w.gather_at(target); current[best_rk] = current.get(best_rk, 0) + 1
 
+# 满仓资源与见底资源同时存在时，优先救急改派农民。
+# 实战出现过：石油 700/700、金 12/800、木 0、食物 4，12 个农民仍在采油/石，
+# 泄压一直在跑但所有兵都买不起。这里不等 97% 满仓，85% 就开始把采集满仓
+# 资源的人拉去采最缺的那种资源；如果地图上找不到对应矿，只记录原因。
+func _emergency_rebalance_workers(workers: Array) -> void:
+	if battle == null or workers.is_empty():
+		return
+	if battle.game_time - _last_emergency_rebalance_time < 4.0:
+		return
+	var scarce: Array = []
+	var overfull: Array = []
+	for rk in ["gold", "wood", "food", "stone", "oil"]:
+		var ratio: float = _resource_ratio(rk)
+		if ratio >= RESOURCE_PRESSURE_RATIO:
+			overfull.append(rk)
+		elif rk != "oil" and ratio <= 0.20:
+			scarce.append(rk)
+	if scarce.is_empty() or overfull.is_empty():
+		return
+	scarce.sort_custom(func(a, b): return _resource_ratio(a) < _resource_ratio(b))
+	var best_rk: String = String(scarce[0])
+	var candidates: Array = []
+	for w in workers:
+		if _worker_is_fleeing(w) or w.current_order == "deliver":
+			continue
+		var tgt = w.current_target
+		if is_instance_valid(tgt) and tgt is WorldResource and String(tgt.resource_type) in overfull:
+			candidates.append(w)
+	if candidates.is_empty():
+		return
+	var max_moves: int = clampi(int(workers.size() / 4), 2, 4)
+	var moved: int = 0
+	for w in candidates:
+		var target = find_best_resource_for_worker(w, {best_rk: 100})
+		if target == null:
+			for rk in scarce:
+				if String(rk) == best_rk:
+					continue
+				target = find_best_resource_for_worker(w, {String(rk): 100})
+				if target != null:
+					break
+		if target == null:
+			break
+		w.gather_at(target)
+		moved += 1
+		if moved >= max_moves:
+			break
+	if moved > 0:
+		_last_emergency_rebalance_time = battle.game_time
+		_last_spend_block = "rebalanced_" + best_rk
+		_last_spend_block_time = battle.game_time
+	else:
+		_last_spend_block = "no_target_" + best_rk
+		_last_spend_block_time = battle.game_time
+
 func _worker_is_fleeing(w) -> bool:
 	if w == null or not is_instance_valid(w) or not w.has_meta("ai_flee_until"):
 		return false
@@ -2607,7 +2687,8 @@ func _get_phase_weights() -> Dictionary:
 func _worker_resource_weights() -> Dictionary:
 	var weights: Dictionary = _get_phase_weights()
 	for rk in ["gold", "wood", "stone", "food"]:
-		if _resource_ratio(rk) >= RESOURCE_CRITICAL_RATIO:
+		# 到 85% 就不再优先派农民去采，避免一边泄压一边继续堆满仓资源。
+		if _resource_ratio(rk) >= RESOURCE_PRESSURE_RATIO:
 			weights.erase(rk)
 	return weights
 
@@ -3886,6 +3967,22 @@ func _relieve_resource_pressure() -> void:
 		_train_overflow_units()
 	_process_line_1()
 
+# 买不起时返回具体缺哪种资源，用于诊断“资源很多但军队不涨”。
+func _afford_block_reason(unit_id: int) -> String:
+	var cfg = EntityDatabase.get_config(unit_id)
+	if not cfg:
+		return "no_config"
+	var res: Dictionary = _get_resources()
+	var cost: Dictionary = cfg.get("cost", {})
+	for k in cost:
+		if int(res.get(k, 0)) < int(cost[k]):
+			return "missing_" + String(k)
+	if _research_age_reserve_active():
+		return "reserve_age"
+	if unit_id != TREBUCHET_ID and _trebuchet_reserve_active():
+		return "reserve_trebuchet"
+	return ""
+
 func _train_overflow_units() -> void:
 	if not _resource_overflow() or not _can_train_unit_with_queue():
 		return
@@ -3898,6 +3995,9 @@ func _train_overflow_units() -> void:
 		if u_id == TRADE_CART_ID and count_unit(TRADE_CART_ID) >= _count_merchants():
 			continue
 		var cap: int = _effective_army_target()
+		if count_unit(u_id) < cap and not can_afford(u_id):
+			_last_spend_block = _afford_block_reason(u_id)
+			_last_spend_block_time = battle.game_time
 		while budget > 0 and count_unit(u_id) < cap and _can_train_unit_with_queue() and can_afford(u_id):
 			if not produce_unit(u_id):
 				break
