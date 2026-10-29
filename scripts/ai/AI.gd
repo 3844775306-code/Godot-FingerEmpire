@@ -55,6 +55,8 @@ var _resource_pressure_time: float = 0.0
 var _last_spend_block: String = ""
 var _last_spend_block_time: float = -999.0
 var _last_emergency_rebalance_time: float = -999.0
+var _last_wall_sink_time: float = -999.0
+var _stone_share_timer: float = 0.0
 
 # ═══ 资源溢出治理 ═══
 # 旧逻辑里军队/建筑都有固定上限（每兵种 7 个、民居 8 座、兵营 3 座…），
@@ -1787,6 +1789,13 @@ func _process(delta):
 	if _repair_scan_timer <= 0.0:
 		_repair_scan_timer = REPAIR_SCAN_INTERVAL * minf(late_scale, 2.0)
 		_tick_building_repair()
+	# 2v2/3v3 的石头共享独立节流：不依赖当前 phase 是否调用 _process_line_1，
+	# 否则生产卡住的 AI 会一直满仓、队友却缺石头造墙。
+	_stone_share_timer -= delta
+	if _stone_share_timer <= 0.0:
+		_stone_share_timer = 5.0
+		_spend_surplus_stone_on_walls()
+		_share_surplus_stone_with_ally()
 	# 决策面板刷新独立于 AI 思考间隔：展开时每秒刷新一次，收起时放慢到 5 秒。
 	# 以前挂在 decide() 的帧计数上，AI 思考间隔 1~2 秒时面板最多要等两轮 think 才更新，
 	# 看起来像数据不刷新；现在按真实 delta 计时，打开面板就是稳定每秒更新。
@@ -3896,6 +3905,12 @@ func _any_building_can_upgrade() -> bool:
 			return true
 	return false
 func _process_line_1():
+	# 石头快满时先升城墙/补墙，再考虑普通建筑和重装科技。
+	# 放在重装/投石机储备的提前 return 之前，否则科技读条期间石头会一直满仓。
+	_spend_surplus_stone_on_walls()
+	# 花墙之后仍然顶在 95% 以上时，把富余石头转给同队缺石头的 AI，
+	# 而不是让 3v3 里一个 AI 石头 1800/1800、另一个 AI 25/1300 造不出墙。
+	_share_surplus_stone_with_ally()
 	# 重装武器厂/城堡4级是59的前置科技，优先于普通建筑升级
 	if _ensure_heavy_siege_tech():
 		return
@@ -3944,6 +3959,135 @@ func _process_line_upgrade():
 		if _should_build_or_upgrade(b_id) and can_afford_upgrade(b_id):
 			upgrade_building(b_id)
 
+# 3v3/2v2 同队 AI 各自独立资源：石头富余且自己的墙已经花不出去时，
+# 转一部分给同队石头最缺的 AI。没有这一步，3v3 快速模式会长期出现
+# “一个 AI 石头满仓、另一个 AI 连第一段墙都造不起”的两极分化。
+func _share_surplus_stone_with_ally() -> bool:
+	if battle == null or GameSettings.ai_mode < 2:
+		return false
+	if _resource_ratio("stone") < 0.95:
+		return false
+	if int(battle.ai_players.size()) <= 1:
+		return false
+	var my_res: Dictionary = _get_resources()
+	var my_lim: Dictionary = _get_limits()
+	var my_stone: int = int(my_res.get("stone", 0))
+	var my_cap: int = int(my_lim.get("stone", 0))
+	if my_cap <= 0 or my_stone < int(float(my_cap) * 0.95):
+		return false
+	var best_pid: int = -1
+	# 只要队友石头没到 80% 就可以接，不要求“极度缺石头”。
+	# 否则全队都中等充裕时，满仓 AI 找不到接收方，石头仍然顶格。
+	var best_ratio: float = 0.80
+	for pid in battle.ai_players.keys():
+		if int(pid) == my_peer_id:
+			continue
+		if int(pid) == int(battle.player_owner_id):
+			continue
+		var info: Dictionary = battle.ai_players.get(pid, {})
+		if int(info.get("team", -1)) != my_team:
+			continue
+		var ally_res: Dictionary = battle.get_resources_for(int(pid))
+		var ally_lim: Dictionary = battle.get_limits_for(int(pid))
+		var ally_cap: int = int(ally_lim.get("stone", 0))
+		if ally_cap <= 0:
+			continue
+		var ally_ratio: float = float(ally_res.get("stone", 0)) / float(ally_cap)
+		if ally_ratio < best_ratio:
+			best_ratio = ally_ratio
+			best_pid = int(pid)
+	if best_pid < 0:
+		return false
+	var ally_res2: Dictionary = battle.get_resources_for(best_pid)
+	var ally_lim2: Dictionary = battle.get_limits_for(best_pid)
+	var ally_cap2: int = int(ally_lim2.get("stone", 0))
+	var space: int = int(float(ally_cap2) * 0.85) - int(ally_res2.get("stone", 0))
+	var amount: int = mini(int(float(my_cap) * 0.25), 300)
+	amount = mini(amount, space)
+	amount = mini(amount, my_stone - int(float(my_cap) * 0.65))
+	if amount < 100:
+		return false
+	my_res["stone"] = my_stone - amount
+	ally_res2["stone"] = int(ally_res2.get("stone", 0)) + amount
+	_last_spend_block = "stone_share_%d" % best_pid
+	_last_spend_block_time = battle.game_time
+	return true
+
+# 石头高水位时优先把石头变成防线：先升级城墙，墙满级后再补一圈墙。
+# 3v3 快速模式里 5 个 AI 抢资源，会出现“石头 1800/1800、城墙等级仍 1”的
+# 情况；以前泄压先造仓库，只是把上限从 1800 抬到 2300，石头依然不花。
+func _spend_surplus_stone_on_walls() -> bool:
+	if battle == null or _resource_ratio("stone") < 0.80:
+		return false
+	var castle = get_peer_castle(my_peer_id)
+	for e in _cached_buildings():
+		if not (e is Building) or not is_instance_valid(e) or e.health <= 0:
+			continue
+		if not entity_belongs_to_me(e) or int(e.entity_id) != 27:
+			continue
+		if not e.can_upgrade():
+			continue
+		var cost: Dictionary = e.get_upgrade_cost()
+		if cost.is_empty() or not _can_pay_with_reserves(cost, 27):
+			continue
+		if e.perform_upgrade(battle):
+			_last_spend_block = "wall_upgrade"
+			_last_spend_block_time = battle.game_time
+			return true
+	if not is_instance_valid(castle):
+		return false
+	if battle.game_time - _last_wall_sink_time < 0.5:
+		return false
+	# 城墙都升到当前上限后，沿已有城墙向外再贴一层墙。
+	# 这比无限抬高仓库上限更符合“石头多就修墙”，也能直接消耗 30 石头/段。
+	var walls: Array = []
+	for e in _cached_buildings():
+		if e is Building and is_instance_valid(e) and e.health > 0 \
+				and entity_belongs_to_me(e) and int(e.entity_id) == 27:
+			walls.append(e)
+	# 快速模式采集是 3 倍、建造只有 2 倍，一次只补一段墙追不上石头收入；
+	# 这里一轮最多补 8 段，石头降到 65% 以下就停手。
+	var built: int = 0
+	for wall in walls:
+		if _resource_ratio("stone") < 0.65 or built >= 8:
+			break
+		var dir: Vector3 = wall.global_position - castle.global_position
+		dir.y = 0.0
+		if dir.length() < 0.5:
+			continue
+		var candidate: Vector3 = wall.global_position + dir.normalized() * 2.6
+		if build_building(27, candidate):
+			built += 1
+	if built == 0:
+		# 贴墙位置被地形/建筑占满时，退回通用合法落点，至少保证石头有地方花。
+		var first_pos: Vector3 = find_valid_build_position(castle.global_position, 27)
+		if first_pos != Vector3.ZERO and build_building(27, first_pos):
+			built += 1
+	if built == 0 and walls.is_empty():
+		for i in range(12):
+			if _resource_ratio("stone") < 0.65 or built >= 8:
+				break
+			var ang: float = TAU * float(i) / 12.0
+			var candidate2: Vector3 = castle.global_position \
+					+ Vector3(cos(ang), 0.0, sin(ang)) * 9.0
+			if build_building(27, candidate2):
+				built += 1
+	# 补墙之外再把石头变成墙上的炮台（炮台只能贴墙建）。
+	# 这仍然是防线支出，不把石头留给仓库上限。
+	var cannon_built: int = 0
+	for wall in walls:
+		if _resource_ratio("stone") < 0.65 or cannon_built >= 4:
+			break
+		if build_building(64, wall.global_position):
+			cannon_built += 1
+	built += cannon_built
+	if built > 0:
+		_last_wall_sink_time = battle.game_time
+		_last_spend_block = "wall_sink"
+		_last_spend_block_time = battle.game_time
+		return true
+	return false
+
 # 资源接近上限时的泄压流程：
 #   1) 人口快满 → 补民居；
 #   2) 任何可升级建筑（包括不在 wanted_buildings 里的民居/塔）→ 升级；
@@ -3958,9 +4102,13 @@ func _relieve_resource_pressure() -> void:
 	if _defense != null and _defense.has_method("first_ring_needs_priority") \
 			and _defense.first_ring_needs_priority():
 		return
-	# 先补仓库：溢出时仓库直接抬高存储上限，比把资源排成兵更能解决“满仓后白采”。
-	# 必须放在泄压支出之前，否则几轮兵/升级花完后资源已低于阈值，又不会造仓库。
-	consider_warehouse_near_farmer()
+	# 石头高水位时优先升级城墙或补墙圈，而不是先造仓库把上限抬高。
+	# 仓库只是把“满仓”变成“还能装”，玩家看到的就是石头长期不花。
+	var wall_spent: bool = _spend_surplus_stone_on_walls()
+	if not wall_spent:
+		# 先补仓库：溢出时仓库直接抬高存储上限，比把资源排成兵更能解决“满仓后白采”。
+		# 必须放在泄压支出之前，否则几轮兵/升级花完后资源已低于阈值，又不会造仓库。
+		consider_warehouse_near_farmer()
 	_process_line_3()
 	_upgrade_any_affordable_building()
 	if _resource_critical():
