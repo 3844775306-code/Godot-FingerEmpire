@@ -2766,7 +2766,10 @@ func _create_visual_and_texture():
 	var size: int = _get_map_size()
 	# 细分到每格 4 段（移动端 3 段）：顶点越密，山坡轮廓越顺，不会被切成大三角面
 	# 移动端/触屏 Web 同时走更保守的地表材质（见下方 ground_mat 分支）
-	var mobile := InputSource.is_mobile_platform() or InputSource.use_mobile_ui()
+	# Web 端（尤其手机浏览器）的运行时贴图 + 自定义 spatial 着色器在部分
+	# GLES3/WebGL 驱动上会整块采样失败，表现就是地面消失、只剩主城等模型。
+	# 这里让整个 Web 端都走标准材质，优先保证地形可见。
+	var mobile := InputSource.is_mobile_platform() or InputSource.use_mobile_ui() or OS.has_feature("web")
 	var n: int = maxi(80, int(round(float(size) * (3.0 if mobile else 4.0))))
 	var half: float = float(size) * 0.5
 	var step: float = float(size) / float(n)
