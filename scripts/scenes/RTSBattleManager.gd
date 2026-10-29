@@ -5347,7 +5347,10 @@ func _tick_animation_lod(delta: float) -> void:
 	_ensure_cache_fresh()
 	var cam := get_viewport().get_camera_3d() if is_inside_tree() else null
 	var total: int = _armies.size()
-	if cam == null or total < 260:
+	# 注意：门槛必须按“全部实体数”判断，不能按军队数。3v3 后期军队数常年在
+	# 200~260 之间徘徊，用 total<260 会让物理/动画 LOD 整局被跳过（实测 600 实体、
+	# 240 军队时物理降频完全没生效，每个物理步仍 25~40ms）。
+	if cam == null or _all_entities.size() < 200:
 		for a in _armies:
 			if is_instance_valid(a):
 				a.set_animation_lod(false)
