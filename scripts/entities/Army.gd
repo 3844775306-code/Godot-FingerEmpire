@@ -3729,6 +3729,8 @@ func _attack(target, delta):
 			# acquire_bullet 已把弹丸挂到 BattleManager 下，这里只设置入树后的全局坐标
 			# 出手点跟随武器/模型朝目标一侧，不再统一从头顶生成。
 			bullet.global_position = WeaponAttachment.projectile_origin(self, entity_id, target.global_position) + offset
+			var aim_point: Vector3 = bullet.target_pos if bullet.target_pos != Vector3.ZERO else target.global_position
+			bullet.aim_initial(aim_point)
 	else:
 		var _dmg_m = attack
 		# 农民对动物伤害+900%
@@ -3752,10 +3754,13 @@ func _play_attack_feedback() -> void:
 		AudioManager.play_sfx_3d(_sfx, global_position, _get_cam_pos())
 	# 真正出手时刷新一次动画：单位可能刚进入攻击距离，不能只等 30 帧轮询
 	# 才从走路切到攻击；这里每次攻击只调用一次，不会形成每帧音效/动画刷新。
-	# 攻城六件套和法术单位需要联机端按“真实出手次数”播放动画/法术弹；
-	# 其他兵种不递增，避免每次普攻都改变快照哈希、平白增加同步带宽。
-	if SiegeAttackAnim.is_siege(entity_id) or CasterAttackAnim.is_caster(entity_id):
+	# 攻城六件套、法术单位和手持武器需要联机端按“真实出手次数”播放动画；
+	# 普通近战单位仍不递增时，客户端会看不到剑/矛/弓自己补的那层动作。
+	if SiegeAttackAnim.is_siege(entity_id) or CasterAttackAnim.is_caster(entity_id) \
+			or WeaponAttachment.has_custom_attack(entity_id):
 		attack_seq += 1
+	# 单机/服务端本地的武器动作；联机客户端在快照 attack_seq 变化时补播。
+	WeaponAttachment.play_attack(self, entity_id)
 	var bm = _get_bm()
 	if bm:
 		# 攻城器械在这里直接播放一次分层动画；联机客户端没有 Army，
@@ -4501,6 +4506,11 @@ func attack_target(p_target, forced: bool = false):
 
 func gather_at(source):
 	if not _is_valid_command_target(source):
+		return
+	# 单位只能采自己配置里允许的资源（农民没有 oil，采集船没有陆地资源）。
+	# 在命令入口就拒绝，避免单位先跑到井边、到了才发现采不了而发呆。
+	if source is WorldResource and gatherable_resources.size() > 0 \
+			and not source.resource_type in gatherable_resources:
 		return
 	# 玩家手动点采集时解除“不可达”标记，让命令立即生效；失败次数保留用于退避
 	_clear_resource_mark(source)

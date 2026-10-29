@@ -2710,12 +2710,8 @@ func _get_phase_weights() -> Dictionary:
 			w = {"gold": 3.0, "wood": 3.0, "stone": 4.0, "food": 3.0}
 		else:
 			w = {"gold": 4.0, "wood": 2.0, "stone": 5.0, "food": 3.0}
-	# 重装武器厂需要大量油；农民权重里以前完全没有 oil，升级 29 时会长期卡油。
-	# 只在已有 29 或进入发育/进攻阶段后加入，避免开局抢走采粮/采木的农民。
-	if phase >= Phase.DEVELOPMENT or count_building(HEAVY_SIEGE_BUILDING_ID) > 0:
-		w["oil"] = maxf(float(w.get("oil", 0.0)), 1.5)
-	if count_building(HEAVY_SIEGE_BUILDING_ID) > 0 and _trebuchet_pending() and not _trebuchet_unlocked():
-		w["oil"] = maxf(float(w.get("oil", 0.0)), 4.0)
+	# 石油只能由采集船采集，农民的可采列表里没有 oil。
+	# 这里不能再把 oil 加进农民权重，否则 AI 会把农民派到油井边空站。
 	return w
 
 # 农民不再去采已经接近上限的资源；否则交资源时会被 add_resource 截断。
@@ -2752,6 +2748,10 @@ func find_best_resource_for_worker(worker: Army, priority_score: Dictionary) -> 
 	for entity in battle.entities.get_children():
 		if entity is WorldResource and entity.health > 0:
 			var type = entity.resource_type
+			# 按单位自己的可采列表过滤：农民不能采石油，采集船不能采陆地上的木/金/石/粮。
+			# 之前只按 AI 权重找最近资源，导致农民被派去油井后原地空站。
+			if worker.gatherable_resources.size() > 0 and not type in worker.gatherable_resources:
+				continue
 			if type in priority_score:
 				var score = priority_score[type] - worker.global_position.distance_to(entity.global_position) * 0.01
 				var threat_penalty: float = float(_worker_threat_cache.get(entity, -1.0))
