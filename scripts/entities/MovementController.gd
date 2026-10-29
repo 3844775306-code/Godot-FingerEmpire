@@ -323,8 +323,9 @@ func recalculate():
 	move_path_failed = false
 	_last_attack_path_ms = -100000  # 建筑变化后允许立即重算追击路径
 	# building recalc - cached paths cleared
-	# 采集/交付/攻击移动也属于「有固定终点」的状态，卡住时必须能重算路径
-	if astar_target != Vector3.ZERO and _army.current_order in ["move", "deliver", "gather", "attack_move"]:
+	# 采集/交付/攻击移动也属于「有固定终点」的状态，卡住时必须能重算路径；
+	# 施工中的农民同样有固定施工位，建筑布局变化后旧路径可能穿进新建筑。
+	if astar_target != Vector3.ZERO and _army.current_order in ["move", "deliver", "gather", "attack_move", "build"]:
 		var key = Vector2i(int(astar_target.x), int(astar_target.z))
 		_path_cache.erase(key)
 		astar_path = _calculate_astar_path(astar_target)

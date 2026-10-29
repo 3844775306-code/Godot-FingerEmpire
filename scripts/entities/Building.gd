@@ -624,9 +624,14 @@ func _is_builder_tile_valid(bm, gx: int, gy: int) -> bool:
 	# 普通建筑：别把施工位选到别的建筑里（否则农民永远走不进去，工地会卡在等待）
 	if entity_id in [7, 8, 64]:
 		return true
+	var wp: Vector3 = bm.grid_to_world(gx, gy)
+	# 也不要选到建筑自己的碰撞盒里。建筑碰撞是 2B×2B 的方盒，而候选点按
+	# “半径 B+0.8”的圆环生成，再取最近格心时可能向内偏最多 0.7 米；
+	# 斜向施工位因此会落进方盒拐角，农民被碰撞体顶在外面，永远到不了施工位。
+	if _builder_slot_blocked_by_self(wp):
+		return false
 	if not bm.has_method("get_nearby_entities"):
 		return true
-	var wp: Vector3 = bm.grid_to_world(gx, gy)
 	for e in bm.get_nearby_entities(wp, 2.0):
 		if e == self or not (e is Building) or e.health <= 0:
 			continue
@@ -634,6 +639,14 @@ func _is_builder_tile_valid(bm, gx: int, gy: int) -> bool:
 		if d < maxf(0.8, e.body_radius * 0.75):
 			return false
 	return true
+
+# 施工位不能落在建筑自身碰撞盒内；这里用旋转后的本地坐标判断，
+# 并留出农民半径 + 余量，避免农民贴着盒子边缘反复被推开。
+func _builder_slot_blocked_by_self(wp: Vector3) -> bool:
+	var local := wp - global_position
+	local = local.rotated(Vector3.UP, -rotation.y)
+	var margin: float = 0.55
+	return absf(local.x) < body_radius + margin and absf(local.z) < body_radius + margin
 
 func is_waiting_for_builder() -> bool:
 	return (build_timer > 0.0 and awaiting_builder) or repair_pending

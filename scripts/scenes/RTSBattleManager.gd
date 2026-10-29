@@ -3759,7 +3759,9 @@ func _place_building_at(pos: Vector3):
 func notify_path_recalc(build_pos: Vector3 = Vector3.ZERO):
 	if not entities: return
 	for e in entities.get_children():
-		if e is Army and e._order_is(e.UnitState.MOVING):
+		# 施工中的农民也要重算：新建筑可能正好盖在他们去工地的旧路径上，
+		# 只重算 MOVING 会让农民沿着旧路径撞进新建筑后卡在半路。
+		if e is Army and e._order_in([e.UnitState.MOVING, e.UnitState.BUILDING]):
 			if build_pos != Vector3.ZERO and e.global_position.distance_to(build_pos) > 10.0: continue
 			e.recalculate_path()
 func _start_build_drag(screen_pos: Vector2):

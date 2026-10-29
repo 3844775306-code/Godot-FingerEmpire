@@ -86,6 +86,10 @@ var _work_slot: int = 0
 var _work_slot_pos: Vector3 = Vector3.ZERO   # 最近合法边缘点：接活时算一次，之后一直用这个点
 var _at_work_site: bool = false
 var _work_repath_timer: float = 0.0
+# 去工地途中被新建筑/单位挤住时，记录“离施工位最近的距离”和停滞时长，
+# 超过预算就丢弃旧路径重新找施工位，避免农民永久顶在半路。
+var _work_last_dist: float = -1.0
+var _work_stuck_time: float = 0.0
 var _deliver_total_time: float = 0.0
 # 连续交付失败的主城/仓库暂时不再选，避免一直往同一个不可达点跑
 var _delivery_failed_targets: Dictionary = {}
@@ -926,6 +930,8 @@ func work_on_building(b) -> bool:
 		_work_slot_pos = b.get_builder_slot(slot)
 	_at_work_site = false
 	_work_repath_timer = 0.0
+	_work_last_dist = -1.0
+	_work_stuck_time = 0.0
 	_set_order(UnitState.BUILDING)
 	_movement.set_move_target(_work_slot_pos, 0.25)
 	return true
@@ -966,6 +972,8 @@ func _detach_from_building() -> void:
 	_work_slot = 0
 	_at_work_site = false
 	_work_repath_timer = 0.0
+	_work_last_dist = -1.0
+	_work_stuck_time = 0.0
 
 func stop_working_for(b) -> void:
 	if b == null or _work_target_id != b.get_instance_id():
@@ -974,6 +982,8 @@ func stop_working_for(b) -> void:
 	_work_slot = 0
 	_at_work_site = false
 	_work_repath_timer = 0.0
+	_work_last_dist = -1.0
+	_work_stuck_time = 0.0
 	if _movement:
 		_movement.stop()
 	_set_order(UnitState.IDLE)
@@ -992,6 +1002,8 @@ func _finish_work() -> void:
 	_work_slot = 0
 	_at_work_site = false
 	_work_repath_timer = 0.0
+	_work_last_dist = -1.0
+	_work_stuck_time = 0.0
 	if _movement:
 		_movement.stop()
 	_set_order(UnitState.IDLE)
@@ -2912,6 +2924,23 @@ func _tick_building_action(delta: float, bm) -> void:
 				if need_repath:
 					_work_repath_timer = 0.6
 					_movement.set_move_target(slot, 0.25)
+			# 进度监测：连续 1.5 秒离施工位没有明显缩短，说明旧路径被新建筑/
+			# 单位堵住，或施工位本身不可达。丢弃旧路径并重新挑一个施工位，
+			# 否则农民会一直顶着碰撞体停在半路。
+			if _work_last_dist < 0.0 or dist < _work_last_dist - 0.15:
+				_work_last_dist = dist
+				_work_stuck_time = 0.0
+			else:
+				_work_stuck_time += delta
+				if _work_stuck_time >= 1.5:
+					_work_stuck_time = 0.0
+					_work_last_dist = -1.0
+					var retry_slot: Vector3 = b.get_builder_slot_for(global_position, _work_slot, self)
+					if retry_slot != Vector3.ZERO:
+						_work_slot_pos = retry_slot
+					if _movement:
+						_movement.stop()
+						_movement.set_move_target(_work_slot_pos, 0.25)
 	else:
 		if dist > reach + 1.2:
 			# 被挤开/建筑移动：重新走过去
