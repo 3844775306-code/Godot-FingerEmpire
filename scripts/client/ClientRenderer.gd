@@ -1596,11 +1596,8 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 			# 城墙横向咬合缩放必须与服务端一致，否则连续墙段会留缝或拐角变窄。
 			loaded_model.scale = RTSConfig.get_wall_model_scale(body_radius, aabb)
 		else:
-			var target_size = body_radius * 2.0 * RTSConfig.get_model_scale(eid)
-			var current_size = max(aabb.size.x, max(aabb.size.y, aabb.size.z))
-			if current_size > 0.01:
-				scale_factor = target_size / current_size
-				loaded_model.scale = RTSConfig.get_model_scale_vector(eid, scale_factor)
+			scale_factor = RTSConfig.get_uniform_model_scale(int(eid), body_radius, aabb)
+			loaded_model.scale = RTSConfig.get_model_scale_vector(int(eid), scale_factor)
 		# Special rotations
 		if info.get("entity_id", 0) == 16: loaded_model.rotation.y = deg_to_rad(180)
 		elif info.get("entity_id", 0) == 17: loaded_model.rotation.y = deg_to_rad(90)
@@ -1713,14 +1710,15 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 
 	# 官员与农民共用随机人物模型，联机端也必须补上同样的金色标识，
 	# 否则只有服务端/单机看得到，联机玩家仍然分不清。
+	var marker_radius: float = RTSConfig.get_visual_body_radius(int(eid), float(info.get("body_radius", 0.4)))
 	if OfficialMarker.is_official(eid):
-		entity.add_child(OfficialMarker.create(float(info.get("body_radius", 0.4))))
+		entity.add_child(OfficialMarker.create(marker_radius))
 	# 僧侣/长老/宗师同理：双层法阵 + 头顶职业符号，客户端与服务端共用 CasterMarker
 	if CasterMarker.is_caster(eid):
-		entity.add_child(CasterMarker.create(eid, float(info.get("body_radius", 0.4))))
+		entity.add_child(CasterMarker.create(eid, marker_radius))
 	# 商人：青色脚环 + 头顶金色铜钱，和农民/官员/法师都能一眼分开
 	if MerchantMarker.is_merchant(eid):
-		entity.add_child(MerchantMarker.create(float(info.get("body_radius", 0.4))))
+		entity.add_child(MerchantMarker.create(marker_radius))
 	# 动物：脚下接触阴影，把模型压在地面上（鱼不需要）
 	if RTSConfig.is_animal(eid) and eid != 63:
 		var animal_model: Node3D = null

@@ -421,7 +421,7 @@ func _add_caster_marker() -> void:
 		return
 	if has_node("CasterMarker"):
 		return
-	add_child(CasterMarker.create(entity_id, body_radius))
+	add_child(CasterMarker.create(entity_id, RTSConfig.get_visual_body_radius(entity_id, body_radius)))
 
 # ==================== 官员：金色身份标识 ====================
 # 官员与农民共用随机人物模型，仅靠衣服颜色难以分辨。给官员加金色脚环和
@@ -431,7 +431,7 @@ func _add_official_marker() -> void:
 		return
 	if has_node("OfficialMarker"):
 		return
-	add_child(OfficialMarker.create(body_radius))
+	add_child(OfficialMarker.create(RTSConfig.get_visual_body_radius(entity_id, body_radius)))
 
 # 走路扬尘与地面痕迹：不再给每个单位各挂一个粒子发射器，也不在场景里
 # 创建 14 个独立脚印节点；统一交给 GroundTrailManager 的共享池处理。

@@ -227,6 +227,40 @@ const ENTITY_MODEL_SCALE := {
 static func get_model_scale(entity_id: int) -> float:
 	return float(ENTITY_MODEL_SCALE.get(entity_id, 1.0))
 
+# 这些兵种按“步兵视觉高度”缩放，而不是跟随各自较小的 body_radius：
+# 农民、弓箭手、商人、法师（僧侣/长老/宗师）和官员的碰撞半径较小，
+# 若继续按半径自动缩放，模型会明显比步兵矮一截。
+# 注意：这是纯视觉缩放，不影响碰撞、射程、靶心等战斗数值。
+const INFANTRY_VISUAL_HEIGHT: float = 1.0
+const INFANTRY_VISUAL_BODY_RADIUS: float = 0.5
+const VISUAL_MATCH_INFANTRY_IDS: Array[int] = [
+	10, 12, 31, 37,
+	43, 44, 45, 51,
+	46, 47, 48, 49, 50,
+	55, 56, 57,
+]
+
+static func uses_infantry_visual_size(entity_id: int) -> bool:
+	return entity_id in VISUAL_MATCH_INFANTRY_IDS
+
+# 统一模型缩放：服务端、客户端、放置预览都走这里，避免联机两边大小不一致。
+static func get_uniform_model_scale(entity_id: int, body_radius: float, aabb: AABB) -> float:
+	var model_scale: float = get_model_scale(entity_id)
+	if uses_infantry_visual_size(entity_id):
+		return INFANTRY_VISUAL_HEIGHT / maxf(aabb.size.y, 0.01) * model_scale
+	var target_size: float = body_radius * 2.0
+	var current_size: float = maxf(aabb.size.x, maxf(aabb.size.y, aabb.size.z))
+	if current_size <= 0.01:
+		return model_scale
+	return target_size / current_size * model_scale
+
+# 法师/官员/商人的脚环、头顶标识也挂在实体根节点上，需要按同一视觉体型放大，
+# 否则模型变大后标识会显得偏小、偏低。
+static func get_visual_body_radius(entity_id: int, body_radius: float) -> float:
+	if uses_infantry_visual_size(entity_id):
+		return INFANTRY_VISUAL_BODY_RADIUS
+	return body_radius
+
 # 只放大模型高度、不改变横向占地的特殊缩放。
 # 瞭望塔当前整体放大 3 倍，再乘 1.5 后实际塔高为原来的 4.5 倍，
 # 但塔基占道宽度仍是 3 倍，避免拉高时把路口挤得更窄。

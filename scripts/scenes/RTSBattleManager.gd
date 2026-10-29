@@ -2886,15 +2886,15 @@ func _init_entities_deferred():
 # 模型缩放：普通模型按最大边等比缩放到实体直径；城墙另外处理横向占地，
 # 让中心相距 2 米的相邻墙段边缘咬合，同时保持原来的墙顶高度。
 func _model_scale_for(entity_id: int, body_radius: float, aabb: AABB) -> Vector3:
-	var target_size: float = body_radius * 2.0
-	var current_size: float = max(aabb.size.x, max(aabb.size.y, aabb.size.z))
+	var current_size: float = maxf(aabb.size.x, maxf(aabb.size.y, aabb.size.z))
 	if current_size <= 0.01:
 		return Vector3.ONE
 	var model_scale: float = RTSConfig.get_model_scale(entity_id)
 	if entity_id == 27:
 		return RTSConfig.get_wall_model_scale(body_radius, aabb) * model_scale
-	# 普通模型按最大边等比缩放；瞭望塔等特殊模型只在 Y 轴再乘高度倍率。
-	var base_scale: float = target_size / current_size * model_scale
+	# 普通人形单位按最大边缩放到体直径；农民/弓手/商人/法师/官员改按
+	# 步兵视觉高度缩放，避免因 body_radius 较小而看起来比步兵矮。
+	var base_scale: float = RTSConfig.get_uniform_model_scale(entity_id, body_radius, aabb)
 	return RTSConfig.get_model_scale_vector(entity_id, base_scale)
 
 func _apply_entity_model(entity: GameEntity) -> bool:
@@ -2963,7 +2963,7 @@ func _apply_entity_model(entity: GameEntity) -> bool:
 		_attach_oil_smoke(model_instance, entity.body_radius)
 	# 商人：青色脚环 + 头顶金色铜钱。单机服务端也要挂，不能只在联机客户端显示。
 	if MerchantMarker.is_merchant(entity.entity_id) and not entity.has_node("MerchantMarker"):
-		entity.add_child(MerchantMarker.create(entity.body_radius))
+		entity.add_child(MerchantMarker.create(RTSConfig.get_visual_body_radius(entity.entity_id, entity.body_radius)))
 	return true
 
 # 石油资源（EntityDatabase id 4）。模型是 water-rocks（几块黑石头），
