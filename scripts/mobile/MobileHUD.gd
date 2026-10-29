@@ -163,11 +163,20 @@ func _process_gyro_rotate(delta: float) -> void:
 
 # AI 决策面板在移动端改为并入全屏统计大屏，战场上不再常驻显示
 func _hide_ai_debug_panels() -> void:
-	if hud == null:
-		return
-	for child in hud.get_children():
-		if child is Control and child.name.begins_with("AIDebugPanel") and child.visible:
-			child.visible = false
+	# AI 面板挂在 battle 的 UI CanvasLayer 下，不是 HUD 节点的子节点；
+	# 两处都扫一遍，确保移动端不会留下桌面版决策面板。
+	var roots: Array = []
+	if hud != null:
+		roots.append(hud)
+	var bm = get_tree().get_first_node_in_group("battle_manager")
+	if bm != null:
+		var ui = bm.get_node_or_null("UI")
+		if ui != null:
+			roots.append(ui)
+	for root in roots:
+		for child in root.get_children():
+			if child is Control and child.name.begins_with("AIDebugPanel") and child.visible:
+				child.visible = false
 
 func _relayout_shared_nodes() -> void:
 	# 摇杆在移动端不再需要：左下角让给单位信息面板，同时停掉它的输入处理避免和手势路由抢触摸

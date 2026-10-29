@@ -1632,7 +1632,9 @@ func _ready():
 	# 手机端不创建 AI 决策面板：屏幕装不下多块 540×400 的面板，
 	# 而且 MobileHUD 只在自己装配时隐藏一次，AI 是开局后才建的，压不住。
 	# 相关信息在手机端已并入全屏统计大屏。
-	if not InputSource.is_mobile_platform():
+	# 注意 Web 手机浏览器没有 mobile/android 特性，必须用 use_mobile_ui()
+	# 才能覆盖网页版移动端。
+	if not InputSource.use_mobile_ui():
 		_create_debug_panel()
 	_defense = AIDefenseScript.new(self)
 	_water_crossing = AIWaterCrossingScript.new(self)
