@@ -1716,9 +1716,14 @@ func _process(delta):
 			var _decide_t0: int = Time.get_ticks_usec()
 			decide(interval)
 			var _decide_ms: float = float(Time.get_ticks_usec() - _decide_t0) / 1000.0
-			# 单次 decide 超过 60ms 就自动再拉长间隔，避免高规模/低配机器上频繁卡顿
-			if _decide_ms > 60.0:
-				_decide_cost_scale = minf(_decide_cost_scale * 1.3, 3.0)
+			# 单次 decide 超过 60ms 就自动拉长间隔，避免高规模/低配机器上频繁卡顿。
+			# 700 单位级对局单次 decide 实测能到 300~500ms，这种量级必须压到很低频（上限 8 倍间隔）。
+			if _decide_ms > 250.0:
+				_decide_cost_scale = minf(_decide_cost_scale * 1.5, 8.0)
+			elif _decide_ms > 120.0:
+				_decide_cost_scale = minf(_decide_cost_scale * 1.35, 6.0)
+			elif _decide_ms > 60.0:
+				_decide_cost_scale = minf(_decide_cost_scale * 1.3, 5.0)
 			elif _decide_ms < 25.0:
 				_decide_cost_scale = maxf(_decide_cost_scale * 0.97, 1.0)
 			if battle != null and battle.has_method("is_research_mode") and battle.is_research_mode():
