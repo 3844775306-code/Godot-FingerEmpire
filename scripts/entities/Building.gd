@@ -185,9 +185,10 @@ func _process(delta):
 			else:
 				current_target = null
 
-func _find_enemy_in_range():
-	var best = null
-	var best_dist = attack_range + 1
+# 收集射程内所有可攻击的敌军，按距离从近到远排序。
+# 驻军齐射时每颗子弹从这里独立挑目标，不再全部锁死 current_target。
+func _collect_enemies_in_range() -> Array:
+	var result: Array = []
 	var bm = _get_bm()
 	var candidates = bm.get_nearby_enemies(global_position, attack_range, team, owner_peer_id, true) if bm else get_tree().get_nodes_in_group("entities")
 	for entity in candidates:
@@ -201,11 +202,16 @@ func _find_enemy_in_range():
 		# 船上的单位仍免疫；墙顶单位对远程防御塔不再免疫，可以被射击。
 		if entity.is_immune_to_damage(self): continue
 		var dist = global_position.distance_to(entity.global_position) - body_radius - entity.body_radius
-		if dist <= attack_range and dist < best_dist:
-			best_dist = dist
-			best = entity
-	if best:
-		current_target = best
+		if dist <= attack_range:
+			result.append(entity)
+	result.sort_custom(func(a, b):
+		return global_position.distance_squared_to(a.global_position) < global_position.distance_squared_to(b.global_position))
+	return result
+
+func _find_enemy_in_range():
+	var candidates := _collect_enemies_in_range()
+	if not candidates.is_empty():
+		current_target = candidates[0]
 
 # 墙顶炮台：脚下城墙存活时只吃远程伤害；近战必须先拆墙。
 # 墙被摧毁后由 die() 里的 _destroy_wall_cannons() 连带拆除。
@@ -228,6 +234,43 @@ func is_immune_to_damage(source = null) -> bool:
 	if source is GameEntity:
 		return not source.is_ranged_attacker()
 	return true
+
+# 驻军齐射：建筑本身一次基础齐射 + 每个驻军各补一发独立子弹。
+# 每颗子弹单独从射程内挑目标（按距离轮换），不再全部锁死 current_target；
+# 总伤害保持与旧版“基础攻击 × (1 + 0.5 × 驻军数)”一致，只是拆成多颗弹丸。
+func _fire_garrison_volley(bm, primary, gcount: int) -> void:
+	var base_shots := 1
+	var base_mult := 1.0
+	if entity_id in [20, 53] and volley_count > 1:
+		base_shots = volley_count
+		base_mult = volley_mult
+	var total_shots := base_shots + gcount
+	var total_damage := float(attack) * base_mult * float(base_shots) * (1.0 + 0.5 * float(gcount))
+	var shot_damage := total_damage / float(total_shots)
+	var targets := _collect_enemies_in_range()
+	if is_instance_valid(primary) and primary.health > 0 and not targets.has(primary):
+		targets.push_front(primary)
+	if targets.is_empty():
+		if not is_instance_valid(primary) or primary.health <= 0:
+			return
+		targets = [primary]
+	for i in range(total_shots):
+		var shot_target = targets[i % targets.size()]
+		if not is_instance_valid(shot_target) or shot_target.health <= 0:
+			continue
+		var bullet = bm.acquire_bullet(self, damage_radius, team)
+		bullet.team = team
+		bullet.owner_peer_id = owner_peer_id
+		bullet.damage = shot_damage
+		bullet.speed = 12.0
+		bullet.target = shot_target
+		bullet.source = self
+		bullet.damage_radius = damage_radius
+		bullet.splash_damage_mult = splash_damage_mult
+		bullet.global_position = WeaponAttachment.projectile_origin(self, entity_id, shot_target.global_position)
+		if i > 0:
+			bullet.global_position += Vector3(randf_range(-0.35, 0.35), 0, randf_range(-0.35, 0.35))
+		bullet.aim_initial(shot_target.global_position)
 
 func _attack(target, delta):
 	# 箭塔/炮塔/墙顶炮台由 is_wall_blocking_shot 放行；普通远程建筑不能隔墙开火。
@@ -255,31 +298,35 @@ func _attack(target, delta):
 		if bm == null:
 			attack_timer = attack_speed
 			return
-		var bullet = bm.acquire_bullet(self, damage_radius, team)
-		bullet.team = team
-		bullet.owner_peer_id = owner_peer_id
-		bullet.damage = attack * (volley_mult if volley_count > 1 else 1.0)
-		bullet.speed = 12.0
-		bullet.target = target
-		bullet.source = self
-		bullet.damage_radius = damage_radius
-		bullet.splash_damage_mult = splash_damage_mult
-		# 从模型朝目标一侧的上沿出手：箭塔射箭、炮塔/城墙炮台打炮都不再从建筑中心冒出。
-		bullet.global_position = WeaponAttachment.projectile_origin(self, entity_id, target.global_position)
-		bullet.aim_initial(target.global_position)
-		# B7 三矢齐发：主城/城堡一次攻击连射 3 支，每支 100% 伤害。
-		var extra_shots: int = maxi(0, volley_count - 1) if entity_id in [20, 53] else 0
-		for _i in range(extra_shots):
-			var extra = bm.acquire_bullet(self, damage_radius, team)
-			extra.team = team
-			extra.owner_peer_id = owner_peer_id
-			extra.damage = attack * volley_mult
-			extra.speed = 12.0
-			extra.target = target
-			extra.source = self
-			extra.damage_radius = damage_radius
-			extra.splash_damage_mult = splash_damage_mult
-			extra.global_position = bullet.global_position + Vector3(randf_range(-0.35, 0.35), 0, randf_range(-0.35, 0.35))
+		var gcount := get_garrison_count()
+		if gcount > 0:
+			_fire_garrison_volley(bm, target, gcount)
+		else:
+			var bullet = bm.acquire_bullet(self, damage_radius, team)
+			bullet.team = team
+			bullet.owner_peer_id = owner_peer_id
+			bullet.damage = attack * (volley_mult if volley_count > 1 else 1.0)
+			bullet.speed = 12.0
+			bullet.target = target
+			bullet.source = self
+			bullet.damage_radius = damage_radius
+			bullet.splash_damage_mult = splash_damage_mult
+			# 从模型朝目标一侧的上沿出手：箭塔射箭、炮塔/城墙炮台打炮都不再从建筑中心冒出。
+			bullet.global_position = WeaponAttachment.projectile_origin(self, entity_id, target.global_position)
+			bullet.aim_initial(target.global_position)
+			# B7 三矢齐发：主城/城堡一次攻击连射 3 支，每支 100% 伤害。
+			var extra_shots: int = maxi(0, volley_count - 1) if entity_id in [20, 53] else 0
+			for _i in range(extra_shots):
+				var extra = bm.acquire_bullet(self, damage_radius, team)
+				extra.team = team
+				extra.owner_peer_id = owner_peer_id
+				extra.damage = attack * volley_mult
+				extra.speed = 12.0
+				extra.target = target
+				extra.source = self
+				extra.damage_radius = damage_radius
+				extra.splash_damage_mult = splash_damage_mult
+				extra.global_position = bullet.global_position + Vector3(randf_range(-0.35, 0.35), 0, randf_range(-0.35, 0.35))
 	else:
 		target.take_damage(attack, self)
 	attack_timer = attack_speed
@@ -1463,7 +1510,8 @@ func _remove_soldier_from_garrison(army: Army):
 func _recalc_garrison_attack():
 	var cnt = _count_valid_garrisoned()
 	if cnt > 0:
-		attack = _base_attack * (1.0 + 0.5 * cnt)   # 每人 +50% 基础攻击
+		# 驻军不再放大 attack 数值；加成改为 _fire_garrison_volley 的多子弹齐射。
+		attack = _base_attack
 	else:
 		attack = _base_attack if _base_attack > 0 else building_data.get("attack", 0)
 		_base_attack = 0.0  # 重置，下次进驻时重新记录
