@@ -791,6 +791,55 @@ func _formation_slot_world(flat_pos: Vector3) -> Vector3:
 	var g: Vector2i = world_to_grid(flat_pos)
 	return Vector3(flat_pos.x, get_height_at_grid(g.x, g.y), flat_pos.z)
 
+# 普通移动/行军的落点修正：目标和 A* 使用同一套地形规则。
+# 玩家点到深水/普通山壁、或 AI 把集结点设进障碍时，退到最近的可站立格，
+# 而不是把非法目标交给 A*。否则 A* 只能给出“走到山脚/岸边”的部分路径，
+# 单位抵达后再次寻路失败就会丢命令并转为空闲。
+func find_legal_ground_pos(unit: Army, desired: Vector3) -> Vector3:
+	if unit == null:
+		return desired
+	var base := Vector3(desired.x, 0.0, desired.z)
+	var g: Vector2i = world_to_grid(base)
+	if _is_ground_tile_legal(unit, g):
+		return Vector3(base.x, get_height_at_grid(g.x, g.y), base.z)
+	var best := Vector3.ZERO
+	var best_d: float = 1e20
+	var found := false
+	for ring in range(1, 17):
+		for dx in range(-ring, ring + 1):
+			for dy in range(-ring, ring + 1):
+				if maxi(absi(dx), absi(dy)) != ring:
+					continue
+				var cand := Vector2i(g.x + dx, g.y + dy)
+				if not _is_ground_tile_legal(unit, cand):
+					continue
+				var d: float = float(dx * dx + dy * dy)
+				if d < best_d:
+					best_d = d
+					best = Vector3(cand.x - RTSConfig.MAP_SIZE / 2.0, 0.0,
+							cand.y - RTSConfig.MAP_SIZE / 2.0)
+					found = true
+		if found:
+			return Vector3(best.x, get_height_at_grid(int(best.x + RTSConfig.MAP_SIZE / 2.0),
+					int(best.z + RTSConfig.MAP_SIZE / 2.0)), best.z)
+	# 附近完全找不到可站立点（例如整块地图都是水），不要发出非法命令。
+	return unit.global_position
+
+func _is_ground_tile_legal(unit: Army, g: Vector2i) -> bool:
+	if g.x < 1 or g.y < 1 or g.x >= RTSConfig.MAP_SIZE - 1 or g.y >= RTSConfig.MAP_SIZE - 1:
+		return false
+	_ensure_cache_fresh()
+	var terrain: int = get_terrain_at_grid(g.x, g.y)
+	var ov: int = get_overlay_at_grid(g.x, g.y)
+	var on_bridge: bool = _bridge_entity_grid.has(g)
+	if unit.water_capable:
+		return terrain == 2 and not on_bridge
+	if terrain == 1:
+		return ov == 4 or ov == 5
+	if terrain == 2:
+		return ov == 3 or on_bridge
+	return terrain == 0
+
 func _ensure_cache_fresh():
 	if _entity_cache_dirty:
 		_rebuild_entity_cache()
@@ -2615,6 +2664,9 @@ func _apply_entity_model(entity: GameEntity) -> bool:
 	# 石油：常年冒黑烟 + 脚下一圈油渍，把黑石头和地面糊在一起
 	if entity.entity_id == OIL_RESOURCE_ID:
 		_attach_oil_smoke(model_instance, entity.body_radius)
+	# 商人：青色脚环 + 头顶金色铜钱。单机服务端也要挂，不能只在联机客户端显示。
+	if MerchantMarker.is_merchant(entity.entity_id) and not entity.has_node("MerchantMarker"):
+		entity.add_child(MerchantMarker.create(entity.body_radius))
 	return true
 
 # 石油资源（EntityDatabase id 4）。模型是 water-rocks（几块黑石头），

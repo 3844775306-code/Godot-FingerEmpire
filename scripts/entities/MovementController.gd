@@ -619,6 +619,16 @@ func process_move(delta, bm: RTSBattleManager):
 		_army.global_position = prev_pos
 		_stop_velocity()
 		return
+	# 陆地单位的最终安全网：A* 路径本应完全避开深水/普通山壁，但单位被挤动、
+	# 路径缓存过期或地图边界格子换算异常时，仍可能把格心带进障碍。这里在实际
+	# 落点再校验一次，发现越界立即退回上一帧位置并丢弃路径，等下一次寻路绕行，
+	# 避免“走进山体/水面后停住并丢失移动命令”。
+	if bm != null and not _army.water_capable \
+			and _is_land_terrain_blocked(bm, _army.global_position):
+		_army.global_position = prev_pos
+		_stop_velocity()
+		astar_path.clear()
+		return
 	# 陆地单位的脚步音由 Army._play_step_sfx 按实际落脚点触发；
 	# 这里只保留船只的持续航行音，避免和脚步音重复。
 	if _army.speed > 0.1 and Engine.get_process_frames() % 40 == 0:
@@ -835,6 +845,20 @@ func _can_push_to(pos: Vector3, bm: RTSBattleManager) -> bool:
 	# 陆军允许浅滩和桥面，河流/海面等深水一律拒绝。
 	return bm.get_overlay_at_grid(g.x, g.y) == 3 or _bridge_set.has(g)
 
+# 陆地单位落点是否压在深水/普通山壁上（只看地形，不看建筑/单位）。
+# 用于移动后的最后一道安全校验，避免实际位置被挤进不可通行地形。
+func _is_land_terrain_blocked(bm: RTSBattleManager, pos: Vector3) -> bool:
+	var g: Vector2i = bm.world_to_grid(pos)
+	var terrain: int = bm.get_terrain_at_grid(g.x, g.y)
+	var ov: int = bm.get_overlay_at_grid(g.x, g.y)
+	if terrain == 2:
+		# 只有踩到水格时才需要桥/运载船缓存；平地单位每帧不必重建队伍缓存。
+		_ensure_current_team_static_caches(bm)
+		return ov != 3 and not _bridge_set.has(g) and not _transport_water.has(g)
+	if terrain == 1:
+		return ov != 4 and ov != 5
+	return terrain != 0
+
 # 尝试推挤；整段落水/上岸时退化为单轴滑动，避免贴着岸线完全卡死。
 func _try_push_position(step: Vector3, bm: RTSBattleManager) -> bool:
 	var base: Vector3 = _army.global_position
@@ -986,8 +1010,10 @@ func _preview_tail_points() -> Array:
 			tail.append(astar_path[int(round(float(i) * step))])
 	# A* 终点常停在资源/建筑边缘外，最后一段由 process_move 直线接近；
 	# 把真正的目的地接到尾点，路径才不会提前断掉。
+	# 部分路径（预算中断）尚未验证到终点，不能把目的地点接上去，否则指引带
+	# 会从山脚/岸边直接连到障碍另一侧，看起来像“寻路穿山/穿水”。
 	var dest2: Vector3 = get_current_target()
-	if dest2 != Vector3.ZERO and not tail.is_empty():
+	if dest2 != Vector3.ZERO and not tail.is_empty() and not path_partial:
 		var last: Vector3 = tail[tail.size() - 1]
 		if Vector2(last.x - dest2.x, last.z - dest2.z).length() > 0.8:
 			tail.append(dest2)
@@ -1340,6 +1366,12 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 			goal_tile = approach_tile
 			goal_adjusted = true
 
+	# 终点本身就在深水/普通山壁里时，A* 永远到不了。必须在展开前直接判死：
+	# 否则搜索会沿着河岸/山脚展开到节点上限，然后返回一段“最近可达”的部分
+	# 路径，单位走过去才失败，正是“走到水边/山边停下并丢命令”的成因。
+	if not goal_adjusted and _get_terrain_cost(goal_tile, bm, wall_cache) >= 999.0:
+		return []
+
 	# 单位已经站在建筑外沿时，目标格可能就落在脚下。返回一个起点航点，
 	# 避免空路径被当成“不可达”写进黑名单，后续攻击/最终接近仍可正常工作。
 	if goal_adjusted and goal_tile == start_tile:
@@ -1367,12 +1399,18 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 	# 150×150 的 2v2/3v3 河图上，双河/海湾类地图的绕行更远（实测最坏约 12k 节点），
 	# 因此预算与上限相应上调；普通短距离寻路命中节点数不变，不影响常规性能。
 	var tile_span: int = absi(start_tile.x - goal_tile.x) + absi(start_tile.y - goal_tile.y)
-	max_nodes = clampi(2000 + tile_span * 80, 2000, 12000)
+	# 最低预算要足够展开整块“被河/山隔开的可达区域”（100×100 河图单侧约 5k 格），
+	# 否则真正不可达的目标会在预算用尽时被误返回部分路径，单位走到岸边才失败。
+	max_nodes = clampi(6000 + tile_span * 80, 6000, 14000)
 	var nodes_explored := 0
 	var path_start_usec: int = Time.get_ticks_usec()
 	var from_height := _get_tile_height(start_tile, bm)
 	var best_partial_tile: Vector2i = start_tile
 	var best_partial_h: float = _heuristic(start_tile, goal_tile)
+	# 只有“预算/耗时上限”中断才允许返回部分路径。若开放列表自然耗尽，
+	# 说明目标根本不可达；这时再返回“最近可达格”，单位会先走到山脚/岸边，
+	# 随后下一次 A* 返回空并丢失移动命令，表现为“寻路穿过山地/水面后发呆”。
+	var budget_exhausted := false
 
 	while not open_list.is_empty() and nodes_explored < max_nodes:
 		# 单条 A* 不能无限展开：12k 节点在 GDScript 里最坏要 20ms+，一帧只要
@@ -1382,8 +1420,10 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 		if nodes_explored % 32 == 0 and nodes_explored > 0:
 			var path_elapsed: int = Time.get_ticks_usec() - path_start_usec
 			if path_elapsed >= A_STAR_HARD_LIMIT_USEC:
+				budget_exhausted = true
 				break
 			if path_elapsed >= A_STAR_SOFT_LIMIT_USEC and best_partial_tile != start_tile:
+				budget_exhausted = true
 				break
 		var current_entry = open_list.pop()
 		if current_entry.is_empty(): break
@@ -1449,9 +1489,13 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 					g_score[neighbor] = tentative_g
 					open_list.push(neighbor, tentative_g + _heuristic(neighbor, goal_tile) * heuristic_weight)
 
+	# 节点数达到硬上限也属于预算耗尽；自然搜索完整个可达区域则不是。
+	if nodes_explored >= max_nodes:
+		budget_exhausted = true
 	# 节点预算耗尽（而不是终点真的不可达）时，返回走到离目标最近的可达格的路径，
 	# 让单位先推进一段；Army 会在该段走完后从新位置继续寻路。
-	if best_partial_tile != start_tile:
+	# 目标不可达时直接返回空，交给命令层处理，不能假装还有“部分路径”。
+	if budget_exhausted and best_partial_tile != start_tile:
 		var partial := _reconstruct_path(came_from, best_partial_tile)
 		if partial.size() > 1:
 			partial.pop_front()

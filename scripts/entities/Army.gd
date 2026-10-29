@@ -205,6 +205,12 @@ var _advance_path_fail_time: float = 0.0
 # 之类的兜底，若目标真被墙/建筑封死会无限重试并一直显示为移动状态。
 const MARCH_PATH_FAIL_TIMEOUT: float = 6.0
 var _march_path_fail_since_ms: int = 0
+# 普通移动（非战斗行军）寻路失败的恢复窗口：先保留原移动命令并低频重试，
+# 避免临时 A* 预算不足/桥被临时挡住时立刻丢失目的地。持续无路才取消。
+const GROUND_MOVE_FAIL_TIMEOUT: float = 4.0
+const GROUND_MOVE_RETRY_INTERVAL_MS: int = 500
+var _ground_move_fail_since_ms: int = 0
+var _ground_move_retry_ms: int = 0
 # 寻路失败后正在等待下一次重试。此时 astar_path 为空、astar_target 仍是原目的地，
 # 不能把它误判成“已经走到最近可达点”。
 var _advance_path_recovering: bool = false
@@ -1236,6 +1242,9 @@ func _clear_stale_defense_anchor() -> void:
 		_defense_return_position = Vector3.ZERO
 
 func _start_combat_march(pos: Vector3) -> void:
+	var march_bm = _get_bm()
+	if march_bm != null and march_bm.has_method("find_legal_ground_pos"):
+		pos = march_bm.find_legal_ground_pos(self, pos)
 	_defense_return_position = Vector3.ZERO
 	remove_meta("ai_building_defense_until")
 	# 行军是显式移动命令，必须解除原地坚守；否则 path 明明存在，
@@ -2861,11 +2870,28 @@ func _process_action(delta, bm):
 				
 				# ²É¼¯µ¥Î»»áÓÉ¿ÕÏÐÂß¼­´¦Àí
 		if _movement.move_path_failed:
-			# 目的地本身无路可走：取消移动，避免一直保持 MOVING 播放走路动画
+			# 普通移动失败不要立刻清命令：A* 可能只因这一帧预算/临时挡路失败。
+			# 先保留 MOVING 状态并低频重试，给桥/浅滩/绕行路径一个恢复窗口；
+			# 持续无路（约 4 秒）后才真正取消，避免“贴到水边/山脚就发呆”。
+			var move_fail_now: int = Time.get_ticks_msec()
+			if _ground_move_fail_since_ms == 0:
+				_ground_move_fail_since_ms = move_fail_now
+			if move_fail_now - _ground_move_fail_since_ms < int(GROUND_MOVE_FAIL_TIMEOUT * 1000.0):
+				_movement.move_path_failed = false
+				if move_fail_now - _ground_move_retry_ms >= GROUND_MOVE_RETRY_INTERVAL_MS:
+					_ground_move_retry_ms = move_fail_now
+					var retry_dest: Vector3 = _movement.astar_target
+					if retry_dest != Vector3.ZERO:
+						_movement.clear_blacklist_at(retry_dest)
+						_movement.set_move_target(retry_dest)
+				return
+			_ground_move_fail_since_ms = 0
+			_ground_move_retry_ms = 0
 			current_target = null
 			_set_order(UnitState.IDLE)
 			_movement.stop()
 			return
+		_ground_move_fail_since_ms = 0
 		if _movement.blocking_building != null \
 				and _is_blocking_building_ahead(_movement.blocking_building, _movement.astar_target):
 			# 普通移动被敌方建筑挡住：停在墙前转空闲，由索敌逻辑决定是否反击，
@@ -4115,14 +4141,18 @@ func _execute_command(cmd: Dictionary):
 	
 	match cmd["type"]:
 		"move":
+			var move_dest: Vector3 = cmd["pos"]
+			var move_bm = _get_bm()
+			if move_bm != null and move_bm.has_method("find_legal_ground_pos"):
+				move_dest = move_bm.find_legal_ground_pos(self, move_dest)
 			if _uses_combat_state():
-				_start_combat_march(cmd["pos"])
+				_start_combat_march(move_dest)
 				return
 			current_target = null
 			attack_move_target = Vector3.ZERO
 			_set_order(UnitState.MOVING)
 			is_attack_moving = false
-			_movement.set_move_target(cmd["pos"])
+			_movement.set_move_target(move_dest)
 		"attack":
 			var attack_cmd_target = cmd.get("target")
 			if not _is_valid_command_target(attack_cmd_target):
