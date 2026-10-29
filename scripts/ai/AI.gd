@@ -2204,7 +2204,9 @@ func _run_decide_step(step: int) -> void:
 				_wall_planner.tick(_last_delta)
 		13:
 			if _water_crossing:
-				_water_crossing.tick(_last_delta)
+				# 渡水模块按“决策轮次”推进，不是每帧推进。传入帧 delta 会让
+				# 船队集结/靠岸/搭桥的计时慢几十倍，看起来像 AI 永远不过河。
+				_water_crossing.tick(_decide_interval)
 func get_team_castle(tm) -> Building:
 	for entity in _cached_buildings():
 		if not is_instance_valid(entity) or entity.health <= 0:

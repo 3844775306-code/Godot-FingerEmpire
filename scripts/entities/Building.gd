@@ -608,8 +608,13 @@ func _is_builder_tile_valid(bm, gx: int, gy: int) -> bool:
 		return false
 	var terrain: int = bm.get_terrain_at_grid(gx, gy)
 	if terrain == 2:
-		# 桥可以从岸边或已有桥面上继续往前修，施工位允许站在已有桥上
-		if entity_id == 7 and bm.get_overlay_at_grid(gx, gy) == 3:
+		# 桥可以从岸边或已有桥面上继续往前修，施工位允许站在浅滩或桥面上。
+		# 不能只认浅滩：河心深水段的桥面地形仍是水，否则农民永远找不到落脚点，
+		# 桥只会搭出岸边一两段，后面的桥段一直停在施工中。
+		var on_bridge := false
+		if entity_id == 7 and bm.has_method("is_bridge_at"):
+			on_bridge = bm.is_bridge_at(bm.grid_to_world(gx, gy))
+		if entity_id == 7 and (on_bridge or bm.get_overlay_at_grid(gx, gy) == 3):
 			pass
 		else:
 			return false
