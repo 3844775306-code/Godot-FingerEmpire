@@ -85,4 +85,5 @@ static func play_looped(ap: AnimationPlayer, anim_name: String, randomize_walk: 
 
 # 用实际位移速度换算步频；单位被地形减速或撞住时，脚步不会继续原地滑动。
 static func walk_speed_scale(actual_speed: float) -> float:
-	return clampf(actual_speed * 0.6, 0.2, 3.0)
+	# 旧的 0.6 倍率会让脚步明显慢于实际位移，看起来像贴地滑行；提高到接近 1:1。
+	return clampf(actual_speed * 0.85, 0.35, 2.8)

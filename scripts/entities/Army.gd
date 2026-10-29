@@ -825,11 +825,14 @@ func _add_weapon():
 			var m = ms.instantiate()
 			if m:
 				m.name = "Mount"
-				m.position = Vector3(0, -body_radius * 1.2, 0)
+				m.position = Vector3.ZERO
 				m.scale = Vector3.ONE * 0.7
 				# 动物模型默认朝 +Z，单位前方是 -Z；不转 180° 会变成倒着跑。
 				m.rotation.y = deg_to_rad(RTSConfig.MOUNT_YAW_DEG)
 				add_child(m)
+				# 按模型实际包围盒把坐骑底面贴到脚下，不能写死负偏移，否则整只陷进地面。
+				var mount_bottom := RTSConfig.get_model_bottom_in_parent(self, m)
+				m.position.y = -mount_bottom
 		body_radius *= 1.2  # make cavalry visibly larger
 
 func _add_collision_shape():

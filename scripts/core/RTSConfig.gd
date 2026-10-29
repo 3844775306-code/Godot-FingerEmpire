@@ -306,6 +306,20 @@ static func get_model_top_in_parent(parent: Node3D, model: Node3D) -> float:
 		top = maxf(top, a.position.y + a.size.y)
 	return top if top > -INF else 0.0
 
+# 坐骑最低点（相对 parent 的局部 Y），用于把坐骑底面贴到单位脚下，避免整只陷进地里。
+static func get_model_bottom_in_parent(parent: Node3D, model: Node3D) -> float:
+	if parent == null or model == null:
+		return 0.0
+	var inv := parent.global_transform.affine_inverse()
+	var bottom := INF
+	for n in model.find_children("*", "MeshInstance3D", true, false):
+		var mi := n as MeshInstance3D
+		if mi == null or mi.mesh == null:
+			continue
+		var a: AABB = (inv * mi.global_transform) * mi.get_aabb()
+		bottom = minf(bottom, a.position.y)
+	return bottom if bottom < INF else 0.0
+
 # 骑乘单位主模型（士兵）的局部 Y：默认抬高半个体半径；侦察兵这类坐骑顶面
 # 高于默认值，按坐骑顶面继续抬高，只让小腿略微陷进坐骑，避免整个人卡进去。
 static func get_rider_base_y(entity_id: int, body_radius: float, mount_top: float) -> float:
