@@ -1,8 +1,8 @@
 {
     "major":  4,
     "minor":  0,
-    "patch":  30,
-    "pending":  5,
-    "last_bump_commit":  "c49d107cd919a71a2bd40e85cabf7d3c833a0f39",
+    "patch":  31,
+    "pending":  0,
+    "last_bump_commit":  "e6a1b9e20992419dc23163c2c928586c8285adfd",
     "last_bump_date":  "2026-10-30"
 }
