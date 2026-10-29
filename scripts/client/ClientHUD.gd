@@ -357,6 +357,9 @@ func _create_stats_capsule() -> void:
 	tribute_btn.tooltip_text = "向同队队友进贡资源（扣 20% 税）"
 	tribute_btn.pressed.connect(_open_tribute_panel)
 	row.add_child(tribute_btn)
+	# 进贡按钮放最左侧，避开展开态标题栏右上角的「▴ 折叠」。
+	# 胶囊较窄时右侧资源可能被裁，但进贡入口始终可见且不会压住折叠按钮。
+	row.move_child(tribute_btn, 0)
 	_stats_capsule.gui_input.connect(_on_stats_capsule_input)
 	add_child(_stats_capsule)
 
