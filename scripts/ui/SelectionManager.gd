@@ -164,6 +164,10 @@ func _input(event):
 		# 移动端：触屏面板上的点击交给 GUI，不做世界选择
 		if bm and bm.has_method("is_mobile_ui_point") and bm.is_mobile_ui_point(event.position):
 			return
+		if bm and bm.has_node("UI/QuickSelectPanel"):
+			var qp = bm.get_node("UI/QuickSelectPanel")
+			if qp is Control and qp.visible and qp.get_global_rect().has_point(event.position):
+				return
 		if bm and bm.has_node("UI/InfoPanel"):
 			var ip = bm.get_node("UI/InfoPanel")
 			if ip.visible and ip.get_global_rect().has_point(event.position):
