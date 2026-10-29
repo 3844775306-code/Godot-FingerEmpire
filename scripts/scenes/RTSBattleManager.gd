@@ -5344,6 +5344,8 @@ func _tick_animation_lod(delta: float) -> void:
 # 500 单位级战斗：每个物理 tick 的 Army 逻辑已经接近 16ms，再乘上帧末
 # 追赶的多个 physics tick 就会把帧时间推到几百毫秒。渲染保持 60FPS，
 # 单机大规模战斗把模拟降到 30Hz；低于 20FPS 时再降到 20Hz，减少每帧补跑步数。
+var _physics_entity_heavy: bool = false
+
 func _tick_physics_rate(delta: float) -> void:
 	if game_over:
 		return
@@ -5358,8 +5360,12 @@ func _tick_physics_rate(delta: float) -> void:
 	# 240 个单位开始就可能出现“一帧补跑多个物理步”的死亡螺旋，不必等到 420。
 	# 30Hz 模拟对 RTS 的移动/战斗手感影响很小，但能把每帧物理工作量砍半。
 	if ent_count >= 240:
+		# 实体多时即使帧率还没掉到 20 以下，也先降物理频率：实测 600+ 实体时
+		# 每次物理步要 15~20ms，30Hz 下每帧补 1~2 步就是 20~40ms 的固定开销。
+		_physics_entity_heavy = ent_count >= 500
 		_set_physics_rate_low(true)
 	elif ent_count < 200:
+		_physics_entity_heavy = false
 		_set_physics_rate_low(false)
 
 func _set_physics_rate_low(low: bool) -> void:
@@ -5368,7 +5374,7 @@ func _set_physics_rate_low(low: bool) -> void:
 	# 低于 20FPS 时把模拟降到 15Hz，14FPS 只需补 1 步，物理开销近似减半；
 	# 帧率恢复后自动回到 30Hz。15Hz 对 RTS 的指令响应仍然可接受，优先保证画面不卡死。
 	var fps: float = Engine.get_frames_per_second()
-	var want_hz: int = 15 if (low and fps < 20.0) else 30
+	var want_hz: int = 15 if (low and (fps < 20.0 or _physics_entity_heavy)) else 30
 	# 最多补 4 步：20Hz 下足以支撑到 5FPS，30Hz 下足以支撑到 7.5FPS；
 	# 更极端的掉帧宁可让游戏稍微慢一点，也不制造更长的卡顿尖峰。
 	var want_steps: int = 3

@@ -1620,6 +1620,15 @@ func _ready():
 	_water_crossing = AIWaterCrossingScript.new(self)
 	_ladder_siege = AILadderSiegeScript.new(self)
 
+# 后期实体数越多，AI 的周期性全量扫描越贵；返回统一的降频倍率。
+func _late_game_scale() -> float:
+	var n: int = battle._all_entities.size() if battle else 0
+	if n > 700:
+		return 3.0
+	if n > 450:
+		return 2.0
+	return 1.0
+
 func _process(delta):
 	# Set think interval based on difficulty (once) + 错开各 AI 的计时器。
 	# 多 AI 同时开局时，timer/worker/naval 都为 0，会在同一帧集中做全实体扫描和寻路，
@@ -1662,12 +1671,16 @@ func _process(delta):
 		# 不影响前期节奏，但能显著降低后期 AI 的固定开销。
 		var interval: float = think_interval
 		var entity_count: int = battle._all_entities.size() if battle else 0
-		if entity_count > 450:
-			interval *= 3.4
+		if entity_count > 700:
+			interval *= 6.0
+		elif entity_count > 550:
+			interval *= 5.0
+		elif entity_count > 450:
+			interval *= 4.2
 		elif entity_count > 360:
-			interval *= 2.6
+			interval *= 3.2
 		elif entity_count > 260:
-			interval *= 1.9
+			interval *= 2.2
 		elif entity_count > 180:
 			interval *= 1.4
 		if battle != null and battle.has_method("acquire_ai_decide_slot") \
@@ -1680,20 +1693,23 @@ func _process(delta):
 			if battle != null and battle.has_method("is_research_mode") and battle.is_research_mode():
 				_tick_research()
 
+	# 后期实体多时，AI 的周期性全量扫描（分配农民、海军巡逻、修建筑）也一起降频：
+	# 这些扫描和 decide() 一样是 O(实体数)，5 个 AI 叠起来在 600+ 实体时非常可观。
+	var late_scale: float = _late_game_scale()
 	worker_allocate_timer -= delta
 	if worker_allocate_timer <= 0:
-		worker_allocate_timer = WORKER_ALLOCATE_INTERVAL
+		worker_allocate_timer = WORKER_ALLOCATE_INTERVAL * late_scale
 		allocate_workers()
 	_naval_patrol_timer -= delta
 	if _naval_patrol_timer <= 0:
-		_naval_patrol_timer = NAVAL_PATROL_INTERVAL
+		_naval_patrol_timer = NAVAL_PATROL_INTERVAL * late_scale
 		if phase >= Phase.DEVELOPMENT:
 			_patrol_navy_around_water()
 	# 修理节奏独立于难度思考间隔（固定 2.5s）：建筑受损/修好之后最多 2.5s 内响应，
 	# 且不挤在 decide() 那一帧里再做一次全建筑扫描。
 	_repair_scan_timer -= delta
 	if _repair_scan_timer <= 0.0:
-		_repair_scan_timer = REPAIR_SCAN_INTERVAL
+		_repair_scan_timer = REPAIR_SCAN_INTERVAL * minf(late_scale, 2.0)
 		_tick_building_repair()
 	# 决策面板刷新独立于 AI 思考间隔：展开时每秒刷新一次，收起时放慢到 5 秒。
 	# 以前挂在 decide() 的帧计数上，AI 思考间隔 1~2 秒时面板最多要等两轮 think 才更新，

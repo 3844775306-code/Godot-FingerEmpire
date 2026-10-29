@@ -1582,20 +1582,25 @@ func _physics_process(delta):
 	if _soldier_garrison_building and _soldier_garrison_building.get_ref() and is_instance_valid(_soldier_garrison_building.get_ref()):
 		return
 
-	# 城墙上的单位即使已停止移动，也要把高度平滑到墙顶；墙被毁后落回地面。
-	# 只对墙上的单位/AI 守墙单位做这件事，普通单位每帧查城墙网格会拖慢全军。
-	_tick_wall_height(delta)
+	# 物理帧降频：城墙高度、落水伤害、扬尘、上船检测都带时间参数，
+	# 隔一个物理步跑一次并传入 2 倍 delta，行为速率不变。
+	# 实测 330 军队时实体物理占单帧 50ms+，这个降频能直接砍掉这部分固定开销。
+	var _detail_tick: bool = Engine.get_physics_frames() % 2 == 0
+	if _detail_tick:
+		# 城墙上的单位即使已停止移动，也要把高度平滑到墙顶；墙被毁后落回地面。
+		# 只对墙上的单位/AI 守墙单位做这件事，普通单位每帧查城墙网格会拖慢全军。
+		_tick_wall_height(delta * 2.0)
 
-	# 陆地单位落水持续伤害（上桥、进运载船、浅滩涉水不受伤）
-	_tick_water_damage(delta)
-	if health <= 0:
-		return
+		# 陆地单位落水持续伤害（上桥、进运载船、浅滩涉水不受伤）
+		_tick_water_damage(delta * 2.0)
+		if health <= 0:
+			return
 
-	# 走动时脚下扬尘、地面留脚印/车辙，停下自动消失（内部已排除船只与鱼）
-	_update_walk_dust(delta)
+		# 走动时脚下扬尘、地面留脚印/车辙，停下自动消失（内部已排除船只与鱼）
+		_update_walk_dust(delta * 2.0)
 
-	# 走到船边后自动上船（由信息面板的「上附近运载船」按钮下达）
-	_update_auto_board(delta)
+		# 走到船边后自动上船（由信息面板的「上附近运载船」按钮下达）
+		_update_auto_board(delta * 2.0)
 
 	# 爆破船/运载船/手推车/贸易车 特殊行为
 	if entity_id == 40:
@@ -1626,7 +1631,8 @@ func _physics_process(delta):
 		return
 
 	# 长时间停在半山腰/山壁上的陆军自动落回最近的低地
-	_tick_mountain_stuck(delta)
+	if _detail_tick:
+		_tick_mountain_stuck(delta * 2.0)
 
 	# ËÙ¶ÈÓëµØÐÎ
 	
