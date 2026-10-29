@@ -47,6 +47,9 @@ var _pending_since_ms: int = 0
 # 到达该段末端后由 Army 重新寻路。否则大部队攻击移动会停在原地。
 var path_partial: bool = false
 var _last_path_partial: bool = false
+# 目标确实不可达（整块可达区域都已展开）时为 true：此时返回的是“最近可达格”的路径，
+# 单位走到那里就算本次移动完成，不再出现“走到岸边/山脚后丢命令发呆”。
+var _last_path_closest: bool = false
 # 大量单位同时移动/攻击移动时 A* 预算可能连续多帧排不到某个单位。
 # 以前等 4~8 秒后直接判“无路”再重发，结果队尾单位反复经历
 # “排队→超时失败→换目标/重发→继续排队”，永远拿不到路径。
@@ -257,6 +260,13 @@ func _apply_path(pos: Vector3, path: Array, stop_range: float) -> void:
 	astar_target = pos
 	astar_path = path
 	path_partial = _last_path_partial
+	# 不可达目标：把目的地点改写为“最近可达格”，走到那里命令即视为完成，
+	# 不会再出现“走到一半路径变空、命令被清掉、单位原地发呆”。
+	if _last_path_closest and astar_path.size() > 0 and not is_attack_move \
+			and _army != null and String(_army.current_order) == "move":
+		var last_wp: Vector3 = astar_path[astar_path.size() - 1]
+		astar_target = Vector3(last_wp.x, pos.y, last_wp.z)
+		_last_path_closest = false
 	var key = Vector2i(int(pos.x), int(pos.z))
 	if astar_path.size() > 0:
 		attack_path_failed = false
@@ -1008,13 +1018,39 @@ func _show_path():
 # 路径预览的剩余路径点。
 # A* 路径可能只剩 1 个航点，甚至在最后几米被清空；此时单位仍在走（最终接近/直追），
 # 如果只按 astar_path.size() >= 2 判断，就会表现为“正在行走却没有路径”。
+# 两点之间是否一路都能走（0.5 米采样）。指引带最后一段直连目的地时，
+# 必须先用它确认不跨山/不跨水，否则指引带会“穿过河流/高山”，
+# 而单位走到岸边就被地形挡住，看起来像寻路规划错了。
+func _straight_terrain_ok(from: Vector3, to: Vector3) -> bool:
+	var bm = _get_bm()
+	if bm == null:
+		return true
+	var dist: float = Vector2(to.x - from.x, to.z - from.z).length()
+	if dist < 0.01:
+		return true
+	var goal_tile: Vector2i = bm.world_to_grid(to)
+	var steps: int = int(ceil(dist / 0.5))
+	var prev_tile := Vector2i(-9999, -9999)
+	for i in range(1, steps + 1):
+		var t: float = float(i) / float(steps)
+		var p: Vector3 = from.lerp(to, t)
+		var tile: Vector2i = bm.world_to_grid(p)
+		if tile == prev_tile:
+			continue
+		prev_tile = tile
+		if tile == goal_tile:
+			continue
+		if _get_terrain_cost(tile, bm, _wall_set) >= 999.0:
+			return false
+	return true
+
 func _preview_tail_points() -> Array:
 	var tail: Array = []
 	if astar_path.is_empty():
 		if not _preview_motion_active():
 			return tail
 		var dest: Vector3 = get_current_target()
-		if dest != Vector3.ZERO:
+		if dest != Vector3.ZERO and _straight_terrain_ok(_army.global_position, dest):
 			tail.append(dest)
 		return tail
 	if astar_path.size() <= MAX_PATH_PREVIEW_POINTS:
@@ -1031,7 +1067,8 @@ func _preview_tail_points() -> Array:
 	var dest2: Vector3 = get_current_target()
 	if dest2 != Vector3.ZERO and not tail.is_empty() and not path_partial:
 		var last: Vector3 = tail[tail.size() - 1]
-		if Vector2(last.x - dest2.x, last.z - dest2.z).length() > 0.8:
+		if Vector2(last.x - dest2.x, last.z - dest2.z).length() > 0.8 \
+				and _straight_terrain_ok(last, dest2):
 			tail.append(dest2)
 	return tail
 
@@ -1355,6 +1392,7 @@ func _try_merge_group_path(target_pos: Vector3, bm: RTSBattleManager) -> bool:
 
 func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Array:
 	_last_path_partial = false
+	_last_path_closest = false
 	var bm = _army._get_bm() as RTSBattleManager
 	if not bm: return []
 	bm.note_astar_path_call()
@@ -1529,6 +1567,24 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 		if partial.size() > 0:
 			_last_path_partial = true
 			return partial
+	# 整个可达区域都展开过、终点仍然进不来：目标确实不可达（隔山/隔水/隔墙）。
+	# 直接返回空会让上层把命令丢掉，单位停在岸边/山脚“发呆”，看起来像丢了任务。
+	# 普通移动命令改成走到“离目标最近的可达格”即算到达：能走就尽量走，走不到就
+	# 在最近可到处正常结束命令，不会出现“路径中途变空、命令被清、原地站桩”。
+	if stop_range <= 0.0 and _army != null and String(_army.current_order) == "move":
+		if best_partial_tile != start_tile:
+			var closest := _reconstruct_path(came_from, best_partial_tile)
+			if closest.size() > 1:
+				closest.pop_front()
+			if closest.size() > 0:
+				_last_path_partial = false
+				_last_path_closest = true
+				return closest
+		# 已经站在最近可达点：给一个“原地”航点，让移动命令正常到点结束。
+		var half_map_c:= RTSConfig.MAP_SIZE / 2.0
+		_last_path_partial = false
+		_last_path_closest = true
+		return [Vector3(start_tile.x - half_map_c, 0.0, start_tile.y - half_map_c)]
 	return []
 
 func _is_ford_tile(cell: Vector2i, bm: RTSBattleManager) -> bool:
