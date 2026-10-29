@@ -1582,6 +1582,14 @@ func _physics_process(delta):
 	if _soldier_garrison_building and _soldier_garrison_building.get_ref() and is_instance_valid(_soldier_garrison_building.get_ref()):
 		return
 
+	# 物理 LOD：屏幕外/远处单位每 3 个物理步跑一次，并用多倍 delta 补偿，
+	# 模拟速度不变但每帧物理开销降到 1/3。后期几百个单位在后方时收益很大。
+	var _phys_lod: int = int(get_meta("_phys_lod", 1))
+	if _phys_lod > 1:
+		if Engine.get_physics_frames() % _phys_lod != 0:
+			return
+		delta *= float(_phys_lod)
+
 	# 物理帧降频：城墙高度、落水伤害、扬尘、上船检测都带时间参数，
 	# 隔一个物理步跑一次并传入 2 倍 delta，行为速率不变。
 	# 实测 330 军队时实体物理占单帧 50ms+，这个降频能直接砍掉这部分固定开销。

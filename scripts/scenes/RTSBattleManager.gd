@@ -5330,6 +5330,7 @@ func _tick_animation_lod(delta: float) -> void:
 		for a in _armies:
 			if is_instance_valid(a):
 				a.set_animation_lod(false)
+				a.set_meta("_phys_lod", 1)
 		return
 	for a in _armies:
 		if not is_instance_valid(a) or a.health <= 0:
@@ -5340,6 +5341,15 @@ func _tick_animation_lod(delta: float) -> void:
 		# 全屏可见单位的动画一起停掉，表现为后期所有单位定格。
 		var offscreen: bool = not cam.is_position_in_frustum(p)
 		a.set_animation_lod(offscreen)
+		# 物理降频按到相机距离分档（不只看视锥）：近距离全速，40m 外 1/2，100m 外 1/3。
+		# 这样即使玩家拉远视角看大战场，物理成本也有上界，不会因为全屏单位一起动而爆帧。
+		var _dist: float = cam.global_position.distance_to(p)
+		var _lod: int = 1
+		if _dist > 100.0:
+			_lod = 3
+		elif _dist > 40.0:
+			_lod = 2
+		a.set_meta("_phys_lod", _lod)
 
 # 500 单位级战斗：每个物理 tick 的 Army 逻辑已经接近 16ms，再乘上帧末
 # 追赶的多个 physics tick 就会把帧时间推到几百毫秒。渲染保持 60FPS，

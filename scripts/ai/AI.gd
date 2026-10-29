@@ -17,6 +17,7 @@ enum LateTactic { NONE, HARASS, OVERWHELM, RAID, DEFEND }
 var phase: int = Phase.PRODUCTION
 var timer: float = 0.0
 var think_interval: float = 2.0  # overridden by difficulty in _ready
+var _decide_cost_scale: float = 1.0  # decide 实测耗时过长时自动拉长间隔（硬件/规模自适应）
 var _think_ready: bool = false    # 难度对应的思考间隔只初始化一次
 var worker_allocate_timer: float = 0.0
 const WORKER_ALLOCATE_INTERVAL: float = 3.0
@@ -1688,7 +1689,11 @@ func _process(delta):
 		# 不影响前期节奏，但能显著降低后期 AI 的固定开销。
 		var interval: float = think_interval
 		var entity_count: int = battle._all_entities.size() if battle else 0
-		if entity_count > 700:
+		if entity_count > 1000:
+			interval *= 12.0
+		elif entity_count > 850:
+			interval *= 9.0
+		elif entity_count > 700:
 			interval *= 6.0
 		elif entity_count > 550:
 			interval *= 5.0
@@ -1705,8 +1710,15 @@ func _process(delta):
 			# 本帧已有别的 AI 在决策：顺延 0.1s，避免多个 decide 叠在同一帧。
 			timer = 0.1
 		else:
-			timer = interval
+			timer = interval * _decide_cost_scale
+			var _decide_t0: int = Time.get_ticks_usec()
 			decide(interval)
+			var _decide_ms: float = float(Time.get_ticks_usec() - _decide_t0) / 1000.0
+			# 单次 decide 超过 60ms 就自动再拉长间隔，避免高规模/低配机器上频繁卡顿
+			if _decide_ms > 60.0:
+				_decide_cost_scale = minf(_decide_cost_scale * 1.3, 3.0)
+			elif _decide_ms < 25.0:
+				_decide_cost_scale = maxf(_decide_cost_scale * 0.97, 1.0)
 			if battle != null and battle.has_method("is_research_mode") and battle.is_research_mode():
 				_tick_research()
 
