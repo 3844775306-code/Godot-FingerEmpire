@@ -7402,9 +7402,6 @@ func get_supply_gather_mult(unit) -> float:
 			continue
 		if e.entity_id != SUPPORT_UNIT_ID or e.team != unit.team:
 			continue
-		if e.owner_peer_id != -1 and unit.owner_peer_id != -1 \
-				and e.owner_peer_id != unit.owner_peer_id:
-			continue
 		if e.global_position.distance_to(unit.global_position) <= get_supply_aura_radius(e):
 			best = maxf(best, 1.0 + SUPPORT_GATHER_BONUS)
 	return best
@@ -7416,9 +7413,6 @@ func get_supply_speed_mult(unit) -> float:
 		if not is_instance_valid(e) or e == unit or e.health <= 0:
 			continue
 		if e.entity_id != SUPPORT_UNIT_ID or e.team != unit.team:
-			continue
-		if e.owner_peer_id != -1 and unit.owner_peer_id != -1 \
-				and e.owner_peer_id != unit.owner_peer_id:
 			continue
 		if e.global_position.distance_to(unit.global_position) <= get_supply_aura_radius(e):
 			best = maxf(best, 1.0 + SUPPORT_SPEED_BONUS)
