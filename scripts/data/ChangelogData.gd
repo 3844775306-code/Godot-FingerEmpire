@@ -79,6 +79,15 @@ static func milestones() -> Array:
 static func entries() -> Array:
 	return [
 		{
+			"version": "v4.0.27",
+			"date": "2026-10-29",
+			"title": "大规模对局卡顿优化",
+			"items": [
+				"优化：阴影/动画 LOD 改为分帧处理，消除几百单位时每秒一次的长帧。",
+				"优化：AI 决策耗时超过 120/250ms 时进一步拉长决策间隔，减少后期 300~700ms 的卡顿尖峰。",
+			],
+		},
+		{
 			"version": "v4.0.26",
 			"date": "2026-10-29",
 			"title": "卡顿诊断与帧时间稳定",
