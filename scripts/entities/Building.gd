@@ -266,6 +266,7 @@ func _attack(target, delta):
 		bullet.splash_damage_mult = splash_damage_mult
 		# 从模型朝目标一侧的上沿出手：箭塔射箭、炮塔/城墙炮台打炮都不再从建筑中心冒出。
 		bullet.global_position = WeaponAttachment.projectile_origin(self, entity_id, target.global_position)
+		bullet.aim_initial(target.global_position)
 		# B7 三矢齐发：主城/城堡一次攻击连射 3 支，每支 100% 伤害。
 		var extra_shots: int = maxi(0, volley_count - 1) if entity_id in [20, 53] else 0
 		for _i in range(extra_shots):

@@ -16,6 +16,7 @@ var max_lifetime: float = 10.0
 var hit: bool = false
 var target_pos: Vector3 = Vector3.ZERO   # 固定目标点（非追踪模式）
 var _saved_dir: Vector3 = Vector3.ZERO
+var flight_dir: Vector3 = Vector3.ZERO   # 当前飞行朝向，供联机快照让客户端首发就摆正模型
 var _pool_key: String = ""                # 对象池键；由 BattleManager 设置
 
 # 抛物线弹道：炮弹、投石车巨石等重弹走抛物线，箭矢保持直线飞行。
@@ -415,6 +416,7 @@ func reset_for_reuse(new_source, p_damage_radius: float, p_team: int, p_key: Str
 	target = null
 	target_pos = Vector3.ZERO
 	_saved_dir = Vector3.ZERO
+	flight_dir = Vector3.ZERO
 	hit = false
 	_stuck_to = null
 	_stuck_offset = Vector3.ZERO
@@ -443,6 +445,7 @@ func recycle() -> void:
 	source_entity_id = -1
 	target_pos = Vector3.ZERO
 	_saved_dir = Vector3.ZERO
+	flight_dir = Vector3.ZERO
 	time_alive = 0.0
 	_reset_ballistic_state()
 	remove_from_group("bullets")
@@ -714,8 +717,16 @@ func _on_hit(entity: GameEntity):
 		return
 	recycle()
 
+# 生成当帧就转向目标，避免箭矢/炮弹先朝世界 -Z 显示一帧再纠正。
+func aim_initial(point: Vector3) -> void:
+	var dir := point - global_position
+	if dir.length_squared() > 0.000001:
+		_orient_to_dir(dir)
+
 # 让弹丸模型朝向飞行方向；方向接近竖直时换用备用 up 向量避免万向锁翻转
 func _orient_to_dir(dir: Vector3):
+	if dir.length_squared() > 0.000001:
+		flight_dir = dir.normalized()
 	var up = Vector3.UP if absf(dir.y) < 0.99 * dir.length() else Vector3.FORWARD
 	look_at(global_position + dir, up)
 

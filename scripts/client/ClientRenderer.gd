@@ -713,14 +713,20 @@ func _process_snapshot(data: Dictionary):
 				node = _create_bullet_node(b)
 				entity_nodes[id] = node
 			var new_pos = Vector3(b["x"], b["y"], b["z"])
-			# 用与上一快照位置的差确定飞行朝向，让箭模型指向运动方向
+			node.global_position = new_pos
+			# 用与上一快照位置的差确定飞行朝向；第一帧没有上一位置时，
+			# 用服务端随快照发来的 flight_dir，避免箭矢先朝世界 -Z 显示一帧。
 			if node.has_meta("prev_pos"):
 				var dir = new_pos - node.get_meta("prev_pos")
 				if dir.length_squared() > 0.0001:
 					var up = Vector3.UP if absf(dir.y) < 0.99 * dir.length() else Vector3.FORWARD
 					node.look_at(new_pos + dir, up)
+			else:
+				var dir0 = Vector3(float(b.get("dx", 0.0)), float(b.get("dy", 0.0)), float(b.get("dz", 0.0)))
+				if dir0.length_squared() > 0.0001:
+					var up0 = Vector3.UP if absf(dir0.y) < 0.99 * dir0.length() else Vector3.FORWARD
+					node.look_at(new_pos + dir0, up0)
 			node.set_meta("prev_pos", new_pos)
-			node.global_position = new_pos
 			# 服务端已按队伍视野裁剪；客户端再兜底一次，旧服务端也不会让
 			# 敌方箭矢/炮弹漏过迷雾。
 			var viewer_team: int = my_team if my_team != -1 else player_team
@@ -1169,6 +1175,17 @@ func _update_entity_animation(node: Node3D, info: Dictionary):
 			var cannon_model = node.get_meta("_model_instance", null)
 			if cannon_model is Node3D:
 				CannonTowerAnim.play(cannon_model)
+	# 手持武器的额外动作（剑斩/矛刺/弓弦回弹）不能只依赖单位攻击动作；
+	# 客户端按快照 attack_seq 的变化补播一次，单机则由 Army 直接调用。
+	if WeaponAttachment.has_custom_attack(entity_id):
+		var weapon_seq := int(info.get("attack_seq", 0))
+		var weapon_prev := int(node.get_meta("_weapon_attack_seq", -1))
+		if weapon_prev == -1:
+			node.set_meta("_weapon_attack_seq", weapon_seq)
+		elif weapon_seq != weapon_prev:
+			node.set_meta("_weapon_attack_seq", weapon_seq)
+			if int(info.get("health", 0)) > 0:
+				WeaponAttachment.play_attack(node, entity_id)
 
 # 联机客户端没有 Army/真实目标引用，只能根据 attack_seq 按朝向和射程
 # 放一枚视觉法术弹；伤害/治疗仍由服务端在命中时结算，客户端只负责表现。

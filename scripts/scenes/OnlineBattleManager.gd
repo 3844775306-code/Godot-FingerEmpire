@@ -1949,6 +1949,10 @@ func _build_bullets_data(vis_mask: PackedByteArray = PackedByteArray(), team: in
 				"team": bullet.team,
 				"entity_id": bullet.source_entity_id,
 				"damage_radius": bullet.damage_radius,
+				# 客户端创建弹丸时先用这个方向摆正模型，避免第一帧箭头朝反方向。
+				"dx": bullet.flight_dir.x,
+				"dy": bullet.flight_dir.y,
+				"dz": bullet.flight_dir.z,
 			})
 	return bullets_data
 

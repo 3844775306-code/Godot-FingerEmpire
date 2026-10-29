@@ -14,6 +14,12 @@ const SWORD_PATH := "res://models/arena/weapon-sword.glb"
 const SPEAR_PATH := "res://models/arena/weapon-spear.glb"
 const BOW_PATH := "res://models/forest/weapon-bow.glb"
 const SHIELD_PATH := "res://models/arena/shield-round.glb"
+const ARROW_PATH := "res://models/forest/weapon-arrow.glb"
+# 搭在弓上的待发箭：跟随弓移动，射击瞬间隐藏，拉弓动作结束后再补一支。
+const NOCKED_ARROW_POS := Vector3(-0.035, 0.239, -0.08)
+const NOCKED_ARROW_SCALE := 0.72
+# 箭模型自身箭尖朝 +Z，而单位模型正面是 -Z；掉头 180° 才能和射击方向一致。
+const NOCKED_ARROW_ROT := Vector3(0.0, PI, 0.0)
 
 # 士兵模型的骨骼是“手臂沿 X 轴伸出”的，肩到手约 0.29；挂点必须沿骨骼
 # 局部 X 轴偏移，不能沿 Y 轴往下压，否则武器会挂到脚边而不是手上。
@@ -36,6 +42,7 @@ static func attach(entity: Node3D, entity_id: int, _body_radius: float) -> void:
 	if entity_id in BOW_IDS:
 		_attach_weapon(entity, skeleton, BOW_PATH, "arm-left",
 				Vector3(HAND_REACH, 0.0, 0.02), Vector3.ZERO, 1.0, BOW_GRIP_OFFSET)
+		_add_nocked_arrow(_find_weapon(entity, "arm-left"))
 	elif entity_id in SPEAR_IDS:
 		_attach_weapon(entity, skeleton, SPEAR_PATH, "arm-right",
 				Vector3(-HAND_REACH, 0.0, 0.02), SPEAR_ROT, 1.0, SPEAR_GRIP_OFFSET)
@@ -125,6 +132,129 @@ static func _merge_world_mesh_aabb(node: Node, acc: Array) -> void:
 			acc[0] = (acc[0] as AABB).merge(box)
 	for child in node.get_children():
 		_merge_world_mesh_aabb(child, acc)
+
+static func _find_weapon(entity: Node3D, bone_name: String) -> Node3D:
+	if entity == null or not is_instance_valid(entity):
+		return null
+	var attachment := entity.find_child("WeaponBone_" + bone_name.replace("-", "_"), true, false)
+	if attachment is Node3D and attachment.get_child_count() > 0:
+		var weapon := attachment.get_child(0)
+		if weapon is Node3D:
+			return weapon as Node3D
+	return null
+
+static func _add_nocked_arrow(bow: Node3D) -> void:
+	if bow == null or not is_instance_valid(bow) or bow.has_meta("_wa_nocked_arrow"):
+		return
+	var scene: PackedScene = load(ARROW_PATH)
+	if scene == null:
+		return
+	var arrow := scene.instantiate() as Node3D
+	if arrow == null:
+		return
+	arrow.name = "NockedArrow"
+	arrow.scale = Vector3.ONE * NOCKED_ARROW_SCALE
+	arrow.position = NOCKED_ARROW_POS
+	arrow.rotation = NOCKED_ARROW_ROT
+	bow.add_child(arrow)
+	bow.set_meta("_wa_nocked_arrow", arrow)
+
+# 只有手持武器需要程序化动作；攻城器械由 SiegeAttackAnim 专门负责。
+static func has_custom_attack(entity_id: int) -> bool:
+	return entity_id in BOW_IDS or entity_id in SWORD_IDS or entity_id in SPEAR_IDS
+
+# 怪物/单位攻击时，除了骨骼攻击动作，再给武器本身叠一层动作：
+# 弓拉弦后回弹、剑补一记横斩、矛向前突刺、盾轻微前顶。
+static func play_attack(entity: Node3D, entity_id: int) -> void:
+	if entity == null or not is_instance_valid(entity) or not has_custom_attack(entity_id):
+		return
+	if not entity.is_inside_tree():
+		return
+	var weapon_bone := "arm-left" if entity_id in BOW_IDS else "arm-right"
+	var weapon := _find_weapon(entity, weapon_bone)
+	if weapon != null:
+		if entity_id in BOW_IDS:
+			_play_bow_attack(weapon)
+		elif entity_id in SPEAR_IDS:
+			_play_spear_attack(weapon)
+		else:
+			_play_sword_attack(weapon)
+	var shield_bone := "arm-right" if entity_id in BOW_IDS else "arm-left"
+	var shield := _find_weapon(entity, shield_bone)
+	if shield != null:
+		_play_shield_bump(shield)
+
+static func _weapon_base(weapon: Node3D) -> Array:
+	if not weapon.has_meta("_wa_base"):
+		weapon.set_meta("_wa_base", [weapon.position, weapon.rotation])
+	return weapon.get_meta("_wa_base")
+
+static func _kill_weapon_tween(weapon: Node3D) -> void:
+	var old = weapon.get_meta("_wa_tween", null)
+	if old is Tween and old.is_valid():
+		old.kill()
+
+static func _begin_weapon_anim(weapon: Node3D) -> Array:
+	_kill_weapon_tween(weapon)
+	var base := _weapon_base(weapon)
+	weapon.position = base[0]
+	weapon.rotation = base[1]
+	return base
+
+static func _play_bow_attack(bow: Node3D) -> void:
+	var base := _begin_weapon_anim(bow)
+	var base_pos: Vector3 = base[0]
+	var base_rot: Vector3 = base[1]
+	var arrow = bow.get_meta("_wa_nocked_arrow", null)
+	# 箭离弦：先隐藏搭在弓上的那支，动作结束再补一支。
+	if arrow is Node3D and is_instance_valid(arrow):
+		arrow.visible = false
+	var tw := bow.create_tween()
+	bow.set_meta("_wa_tween", tw)
+	tw.tween_property(bow, "position", base_pos + Vector3(0.0, 0.0, 0.07), 0.07)
+	tw.parallel().tween_property(bow, "rotation", base_rot + Vector3(0.10, 0.0, 0.0), 0.07)
+	tw.tween_property(bow, "position", base_pos - Vector3(0.0, 0.0, 0.05), 0.05)
+	tw.parallel().tween_property(bow, "rotation", base_rot - Vector3(0.05, 0.0, 0.0), 0.05)
+	tw.tween_property(bow, "position", base_pos, 0.20)
+	tw.parallel().tween_property(bow, "rotation", base_rot, 0.20)
+	tw.tween_callback(func() -> void:
+		if is_instance_valid(bow) and arrow is Node3D and is_instance_valid(arrow):
+			arrow.visible = true)
+
+static func _play_sword_attack(sword: Node3D) -> void:
+	var base := _begin_weapon_anim(sword)
+	var base_pos: Vector3 = base[0]
+	var base_rot: Vector3 = base[1]
+	var tw := sword.create_tween()
+	sword.set_meta("_wa_tween", tw)
+	tw.tween_property(sword, "rotation", base_rot + Vector3(0.0, 0.0, -0.62), 0.10)
+	tw.parallel().tween_property(sword, "position", base_pos + Vector3(0.0, 0.02, -0.06), 0.10)
+	tw.tween_property(sword, "rotation", base_rot + Vector3(0.10, 0.0, 0.24), 0.14)
+	tw.parallel().tween_property(sword, "position", base_pos, 0.14)
+	tw.tween_property(sword, "rotation", base_rot, 0.22)
+
+static func _play_spear_attack(spear: Node3D) -> void:
+	var base := _begin_weapon_anim(spear)
+	var base_pos: Vector3 = base[0]
+	var base_rot: Vector3 = base[1]
+	var tw := spear.create_tween()
+	spear.set_meta("_wa_tween", tw)
+	tw.tween_property(spear, "position", base_pos + Vector3(0.0, 0.0, 0.10), 0.08)
+	tw.parallel().tween_property(spear, "rotation", base_rot + Vector3(0.12, 0.0, 0.0), 0.08)
+	tw.tween_property(spear, "position", base_pos - Vector3(0.0, 0.0, 0.20), 0.10)
+	tw.parallel().tween_property(spear, "rotation", base_rot - Vector3(0.08, 0.0, 0.0), 0.10)
+	tw.tween_property(spear, "position", base_pos, 0.24)
+	tw.parallel().tween_property(spear, "rotation", base_rot, 0.24)
+
+static func _play_shield_bump(shield: Node3D) -> void:
+	var base := _begin_weapon_anim(shield)
+	var base_pos: Vector3 = base[0]
+	var base_rot: Vector3 = base[1]
+	var tw := shield.create_tween()
+	shield.set_meta("_wa_tween", tw)
+	tw.tween_property(shield, "position", base_pos - Vector3(0.0, 0.0, 0.09), 0.08)
+	tw.tween_property(shield, "position", base_pos, 0.22)
+	tw.parallel().tween_property(shield, "rotation", base_rot, 0.22)
 
 static func _find_skeleton(node: Node) -> Skeleton3D:
 	if node is Skeleton3D:
