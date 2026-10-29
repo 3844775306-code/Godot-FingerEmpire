@@ -195,6 +195,15 @@ const WALL_GUARD_SLOT_META: String = "ai_wall_guard_slot"
 const WALL_GUARD_POS_META: String = "ai_wall_guard_pos"
 const WALL_GUARD_SMALL_BODY: float = 0.5
 var _wall_deploy_timer: float = 0.0
+# 防御建筑驻军：AI 会把部分闲置士兵/农民送进箭塔、炮塔和城堡，
+# 让它们吃到多子弹齐射加成，而不是只在塔外站着。
+const GARRISON_CHECK_INTERVAL: float = 4.0
+const GARRISON_TOWER_WANT: int = 1
+const GARRISON_CASTLE_WANT: int = 2
+const GARRISON_TOWER_WANT_DEFEND: int = 3
+const GARRISON_CASTLE_WANT_DEFEND: int = 4
+const GARRISON_MAX_DISTANCE: float = 42.0
+var _garrison_timer: float = 0.0
 var defense_wall_axis: Vector3 = Vector3.RIGHT
 const TOWER_SPACING: float = 3.0
 const DEFENSE_FRONT_DIST: float = 8.0
@@ -2186,6 +2195,12 @@ func _run_decide_step(step: int) -> void:
 			if _wall_deploy_timer <= 0.0:
 				_wall_deploy_timer = WALL_DEPLOY_INTERVAL
 				_deploy_ranged_units_to_walls()
+			# 守墙之后再安排塔内驻军：墙顶单位、赶路单位都已被占用，
+			# 不会把刚派去城墙的远程兵又抽回箭塔。
+			_garrison_timer -= _last_delta
+			if _garrison_timer <= 0.0:
+				_garrison_timer = GARRISON_CHECK_INTERVAL
+				_ai_garrison_soldiers()
 		10:
 			match phase:
 				Phase.PRODUCTION: _state_production(_last_delta)
@@ -2802,6 +2817,9 @@ func _is_held_by_garrison(u) -> bool:
 		return true
 	if u.garrison_point != Vector3.ZERO:
 		return true
+	# 已预约进驻建筑、正在赶路：在抵达前也不能被主攻/集结/守家调度拉走。
+	if int(u.get("_garrison_target_id")) != -1:
+		return true
 	return _is_local_defense_active(u)
 
 func attack_move(target_position: Vector3, max_units: int):
@@ -3012,6 +3030,118 @@ func _ai_garrison_officials():
 			# 至少不要站在野外闲置；等 AI 补回对应建筑后会再改派。
 			target = _find_commander_station_s()
 		if target: entity.command_garrison(target)
+
+# AI 普通部队进驻防御建筑：箭塔/炮塔/城堡。
+# 与官员不同，士兵/农民走 _garrison_target_id + move_to 的到达进驻流程。
+func _ai_garrison_soldiers() -> void:
+	if _defense == null:
+		return
+	var castle = get_peer_castle(my_peer_id if my_peer_id != -1 else my_team)
+	if castle == null or not is_instance_valid(castle):
+		return
+	var defending: bool = _is_defending() or int(_defense.threat_level) >= 1
+	var pending: Dictionary = {}
+	var candidates: Array = []
+	for e in _cached_armies():
+		if not is_instance_valid(e) or e.health <= 0:
+			continue
+		if not entity_belongs_to_me(e):
+			continue
+		# 农民、官员、商人、侦察兵、攻城器械和海军不参与塔内驻军。
+		if int(e.entity_id) in [10, 14, 16, 17, 18, 19, 43, 44, 45, 46, 47, 48, 49, 50, 51, 59]:
+			continue
+		if e.water_capable or e.hold_position:
+			continue
+		if e.has_meta("ai_home_guard") or e.has_meta("ai_wall_guard") \
+				or e.has_meta("ai_resource_guard") or e.has_meta("ai_harass") \
+				or e.has_meta("ai_transporting") or e.has_meta("ai_escorting") \
+				or e.has_meta("ai_building_defense_until"):
+			continue
+		if _is_local_defense_active(e):
+			continue
+		var boarded = e.get("_boarded_on")
+		if boarded != null and int(boarded) != -1:
+			continue
+		var sgb = e.get("_soldier_garrison_building")
+		if sgb != null and sgb.get_ref() != null:
+			continue
+		var tid := int(e.get("_garrison_target_id"))
+		if tid != -1:
+			# 已经在赶去进驻：目标失效/已满/寻路失败时清掉预约，下一轮重新分配。
+			var target = instance_from_id(tid)
+			var target_ok: bool = target != null and is_instance_valid(target) \
+				and target.health > 0 and target.has_method("can_garrison_soldier") \
+				and target.can_garrison_soldier()
+			if not target_ok or (e._movement != null and e._movement.move_path_failed):
+				e._garrison_target_id = -1
+				if e.has_method("stop_movement"):
+					e.stop_movement()
+				continue
+			pending[tid] = int(pending.get(tid, 0)) + 1
+			continue
+		if e.garrison_point != Vector3.ZERO:
+			continue
+		if e.current_target != null or e.current_order != "" or e.is_attack_moving:
+			continue
+		if not e.command_queue.is_empty():
+			continue
+		if e.has_method("_is_unit_on_wall") and e._is_unit_on_wall():
+			continue
+		candidates.append(e)
+	var buildings: Array = []
+	for b in _cached_buildings():
+		if not is_instance_valid(b) or b.health <= 0 or not entity_belongs_to_me(b):
+			continue
+		if int(b.entity_id) not in [25, 26, 53]:
+			continue
+		if b.build_timer > 0.0 or not b.can_garrison_soldier():
+			continue
+		buildings.append(b)
+	if buildings.is_empty() or candidates.is_empty():
+		return
+	buildings.sort_custom(func(x, y):
+		return x.global_position.distance_squared_to(castle.global_position) \
+			< y.global_position.distance_squared_to(castle.global_position))
+	var assigned_total := 0
+	var total_cap := 12 if defending else 6
+	for b in buildings:
+		if assigned_total >= total_cap:
+			break
+		var bid: int = int(b.get_instance_id())
+		var want := GARRISON_CASTLE_WANT if int(b.entity_id) == 53 else GARRISON_TOWER_WANT
+		if defending:
+			want = GARRISON_CASTLE_WANT_DEFEND if int(b.entity_id) == 53 else GARRISON_TOWER_WANT_DEFEND
+		var have := int(b.get_garrison_count()) + int(pending.get(bid, 0))
+		var need := want - have
+		if need <= 0:
+			continue
+		# 优先把远程兵放进塔里；同距离下近战再补位。
+		var ranged: Array = []
+		var melee: Array = []
+		for u in candidates:
+			if u.global_position.distance_to(b.global_position) > GARRISON_MAX_DISTANCE:
+				continue
+			if float(u.attack_range) >= 2.0:
+				ranged.append(u)
+			else:
+				melee.append(u)
+		ranged.sort_custom(func(a, c):
+			return a.global_position.distance_squared_to(b.global_position) \
+				< c.global_position.distance_squared_to(b.global_position))
+		melee.sort_custom(func(a, c):
+			return a.global_position.distance_squared_to(b.global_position) \
+				< c.global_position.distance_squared_to(b.global_position))
+		var pool: Array = ranged + melee
+		var take := mini(need, pool.size())
+		for i in range(take):
+			var u = pool[i]
+			if not is_instance_valid(u):
+				continue
+			u._garrison_target_id = bid
+			u.move_to(b.global_position)
+			candidates.erase(u)
+			assigned_total += 1
+		pending[bid] = int(pending.get(bid, 0)) + take
 
 # ═══ Hunting ═══
 # 沙漠类地图食物资源几乎为零、全靠兽群：狩猎要更频繁、范围更大，并允许农民一起上

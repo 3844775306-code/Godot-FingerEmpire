@@ -218,7 +218,7 @@ static func levels() -> Array:
 		"time_limit": 420.0, "stars": {"two": 300.0, "three": 180.0},
 		"concepts": [
 			{"name": "城墙", "kind": "building", "id": 27, "icon": "🧱", "desc": "高护甲，阻挡陆军。不要全封死，留一个缺口让敌人走进箭塔火力。"},
-			{"name": "箭塔", "kind": "building", "id": 25, "icon": "🏹", "desc": "自动攻击范围内敌人，血厚。放在墙后或资源点旁，交叉火力最强。"},
+			{"name": "箭塔进驻", "kind": "building", "id": 25, "icon": "🏹", "desc": "选中士兵/农民右键己方箭塔、炮塔或防御城堡即可进驻（主城不可）。驻军会让防御建筑一次齐射多颗独立索敌的子弹；箭塔最多 5 人，城堡最多 10 人。"},
 		],
 		"unlock_buildings": [27, 25],
 		"player": _p(
@@ -235,9 +235,11 @@ static func levels() -> Array:
 			], [], false, false, 1, 1, 40),
 		"objectives": [
 			{"type": "survive", "duration": 120.0, "label": "守住 2 分钟"},
+			{"type": "garrison_units", "count": 4, "building_ids": [25, 26, 53],
+				"label": "把 4 名士兵进驻箭塔/炮塔/城堡"},
 		],
 		"fail": ["castle_lost", "timeout"],
-		"brief": "用城墙围出一个带缺口的防线，在缺口后方建 2 座箭塔。不要把墙完全封死，否则敌人会绕路。",
+		"brief": "用城墙围出一个带缺口的防线，在缺口后方建 2 座箭塔。再选中至少 4 名步兵或弓手，右键己方箭塔进驻；也可框选后点信息面板底部「进驻建筑」。驻军齐射会同时打出多颗子弹。",
 	}))
 
 	out.append(_level({

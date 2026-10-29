@@ -82,6 +82,10 @@ var _target_initial: int = 0
 var _gather_need: float = 0.0
 var _gather_total: float = 0.0
 var _gather_last_total: float = -1.0
+# 驻军目标：新手训练用，统计玩家指定建筑里的驻军总数（达到过就算完成）
+var _garrison_need: int = 0
+var _garrison_ids: Array = []
+var _garrison_best: int = 0
 var _kill_need: int = 0
 var _kill_ids: Array = []
 var _kill_intercept_dist: float = 0.0   # >0 时：只有死在离主城这么远之外的才算"击沉"
@@ -605,6 +609,9 @@ func _parse_objectives() -> void:
 	_target_need = 0
 	_target_initial = 0
 	_gather_need = 0.0
+	_garrison_need = 0
+	_garrison_ids.clear()
+	_garrison_best = 0
 	_multi_zones.clear()
 	_defend_ids.clear()
 	_defend_buildings.clear()
@@ -694,6 +701,9 @@ func _parse_objectives() -> void:
 				_target_initial = _count_enemy_buildings(_target_ids)
 			"gather":
 				_gather_need = float(obj.get("amount", 1500.0))
+			"garrison_units":
+				_garrison_need = int(obj.get("count", 3))
+				_garrison_ids = obj.get("building_ids", [25, 26, 53]).duplicate()
 			"endless":
 				_endless_on = true
 				_endless_first = float(obj.get("first_wave", 20.0))
@@ -1491,6 +1501,9 @@ func _update_objective_states() -> void:
 				done = _targets_destroyed() >= _target_need
 			"gather":
 				done = _gather_total >= _gather_need
+			"garrison_units":
+				_garrison_best = maxi(_garrison_best, _count_player_garrisoned())
+				done = _garrison_best >= _garrison_need
 			"kill_units":
 				if _kill_max_slip > 0 and _kill_slipped > _kill_max_slip:
 					_finish(false)
@@ -1517,6 +1530,22 @@ func _kill_progress() -> int:
 	for id in _kill_ids:
 		n += int(_enemy_kills_by_id.get(int(id), 0))
 	return n
+
+# 驻军目标进度：只数玩家指定类型建筑里的驻军，避免敌方建筑/其他建筑凑数。
+func _count_player_garrisoned() -> int:
+	if bm == null or _garrison_ids.is_empty():
+		return 0
+	var total := 0
+	for e in bm.entities.get_children():
+		if not (e is Building) or e.health <= 0:
+			continue
+		if int(e.team) != int(bm.player_team):
+			continue
+		if int(e.entity_id) not in _garrison_ids:
+			continue
+		if e.has_method("get_garrison_count"):
+			total += int(e.get_garrison_count())
+	return total
 
 func _update_zone(dt: float) -> void:
 	if _zone_radius <= 0.0 or _zone_hold_need <= 0.0:
@@ -2225,6 +2254,9 @@ func _update_progress_text() -> void:
 				parts.append("已摧毁 %d / %d 座目标建筑" % [_targets_destroyed(), _target_need])
 			"gather":
 				parts.append("累计采集 %d / %d 资源" % [int(_gather_total), int(_gather_need)])
+			"garrison_units":
+				_garrison_best = maxi(_garrison_best, _count_player_garrisoned())
+				parts.append("驻军 %d / %d（选士兵后右键己方箭塔/炮塔/城堡）" % [_garrison_best, _garrison_need])
 			"kill_units":
 				var verb := "已击沉敌船" if not _kill_ids.is_empty() else "已歼灭敌军"
 				var kill_line := "%s %d / %d" % [verb, _kill_progress(), _kill_need]

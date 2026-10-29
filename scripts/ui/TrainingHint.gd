@@ -23,7 +23,7 @@ func _ready() -> void:
 func _build() -> void:
 	var mobile := InputSource.use_mobile_ui()
 	var w: float = UILayout.dp(274.0) if mobile else 620.0
-	var h: float = UILayout.dp(194.0) if mobile else 300.0
+	var h: float = UILayout.dp(232.0) if mobile else 340.0
 	_full_height = h
 	_compact_height = UILayout.dp(34.0) if mobile else 44.0
 	var x: float = UILayout.dp(8.0) if mobile else 28.0
