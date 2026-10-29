@@ -44,6 +44,12 @@ const BOARD_WAIT_TIMEOUT := 50.0
 # 不能永远等“4 运载船 + 4 护航舰”齐编。超过这个时间就按现有船先组织登陆，
 # 否则海峡图这种完全无陆路的地图会一直停在 STATE_IDLE，永远不投送陆军。
 const FLEET_ASSEMBLY_TIMEOUT := 45.0
+# 桥计划在“木材不足”状态下不能无限占着通道：超时后放弃本段并计入失败，
+# 连续失败会按既有逻辑改走运载船。
+const BRIDGE_AFFORD_TIMEOUT := 30.0
+# 船队已经集结/出航后，如果个别船被地形或其它船卡住，不能无限等待。
+const FLEET_IDLE_TIMEOUT := 90.0
+const FLEET_SAIL_TIMEOUT := 180.0
 
 const MODE_NONE := 0
 const MODE_BRIDGE := 1
@@ -98,6 +104,9 @@ var _wave_escort_target: int = 0
 var _wave_troop_target: int = 0
 var _wave_troop_quota: int = 0
 var _fleet_wait_timer: float = 0.0
+var _bridge_afford_timer: float = 0.0
+var _fleet_idle_timer: float = 0.0
+var _fleet_sail_timer: float = 0.0
 
 func _init(owner):
 	ai = owner
@@ -161,6 +170,7 @@ func _refresh_plan():
 		if mode == MODE_TRANSPORT:
 			_abort_transport()
 		bridge_plan = plan
+		_bridge_afford_timer = 0.0
 		_transport_state = STATE_IDLE
 		_transport_units.clear()
 		mode = MODE_BRIDGE
@@ -187,6 +197,7 @@ func _stop_all():
 	_abort_transport()
 	bridge_plan.clear()
 	_bridge_fail_count = 0
+	_bridge_afford_timer = 0.0
 	_transport_shores_valid = false
 	_reachable_land.clear()
 	mode = MODE_NONE
@@ -215,13 +226,22 @@ func _abort_transport():
 	_transport_state = STATE_IDLE
 	_transport_timer = 0.0
 	_fleet_wait_timer = 0.0
+	_fleet_idle_timer = 0.0
+	_fleet_sail_timer = 0.0
 	# 中断后下一次组织登陆按当时时间重新计算波次规模
 	_reset_wave_targets()
+
+# 船队卡住时不只是原地重试：作废当前岸点，让下一轮重新找登陆场。
+func _stall_transport():
+	_transport_shores_valid = false
+	_plan_timer = 0.0
+	_abort_transport()
 
 func _collect_bridges() -> Dictionary:
 	var out: Dictionary = {}
 	for e in battle.entities.get_children():
-		if e is Building and e.entity_id == BRIDGE_ID and e.health > 0:
+		# 只把完工的桥算作可通行；施工中的桥段不能拿来判断两岸已经连通。
+		if e is Building and e.entity_id == BRIDGE_ID and e.health > 0 and e.build_timer <= 0.0:
 			out[battle.world_to_grid(e.global_position)] = true
 	return out
 
@@ -234,6 +254,9 @@ func _land_passable(tile: Vector2i, bridges: Dictionary) -> bool:
 	if terrain == 2:
 		# 浅滩(3)是水格但陆军可通行
 		return battle.get_overlay_at_grid(tile.x, tile.y) == 3
+	# 与陆军 A* 保持一致：山壁、悬崖、无法通过的台地边缘不能算陆地连通。
+	if battle.has_method("is_cliff_tile") and battle.is_cliff_tile(tile.x, tile.y):
+		return false
 	return true
 
 func _bfs_land(start: Vector2i, bridges: Dictionary) -> Dictionary:
@@ -313,6 +336,7 @@ func _try_resource_bridge(own_set: Dictionary, bridges: Dictionary, own_grid: Ve
 		return false
 	_resource_bridges_started += 1
 	bridge_plan = plan
+	_bridge_afford_timer = 0.0
 	_transport_state = STATE_IDLE
 	_transport_units.clear()
 	mode = MODE_BRIDGE
@@ -400,6 +424,7 @@ func plan_bridge_to(target_pos: Vector3, from_pos: Vector3 = Vector3.ZERO) -> bo
 	if plan.is_empty():
 		return false
 	bridge_plan = plan
+	_bridge_afford_timer = 0.0
 	mode = MODE_BRIDGE
 	_transport_state = STATE_IDLE
 	_transport_units.clear()
@@ -723,8 +748,9 @@ func _landing_defense_score(pos: Vector3, defenses: Array) -> float:
 
 # ═══════════════════════ 搭桥 ═══════════════════════
 
-func _tick_bridge(_delta: float):
+func _tick_bridge(delta: float):
 	if bridge_plan.is_empty():
+		_bridge_afford_timer = 0.0
 		_plan_timer = minf(_plan_timer, 1.0)
 		return
 	var pos: Vector3 = bridge_plan[0]
@@ -732,10 +758,19 @@ func _tick_bridge(_delta: float):
 	for e in battle.entities.get_children():
 		if e is Building and e.entity_id == BRIDGE_ID and e.health > 0:
 			if battle.world_to_grid(e.global_position) == g:
+				_bridge_afford_timer = 0.0
 				bridge_plan.pop_front()
 				return
 	if not ai.can_afford_building(BRIDGE_ID):
+		_bridge_afford_timer += delta
+		if _bridge_afford_timer >= BRIDGE_AFFORD_TIMEOUT:
+			# 木材长期不够：放弃这条桥，让下一次规划改走运载船或更短的资源桥。
+			bridge_plan.clear()
+			_bridge_afford_timer = 0.0
+			_register_bridge_failure()
+			_plan_timer = 1.0
 		return
+	_bridge_afford_timer = 0.0
 	if battle.has_method("is_valid_bridge_position") and not battle.is_valid_bridge_position(pos):
 		# 这个桥位被单位/建筑挡住或地形已变，下一周期重新找
 		bridge_plan.clear()
@@ -745,6 +780,7 @@ func _tick_bridge(_delta: float):
 	if ai.build_building(BRIDGE_ID, pos):
 		_bridge_fail_count = 0
 		_bridge_retry_at_ms = 0
+		_bridge_afford_timer = 0.0
 		bridge_plan.pop_front()
 		if bridge_plan.is_empty():
 			_plan_timer = 0.0
@@ -914,6 +950,9 @@ func _tick_fleet_idle(delta: float):
 			# 到岸边后先停船，等陆军走到船边再上船
 			ship.stop_movement()
 	if not all_close:
+		_fleet_idle_timer += delta
+		if _fleet_idle_timer >= FLEET_IDLE_TIMEOUT:
+			_stall_transport()
 		return
 	_transport_slots = slots
 	# 护航舰也先回到出发海域，和运载船一起走，避免船队先冲出去、护航舰还在后面
@@ -926,7 +965,11 @@ func _tick_fleet_idle(delta: float):
 			_escorts[i].move_to(escort_slots[i])
 			escorts_home = false
 	if not escorts_home:
+		_fleet_idle_timer += delta
+		if _fleet_idle_timer >= FLEET_IDLE_TIMEOUT:
+			_stall_transport()
 		return
+	_fleet_idle_timer = 0.0
 	# 本波次实际目标兵力：不超过本次运载船总容量。
 	# 编队缩水时最低人数也随运力下降，否则 2 艘船永远达不到 30 人。
 	var capacity: int = _transports.size() * TRANSPORT_CAPACITY
@@ -979,6 +1022,8 @@ func _tick_fleet_idle(delta: float):
 	_order_escorts_to(own_shore_water, 3.0)
 	_transport_state = STATE_GATHER
 	_transport_timer = 0.0
+	_fleet_idle_timer = 0.0
+	_fleet_sail_timer = 0.0
 
 func _tick_fleet_gather(delta: float):
 	_transport_timer += delta
@@ -1048,11 +1093,13 @@ func _tick_fleet_gather(delta: float):
 		return
 	_transport_state = STATE_SAIL
 	_transport_timer = 0.0
+	_fleet_sail_timer = 0.0
 	_escort_advanced = false
 	_order_fleet_sail()
 
 func _tick_fleet_sail(delta: float):
 	_transport_timer += delta
+	_fleet_sail_timer += delta
 	var slots := _shore_slots(enemy_shore_water, _transports.size(), 2.5)
 	var all_unloaded: bool = true
 	var any_ship: bool = false
@@ -1084,9 +1131,13 @@ func _tick_fleet_sail(delta: float):
 	if not _escort_advanced and _transport_timer > 8.0:
 		_escort_advanced = true
 		_order_escorts_to(enemy_shore_water, 3.0)
-	# 没全部靠岸就继续等/继续开，不在深海放人
+	# 没全部靠岸就继续等/继续开，不在深海放人。
+	# 但长时间到不了敌岸时必须放弃当前登陆场，否则整支舰队会在海上永航。
 	if not all_unloaded:
+		if _fleet_sail_timer >= FLEET_SAIL_TIMEOUT:
+			_stall_transport()
 		return
+	_fleet_sail_timer = 0.0
 	var enemy_castle = ai._get_attack_target_castle()
 	for u in _transport_units:
 		if is_instance_valid(u) and u is Army:
@@ -1297,7 +1348,7 @@ func _ensure_shore_shipyard():
 			if e.global_position.distance_to(own_shore_water) <= 40.0:
 				# 标记为渡水专用，避免 _manage_shipyards 因“附近无油田”把它拆掉
 				e.set_meta("ai_transport_shipyard", true)
-			return
+				return
 	if not ai.can_afford_building(SHIPYARD_ID):
 		return
 	var pos: Vector3 = _find_shore_shipyard_pos()
@@ -1340,8 +1391,25 @@ func _find_shore_shipyard_pos() -> Vector3:
 				return pos
 	return Vector3.ZERO
 
+# 优先使用靠近登陆岸的专用船坞；只有没有专用船坞时才退回第一座己方船坞。
+# 否则 AI 可能把运载船科技/生产排到远处只产渔船/战船的油田船坞上。
+func _find_transport_shipyard() -> Building:
+	var fallback: Building = null
+	for e in battle.entities.get_children():
+		if not (e is Building) or e.health <= 0 or e.entity_id != SHIPYARD_ID:
+			continue
+		if not ai.entity_belongs_to_me(e) or not e.has_meta("ai_transport_shipyard"):
+			continue
+		if e.build_timer <= 0.0 and e.upgrade_level >= TRANSPORT_SHIPYARD_LEVEL:
+			return e as Building
+		if fallback == null:
+			fallback = e as Building
+	if fallback != null:
+		return fallback
+	return ai._find_own_building(SHIPYARD_ID)
+
 func _ensure_transport_tech():
-	var sy = ai._find_own_building(SHIPYARD_ID)
+	var sy = _find_transport_shipyard()
 	if not is_instance_valid(sy):
 		return
 	if sy.build_timer > 0.0:
@@ -1361,7 +1429,7 @@ func _ensure_transport_fleet():
 	# 当成已拥有，就会出现“实际只有2艘、队列里4艘、AI以为够了不再下单”的卡死。
 	if ai.count_unit(TRANSPORT_ID, false) >= _wave_transport_target:
 		return
-	var sy = ai._find_own_building(SHIPYARD_ID)
+	var sy = _find_transport_shipyard()
 	if not is_instance_valid(sy) or sy.build_timer > 0.0:
 		return
 	if sy.upgrade_level < TRANSPORT_SHIPYARD_LEVEL:
@@ -1391,7 +1459,7 @@ func _ensure_escort_ships():
 	var total: int = ai.count_unit(13, false) + ai.count_unit(39, false) + ai.count_unit(40, false)
 	if total >= _wave_escort_target:
 		return
-	var sy = ai._find_own_building(SHIPYARD_ID)
+	var sy = _find_transport_shipyard()
 	if not is_instance_valid(sy) or sy.build_timer > 0.0:
 		return
 	if sy.upgrade_level < 2:

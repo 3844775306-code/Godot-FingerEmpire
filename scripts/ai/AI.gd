@@ -3509,9 +3509,10 @@ func _manage_merchant_bridges() -> void:
 		var to: Vector3 = castle.global_position
 		if not _line_crosses_water(from, to):
 			continue
-		for spot in _bridge_spot_candidates(from, to):
-			if build_building(7, spot):
-				return
+		# 交给渡水模块生成完整桥段计划，而不是只拍一段桥。
+		# 单段桥在河宽超过一格时仍无法让商人通过，旧逻辑会反复尝试同一水面。
+		if _water_crossing != null and _water_crossing.plan_bridge_to(to, from):
+			return
 
 # 两点连线上的采样是否出现过水面
 func _line_crosses_water(from: Vector3, to: Vector3) -> bool:
@@ -3521,27 +3522,6 @@ func _line_crosses_water(from: Vector3, to: Vector3) -> bool:
 		if battle.get_terrain_at(from.lerp(to, t)) == 2:
 			return true
 	return false
-
-# 沿"商人 → 城堡"方向找到第一段水面，返回水面附近几个可尝试建桥的位置
-func _bridge_spot_candidates(from: Vector3, to: Vector3) -> Array:
-	var out: Array = []
-	var dir: Vector3 = to - from
-	dir.y = 0.0
-	if dir.length() < 0.1:
-		return out
-	dir = dir.normalized()
-	const STEPS: int = 40
-	for i in range(1, STEPS):
-		var t: float = float(i) / float(STEPS)
-		var p: Vector3 = from.lerp(to, t)
-		if battle.get_terrain_at(p) != 2:
-			continue
-		# 先试靠商人这一侧的岸边，再试水面正中，最后试对岸
-		out.append(p - dir * 2.0)
-		out.append(p)
-		out.append(p + dir * 2.0)
-		break
-	return out
 
 func _find_shipyard_pos_near_oil() -> Vector3:
 	var castle = get_peer_castle(my_peer_id)
