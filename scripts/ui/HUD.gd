@@ -1330,6 +1330,8 @@ var _stutter_last_usec: int = 0
 var _stutter_window_count: int = 0
 var _stutter_window_max: float = 0.0
 var _stutter_window_timer: float = 30.0
+var _stutter_window_sum: float = 0.0
+var _stutter_window_frames: int = 0
 var _stutter_file: FileAccess = null
 
 # 卡顿诊断：单帧超过 60ms 就记一条到 user://stutter.log（含游戏时间/实体数/物理帧率），
@@ -1346,6 +1348,16 @@ func _tick_stutter_log(delta: float) -> void:
 		_stutter_file = FileAccess.open("user://stutter.log", FileAccess.WRITE)
 		if _stutter_file:
 			print("[Stutter] 日志: ", ProjectSettings.globalize_path("user://stutter.log"))
+			# 首行记运行环境：玩家机器与开发机差异很大（窗口分辨率、垂直同步、
+			# 刷新率、渲染器），没有这行就无法判断“同样的实体数为什么差 3 倍”。
+			_stutter_file.store_line("ENV win=%s screen=%s refresh=%.0f vsync=%d max_fps=%d cpus=%d adapter=%s renderer=%s scale3d=%.2f" % [
+				str(DisplayServer.window_get_size()), str(DisplayServer.screen_get_size()),
+				DisplayServer.screen_get_refresh_rate(), DisplayServer.window_get_vsync_mode(),
+				Engine.max_fps, OS.get_processor_count(), RenderingServer.get_video_adapter_name(),
+				RenderingServer.get_video_adapter_api_version(), get_viewport().scaling_3d_scale,
+			])
+	_stutter_window_sum += ms
+	_stutter_window_frames += 1
 	var bm = _get_bm()
 	if ms > 60.0:
 		_stutter_window_count += 1
@@ -1364,13 +1376,18 @@ func _tick_stutter_log(delta: float) -> void:
 		_stutter_window_timer = 30.0
 		if _stutter_file:
 			var bm2 = _get_bm()
-			_stutter_file.store_line("SUMMARY 30s spikes=%d max_ms=%.1f game_time=%.1f entities=%d" % [
-				_stutter_window_count, _stutter_window_max,
+			var wframes: int = maxi(_stutter_window_frames, 1)
+			var wavg: float = _stutter_window_sum / float(wframes)
+			_stutter_file.store_line("SUMMARY 30s spikes=%d max_ms=%.1f avg_ms=%.1f fps=%.1f game_time=%.1f entities=%d vsync=%d" % [
+				_stutter_window_count, _stutter_window_max, wavg, 1000.0 / maxf(wavg, 0.01),
 				float(bm2.game_time) if bm2 else 0.0,
 				bm2._all_entities.size() if bm2 and "_all_entities" in bm2 else 0,
+				DisplayServer.window_get_vsync_mode(),
 			])
 		_stutter_window_count = 0
 		_stutter_window_max = 0.0
+		_stutter_window_sum = 0.0
+		_stutter_window_frames = 0
 
 func _process(delta):
 	_tick_stutter_log(delta)
