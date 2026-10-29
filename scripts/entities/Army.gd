@@ -1611,6 +1611,13 @@ func _physics_process(delta):
 	if _soldier_garrison_building and _soldier_garrison_building.get_ref() and is_instance_valid(_soldier_garrison_building.get_ref()):
 		return
 
+	# 普通军队/农民/攻城车的进驻抵达检测。
+	# 官员的 _garrison_target_id 由 _process_official 处理，这里只处理可进驻士兵。
+	if _garrison_target_id != -1 and _is_garrisonable_unit():
+		_process_soldier_garrison_arrival()
+		if _soldier_garrison_building and _soldier_garrison_building.get_ref() and is_instance_valid(_soldier_garrison_building.get_ref()):
+			return
+
 	# 物理 LOD：屏幕外/远处单位每 N 个物理步跑一次，并用多倍 delta 补偿，
 	# 模拟速度不变但每帧物理开销降到 1/N。后期几百个单位在后方时收益很大。
 	# 关键：必须按实例 id 错峰。旧写法用 Engine.get_physics_frames() % N，
@@ -6089,6 +6096,37 @@ func _do_soldier_garrison(target):
 	stop_movement()
 	current_target = null
 	current_order = ""
+
+# 普通军队抵达进驻目标后的统一处理。
+# 旧代码把这段逻辑放在 _process_official 里，只有官员会执行，导致士兵/农民
+# 走到建筑旁就停住。现在由 _physics_process 对所有可进驻单位调用。
+func _process_soldier_garrison_arrival() -> void:
+	if _garrison_target_id == -1:
+		return
+	if not _is_garrisonable_unit():
+		return
+	var target = instance_from_id(_garrison_target_id)
+	if not is_instance_valid(target) or target.health <= 0 or int(target.team) != int(team):
+		_garrison_target_id = -1
+		stop_movement()
+		return
+	if target is Building:
+		if target.build_timer > 0.0 or not target.can_garrison_soldier():
+			_garrison_target_id = -1
+			stop_movement()
+			return
+	elif target is Army and target.entity_id == 18:
+		if target._ram_garrisoned_soldiers.size() >= 5:
+			_garrison_target_id = -1
+			stop_movement()
+			return
+	else:
+		_garrison_target_id = -1
+		stop_movement()
+		return
+	if global_position.distance_to(target.global_position) < 4.0:
+		_do_soldier_garrison(target)
+		_garrison_target_id = -1
 
 func _exit_soldier_garrison():
 	var target = _soldier_garrison_building.get_ref() if _soldier_garrison_building else null

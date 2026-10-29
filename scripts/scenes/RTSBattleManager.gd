@@ -4337,8 +4337,12 @@ func _command_selected_units_impl(screen_pos: Vector2, mode: String = ""):
 				elif u.entity_id >= 46 and u.entity_id <= 50 and target is Building:
 					u.command_garrison(target)
 				elif u.has_method("can_soldier_garrison") and u.can_soldier_garrison(target):
-					u._garrison_target_id = target.get_instance_id()
-					u.move_to(target.global_position)
+					if _can_assign_garrison(u, target):
+						u._garrison_target_id = target.get_instance_id()
+						u.move_to(target.global_position)
+					else:
+						# 名额已被前面的单位预约/占满：只移动，不写入进驻目标。
+						u.move_to(target.global_position)
 				else:
 					u.move_to(target.global_position)
 			else:
@@ -6020,25 +6024,86 @@ func toggle_attack_move_for_selected():
 			else:
 				e.is_attack_moving = not e.is_attack_moving
 
+# 统计已经预约了某进驻目标、但还没抵达的单位数。
+# 进驻容量不能只看 garrisoned_soldiers，否则多选时所有单位都会看到“还有空位”，
+# 抵达后才发现超编。
+func _pending_garrison_count(target, exclude_unit = null) -> int:
+	if target == null or not is_instance_valid(target) or entities == null:
+		return 0
+	var tid: int = target.get_instance_id()
+	var cnt := 0
+	for e in entities.get_children():
+		if e is Army and e != exclude_unit and e.health > 0:
+			if e.entity_id >= 46 and e.entity_id <= 50:
+				continue  # 官员不占士兵进驻名额
+			if int(e.get("_garrison_target_id")) == tid:
+				cnt += 1
+	return cnt
+
+# 判断某个单位现在是否真的能分到一个进驻名额（建筑/攻城车通用）。
+func _can_assign_garrison(u, target) -> bool:
+	if not is_instance_valid(u) or not (u is Army):
+		return false
+	if target == null or not is_instance_valid(target) or target.health <= 0:
+		return false
+	if target == u:
+		return false
+	if int(target.team) != int(u.team):
+		return false
+	if not u.has_method("can_soldier_garrison") or not u.can_soldier_garrison(target):
+		return false
+	if target is Building:
+		var limit: int = target.get_garrison_limit()
+		if limit <= 0:
+			return false
+		return target.get_garrison_count() + _pending_garrison_count(target, u) < limit
+	if target is Army and target.entity_id == 18:
+		return target._ram_garrisoned_soldiers.size() + _pending_garrison_count(target, u) < 5
+	return false
+
+# 为单个单位找最近的可进驻目标：普通军队只找箭塔/炮塔/城堡/攻城车，
+# 官员仍可找任意已完工建筑（官员的具体占用/改派由 command_garrison 处理）。
+func _find_nearest_garrison_target(u):
+	var best: GameEntity = null
+	var best_d := 30.0 * 30.0
+	var is_official: bool = u.entity_id >= 46 and u.entity_id <= 50
+	for entity in _all_entities:
+		if entity == null or not is_instance_valid(entity) or entity.health <= 0:
+			continue
+		if entity == u:
+			continue
+		if int(entity.team) != int(u.team):
+			continue
+		if entity is Building:
+			if entity.build_timer > 0.0:
+				continue
+			if not is_official and not _can_assign_garrison(u, entity):
+				continue
+		elif entity is Army and entity.entity_id == 18 and not is_official:
+			if not _can_assign_garrison(u, entity):
+				continue
+		else:
+			continue
+		var d: float = u.global_position.distance_squared_to(entity.global_position)
+		if d < best_d:
+			best_d = d
+			best = entity
+	return best
+
 func garrison_nearest_for_selected():
 	_ensure_cache_fresh()
-	var avg = _get_selected_avg_pos()
-	var best_dist = 30.0 * 30.0; var best_target: GameEntity = null
-	for entity in _all_entities:
-		if entity.team != get_host_team(): continue
-		var ok = (entity is Building and entity.entity_id in [20,21,22,23,24,25,26,29,41,42,52,53,54]) or (entity is Army and entity.entity_id in [9,18])
-		if not ok: continue
-		var d = entity.global_position.distance_squared_to(avg)
-		if d < best_dist: best_dist = d; best_target = entity
-	if best_target:
-		for e in selection.selected_entities:
-			if is_instance_valid(e) and e is Army:
-				if e.entity_id >= 46 and e.entity_id <= 50 and best_target is Building:
-					# 官员走统一进驻入口，避免多个同类型官员抢同一栋建筑
-					e.command_garrison(best_target)
-				else:
-					e.set("_garrison_target_id", best_target.get_instance_id())
-					e.move_to(best_target.global_position)
+	for e in selection.selected_entities:
+		if not is_instance_valid(e) or not (e is Army) or e.health <= 0:
+			continue
+		var best = _find_nearest_garrison_target(e)
+		if best == null:
+			continue
+		if e.entity_id >= 46 and e.entity_id <= 50 and best is Building:
+			# 官员走统一进驻入口，避免多个同类型官员抢同一栋建筑
+			e.command_garrison(best)
+		else:
+			e.set("_garrison_target_id", best.get_instance_id())
+			e.move_to(best.global_position)
 
 func global_attack():
 	var castle = get_enemy_castle_pos()

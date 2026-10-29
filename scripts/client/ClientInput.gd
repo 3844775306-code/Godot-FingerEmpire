@@ -1485,16 +1485,29 @@ func _can_afford_building(build_id: int) -> bool:
 
 
 
-# 进驻最近的可进驻建筑/攻城车/运载船
+# 进驻最近的可用建筑/攻城车。普通军队只能进箭塔、炮塔、城堡和攻城车；
+# 官员仍可进任意已完工己方建筑，具体占用/改派由服务端 command_garrison 处理。
 func _garrison_nearest():
 	if not renderer: return
+	var selected_official := false
+	for sid in client_selected_ids:
+		var si = _get_entity_info(sid)
+		var seid = int(si.get("entity_id", -1)) if si else -1
+		if seid >= 46 and seid <= 50:
+			selected_official = true
+			break
 	var best_dist = 30.0 * 30.0; var best_target = null; var best_id = -1
 	for node in renderer.entity_nodes.values():
 		if not node.has_meta("snapshot_info"): continue
 		var info = node.get_meta("snapshot_info")
-		var eid = info.get("entity_id", -1)
-		# 建筑(有进驻槽)、攻城车、运载船
-		var garrisonable = (info.get("type") == 1 and eid in [20,21,22,23,24,25,26,29,41,42,52,53,54]) or eid == 18 or eid == 9
+		var eid = int(info.get("entity_id", -1))
+		var garrisonable := false
+		if int(info.get("type", -1)) == 1:
+			if float(info.get("build_timer", 0.0)) > 0.0:
+				continue
+			garrisonable = selected_official or eid in [25, 26, 53]
+		elif eid == 18 and not selected_official:
+			garrisonable = true
 		if not garrisonable: continue
 		# 检查是否是己方
 		var friendly = (renderer.my_peer_id != -1 and info.get("owner_peer_id", -1) == renderer.my_peer_id)

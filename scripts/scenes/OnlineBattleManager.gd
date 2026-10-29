@@ -1054,8 +1054,12 @@ func _1v1_right_click(team: int, data: Dictionary):
 				elif entity.entity_id >= 46 and entity.entity_id <= 50 and target is Building:
 					entity.command_garrison(target)
 				elif entity.has_method("can_soldier_garrison") and entity.can_soldier_garrison(target):
-					entity._garrison_target_id = target.get_instance_id()
-					entity.move_to(target.global_position)
+					if _can_assign_garrison(entity, target):
+						entity._garrison_target_id = target.get_instance_id()
+						entity.move_to(target.global_position)
+					else:
+						# 名额已被前面的单位预约/占满：只移动，不写入进驻目标。
+						entity.move_to(target.global_position)
 				else:
 					entity.move_to(target.global_position)
 			else:
@@ -1214,8 +1218,12 @@ func _2v2_right_click(peer_id: int, data: Dictionary):
 				elif entity.entity_id >= 46 and entity.entity_id <= 50 and target is Building:
 					entity.command_garrison(target)
 				elif entity.has_method("can_soldier_garrison") and entity.can_soldier_garrison(target):
-					entity._garrison_target_id = target.get_instance_id()
-					entity.move_to(target.global_position)
+					if _can_assign_garrison(entity, target):
+						entity._garrison_target_id = target.get_instance_id()
+						entity.move_to(target.global_position)
+					else:
+						# 名额已被前面的单位预约/占满：只移动，不写入进驻目标。
+						entity.move_to(target.global_position)
 				else:
 					entity.move_to(target.global_position)
 			else:
