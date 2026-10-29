@@ -89,12 +89,82 @@ var _map_chunk_total: int = 0
 var _map_chunk_raw_size: int = 0
 var _map_chunks: Array = []
 
+var _battle_loading: CanvasLayer = null
+var _battle_loading_tip: Label = null
+
 func _ready():
 	multiplayer.peer_connected.connect(_on_peer_connected)
 	multiplayer.peer_disconnected.connect(_on_peer_disconnected)
 	multiplayer.connection_failed.connect(_on_connection_failed)
 	multiplayer.connected_to_server.connect(_on_connected_to_server)
 	multiplayer.server_disconnected.connect(_on_server_disconnected)
+
+# 联机开局同步遮罩：服务器/客户端都显示，等双方都收到地图和初始状态后一起消失。
+func show_battle_loading(message: String = "正在同步战场…") -> void:
+	if _battle_loading == null:
+		_build_battle_loading()
+	if _battle_loading == null:
+		return
+	_battle_loading.visible = true
+	if is_instance_valid(_battle_loading_tip):
+		_battle_loading_tip.text = message
+
+func hide_battle_loading() -> void:
+	if _battle_loading:
+		_battle_loading.visible = false
+
+func _build_battle_loading() -> void:
+	_battle_loading = CanvasLayer.new()
+	_battle_loading.layer = 200
+	add_child(_battle_loading)
+	var root := Control.new()
+	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	root.mouse_filter = Control.MOUSE_FILTER_STOP
+	_battle_loading.add_child(root)
+	var bg := TextureRect.new()
+	bg.texture = load("res://map_previews/loading_battle.png")
+	bg.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	bg.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	bg.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_COVERED
+	root.add_child(bg)
+	var shade := ColorRect.new()
+	shade.color = Color(0.02, 0.02, 0.03, 0.68)
+	shade.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	root.add_child(shade)
+	var title := Label.new()
+	title.text = "FINGER EMPIRE"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 64)
+	title.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	title.offset_left = -500
+	title.offset_right = 500
+	title.offset_top = -180
+	title.offset_bottom = -80
+	root.add_child(title)
+	var sub := Label.new()
+	sub.text = "正在进入战场…"
+	sub.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	sub.add_theme_font_size_override("font_size", 24)
+	sub.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
+	sub.offset_left = -300
+	sub.offset_right = 300
+	sub.offset_top = -60
+	sub.offset_bottom = -10
+	root.add_child(sub)
+	_battle_loading_tip = Label.new()
+	_battle_loading_tip.text = "正在同步战场…"
+	_battle_loading_tip.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_battle_loading_tip.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	_battle_loading_tip.add_theme_font_size_override("font_size", 20)
+	_battle_loading_tip.add_theme_color_override("font_color", Color(0.94, 0.9, 0.82))
+	_battle_loading_tip.set_anchors_and_offsets_preset(Control.PRESET_CENTER_BOTTOM)
+	_battle_loading_tip.offset_left = -600
+	_battle_loading_tip.offset_right = 600
+	_battle_loading_tip.offset_top = -120
+	_battle_loading_tip.offset_bottom = -40
+	root.add_child(_battle_loading_tip)
+	_battle_loading.visible = false
 
 func _get_renderer():
 	if not is_instance_valid(_cached_renderer):
@@ -730,6 +800,11 @@ func notify_initial_state(resources: Dictionary, population: Dictionary, castle_
 		renderer.apply_initial_state(resources, population, castle_pos)
 	initial_state_received = true
 	client_initial_ready.rpc_id(1)
+
+@rpc("authority", "call_remote", "reliable")
+func notify_battle_started():
+	if mode == Mode.CLIENT:
+		hide_battle_loading()
 @rpc("any_peer", "call_remote", "reliable")
 func ping_server(client_time: int):
 	pong_client.rpc_id(multiplayer.get_remote_sender_id(), client_time)

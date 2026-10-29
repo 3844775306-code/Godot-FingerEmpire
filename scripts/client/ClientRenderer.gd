@@ -200,6 +200,8 @@ func set_player_info(peer_id: int, team: int, slot: int, color: Color):
 # ==================== 初始化 ====================
 func _ready():
 	add_to_group("client_renderer")
+	if NetworkManager.mode == NetworkManager.Mode.CLIENT:
+		NetworkManager.show_battle_loading("正在同步开局数据…")
 	show_unit_text = GameSettings.show_unit_text
 	# 快照时间显示标签
 	_snap_time_label = Label.new()

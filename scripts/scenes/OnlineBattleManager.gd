@@ -346,6 +346,8 @@ func _ready():
 	# 客户端画面同步前先冻结服务器：避免客户端还在等地图时，服务器已经跑了一段游戏逻辑。
 	set_process(false)
 	set_physics_process(false)
+	if multiplayer.get_peers().size() > 0:
+		NetworkManager.show_battle_loading("正在等待所有玩家加载…")
 	add_to_group("online_battle_manager")
 	#set_process_input(false)
 
@@ -356,6 +358,11 @@ func _ready():
 	else:
 		RTSConfig.MAP_SIZE = 150
 		await _init_team_mode()
+
+func _finish_loading(peers: Array) -> void:
+	for pid in peers:
+		NetworkManager.notify_battle_started.rpc_id(pid)
+	NetworkManager.hide_battle_loading()
 
 # ---------- 1v1 初始化 ----------
 func _init_1v1():
@@ -422,6 +429,7 @@ func _init_1v1():
 		var cpos = castle.global_position if castle else Vector3.ZERO
 		NetworkManager.notify_initial_state.rpc_id(pid, player_resources.get(pid, {}), player_population.get(pid, {}), cpos)
 	await NetworkManager.wait_clients_initial_ready(peers)
+	_finish_loading(peers)
 	set_process(true)
 	set_physics_process(true)
 	broadcast_enabled = true
@@ -577,6 +585,7 @@ func _init_team_mode():
 		var cpos = castle.global_position if castle else Vector3.ZERO
 		NetworkManager.notify_initial_state.rpc_id(pid, player_resources.get(pid, {}), player_population.get(pid, {}), cpos)
 	await NetworkManager.wait_clients_initial_ready(real_pids)
+	_finish_loading(real_pids)
 	set_process(true)
 	set_physics_process(true)
 	broadcast_enabled = true
