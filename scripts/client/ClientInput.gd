@@ -518,6 +518,10 @@ func _input(event):
 					return
 
 				if info["health"] <= 0: return
+				# 建筑只有在当前没有选中任何陆军时才能被选中；已选中部队时
+				# 左键点建筑保持部队选择，不要用建筑替换掉整支部队。
+				if int(info.get("type", -1)) == 1 and _selection_has_army():
+					return
 
 				# 双击全选同类
 				var now = Time.get_ticks_msec() / 1000.0
@@ -945,6 +949,16 @@ func _selection_has_enemy() -> bool:
 func _selection_has_neutral() -> bool:
 	for sid in client_selected_ids:
 		if _is_neutral_info(sid): return true
+	return false
+
+# 当前是否选中了任意一方的陆军（自己的/队友的/敌方的）。
+# 用于限制建筑选择：已经选中部队时，左键点建筑不替换选择。
+func _selection_has_army() -> bool:
+	for sid in client_selected_ids:
+		var info = _get_entity_info(sid)
+		if info.is_empty(): continue
+		if int(info.get("type", -1)) == 2:
+			return true
 	return false
 
 # 当前是否选中了可指挥的己方陆军。用于区分“点敌人/中立=下达命令”和

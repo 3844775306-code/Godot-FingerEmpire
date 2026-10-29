@@ -317,6 +317,11 @@ func _input(event):
 						if e is Army and e.entity_id >= 46 and e.entity_id <= 50:
 							e.command_garrison(clicked_entity)
 							return
+				# 建筑只有在当前没有选中任何陆军时才能被选中；已经选中部队时
+				# 左键点建筑不替换部队选择，避免查看建筑把整支部队丢掉。
+				# 放在 Alt 进驻之后，保证“选中官员 Alt+左键建筑”仍然是驻扎命令。
+				if clicked_entity is Building and _selection_has_army():
+					return
 				# 双击检测：短时间内再次点击同一个实体
 				if last_clicked_entity == clicked_entity and (now - last_click_time) < DOUBLE_CLICK_THRESHOLD:
 					# 双击：选中屏幕上所有同类型己方实体
@@ -599,6 +604,12 @@ func _can_inspect(entity) -> bool:
 		# 迷雾里的敌人/中立目标不能通过点击碰撞体“隔雾查看”
 		var node := entity as Node3D
 		return node != null and node.visible
+	return false
+
+func _selection_has_army() -> bool:
+	for e in selected_entities:
+		if is_instance_valid(e) and e is Army:
+			return true
 	return false
 
 func _selection_has_teammate() -> bool:
