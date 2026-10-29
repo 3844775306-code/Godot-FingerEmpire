@@ -58,6 +58,11 @@ var _builder_box: VBoxContainer = null
 var _builder_info_rtl: RichTextLabel = null
 var _add_builder_btn: Button = null
 var _add_repairer_btn: Button = null
+# 选中敌方单位时，按“视野内能看到它的我方兵种”分组生成的攻击按钮
+var _attack_box: VBoxContainer = null
+var _attack_title_rtl: RichTextLabel = null
+var _attack_flow: HFlowContainer = null
+var _attack_groups: Dictionary = {}  # entity_id(int) -> Array[Army]
 # 注意 RichTextLabel 的字号主题项是 normal_font_size，只设 font_size 不会生效。
 func _is_mobile() -> bool:
 	return InputSource.use_mobile_ui()
@@ -204,6 +209,24 @@ func _ready():
 	build_row.add_child(_add_repairer_btn)
 	_builder_box.add_child(build_row)
 	_vb.add_child(_builder_box)
+
+	# 敌方单位：按兵种分组列出“视野内能看到它”的我方军队，点一下即全军攻击。
+	_attack_box = VBoxContainer.new()
+	_attack_box.name = "AttackBox"
+	_attack_box.visible = false
+	_attack_box.add_theme_constant_override("separation", 4)
+	_attack_title_rtl = RichTextLabel.new()
+	_attack_title_rtl.bbcode_enabled = true
+	_attack_title_rtl.fit_content = true
+	_attack_title_rtl.scroll_active = false
+	_attack_title_rtl.add_theme_font_size_override("normal_font_size", UITheme.FONT_SM)
+	_attack_title_rtl.add_theme_color_override("default_color", UITheme.PARCHMENT)
+	_attack_box.add_child(_attack_title_rtl)
+	_attack_flow = HFlowContainer.new()
+	_attack_flow.add_theme_constant_override("h_separation", 6)
+	_attack_flow.add_theme_constant_override("v_separation", 4)
+	_attack_box.add_child(_attack_flow)
+	_vb.add_child(_attack_box)
 
 	set_process(true)
 	if _is_mobile():
@@ -774,6 +797,7 @@ func update_info(entity):
 		return
 
 	_hide_resource_box()
+	_hide_attack_box()
 
 	var hc = _hc(pct)
 	var t := _nation_display(entity)
@@ -820,6 +844,15 @@ func update_info(entity):
 			UITheme.hex_str(UITheme.SAPPHIRE), _army_task_text(entity)]
 	t += _bonus_text(entity)
 	stats_rtl.text = t
+
+	# 敌方单位/建筑：不再显示生产/升级等只读操作，改为按兵种给出攻击按钮。
+	if _is_enemy_entity(entity) and (entity is Army or entity is Building):
+		_hide_all_action_buttons()
+		_update_attack_ui(entity)
+		hp_bar.visible = true
+		_promote_mobile_actions()
+		_apply_detail_mode()
+		return
 
 	# Always detach old upgrade box first (avoid deferred-deletion residue)
 	var old_box = _vb.get_node_or_null("UpgradeInfoBox")
@@ -954,6 +987,9 @@ func _promote_mobile_actions() -> void:
 		idx += 1
 	if _builder_box != null and is_instance_valid(_builder_box) and _builder_box.visible:
 		_vb.move_child(_builder_box, idx)
+		idx += 1
+	if _attack_box != null and is_instance_valid(_attack_box) and _attack_box.visible:
+		_vb.move_child(_attack_box, idx)
 
 # 切到资源点时把建筑/单位操作全部收起，避免残留“升级/生产/拆除”按钮。
 func _hide_all_action_buttons() -> void:
@@ -963,6 +999,7 @@ func _hide_all_action_buttons() -> void:
 	if repair_btn: repair_btn.visible = false
 	if cancel_build_btn: cancel_build_btn.visible = false
 	_hide_builder_box()
+	_hide_attack_box()
 	_hide_multi_board_btn()
 	_clear_produce_area()
 	var old_box = _vb.get_node_or_null("UpgradeInfoBox")
@@ -981,6 +1018,59 @@ func _hide_builder_box() -> void:
 		_add_builder_btn.visible = false
 	if _add_repairer_btn != null:
 		_add_repairer_btn.visible = false
+
+func _hide_attack_box() -> void:
+	_attack_groups.clear()
+	if _attack_flow != null:
+		for c in _attack_flow.get_children():
+			_attack_flow.remove_child(c)
+			c.queue_free()
+	if _attack_box != null:
+		_attack_box.visible = false
+
+func _update_attack_ui(entity) -> void:
+	if _attack_box == null or battle == null:
+		return
+	_hide_attack_box()
+	if not (entity is Army or entity is Building):
+		return
+	var groups: Dictionary = {}
+	if battle.has_method("get_attack_groups_in_vision"):
+		groups = battle.get_attack_groups_in_vision(entity)
+	if groups.is_empty():
+		return
+	_attack_groups = groups
+	var total: int = 0
+	for gid in groups:
+		total += groups[gid].size()
+	_attack_title_rtl.text = "⚔️ [color=%s]视野内可攻击的我方军队[/color]:  [color=white]%d[/color] 支" % [
+		UITheme.hex_str(UITheme.VERMILION), total]
+	_attack_box.visible = true
+	var ids: Array = groups.keys()
+	ids.sort()
+	for gid in ids:
+		var units: Array = groups[gid]
+		if units.is_empty():
+			continue
+		var cfg: Dictionary = EntityDatabase.get_config(int(gid))
+		var uname: String = str(cfg.get("name", "军队"))
+		var b := Button.new()
+		b.text = "%s %s ×%d" % [UITheme.entity_emoji(int(gid), 2), uname, units.size()]
+		b.custom_minimum_size = Vector2(0, UILayout.dp(30.0) if _is_mobile() else 34.0)
+		b.tooltip_text = "命令这 %d 支%s立即攻击选中目标" % [units.size(), uname]
+		b.pressed.connect(_on_attack_group_pressed.bind(int(gid)))
+		UITheme.apply_danger_button(b, UITheme.FONT_SM)
+		_attack_flow.add_child(b)
+
+func _on_attack_group_pressed(unit_id: int) -> void:
+	if observed_entity == null or not is_instance_valid(observed_entity) or battle == null:
+		return
+	var n: int = 0
+	if battle.has_method("command_attack_group"):
+		n = int(battle.command_attack_group(observed_entity, unit_id))
+	if n <= 0 and battle.has_method("_show_hud_alert"):
+		battle._show_hud_alert("所选兵种当前无法攻击该目标", UITheme.ALERT_WARNING)
+	update_info(observed_entity)
 
 func _update_builder_ui(entity, readonly: bool) -> void:
 	if _builder_box == null or battle == null or not (entity is Building):

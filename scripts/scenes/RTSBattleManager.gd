@@ -2278,6 +2278,55 @@ func assign_builder_to_building(b, team: int = -1) -> bool:
 		return false
 	return bool(best.work_on_building(b))
 
+# ==================== 敌方单位选中：按兵种统计视野内的我方军队 ====================
+# 只统计“自己队伍 + 军事单位 + 视野真的覆盖目标”的军队；同一个兵种合成一组。
+func get_attack_groups_in_vision(target) -> Dictionary:
+	var groups: Dictionary = {}
+	if target == null or not is_instance_valid(target) or not (target is GameEntity):
+		return groups
+	if not target is Army and not target is Building:
+		return groups
+	_ensure_cache_fresh()
+	var team: int = get_host_team()
+	for u in _armies:
+		if not is_instance_valid(u) or u.health <= 0 or u.team != team:
+			continue
+		if not u.has_method("_is_military") or not u._is_military():
+			continue
+		if not is_hostile_to(u.team, int(u.owner_peer_id), target):
+			continue
+		if not is_target_visible_from(u, target):
+			continue
+		if u.has_method("_can_attack_target") and not u._can_attack_target(target):
+			continue
+		var uid: int = int(u.entity_id)
+		if not groups.has(uid):
+			groups[uid] = []
+		groups[uid].append(u)
+	return groups
+
+# 对某一兵种组下令攻击选中目标；返回实际响应命令的单位数。
+func command_attack_group(target, unit_id: int) -> int:
+	if target == null or not is_instance_valid(target):
+		return 0
+	_ensure_cache_fresh()
+	var count: int = 0
+	var team: int = get_host_team()
+	for u in _armies:
+		if not is_instance_valid(u) or u.health <= 0 or u.team != team:
+			continue
+		if int(u.entity_id) != unit_id or not u.has_method("_is_military") or not u._is_military():
+			continue
+		if not is_hostile_to(u.team, int(u.owner_peer_id), target):
+			continue
+		if not is_target_visible_from(u, target):
+			continue
+		if u.has_method("_can_attack_target") and not u._can_attack_target(target):
+			continue
+		u.attack_target(target, true)
+		count += 1
+	return count
+
 # 按队伍找主城（单机 2v2/3v3 同队多城时只取第一座；调用方需要 owner 精度时自行过滤）
 func get_castle_by_team(team: int) -> Building:
 	_ensure_cache_fresh()
