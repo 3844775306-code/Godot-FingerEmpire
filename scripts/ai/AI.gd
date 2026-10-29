@@ -18,6 +18,16 @@ var phase: int = Phase.PRODUCTION
 var timer: float = 0.0
 var think_interval: float = 2.0  # overridden by difficulty in _ready
 var _decide_cost_scale: float = 1.0  # decide 实测耗时过长时自动拉长间隔（硬件/规模自适应）
+# decide() 内部是十几个 O(实体数) 的阶段。整段一次跑完在 600+ 实体时实测单帧
+# 200~500ms，就是玩家看到的「隔几秒一顿」。这里把它拆成阶段，每帧只跑固定预算，
+# 剩余阶段留给后续帧，把单帧峰值摊平（总工作量不变，但不再整段堵住主线程）。
+const DECIDE_BUDGET_USEC: int = 7000
+const DECIDE_LAST_STEP: int = 13
+var _decide_cursor: int = 0        # 下次要执行的阶段；> LAST 表示本轮结束
+var _decide_running: bool = false
+var _decide_interval: float = 2.0
+var _decide_start_usec: int = 0
+var _decide_step_usec: Array = []  # 各阶段耗时，用于定位真正的热点
 var _think_ready: bool = false    # 难度对应的思考间隔只初始化一次
 var worker_allocate_timer: float = 0.0
 const WORKER_ALLOCATE_INTERVAL: float = 3.0
@@ -192,6 +202,12 @@ var _naval_value_cache: Dictionary = {}
 # “当前鱼数 - 保留数”派出猎手，避免几艘船把整片水域的鱼一次清空。
 const NAVAL_MIN_FISH_POPULATION: int = 5
 const NAVAL_FISH_ATTACK_RANGE: float = 32.0
+# 非攻城部队打建筑时若被敌方部队偷袭，要尽快回头；独立于 decide 的 1 秒扫描，
+# 避免 AI 思考间隔 1.5~2 秒时部队一直挨打拆墙。
+const RETARGET_CHECK_INTERVAL: float = 1.0
+const RETARGET_MEMORY: float = 3.0
+const RETARGET_MAX_DIST: float = 22.0
+var _retarget_timer: float = 0.0
 
 # ── 建筑修理（AI 也会修残破建筑）──
 # 修理机制本身在 Building 内实现：按已损比例扣费 + 计时，主城(20/53)不可修；
@@ -1696,7 +1712,7 @@ func _process(delta):
 		for rk in ["gold","wood","stone","food","oil"]:
 			_ai_income_rate[rk] = _ai_res_income.get(rk, 0) / 10.0
 			_ai_res_income[rk] = 0
-	if timer <= 0:
+	if timer <= 0 and not _decide_running:
 		# 后期实体多时 AI 决策降频：单次 decide 会做多轮全实体统计和可见性刷新，
 		# 4 个 AI 同时跑会造成周期性主线程尖峰。260 个实体后拉长间隔，
 		# 不影响前期节奏，但能显著降低后期 AI 的固定开销。
@@ -1722,23 +1738,11 @@ func _process(delta):
 				and not bool(battle.acquire_ai_decide_slot(my_peer_id)):
 			# 本帧已有别的 AI 在决策：顺延 0.1s，避免多个 decide 叠在同一帧。
 			timer = 0.1
-		else:
-			timer = interval * _decide_cost_scale
-			var _decide_t0: int = Time.get_ticks_usec()
-			decide(interval)
-			var _decide_ms: float = float(Time.get_ticks_usec() - _decide_t0) / 1000.0
-			# 单次 decide 超过 60ms 就自动拉长间隔，避免高规模/低配机器上频繁卡顿。
-			# 700 单位级对局单次 decide 实测能到 300~500ms，这种量级必须压到很低频（上限 8 倍间隔）。
-			if _decide_ms > 250.0:
-				_decide_cost_scale = minf(_decide_cost_scale * 1.5, 8.0)
-			elif _decide_ms > 120.0:
-				_decide_cost_scale = minf(_decide_cost_scale * 1.35, 6.0)
-			elif _decide_ms > 60.0:
-				_decide_cost_scale = minf(_decide_cost_scale * 1.3, 5.0)
-			elif _decide_ms < 25.0:
-				_decide_cost_scale = maxf(_decide_cost_scale * 0.97, 1.0)
-			if battle != null and battle.has_method("is_research_mode") and battle.is_research_mode():
-				_tick_research()
+		elif battle != null:
+			# 本轮决策不再整段执行，改为从这里开始逐帧推进（每帧约 7ms 预算）。
+			_begin_decide(interval, delta)
+	if _decide_running:
+		_pump_decide()
 
 	# 后期实体多时，AI 的周期性全量扫描（分配农民、海军巡逻、修建筑）也一起降频：
 	# 这些扫描和 decide() 一样是 O(实体数)，5 个 AI 叠起来在 600+ 实体时非常可观。
@@ -1752,6 +1756,11 @@ func _process(delta):
 		_naval_patrol_timer = NAVAL_PATROL_INTERVAL * late_scale
 		if phase >= Phase.DEVELOPMENT:
 			_patrol_navy_around_water()
+	# 被偷袭后回头打人：独立 1 秒节流，避免等下一次 decide 才反应。
+	_retarget_timer -= delta
+	if _retarget_timer <= 0.0:
+		_retarget_timer = RETARGET_CHECK_INTERVAL * minf(late_scale, 2.0)
+		_retarget_attacked_siege_units()
 	# 修理节奏独立于难度思考间隔（固定 2.5s）：建筑受损/修好之后最多 2.5s 内响应，
 	# 且不挤在 decide() 那一帧里再做一次全建筑扫描。
 	_repair_scan_timer -= delta
@@ -2007,63 +2016,140 @@ func _state_assault(_delta):
 	_ai_garrison_officials()
 	update_tactic(_delta)
 # ═══ State Machine Dispatcher ═══
+# 兼容入口：一次性跑完全部阶段（调试/特殊场景用）。正常节奏走分帧版本。
 func decide(_delta):
-	var _pt = Time.get_ticks_usec()
 	_last_delta = _delta
 	if not battle: return
-	if my_peer_id != -1 and battle.has_method("update_player_limits"):
-		battle.update_player_limits(my_peer_id)
-		battle.update_player_population(my_peer_id)
-	else:
-		battle.update_resource_limits(my_team)
-		battle.update_population_limits()
-	clear_invalid_targets()
-	_refresh_visibility()
-	_process_scout_recon()
-	_refresh_primary_enemy()
-	_update_resource_pressure(_delta)
-	_ensure_house_quota()
-	# 升时代要求每 30 秒兜底检查一次：普通建造目标不一定包含瞭望塔等条件建筑；
-	# 同一轮里再检查一次能否直接进入新时代（不再按固定分钟数等待）。
-	_age_building_check_timer -= _delta
-	if _age_building_check_timer <= 0.0:
-		_age_building_check_timer = AGE_BUILDING_CHECK_INTERVAL
-		_ensure_age_upgrade_buildings()
-		_try_start_age_upgrade()
-	# 资源囤到接近上限时先泄压：补人口/建筑升级/多排兵，避免继续采集却被上限截断。
-	_relieve_resource_pressure()
-	_diplo_decide()
-	if _defense == null:
-		_defense = AIDefenseScript.new(self)
-	_defense.tick(_delta)
-	if Engine.get_process_frames() % 60 == 0:
-		var _w = count_unit(10)
-	# 守墙调度必须先于本帧的集结/主攻：新生产的远程兵在出生后的第一个
-	# AI 决策帧仍是空闲状态，若先执行 _state_* 里的 _rally_land_army_to_castle
-	# 或 attack_move，它们会被立刻拉去集结点/前线，之后一直是 MOVING/攻击移动，
-	# _is_ranged_wall_candidate 永远不满足，城墙也就永远等不到远程守军。
-	_wall_deploy_timer -= _delta
-	if _wall_deploy_timer <= 0.0:
-		_wall_deploy_timer = WALL_DEPLOY_INTERVAL
-		_deploy_ranged_units_to_walls()
-	# State dispatch
-	match phase:
-		Phase.PRODUCTION: _state_production(_delta)
-		Phase.DEVELOPMENT: _state_development(_delta)
-		Phase.ASSAULT: _state_assault(_delta)
-	# 进攻阶段转换只在思考节流里判断；count_field_military 会遍历全部实体，不能每帧调用
-	if phase == Phase.DEVELOPMENT:
-		# 用可出击野战军而不是总军事人口：守墙/守家/队列里的兵不会出门，
-		# 用总数判断会让 AI 提前进入 ASSAULT，却只有少量部队可派。
-		var army_count = count_field_military(my_peer_id if my_peer_id != -1 else my_team)
-		if army_count >= 30:
-			phase = Phase.ASSAULT
-	if _defense != null:
-		if _wall_planner == null:
-			_wall_planner = AIWallPlannerScript.new(self, _defense)
-		_wall_planner.tick(_delta)
-	if _water_crossing:
-		_water_crossing.tick(_delta)
+	for step in range(DECIDE_LAST_STEP + 1):
+		_run_decide_step(step)
+
+func _begin_decide(interval: float, d: float) -> void:
+	_last_delta = d
+	_decide_interval = interval
+	_decide_running = true
+	_decide_cursor = 0
+	_decide_start_usec = Time.get_ticks_usec()
+	if _decide_step_usec.size() != DECIDE_LAST_STEP + 1:
+		_decide_step_usec.resize(DECIDE_LAST_STEP + 1)
+	_decide_step_usec.fill(0)
+
+# 逐帧推进：一帧内按 7ms 预算连续跑阶段，超预算就留到下一帧。
+# 实测 600+ 实体时整段 decide 要 200~500ms，拆开后单帧最多多花 7ms 左右。
+func _pump_decide() -> void:
+	var frame_start: int = Time.get_ticks_usec()
+	while _decide_cursor <= DECIDE_LAST_STEP:
+		var step_start: int = Time.get_ticks_usec()
+		_run_decide_step(_decide_cursor)
+		_decide_step_usec[_decide_cursor] = int(_decide_step_usec[_decide_cursor]) + (Time.get_ticks_usec() - step_start)
+		_decide_cursor += 1
+		if Time.get_ticks_usec() - frame_start >= DECIDE_BUDGET_USEC:
+			break
+	if _decide_cursor > DECIDE_LAST_STEP:
+		_finish_decide()
+
+func _finish_decide() -> void:
+	var total_ms: float = float(Time.get_ticks_usec() - _decide_start_usec) / 1000.0
+	_decide_running = false
+	_decide_cursor = 0
+	timer = _decide_interval * _decide_cost_scale
+	# 整轮耗时超过 60ms 就自动拉长下一轮间隔，避免高规模/低配机器上频繁卡顿。
+	if total_ms > 250.0:
+		_decide_cost_scale = minf(_decide_cost_scale * 1.5, 8.0)
+	elif total_ms > 120.0:
+		_decide_cost_scale = minf(_decide_cost_scale * 1.35, 6.0)
+	elif total_ms > 60.0:
+		_decide_cost_scale = minf(_decide_cost_scale * 1.3, 5.0)
+	elif total_ms < 25.0:
+		_decide_cost_scale = maxf(_decide_cost_scale * 0.97, 1.0)
+	if total_ms > 80.0:
+		_log_decide_profile(total_ms)
+	if battle != null and battle.has_method("is_research_mode") and battle.is_research_mode():
+		_tick_research()
+
+# 决策耗时诊断：单轮超过 80ms 时把各阶段耗时写进 user://ai_decide.log，
+# 用真实数据定位到底哪一段吃掉主线程（而不是靠猜）。
+func _log_decide_profile(total_ms: float) -> void:
+	var parts: PackedStringArray = PackedStringArray()
+	for i in range(DECIDE_LAST_STEP + 1):
+		parts.append("%d=%.0f" % [i, float(_decide_step_usec[i]) / 1000.0])
+	var f: FileAccess = FileAccess.open("user://ai_decide.log", FileAccess.READ_WRITE)
+	if f == null:
+		f = FileAccess.open("user://ai_decide.log", FileAccess.WRITE)
+	if f == null:
+		return
+	f.seek_end()
+	f.store_line("DECIDE peer=%d total=%.0fms entities=%d %s" % [
+		my_peer_id, total_ms, battle._all_entities.size() if battle else 0, " ".join(parts)])
+	f.close()
+
+func _run_decide_step(step: int) -> void:
+	if not battle:
+		return
+	match step:
+		0:
+			if my_peer_id != -1 and battle.has_method("update_player_limits"):
+				battle.update_player_limits(my_peer_id)
+				battle.update_player_population(my_peer_id)
+			else:
+				battle.update_resource_limits(my_team)
+				battle.update_population_limits()
+		1:
+			clear_invalid_targets()
+		2:
+			_refresh_visibility()
+		3:
+			_process_scout_recon()
+		4:
+			_refresh_primary_enemy()
+		5:
+			_update_resource_pressure(_last_delta)
+			_ensure_house_quota()
+		6:
+			# 升时代要求每 30 秒兜底检查一次：普通建造目标不一定包含瞭望塔等条件建筑；
+			# 同一轮里再检查一次能否直接进入新时代（不再按固定分钟数等待）。
+			_age_building_check_timer -= _last_delta
+			if _age_building_check_timer <= 0.0:
+				_age_building_check_timer = AGE_BUILDING_CHECK_INTERVAL
+				_ensure_age_upgrade_buildings()
+				_try_start_age_upgrade()
+		7:
+			# 资源囤到接近上限时先泄压：补人口/建筑升级/多排兵，避免继续采集却被上限截断。
+			_relieve_resource_pressure()
+			_diplo_decide()
+		8:
+			if _defense == null:
+				_defense = AIDefenseScript.new(self)
+			_defense.tick(_last_delta)
+		9:
+			# 守墙调度必须先于本帧的集结/主攻：新生产的远程兵在出生后的第一个
+			# AI 决策帧仍是空闲状态，若先执行 _state_* 里的 _rally_land_army_to_castle
+			# 或 attack_move，它们会被立刻拉去集结点/前线，之后一直是 MOVING/攻击移动，
+			# _is_ranged_wall_candidate 永远不满足，城墙也就永远等不到远程守军。
+			_wall_deploy_timer -= _last_delta
+			if _wall_deploy_timer <= 0.0:
+				_wall_deploy_timer = WALL_DEPLOY_INTERVAL
+				_deploy_ranged_units_to_walls()
+		10:
+			match phase:
+				Phase.PRODUCTION: _state_production(_last_delta)
+				Phase.DEVELOPMENT: _state_development(_last_delta)
+				Phase.ASSAULT: _state_assault(_last_delta)
+		11:
+			# 进攻阶段转换只在思考节流里判断；count_field_military 会遍历全部实体，不能每帧调用。
+			if phase == Phase.DEVELOPMENT:
+				# 用可出击野战军而不是总军事人口：守墙/守家/队列里的兵不会出门，
+				# 用总数判断会让 AI 提前进入 ASSAULT，却只有少量部队可派。
+				var army_count = count_field_military(my_peer_id if my_peer_id != -1 else my_team)
+				if army_count >= 30:
+					phase = Phase.ASSAULT
+		12:
+			if _defense != null:
+				if _wall_planner == null:
+					_wall_planner = AIWallPlannerScript.new(self, _defense)
+				_wall_planner.tick(_last_delta)
+		13:
+			if _water_crossing:
+				_water_crossing.tick(_last_delta)
 func get_team_castle(tm) -> Building:
 	for entity in _cached_buildings():
 		if not is_instance_valid(entity) or entity.health <= 0:
@@ -3903,6 +3989,32 @@ func _try_produce_scout() -> bool:
 		return false
 	_scout_next_produce_at = battle.game_time + SCOUT_RETRY_AFTER_DEATH
 	return true
+
+# AI 非攻城部队在拆建筑时被敌方部队偷袭：把目标从建筑切回攻击者。
+# 攻城器械（火炮/投石车/冲车/弩炮/巨投）保持拆建筑，不因为挨打就放弃攻城。
+func _retarget_attacked_siege_units() -> void:
+	if battle == null:
+		return
+	var now: float = Time.get_ticks_msec() / 1000.0
+	for e in battle.entities.get_children():
+		if not (e is Army) or e.health <= 0 or not entity_belongs_to_me(e):
+			continue
+		if not (e.current_target is Building):
+			continue
+		if int(e.entity_id) in [16, 17, 18, 58, 59]:
+			continue
+		var attacker = e._last_unit_attacker
+		if attacker == null or not is_instance_valid(attacker) or attacker.health <= 0:
+			continue
+		if not (attacker is Army) or not _entity_is_enemy(attacker):
+			continue
+		if now - float(e._last_unit_attack_time) > RETARGET_MEMORY:
+			continue
+		if e.global_position.distance_to(attacker.global_position) > RETARGET_MAX_DIST:
+			continue
+		if e.has_method("_is_target_attackable_now") and not e._is_target_attackable_now(attacker):
+			continue
+		e.attack_target(attacker)
 
 func _process_line_military():
 	# 59优先排产；如果已经解锁但资源不够，进入短暂攒钱模式，避免普通兵种把资源吃干

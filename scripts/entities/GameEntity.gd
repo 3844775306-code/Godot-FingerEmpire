@@ -26,6 +26,11 @@ var melee_armor: float = 0.0       # 铠甲：抵挡近战攻击 (target_type=2)
 var shield_armor: float = 0.0      # 盾牌：抵挡远程攻击 (target_type=3)
 var attack: float = 0.0
 var _last_damager: GameEntity = null
+# 最近一次受击时间（秒，引擎时钟）：AI 用它判断“正在被谁打”，避免旧仇恨反复生效。
+var _last_damage_time: float = -999.0
+# 最近一次被“敌方部队”（而非建筑/箭塔）攻击的记录，供 AI 在拆墙时回头反击。
+var _last_unit_attacker: GameEntity = null
+var _last_unit_attack_time: float = -999.0
 var attack_speed: float = 1.0
 var attack_range: float = 1.0
 var damage_radius: float = 0.0
@@ -302,6 +307,10 @@ func take_damage(amount: float, source = null):
 	var eff_armor: float = melee_armor
 	if source:
 		_last_damager = source
+		_last_damage_time = Time.get_ticks_msec() / 1000.0
+		if source is Army:
+			_last_unit_attacker = source
+			_last_unit_attack_time = _last_damage_time
 		# 科研模式目标类型加成：对建筑/弓箭/骑兵/船只的额外伤害。
 		if self is Building and source.building_damage_pct != 0.0:
 			amount *= maxf(0.0, 1.0 + source.building_damage_pct)
