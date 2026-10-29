@@ -13,7 +13,7 @@ signal tunnel_failed(reason: String)
 signal tunnel_stopped()
 
 const DOWNLOAD_URL: String = "https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-windows-amd64.exe"
-const WEB_ENTRY_URL: String = "https://fingerempire.netlify.app/"
+const WEB_ENTRY_URL: String = "https://3844775306-code.github.io/Godot-FingerEmpire/"
 const START_TIMEOUT_MS: int = 45000
 const TUNNEL_HOST_RE: String = "https://([a-z0-9-]+\\.trycloudflare\\.com)"
 const PID_PATH: String = "user://web_tunnel.pid"

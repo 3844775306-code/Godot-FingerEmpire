@@ -24,7 +24,7 @@ extends RefCounted
 const ENABLED: bool = true
 
 # 站点根地址（不带结尾 /）。部署后运行 deploy 脚本会自动替换成真实地址。
-const SITE_URL: String = "https://fingerempire.netlify.app"
+const SITE_URL: String = "https://3844775306-code.github.io/Godot-FingerEmpire"
 
 # 最新版安装包地址：GitHub Releases 的 latest 链接，和 update.json 里保持一致。
 const GITHUB_REPO_URL: String = "https://github.com/3844775306-code/Godot-FingerEmpire"
