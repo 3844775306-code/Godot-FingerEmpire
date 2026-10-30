@@ -4280,10 +4280,6 @@ func find_delivery_point() -> Building:
 
 # ----------------- Ñ°µÐ / Ñ°×ÊÔ´ -----------------
 func _find_nearest_resource():
-	# AI 在所有可采资源都接近满仓时会临时暂停自动找矿，避免继续把资源
-	# 送进被上限截断的仓库；资源花掉后 AI 会移除该 meta，农民恢复采集。
-	if has_meta("ai_pause_gather"):
-		return
 	var search_r: float = gather_search_range if gather_search_range > 0.0 else float(vision_range)
 	var bm = _get_bm()
 	if bm:

@@ -2594,19 +2594,6 @@ func allocate_workers():
 	for w in workers:
 		if w.current_order != "deliver": non_delivering.append(w)
 
-	# 四种可采资源全部接近满仓时，继续采集只会被仓储上限截断。
-	# 给农民打上暂停标记（Army._find_nearest_resource 会尊重它），
-	# 有货的先送完；等泄压花掉资源后下一轮分配自动恢复采集。
-	var pause_gather: bool = _all_gather_resources_full()
-	for w in workers:
-		if pause_gather:
-			w.set_meta("ai_pause_gather", true)
-			if not _worker_is_fleeing(w) and w.current_order in ["", "gather", "move"]:
-				w.stop_movement()
-		elif w.has_meta("ai_pause_gather"):
-			w.remove_meta("ai_pause_gather")
-	if pause_gather:
-		return
 
 	# 先救急：石油/石头已经满仓、但金/木/食物见底时，把正在采满仓资源的
 	# 农民强行拉去采稀缺资源。旧的 97% 阈值要等资源几乎完全满仓才动，
