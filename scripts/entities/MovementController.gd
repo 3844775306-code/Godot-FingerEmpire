@@ -53,6 +53,13 @@ var _pending_since_ms: int = 0
 # 到达该段末端后由 Army 重新寻路。否则大部队攻击移动会停在原地。
 var path_partial: bool = false
 var _last_path_partial: bool = false
+# 航点绕圈检测：单位满速度却长时间接近不了当前航点（常见于航点落在
+# 建筑/资源碰撞体边缘）时，跳过这个中间航点，避免原地绕十几秒。
+const WAYPOINT_STUCK_TIMEOUT: float = 1.6
+const WAYPOINT_APPROACH_EPS: float = 0.2
+var _waypoint_track_pos: Vector3 = Vector3.ZERO
+var _waypoint_best_dist: float = INF
+var _waypoint_stuck_time: float = 0.0
 # 目标确实不可达（整块可达区域都已展开）时为 true：此时返回的是“最近可达格”的路径，
 # 单位走到那里就算本次移动完成，不再出现“走到岸边/山脚后丢命令发呆”。
 var _last_path_closest: bool = false
@@ -268,6 +275,7 @@ func _apply_path(pos: Vector3, path: Array, stop_range: float) -> void:
 	var is_attack_move := stop_range > 0.0
 	astar_target = pos
 	astar_path = path
+	_reset_waypoint_track()
 	path_partial = _last_path_partial
 	# 不可达目标：把目的地点改写为“最近可达格”，走到那里命令即视为完成，
 	# 不会再出现“走到一半路径变空、命令被清掉、单位原地发呆”。
@@ -333,7 +341,31 @@ func debug_motion_snapshot() -> Dictionary:
 		"path_failed": move_path_failed or attack_path_failed,
 		"partial": path_partial,
 		"cliff_block": _cliff_block_streak,
+		"waypoint_stuck": _waypoint_stuck_time,
 	}
+
+func _reset_waypoint_track() -> void:
+	_waypoint_track_pos = Vector3.ZERO
+	_waypoint_best_dist = INF
+	_waypoint_stuck_time = 0.0
+
+# 记录对当前航点的最佳接近距离；满速但持续无法更近时跳过一个中间航点。
+# 只跳中间点，最后一个航点仍交给最终接近/重新寻路，不直接穿进目标碰撞体。
+func _track_waypoint_progress(waypoint: Vector3, delta: float) -> void:
+	if _waypoint_track_pos.distance_squared_to(waypoint) > 0.04:
+		_waypoint_track_pos = waypoint
+		_waypoint_best_dist = INF
+		_waypoint_stuck_time = 0.0
+	var h_dist: float = Vector2(waypoint.x - _army.global_position.x,
+			waypoint.z - _army.global_position.z).length()
+	if h_dist < _waypoint_best_dist - WAYPOINT_APPROACH_EPS:
+		_waypoint_best_dist = h_dist
+		_waypoint_stuck_time = 0.0
+		return
+	_waypoint_stuck_time += delta
+	if _waypoint_stuck_time >= WAYPOINT_STUCK_TIMEOUT and astar_path.size() > 1:
+		astar_path.pop_front()
+		_reset_waypoint_track()
 
 func _get_bm() -> RTSBattleManager:
 	if _army == null or not is_instance_valid(_army) or not _army.is_inside_tree():
@@ -591,8 +623,12 @@ func process_move(delta, bm: RTSBattleManager):
 	if astar_path.size() > 0:
 		move_target = astar_path[0]
 		var h_dist = Vector2(move_target.x - _army.global_position.x, move_target.z - _army.global_position.z)
-		if h_dist.length() < 0.5:
+		# 航点到达半径按单位体积放宽：大型单位/被碰撞体挤住的单位不需要严格贴到
+		# 航点中心 0.5 米内，否则会在航点边缘满速度绕圈，路径索引永远不前进。
+		var arrive_dist: float = maxf(0.5, float(_army.body_radius) + 0.25)
+		if h_dist.length() < arrive_dist:
 			astar_path.pop_front()
+			_reset_waypoint_track()
 			# 走过一个航点后让指引带跟着收一段（_show_path 内部按 0.45 米步长节流，
 			# 不会每帧重建网格）。路径走空时不要立刻收起：单位可能还在做最后几米接近，
 			# 由 _show_path 用当前位置到目的地补一条短线。
@@ -600,6 +636,8 @@ func process_move(delta, bm: RTSBattleManager):
 				_show_path()
 			if astar_path.size() > 0:
 				move_target = astar_path[0]
+		else:
+			_track_waypoint_progress(move_target, delta)
 	# 沿着长直路段前进时不会经过航点，这里按位移节流地刷新一次排头，
 	# 让线一直贴着脚下走，而不是等到下一个航点才跳一段。
 	# 路径走空但单位仍在最终接近/直追时，也要补建这条短线；停下后收起。
