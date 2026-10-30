@@ -2834,11 +2834,15 @@ func _build_defense_step() -> void:
 			break
 		# 没有空闲农民时不要把队列项当“失败”消耗掉，否则第一圈几十面墙
 		# 会在农民还走在路上时就被全部移出队列，最后只立起三四面墙。
-		var idle_builder = ai.battle.find_nearest_idle_builder(
-				ai.my_team, ai.my_peer_id, b_pos, 60.0) \
-				if ai.battle.has_method("find_nearest_idle_builder") else null
-		if idle_builder == null:
-			break
+		if ai._worker_director != null:
+			if not ai._worker_director.has_available_builder(b_pos, false, 60.0):
+				break
+		else:
+			var idle_builder = ai.battle.find_nearest_idle_builder(
+					ai.my_team, ai.my_peer_id, b_pos, 60.0) \
+					if ai.battle.has_method("find_nearest_idle_builder") else null
+			if idle_builder == null:
+				break
 		# 敌人临时站在山口、或瞭望塔链还没把视野铺到时，不要把这一个队列项
 		# 当成“失败”消耗掉；等下一轮条件满足再建，否则山口防线会被敌人一次路过清空。
 		if ai._enemy_army_within(b_pos):

@@ -185,6 +185,29 @@ func acquire_builder(pos: Vector3, critical: bool = false, max_dist: float = 60.
 	}
 	return best
 
+# 只查询、不占租约；供 AIDefense 建墙前判断是否值得发起建造。
+func has_available_builder(pos: Vector3, critical: bool = false, max_dist: float = 60.0) -> bool:
+	if ai == null:
+		return false
+	_sync_roster()
+	var max_sq: float = max_dist * max_dist
+	for uid in _workers:
+		if _builder_reservations.has(uid):
+			continue
+		var w = _workers[uid].get("unit")
+		if w == null or not is_instance_valid(w) or w.health <= 0 or not w.can_move:
+			continue
+		if ai._worker_is_fleeing(w) or _is_garrisoned(w):
+			continue
+		var order: String = String(w.current_order)
+		if order == "build":
+			continue
+		if not critical and order == "gather" and int(w.get("_work_target_id")) != -1:
+			continue
+		if w.global_position.distance_squared_to(pos) <= max_sq:
+			return true
+	return false
+
 func on_builder_assigned(builder, building, kind: String = "") -> void:
 	if builder == null or not is_instance_valid(builder):
 		return

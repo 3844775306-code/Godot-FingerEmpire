@@ -1475,14 +1475,22 @@ func build_ladder(pos: Vector3) -> bool:
 	# 墙边至少要有几名野战单位掩护，避免农民单独跑到敌墙下送死。
 	if _ladder_support_count(pos, 22.0) < 4:
 		return false
-	var builder = battle.find_nearest_idle_builder(my_team, my_peer_id, pos, 70.0) \
-			if battle.has_method("find_nearest_idle_builder") else null
+	var builder = null
+	if _worker_director != null:
+		builder = _worker_director.acquire_builder(pos, false, 70.0, "ladder")
+	else:
+		builder = battle.find_nearest_idle_builder(my_team, my_peer_id, pos, 70.0) \
+				if battle.has_method("find_nearest_idle_builder") else null
 	if builder == null:
 		return false
 	if _water_crossing != null and not _water_crossing.can_builder_reach(builder.global_position, pos):
+		if _worker_director != null:
+			_worker_director.release_builder(builder, "ladder_no_path")
 		return false
 	var cost = cfg.get("cost", {})
 	if not _deduct_resources(cost):
+		if _worker_director != null:
+			_worker_director.release_builder(builder, "ladder_cost")
 		return false
 	cfg["owner_peer_id"] = my_peer_id
 	var team: int = my_team
@@ -1493,6 +1501,8 @@ func build_ladder(pos: Vector3) -> bool:
 			team = my_team
 	var b = battle.spawn_entity(cfg, team, pos) as Building
 	if b == null:
+		if _worker_director != null:
+			_worker_director.release_builder(builder, "ladder_spawn_failed")
 		return false
 	# 梯子模型很薄，必须让梯面垂直于墙、薄边朝向墙体，否则横向卡进墙里。
 	# 同时把梯子中心向墙外挪 0.12 米，避免模型厚度与墙面重叠。
@@ -1515,6 +1525,8 @@ func build_ladder(pos: Vector3) -> bool:
 	b.set_meta("ai_ladder", true)
 	if battle.has_method("assign_builders"):
 		battle.assign_builders(b, [builder.get_instance_id()])
+		if _worker_director != null:
+			_worker_director.on_builder_assigned(builder, b, "build")
 	return true
 
 func _ladder_support_count(pos: Vector3, radius: float) -> int:
