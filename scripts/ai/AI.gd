@@ -768,7 +768,7 @@ func count_field_military(peer: int) -> int:
 		if _is_scout_unit(entity): continue
 		# 海军由 AIWaterCrossing / 船坞逻辑单独调度，不能算作陆地主攻兵力。
 		if entity.water_capable: continue
-		if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass") or entity.has_meta("ai_wall_guard"):
+		if _unit_has_claim(entity):
 			continue
 		if entity.has_meta("ai_transporting"): continue
 		if _is_held_by_garrison(entity): continue
@@ -1526,7 +1526,7 @@ func _ladder_support_count(pos: Vector3, radius: float) -> int:
 			continue
 		if int(e.entity_id) in [10, 14, 43, 44, 45, 46, 47, 48, 49, 50, 51]:
 			continue
-		if e.has_meta("ai_wall_guard") or e.has_meta("ai_harass") or e.has_meta("ai_home_guard"):
+		if _unit_has_claim(e):
 			continue
 		if e.global_position.distance_to(pos) <= radius:
 			count += 1
@@ -3050,6 +3050,17 @@ func _is_local_defense_active(u) -> bool:
 	u.remove_meta("ai_building_defense_until")
 	return false
 
+# 统一判定：这个单位是否已经被某个调度器/角色占用。
+# 以前这段判断在 9 处各抄一份（守家/资源守/守墙/骚扰/运输/护航的组合还各不相同），
+# 改一个角色就要改 9 处、必漏。现在账本 + 旧 meta 只在这里判断。
+func _unit_has_claim(u) -> bool:
+	if u == null or not is_instance_valid(u):
+		return true
+	if _roles.has(u.get_instance_id()):
+		return true
+	return u.has_meta("ai_home_guard") or u.has_meta("ai_resource_guard") or u.has_meta("ai_wall_guard") \
+		or u.has_meta("ai_harass") or u.has_meta("ai_transporting") or u.has_meta("ai_escorting") \
+		or u.has_meta("ai_building_defense_until")
 func _is_held_by_garrison(u) -> bool:
 	if u == null or not is_instance_valid(u):
 		return true
@@ -3067,7 +3078,7 @@ func attack_move(target_position: Vector3, max_units: int):
 		if entity is Army and entity.health > 0 and int(entity.entity_id) not in [5,6,9,10,14,33,43,44,45,46,47,48,49,50,51] and entity_belongs_to_me(entity):
 			if _is_scout_unit(entity):
 				continue
-			if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass") or entity.has_meta("ai_transporting") or entity.has_meta("ai_escorting") or entity.has_meta("ai_wall_guard"):
+			if _unit_has_claim(entity):
 				continue
 			# 已有驻扎点的部队不再被主攻调用（防守时由 AIDefense 单独调度）
 			if entity.garrison_point != Vector3.ZERO:
@@ -3294,10 +3305,7 @@ func _ai_garrison_soldiers() -> void:
 			continue
 		if e.water_capable or e.hold_position:
 			continue
-		if e.has_meta("ai_home_guard") or e.has_meta("ai_wall_guard") \
-				or e.has_meta("ai_resource_guard") or e.has_meta("ai_harass") \
-				or e.has_meta("ai_transporting") or e.has_meta("ai_escorting") \
-				or e.has_meta("ai_building_defense_until"):
+		if _unit_has_claim(e):
 			continue
 		if _is_local_defense_active(e):
 			continue
@@ -3621,7 +3629,7 @@ func _pick_harass_squad(my_castle) -> Array:
 		var sgb = e.get("_soldier_garrison_building")
 		if sgb != null and sgb.get_ref() != null:
 			continue
-		if e.has_meta("ai_home_guard") or e.has_meta("ai_resource_guard") or e.has_meta("ai_transporting") or e.has_meta("ai_escorting") or e.has_meta("ai_wall_guard"):
+		if _unit_has_claim(e):
 			continue
 		if e.garrison_point != Vector3.ZERO:
 			continue
@@ -3670,7 +3678,7 @@ func execute_overwhelm():
 		if entity is Army and entity_belongs_to_me(entity) and entity.health > 0:
 			if int(entity.entity_id) in [5,6,10,14,33,43,44,45,46,47,48,49,50,51]: continue
 			if _is_scout_unit(entity): continue
-			if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass") or entity.has_meta("ai_wall_guard"): continue
+			if _unit_has_claim(entity): continue
 			if _is_held_by_garrison(entity): continue
 			if entity.water_capable: continue
 			# 已经在交战/移动的单位不重新下发，避免“全军压上”把前线目标清掉。
@@ -3685,7 +3693,7 @@ func execute_overwhelm():
 		if entity is Army and entity_belongs_to_me(entity) and entity.health > 0:
 			if int(entity.entity_id) in [5,6,10,14,33,43,44,45,46,47,48,49,50,51]: continue
 			if _is_scout_unit(entity): continue
-			if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass") or entity.has_meta("ai_wall_guard"): continue
+			if _unit_has_claim(entity): continue
 			if _is_held_by_garrison(entity): continue
 			if entity.water_capable: continue
 			if entity.current_target != null or entity.current_order != "" or entity.is_attack_moving: continue
@@ -3725,7 +3733,7 @@ func execute_raid():
 		if e is Army and e.team == my_team and e.health > 0 and (int(e.entity_id) not in [5,6,9,10,14,33,43,44,45,46,47,48,49,50,51]) and entity_belongs_to_me(e):
 			if _is_scout_unit(e):
 				continue
-			if e.has_meta("ai_home_guard") or e.has_meta("ai_resource_guard") or e.has_meta("ai_harass") or e.has_meta("ai_wall_guard"):
+			if _unit_has_claim(e):
 				continue
 			if _is_held_by_garrison(e):
 				continue
@@ -4826,8 +4834,7 @@ func _retask_idle_front_units() -> void:
 			continue
 		if int(u.entity_id) == 10 or int(u.attack) <= 0 or bool(u.water_capable):
 			continue
-		if u.has_meta("ai_home_guard") or u.has_meta("ai_resource_guard") or u.has_meta("ai_harass") \
-				or u.has_meta("ai_wall_guard") or u.has_meta("ai_transporting") or u.has_meta("ai_escorting"):
+		if _unit_has_claim(u):
 			continue
 		if String(u.current_order) != "" or u.current_target != null or not u.command_queue.is_empty():
 			continue
@@ -4905,8 +4912,7 @@ func _director_is_land_combat(u) -> bool:
 		return false
 	if _is_scout_unit(u) or bool(u.water_capable) or bool(u.hold_position):
 		return false
-	if u.has_meta("ai_home_guard") or u.has_meta("ai_resource_guard") or u.has_meta("ai_wall_guard") \
-		or u.has_meta("ai_harass") or u.has_meta("ai_transporting") or u.has_meta("ai_escorting"):
+	if _unit_has_claim(u):
 		return false
 	return true
 
@@ -5007,8 +5013,9 @@ func _director_dispatch(idle: Array, now: float) -> void:
 			u.attack_move_to(rally)
 		_director_set_role(u, UnitRole.STANDBY, DIRECTOR_STANDBY_LEASE, now)
 
-func _director_log() -> void:
-	var names: Array = ["IDLE", "SCOUT", "GARRISON", "WALL", "HOME_GUARD", "RESOURCE_GUARD", "BUILDING_DEFENSE", "HARASS", "RAID", "FIELD", "SIEGE", "TRANSPORT", "ESCORT", "RETREAT", "STANDBY"]
+# 给调试面板/诊断脚本用的角色分布摘要，例如 "守家=3 守墙=5 主攻=8 待命=2"。
+func get_role_summary() -> String:
+	var names: Array = ["IDLE", "侦察", "驻军", "守墙", "守家", "资源守", "回防", "骚扰", "突袭", "主攻", "攻城", "运输", "护航", "撤退", "待命"]
 	var counts: Dictionary = {}
 	for uid in _roles.keys():
 		var ent: Dictionary = _roles[uid]
@@ -5018,7 +5025,9 @@ func _director_log() -> void:
 	for k in counts.keys():
 		var idx: int = clampi(int(k), 0, names.size() - 1)
 		parts.append("%s=%d" % [String(names[idx]), int(counts[k])])
-	print("[DIRECTOR] p%d t=%.0f %s" % [my_peer_id, float(battle.game_time), " ".join(parts)])
+	return " ".join(parts)
+func _director_log() -> void:
+	print("[DIRECTOR] p%d t=%.0f %s" % [my_peer_id, float(battle.game_time), get_role_summary()])
 
 func _process_line_3():
 	if count_building(28) < _effective_house_target() and can_afford_building(28):
@@ -5041,7 +5050,7 @@ func _force_house_builder(pos: Vector3) -> bool:
 			continue
 		if e.entity_id != 10 or not entity_belongs_to_me(e) or not e.can_move:
 			continue
-		if e.has_meta("ai_transporting") or e.has_meta("ai_home_guard") or e.has_meta("ai_wall_guard"):
+		if _unit_has_claim(e):
 			continue
 		# 采集中也要能抽走；旧逻辑把 _work_target_id != -1 的农民全跳过，
 		# 六 AI 混战时 15 个农民都在采集，结果一个建房工人都找不到。
@@ -5248,7 +5257,7 @@ func _rally_land_army_to_castle():
 		# 账本里已有角色（集结/守军/守墙/驻军/骚扰）的单位不再重复集结。
 		# 以前用永久的 ai_rallied 标记，导致首波之后新生产的兵再也不会被集结。
 		if _roles.has(entity.get_instance_id()): continue
-		if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass") or entity.has_meta("ai_transporting") or entity.has_meta("ai_wall_guard"): continue
+		if _unit_has_claim(entity): continue
 		if _is_held_by_garrison(entity): continue
 		# 已登船单位由 AIWaterCrossing 管理，不再被集结点重新下令
 		var boarded = entity.get("_boarded_on")
