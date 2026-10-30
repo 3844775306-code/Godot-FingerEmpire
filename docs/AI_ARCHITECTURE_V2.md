@@ -529,3 +529,18 @@ AIClock.fast (4Hz)
 **判定**：打开。`branch 读取点只是数据来源，语义应与 `_roles` 完全相同；开/关两组差异在环境噪声范围内（本轮 p95 从 391 漂到 667，说明机器负载波动大），关键是 **4 次运行 `MISMATCH` 全 0、`rejected` 全 0**，证明账本与 `_roles` 内容等价。
 
 **下一步（P3.1 第三步）**：`_roles` 降级为只写别名（或直接删除），让 `RoleLedger` 成为唯一事实来源；届时把农民/防御也登记进同一本账（source = `worker` / `defense`），`rejected` 才会出现真实含义——即"两个模块抢同一单位"。
+
+### 12.3.6 P3.1 第三步：账本成为写入侧事实来源（2026-10-30 22:55）
+
+| 改动 | 说明 |
+|---|---|
+| 写入顺序反转 | `_director_set_role` 先 `_ledger.claim(...)`，成功后才写 `_roles` 镜像；`_roles` 从此是"账本的人读视图" |
+| 冲突检测 | claim 被拒绝（同一单位已被别的 source 占用）时**保留原占用者**、`_ledger_conflicts += 1`、打印 `[LEDGER] CONFLICT t= uid= want= holder= kind=` |
+| 来源名 | 新增 `LEDGER_SRC_DIRECTOR = "director"`，为农民（`worker`）/防御（`defense`）登记留位 |
+| 可观测 | `get_situation_summary()` 增加 `ledger_conflicts` |
+
+**当前行为不变**：所有 claim 都来自 `director`，账本不会拒绝，冲突计数恒为 0。这一步的价值是把"抢单位"从**静默覆盖**变成**显式拒绝 + 冲突日志**——等农民/防御登记进来后，`CONFLICT` 出现的位置就是现在靠 `_unit_has_claim()` 互相查询掩盖掉的真实冲突点。
+
+**冒烟结果**：3 分钟 3v3 HELL，无脚本错误，`SITUATION/LEDGER MISMATCH` = 0，`CONFLICT` = 0，front 56.5% / idle 15.3%，行为正常。
+
+**下一步（第四步）**：把 `AIWorkerDirector` 的农民角色与 `AIDefense` 的守军/预留登记为 `worker` / `defense` 来源（kind 用不同偏移避免与 `UnitRole` 撞号），观察 `CONFLICT` 分布；确认无真实冲突后删除 `_roles` 主写。

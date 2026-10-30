@@ -223,6 +223,7 @@ var _situation_last_t: float = -1.0
 var _ledger = null
 var _ledger_checks: int = 0
 var _ledger_mismatch_total: int = 0
+var _ledger_conflicts: int = 0
 var _situation_checks: int = 0
 var _situation_mismatch_total: int = 0
 # 防御建筑驻军：AI 会把部分闲置士兵/农民送进箭塔、炮塔和城堡，
@@ -5050,11 +5051,19 @@ func _director_prune(now: float) -> void:
 		_ledger.sweep(now)
 
 func _director_set_role(u, role: int, lease: float, now: float) -> void:
-	_roles[u.get_instance_id()] = {"role": role, "since": now, "until": now + lease}
-	u.set_meta("ai_role", role)
-	# P3.1 影子镜像：同一份占用同步登记到统一账本（来源暂记为 director）。
+	var uid: int = u.get_instance_id()
+	# P3.1 第三步：账本改为写入侧的事实来源。先认领，被拒绝说明该单位已被别的来源占用
+	#（例如防御模块），这时保留原占用者并记录冲突，避免两处调度同时指挥同一个单位。
 	if _ledger != null:
-		_ledger.claim(u.get_instance_id(), role, "director", now, lease)
+		if not _ledger.claim(uid, role, LEDGER_SRC_DIRECTOR, now, lease):
+			_ledger_conflicts += 1
+			if _ledger_conflicts <= 5 or _ledger_conflicts % 50 == 0:
+				print("[LEDGER] CONFLICT t=%.0f uid=%d want=%d holder=%s kind=%d" % [
+					float(battle.game_time), uid, role,
+					_ledger.source_of(uid), _ledger.kind_of(uid)])
+			return
+	_roles[uid] = {"role": role, "since": now, "until": now + lease}
+	u.set_meta("ai_role", role)
 
 # 统一认领接口：旧的 4 个防务调度器（守家/守墙/驻军/资源守卫）改走这里登记角色，
 # director 的兜底派单因此不会再碰它们，租约到期也能自动回收（后续步骤会把挑选逻辑也收进来）。
@@ -6307,6 +6316,8 @@ const USE_TRUE_ROUND_ELAPSED: bool = true
 const USE_SITUATION_COUNTS: bool = false
 # P3.1 第二步开关：true=读取点走统一账本，false=读旧 _roles（默认 false，验证后再打开）。
 const USE_LEDGER_READS: bool = true
+# P3.1 第三步：账本来源名（后续农民/防御也登记到同一本账时用于区分）。
+const LEDGER_SRC_DIRECTOR: String = "director"
 
 func _situation_shadow_tick() -> void:
 	if _situation == null or battle == null:
@@ -6375,4 +6386,5 @@ func get_situation_summary() -> Dictionary:
 	d["ledger"] = _ledger.snapshot() if _ledger != null else {}
 	d["ledger_checks"] = _ledger_checks
 	d["ledger_mismatch"] = _ledger_mismatch_total
+	d["ledger_conflicts"] = _ledger_conflicts
 	return d
