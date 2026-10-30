@@ -3094,7 +3094,13 @@ func _process_action(delta, bm):
 			else:
 				# 目标点取建筑外缘（走到城堡中心会导致路径不可达而原地卡住）
 				var arrive: float = delivery_target.body_radius + body_radius + 0.5
-				if delivery_target.global_position != _movement.astar_target:
+				# 没有路径时必须补发：旧逻辑只在「目标点 != astar_target」时才发请求，
+				# 而请求一旦被丢弃/失败，astar_target 早就等于目标点了，于是永远不再发，
+				# 农民就背着货永久站在半路（实测长期卡死的交付样本正是 路径0 无进展4秒）。
+				if _movement.astar_path.is_empty():
+					_movement.clear_blacklist_at(delivery_target.global_position)
+					_movement.set_move_target(delivery_target.global_position, arrive)
+				elif delivery_target.global_position != _movement.astar_target:
 					_movement.set_move_target(delivery_target.global_position, arrive)
 		return
 		# Èç¹ûÊÇÒÆ¶¯ÃüÁîÇÒÒÑ½Ó½üÄ¿±ê£¬Çå³ýÃüÁî£¬×ªÎª¿ÕÏÐ
