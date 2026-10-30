@@ -317,3 +317,20 @@ AIClock.fast (4Hz)
 | 冒烟验证 | 无头自对弈 3 分钟：5 AI 正常、无解析/运行错误、front≈58~73%（噪声范围内） |
 
 **P1 结论**：基础设施四件套可用，`AI.gd` 的节流与参数入口已统一；下一步进入 **P2 世界模型（Situation 快照 + 空间索引）**。
+
+### 11.4 P2 影子版世界模型已落地（2026-10-30 20:20）
+
+| 项 | 结果 |
+|---|---|
+| `AISituation` | `scripts/ai/world/AISituation.gd`：单次遍历产出本方/敌方、农民/陆军/建筑/主城分类视图 + 自身计数 |
+| 只读接入 | `AI.gd` step 0 每轮刷新快照（不接管任何决策），5 秒（游戏时间）做一次对账 |
+| 一致性 | 8 分钟对弈：`land / worker / castle` 三项计数**0 次不一致**（`[SITUATION] MISMATCH` 0 条） |
+| 成本 | 单次刷新 0.05~0.18 ms（EMA），远低于一次完整决策（数百 ms） |
+| 回归数据 | 自对弈 CSV 新增 `src_usec` / `src_mismatch` 两列 |
+
+**顺带发现的既有问题（未改，留给 P3）**：`_last_delta` 是"本轮所在单帧的 delta"，而多数计时器每轮只减一次，导致**名义 10s 的计时器实际要几十秒才触发**（旧代码同样如此，AIClock 迁移保持了行为一致）。修正需要引入"轮次经过时间" `elapsed_since_last_round` 统一替换，属于行为改动，放到 P3 统一 Director 时一起做。
+
+**P2 下一步**：
+1. `Situation` 增加空间索引（近邻查询）与敌军可见性，供防御/骚扰使用；
+2. 把 `count_land_army` / `count_field_military` 等读取点切到快照（影子→接管）；
+3. 资源节点与建造点缓存进快照，减少 `find_valid_build_position` 的重复扫描。

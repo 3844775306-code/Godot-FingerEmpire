@@ -256,10 +256,16 @@ func _peer_row(ai) -> Dictionary:
 		row["queued_workers"] = int(snap.get("queued", -1))
 		row["builders"] = int(snap.get("builders", -1))
 		row["train_block"] = String(snap.get("train_block", ""))
+	row["src_usec"] = -1.0
+	row["src_mismatch"] = -1
 	row["threat"] = -1
 	row["posture"] = -1
 	row["ring"] = -1
 	var d = ai.get("_defense")
+	if ai.has_method("get_situation_summary"):
+		var ss: Dictionary = ai.get_situation_summary()
+		row["src_usec"] = float(ss.get("usec_ema", -1.0))
+		row["src_mismatch"] = int(ss.get("mismatch_total", -1))
 	if d != null:
 		row["threat"] = int(d.threat_level)
 		if d.has_method("get_defense_posture"):
@@ -287,14 +293,15 @@ func _write_seed_csv(seed_id: int, rows: Array) -> String:
 		f.close()
 	var p: FileAccess = FileAccess.open(peers_path, FileAccess.WRITE)
 	if p != null:
-		p.store_line("seed,t,peer,team,phase,land,field,workers,queued_workers,builders,train_block,threat,posture,rings")
+		p.store_line("seed,t,peer,team,phase,land,field,workers,queued_workers,builders,train_block,threat,posture,rings,src_usec,src_mismatch")
 		for r in rows:
 			for pr in r["peers"]:
-				p.store_line("%d,%.0f,%d,%d,%d,%d,%d,%d,%d,%d,%s,%d,%d,%d" % [
+				p.store_line("%d,%.0f,%d,%d,%d,%d,%d,%d,%d,%d,%s,%d,%d,%d,%.3f,%d" % [
 					seed_id, float(r["t"]), int(pr["peer"]), int(pr["team"]), int(pr["phase"]),
 					int(pr["land"]), int(pr["field"]), int(pr["workers"]), int(pr["queued_workers"]),
 					int(pr["builders"]), String(pr["train_block"]),
-					int(pr["threat"]), int(pr["posture"]), int(pr["ring"])])
+					int(pr["threat"]), int(pr["posture"]), int(pr["ring"]),
+					float(pr["src_usec"]), int(pr["src_mismatch"])])
 		p.close()
 	return samples_path
 

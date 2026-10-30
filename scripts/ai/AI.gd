@@ -13,6 +13,7 @@ const AILadderSiegeScript = preload("res://scripts/ai/AILadderSiege.gd")
 const AIWorkerDirectorScript = preload("res://scripts/ai/AIWorkerDirector.gd")
 const AIConfigScript = preload("res://scripts/ai/core/AIConfig.gd")
 const AIClockScript = preload("res://scripts/ai/core/AIClock.gd")
+const AISituationScript = preload("res://scripts/ai/world/AISituation.gd")
 
 enum Phase { PRODUCTION, DEVELOPMENT, ASSAULT }
 enum LateTactic { NONE, HARASS, OVERWHELM, RAID, DEFEND }
@@ -210,6 +211,12 @@ const WALL_GUARD_POS_META: String = "ai_wall_guard_pos"
 const WALL_GUARD_SMALL_BODY: float = 0.5
 # P1：统一节拍器（见 scripts/ai/core/AIClock.gd），目前已接管 retask / age_build / wall_deploy / garrison。
 var _ai_clock = null
+# P2：世界模型影子快照（只读，不接管决策；用于对账与成本测量）。
+var _situation = null
+var _situation_usec_ema: float = 0.0
+var _situation_last_t: float = -1.0
+var _situation_checks: int = 0
+var _situation_mismatch_total: int = 0
 # 防御建筑驻军：AI 会把部分闲置士兵/农民送进箭塔、炮塔和城堡，
 # 让它们吃到多子弹齐射加成，而不是只在塔外站着。
 const GARRISON_CHECK_INTERVAL: float = 4.0
@@ -1882,6 +1889,7 @@ func _ready():
 	_ai_clock.add("age_build", AGE_BUILDING_CHECK_INTERVAL, 1.0)
 	_ai_clock.add("wall_deploy", WALL_DEPLOY_INTERVAL)
 	_ai_clock.add("garrison", GARRISON_CHECK_INTERVAL)
+	_situation = AISituationScript.new()
 
 # 后期实体数越多，AI 的周期性全量扫描越贵；返回统一的降频倍率。
 func _late_game_scale() -> float:
@@ -2346,6 +2354,7 @@ func _run_decide_step(step: int) -> void:
 		0:
 			if _ai_clock != null:
 				_ai_clock.advance(_last_delta)
+			_situation_shadow_tick()
 			if my_peer_id != -1 and battle.has_method("update_player_limits"):
 				battle.update_player_limits(my_peer_id)
 				battle.update_player_population(my_peer_id)
@@ -6242,3 +6251,44 @@ func _get_tactic_name(tactic: int) -> String:
 		LateTactic.RAID: return "⚡ 突袭"
 		LateTactic.DEFEND: return "🛡️ 防守"
 		_: return "未知"
+
+# ═══ P2 世界模型（影子） ═══
+# 只读快照 + 与现有 count_* 对账；不改变任何决策。
+const SITUATION_CHECK_INTERVAL: float = 5.0
+
+func _situation_shadow_tick() -> void:
+	if _situation == null or battle == null:
+		return
+	_situation.refresh(self)
+	var us: float = float(_situation.cost_usec)
+	_situation_usec_ema = us if _situation_usec_ema <= 0.0 else _situation_usec_ema * 0.9 + us * 0.1
+	# 用游戏时间判断间隔：_last_delta 只是本轮所在单帧的 delta，累加会严重低估经过时间。
+	var gt: float = float(battle.game_time)
+	if _situation_last_t < 0.0:
+		_situation_last_t = gt
+	if gt - _situation_last_t < SITUATION_CHECK_INTERVAL:
+		return
+	_situation_last_t = gt
+	_situation_checks += 1
+	# 对账：快照计数必须与现有 count_* 完全一致（影子迁移的验收条件）。
+	var land_gap: int = int(_situation.own_land_count) - count_land_army()
+	var worker_gap: int = int(_situation.own_worker_count) - count_unit(10, false)
+	var castle_gap: int = _situation.count_building(20) - count_building(20)
+	if land_gap != 0 or worker_gap != 0 or castle_gap != 0:
+		_situation_mismatch_total += 1
+		if _situation_mismatch_total <= 5 or _situation_mismatch_total % 20 == 0:
+			print("[SITUATION] MISMATCH t=%.0f land=%+d worker=%+d castle=%+d cost=%.2fms" % [
+				float(battle.game_time), land_gap, worker_gap, castle_gap, _situation_usec_ema / 1000.0])
+	elif _situation_checks <= 3 or _situation_checks % 20 == 0:
+		print("[SITUATION] ok t=%.0f land=%d worker=%d castle=%d cost=%.3fms" % [
+			float(battle.game_time), int(_situation.own_land_count), int(_situation.own_worker_count),
+			_situation.count_building(20), _situation_usec_ema / 1000.0])
+
+func get_situation_summary() -> Dictionary:
+	if _situation == null:
+		return {}
+	var d: Dictionary = _situation.describe()
+	d["usec_ema"] = _situation_usec_ema
+	d["checks"] = _situation_checks
+	d["mismatch_total"] = _situation_mismatch_total
+	return d
