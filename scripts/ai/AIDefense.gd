@@ -2766,6 +2766,15 @@ func _build_defense_step() -> void:
 			continue
 		# 墙的石耗按“一圈周长”设预算：超了就不再往墙上堆石头（实测有 AI 堆到 112 段，
 		# 而其中 60% 以上的墙朝的方向本来就没封闭，纯粹浪费石头）。省下的钱给塔和补兵。
+		# 塔没建满之前别把钱全砸在墙上：箭塔要 80 木 50 石，石头低于 80 就先攒着，
+		# 否则队列里 8 个塔位永远缺石头（实测破防时塔只有 1 座，墙却有 21~38 段）。
+		if b_id == 27:
+			var towers_built: int = ai.count_building(25) + ai.count_building(26)
+			if towers_built < MIN_TOWERS:
+				var res_now: Dictionary = ai._get_resources()
+				if float(res_now.get("stone", 0)) < 80.0 or float(res_now.get("wood", 0)) < 110.0:
+					i += 1
+					continue
 		if b_id == 27 and not _wall_ring_radii.is_empty():
 			var max_rr: int = 0
 			for r in _wall_ring_radii:
