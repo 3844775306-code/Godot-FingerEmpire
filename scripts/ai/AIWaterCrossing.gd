@@ -264,7 +264,7 @@ func _stall_transport():
 
 func _collect_bridges() -> Dictionary:
 	var out: Dictionary = {}
-	for e in battle.entities.get_children():
+	for e in _ctx.entities_children():
 		# 只把完工的桥算作可通行；施工中的桥段不能拿来判断两岸已经连通。
 		if e is Building and e.entity_id == BRIDGE_ID and e.health > 0 and e.build_timer <= 0.0:
 			out[_ctx.world_to_grid(e.global_position)] = true
@@ -280,7 +280,7 @@ func _land_passable(tile: Vector2i, bridges: Dictionary) -> bool:
 		# 浅滩(3)是水格但陆军可通行
 		return _ctx.overlay_at_grid(tile.x, tile.y) == 3
 	# 与陆军 A* 保持一致：山壁、悬崖、无法通过的台地边缘不能算陆地连通。
-	if battle.has_method("is_cliff_tile") and _ctx.is_cliff_tile(tile.x, tile.y):
+	if _ctx.battle_has_method("is_cliff_tile") and _ctx.is_cliff_tile(tile.x, tile.y):
 		return false
 	return true
 
@@ -330,7 +330,7 @@ func _find_bridge_plan(own_set: Dictionary, enemy_set: Dictionary, bridges: Dict
 			if not enemy_set.has(n):
 				continue
 			var first_world: Vector3 = _ctx.grid_to_world(line[0].x, line[0].y)
-			if not battle.has_method("is_valid_bridge_position"):
+			if not _ctx.battle_has_method("is_valid_bridge_position"):
 				continue
 			if not _ctx.is_valid_bridge_position(first_world):
 				continue
@@ -469,7 +469,7 @@ func is_planned_bridge_position(pos: Vector3) -> bool:
 
 func _find_resource_bridge_plan(own_set: Dictionary, bridges: Dictionary, own_grid: Vector2i) -> Array:
 	var resource_tiles: Dictionary = {}
-	for e in battle.entities.get_children():
+	for e in _ctx.entities_children():
 		if not (e is WorldResource) or e.health <= 0:
 			continue
 		var rt: Vector2i = _ctx.world_to_grid(e.global_position)
@@ -781,7 +781,7 @@ func _tick_bridge(delta: float):
 	var pos: Vector3 = bridge_plan[0]
 	var g: Vector2i = _ctx.world_to_grid(pos)
 	var pending_bridge: Building = null
-	for e in battle.entities.get_children():
+	for e in _ctx.entities_children():
 		if e is Building and e.entity_id == BRIDGE_ID and e.health > 0:
 			if _ctx.world_to_grid(e.global_position) == g:
 				# 施工中的桥段不能从计划里弹掉。以前只要桥实体存在就算“已建”，
@@ -806,10 +806,10 @@ func _tick_bridge(delta: float):
 			_bridge_pending_stall += delta
 		var stalled: bool = _bridge_pending_stall >= 8.0
 		if stalled or int(pending_bridge.get("builder_count_cache")) <= 0 or bool(pending_bridge.get("awaiting_builder")):
-			if battle.has_method("assign_builders"):
+			if _ctx.battle_has_method("assign_builders"):
 				if stalled and pending_bridge.has_method("_release_builders"):
 					pending_bridge._release_builders()
-				battle.assign_builders(pending_bridge, [])
+				_ctx.assign_builders(pending_bridge, [])
 			_bridge_pending_stall = 0.0
 		_bridge_afford_timer = 0.0
 		return
@@ -823,7 +823,7 @@ func _tick_bridge(delta: float):
 			_request_plan_in(1.0)
 		return
 	_bridge_afford_timer = 0.0
-	if battle.has_method("is_valid_bridge_position") and not _ctx.is_valid_bridge_position(pos):
+	if _ctx.battle_has_method("is_valid_bridge_position") and not _ctx.is_valid_bridge_position(pos):
 		# 这个桥位被单位/建筑挡住或地形已变，下一周期重新找
 		bridge_plan.clear()
 		_register_bridge_failure()
@@ -850,7 +850,7 @@ func _register_bridge_failure():
 		_bridge_retry_at_ms = SimTime.now_ms() + 45000
 
 func _recalculate_army_paths():
-	for e in battle.entities.get_children():
+	for e in _ctx.entities_children():
 		if e is Army and e.health > 0 and _belongs(e):
 			if e.has_method("recalculate_path"):
 				e.recalculate_path()
@@ -899,7 +899,7 @@ func _min_wave_troops(capacity: int) -> int:
 func _refresh_fleet():
 	_transports.clear()
 	_escorts.clear()
-	for e in battle.entities.get_children():
+	for e in _ctx.entities_children():
 		if not (e is Army) or e.health <= 0:
 			continue
 		if not _belongs(e):
@@ -921,7 +921,7 @@ func _refresh_fleet():
 			_escorts.append(e)
 	# 先清掉上一轮的护航标记，再把当前选中的护航舰重新标记，
 	# 防止海军巡逻/总攻把护航舰队拉去别处。
-	for e in battle.entities.get_children():
+	for e in _ctx.entities_children():
 		if e is Army and int(e.entity_id) in ESCORT_IDS and _belongs(e):
 			e.remove_meta("ai_escorting")
 	var transport_cap: int = maxi(1, _wave_transport_target)
@@ -936,7 +936,7 @@ func _refresh_fleet():
 # 只统计能参与渡水的运载船，排除已判定到不了出发岸的远端船。
 func _usable_transport_count() -> int:
 	var n: int = 0
-	for e in battle.entities.get_children():
+	for e in _ctx.entities_children():
 		if e is Army and e.health > 0 and int(e.entity_id) == TRANSPORT_ID \
 				and _belongs(e) and not e.has_meta("ai_transport_excluded"):
 			n += 1
@@ -1410,7 +1410,7 @@ func _transport_candidate_less(a: Dictionary, b: Dictionary) -> bool:
 func _pick_units(max_count: int) -> Array:
 	var candidates: Array = []
 	var exclusions: Array = [5, 6, 9, 10, 13, 14, 19, 39, 40, 43, 44, 45, 46, 47, 48, 49, 50, 51, 55, 56, 57]
-	for e in battle.entities.get_children():
+	for e in _ctx.entities_children():
 		if not (e is Army) or e.health <= 0:
 			continue
 		if not _belongs(e):
@@ -1546,7 +1546,7 @@ func _ensure_shore_shipyard():
 	# 运载船就会从远处船坞下水，随后又被 _refresh_fleet 以“离岸超过20米”排除。
 	var best: Building = null
 	var best_dist: float = INF
-	for e in battle.entities.get_children():
+	for e in _ctx.entities_children():
 		if not (e is Building) or e.entity_id != SHIPYARD_ID or e.health <= 0:
 			continue
 		if not _belongs(e):
@@ -1562,7 +1562,7 @@ func _ensure_shore_shipyard():
 			best = e
 			best_dist = d
 	if is_instance_valid(best):
-		for e in battle.entities.get_children():
+		for e in _ctx.entities_children():
 			if e is Building and e.entity_id == SHIPYARD_ID and e != best:
 				if e.has_meta("ai_transport_shipyard"):
 					e.remove_meta("ai_transport_shipyard")
@@ -1577,7 +1577,7 @@ func _ensure_shore_shipyard():
 	if not _ports.build.build(SHIPYARD_ID, pos):
 		return
 	var built: Building = null
-	for e in battle.entities.get_children():
+	for e in _ctx.entities_children():
 		if e is Building and e.entity_id == SHIPYARD_ID and e.health > 0 and _belongs(e):
 			if e.global_position.distance_to(pos) <= 3.0:
 				built = e
@@ -1589,7 +1589,7 @@ func _ensure_shore_shipyard():
 # 运载船只能从渡水专用船坞生产。远处船坞排出的运载船开不到出发岸，
 # 留下来只会白吃木头/金币和人口，所以每次确认专用船坞后清掉这些排队项。
 func _drop_remote_transport_orders(keep: Building) -> void:
-	for e in battle.entities.get_children():
+	for e in _ctx.entities_children():
 		if not (e is Building) or e.entity_id != SHIPYARD_ID or e == keep or e.health <= 0:
 			continue
 		if not _belongs(e):
@@ -1631,7 +1631,7 @@ func _find_shore_shipyard_pos() -> Vector3:
 # 否则 AI 可能把运载船科技/生产排到远处只产渔船/战船的油田船坞上。
 func _find_transport_shipyard() -> Building:
 	var fallback: Building = null
-	for e in battle.entities.get_children():
+	for e in _ctx.entities_children():
 		if not (e is Building) or e.health <= 0 or e.entity_id != SHIPYARD_ID:
 			continue
 		if not _belongs(e) or not e.has_meta("ai_transport_shipyard"):
@@ -1753,5 +1753,5 @@ func _afford_bld(id: int) -> bool:
 func _afford_upg(id: int) -> bool:
 	return _ctx.can_afford_upgrade(id)
 func _now() -> float:
-	return _ctx.game_time() if _ctx != null else float(ai.battle.game_time)
+	return _ctx.game_time() if _ctx != null else float(_ctx.game_time())
 

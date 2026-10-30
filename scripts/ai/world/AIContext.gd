@@ -214,3 +214,68 @@ func set_meta_value(key: String, value) -> void:
 
 func build_ladder(spot) -> bool:
 	return bool(_ai.build_ladder(spot)) if _ai != null else false
+
+# ── 实体与地形（R4：L2 不再直接摸 battle）──
+func entities_children() -> Array:
+	return _ai.battle.entities.get_children() if _ai != null and _ai.battle != null else []
+
+func is_terrain_flat(pos, radius: float = 6.0) -> bool:
+	return bool(_ai.battle._is_terrain_flat(pos, radius)) if _ai != null and _ai.battle != null else false
+
+func height_at_grid(gx: int, gy: int) -> float:
+	return float(_ai.battle.get_height_at_grid(gx, gy)) if _ai != null and _ai.battle != null else 0.0
+
+func nearby_buildings(pos, radius: float) -> Array:
+	return _ai.battle.get_nearby_buildings(pos, radius) if _ai != null and _ai.battle != null else []
+
+func battle_has_method(name: String) -> bool:
+	return bool(_ai.battle.has_method(name)) if _ai != null and _ai.battle != null else false
+
+func battle_node(path: String):
+	return _ai.battle.get_node_or_null(path) if _ai != null and _ai.battle != null else null
+
+func research_state(peer: int, team: int) -> Dictionary:
+	return _ai.battle.get_research_state(peer, team) if _ai != null and _ai.battle != null else {}
+
+func visible_mask(team: int):
+	if _ai == null or _ai.battle == null:
+		return PackedByteArray()
+	return _ai.battle.get_team_visible_mask(team)
+
+func nearest_idle_builder(team: int, owner: int, pos, radius: float = 60.0):
+	if _ai == null or _ai.battle == null:
+		return null
+	return _ai.battle.find_nearest_idle_builder(team, owner, pos, radius)
+
+# 过渡：个别地方仍需要 battle 对象本身（例如 perform_upgrade(battle)），
+# 只在 AIContext 内部暴露，L2 不得直接用 battle.xxx。
+func battle_ref():
+	return _ai.battle if _ai != null else null
+
+func has_available_builder(pos) -> bool:
+	if _ai == null or _ai._worker_director == null:
+		return false
+	return bool(_ai._worker_director.has_available_builder(pos, false, 60.0))
+
+func ensure_cache_fresh() -> void:
+	if _ai != null and _ai.battle != null:
+		_ai.battle._ensure_cache_fresh()
+
+func armies() -> Array:
+	return _ai.battle._armies if _ai != null and _ai.battle != null else []
+
+func buildings() -> Array:
+	return _ai.battle._buildings if _ai != null and _ai.battle != null else []
+
+func training_allowed(building_id: int) -> bool:
+	return bool(_ai.battle.is_training_building_allowed(building_id)) if _ai != null and _ai.battle != null else true
+
+func assign_builders(target, ids) -> void:
+	if _ai != null and _ai.battle != null:
+		_ai.battle.assign_builders(target, ids)
+
+func spawn_entity(config, team: int, pos, level: int = 1):
+	return _ai.battle.spawn_entity(config, team, pos, level) if _ai != null and _ai.battle != null else null
+
+func is_valid_ladder_position(pos, team: int) -> bool:
+	return bool(_ai.battle.is_valid_ladder_position(pos, team)) if _ai != null and _ai.battle != null else false

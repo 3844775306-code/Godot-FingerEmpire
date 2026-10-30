@@ -649,3 +649,40 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/ai_arch_check.ps1
 输出表 + 存档 `docs/ai-analysis/arch_check.json`。目标值：**R1 = 0、R2 = 0** 已达成；R3 剩 1（`AIDefense._init(owner_ai)` 构造签名待 A6 收尾一并改）；R4 剩 91 处 `battle.` 直接访问（实体遍历为主，需要 `AISituation` 提供更完整的实体视图）。
 
 **踩坑（第七个）**：`AIContext.field_military_count(key = "")` 把参数当字符串用，但底层 `count_field_military(peer: int)` 要的是 peer id，运行期报 `Invalid operands 'int' and 'String'`（每个 AI 一次，共 6 条）。**转发层的参数类型必须和真实签名一致**，不能凭方法名猜。
+
+---
+
+## 23. R4 清零：执行层不再直接访问 battle（2026-10-31 06:35）
+
+**R4 从 91 降到 0**，五个执行模块的 `battle.` 直接访问全部消失，改为经 `AIContext` 的只读实体/地形视图。
+
+| 模块 | R1 | R2 | R3 | R4（原→今）|
+|---|---|---|---|---|
+| AIDefense | 0 | 0 | 1 | 44 → **0** |
+| AIWorkerDirector | 0 | 0 | 0 | 2 → **0** |
+| AIWaterCrossing | 0 | 0 | 0 | 19 → **0** |
+| AILadderSiege | 0 | 0 | 0 | 20 → **0** |
+| AIWallPlanner | 0 | 0 | 0 | 6 → **0** |
+| **合计** | **0** | **0** | 1 | **91 → 0** |
+
+**AIContext 新增的只读视图**：
+- 实体：`entities_children()`（替代 32 处 `battle.entities.get_children()`）、`armies()`、`buildings()`
+- 地形：`is_terrain_flat(pos, radius)`、`height_at_grid(gx, gy)`、`training_allowed(id)`、`is_valid_ladder_position(pos, team)`
+- 其它：`research_state(peer, team)`、`visible_mask(team)`、`nearby_buildings`、`nearest_idle_builder(team, owner, pos, r)`、`ensure_cache_fresh()`、`assign_builders()`、`spawn_entity()`、`battle_has_method()`、`battle_node()`
+- 过渡出口：`battle_ref()`（只有 `perform_upgrade(battle)` 这类必须传 battle 的调用还在用）
+
+**写操作进一步收口**：`spawn_entity` 改走 `BuildPort.spawn`（AIDefense 2 处）。
+
+**R3 部分改善**：`AIDefense._init(owner_ai, ctx = null)` 现在接受上下文，`AI.gd` 把 `_context` 的创建**提前到模块创建之前**并直接传入，`_ready` 里的 set_context 变成幂等兜底。R3 仍计 1 是因为构造签名还保留 `owner_ai` 形参（模块内部仍用于端口兜底），这是最后一步。
+
+**验证**：
+| 运行 | front | idle | engage | 脚本错误 |
+|---|---|---|---|---|
+| 2 分钟（a8d）| 47.8% | 28.3% | 13.0% | 0 |
+| 3 分钟（a8e）| 52.6% | 21.8% | 24.4% | 0 |
+
+⚠️ 与 A7 的 3 分钟样本（79.8% / 6.1%）差异较大，但本会话同配置 3 分钟样本区间本就覆盖 40.9%~79.8%，**无法据此判定退化**。真正结论需要 8 分钟 × 多轮中位数，见 §24 待办。
+
+**踩坑（第八、九个）**：
+1. 把 `battle.xxx(` 换成 `_ctx.xxx(` 时，`ai.battle.xxx(` 里的子串同样被命中，产生 40 处 `ai._ctx.xxx()`（访问控制器上不存在的 `_ctx`）——**批量替换必须带词边界**。这已经是同一类坑的第三次。
+2. 转发签名必须照抄原方法：`_is_terrain_flat(pos, radius)` 被写成 `(gx: int, gy: int)`、`get_team_visible_mask` 返回 `PackedByteArray` 却被包成 `int`、`nearest_idle_builder` 需要 4 个参数却只声明 1 个 —— 三个都在运行期才爆。

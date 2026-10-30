@@ -91,14 +91,14 @@ func _refresh_built_walls() -> void:
 		if not _ctx.belongs_to_me(b):
 			continue
 		_built_walls.append(b)
-		_built_grid[ai.battle.world_to_grid(b.global_position)] = true
+		_built_grid[_ctx.world_to_grid(b.global_position)] = true
 
 func _pos_key(p: Vector3) -> String:
 	return "%.2f:%.2f" % [p.x, p.z]
 
 # 墙端是否顶在水/山/地图边缘上。浅滩(overlay 3)是陆军可通行的，不算屏障。
 func _is_anchor(p: Vector3) -> bool:
-	var cell: Vector2i = ai.battle.world_to_grid(p)
+	var cell: Vector2i = _ctx.world_to_grid(p)
 	var key: String = "%d:%d" % [cell.x, cell.y]
 	if _anchor_cache.has(key):
 		return bool(_anchor_cache[key])
@@ -114,18 +114,18 @@ func _is_anchor(p: Vector3) -> bool:
 		if n.x <= 0 or n.y <= 0 or n.x >= RTSConfig.MAP_SIZE - 1 or n.y >= RTSConfig.MAP_SIZE - 1:
 			found = true
 			break
-		if ai.battle.is_cliff_tile(n.x, n.y):
+		if _ctx.is_cliff_tile(n.x, n.y):
 			found = true
 			break
-		if ai.battle.get_terrain_at_grid(n.x, n.y) == 2 \
-				and ai.battle.get_overlay_at_grid(n.x, n.y) != 3:
+		if _ctx.terrain_at_grid(n.x, n.y) == 2 \
+				and _ctx.overlay_at_grid(n.x, n.y) != 3:
 			found = true
 			break
 	_anchor_cache[key] = found
 	return found
 
 func _has_built_neighbor(p: Vector3) -> bool:
-	var cell: Vector2i = ai.battle.world_to_grid(p)
+	var cell: Vector2i = _ctx.world_to_grid(p)
 	var r: int = int(ceil(LINK_RADIUS))
 	for dx in range(-r, r + 1):
 		for dz in range(-r, r + 1):

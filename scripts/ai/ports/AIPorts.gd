@@ -41,6 +41,11 @@ class BuildPort:
 			return false
 		return bool(_ai._can_place_ai_building(building_id, pos))
 
+	func spawn(config, team: int, pos, level: int = 1):
+		if _ai == null or _ai.battle == null:
+			return null
+		return _ai.battle.spawn_entity(config, team, pos, level)
+
 	func can_build(building_id: int) -> bool:
 		if _ai == null:
 			return false

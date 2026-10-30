@@ -229,8 +229,13 @@ func set_ports(build_port, cmd_port) -> void:
 	_build_port = build_port
 	_cmd_port = cmd_port
 
-func _init(owner_ai) -> void:
+# A6 收尾：角色常量本地化（数值须与 AI.UnitRole 枚举一致）。
+const ROLE_HOME_GUARD: int = 4
+const ROLE_RESOURCE_GUARD: int = 5
+
+func _init(owner_ai, ctx = null) -> void:
 	ai = owner_ai
+	_ctx = ctx
 	# P3.3：模块内计时器统一走 AIClock（按帧推进），不再各自维护浮点计时。
 	_clock = AIClockScript.new()
 	_clock.add("threat", THREAT_INTERVAL)
@@ -253,7 +258,7 @@ func _init(owner_ai) -> void:
 func tick(delta: float) -> void:
 	if ai == null:
 		return
-	var b = ai.battle
+	var b = _ctx.battle_ref()
 	if b == null or not is_instance_valid(b):
 		return
 	if b.game_over:
@@ -382,7 +387,7 @@ func _update_defense_plan_shadow(_castle, delta: float) -> void:
 	if snapshot.is_empty():
 		snapshot = get_threat_snapshot()
 	var now: float = 0.0
-	if ai != null and ai.battle != null:
+	if ai != null and _ctx.battle_ref() != null:
 		now = float(_ctx.game_time())
 	_defense_director.evaluate(snapshot, _wall_ring_target, now)
 	_defense_plan.rebuild(self, _defense_director, snapshot)
@@ -434,7 +439,7 @@ func _enemy_castle_dir(castle) -> Vector3:
 	var enemy_team: int = _primary_team()
 	var ec = _team_castle(enemy_team)
 	if ec == null:
-		for e in ai.battle.entities.get_children():
+		for e in _ctx.entities_children():
 			if e is Building and int(e.entity_id) == 20 and e.health > 0 and _is_enemy_ent(e):
 				ec = e
 				break
@@ -553,7 +558,7 @@ func _wall_ring_desired_radius(castle, ring_index: int) -> int:
 		outer_min = _campaign_ring_min_radius if _campaign_ring_min_radius > 0 \
 				else NORMAL_RING_MIN_RADIUS
 	var samples: Array = []
-	for e in ai.battle.entities.get_children():
+	for e in _ctx.entities_children():
 		if not (e is Building) or e.health <= 0 or not _belongs(e):
 			continue
 		# 城墙本身不参与“势力范围”计算，否则外圈会被已规划的内圈墙拖着走。
@@ -791,7 +796,7 @@ func _plan_terrain_ring(castle, ring_index: int) -> bool:
 
 # 该格是否已经被建筑/资源点的实体本身占住（这种格不需要砌墙，敌人也过不去）。
 func _cell_obstructed(pos: Vector3) -> bool:
-	for e in ai.battle.entities.get_children():
+	for e in _ctx.entities_children():
 		if not is_instance_valid(e) or e.health <= 0:
 			continue
 		if not (e is Building) and not (e is WorldResource):
@@ -803,7 +808,7 @@ func _cell_obstructed(pos: Vector3) -> bool:
 # 从主城洪泛，判断“墙 + 建筑 + 资源点 + 地形”是否真的把主城围死。
 # 逃不出去 = 闭合；能走到 radius + 6 格以外 = 有缺口（这个判定直接对应“敌人能不能走进来”）。
 func _ring_sealed(castle, radius: int) -> bool:
-	var b = ai.battle
+	var b = _ctx.battle_ref()
 	if b == null:
 		return false
 	var center: Vector2i = b.world_to_grid(castle.global_position)
@@ -1016,7 +1021,7 @@ func prebuild_campaign_castle_ring(castle, threat_dir: Vector3) -> bool:
 	for item in _defense_queue:
 		var bid: int = int(item.get("id", -1))
 		var pos: Vector3 = item.get("pos", Vector3.ZERO)
-		var spawned = ai.battle.spawn_entity(EntityDatabase.get_config(bid), ai.my_team, pos, 1)
+		var spawned = _build_port.spawn(EntityDatabase.get_config(bid), _ctx.my_team(), pos, 1)
 		if spawned == null:
 			failed.append(item)
 			continue
@@ -1070,7 +1075,7 @@ func _spawn_campaign_wall_cannons(castle, walls: Array) -> void:
 		var wall = walls[clampi(idx, 0, walls.size() - 1)]
 		if not is_instance_valid(wall) or wall.health <= 0:
 			continue
-		ai.battle.spawn_entity(EntityDatabase.get_config(64), ai.my_team,
+		_build_port.spawn(EntityDatabase.get_config(64), _ctx.my_team(),
 				wall.global_position, 1)
 
 # ── 地形防线：在朝敌方向前方寻找隘口/浅滩 ──
@@ -1198,8 +1203,8 @@ func _find_defense_anchor(castle, enemy_dir: Vector3,
 # ═══════════════════════════════════════════════════════════════
 
 func _fort_tech_ready(castle) -> bool:
-	if ai.battle != null and ai.battle.has_method("is_research_mode") and ai.battle.is_research_mode():
-		var st: Dictionary = ai.battle.get_research_state(ai.my_peer_id, ai.my_team)
+	if _ctx.is_research_mode():
+		var st: Dictionary = _ctx.research_state(_ctx.my_peer_id(), _ctx.my_team())
 		return int(st.get("age", 0)) >= 1
 	return int(castle.upgrade_level) >= 2
 
@@ -1216,7 +1221,7 @@ func _enemy_dir_for_pass(castle) -> Vector3:
 # 地图生成器会把“隘口中心”记在 Map 节点的 _pass_centers 里；
 # 优先用这些真实地图数据，找不到时再退回地形扇形搜索。
 func _map_pass_centers() -> Array:
-	var map = ai.battle.get_node_or_null("Map")
+	var map = _ctx.battle_node("Map")
 	if map == null:
 		return []
 	var raw = map.get("_pass_centers")
@@ -1309,7 +1314,7 @@ func _find_pass_anchor(castle) -> Dictionary:
 			continue
 		seen[key] = true
 		var p: Vector3 = _ctx.grid_to_world(pc.x, pc.y)
-		p.y = ai.battle.get_height_at_grid(pc.x, pc.y)
+		p.y = _ctx.height_at_grid(pc.x, pc.y)
 		var delta: Vector3 = p - base
 		delta.y = 0.0
 		var dist: float = delta.length()
@@ -1606,12 +1611,12 @@ func _ring_cell_blocked(cell: Vector2i) -> bool:
 	if _cell_blocks_land(cell.x, cell.y):
 		return true
 	var wp: Vector3 = _ctx.grid_to_world(cell.x, cell.y)
-	wp.y = ai.battle.get_height_at_grid(cell.x, cell.y)
+	wp.y = _ctx.height_at_grid(cell.x, cell.y)
 	var nearby: Array = []
-	if ai.battle.has_method("get_nearby_entities"):
+	if _ctx.battle_has_method("get_nearby_entities"):
 		nearby = _ctx.nearby_entities(wp, 3.2)
 	else:
-		nearby = ai.battle.entities.get_children()
+		nearby = _ctx.entities_children()
 	for e in nearby:
 		if not (e is Building or e is WorldResource) or e.health <= 0:
 			continue
@@ -1624,7 +1629,7 @@ func _ring_cell_blocked(cell: Vector2i) -> bool:
 # 环格上能否放一面墙（不把会移动的军队算作障碍，敌人靠近时先规划、建造时再重试）
 func _ring_wall_spot(cell: Vector2i, nearby: Array = []) -> Vector3:
 	var base: Vector3 = _ctx.grid_to_world(cell.x, cell.y)
-	if nearby.is_empty() and ai.battle.has_method("get_nearby_entities"):
+	if nearby.is_empty() and _ctx.battle_has_method("get_nearby_entities"):
 		nearby = _ctx.nearby_entities(base, 6.0)
 	# 环格中心不平时在 2.5 米内找最近的平地墙位；海边/山脚的环线本来就该顺着可建地形微调。
 	var offsets: Array = [Vector3.ZERO]
@@ -1640,7 +1645,7 @@ func _ring_wall_spot(cell: Vector2i, nearby: Array = []) -> Vector3:
 			continue
 		if _ctx.terrain_at_grid(gx, gz) != 0:
 			continue
-		if ai.battle.has_method("_is_terrain_flat") and not ai.battle._is_terrain_flat(wp, 0.45):
+		if _ctx.battle_has_method("_is_terrain_flat") and not _ctx.is_terrain_flat(wp, 0.45):
 			continue
 		var blocked: bool = false
 		for e in nearby:
@@ -1674,14 +1679,14 @@ func _ring_exact_wall_ok(cell: Vector2i, cache: Dictionary = {}) -> bool:
 		ok = false
 	elif _ctx.terrain_at_grid(cell.x, cell.y) != 0:
 		ok = false
-	elif ai.battle.has_method("_is_terrain_flat") and not ai.battle._is_terrain_flat(wp, 0.45):
+	elif _ctx.battle_has_method("_is_terrain_flat") and not _ctx.is_terrain_flat(wp, 0.45):
 		ok = false
 	else:
 		var nearby: Array = []
-		if ai.battle.has_method("get_nearby_entities"):
+		if _ctx.battle_has_method("get_nearby_entities"):
 			nearby = _ctx.nearby_entities(wp, 4.0)
 		else:
-			nearby = ai.battle.entities.get_children()
+			nearby = _ctx.entities_children()
 		for e in nearby:
 			if not (e is Building or e is WorldResource) or e.health <= 0:
 				continue
@@ -2191,8 +2196,8 @@ func _watchtower_near(pos: Vector3, radius: float = WATCHTOWER_MIN_SEP) -> bool:
 			var sp: Vector3 = s["pos"]
 			if sp.distance_to(pos) < radius:
 				return true
-	if ai.battle.has_method("get_nearby_buildings"):
-		for e in ai.battle.get_nearby_buildings(pos, radius):
+	if _ctx.battle_has_method("get_nearby_buildings"):
+		for e in _ctx.nearby_buildings(pos, radius):
 			if e is Building and e.health > 0 and int(e.entity_id) == OUTPOST_ID \
 					and _belongs(e):
 				if e.global_position.distance_to(pos) < radius:
@@ -2259,8 +2264,8 @@ func _watchtower_visible_gain(pos: Vector3, anchor: Vector3, mode: String) -> fl
 		return 0.0
 	var vision: float = float(cfg.get("vision_range", 25.0))
 	var mask: PackedByteArray = PackedByteArray()
-	if ai.battle.has_method("get_team_visible_mask"):
-		mask = ai.battle.get_team_visible_mask(ai.my_team)
+	if _ctx.battle_has_method("get_team_visible_mask"):
+		mask = _ctx.visible_mask(_ctx.my_team())
 	var ms: int = RTSConfig.MAP_SIZE
 	var center: Vector2i = _ctx.world_to_grid(pos)
 	var planned: Array = _watchtower_centers()
@@ -2302,7 +2307,7 @@ func _score_watchtower_candidate(pos: Vector3, anchor: Vector3, mode: String) ->
 	elif mode == "chain":
 		score -= dist * 0.05
 	# 纯视野建筑没有自卫能力，明显暴露在敌军面前的位置直接降权。
-	for e in ai._visible_enemies:
+	for e in _ctx.visible_enemies():
 		if not is_instance_valid(e) or e.health <= 0:
 			continue
 		if not (e is Army or e is Building):
@@ -2456,7 +2461,7 @@ func find_watchtower_build_position(castle) -> Vector3:
 
 func _resource_watchtower_count() -> int:
 	var count: int = 0
-	for e in ai.battle.entities.get_children():
+	for e in _ctx.entities_children():
 		if not (e is Building) or e.health <= 0:
 			continue
 		if int(e.entity_id) != OUTPOST_ID or not _belongs(e):
@@ -2481,7 +2486,7 @@ func _ring_blocked_base() -> Dictionary:
 		for gz in range(sz):
 			if _cell_blocks_land(gx, gz):
 				blocked[Vector2i(gx, gz)] = true
-	for e in ai.battle.entities.get_children():
+	for e in _ctx.entities_children():
 		if not (e is GameEntity) or e.health <= 0:
 			continue
 		if not (e is Building or e is WorldResource):
@@ -2859,13 +2864,12 @@ func _build_defense_step() -> void:
 			break
 		# 没有空闲农民时不要把队列项当“失败”消耗掉，否则第一圈几十面墙
 		# 会在农民还走在路上时就被全部移出队列，最后只立起三四面墙。
-		if ai._worker_director != null:
-			if not ai._worker_director.has_available_builder(b_pos, false, 60.0):
-				break
+		if not _ctx.has_available_builder(b_pos):
+			break
 		else:
-			var idle_builder = ai.battle.find_nearest_idle_builder(
-					ai.my_team, ai.my_peer_id, b_pos, 60.0) \
-					if ai.battle.has_method("find_nearest_idle_builder") else null
+			var idle_builder = _ctx.nearest_idle_builder(
+					_ctx.my_team(), _ctx.my_peer_id(), b_pos, 60.0) \
+					if _ctx.battle_has_method("find_nearest_idle_builder") else null
 			if idle_builder == null:
 				break
 		# 敌人临时站在山口、或瞭望塔链还没把视野铺到时，不要把这一个队列项
@@ -2909,21 +2913,21 @@ func _queue_has(b_id: int, pos: Vector3) -> bool:
 
 func _pos_has_building(b_id: int, pos: Vector3) -> bool:
 	# 用战斗管理器的建筑空间网格只查附近建筑，别再为每个墙位扫全图实体。
-	if ai.battle.has_method("get_nearby_buildings"):
-		for e in ai.battle.get_nearby_buildings(pos, 1.2):
+	if _ctx.battle_has_method("get_nearby_buildings"):
+		for e in _ctx.nearby_buildings(pos, 1.2):
 			if e is Building and e.health > 0 and int(e.entity_id) == b_id \
 					and _belongs(e):
 				if e.global_position.distance_to(pos) < 1.2:
 					return true
 		return false
-	if ai.battle.has_method("get_nearby_entities"):
+	if _ctx.battle_has_method("get_nearby_entities"):
 		for e in _ctx.nearby_entities(pos, 1.2):
 			if e is Building and e.health > 0 and int(e.entity_id) == b_id \
 					and _belongs(e):
 				if e.global_position.distance_to(pos) < 1.2:
 					return true
 		return false
-	for e in ai.battle.entities.get_children():
+	for e in _ctx.entities_children():
 		if e is Building and e.health > 0 and int(e.entity_id) == b_id and _belongs(e):
 			if e.global_position.distance_to(pos) < 1.2:
 				return true
@@ -2990,7 +2994,7 @@ func _maybe_reactive_tower(castle) -> void:
 			return
 
 func _own_tower_near(pos: Vector3, radius: float) -> bool:
-	for e in ai.battle.entities.get_children():
+	for e in _ctx.entities_children():
 		if e is Building and e.health > 0 and int(e.entity_id) in TOWER_IDS and _belongs(e):
 			if e.global_position.distance_to(pos) < radius:
 				return true
@@ -3004,7 +3008,7 @@ func _manage_defense_upgrades(castle, delta: float) -> void:
 	if threat_level == 0 and now < 240.0:
 		return
 	var towers: Array = []
-	for e in ai.battle.entities.get_children():
+	for e in _ctx.entities_children():
 		if not (e is Building) or e.health <= 0:
 			continue
 		if not _belongs(e):
@@ -3030,7 +3034,7 @@ func _manage_defense_upgrades(castle, delta: float) -> void:
 			continue
 		if not _can_spend(cost, reserve):
 			continue
-		if t.perform_upgrade(ai.battle):
+		if t.perform_upgrade(_ctx.battle_ref()):
 			return
 
 # ═══════════════════════════════════════════════════════════════
@@ -3041,7 +3045,7 @@ func _detect_building_attacks() -> void:
 	var now: float = float(_ctx.game_time())
 	var seen: Dictionary = {}
 	var alerts: Array = []
-	for e in ai.battle.entities.get_children():
+	for e in _ctx.entities_children():
 		if not (e is Building) or e.health <= 0:
 			continue
 		if int(e.team) == RTSConfig.Team.NEUTRAL:
@@ -3169,7 +3173,7 @@ func _skip_near_castle_active(unit, castle) -> bool:
 # 城墙优先保留远程兵：守墙逻辑每 30 秒才巡检一次，守军快速补员
 # 不能在这之前把刚生产出来的远程兵全部收进主城，否则城墙会长期空着。
 func _has_valid_walls() -> bool:
-	for b in ai.battle.entities.get_children():
+	for b in _ctx.entities_children():
 		if b is Building and int(b.entity_id) == 27 and b.health > 0 and b.build_timer <= 0.0 \
 				and _belongs(b):
 			return true
@@ -3404,7 +3408,7 @@ func _assign_guard(unit, rally: Vector3) -> void:
 	var is_new: bool = not unit.has_meta("ai_home_guard")
 	_home_guard_ids[uid] = true
 	unit.set_meta("ai_home_guard", true)
-	_cmd_port.claim(unit, ai.UnitRole.HOME_GUARD, 60.0)
+	_cmd_port.claim(unit, ROLE_HOME_GUARD, 60.0)
 	# 驻军点只为“新守军/换了集结点”更新，避免每 0.8 秒重建一次旗帜标记
 	if is_new or unit.garrison_point.distance_to(rally) > 1.0:
 		unit.set_garrison(rally)
@@ -3439,7 +3443,7 @@ func _clear_special_role(unit) -> void:
 
 func _land_combat_units() -> Array:
 	var out: Array = []
-	for e in ai.battle.entities.get_children():
+	for e in _ctx.entities_children():
 		if not (e is Army) or e.health <= 0:
 			continue
 		if not _belongs(e):
@@ -3495,7 +3499,7 @@ func _manage_resource_security(castle, delta: float) -> void:
 
 func _refresh_resource_zones(castle) -> void:
 	var clusters: Array = []
-	for w in ai.battle.entities.get_children():
+	for w in _ctx.entities_children():
 		if not (w is Army) or w.health <= 0 or not _belongs(w):
 			continue
 		if int(w.entity_id) != 10:
@@ -3545,7 +3549,7 @@ func _refresh_resource_zones(castle) -> void:
 func _defend_resources(castle) -> void:
 	var now: float = float(_ctx.game_time())
 	var workers: Array = []
-	for w in ai.battle.entities.get_children():
+	for w in _ctx.entities_children():
 		if w is Army and w.health > 0 and int(w.entity_id) == 10 and _belongs(w):
 			workers.append(w)
 
@@ -3553,7 +3557,7 @@ func _defend_resources(castle) -> void:
 	#    不再把所有农民都召回主城；防守状态下资源采集也尽量保持。
 	for w in workers:
 		# 第 4 阶段起农民逃跑由 WorkerDirector 接管，避免两套逻辑每帧互相推目标。
-		if ai._worker_director != null:
+		if true:
 			continue
 		var danger = _nearest_enemy_combat(w.global_position, WORKER_FLEE_RADIUS)
 		if danger:
@@ -3632,7 +3636,7 @@ func _defend_resources(castle) -> void:
 				var u = item["u"]
 				_resource_guard_ids[u.get_instance_id()] = true
 				u.set_meta("ai_resource_guard", true)
-				_cmd_port.claim(u, ai.UnitRole.RESOURCE_GUARD, 45.0)
+				_cmd_port.claim(u, ROLE_RESOURCE_GUARD, 45.0)
 				u.set_garrison(hot_zone["center"])
 				if u.global_position.distance_to(hot_zone["center"]) > 5.0:
 					u.move_to(hot_zone["center"])
@@ -3662,7 +3666,7 @@ func _prune_resource_guards() -> void:
 			_resource_guard_ids.erase(uid)
 
 func _own_outpost_near(pos: Vector3, radius: float) -> bool:
-	for e in ai.battle.entities.get_children():
+	for e in _ctx.entities_children():
 		if e is Building and e.health > 0 and int(e.entity_id) == OUTPOST_ID and _belongs(e):
 			if e.global_position.distance_to(pos) < radius:
 				return true
@@ -3721,10 +3725,10 @@ func _is_valid_defense_ground(pos: Vector3, radius: float = 1.0,
 		return false
 	# 山口/山脊边缘常见“中心格是平地、脚下实际是斜坡”的位置；
 	# 建造校验 _can_place_ai_building 会检查平整度，规划阶段先过滤掉，避免反复失败。
-	if require_flat and ai.battle.has_method("_is_terrain_flat"):
-		if not ai.battle._is_terrain_flat(pos, maxf(0.5, radius * 0.5)):
+	if require_flat and _ctx.battle_has_method("_is_terrain_flat"):
+		if not _ctx.is_terrain_flat(pos, maxf(0.5, radius * 0.5)):
 			return false
-	for e in ai.battle.entities.get_children():
+	for e in _ctx.entities_children():
 		if not (e is GameEntity) or e.health <= 0:
 			continue
 		var d: float = e.global_position.distance_to(pos)
@@ -3744,7 +3748,7 @@ func _is_valid_defense_ground(pos: Vector3, radius: float = 1.0,
 			if d < radius + float(e.body_radius) + 0.5:
 				return false
 	if not allow_under_fire:
-		for e in ai._visible_enemies:
+		for e in _ctx.visible_enemies():
 			if not is_instance_valid(e) or not (e is Army or e is Building) or e.health <= 0:
 				continue
 			if not _is_enemy_ent(e):
@@ -3761,7 +3765,7 @@ func _has_friendly_vision(pos: Vector3) -> bool:
 	var castle = _castle()
 	if castle != null and castle.global_position.distance_to(pos) <= 18.0:
 		return true
-	for e in ai.battle.entities.get_children():
+	for e in _ctx.entities_children():
 		if e is GameEntity and e.health > 0 and _belongs(e):
 			if e.global_position.distance_to(pos) <= float(e.vision_range):
 				return true
@@ -3772,13 +3776,13 @@ func _has_friendly_vision(pos: Vector3) -> bool:
 func _defense_pos_visible(pos: Vector3) -> bool:
 	var world_pos := Vector3(pos.x, 0.0, pos.z)
 	# 只查附近实体；己方最远视野 25 米，不需要为每个墙位遍历全图。
-	if ai.battle.has_method("get_nearby_entities"):
+	if _ctx.battle_has_method("get_nearby_entities"):
 		for e in _ctx.nearby_entities(world_pos, DEFENSE_VISION_QUERY_RADIUS):
 			if e is GameEntity and e.health > 0 and _belongs(e):
 				if e.global_position.distance_to(world_pos) <= float(e.vision_range):
 					return true
 		return false
-	for e in ai.battle.entities.get_children():
+	for e in _ctx.entities_children():
 		if e is GameEntity and e.health > 0 and _belongs(e):
 			if e.global_position.distance_to(world_pos) <= float(e.vision_range):
 				return true
@@ -3814,7 +3818,7 @@ func _defense_reserve() -> float:
 func _nearest_enemy_combat(pos: Vector3, radius: float):
 	var best = null
 	var best_d: float = radius
-	for e in ai._visible_enemies:
+	for e in _ctx.visible_enemies():
 		if not _is_combat_enemy(e):
 			continue
 		var d: float = e.global_position.distance_to(pos)
@@ -3825,7 +3829,7 @@ func _nearest_enemy_combat(pos: Vector3, radius: float):
 
 func _count_enemy_combat_near(pos: Vector3, radius: float) -> int:
 	var n: int = 0
-	for e in ai._visible_enemies:
+	for e in _ctx.visible_enemies():
 		if not _is_combat_enemy(e):
 			continue
 		if e.global_position.distance_to(pos) <= radius:
@@ -3870,5 +3874,5 @@ func _afford_bld(id: int) -> bool:
 func _afford_upg(id: int) -> bool:
 	return _ctx.can_afford_upgrade(id)
 func _now() -> float:
-	return _ctx.game_time() if _ctx != null else float(ai.battle.game_time)
+	return _ctx.game_time() if _ctx != null else float(_ctx.game_time())
 

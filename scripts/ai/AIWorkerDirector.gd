@@ -415,7 +415,7 @@ func _update_flee() -> void:
 			_flee_resume.erase(uid)
 
 func _nearest_enemy(pos: Vector3, radius: float):
-	if ai == null or ai.battle == null or not ai.battle.has_method("get_nearby_enemies"):
+	if ai == null or ai.battle == null or not _ctx.battle_has_method("get_nearby_enemies"):
 		return null
 	var w = null
 	for e in _ctx.nearby_enemies(pos, radius, ai.my_team, ai.my_peer_id, true):
@@ -662,7 +662,7 @@ func _phase_v() -> int:
 func _threat_level() -> int:
 	return _ctx.defense_threat_level()
 func _now() -> float:
-	return _ctx.game_time() if _ctx != null else float(ai.battle.game_time)
+	return _ctx.game_time() if _ctx != null else float(_ctx.game_time())
 
 func set_ports(p) -> void:
 	_ports = p

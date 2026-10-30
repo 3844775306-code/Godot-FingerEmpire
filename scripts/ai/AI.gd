@@ -1943,7 +1943,9 @@ func _ready():
 	# 才能覆盖网页版移动端。
 	if not InputSource.use_mobile_ui():
 		_create_debug_panel()
-	_defense = AIDefenseScript.new(self)
+	# A6 收尾：上下文先于模块创建，模块可在构造时即拿到只读视图。
+	_context = AIContextScript.new()
+	_defense = AIDefenseScript.new(self, _context)
 	_water_crossing = AIWaterCrossingScript.new(self)
 	_ladder_siege = AILadderSiegeScript.new(self)
 	_worker_director = AIWorkerDirectorScript.new()
@@ -1964,7 +1966,8 @@ func _ready():
 	_pipeline.register(DECIDE_STAGE_NAMES)
 	if _pipeline.size() != DECIDE_LAST_STEP + 1:
 		push_error("[PIPELINE] 阶段数与 DECIDE_LAST_STEP 不一致: %d vs %d" % [_pipeline.size(), DECIDE_LAST_STEP + 1])
-	_context = AIContextScript.new()
+	if _context == null:
+		_context = AIContextScript.new()
 	# A3：执行层唯一写出口。
 	_ports = AIPortsScript.new()
 	_ports.bind(self)
