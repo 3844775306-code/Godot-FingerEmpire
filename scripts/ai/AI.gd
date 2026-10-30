@@ -775,6 +775,23 @@ func count_field_military(peer: int) -> int:
 		total += 1
 	return total
 
+# 全部本方陆军战斗单位（含守军/守墙/骚扰/驻军/待命），只排除农民、侦察兵和海军。
+# 主攻门槛必须用这个口径：旧的 count_field_military 扣掉所有角色，守军一多野战兵就变少，
+# 于是越强越不敢打，和守军抓人形成自锁（详见 docs/AI_ARMY_DISPATCH_DESIGN.md）。
+func count_land_army() -> int:
+	var n: int = 0
+	for e in _cached_armies():
+		if not is_instance_valid(e) or e.health <= 0:
+			continue
+		if not entity_belongs_to_me(e):
+			continue
+		if int(e.entity_id) == 10 or int(e.attack) <= 0:
+			continue
+		if _is_scout_unit(e) or bool(e.water_capable):
+			continue
+		n += 1
+	return n
+
 func count_military_by_team(tm: int) -> int:
 	var total = 0
 	for entity in _cached_armies():
@@ -3044,6 +3061,9 @@ func attack_move(target_position: Vector3, max_units: int):
 				continue
 			if _is_local_defense_active(entity):
 				continue
+			# 账本里已有角色（守军/守墙/驻军/骚扰/待命）的单位不归主攻调度。
+			if _roles.has(entity.get_instance_id()):
+				continue
 			# 主攻只调度真正空闲的野战部队。正在交战/移动/攻击移动/排队命令的单位
 			# 如果被重新下发，会清空 current_target 和命令队列，表现为“打两下就转身”。
 			if entity.current_target != null or entity.current_order != "" or entity.is_attack_moving:
@@ -3057,6 +3077,7 @@ func attack_move(target_position: Vector3, max_units: int):
 			if boarded != null and int(boarded) != -1:
 				continue
 			entity.attack_move_to(target_position)
+			_director_claim(entity, UnitRole.FIELD, 30.0)
 			sent += 1
 
 func an_attack() -> bool:
@@ -3530,6 +3551,7 @@ func execute_harass():
 		if not is_instance_valid(u) or u.health <= 0:
 			continue
 		u.set_meta("ai_harass", true)
+		_director_claim(u, UnitRole.HARASS, 32.0)
 		u.attack_move_to(target.global_position)
 		_harass_ids[u.get_instance_id()] = true
 	_harass_until = battle.game_time + 32.0
@@ -5107,7 +5129,7 @@ func _process_line_4():
 	# 主攻门槛不再固定 12：六 AI 混战时很多 AI 的野战兵长期只有 4~10 个
 	# （实测 t=420 时 6 个 AI 里 4 个 <12），固定门槛会让它们整局都不出门，
 	# 家里一堆兵站着待命。开局 180 秒后、主城没有被真打，6 个野战兵就允许出门。
-	var field_now: int = count_field_military(my_key)
+	var field_now: int = count_land_army()
 	var attack_threshold: int = 12
 	if battle.game_time >= 180.0 and not _base_under_attack():
 		attack_threshold = 6
@@ -5210,8 +5232,9 @@ func _rally_land_army_to_castle():
 		if entity.entity_id in [5, 6, 10, 14, 43, 44, 45, 46, 47, 48, 49, 50, 51]: continue
 		if _is_scout_unit(entity): continue
 		if entity.water_capable: continue
-		# 已集合过的单位不再重复集合
-		if entity.has_meta("ai_rallied"): continue
+		# 账本里已有角色（集结/守军/守墙/驻军/骚扰）的单位不再重复集结。
+		# 以前用永久的 ai_rallied 标记，导致首波之后新生产的兵再也不会被集结。
+		if _roles.has(entity.get_instance_id()): continue
 		if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass") or entity.has_meta("ai_transporting") or entity.has_meta("ai_wall_guard"): continue
 		if _is_held_by_garrison(entity): continue
 		# 已登船单位由 AIWaterCrossing 管理，不再被集结点重新下令
@@ -5219,7 +5242,7 @@ func _rally_land_army_to_castle():
 		if boarded != null and int(boarded) != -1: continue
 		# Only rally idle units (刚生产出来的单位处于空闲状态)
 		if entity.current_order != "" or entity.current_target != null: continue
-		entity.set_meta("ai_rallied", true)
+		_director_claim(entity, UnitRole.STANDBY, 30.0)
 		entity.attack_move_to(rally_point)
 
 # ═══ Wall Defense Deployment ═══
