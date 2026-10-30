@@ -88,9 +88,10 @@ var _work_idle_watch: float = 0.0
 var _work_last_build_timer: float = -1.0
 const BUILD_SITE_IDLE_TIMEOUT: float = 6.0
 # 走向施工位超过这个时间还没到，就放弃施工
-const BUILD_APPROACH_GIVEUP: float = 10.0
+const BUILD_APPROACH_GIVEUP: float = 25.0
 var _work_approach_total: float = 0.0
 var _work_approach_best: float = -1.0
+var _work_slot_tries: int = 0
 var _deliver_total_time: float = 0.0
 # 连续交付失败的主城/仓库暂时不再选，避免一直往同一个不可达点跑
 var _delivery_failed_targets: Dictionary = {}
@@ -2887,6 +2888,17 @@ func _tick_building_action(delta: float, bm) -> void:
 				if need_repath:
 					_work_repath_timer = 0.6
 					_movement.set_move_target(slot, 0.25)
+				# 施工位被别的建筑/围墙围死时寻路会直接失败：立刻换下一个施工位，
+				# 不要干等 1.5 秒再重挑（否则十几秒内换不了几个位子，就被判“走不到”而离开工地）。
+				if _movement.move_path_failed and _movement.astar_path.is_empty():
+					_work_slot_tries += 1
+					if _work_slot_tries >= 4:
+						_finish_work()
+						return
+					var alt_slot: Vector3 = b.get_builder_slot_for(global_position, _work_slot + _work_slot_tries, self)
+					if alt_slot != Vector3.ZERO:
+						_work_slot_pos = alt_slot
+						_work_repath_timer = 0.0
 			# 进度监测：连续 1.5 秒离施工位没有明显缩短，说明旧路径被新建筑/
 			# 单位堵住，或施工位本身不可达。丢弃旧路径并重新挑一个施工位，
 			# 否则农民会一直顶着碰撞体停在半路。
