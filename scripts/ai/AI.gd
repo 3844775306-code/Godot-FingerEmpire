@@ -108,6 +108,9 @@ var nation = -1
 
 var _ai_income_timer: float = 10.0
 var _last_delta: float = 2.0
+# P3.0：自上一轮决策开始以来经过的真实时间（每帧累加，决策开始时取出并清零）。
+# _last_delta 只等于「本轮所在单帧的 delta」，按轮次递减的计时器会严重低估经过时间。
+var _elapsed_since_round: float = 0.0
 var _ai_res_snapshot: Dictionary = {}
 var _ai_res_income: Dictionary = {}
 var _ai_income_rate: Dictionary = {"gold":0,"wood":0,"stone":0,"food":0,"oil":0}
@@ -1922,6 +1925,8 @@ func _physics_process(delta):
 func _ai_simulation_tick(delta):
 	if GameSettings.deterministic_sim and battle != null and not battle.sim_ready:
 		return
+	# P3.0：真实轮间时间累积（两种时钟模式都累加，切换开关时无需改这里）。
+	_elapsed_since_round += delta
 	# Set think interval based on difficulty (once) + 错开各 AI 的计时器。
 	# 多 AI 同时开局时，timer/worker/naval 都为 0，会在同一帧集中做全实体扫描和寻路，
 	# 造成明显的周期性卡顿；按 peer/instance id 相位错开可把峰值摊到不同帧。
@@ -2295,7 +2300,12 @@ func decide(_delta):
 		_run_decide_step(step)
 
 func _begin_decide(interval: float, d: float) -> void:
-	_last_delta = d
+	# P3.0：默认沿用旧行为（单帧 delta）；开关打开后用真实轮间时间。
+	if USE_TRUE_ROUND_ELAPSED:
+		_last_delta = _elapsed_since_round
+		_elapsed_since_round = 0.0
+	else:
+		_last_delta = d
 	_decide_interval = interval
 	_decide_running = true
 	_decide_cursor = 0
@@ -6264,6 +6274,8 @@ func _get_tactic_name(tactic: int) -> String:
 # ═══ P2 世界模型（影子） ═══
 # 只读快照 + 与现有 count_* 对账；不改变任何决策。
 const SITUATION_CHECK_INTERVAL: float = 5.0
+# P3.0 开关：true=用真实轮间时间驱动 AIClock 与模块计时器，false=沿用旧的单帧 delta（保持现有行为）。
+const USE_TRUE_ROUND_ELAPSED: bool = false
 # 读取点切换开关：true=读快照，false=全量扫描。
 # 默认 false：AISituation 已通过影子对账（0 不一致），但切换后还没在无并发实例的环境跑过基线，
 # 先保持旧路径；verify 通过后再置 true。
@@ -6307,4 +6319,8 @@ func get_situation_summary() -> Dictionary:
 	d["usec_ema"] = _situation_usec_ema
 	d["checks"] = _situation_checks
 	d["mismatch_total"] = _situation_mismatch_total
+	# P3.0：暴露时钟量，便于验证「计时器间隔是否等于真实秒数」。
+	d["round_delta"] = _last_delta
+	d["elapsed_since_round"] = _elapsed_since_round
+	d["clock"] = _ai_clock.snapshot() if _ai_clock != null else {}
 	return d

@@ -455,3 +455,19 @@ AIClock.fast (4Hz)
 4. P3.3（1 天）——纯搬运，机械改动。
 
 **不建议**先做 P3.2：没有统一账本时，Director 只会变成一个新的"第五本账"。
+
+### 12.3.1 P3.0 已实现（开关默认关闭，2026-10-30 20:30）
+
+| 改动 | 位置 | 说明 |
+|---|---|---|
+| `_elapsed_since_round` | `AI.gd:113` | 每帧在 `_ai_simulation_tick` 累加真实时间 |
+| `USE_TRUE_ROUND_ELAPSED` | `AI.gd:6278` | 默认 false（行为与旧版完全一致） |
+| 取用点 | `_begin_decide` | true 时 `_last_delta = _elapsed_since_round` 并清零 |
+| 可观测 | `get_situation_summary()` | 新增 `round_delta`、`elapsed_since_round`、`clock`（各 key 的 next_in） |
+
+**为什么默认关闭**：打开后 `_last_delta` 从「单帧 delta」变成「轮间真实时间」（通常大 10~20 倍），所有按轮递减的计时器（`AIClock` 4 个 + `AIDefense` 内部 11 个 + `AIWorkerDirector` 2 个 + `AIWaterCrossing` 1 个）触发频率会同步上升，属于**行为 + 性能双重变化**，必须单独验证。
+
+**验证方法（环境干净时）**：
+1. 同种子 12 分钟跑两次（开关 false / true），对比 `summary.json` 的 front/idle/engage/land 与 p95 帧耗时；
+2. 看 `[SITUATION]` 日志的检查间隔：false 时明显大于 5 秒，true 时贴近 5 秒（游戏时间）；
+3. 若性能超标，把模块计时器先减半再打开，而不要直接回退整个开关。
