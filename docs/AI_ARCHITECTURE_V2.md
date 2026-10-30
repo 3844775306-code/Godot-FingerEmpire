@@ -334,3 +334,15 @@ AIClock.fast (4Hz)
 1. `Situation` 增加空间索引（近邻查询）与敌军可见性，供防御/骚扰使用；
 2. 把 `count_land_army` / `count_field_military` 等读取点切到快照（影子→接管）；
 3. 资源节点与建造点缓存进快照，减少 `find_valid_build_position` 的重复扫描。
+
+### 11.5 P2 能力补全：空间索引 / 资源索引 / 可见性（2026-10-30 20:35）
+
+| 能力 | 接口 | 实现要点 | 成本 |
+|---|---|---|---|
+| 敌军空间索引 | `enemies_within(pos, r)` / `nearest_enemy(pos, d)` / `enemies_within_count` | 8m 网格分桶，查询只遍历覆盖到的格子 | 每轮随 refresh 建索引，开销可忽略 |
+| 资源索引 | `resources_of_kind(id)` / `nearest_resource(pos, kinds, d)` | 按资源类型分组 + 网格；**只在低频轮重建**（资源点几百个且很少变化） | 低频轮才付，避免每轮 0.8ms |
+| 敌军可见性 | `visible_enemies` | 低频轮以本方主城（或首支部队）为观察者，调 `battle.is_target_visible_from()` | 0.37~0.53ms/次（5 秒一次） |
+
+**成本变化**：资源索引低频化后，单轮 refresh 从 0.8ms 降到 **0.25~0.40ms**；对账仍 **0 不一致**。
+
+**下一步（P2 收尾）**：把读取点切到快照——优先 `count_land_army()` / `count_field_military()` 与防御的"附近敌人"查询；切换后用 P0 基线对比扫描成本与 front/idle 指标。

@@ -6259,14 +6259,16 @@ const SITUATION_CHECK_INTERVAL: float = 5.0
 func _situation_shadow_tick() -> void:
 	if _situation == null or battle == null:
 		return
-	_situation.refresh(self)
-	var us: float = float(_situation.cost_usec)
-	_situation_usec_ema = us if _situation_usec_ema <= 0.0 else _situation_usec_ema * 0.9 + us * 0.1
 	# 用游戏时间判断间隔：_last_delta 只是本轮所在单帧的 delta，累加会严重低估经过时间。
 	var gt: float = float(battle.game_time)
 	if _situation_last_t < 0.0:
 		_situation_last_t = gt
-	if gt - _situation_last_t < SITUATION_CHECK_INTERVAL:
+	var is_check: bool = gt - _situation_last_t >= SITUATION_CHECK_INTERVAL
+	# 可见性判定较贵（每敌人一次视野检查），只在低频对账轮开启。
+	_situation.refresh(self, is_check, is_check)
+	var us: float = float(_situation.cost_usec)
+	_situation_usec_ema = us if _situation_usec_ema <= 0.0 else _situation_usec_ema * 0.9 + us * 0.1
+	if not is_check:
 		return
 	_situation_last_t = gt
 	_situation_checks += 1
@@ -6280,9 +6282,10 @@ func _situation_shadow_tick() -> void:
 			print("[SITUATION] MISMATCH t=%.0f land=%+d worker=%+d castle=%+d cost=%.2fms" % [
 				float(battle.game_time), land_gap, worker_gap, castle_gap, _situation_usec_ema / 1000.0])
 	elif _situation_checks <= 3 or _situation_checks % 20 == 0:
-		print("[SITUATION] ok t=%.0f land=%d worker=%d castle=%d cost=%.3fms" % [
+		print("[SITUATION] ok t=%.0f land=%d worker=%d castle=%d vis=%d cost=%.3fms vis_cost=%.3fms" % [
 			float(battle.game_time), int(_situation.own_land_count), int(_situation.own_worker_count),
-			_situation.count_building(20), _situation_usec_ema / 1000.0])
+			_situation.count_building(20), _situation.visible_enemies.size(),
+			_situation_usec_ema / 1000.0, float(_situation.visibility_usec) / 1000.0])
 
 func get_situation_summary() -> Dictionary:
 	if _situation == null:
