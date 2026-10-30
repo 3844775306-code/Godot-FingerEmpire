@@ -2379,7 +2379,6 @@ func _run_decide_step(step: int) -> void:
 		0:
 			if _ai_clock != null:
 				_ai_clock.advance(_last_delta)
-			_situation_shadow_tick()
 			if my_peer_id != -1 and battle.has_method("update_player_limits"):
 				battle.update_player_limits(my_peer_id)
 				battle.update_player_population(my_peer_id)
@@ -2450,6 +2449,9 @@ func _run_decide_step(step: int) -> void:
 			if _ai_clock != null and _ai_clock.due("retask"):
 				_retask_idle_front_units()
 		14:
+			# P2：快照放在轮末刷新，本轮 step 10 生产出来的单位本轮就能被统计到，
+			# 避免 count_land_army 读到「上一轮」的旧值导致派单滞后（实测待命比例偏高）。
+			_situation_shadow_tick()
 			if _water_crossing:
 				# 渡水模块按“决策轮次”推进，不是每帧推进。传入帧 delta 会让
 				# 船队集结/靠岸/搭桥的计时慢几十倍，看起来像 AI 永远不过河。
@@ -6290,7 +6292,7 @@ func _get_tactic_name(tactic: int) -> String:
 # 只读快照 + 与现有 count_* 对账；不改变任何决策。
 const SITUATION_CHECK_INTERVAL: float = 5.0
 # P3.0 开关：true=用真实轮间时间驱动 AIClock 与模块计时器，false=沿用旧的单帧 delta（保持现有行为）。
-const USE_TRUE_ROUND_ELAPSED: bool = false
+const USE_TRUE_ROUND_ELAPSED: bool = true
 # 读取点切换开关：true=读快照，false=全量扫描。
 # 默认 false：AISituation 已通过影子对账（0 不一致），但切换后还没在无并发实例的环境跑过基线，
 # 先保持旧路径；verify 通过后再置 true。
@@ -6342,8 +6344,8 @@ func _ledger_check() -> void:
 				diff += 1
 	if diff == 0:
 		if _ledger_checks <= 3 or _ledger_checks % 20 == 0:
-			print("[LEDGER] ok t=%.0f roles=%d rejected=%d expired=%d" % [
-				float(battle.game_time), _roles.size(), int(_ledger.rejected), int(_ledger.expired)])
+			print("[LEDGER] ok t=%.0f roles=%d ledger=%d rejected=%d expired=%d" % [
+				float(battle.game_time), _roles.size(), _ledger.size(), int(_ledger.rejected), int(_ledger.expired)])
 	else:
 		_ledger_mismatch_total += 1
 		print("[LEDGER] MISMATCH t=%.0f roles=%d ledger=%d diff=%d" % [
