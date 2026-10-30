@@ -88,9 +88,12 @@ var _work_idle_watch: float = 0.0
 var _work_last_build_timer: float = -1.0
 const BUILD_SITE_IDLE_TIMEOUT: float = 6.0
 # 走向施工位超过这个时间还没到，就放弃施工
-const BUILD_APPROACH_GIVEUP: float = 25.0
+const BUILD_APPROACH_GIVEUP: float = 60.0
+# 连续这么久没有更靠近施工位，才算真的卡住（绕城墙走路时距离会反复变化，不能只按总时长）
+const BUILD_APPROACH_STALL_LIMIT: float = 8.0
 var _work_approach_total: float = 0.0
 var _work_approach_best: float = -1.0
+var _work_approach_stall: float = 0.0
 var _work_slot_tries: int = 0
 # 已经走过但走不进去的施工位（换位时回避，避免重挑回同一个点）
 var _work_slot_avoid: Array = []
@@ -959,6 +962,7 @@ func work_on_building(b) -> bool:
 	_work_stuck_time = 0.0
 	_work_approach_total = 0.0
 	_work_approach_best = -1.0
+	_work_approach_stall = 0.0
 	_set_order(UnitState.BUILDING)
 	_movement.set_move_target(_work_slot_pos, 0.25)
 	return true
@@ -2881,9 +2885,15 @@ func _tick_building_action(delta: float, bm) -> void:
 			# 走了很久还是到不了施工位（施工位被围死/隔水/在敌墙后）：放弃这次施工，
 			# 回去采集，别一直原地顶着（实测这类农民会永久静止、AI 又因为施工锁无法改派）。
 			_work_approach_total += delta
-			if _work_approach_best < 0.0 or dist < _work_approach_best:
+			if _work_approach_best < 0.0 or dist < _work_approach_best - 0.3:
+				# 还在缩短距离（哪怕在绕城墙/绕建筑）就不算卡住，必须继续走
 				_work_approach_best = dist
-			if _work_approach_total > BUILD_APPROACH_GIVEUP:
+				_work_approach_stall = 0.0
+			else:
+				_work_approach_stall += delta
+			# 真正卡住（连续 8 秒没有更靠近）才放弃；另有 60 秒硬上限兜底
+			if _work_approach_stall > BUILD_APPROACH_STALL_LIMIT \
+					or _work_approach_total > BUILD_APPROACH_GIVEUP:
 				_finish_work()
 				return
 			_work_repath_timer -= delta
