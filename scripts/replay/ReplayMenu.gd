@@ -1,6 +1,8 @@
 extends Control
 
 const ReplayStoreScript = preload("res://scripts/replay/ReplayStore.gd")
+const CommandReplayScript = preload("res://scripts/replay/CommandReplay.gd")
+const MapPresetsScript = preload("res://scripts/map/MapPresets.gd")
 
 var _list_box: VBoxContainer = null
 var _empty_label: Label = null
@@ -78,9 +80,44 @@ func _populate() -> void:
 	for child in _list_box.get_children():
 		child.queue_free()
 	var replays := ReplayStoreScript.list_replays()
+	for cmd_item in _list_command_replays():
+		replays.append(cmd_item)
+	replays.sort_custom(func(a, b): return int(a.get("mtime", 0)) > int(b.get("mtime", 0)))
 	_empty_label.visible = replays.is_empty()
 	for item in replays:
 		_list_box.add_child(_make_row(item))
+
+func _list_command_replays() -> Array:
+	var out: Array = []
+	var dir := DirAccess.open(ReplayStoreScript.DEFAULT_DIR)
+	if dir == null:
+		return out
+	for file in dir.get_files():
+		if not file.ends_with(".cmdr"):
+			continue
+		var path: String = ReplayStoreScript.DEFAULT_DIR.path_join(file)
+		var raw := CommandReplayScript.load_file(path)
+		if raw.is_empty():
+			continue
+		var header: Dictionary = raw.get("header", {})
+		var mtime := FileAccess.get_modified_time(path)
+		var fsize := 0
+		var f := FileAccess.open(path, FileAccess.READ)
+		if f != null:
+			fsize = f.get_length()
+			f.close()
+		out.append({
+			"path": path,
+			"file": file,
+			"mtime": mtime,
+			"date": ReplayStoreScript.format_datetime(mtime),
+			"mode": "command",
+			"map_name": String(MapPresetsScript.get_info(String(header.get("map_id", "classic")))["name"]),
+			"duration": float(header.get("duration", 0.0)),
+			"size": fsize,
+			"header": header,
+		})
+	return out
 
 func _make_row(item: Dictionary) -> Control:
 	var panel := PanelContainer.new()
@@ -94,7 +131,7 @@ func _make_row(item: Dictionary) -> Control:
 	var label := Label.new()
 	label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	var mode := "联机" if String(item.get("mode", "")) == "online" else "单机"
+	var mode := "指令" if String(item.get("mode", "")) == "command" else ("联机" if String(item.get("mode", "")) == "online" else "单机")
 	label.text = "%s  ·  %s  ·  %s  ·  %s  ·  %s" % [
 		String(item.get("date", "")), mode, String(item.get("map_name", "未知地图")),
 		ReplayStoreScript.format_duration(float(item.get("duration", 0.0))),
@@ -134,13 +171,48 @@ func _on_play(path: String) -> void:
 	if path == "" or not FileAccess.file_exists(path):
 		_populate()
 		return
+	if path.ends_with(".cmdr"):
+		_play_command(path)
+		return
 	ReplayStoreScript.pending_path = path
 	get_tree().change_scene_to_file("res://scenes/replay_player.tscn")
+
+func _play_command(path: String) -> void:
+	var raw := CommandReplayScript.load_file(path)
+	if raw.is_empty():
+		_populate()
+		return
+	var h: Dictionary = raw.get("header", {})
+	GameSettings.replay_mode = "command"
+	GameSettings.command_replay = true
+	GameSettings.command_replay_file = path
+	GameSettings.deterministic_sim = true
+	GameSettings.sim_seed = int(h.get("sim_seed", 0))
+	GameSettings.map_seed = int(h.get("map_seed", 0))
+	GameSettings.map_id = String(h.get("map_id", "classic"))
+	GameSettings.player_nation = int(h.get("player_nation", 0))
+	GameSettings.enemy_nation = int(h.get("enemy_nation", 1))
+	GameSettings.ai_mode = int(h.get("ai_mode", 1))
+	GameSettings.ai_difficulty = int(h.get("ai_difficulty", 0))
+	GameSettings.blue_ai_difficulty = int(h.get("blue_ai_difficulty", 0))
+	GameSettings.red_ai_difficulty = int(h.get("red_ai_difficulty", 0))
+	GameSettings.is_ffa = bool(h.get("is_ffa", false))
+	GameSettings.ffa_nation_count = int(h.get("ffa_nation_count", 3))
+	GameSettings.is_single_2v2 = bool(h.get("is_single_2v2", false))
+	GameSettings.progression_mode = int(h.get("progression_mode", 0))
+	GameSettings.fast_mode = bool(h.get("fast_mode", false))
+	GameSettings.campaign_mode = false
+	GameSettings.tutorial_mode = false
+	GameSettings.training_mode = false
+	get_tree().change_scene_to_file("res://scenes/rts_battle.tscn")
 
 func _on_delete(path: String) -> void:
 	if path == "":
 		return
-	ReplayStoreScript.delete_file(path)
+	if path.ends_with(".cmdr"):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(path))
+	else:
+		ReplayStoreScript.delete_file(path)
 	_populate()
 
 func _on_back() -> void:

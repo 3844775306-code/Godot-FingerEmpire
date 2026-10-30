@@ -4452,6 +4452,14 @@ func _is_valid_command_target(target) -> bool:
 		return false
 	return true
 
+func replay_queue_command(cmd: Dictionary):
+	var bm = _get_bm()
+	if bm != null and bm.has_method("_begin_player_command"):
+		bm._begin_player_command()
+	_queue_command(cmd)
+	if bm != null and bm.has_method("_end_player_command"):
+		bm._end_player_command()
+
 func _queue_command(cmd: Dictionary):
 	if cmd.has("target") and not _is_valid_command_target(cmd["target"]):
 		return
@@ -4459,6 +4467,9 @@ func _queue_command(cmd: Dictionary):
 	# 玩家主动下达的移动/采集/攻击命令仍然立即生效，由 battle 的玩家命令上下文放行。
 	if _work_command_locked():
 		return
+	var _cmd_bm = _get_bm()
+	if _cmd_bm != null and _cmd_bm.has_method("record_player_army_command"):
+		_cmd_bm.record_player_army_command(self, cmd)
 	cmd["is_loop"] = false
 	var q = _should_queue()
 	if q:
@@ -5248,6 +5259,9 @@ func _on_garrison_building_died(official_id: int):
 func stop_movement():
 	if _work_command_locked():
 		return
+	var _stop_bm = _get_bm()
+	if _stop_bm != null and _stop_bm.has_method("record_player_action"):
+		_stop_bm.record_player_action("stop", {"uid": int(get_meta("_sim_uid", -1))})
 	_set_order(UnitState.IDLE)
 	current_target = null
 	attack_move_target = Vector3.ZERO

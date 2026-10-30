@@ -88,6 +88,8 @@ var sim_seed: int = 0
 var command_replay: bool = false
 # 指令录像正在录制：强制固定步长/固定随机源。
 var deterministic_sim: bool = false
+# 指令回放文件路径（播放时由回放列表设置）。
+var command_replay_file: String = ""
 
 # ==================== 战报接收筛选 ====================
 # 战报类型。建造 / 升级 / 生产 / 科研需要按国家过滤，

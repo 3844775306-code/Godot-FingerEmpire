@@ -9,6 +9,7 @@ var diff_select: OptionButton
 var mode_select: OptionButton
 var fast_check: CheckBox
 var research_check: CheckBox
+var replay_check: CheckBox
 var _map_button: Button
 var _nation_detail: Label
 var _mode_desc: Label
@@ -269,6 +270,20 @@ func _build_desktop_ui() -> void:
 	research_check.toggled.connect(_on_research_toggled)
 	map_vb.add_child(research_check)
 
+	# 录像方式：默认快照录像；勾选后使用严格指令回放（固定种子+固定步长，文件更小）。
+	replay_check = CheckBox.new()
+	replay_check.name = "ReplayModeCheck"
+	replay_check.text = "指令回放录像（严格确定性 · 文件更小）"
+	replay_check.custom_minimum_size = Vector2(0, 38)
+	replay_check.add_theme_font_size_override("font_size", 18)
+	replay_check.add_theme_color_override("font_color", UITheme.PARCHMENT)
+	replay_check.add_theme_color_override("font_hover_color", UITheme.GOLD)
+	replay_check.add_theme_color_override("icon_normal_color", UITheme.GOLD)
+	replay_check.tooltip_text = "不勾选：按快照录像，兼容现有回放；勾选：只记录你的操作与随机种子，回放时重新模拟。"
+	replay_check.button_pressed = GameSettings.replay_mode == "command"
+	replay_check.toggled.connect(func(on): GameSettings.replay_mode = "command" if on else "snapshot"; _update_summary())
+	map_vb.add_child(replay_check)
+
 	# 右侧：摘要 + 操作
 	var right := VBoxContainer.new()
 	right.size_flags_horizontal = Control.SIZE_EXPAND_FILL
@@ -480,8 +495,9 @@ func _update_summary() -> void:
 	var map_name := String(MapPresets.get_info(GameSettings.map_id)["name"])
 	var progression := "科研 · 四时代科技树" if GameSettings.is_research_mode() else "经典 · 升级解锁"
 	var pace := "快速" if (fast_check != null and fast_check.button_pressed) else "标准"
-	_summary.text = "文明\n%s\n\n难度\n%s\n\n模式\n%s\n\n地形\n%s\n\n发展\n%s\n\n节奏\n%s" % [
-		nation_name, diff_name, mode_name, map_name, progression, pace
+	var replay := "指令回放" if (replay_check != null and replay_check.button_pressed) else "快照录像"
+	_summary.text = "文明\n%s\n\n难度\n%s\n\n模式\n%s\n\n地形\n%s\n\n发展\n%s\n\n节奏\n%s\n\n录像\n%s" % [
+		nation_name, diff_name, mode_name, map_name, progression, pace, replay
 	]
 
 func _start_battle() -> void:
@@ -504,6 +520,12 @@ func _start_battle() -> void:
 		GameSettings.ai_mode = mode_idx + 1
 	GameSettings.fast_mode = fast_check.button_pressed if fast_check != null else false
 	GameSettings.progression_mode = GameSettings.ProgressionMode.RESEARCH if (research_check != null and research_check.button_pressed) else GameSettings.ProgressionMode.CLASSIC
+	GameSettings.replay_mode = "command" if (replay_check != null and replay_check.button_pressed) else "snapshot"
+	GameSettings.command_replay = false
+	GameSettings.command_replay_file = ""
+	GameSettings.deterministic_sim = false
+	GameSettings.sim_seed = 0
+	GameSettings.map_seed = 0
 	LoadingScreen.goto_scene("res://scenes/rts_battle.tscn")
 
 func _on_back_pressed() -> void:
@@ -637,6 +659,15 @@ func _build_mobile_ui() -> void:
 	research_check.button_pressed = GameSettings.is_research_mode()
 	research_check.toggled.connect(_on_research_toggled)
 	vb.add_child(research_check)
+
+	replay_check = CheckBox.new()
+	replay_check.text = "指令回放录像（严格确定性）"
+	replay_check.custom_minimum_size = Vector2(0, UILayout.dp(32.0))
+	replay_check.add_theme_font_size_override("font_size", UILayout.font_dp(9.0))
+	replay_check.add_theme_color_override("font_color", UITheme.PARCHMENT)
+	replay_check.button_pressed = GameSettings.replay_mode == "command"
+	replay_check.toggled.connect(func(on): GameSettings.replay_mode = "command" if on else "snapshot"; _update_summary())
+	vb.add_child(replay_check)
 
 	vb.add_child(_mobile_section("📋 出征准备"))
 	_summary = Label.new()

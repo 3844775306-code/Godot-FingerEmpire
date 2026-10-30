@@ -2,6 +2,10 @@ class_name RTSBattleManager
 extends Node3D
 const SimRandom = preload("res://scripts/core/SimRandom.gd")
 const SimTime = preload("res://scripts/core/SimTime.gd")
+const CommandReplayScript = preload("res://scripts/replay/CommandReplay.gd")
+const CommandRecorderScript = preload("res://scripts/replay/CommandRecorder.gd")
+const CommandPlayerScript = preload("res://scripts/replay/CommandPlayer.gd")
+const CommandReplayOverlayScript = preload("res://scripts/replay/CommandReplayOverlay.gd")
 const BattleStatsScript = preload("res://scripts/core/BattleStats.gd")
 # 强制走程序化攻击动作的兵种：模型即使自带 attack 动画幅度也太小，看不出来
 const PROC_ATTACK_IDS = [18, 16, 17, 59, 13, 39]
@@ -140,6 +144,11 @@ var game_over_label: Label = null
 var game_over: bool = false
 # 录像采集器：对局中按固定频率记录实体快照，结束时自动写入 user://replays
 var replay_recorder = null
+var command_recorder = null
+var command_player = null
+# 确定性模拟已执行的物理帧数，用于命令回放对齐。
+var _sim_tick: int = 0
+var _replay_active: bool = false
 var _spawn_counter: int = 0
 # 初始实体全部生成完毕后才允许推进确定性模拟/AI；否则同一次录像可能因为
 # 延迟初始化落在不同物理帧而出现 AI 决策时机差异。
@@ -1531,7 +1540,7 @@ func can_train_unit(team: int) -> bool:
 func _enter_tree():
 	# 父节点先于 Map/HUD 子节点进入场景树，必须在 Map._ready 生成地图前固定随机源。
 	SimTime.reset(Engine.get_physics_frames())
-	if GameSettings.command_replay:
+	if GameSettings.command_replay or GameSettings.replay_mode == "command":
 		GameSettings.deterministic_sim = true
 	if GameSettings.deterministic_sim:
 		if GameSettings.sim_seed == 0:
@@ -1628,6 +1637,25 @@ func _ready():
 	call_deferred("_start_replay_recording")
 
 func _start_replay_recording() -> void:
+	if GameSettings.command_replay:
+		var path := GameSettings.command_replay_file
+		if path != "":
+			command_player = CommandPlayerScript.load_from(path)
+			if command_player != null:
+				set_process_input(false)
+				set_process_unhandled_input(false)
+				var overlay = CommandReplayOverlayScript.new()
+				$UI.add_child(overlay)
+				overlay.setup(self)
+				print("[指令回放] 开始重演: ", path, "  命令 ", command_player.commands.size())
+		return
+	if GameSettings.replay_mode == "command":
+		if command_recorder == null:
+			command_recorder = CommandRecorderScript.new()
+			command_recorder.name = "CommandRecorder"
+			add_child(command_recorder)
+			command_recorder.start(self)
+		return
 	if replay_recorder != null:
 		return
 	if DisplayServer.get_name() == "headless":
@@ -2945,6 +2973,7 @@ func _init_entities_deferred():
 		cam.global_position = Vector3(player_castle.global_position.x, cam.global_position.y, player_castle.global_position.z)
 	if GameSettings.deterministic_sim:
 		SimTime.reset(Engine.get_physics_frames())
+		_sim_tick = 0
 	sim_ready = true
 
 # ==================== 实体生成 ====================
@@ -3526,6 +3555,122 @@ func _model_local_min_y(model: Node3D) -> float:
 		return 0.0
 	return merged.position.y
 
+# ==================== 指令回放录制/重演 ====================
+func get_sim_tick() -> int:
+	return _sim_tick
+
+func is_command_replaying() -> bool:
+	return _replay_active
+
+func get_entity_by_sim_uid(uid: int):
+	if uid < 0 or entities == null:
+		return null
+	_ensure_cache_fresh()
+	for e in _all_entities:
+		if e != null and is_instance_valid(e) and int(e.get_meta("_sim_uid", -1)) == uid:
+			return e
+	return null
+
+func _encode_sim_command(cmd: Dictionary) -> Dictionary:
+	var out: Dictionary = {}
+	for k in cmd:
+		var v = cmd[k]
+		if k == "target" and v is GameEntity:
+			out["target_uid"] = int(v.get_meta("_sim_uid", -1))
+		elif v is Vector3:
+			out[k] = [v.x, v.y, v.z]
+		elif v is int or v is float or v is bool or v is String:
+			out[k] = v
+		elif v == null:
+			out[k] = null
+	return out
+
+func _decode_sim_command(data: Dictionary) -> Dictionary:
+	var out: Dictionary = {}
+	for k in data:
+		var v = data[k]
+		if k == "target_uid":
+			var t = get_entity_by_sim_uid(int(v))
+			if t != null:
+				out["target"] = t
+		elif v is float or v is int:
+			out[k] = v
+		elif v is bool or v is String or v == null:
+			out[k] = v
+		elif v is Array and v.size() >= 3:
+			out[k] = Vector3(float(v[0]), float(v[1]), float(v[2]))
+	return out
+
+func record_player_army_command(army, cmd: Dictionary) -> void:
+	if command_recorder == null or _replay_active:
+		return
+	if not is_player_command_active():
+		return
+	if army == null or not is_instance_valid(army):
+		return
+	var uid: int = int(army.get_meta("_sim_uid", -1))
+	if uid < 0:
+		return
+	command_recorder.record(_sim_tick, "army", {"uid": uid, "cmd": _encode_sim_command(cmd)})
+
+func record_player_action(action: String, data: Dictionary) -> void:
+	if command_recorder == null or _replay_active:
+		return
+	if not is_player_command_active():
+		return
+	command_recorder.record(_sim_tick, action, data)
+
+func replay_army_command(army, data: Dictionary) -> void:
+	if army == null or not is_instance_valid(army):
+		return
+	_replay_active = true
+	army.replay_queue_command(_decode_sim_command(data))
+	_replay_active = false
+
+func replay_build(building_id: int, pos: Vector3) -> void:
+	if building_id < 0:
+		return
+	_replay_active = true
+	selected_building_id = building_id
+	_place_building_at(pos)
+	_replay_active = false
+
+func replay_produce(building_uid: int, unit_id: int) -> void:
+	var b = get_entity_by_sim_uid(building_uid)
+	if b is Building:
+		_replay_active = true
+		b.try_produce(unit_id)
+		_replay_active = false
+
+func replay_upgrade(building_uid: int) -> void:
+	var b = get_entity_by_sim_uid(building_uid)
+	if b is Building and b.has_method("start_upgrade"):
+		_replay_active = true
+		b.start_upgrade()
+		_replay_active = false
+
+func replay_demolish(building_uid: int) -> void:
+	var b = get_entity_by_sim_uid(building_uid)
+	if b is Building:
+		_replay_active = true
+		demolish_building(b)
+		_replay_active = false
+
+func replay_stop(unit_uid: int) -> void:
+	var e = get_entity_by_sim_uid(unit_uid)
+	if e is Army:
+		_replay_active = true
+		e.stop_movement()
+		_replay_active = false
+
+func replay_garrison(unit_uid: int, target_uid: int) -> void:
+	var e = get_entity_by_sim_uid(unit_uid)
+	var t = get_entity_by_sim_uid(target_uid)
+	if e is Army and t is Building:
+		_replay_active = true
+		e.command_garrison(t)
+		_replay_active = false
+
 func simulation_checksum() -> Dictionary:
 	var parts: Array = []
 	for e in entities.get_children():
@@ -3578,7 +3723,6 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 	entities.add_child(entity)
 	entity.set_meta("_sim_phase", _spawn_counter % 8)
 	entity.set_meta("_sim_uid", _spawn_counter)
-	if GameSettings.deterministic_sim and _spawn_counter >= 141:
 	_spawn_counter += 1
 	# 实体以任何方式离开场景树（死亡动画结束、销毁、场景退出）都立即标记缓存失效，
 	# 避免 AI/统计缓存里残留已释放实例，访问属性时报 "previously freed"。
@@ -3705,6 +3849,8 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 
 # ==================== 拆除建筑 ====================
 func demolish_building(building: Building) -> bool:
+	if command_player != null and not _replay_active:
+		return false
 	if not building or not is_instance_valid(building):
 		return false
 	if building.entity_id == 20:  # 不能拆除城堡
@@ -3726,7 +3872,8 @@ func demolish_building(building: Building) -> bool:
 				add_resource(res, refund, building.team)
 
 	
-
+	if command_recorder != null and not _replay_active:
+		command_recorder.record(_sim_tick, "demolish", {"uid": int(building.get_meta("_sim_uid", -1))})
 	building.die()
 	var _b_owner = building.owner_peer_id
 	if _b_owner != -1:
@@ -3822,6 +3969,8 @@ func _count_buildings_of_type(building_id: int, for_team: int) -> int:
 			cnt += 1
 	return cnt
 func _place_building_at(pos: Vector3):
+	if command_player != null and not _replay_active:
+		return
 	# 检查城堡等级解锁
 	if not is_building_unlocked(selected_building_id, player_owner_id, get_host_team()):
 		var unlock_tip := get_building_unlock_text(selected_building_id, player_owner_id, get_host_team())
@@ -3870,6 +4019,8 @@ func _place_building_at(pos: Vector3):
 		request_construction(b)
 		AudioManager.play_sfx("build_place")
 		notify_path_recalc(pos)
+		if command_recorder != null and not _replay_active:
+			command_recorder.record(_sim_tick, "build", {"id": selected_building_id, "pos": [pos.x, pos.y, pos.z]})
 	# 注意：如果仍需要支持鼠标（PC调试），可以同时保留原鼠标处理
 	# 但移动端主要用触摸，PC端继续用鼠标左键命令+右键选择
 
@@ -4072,6 +4223,8 @@ func is_special_move_target(target) -> bool:
 	return false
 
 func command_special_target(target) -> bool:
+	if command_player != null:
+		return false
 	_begin_player_command()
 	var handled: bool = _command_special_target_impl(target)
 	_end_player_command()
@@ -4326,6 +4479,8 @@ func _end_player_command() -> void:
 	_player_cmd_depth = maxi(0, _player_cmd_depth - 1)
 
 func _command_selected_units(screen_pos: Vector2, mode: String = ""):
+	if command_player != null:
+		return
 	_begin_player_command()
 	_command_selected_units_impl(screen_pos, mode)
 	_end_player_command()
@@ -5473,7 +5628,14 @@ func _process(delta):
 func _physics_process(delta):
 	if not GameSettings.deterministic_sim:
 		return
+	if not sim_ready:
+		return
+	if get_tree().paused:
+		return
+	if command_player != null:
+		command_player.tick(self)
 	_simulation_tick(delta)
+	_sim_tick += 1
 
 func _simulation_tick(delta):
 	if GameSettings.deterministic_sim and not sim_ready:
@@ -6289,6 +6451,8 @@ func garrison_nearest_for_selected():
 
 # 信息面板“进驻”按钮选中目标后调用：普通军队按名额预约，官员走 command_garrison。
 func garrison_selected_to(target) -> void:
+	if command_player != null:
+		return
 	if target == null or not is_instance_valid(target) or target.team != get_host_team():
 		_show_hud_alert("请选择己方箭塔/炮塔/城堡或攻城车", Color(1.0, 0.5, 0.3), get_host_team(), get_host_team())
 		return
@@ -6308,6 +6472,8 @@ func garrison_selected_to(target) -> void:
 		_show_hud_alert("没有可进驻的单位或名额已满", Color(1.0, 0.5, 0.3), get_host_team(), get_host_team())
 
 func global_attack():
+	if command_player != null:
+		return
 	var castle = get_enemy_castle_pos()
 	if castle == Vector3.ZERO: return
 	for e in selection.selected_entities:
@@ -6346,9 +6512,17 @@ func toggle_patrol_mode():
 	print("[RTS] patrol mode stub")
 
 func produce_unit(building: Building, unit_id: int):
+	if command_player != null and not _replay_active:
+		return
+	if command_recorder != null and not _replay_active and building != null:
+		command_recorder.record(_sim_tick, "produce", {"uid": int(building.get_meta("_sim_uid", -1)), "unit": unit_id})
 	building.try_produce(unit_id)
 
 func upgrade_building(b: Building):
+	if command_player != null and not _replay_active:
+		return
+	if command_recorder != null and not _replay_active and b != null:
+		command_recorder.record(_sim_tick, "upgrade", {"uid": int(b.get_meta("_sim_uid", -1))})
 	if b.has_method("start_upgrade"): b.start_upgrade()
 
 # 修理残破建筑（单机/主机路径）。规则与扣费都在 Building 内实现，
