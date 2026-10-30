@@ -492,3 +492,40 @@ naval.cross_water           组织渡海
 **踩坑（第三次同类）**：批量替换 `int(ai._defense.threat_level)` 只替换了内层表达式，外层 `ai._defense != null and` 残留，生成了语法合法但语义错误的 `elif a and b if c else d`——**GDScript 不报错但逻辑错**，靠人工 review 发现。教训：批量替换涉及条件表达式时，必须整行替换而不是替换子串。
 
 **剩余**：`battle` 直接访问（AIDefense 121 处、WaterCrossing/WorkerDirector 各 20+）是 R4 的核心存量，需 A5 引入 `AISituation` 局部视图逐步替换。
+
+---
+
+## 18. A5 第一步 + A7 工具：battle 地图查询迁入上下文，架构检查脚本上线（2026-10-31 04:35）
+
+**A5 第一步：把"只读地图/时间查询"从 `battle.` 迁到 `_ctx`**
+
+`AIContext` 新增 9 个只读查询：`game_time` / `world_to_grid` / `grid_to_world` / `terrain_at_grid` / `overlay_at_grid` / `is_cliff_tile` / `is_valid_bridge_position` / `nearby_entities` / `nearby_enemies` / `is_research_mode`。
+
+三个模块的机械替换（共 **150 处**）：
+
+| 模块 | 替换内容 | 处数 |
+|---|---|---|
+| AIWaterCrossing | 地图/地形/搭桥判定 + `game_time` | 66 |
+| AIDefense | `game_time` 25、地图查询 30、`nearby_entities` 5 | 60 |
+| AIWorkerDirector | `game_time` 9、`nearby_enemies` 1 | 10 |
+
+**A7 工具：`tools/ai_arch_check.ps1`**
+
+新增架构约束检查脚本，直接输出 R1~R4 违规数并存档 `docs/ai-analysis/arch_check.json`。**基线（A5 第一步完成后）**：
+
+| 模块 | R1 直接调 ai. | 其中兜底 | R2 引用他模块 | R3 遗留构造 | R4 直接 battle |
+|---|---|---|---|---|---|
+| AIDefense | 22 | 11 | 1 | 1 | **44**（原 121）|
+| AIWorkerDirector | 30 | 0 | 1 | 0 | 2 |
+| AIWaterCrossing | 22 | 0 | 0 | 0 | 20 |
+| AILadderSiege | 11 | 0 | 0 | 0 | 20 |
+| AIWallPlanner | 4 | 0 | 3 | 0 | 6 |
+| **合计** | **89** | 11 | **5** | 1 | **92** |
+
+R4 从约 170 降到 92，主要是 AIDefense（121→44）。
+
+**踩坑（第四个，最险的一次）**：替换 `battle.xxx(` 时，`ai.battle.xxx` 里的子串也被命中，产生了 80 处 `ai._ctx.xxx()`——**访问的是 AI 控制器上的 `_ctx` 属性，运行期直接报 `Invalid access to property '_ctx'`，1144 条脚本错误、AI 全灭**。教训：替换必须以词边界（`\bbattle\.`）匹配，或先替换带前缀的完整形态（`ai.battle.`）。
+
+**验证**：2 分钟 3v3 HELL → `front 77.6% / idle 18.4% / engage 34.7%`，脚本错误 0。
+
+**剩余（A5 第二步）**：R1 的 89 处里，WorkerDirector 30、WaterCrossing 22、LadderSiege 11 仍是直接调用（生产/调兵/升级），需接入 A3 建立的端口；R2 的 5 处需改为事件或端口；R3 的 `_init(owner_ai)` 改造需连带 AI.gd 的实例化顺序。

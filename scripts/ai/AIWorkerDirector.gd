@@ -108,7 +108,7 @@ func ensure_worker_count(workers: Array = []) -> bool:
 func _try_train_worker(reason: String) -> bool:
 	if ai == null or ai.battle == null:
 		return false
-	var now: float = float(ai.battle.game_time)
+	var now: float = float(_ctx.game_time())
 	if now - _last_train_at < TRAIN_COOLDOWN:
 		_last_train_block = "cooldown"
 		return false
@@ -131,7 +131,7 @@ func acquire_builder(pos: Vector3, critical: bool = false, max_dist: float = 60.
 		return null
 	_sync_roster()
 	_release_finished_builders()
-	var now: float = float(ai.battle.game_time)
+	var now: float = float(_ctx.game_time())
 	var best = null
 	var best_priority: int = 99
 	var best_dist: float = INF
@@ -221,7 +221,7 @@ func request_build(building_id: int, pos: Vector3, facing: Vector3, critical: bo
 	var key: String = "%d:%d:%d" % [building_id, roundi(pos.x), roundi(pos.z)]
 	if _build_requests.has(key):
 		return
-	var now: float = float(ai.battle.game_time) if ai.battle != null else 0.0
+	var now: float = float(_ctx.game_time()) if ai.battle != null else 0.0
 	_build_requests[key] = {
 		"building_id": building_id,
 		"pos": pos,
@@ -238,7 +238,7 @@ func is_processing_build_request() -> bool:
 func _process_build_requests() -> void:
 	if _processing_build_request or _build_requests.is_empty() or ai == null or ai.battle == null:
 		return
-	var now: float = float(ai.battle.game_time)
+	var now: float = float(_ctx.game_time())
 	for key in _build_requests.keys():
 		var req: Dictionary = _build_requests[key]
 		if now - float(req.created_at) > BUILD_REQUEST_TTL or int(req.tries) >= BUILD_REQUEST_TRIES:
@@ -265,7 +265,7 @@ func on_builder_assigned(builder, building, kind: String = "") -> void:
 	rec["building"] = building
 	if kind != "":
 		rec["kind"] = kind
-	rec["assigned_at"] = float(ai.battle.game_time) if ai != null and ai.battle != null else 0.0
+	rec["assigned_at"] = float(_ctx.game_time()) if ai != null and ai.battle != null else 0.0
 	_builder_reservations[uid] = rec
 
 func release_builder(builder, reason: String = "") -> void:
@@ -276,7 +276,7 @@ func release_builder(builder, reason: String = "") -> void:
 func _release_finished_builders() -> void:
 	if _builder_reservations.is_empty():
 		return
-	var now: float = float(ai.battle.game_time) if ai != null and ai.battle != null else 0.0
+	var now: float = float(_ctx.game_time()) if ai != null and ai.battle != null else 0.0
 	for uid in _builder_reservations.keys():
 		var rec: Dictionary = _builder_reservations[uid]
 		var w = rec.get("unit")
@@ -324,7 +324,7 @@ func _live_workers() -> Array:
 func _sync_roster() -> void:
 	var now: float = 0.0
 	if ai.battle != null:
-		now = float(ai.battle.game_time)
+		now = float(_ctx.game_time())
 	ai.desired_worker_count = _worker_target_count()
 	var seen: Dictionary = {}
 	for entity in ai._cached_armies():
@@ -368,7 +368,7 @@ func _classify(worker, now: float) -> int:
 func _update_flee() -> void:
 	if ai == null or ai.battle == null:
 		return
-	var now: float = float(ai.battle.game_time)
+	var now: float = float(_ctx.game_time())
 	for uid in _workers.keys():
 		var rec: Dictionary = _workers[uid]
 		var w = rec.get("unit")
@@ -418,7 +418,7 @@ func _nearest_enemy(pos: Vector3, radius: float):
 	if ai == null or ai.battle == null or not ai.battle.has_method("get_nearby_enemies"):
 		return null
 	var w = null
-	for e in ai.battle.get_nearby_enemies(pos, radius, ai.my_team, ai.my_peer_id, true):
+	for e in _ctx.nearby_enemies(pos, radius, ai.my_team, ai.my_peer_id, true):
 		if not (e is Army) or e.health <= 0:
 			continue
 		if _is_animal_target(e):
@@ -620,7 +620,7 @@ func _log_metrics() -> void:
 	elif _threat_level() >= 2:
 		mode = "BASE_ALERT"
 	print("[WORKER] t=%d pid=%d mode=%s live=%d queued=%d target=%d floor=%d idle=%d flee=%d builders=%d roles=%s train=%s block=%s" % [
-		int(ai.battle.game_time), int(ai.my_peer_id), mode, live, queued,
+		int(_ctx.game_time()), int(ai.my_peer_id), mode, live, queued,
 		_worker_target_count(), _worker_floor_count(), idle, flee,
 		_builder_reservations.size(), _format_role_counts(counts), _last_train_block,
 		String(ai._last_spend_block)])
@@ -666,3 +666,6 @@ func _threat_level() -> int:
 	if _ctx != null:
 		return _ctx.defense_threat_level()
 	return int(ai._defense.threat_level) if ai != null and ai._defense != null else 0
+func _now() -> float:
+	return _ctx.game_time() if _ctx != null else float(ai.battle.game_time)
+

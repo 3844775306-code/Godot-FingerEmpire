@@ -115,3 +115,34 @@ func team_castle_of(team: int):
 
 func defense_threat_level() -> int:
 	return int(_ai._defense.threat_level) if _ai != null and _ai._defense != null else 0
+
+# ── 地图与时间（只读查询，L2 不再直接摸 battle）──
+func game_time() -> float:
+	return float(_ai.battle.game_time) if _ai != null and _ai.battle != null else 0.0
+
+func world_to_grid(pos):
+	return _ai.battle.world_to_grid(pos) if _ai != null else Vector2i.ZERO
+
+func grid_to_world(gx: int, gy: int):
+	return _ai.battle.grid_to_world(gx, gy) if _ai != null else Vector3.ZERO
+
+func terrain_at_grid(gx: int, gy: int) -> int:
+	return int(_ai.battle.get_terrain_at_grid(gx, gy)) if _ai != null else -1
+
+func overlay_at_grid(gx: int, gy: int) -> int:
+	return int(_ai.battle.get_overlay_at_grid(gx, gy)) if _ai != null else -1
+
+func is_cliff_tile(gx: int, gy: int) -> bool:
+	return bool(_ai.battle.is_cliff_tile(gx, gy)) if _ai != null else false
+
+func is_valid_bridge_position(pos) -> bool:
+	return bool(_ai.battle.is_valid_bridge_position(pos)) if _ai != null else false
+
+func nearby_entities(pos, radius: float) -> Array:
+	return _ai.battle.get_nearby_entities(pos, radius) if _ai != null else []
+
+func nearby_enemies(pos, radius: float, team: int, owner: int = -1, only_visible: bool = false) -> Array:
+	return _ai.battle.get_nearby_enemies(pos, radius, team, owner, only_visible) if _ai != null else []
+
+func is_research_mode() -> bool:
+	return bool(_ai.battle.is_research_mode()) if _ai != null and _ai.battle.has_method("is_research_mode") else false

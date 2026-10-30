@@ -302,7 +302,7 @@ func start_defense() -> void:
 	var castle = _castle()
 	if castle == null:
 		return
-	_force_guard_until = float(ai.battle.game_time) + FORCE_GUARD_TIME
+	_force_guard_until = float(_ctx.game_time()) + FORCE_GUARD_TIME
 	_clock.reset("guard", 0.0)
 	_ensure_layout(castle)
 	_assign_home_guard(castle, true)
@@ -314,7 +314,7 @@ func first_ring_needs_priority() -> bool:
 		return false
 	if _first_ring_planned_at < 0.0:
 		return false
-	var now: float = float(ai.battle.game_time)
+	var now: float = float(_ctx.game_time())
 	if now - _first_ring_planned_at > 180.0:
 		return false
 	# 溢出泄压每帧都会问一次；半秒缓存足够，否则每帧扫首圈几十面墙会把主线程拖住。
@@ -389,7 +389,7 @@ func _update_defense_plan_shadow(_castle, delta: float) -> void:
 		snapshot = get_threat_snapshot()
 	var now: float = 0.0
 	if ai != null and ai.battle != null:
-		now = float(ai.battle.game_time)
+		now = float(_ctx.game_time())
 	_defense_director.evaluate(snapshot, _wall_ring_target, now)
 	_defense_plan.rebuild(self, _defense_director, snapshot)
 
@@ -492,7 +492,7 @@ func _manage_early_defense(castle, delta: float) -> void:
 		_build_defense_step()
 		_maybe_reactive_tower(castle)
 		return
-	var now: float = float(ai.battle.game_time)
+	var now: float = float(_ctx.game_time())
 	if now < _next_layout_try:
 		return
 	if threat_level >= 1 or now >= 150.0:
@@ -514,7 +514,7 @@ func _manage_defense(castle, delta: float) -> void:
 		_manage_early_defense(castle, delta)
 		return
 	# 到达触发等级/时代后立即筹备下一圈；规划失败也持续重试，而不是等固定时间。
-	var now: float = float(ai.battle.game_time)
+	var now: float = float(_ctx.game_time())
 	if _wall_rings_planned < _wall_ring_target and now >= _next_ring_plan_at:
 		if _plan_wall_ring(castle, _wall_rings_planned):
 			defense_initialized = true
@@ -537,13 +537,13 @@ func _ensure_layout(castle) -> bool:
 		return true
 	if _required_wall_ring_count(castle) <= 0:
 		return false
-	if float(ai.battle.game_time) < _next_layout_try:
+	if float(_ctx.game_time()) < _next_layout_try:
 		return false
 	if _plan_wall_ring(castle, 0):
 		defense_initialized = true
-		_next_layout_try = float(ai.battle.game_time) + 5.0
+		_next_layout_try = float(_ctx.game_time()) + 5.0
 		return true
-	_next_layout_try = float(ai.battle.game_time) + 8.0
+	_next_layout_try = float(_ctx.game_time()) + 8.0
 	return false
 
 # 首圈要求尽量把己方基地建筑包进去：取主城周围己方建筑距离的 90 分位（向上取），
@@ -644,7 +644,7 @@ func _plan_wall_ring(castle, ring_index: int, force_radius: int = 0) -> bool:
 	_wall_rings_planned = ring_index + 1
 	if ring_index == 0:
 		_plan_ring_towers(castle, radius)
-		_first_ring_planned_at = float(ai.battle.game_time)
+		_first_ring_planned_at = float(_ctx.game_time())
 		_castle_ring_planned = true
 		_castle_ring_radius = radius
 		_first_ring_wall_start = walls_before
@@ -688,7 +688,7 @@ func _plan_terrain_ring(castle, ring_index: int) -> bool:
 	var desired: int = _wall_ring_desired_radius(castle, ring_index)
 	var max_r: int = clampi(desired, RING_MIN_RADIUS + 2,
 			RING_FIRST_MAX if ring_index == 0 else RING_MAX_RADIUS)
-	var center: Vector2i = ai.battle.world_to_grid(castle.global_position)
+	var center: Vector2i = _ctx.world_to_grid(castle.global_position)
 	var cpos: Vector3 = castle.global_position
 	# 墙是按 1 米一格摆的，一圈要“真的没有缝”就需要 ≈ 周长米数的墙段（半径 18 米要 113 段）。
 	# 之前的实现只按预算挑了前 N 个边界格，剩下 60% 的周长是空的，判“闭合”却挡不住人。
@@ -754,7 +754,7 @@ func _plan_terrain_ring(castle, ring_index: int) -> bool:
 		if _cell_obstructed(pos):
 			closed_angles.append(atan2(pos.z - cpos.z, pos.x - cpos.x))
 			continue
-		var gcell: Vector2i = ai.battle.world_to_grid(pos)
+		var gcell: Vector2i = _ctx.world_to_grid(pos)
 		if not _terrain_plain_grid(gcell.x, gcell.y):
 			continue
 		if _add_defense_slot(27, pos, float(it["prio"]), "wall", true, false, false):
@@ -789,7 +789,7 @@ func _plan_terrain_ring(castle, ring_index: int) -> bool:
 	_ring_gap_count = int(ceil(_ring_gap_deg(castle, mean_r)))
 	_defense_terrain_text = "地形环%d段(闭)" % planned
 	if ring_index == 0:
-		_first_ring_planned_at = float(ai.battle.game_time)
+		_first_ring_planned_at = float(_ctx.game_time())
 		_first_ring_wall_start = wall_before
 	_plan_ring_towers(castle, mean_r)
 	_defense_queue.sort_custom(func(a, b): return float(a["priority"]) < float(b["priority"]))
@@ -887,7 +887,7 @@ func _ring_gap_deg(castle, ring_r: int) -> float:
 		var ang2: float = TAU * float(i) / 180.0
 		var px: float = cpos.x + cos(ang2) * float(ring_r)
 		var pz: float = cpos.z + sin(ang2) * float(ring_r)
-		var g: Vector2i = ai.battle.world_to_grid(Vector3(px, 0.0, pz))
+		var g: Vector2i = _ctx.world_to_grid(Vector3(px, 0.0, pz))
 		if not _terrain_passable_grid(g.x, g.y):
 			bins[i] = 1
 	var max_gap: int = 0
@@ -915,16 +915,16 @@ func _ring_gap_deg(castle, ring_r: int) -> float:
 func _terrain_plain_grid(gx: int, gz: int) -> bool:
 	if gx < 0 or gz < 0 or gx >= RTSConfig.MAP_SIZE or gz >= RTSConfig.MAP_SIZE:
 		return false
-	return ai.battle.get_terrain_at_grid(gx, gz) == 0
+	return _ctx.terrain_at_grid(gx, gz) == 0
 
 func _terrain_passable_grid(gx: int, gz: int) -> bool:
 	if gx < 0 or gz < 0 or gx >= RTSConfig.MAP_SIZE or gz >= RTSConfig.MAP_SIZE:
 		return false
-	var t: int = ai.battle.get_terrain_at_grid(gx, gz)
+	var t: int = _ctx.terrain_at_grid(gx, gz)
 	if t == 2:
-		return ai.battle.get_overlay_at_grid(gx, gz) == 3
+		return _ctx.overlay_at_grid(gx, gz) == 3
 	if t == 1:
-		var ov: int = ai.battle.get_overlay_at_grid(gx, gz)
+		var ov: int = _ctx.overlay_at_grid(gx, gz)
 		return ov == 4 or ov == 5
 	return true
 
@@ -935,7 +935,7 @@ func _fill_ring_gaps(castle, ring_r: int, prio_base: float) -> void:
 		var ang: float = TAU * float(i) / 180.0
 		var px: float = cpos.x + cos(ang) * float(ring_r)
 		var pz: float = cpos.z + sin(ang) * float(ring_r)
-		var g: Vector2i = ai.battle.world_to_grid(Vector3(px, 0.0, pz))
+		var g: Vector2i = _ctx.world_to_grid(Vector3(px, 0.0, pz))
 		if not _terrain_passable_grid(g.x, g.y):
 			continue
 		var covered: bool = false
@@ -1081,28 +1081,28 @@ func _spawn_campaign_wall_cannons(castle, walls: Array) -> void:
 
 # ── 地形防线：在朝敌方向前方寻找隘口/浅滩 ──
 func _cell_blocks_land(gx: int, gz: int) -> bool:
-	var terrain: int = ai.battle.get_terrain_at_grid(gx, gz)
+	var terrain: int = _ctx.terrain_at_grid(gx, gz)
 	if terrain < 0:
 		return true
-	if terrain == 2 and ai.battle.get_overlay_at_grid(gx, gz) != 3:
+	if terrain == 2 and _ctx.overlay_at_grid(gx, gz) != 3:
 		return true
 	# 普通山地是天然墙；只有缓坡/台地（is_cliff_tile 返回 false）才算可通行地形。
-	return ai.battle.is_cliff_tile(gx, gz)
+	return _ctx.is_cliff_tile(gx, gz)
 
 func _is_ford_cell(gx: int, gz: int) -> bool:
-	return ai.battle.get_terrain_at_grid(gx, gz) == 2 and ai.battle.get_overlay_at_grid(gx, gz) == 3
+	return _ctx.terrain_at_grid(gx, gz) == 2 and _ctx.overlay_at_grid(gx, gz) == 3
 
 # 沿垂直方向测量可通行通道宽度；两侧山/水会很快截断
 func _lane_width(pos: Vector3, perp: Vector3, max_steps: int = DEFENSE_LANE_MAX_WIDTH) -> int:
 	var left: int = 0
 	var right: int = 0
 	while left < max_steps:
-		var lc: Vector2i = ai.battle.world_to_grid(pos - perp * float(left + 1))
+		var lc: Vector2i = _ctx.world_to_grid(pos - perp * float(left + 1))
 		if _cell_blocks_land(lc.x, lc.y):
 			break
 		left += 1
 	while right < max_steps:
-		var rc: Vector2i = ai.battle.world_to_grid(pos + perp * float(right + 1))
+		var rc: Vector2i = _ctx.world_to_grid(pos + perp * float(right + 1))
 		if _cell_blocks_land(rc.x, rc.y):
 			break
 		right += 1
@@ -1110,7 +1110,7 @@ func _lane_width(pos: Vector3, perp: Vector3, max_steps: int = DEFENSE_LANE_MAX_
 
 func _count_nearby_barriers(pos: Vector3, radius: int = 3) -> int:
 	var total: int = 0
-	var center: Vector2i = ai.battle.world_to_grid(pos)
+	var center: Vector2i = _ctx.world_to_grid(pos)
 	for dx in range(-radius, radius + 1):
 		for dz in range(-radius, radius + 1):
 			if dx == 0 and dz == 0:
@@ -1120,7 +1120,7 @@ func _count_nearby_barriers(pos: Vector3, radius: int = 3) -> int:
 	return total
 
 func _find_ford_near(pos: Vector3, radius: float = 3.5) -> Vector3:
-	var center: Vector2i = ai.battle.world_to_grid(pos)
+	var center: Vector2i = _ctx.world_to_grid(pos)
 	var r: int = int(ceil(radius))
 	var best: Vector3 = Vector3.ZERO
 	var best_d: float = INF
@@ -1128,7 +1128,7 @@ func _find_ford_near(pos: Vector3, radius: float = 3.5) -> Vector3:
 		for dz in range(-r, r + 1):
 			if not _is_ford_cell(center.x + dx, center.y + dz):
 				continue
-			var wp: Vector3 = ai.battle.grid_to_world(center.x + dx, center.y + dz)
+			var wp: Vector3 = _ctx.grid_to_world(center.x + dx, center.y + dz)
 			var d: float = wp.distance_squared_to(pos)
 			if d < best_d:
 				best_d = d
@@ -1314,7 +1314,7 @@ func _find_pass_anchor(castle) -> Dictionary:
 		if seen.has(key):
 			continue
 		seen[key] = true
-		var p: Vector3 = ai.battle.grid_to_world(pc.x, pc.y)
+		var p: Vector3 = _ctx.grid_to_world(pc.x, pc.y)
 		p.y = ai.battle.get_height_at_grid(pc.x, pc.y)
 		var delta: Vector3 = p - base
 		delta.y = 0.0
@@ -1361,7 +1361,7 @@ func _ensure_chokepoint(castle) -> bool:
 		return true
 	if not _fort_tech_ready(castle):
 		return false
-	var now: float = float(ai.battle.game_time)
+	var now: float = float(_ctx.game_time())
 	if now < _next_choke_try:
 		return false
 	_next_choke_try = now + CHOKE_RETRY_INTERVAL
@@ -1611,11 +1611,11 @@ func _ring_cell_blocked(cell: Vector2i) -> bool:
 		return true
 	if _cell_blocks_land(cell.x, cell.y):
 		return true
-	var wp: Vector3 = ai.battle.grid_to_world(cell.x, cell.y)
+	var wp: Vector3 = _ctx.grid_to_world(cell.x, cell.y)
 	wp.y = ai.battle.get_height_at_grid(cell.x, cell.y)
 	var nearby: Array = []
 	if ai.battle.has_method("get_nearby_entities"):
-		nearby = ai.battle.get_nearby_entities(wp, 3.2)
+		nearby = _ctx.nearby_entities(wp, 3.2)
 	else:
 		nearby = ai.battle.entities.get_children()
 	for e in nearby:
@@ -1629,9 +1629,9 @@ func _ring_cell_blocked(cell: Vector2i) -> bool:
 
 # 环格上能否放一面墙（不把会移动的军队算作障碍，敌人靠近时先规划、建造时再重试）
 func _ring_wall_spot(cell: Vector2i, nearby: Array = []) -> Vector3:
-	var base: Vector3 = ai.battle.grid_to_world(cell.x, cell.y)
+	var base: Vector3 = _ctx.grid_to_world(cell.x, cell.y)
 	if nearby.is_empty() and ai.battle.has_method("get_nearby_entities"):
-		nearby = ai.battle.get_nearby_entities(base, 6.0)
+		nearby = _ctx.nearby_entities(base, 6.0)
 	# 环格中心不平时在 2.5 米内找最近的平地墙位；海边/山脚的环线本来就该顺着可建地形微调。
 	var offsets: Array = [Vector3.ZERO]
 	for dist in [0.6, 1.1, 1.5, 2.0, 2.5]:
@@ -1644,7 +1644,7 @@ func _ring_wall_spot(cell: Vector2i, nearby: Array = []) -> Vector3:
 		var gz: int = int(round(wp.z + RTSConfig.MAP_SIZE / 2.0))
 		if gx < 1 or gz < 1 or gx >= RTSConfig.MAP_SIZE - 1 or gz >= RTSConfig.MAP_SIZE - 1:
 			continue
-		if ai.battle.get_terrain_at_grid(gx, gz) != 0:
+		if _ctx.terrain_at_grid(gx, gz) != 0:
 			continue
 		if ai.battle.has_method("_is_terrain_flat") and not ai.battle._is_terrain_flat(wp, 0.45):
 			continue
@@ -1673,19 +1673,19 @@ func _ring_exact_wall_ok(cell: Vector2i, cache: Dictionary = {}) -> bool:
 		cache[cell] = cached
 		return cached
 	var ok: bool = true
-	var wp: Vector3 = ai.battle.grid_to_world(cell.x, cell.y)
+	var wp: Vector3 = _ctx.grid_to_world(cell.x, cell.y)
 	if cell.x < 1 or cell.y < 1 or cell.x >= RTSConfig.MAP_SIZE - 1 or cell.y >= RTSConfig.MAP_SIZE - 1:
 		ok = false
 	elif _cell_blocks_land(cell.x, cell.y) or _is_ford_cell(cell.x, cell.y):
 		ok = false
-	elif ai.battle.get_terrain_at_grid(cell.x, cell.y) != 0:
+	elif _ctx.terrain_at_grid(cell.x, cell.y) != 0:
 		ok = false
 	elif ai.battle.has_method("_is_terrain_flat") and not ai.battle._is_terrain_flat(wp, 0.45):
 		ok = false
 	else:
 		var nearby: Array = []
 		if ai.battle.has_method("get_nearby_entities"):
-			nearby = ai.battle.get_nearby_entities(wp, 4.0)
+			nearby = _ctx.nearby_entities(wp, 4.0)
 		else:
 			nearby = ai.battle.entities.get_children()
 		for e in nearby:
@@ -1817,7 +1817,7 @@ func _ring_build_path(center: Vector2i, radius: int) -> Dictionary:
 					wall_cells[c] = true
 	var pts: Array = []
 	for c in wall_cells.keys():
-		pts.append(ai.battle.grid_to_world(c.x, c.y))
+		pts.append(_ctx.grid_to_world(c.x, c.y))
 	var walls: int = pts.size()
 	if walls < RING_WALL_MIN or walls > RING_WALL_MAX:
 		return {"ok": false}
@@ -1901,7 +1901,7 @@ func _ring_fill_gaps(castle, center: Vector2i, radius: int,
 	var positions: Array = built.get("positions", []).duplicate()
 	var wall_cells: Dictionary = {}
 	for p in positions:
-		wall_cells[ai.battle.world_to_grid(p)] = true
+		wall_cells[_ctx.world_to_grid(p)] = true
 	# 先在环线上补“本该有墙但实际缺失”的格子。A* 兜底/建造失败留下的洞，
 	# 往往就是环序列里少了一格；直接补这一格比从泛洪路径上猜位置准确得多。
 	var ring_cells: Array = built.get("cells", [])
@@ -1910,7 +1910,7 @@ func _ring_fill_gaps(castle, center: Vector2i, radius: int,
 			continue
 		if not _ring_exact_wall_ok(c):
 			continue
-		var cp: Vector3 = ai.battle.grid_to_world(c.x, c.y)
+		var cp: Vector3 = _ctx.grid_to_world(c.x, c.y)
 		var close: bool = false
 		for p in positions:
 			if (p as Vector3).distance_to(cp) < 0.9:
@@ -1944,7 +1944,7 @@ func _ring_fill_gaps(castle, center: Vector2i, radius: int,
 			break
 		if wall_cells.has(gap):
 			break
-		var gap_pos: Vector3 = ai.battle.grid_to_world(gap.x, gap.y)
+		var gap_pos: Vector3 = _ctx.grid_to_world(gap.x, gap.y)
 		positions.append(gap_pos)
 		wall_cells[gap] = true
 	if not _ring_is_sealed(castle, radius, base_blocked, wall_cells):
@@ -1975,7 +1975,7 @@ func _find_ring_gap_cell(castle, center: Vector2i, radius: int,
 	var queue: Array = []
 	var seen: Dictionary = {}
 	var parent: Dictionary = {}
-	var center_cell: Vector2i = ai.battle.world_to_grid(castle.global_position)
+	var center_cell: Vector2i = _ctx.world_to_grid(castle.global_position)
 	for dx in range(-start_r, start_r + 1):
 		for dz in range(-start_r, start_r + 1):
 			var c := Vector2i(center_cell.x + dx, center_cell.y + dz)
@@ -2037,7 +2037,7 @@ func _find_ring_gap_cell(castle, center: Vector2i, radius: int,
 
 
 func _pick_ring_radius(castle, forced_radius: int = 0, center_override: Vector2i = Vector2i(-9999, -9999), preferred_radius: int = 0) -> Dictionary:
-	var center: Vector2i = center_override if center_override.x > -9000 else ai.battle.world_to_grid(castle.global_position)
+	var center: Vector2i = center_override if center_override.x > -9000 else _ctx.world_to_grid(castle.global_position)
 	var base_blocked: Dictionary = _ring_blocked_base()
 	var radii: Array = []
 	var min_r: int = maxi(RING_MIN_RADIUS, int(ceil(float(castle.body_radius) + 3.0)))
@@ -2084,7 +2084,7 @@ func _pick_ring_radius(castle, forced_radius: int = 0, center_override: Vector2i
 		# 能补的墙位补上；补不上就换下一个半径，绝不把缺口环当成已闭合圈。
 		var candidate_walls: Dictionary = {}
 		for p in built["positions"]:
-			candidate_walls[ai.battle.world_to_grid(p)] = true
+			candidate_walls[_ctx.world_to_grid(p)] = true
 		if not _ring_is_sealed(castle, int(r), base_blocked, candidate_walls):
 			built = _ring_fill_gaps(castle, center, int(r), base_blocked, built)
 			if built.is_empty():
@@ -2115,7 +2115,7 @@ func _pick_ring_radius_best(castle, forced_radius: int = 0,
 		return base
 	# 基地正好贴山脚/地图边缘时，环心向地图内侧挪 2 格通常就能闭合；
 	# 只在原环心完全失败时补试一次，避免每次都多跑几轮 A*。
-	var center: Vector2i = ai.battle.world_to_grid(castle.global_position)
+	var center: Vector2i = _ctx.world_to_grid(castle.global_position)
 	var map_center := Vector2i(RTSConfig.MAP_SIZE / 2, RTSConfig.MAP_SIZE / 2)
 	var dir := Vector2(map_center.x - center.x, map_center.y - center.y)
 	if dir.length() < 1.5:
@@ -2268,7 +2268,7 @@ func _watchtower_visible_gain(pos: Vector3, anchor: Vector3, mode: String) -> fl
 	if ai.battle.has_method("get_team_visible_mask"):
 		mask = ai.battle.get_team_visible_mask(ai.my_team)
 	var ms: int = RTSConfig.MAP_SIZE
-	var center: Vector2i = ai.battle.world_to_grid(pos)
+	var center: Vector2i = _ctx.world_to_grid(pos)
 	var planned: Array = _watchtower_centers()
 	var radius: int = int(ceil(vision))
 	var steps: int = int(ceil(float(radius) / float(WATCHTOWER_SAMPLE_STEP)))
@@ -2286,7 +2286,7 @@ func _watchtower_visible_gain(pos: Vector3, anchor: Vector3, mode: String) -> fl
 				continue
 			if full_mask and mask[gx * ms + gz] == 1:
 				continue
-			var wp: Vector3 = ai.battle.grid_to_world(gx, gz)
+			var wp: Vector3 = _ctx.grid_to_world(gx, gz)
 			if _watchtower_covered_by_planned(wp, planned):
 				continue
 			gain += _watchtower_cell_weight(wp, anchor, mode)
@@ -2345,7 +2345,7 @@ func _collect_watchtower_candidates(center: Vector3, radii: Array, angle_count: 
 		for i in range(angle_count):
 			var a: float = TAU * float(i) / float(angle_count)
 			var p: Vector3 = center + Vector3(cos(a) * rf, 0.0, sin(a) * rf)
-			var key: Vector2i = ai.battle.world_to_grid(p)
+			var key: Vector2i = _ctx.world_to_grid(p)
 			if seen.has(key):
 				continue
 			seen[key] = true
@@ -2492,7 +2492,7 @@ func _ring_blocked_base() -> Dictionary:
 			continue
 		if not (e is Building or e is WorldResource):
 			continue
-		var c: Vector2i = ai.battle.world_to_grid(e.global_position)
+		var c: Vector2i = _ctx.world_to_grid(e.global_position)
 		var rr: int = int(ceil(float(e.body_radius)))
 		# 城墙是 2 米宽的连续墙体，兜底点位允许有不到 1.85 米的中心距；
 		# 闭合校验按墙体半径 + 安全边距算，否则 0.45 的余量会把实际封死的墙圈误判为有缝。
@@ -2515,8 +2515,8 @@ func _ring_is_sealed(castle, radius: int, base_blocked: Dictionary = {},
 	var extra: Dictionary = candidate_walls
 	if extra.is_empty():
 		for p in wall_positions:
-			extra[ai.battle.world_to_grid(p)] = true
-	var center: Vector2i = ai.battle.world_to_grid(castle.global_position)
+			extra[_ctx.world_to_grid(p)] = true
+	var center: Vector2i = _ctx.world_to_grid(castle.global_position)
 	# 墙圈伸出地图时，地图边界就是墙的一部分：这时从“远侧边界”往主城泛洪，
 	# 只要远侧进不来，主城就被墙段 + 地图边界封死了。
 	# 旧实现一律要求内圈不能碰边界，导致贴边基地永远无法用地图边缘省墙。
@@ -2821,7 +2821,7 @@ func _add_defense_slot(b_id: int, pos: Vector3, priority: float, kind: String,
 func _build_defense_step() -> void:
 	if _defense_queue.is_empty():
 		return
-	var now: float = float(ai.battle.game_time)
+	var now: float = float(_ctx.game_time())
 	if now < _defense_retry_at or now < _next_build_step:
 		return
 	_next_build_step = now + DEFENSE_BUILD_STEP_INTERVAL
@@ -2923,7 +2923,7 @@ func _pos_has_building(b_id: int, pos: Vector3) -> bool:
 					return true
 		return false
 	if ai.battle.has_method("get_nearby_entities"):
-		for e in ai.battle.get_nearby_entities(pos, 1.2):
+		for e in _ctx.nearby_entities(pos, 1.2):
 			if e is Building and e.health > 0 and int(e.entity_id) == b_id \
 					and _belongs(e):
 				if e.global_position.distance_to(pos) < 1.2:
@@ -2944,7 +2944,7 @@ func _ensure_min_towers(castle) -> void:
 	var planned: int = _count_planned(25) + _count_planned(26)
 	if built >= MIN_TOWERS or planned > 0:
 		return
-	var now: float = float(ai.battle.game_time)
+	var now: float = float(_ctx.game_time())
 	if now < 150.0 or now < _next_reactive_tower:
 		return
 	_next_reactive_tower = now + 22.0
@@ -2976,7 +2976,7 @@ func _ensure_min_towers(castle) -> void:
 func _maybe_reactive_tower(castle) -> void:
 	if threat_level < 1:
 		return
-	var now: float = float(ai.battle.game_time)
+	var now: float = float(_ctx.game_time())
 	if now < _next_reactive_tower:
 		return
 	_next_reactive_tower = now + 28.0
@@ -3006,7 +3006,7 @@ func _own_tower_near(pos: Vector3, radius: float) -> bool:
 func _manage_defense_upgrades(castle, delta: float) -> void:
 	if not _clock.due("defense_upgrade"):
 		return
-	var now: float = float(ai.battle.game_time)
+	var now: float = float(_ctx.game_time())
 	if threat_level == 0 and now < 240.0:
 		return
 	var towers: Array = []
@@ -3044,7 +3044,7 @@ func _manage_defense_upgrades(castle, delta: float) -> void:
 # ═══════════════════════════════════════════════════════════════
 
 func _detect_building_attacks() -> void:
-	var now: float = float(ai.battle.game_time)
+	var now: float = float(_ctx.game_time())
 	var seen: Dictionary = {}
 	var alerts: Array = []
 	for e in ai.battle.entities.get_children():
@@ -3156,7 +3156,7 @@ func _is_local_building_defender(u, now: float) -> bool:
 func _defense_mode_active() -> bool:
 	if threat_level >= 2:
 		return true
-	if ai != null and float(ai.battle.game_time) < _force_guard_until:
+	if ai != null and float(_ctx.game_time()) < _force_guard_until:
 		return true
 	if ai != null and ai.has_method("_is_defending"):
 		return bool(_is_defending_v())
@@ -3196,7 +3196,7 @@ func _manage_home_guard(castle, delta: float) -> void:
 	var own: Array = _land_combat_units()
 	if own.is_empty():
 		return
-	var now: float = float(ai.battle.game_time)
+	var now: float = float(_ctx.game_time())
 	var is_defending: bool = _defense_mode_active()
 	var walls_exist: bool = _has_valid_walls()
 	var desired: int = 0
@@ -3304,7 +3304,7 @@ func _quick_fill_home_guard(castle, delta: float) -> void:
 		_manage_home_guard(castle, 0.0)
 		return
 	_prune_guard_ids()
-	if threat_level < 2 and float(ai.battle.game_time) < _guard_block_until:
+	if threat_level < 2 and float(_ctx.game_time()) < _guard_block_until:
 		return
 	if _home_guard_ids.size() >= HOME_GUARD_COUNT:
 		return
@@ -3332,10 +3332,10 @@ func _quick_fill_home_guard(castle, delta: float) -> void:
 		# 补员同样只挑没有任务的部队，避免把正在交战/行军/采集/排队的部队拉回主城。
 		if _unit_has_existing_task(u):
 			continue
-		if _is_local_building_defender(u, float(ai.battle.game_time)):
+		if _is_local_building_defender(u, float(_ctx.game_time())):
 			continue
 		if _reserve_ranged_for_wall(u, walls_exist) \
-				and float(ai.battle.game_time) >= _force_guard_until:
+				and float(_ctx.game_time()) >= _force_guard_until:
 			continue
 		_assign_guard(u, rally)
 
@@ -3345,7 +3345,7 @@ func release_guards_for_attack() -> void:
 	_clock.reset("guard", 0.0)
 	# 解除后 20 秒内不再抓人：否则 2 秒一次的守军快补马上又把同一批兵抓回主城，
 	# 主攻刚放出去的人又被 garrison_point 卡住，等于没解锁。
-	_guard_block_until = float(ai.battle.game_time) + 20.0
+	_guard_block_until = float(_ctx.game_time()) + 20.0
 	for uid in _home_guard_ids.keys():
 		_release_guard(int(uid))
 	_home_guard_ids.clear()
@@ -3375,7 +3375,7 @@ func _assign_home_guard(castle, force: bool) -> void:
 			break
 		if not is_instance_valid(u) or u.health <= 0:
 			continue
-		if _is_local_building_defender(u, float(ai.battle.game_time)):
+		if _is_local_building_defender(u, float(_ctx.game_time())):
 			continue
 		# 强制回防也只动没有任务的部队；正在执行任务的主力继续自己的行动。
 		if _unit_has_existing_task(u):
@@ -3401,7 +3401,7 @@ func _guard_rally(castle) -> Vector3:
 	var gz: int = int(p.z + RTSConfig.MAP_SIZE / 2.0)
 	if gx < 0 or gx >= RTSConfig.MAP_SIZE or gz < 0 or gz >= RTSConfig.MAP_SIZE:
 		return castle.global_position
-	if ai.battle.get_terrain_at_grid(gx, gz) != 0:
+	if _ctx.terrain_at_grid(gx, gz) != 0:
 		return castle.global_position + Vector3(3.0, 0.0, 3.0)
 	return p
 
@@ -3549,7 +3549,7 @@ func _refresh_resource_zones(castle) -> void:
 	resource_zones = zones.slice(0, 3)
 
 func _defend_resources(castle) -> void:
-	var now: float = float(ai.battle.game_time)
+	var now: float = float(_ctx.game_time())
 	var workers: Array = []
 	for w in ai.battle.entities.get_children():
 		if w is Army and w.health > 0 and int(w.entity_id) == 10 and _belongs(w):
@@ -3675,7 +3675,7 @@ func _own_outpost_near(pos: Vector3, radius: float) -> bool:
 	return false
 
 func _maybe_build_outpost(castle) -> void:
-	var now: float = float(ai.battle.game_time)
+	var now: float = float(_ctx.game_time())
 	if now < _next_outpost:
 		return
 	_next_outpost = now + OUTPOST_INTERVAL
@@ -3723,7 +3723,7 @@ func _is_valid_defense_ground(pos: Vector3, radius: float = 1.0,
 	var gz: int = int(pos.z + half)
 	if gx < 0 or gx >= RTSConfig.MAP_SIZE or gz < 0 or gz >= RTSConfig.MAP_SIZE:
 		return false
-	if ai.battle.get_terrain_at_grid(gx, gz) != 0:
+	if _ctx.terrain_at_grid(gx, gz) != 0:
 		return false
 	# 山口/山脊边缘常见“中心格是平地、脚下实际是斜坡”的位置；
 	# 建造校验 _can_place_ai_building 会检查平整度，规划阶段先过滤掉，避免反复失败。
@@ -3779,7 +3779,7 @@ func _defense_pos_visible(pos: Vector3) -> bool:
 	var world_pos := Vector3(pos.x, 0.0, pos.z)
 	# 只查附近实体；己方最远视野 25 米，不需要为每个墙位遍历全图。
 	if ai.battle.has_method("get_nearby_entities"):
-		for e in ai.battle.get_nearby_entities(world_pos, DEFENSE_VISION_QUERY_RADIUS):
+		for e in _ctx.nearby_entities(world_pos, DEFENSE_VISION_QUERY_RADIUS):
 			if e is GameEntity and e.health > 0 and _belongs(e):
 				if e.global_position.distance_to(world_pos) <= float(e.vision_range):
 					return true
@@ -3875,4 +3875,6 @@ func _afford_bld(id: int) -> bool:
 
 func _afford_upg(id: int) -> bool:
 	return _ctx.can_afford_upgrade(id) if _ctx != null else (ai.can_afford_upgrade(id) if ai != null else false)
+func _now() -> float:
+	return _ctx.game_time() if _ctx != null else float(ai.battle.game_time)
 

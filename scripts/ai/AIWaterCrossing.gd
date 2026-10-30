@@ -162,8 +162,8 @@ func _refresh_plan():
 	if not is_instance_valid(my_castle) or not is_instance_valid(enemy_castle):
 		_stop_all()
 		return
-	var start: Vector2i = battle.world_to_grid(my_castle.global_position)
-	var target: Vector2i = battle.world_to_grid(enemy_castle.global_position)
+	var start: Vector2i = _ctx.world_to_grid(my_castle.global_position)
+	var target: Vector2i = _ctx.world_to_grid(enemy_castle.global_position)
 	var bridges: Dictionary = _collect_bridges()
 	var own_set: Dictionary = _bfs_land(start, bridges)
 	_reachable_land = own_set
@@ -267,7 +267,7 @@ func _collect_bridges() -> Dictionary:
 	for e in battle.entities.get_children():
 		# 只把完工的桥算作可通行；施工中的桥段不能拿来判断两岸已经连通。
 		if e is Building and e.entity_id == BRIDGE_ID and e.health > 0 and e.build_timer <= 0.0:
-			out[battle.world_to_grid(e.global_position)] = true
+			out[_ctx.world_to_grid(e.global_position)] = true
 	return out
 
 func _land_passable(tile: Vector2i, bridges: Dictionary) -> bool:
@@ -275,12 +275,12 @@ func _land_passable(tile: Vector2i, bridges: Dictionary) -> bool:
 		return false
 	if bridges.has(tile):
 		return true
-	var terrain = battle.get_terrain_at_grid(tile.x, tile.y)
+	var terrain = _ctx.terrain_at_grid(tile.x, tile.y)
 	if terrain == 2:
 		# 浅滩(3)是水格但陆军可通行
-		return battle.get_overlay_at_grid(tile.x, tile.y) == 3
+		return _ctx.overlay_at_grid(tile.x, tile.y) == 3
 	# 与陆军 A* 保持一致：山壁、悬崖、无法通过的台地边缘不能算陆地连通。
-	if battle.has_method("is_cliff_tile") and battle.is_cliff_tile(tile.x, tile.y):
+	if battle.has_method("is_cliff_tile") and _ctx.is_cliff_tile(tile.x, tile.y):
 		return false
 	return true
 
@@ -315,7 +315,7 @@ func _find_bridge_plan(own_set: Dictionary, enemy_set: Dictionary, bridges: Dict
 			var line: Array = []
 			var n: Vector2i = c + d
 			while n.x >= 0 and n.x < RTSConfig.MAP_SIZE and n.y >= 0 and n.y < RTSConfig.MAP_SIZE:
-				if battle.get_terrain_at_grid(n.x, n.y) != 2:
+				if _ctx.terrain_at_grid(n.x, n.y) != 2:
 					break
 				if bridges.has(n):
 					break
@@ -329,10 +329,10 @@ func _find_bridge_plan(own_set: Dictionary, enemy_set: Dictionary, bridges: Dict
 				continue
 			if not enemy_set.has(n):
 				continue
-			var first_world: Vector3 = battle.grid_to_world(line[0].x, line[0].y)
+			var first_world: Vector3 = _ctx.grid_to_world(line[0].x, line[0].y)
 			if not battle.has_method("is_valid_bridge_position"):
 				continue
-			if not battle.is_valid_bridge_position(first_world):
+			if not _ctx.is_valid_bridge_position(first_world):
 				continue
 			var mid: Vector2 = Vector2(
 				(float(line[0].x) + float(line[line.size() - 1].x)) * 0.5,
@@ -348,7 +348,7 @@ func _find_bridge_plan(own_set: Dictionary, enemy_set: Dictionary, bridges: Dict
 		return []
 	var out: Array = []
 	for t in best_line:
-		out.append(battle.grid_to_world(t.x, t.y))
+		out.append(_ctx.grid_to_world(t.x, t.y))
 	return out
 
 # 给农民找一座“经济桥”：从己方岸边跨过一段窄水，落到对岸资源点附近。
@@ -377,8 +377,8 @@ func has_pending_bridge() -> bool:
 func can_builder_reach(from_pos: Vector3, target_pos: Vector3) -> bool:
 	if battle == null:
 		return true
-	var start: Vector2i = battle.world_to_grid(from_pos)
-	var goal: Vector2i = battle.world_to_grid(target_pos)
+	var start: Vector2i = _ctx.world_to_grid(from_pos)
+	var goal: Vector2i = _ctx.world_to_grid(target_pos)
 	if start == goal:
 		return true
 	var bridges: Dictionary = _collect_bridges()
@@ -387,7 +387,7 @@ func can_builder_reach(from_pos: Vector3, target_pos: Vector3) -> bool:
 		# 连通集，避免 AI 每造一座建筑都做一次全图 BFS。
 		var castle = _castle()
 		if is_instance_valid(castle):
-			_reachable_land = _bfs_land(battle.world_to_grid(castle.global_position), bridges)
+			_reachable_land = _bfs_land(_ctx.world_to_grid(castle.global_position), bridges)
 	if _reachable_land.has(start) and _reachable_land.has(goal):
 		return true
 	return _bfs_reach(start, goal, bridges)
@@ -434,8 +434,8 @@ func plan_bridge_to(target_pos: Vector3, from_pos: Vector3 = Vector3.ZERO) -> bo
 		if not is_instance_valid(castle):
 			return false
 		start_pos = castle.global_position
-	var start: Vector2i = battle.world_to_grid(start_pos)
-	var goal: Vector2i = battle.world_to_grid(target_pos)
+	var start: Vector2i = _ctx.world_to_grid(start_pos)
+	var goal: Vector2i = _ctx.world_to_grid(target_pos)
 	if start == goal:
 		return false
 	var bridges: Dictionary = _collect_bridges()
@@ -465,19 +465,19 @@ func plan_bridge_to(target_pos: Vector3, from_pos: Vector3 = Vector3.ZERO) -> bo
 func is_planned_bridge_position(pos: Vector3) -> bool:
 	if bridge_plan.is_empty():
 		return false
-	return battle.world_to_grid(pos) == battle.world_to_grid(bridge_plan[0])
+	return _ctx.world_to_grid(pos) == _ctx.world_to_grid(bridge_plan[0])
 
 func _find_resource_bridge_plan(own_set: Dictionary, bridges: Dictionary, own_grid: Vector2i) -> Array:
 	var resource_tiles: Dictionary = {}
 	for e in battle.entities.get_children():
 		if not (e is WorldResource) or e.health <= 0:
 			continue
-		var rt: Vector2i = battle.world_to_grid(e.global_position)
+		var rt: Vector2i = _ctx.world_to_grid(e.global_position)
 		if rt.x < 0 or rt.y < 0 or rt.x >= RTSConfig.MAP_SIZE or rt.y >= RTSConfig.MAP_SIZE:
 			continue
 		if own_set.has(rt):
 			continue
-		if battle.get_terrain_at_grid(rt.x, rt.y) != 0:
+		if _ctx.terrain_at_grid(rt.x, rt.y) != 0:
 			continue
 		resource_tiles[rt] = String(e.resource_type)
 	if resource_tiles.is_empty():
@@ -495,7 +495,7 @@ func _find_resource_bridge_plan(own_set: Dictionary, bridges: Dictionary, own_gr
 			var w: Vector2i = cell + d
 			if w.x < 0 or w.y < 0 or w.x >= RTSConfig.MAP_SIZE or w.y >= RTSConfig.MAP_SIZE:
 				continue
-			if battle.get_terrain_at_grid(w.x, w.y) == 2:
+			if _ctx.terrain_at_grid(w.x, w.y) == 2:
 				near_water = true
 				break
 		if not near_water:
@@ -504,7 +504,7 @@ func _find_resource_bridge_plan(own_set: Dictionary, bridges: Dictionary, own_gr
 			var line: Array = []
 			var n: Vector2i = cell + d
 			while n.x >= 0 and n.x < RTSConfig.MAP_SIZE and n.y >= 0 and n.y < RTSConfig.MAP_SIZE:
-				if battle.get_terrain_at_grid(n.x, n.y) != 2:
+				if _ctx.terrain_at_grid(n.x, n.y) != 2:
 					break
 				if bridges.has(n):
 					break
@@ -519,7 +519,7 @@ func _find_resource_bridge_plan(own_set: Dictionary, bridges: Dictionary, own_gr
 			if n.x < 0 or n.y < 0 or n.x >= RTSConfig.MAP_SIZE or n.y >= RTSConfig.MAP_SIZE:
 				continue
 			# 桥头必须落在可走的平地上，不能把桥修到山壁/水里
-			if battle.get_terrain_at_grid(n.x, n.y) != 0:
+			if _ctx.terrain_at_grid(n.x, n.y) != 0:
 				continue
 			var goal_tile := Vector2i(-1, -1)
 			var goal_dist: float = INF
@@ -536,8 +536,8 @@ func _find_resource_bridge_plan(own_set: Dictionary, bridges: Dictionary, own_gr
 						goal_type = String(resource_tiles[g])
 			if goal_tile.x < 0:
 				continue
-			var first_world: Vector3 = battle.grid_to_world(line[0].x, line[0].y)
-			if battle.has_method("is_valid_bridge_position") and not battle.is_valid_bridge_position(first_world):
+			var first_world: Vector3 = _ctx.grid_to_world(line[0].x, line[0].y)
+			if battle.has_method("is_valid_bridge_position") and not _ctx.is_valid_bridge_position(first_world):
 				continue
 			var weight: float = 1.0
 			if ai != null and ai.has_method("_get_phase_weights"):
@@ -554,7 +554,7 @@ func _find_resource_bridge_plan(own_set: Dictionary, bridges: Dictionary, own_gr
 		return []
 	var out: Array = []
 	for t in best_line:
-		out.append(battle.grid_to_world(t.x, t.y))
+		out.append(_ctx.grid_to_world(t.x, t.y))
 	return out
 
 func _point_segment_distance(p: Vector2, a: Vector2, b: Vector2) -> float:
@@ -578,7 +578,7 @@ func _find_transport_shores(own_set: Dictionary, enemy_set: Dictionary, bridges:
 			var n: Vector2i = c + d
 			if n.x < 0 or n.x >= RTSConfig.MAP_SIZE or n.y < 0 or n.y >= RTSConfig.MAP_SIZE:
 				continue
-			if battle.get_terrain_at_grid(n.x, n.y) != 2:
+			if _ctx.terrain_at_grid(n.x, n.y) != 2:
 				continue
 			if bridges.has(n):
 				continue
@@ -589,7 +589,7 @@ func _find_transport_shores(own_set: Dictionary, enemy_set: Dictionary, bridges:
 			var n: Vector2i = c + d
 			if n.x < 0 or n.x >= RTSConfig.MAP_SIZE or n.y < 0 or n.y >= RTSConfig.MAP_SIZE:
 				continue
-			if battle.get_terrain_at_grid(n.x, n.y) != 2:
+			if _ctx.terrain_at_grid(n.x, n.y) != 2:
 				continue
 			if bridges.has(n):
 				continue
@@ -601,8 +601,8 @@ func _find_transport_shores(own_set: Dictionary, enemy_set: Dictionary, bridges:
 	var enemy_castle = ai._get_attack_target_castle()
 	if not is_instance_valid(my_castle) or not is_instance_valid(enemy_castle):
 		return {}
-	var own_grid: Vector2i = battle.world_to_grid(my_castle.global_position)
-	var enemy_grid: Vector2i = battle.world_to_grid(enemy_castle.global_position)
+	var own_grid: Vector2i = _ctx.world_to_grid(my_castle.global_position)
+	var enemy_grid: Vector2i = _ctx.world_to_grid(enemy_castle.global_position)
 	var visited: Dictionary = {}
 	var source: Dictionary = {}
 	var sea_dist: Dictionary = {}
@@ -636,7 +636,7 @@ func _find_transport_shores(own_set: Dictionary, enemy_set: Dictionary, bridges:
 				continue
 			if visited.has(n):
 				continue
-			if battle.get_terrain_at_grid(n.x, n.y) != 2:
+			if _ctx.terrain_at_grid(n.x, n.y) != 2:
 				continue
 			# 运载船不能从桥下/桥上通过
 			if bridges.has(n):
@@ -650,7 +650,7 @@ func _find_transport_shores(own_set: Dictionary, enemy_set: Dictionary, bridges:
 	# 一次收集敌岸附近的守军/防御塔，避免为每个候选岸点重复全实体扫描。
 	var defenses: Array = _collect_landing_defenses()
 	for cd in cands:
-		var land_world: Vector3 = battle.grid_to_world(cd["enemy_land"].x, cd["enemy_land"].y)
+		var land_world: Vector3 = _ctx.grid_to_world(cd["enemy_land"].x, cd["enemy_land"].y)
 		cd["defense"] = _landing_defense_score(land_world, defenses)
 		# 先比较“从己方主城到登陆点”的实际接近距离（陆路到己岸 + 最短海路），
 		# 再比较登陆后到敌方主城的陆路距离；距离最近的上岸点优先。
@@ -667,14 +667,14 @@ func _find_transport_shores(own_set: Dictionary, enemy_set: Dictionary, bridges:
 	# 最近上岸点敌军过强：只在这片岸线附近找替代点，保证运载船仍然就近登陆。
 	if float(nearest["defense"]) > defense_limit:
 		var nearby: Array = []
-		var nearest_land: Vector3 = battle.grid_to_world(nearest["enemy_land"].x, nearest["enemy_land"].y)
+		var nearest_land: Vector3 = _ctx.grid_to_world(nearest["enemy_land"].x, nearest["enemy_land"].y)
 		for cd in cands:
 			if cd == nearest:
 				continue
 			# 只考虑防御确实更低的附近岸点；否则换过去反而更危险，不如保持最近点。
 			if float(cd["defense"]) >= float(nearest["defense"]) - 0.5:
 				continue
-			var near_land: Vector3 = battle.grid_to_world(cd["enemy_land"].x, cd["enemy_land"].y)
+			var near_land: Vector3 = _ctx.grid_to_world(cd["enemy_land"].x, cd["enemy_land"].y)
 			if _flat_distance(near_land, nearest_land) <= LANDING_ALTERNATIVE_RADIUS \
 					or absf(float(cd["sea_dist"]) - float(nearest["sea_dist"])) <= LANDING_ALTERNATIVE_SEA_GAP:
 				nearby.append(cd)
@@ -688,8 +688,8 @@ func _find_transport_shores(own_set: Dictionary, enemy_set: Dictionary, bridges:
 			if not a_safe:
 				if not is_equal_approx(float(a["defense"]), float(b["defense"])):
 					return float(a["defense"]) < float(b["defense"])
-			var a_land: Vector3 = battle.grid_to_world(a["enemy_land"].x, a["enemy_land"].y)
-			var b_land: Vector3 = battle.grid_to_world(b["enemy_land"].x, b["enemy_land"].y)
+			var a_land: Vector3 = _ctx.grid_to_world(a["enemy_land"].x, a["enemy_land"].y)
+			var b_land: Vector3 = _ctx.grid_to_world(b["enemy_land"].x, b["enemy_land"].y)
 			var a_d: float = _flat_distance(a_land, nearest_land)
 			var b_d: float = _flat_distance(b_land, nearest_land)
 			if not is_equal_approx(a_d, b_d):
@@ -705,7 +705,7 @@ func _find_transport_shores(own_set: Dictionary, enemy_set: Dictionary, bridges:
 				continue
 			if float(cd["approach"]) > float(nearest["approach"]) + LANDING_AVOID_MAX_DETOUR:
 				continue
-			var cd_land: Vector3 = battle.grid_to_world(cd["enemy_land"].x, cd["enemy_land"].y)
+			var cd_land: Vector3 = _ctx.grid_to_world(cd["enemy_land"].x, cd["enemy_land"].y)
 			if _flat_distance(cd_land, avoid_pos) > 6.0:
 				pick = cd
 				break
@@ -714,10 +714,10 @@ func _find_transport_shores(own_set: Dictionary, enemy_set: Dictionary, bridges:
 	var own_land_cell2: Vector2i = own_land.get(best_src2, best_src2)
 	var enemy_land_cell2: Vector2i = enemy_land.get(best_enemy2, best_enemy2)
 	return {
-		"own_water": battle.grid_to_world(best_src2.x, best_src2.y),
-		"own_land": battle.grid_to_world(own_land_cell2.x, own_land_cell2.y),
-		"enemy_water": battle.grid_to_world(best_enemy2.x, best_enemy2.y),
-		"enemy_land": battle.grid_to_world(enemy_land_cell2.x, enemy_land_cell2.y)
+		"own_water": _ctx.grid_to_world(best_src2.x, best_src2.y),
+		"own_land": _ctx.grid_to_world(own_land_cell2.x, own_land_cell2.y),
+		"enemy_water": _ctx.grid_to_world(best_enemy2.x, best_enemy2.y),
+		"enemy_land": _ctx.grid_to_world(enemy_land_cell2.x, enemy_land_cell2.y)
 	}
 
 # 统计登陆点附近的敌方防御强度。只算能反击的陆军、战船与防御建筑；
@@ -779,11 +779,11 @@ func _tick_bridge(delta: float):
 		_request_plan_in(1.0)
 		return
 	var pos: Vector3 = bridge_plan[0]
-	var g: Vector2i = battle.world_to_grid(pos)
+	var g: Vector2i = _ctx.world_to_grid(pos)
 	var pending_bridge: Building = null
 	for e in battle.entities.get_children():
 		if e is Building and e.entity_id == BRIDGE_ID and e.health > 0:
-			if battle.world_to_grid(e.global_position) == g:
+			if _ctx.world_to_grid(e.global_position) == g:
 				# 施工中的桥段不能从计划里弹掉。以前只要桥实体存在就算“已建”，
 				# AI 会把整条计划快速弹空，最后一段却停在等待农民的状态，
 				# 之后重新规划又把这段当成已存在弹掉，桥永远差一格不通。
@@ -823,7 +823,7 @@ func _tick_bridge(delta: float):
 			_request_plan_in(1.0)
 		return
 	_bridge_afford_timer = 0.0
-	if battle.has_method("is_valid_bridge_position") and not battle.is_valid_bridge_position(pos):
+	if battle.has_method("is_valid_bridge_position") and not _ctx.is_valid_bridge_position(pos):
 		# 这个桥位被单位/建筑挡住或地形已变，下一周期重新找
 		bridge_plan.clear()
 		_register_bridge_failure()
@@ -865,7 +865,7 @@ func _recalculate_army_paths():
 func _wave_step() -> int:
 	if battle == null:
 		return 0
-	return int(maxf(0.0, float(battle.game_time)) / FLEET_GROWTH_INTERVAL)
+	return int(maxf(0.0, float(_ctx.game_time())) / FLEET_GROWTH_INTERVAL)
 
 # 在“开始组织新一轮登陆”时固定本波规模，避免舰队出航途中目标继续膨胀。
 func _prepare_wave_targets():
@@ -1325,10 +1325,10 @@ func _fleet_slots(base: Vector3, count: int, spacing: float) -> Array:
 	return out
 
 func _is_water_point(pos: Vector3) -> bool:
-	var g: Vector2i = battle.world_to_grid(pos)
+	var g: Vector2i = _ctx.world_to_grid(pos)
 	if g.x < 0 or g.x >= RTSConfig.MAP_SIZE or g.y < 0 or g.y >= RTSConfig.MAP_SIZE:
 		return false
-	return battle.get_terrain_at_grid(g.x, g.y) == 2
+	return _ctx.terrain_at_grid(g.x, g.y) == 2
 
 func _flat_distance(a: Vector3, b: Vector3) -> float:
 	return Vector2(a.x - b.x, a.z - b.z).length()
@@ -1336,14 +1336,14 @@ func _flat_distance(a: Vector3, b: Vector3) -> float:
 func _is_shore_water_point(pos: Vector3) -> bool:
 	if not _is_water_point(pos):
 		return false
-	var g: Vector2i = battle.world_to_grid(pos)
+	var g: Vector2i = _ctx.world_to_grid(pos)
 	for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
 		var nx: int = g.x + d.x
 		var ny: int = g.y + d.y
 		if nx < 0 or nx >= RTSConfig.MAP_SIZE or ny < 0 or ny >= RTSConfig.MAP_SIZE:
 			continue
 		# 浅滩（overlay==3）陆军可以走，也算能靠岸
-		if battle.get_terrain_at_grid(nx, ny) != 2 or battle.get_overlay_at_grid(nx, ny) == 3:
+		if _ctx.terrain_at_grid(nx, ny) != 2 or _ctx.overlay_at_grid(nx, ny) == 3:
 			return true
 	return false
 
@@ -1359,7 +1359,7 @@ func _shore_slots(base: Vector3, count: int, spacing: float) -> Array:
 			break
 	if all_shore:
 		return generic
-	var center: Vector2i = battle.world_to_grid(base)
+	var center: Vector2i = _ctx.world_to_grid(base)
 	var radius: int = int(ceil(spacing * float(count))) + 8
 	var candidates: Array = []
 	for dx in range(-radius, radius + 1):
@@ -1368,9 +1368,9 @@ func _shore_slots(base: Vector3, count: int, spacing: float) -> Array:
 			var gy: int = center.y + dy
 			if gx < 0 or gx >= RTSConfig.MAP_SIZE or gy < 0 or gy >= RTSConfig.MAP_SIZE:
 				continue
-			if not _is_shore_water_point(battle.grid_to_world(gx, gy)):
+			if not _is_shore_water_point(_ctx.grid_to_world(gx, gy)):
 				continue
-			var p: Vector3 = battle.grid_to_world(gx, gy)
+			var p: Vector3 = _ctx.grid_to_world(gx, gy)
 			candidates.append({"p": p, "d": p.distance_to(base)})
 	candidates.sort_custom(func(a, b): return float(a["d"]) < float(b["d"]))
 	var out: Array = []
@@ -1454,7 +1454,7 @@ func _pick_units(max_count: int) -> Array:
 	return out
 
 func _find_land_near(pos: Vector3) -> Vector3:
-	var center: Vector2i = battle.world_to_grid(pos)
+	var center: Vector2i = _ctx.world_to_grid(pos)
 	# 搜索半径放大到 11 格：原来的 8 格在宽阔水域里常常找不到岸，
 	# 单位就被一直留在船里下不来。
 	for radius in range(0, 11):
@@ -1468,14 +1468,14 @@ func _find_land_near(pos: Vector3) -> Vector3:
 					continue
 				# 普通山地不可登陆；只有缓坡/台地(4/5)能让陆军上岸。
 				# 浅滩（overlay==3）陆军能走，算合格。
-				var terrain: int = int(battle.get_terrain_at_grid(gx, gy))
+				var terrain: int = int(_ctx.terrain_at_grid(gx, gy))
 				if terrain < 0:
 					continue
-				if terrain != 2 and battle.is_cliff_tile(gx, gy):
+				if terrain != 2 and _ctx.is_cliff_tile(gx, gy):
 					continue
-				if terrain == 2 and int(battle.get_overlay_at_grid(gx, gy)) != 3:
+				if terrain == 2 and int(_ctx.overlay_at_grid(gx, gy)) != 3:
 					continue
-				return battle.grid_to_world(gx, gy)
+				return _ctx.grid_to_world(gx, gy)
 	return Vector3.ZERO
 
 # ═══════════════════════ 运载船前置科技 ═══════════════════════
@@ -1485,11 +1485,11 @@ func _find_land_near(pos: Vector3) -> Vector3:
 func _shipyard_reaches_own_water(sy: Building) -> bool:
 	if not is_instance_valid(sy) or own_shore_water == Vector3.ZERO:
 		return false
-	var shore_grid: Vector2i = battle.world_to_grid(own_shore_water)
+	var shore_grid: Vector2i = _ctx.world_to_grid(own_shore_water)
 	var key: String = "%d@%d,%d" % [sy.get_instance_id(), shore_grid.x, shore_grid.y]
 	if _shipyard_water_cache.has(key):
 		return bool(_shipyard_water_cache[key])
-	var start: Vector2i = battle.world_to_grid(sy.global_position)
+	var start: Vector2i = _ctx.world_to_grid(sy.global_position)
 	var target: Vector2i = Vector2i(-1, -1)
 	# 船坞在陆地上，找它旁边最近的一格水面作为 BFS 起点。
 	for radius in range(0, 4):
@@ -1501,7 +1501,7 @@ func _shipyard_reaches_own_water(sy: Building) -> bool:
 				var gz: int = start.y + dz
 				if gx < 0 or gx >= RTSConfig.MAP_SIZE or gz < 0 or gz >= RTSConfig.MAP_SIZE:
 					continue
-				if battle.get_terrain_at_grid(gx, gz) == 2:
+				if _ctx.terrain_at_grid(gx, gz) == 2:
 					target = Vector2i(gx, gz)
 					break
 			if target.x >= 0:
@@ -1509,7 +1509,7 @@ func _shipyard_reaches_own_water(sy: Building) -> bool:
 		if target.x >= 0:
 			break
 	var reachable: bool = false
-	if target.x >= 0 and battle.get_terrain_at_grid(shore_grid.x, shore_grid.y) == 2:
+	if target.x >= 0 and _ctx.terrain_at_grid(shore_grid.x, shore_grid.y) == 2:
 		if target == shore_grid:
 			reachable = true
 		else:
@@ -1528,7 +1528,7 @@ func _shipyard_reaches_own_water(sy: Building) -> bool:
 						continue
 					if n.x < 0 or n.x >= RTSConfig.MAP_SIZE or n.y < 0 or n.y >= RTSConfig.MAP_SIZE:
 						continue
-					if battle.get_terrain_at_grid(n.x, n.y) != 2:
+					if _ctx.terrain_at_grid(n.x, n.y) != 2:
 						continue
 					visited[n] = true
 					queue.append(n)
@@ -1598,7 +1598,7 @@ func _drop_remote_transport_orders(keep: Building) -> void:
 			e.production_queue.erase(TRANSPORT_ID)
 
 func _find_shore_shipyard_pos() -> Vector3:
-	var base: Vector2i = battle.world_to_grid(own_shore_land)
+	var base: Vector2i = _ctx.world_to_grid(own_shore_land)
 	for radius in range(1, 13):
 		for dx in range(-radius, radius + 1):
 			for dz in range(-radius, radius + 1):
@@ -1608,7 +1608,7 @@ func _find_shore_shipyard_pos() -> Vector3:
 				var gz: int = base.y + dz
 				if gx < 0 or gx >= RTSConfig.MAP_SIZE or gz < 0 or gz >= RTSConfig.MAP_SIZE:
 					continue
-				if battle.get_terrain_at_grid(gx, gz) != 0:
+				if _ctx.terrain_at_grid(gx, gz) != 0:
 					continue
 				var has_water: bool = false
 				for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
@@ -1616,12 +1616,12 @@ func _find_shore_shipyard_pos() -> Vector3:
 					var nz: int = gz + d.y
 					if nx < 0 or nx >= RTSConfig.MAP_SIZE or nz < 0 or nz >= RTSConfig.MAP_SIZE:
 						continue
-					if battle.get_terrain_at_grid(nx, nz) == 2:
+					if _ctx.terrain_at_grid(nx, nz) == 2:
 						has_water = true
 						break
 				if not has_water:
 					continue
-				var pos: Vector3 = battle.grid_to_world(gx, gz)
+				var pos: Vector3 = _ctx.grid_to_world(gx, gz)
 				if ai.has_method("_can_place_ai_building") and not ai._can_place_ai_building(SHIPYARD_ID, pos):
 					continue
 				return pos
@@ -1770,4 +1770,6 @@ func _afford_upg(id: int) -> bool:
 	if _ctx != null:
 		return _ctx.can_afford_upgrade(id)
 	return ai.can_afford_upgrade(id) if ai != null else false
+func _now() -> float:
+	return _ctx.game_time() if _ctx != null else float(ai.battle.game_time)
 
