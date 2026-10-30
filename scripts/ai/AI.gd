@@ -1482,6 +1482,8 @@ func build_ladder(pos: Vector3) -> bool:
 		builder = battle.find_nearest_idle_builder(my_team, my_peer_id, pos, 70.0) \
 				if battle.has_method("find_nearest_idle_builder") else null
 	if builder == null:
+		if _worker_director != null and not _worker_director.is_processing_build_request():
+			_worker_director.request_build(8, pos, Vector3.ZERO, false, "ladder")
 		return false
 	if _water_crossing != null and not _water_crossing.can_builder_reach(builder.global_position, pos):
 		if _worker_director != null:
@@ -1622,6 +1624,9 @@ func build_building(building_id: int, pos: Vector3, facing: Vector3 = Vector3.ZE
 		builder = battle.find_nearest_idle_builder(my_team, my_peer_id, pos, 60.0) \
 				if battle.has_method("find_nearest_idle_builder") else null
 	if builder == null:
+		if _worker_director != null and not _worker_director.is_processing_build_request():
+			_worker_director.request_build(building_id, pos, facing,
+					building_id in [21, 28] or _base_under_attack(), "build")
 		return false
 	# 农民脚下到建造点没有陆路（被水隔开）时，不要先拍一个永远修不完的地基：
 	# 让渡水模块从农民所在岸边规划短桥，桥修通后 AI 的下一次建造会自然成功。

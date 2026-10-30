@@ -4,9 +4,9 @@
 > 里的补农、采集、逃跑、建造、修理、打猎逻辑，收敛成
 > **一个调度器 + 一张需求表 + 一套角色租约**。
 >
-> 实施状态：**第 5 阶段（墙体/梯子收口）已接入**。`AIDefense` 建墙前改为询问
-> WorkerDirector 是否有可用建造者，梯子建造也走 Director 领取/释放租约；
-> 完整的 BuildRequest 队列仍是下一步，目前采用“同步领取 + 90 秒租约”。
+> 实施状态：**第 6 阶段（建造请求队列）已接入**。没有可用建造者时，`build_building`
+> 会把请求登记到 Director，下一轮分配统一重试；请求带位置去重、30 秒 TTL 和
+> 3 次尝试上限。完整 RepairRequest 队列和旧回退分支清理仍未完成。
 >
 > 这套结构可以视为 [AI_ARMY_DISPATCH_DESIGN.md](AI_ARMY_DISPATCH_DESIGN.md)
 > 的农民版：军队用 ArmyDirector，农民用 WorkerDirector，两者共用同一套

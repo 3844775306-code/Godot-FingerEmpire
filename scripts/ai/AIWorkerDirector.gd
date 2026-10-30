@@ -30,6 +30,11 @@ var _last_train_block: String = ""
 var _flee_resume: Dictionary = {}
 # uid -> {unit, building, kind, source, created_at, assigned_at, expires_at}
 var _builder_reservations: Dictionary = {}
+# 建造请求：在没有空闲建造者时先记账，避免每个调用点各自重试。
+var _build_requests: Dictionary = {}
+var _processing_build_request: bool = false
+const BUILD_REQUEST_TTL: float = 30.0
+const BUILD_REQUEST_TRIES: int = 3
 
 func setup(controller) -> void:
 	ai = controller
@@ -69,6 +74,7 @@ func allocate() -> void:
 	_assign_idle(workers)
 	_reassign_full(workers)
 	_periodic_rebalance(workers)
+	_process_build_requests()
 
 # 补农唯一入口：先保底，再补到阶段目标。
 # 返回是否成功排入一个农民。
@@ -207,6 +213,46 @@ func has_available_builder(pos: Vector3, critical: bool = false, max_dist: float
 		if w.global_position.distance_squared_to(pos) <= max_sq:
 			return true
 	return false
+
+func request_build(building_id: int, pos: Vector3, facing: Vector3, critical: bool, source: String) -> void:
+	if ai == null:
+		return
+	var key: String = "%d:%d:%d" % [building_id, roundi(pos.x), roundi(pos.z)]
+	if _build_requests.has(key):
+		return
+	var now: float = float(ai.battle.game_time) if ai.battle != null else 0.0
+	_build_requests[key] = {
+		"building_id": building_id,
+		"pos": pos,
+		"facing": facing,
+		"critical": critical,
+		"source": source,
+		"created_at": now,
+		"tries": 0,
+	}
+
+func is_processing_build_request() -> bool:
+	return _processing_build_request
+
+func _process_build_requests() -> void:
+	if _processing_build_request or _build_requests.is_empty() or ai == null or ai.battle == null:
+		return
+	var now: float = float(ai.battle.game_time)
+	for key in _build_requests.keys():
+		var req: Dictionary = _build_requests[key]
+		if now - float(req.created_at) > BUILD_REQUEST_TTL or int(req.tries) >= BUILD_REQUEST_TRIES:
+			_build_requests.erase(key)
+			continue
+		if not has_available_builder(req.pos, bool(req.critical), 60.0):
+			continue
+		_processing_build_request = true
+		var ok: bool = ai.build_building(int(req.building_id), req.pos, req.facing)
+		_processing_build_request = false
+		if ok:
+			_build_requests.erase(key)
+		else:
+			req.tries = int(req.tries) + 1
+			_build_requests[key] = req
 
 func on_builder_assigned(builder, building, kind: String = "") -> void:
 	if builder == null or not is_instance_valid(builder):
