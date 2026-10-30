@@ -165,6 +165,23 @@ static func _add_nocked_arrow(bow: Node3D) -> void:
 static func has_custom_attack(entity_id: int) -> bool:
 	return entity_id in BOW_IDS or entity_id in SWORD_IDS or entity_id in SPEAR_IDS
 
+# 近战挥击的命中时刻：数值与下面的剑/矛补间保持一致。
+# 剑：0.07 基础周期蓄力，0.10 挥出，取 0.12 作为剑身到达最前方附近的命中点；
+# 矛：0.08 蓄力，0.10 突刺，取 0.13 作为矛尖刺出的命中点。
+# attack_speed 会像 _period_scale 一样把整套动作拉伸，所以命中点也要乘同一倍率。
+static func melee_impact_delay(entity_id: int, attack_speed: float) -> float:
+	var base_period: float = 0.35
+	var impact_ratio: float = 0.12
+	if entity_id in SPEAR_IDS:
+		base_period = 0.42
+		impact_ratio = 0.13
+	elif entity_id not in SWORD_IDS:
+		return 0.0
+	var k: float = clampf(attack_speed / base_period, 0.35, 6.0)
+	var delay: float = impact_ratio * k
+	# 极快攻速下不要让本次挥击拖到下一次攻击之后。
+	return minf(delay, maxf(0.02, attack_speed * 0.8))
+
 # 怪物/单位攻击时，除了骨骼攻击动作，再给武器本身叠一层动作：
 # 弓拉弦后回弹、剑补一记横斩、矛向前突刺、盾轻微前顶。
 static func play_attack(entity: Node3D, entity_id: int, swing_duration: float = 0.0) -> void:

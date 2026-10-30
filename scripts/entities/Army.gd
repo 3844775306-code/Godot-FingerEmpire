@@ -124,6 +124,12 @@ var _attack_watch_target_id: int = -1
 var _attack_progress_target_id: int = -1
 var _attack_progress_last_dist: float = INF
 var _attack_progress_time: float = 0.0
+# 近战伤害不在抬手瞬间结算，而是等武器模型真正挥到命中点再扣血。
+# 这里只缓存一次挥击的目标/范围/伤害，物理帧推进计时；目标死了或消失就跳过。
+var _pending_melee_timer: float = 0.0
+var _pending_melee_target_id: int = -1
+var _pending_melee_aoe: bool = false
+var _pending_melee_power: float = 0.0
 var _advance_progress_last_dist: float = INF
 var _advance_progress_time: float = 0.0
 var _self_defense_until_ms: int = 0
@@ -1606,6 +1612,9 @@ func _physics_process(delta):
 		if _phys_phase % _phys_lod != 0:
 			return
 		delta *= float(_phys_lod)
+
+	# 近战挥击的命中延迟：动画先挥出去，计时到点才真正扣血。
+	_tick_pending_melee_hit(delta)
 
 	# 物理帧降频：城墙高度、落水伤害、扬尘、上船检测都带时间参数，
 	# 隔一个物理步跑一次并传入 2 倍 delta，行为速率不变。
@@ -3808,20 +3817,7 @@ func _attack(target, delta):
 
 	# ½üÕ½·¶Î§ÉËº¦£¨³¤Ç¹±øµÈ£©
 	if damage_radius > 0 and attack_range <= 2.0:
-		var bm_aoe = _get_bm()
-		var all_entities = bm_aoe.get_nearby_entities(global_position, damage_radius + 4.0) if bm_aoe else get_tree().get_nodes_in_group("entities")
-		for entity in all_entities:
-			if entity == self or not (entity is GameEntity) or entity.health <= 0:
-				continue
-			if not _is_hostile_to(entity):
-				continue
-			var dist = global_position.distance_to(entity.global_position) - body_radius - entity.body_radius
-			if dist <= damage_radius:
-				var _dmg_r = attack
-				# 农民对动物伤害+900%
-				if entity_id == 10 and entity.get("_animal_type") != null and str(entity.get("_animal_type")) != "":
-					_dmg_r = attack * 10
-				entity.take_damage(_dmg_r, self)
+		_queue_melee_hit(null, true, attack)
 		attack_timer = attack_speed
 		return
 
@@ -3873,13 +3869,86 @@ func _attack(target, delta):
 			var aim_point: Vector3 = bullet.target_pos if bullet.target_pos != Vector3.ZERO else target.global_position
 			bullet.aim_initial(aim_point)
 	else:
-		var _dmg_m = attack
-		# 农民对动物伤害+900%
-		if entity_id == 10 and target.get("_animal_type") != null and str(target.get("_animal_type")) != "":
-			_dmg_m = attack * 10
-		target.take_damage(_dmg_m, self)
+		_queue_melee_hit(target, false, attack)
 
 	attack_timer = attack_speed
+
+# 近战武器挥击的命中延迟由 WeaponAttachment 的剑/矛补间统一给出，
+# 保证“动画挥到命中点”和“扣血”使用同一套时间比例。
+func _melee_impact_delay() -> float:
+	return WeaponAttachment.melee_impact_delay(entity_id, attack_speed)
+
+func _queue_melee_hit(target, aoe: bool, power: float) -> void:
+	# 极快攻速或异常状态导致上一击还没结算时，先补算上一击，避免丢伤害。
+	_flush_pending_melee_hit()
+	var delay: float = _melee_impact_delay()
+	if delay <= 0.001:
+		_resolve_melee_hit(target.get_instance_id() if target != null and is_instance_valid(target) else -1, aoe, power)
+		return
+	_pending_melee_timer = delay
+	_pending_melee_target_id = target.get_instance_id() if target != null and is_instance_valid(target) else -1
+	_pending_melee_aoe = aoe
+	_pending_melee_power = power
+
+func _tick_pending_melee_hit(delta: float) -> void:
+	if _pending_melee_timer <= 0.0:
+		return
+	_pending_melee_timer -= delta
+	if _pending_melee_timer > 0.0:
+		return
+	var target_id: int = _pending_melee_target_id
+	var aoe: bool = _pending_melee_aoe
+	var power: float = _pending_melee_power
+	_pending_melee_timer = 0.0
+	_pending_melee_target_id = -1
+	_pending_melee_aoe = false
+	_pending_melee_power = 0.0
+	_resolve_melee_hit(target_id, aoe, power)
+
+func _flush_pending_melee_hit() -> void:
+	if _pending_melee_timer <= 0.0:
+		return
+	var target_id: int = _pending_melee_target_id
+	var aoe: bool = _pending_melee_aoe
+	var power: float = _pending_melee_power
+	_pending_melee_timer = 0.0
+	_pending_melee_target_id = -1
+	_pending_melee_aoe = false
+	_pending_melee_power = 0.0
+	_resolve_melee_hit(target_id, aoe, power)
+
+# 命中结算：只在挥击计时到点时调用。目标已死亡/消失/变成友军就跳过；
+# 范围近战在命中点重新取周围敌人，保持原来“以自身为中心”的判定。
+func _resolve_melee_hit(target_id: int, aoe: bool, power: float) -> void:
+	if aoe:
+		var bm_aoe = _get_bm()
+		var all_entities = bm_aoe.get_nearby_entities(global_position, damage_radius + 4.0) if bm_aoe else get_tree().get_nodes_in_group("entities")
+		for entity in all_entities:
+			if entity == self or not (entity is GameEntity) or entity.health <= 0:
+				continue
+			if not _is_hostile_to(entity):
+				continue
+			var dist = global_position.distance_to(entity.global_position) - body_radius - entity.body_radius
+			if dist > damage_radius:
+				continue
+			var dmg: float = power
+			# 农民对动物伤害+900%
+			if entity_id == 10 and entity.get("_animal_type") != null and str(entity.get("_animal_type")) != "":
+				dmg = power * 10.0
+			entity.take_damage(dmg, self)
+		return
+	if target_id == -1:
+		return
+	var target = instance_from_id(target_id)
+	if target == null or not is_instance_valid(target) or not (target is GameEntity) or target.health <= 0:
+		return
+	if not _is_hostile_to(target):
+		return
+	var dmg_single: float = power
+	# 农民对动物伤害+900%
+	if entity_id == 10 and target.get("_animal_type") != null and str(target.get("_animal_type")) != "":
+		dmg_single = power * 10.0
+	target.take_damage(dmg_single, self)
 
 # 攻击音效/动画只在真正出手时触发；此前每帧调用会让上百个交战单位
 # 每秒尝试播放几千次音效，同时反复刷新动画状态。
