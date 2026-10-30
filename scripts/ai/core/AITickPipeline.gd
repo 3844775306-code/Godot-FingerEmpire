@@ -10,16 +10,33 @@ extends RefCounted
 # 下一步（A6 收尾）会把每个分支抽成方法，注册成 Callable，由本类直接 run()。
 
 var _names: PackedStringArray = PackedStringArray()
+var _fns: Array = []
 var _t_total: float = 0.0
 var _t_stage: PackedFloat32Array = PackedFloat32Array()
 var _runs: int = 0
 
-func register(names: Array) -> void:
+func register(names: Array, callables: Array = []) -> void:
 	_names = PackedStringArray()
 	for n in names:
 		_names.append(String(n))
 	_t_stage.resize(_names.size())
 	_t_stage.fill(0.0)
+	_fns = callables.duplicate()
+	if not _fns.is_empty() and _fns.size() != _names.size():
+		push_error("[PIPELINE] Callable 数与阶段数不一致: %d vs %d" % [_fns.size(), _names.size()])
+
+# A6 收尾：顺序完全由注册表决定，新增阶段只需插一行名字 + 一个方法。
+func run(step: int) -> bool:
+	if step < 0 or step >= _fns.size():
+		return false
+	var fn: Callable = _fns[step]
+	if not fn.is_valid():
+		return false
+	fn.call()
+	return true
+
+func has_callables() -> bool:
+	return _fns.size() == _names.size() and not _fns.is_empty()
 
 func last_step() -> int:
 	return _names.size() - 1

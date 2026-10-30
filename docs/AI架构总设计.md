@@ -711,3 +711,23 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/ai_arch_check.ps1
 **踩坑（第十个）**：删掉 `ai` 字段后，`DefensePlan.gd:85` 仍在读 `defense.ai.battle`，运行期报 `Invalid access to property 'ai'`（31 条）。**删除字段前必须全仓库搜索该字段的读取点**，不能只看本文件。
 
 **当前架构状态一句话**：执行层 5 个模块只依赖 `AIContext`（读）+ 5 个 Port（写），对控制器与 `battle` 的直接依赖为 **0**；决策顺序由 `AITickPipeline` 的 15 个具名阶段定义；四条硬规则可由 `tools/ai_arch_check.ps1` 一键验证。**A0~A7 全部完成。**
+
+---
+
+## 25. A6 收尾：决策阶段真正由数据驱动（2026-10-31 07:25）
+
+上一轮 A6 只做了「阶段名」，这一轮把**执行体**也交了出去：
+
+- `_run_decide_step(step)` 从 84 行的 `match` 缩到 7 行，只剩守卫 + `_pipeline.run(step)`；
+- 原来的 15 个 `case` 各自抽成方法 `_decide_stage_0` ~ `_decide_stage_14`，函数体与原分支逐行等价（仅去掉一级缩进）；
+- `AI.gd` 在 `_ready` 里按名字数组生成 `Callable(self, "_decide_stage_%d" % i)` 并注册给 `AITickPipeline`；
+- `AITickPipeline.register(names, callables)` 校验两者数量一致，`run(step)` 取注册的 Callable 执行，`has_callables()` 供自检。
+
+**新增一个决策阶段的完整步骤**（现在是两步）：
+1. `DECIDE_STAGE_NAMES` 数组插一行名字；
+2. 写一个 `_decide_stage_N()` 方法。
+顺序即数组顺序，不需要改 `match`。
+
+**验证**：2 分钟 3v3 HELL → `front 66.7% / idle 6.7% / engage 16.7%`，脚本错误 0；`ai_arch_check.ps1` 仍为 R1=R2=R3=R4=0。
+
+**踩坑（第十一个）**：从 `match` 抽方法时，分支体原本是 3 级 Tab，抽到函数里要**正好去掉 2 级**——少去一级会变成缩进错误，多去一级会把内层 `if` 的逻辑改掉。抽完必须抽查 2~3 个阶段方法的缩进，再跑一次自对弈。

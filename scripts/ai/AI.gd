@@ -1963,7 +1963,10 @@ func _ready():
 	_ai_clock.add("upgrade_cycle", 20.0)
 	_ai_clock.add("defense_gap", DEFENSE_CHECK_INTERVAL)
 	_situation = AISituationScript.new()
-	_pipeline.register(DECIDE_STAGE_NAMES)
+	var _stage_fns: Array = []
+	for _si in range(DECIDE_STAGE_NAMES.size()):
+		_stage_fns.append(Callable(self, "_decide_stage_%d" % _si))
+	_pipeline.register(DECIDE_STAGE_NAMES, _stage_fns)
 	if _pipeline.size() != DECIDE_LAST_STEP + 1:
 		push_error("[PIPELINE] 阶段数与 DECIDE_LAST_STEP 不一致: %d vs %d" % [_pipeline.size(), DECIDE_LAST_STEP + 1])
 	if _context == null:
@@ -2461,87 +2464,134 @@ func _log_decide_profile(total_ms: float) -> void:
 func _run_decide_step(step: int) -> void:
 	if not battle:
 		return
-	match step:
-		0:
-			# 时钟已在 _ai_simulation_tick 逐帧推进，这里不再重复累加。
-			if my_peer_id != -1 and battle.has_method("update_player_limits"):
-				battle.update_player_limits(my_peer_id)
-				battle.update_player_population(my_peer_id)
-			else:
-				battle.update_resource_limits(my_team)
-				battle.update_population_limits()
-		1:
-			clear_invalid_targets()
-		2:
-			_refresh_visibility()
-		3:
-			_process_scout_recon()
-		4:
-			_refresh_primary_enemy()
-		5:
-			_update_resource_pressure(_last_delta)
-			_ensure_house_quota()
-			_ensure_military_producer_quota()
-		6:
-			# 升时代要求每 30 秒兜底检查一次：普通建造目标不一定包含瞭望塔等条件建筑；
-			# 同一轮里再检查一次能否直接进入新时代（不再按固定分钟数等待）。
-			# 计时已迁到 AIClock（P1），初始相位=1 表示首轮不触发，与旧初始值一致。
-			if _ai_clock != null and _ai_clock.due("age_build"):
-				_ensure_age_upgrade_buildings()
-				_try_start_age_upgrade()
-		7:
-			# 资源囤到接近上限时先泄压：补人口/建筑升级/多排兵，避免继续采集却被上限截断。
-			_relieve_resource_pressure()
-			_diplo_decide()
-		8:
-			if _defense == null:
-				_defense = AIDefenseScript.new(_context)
-			_defense.tick(_last_delta)
-		9:
-			# 守墙调度必须先于本帧的集结/主攻：新生产的远程兵在出生后的第一个
-			# AI 决策帧仍是空闲状态，若先执行 _state_* 里的 _rally_land_army_to_castle
-			# 或 attack_move，它们会被立刻拉去集结点/前线，之后一直是 MOVING/攻击移动，
-			# _is_ranged_wall_candidate 永远不满足，城墙也就永远等不到远程守军。
-			# 计时已迁到 AIClock（P1）；相位 0 表示首轮即触发，与旧初始值一致。
-			if _ai_clock != null and _ai_clock.due("wall_deploy"):
-				_deploy_ranged_units_to_walls()
-			# 守墙之后再安排塔内驻军：墙顶单位、赶路单位都已被占用，
-			# 不会把刚派去城墙的远程兵又抽回箭塔。
-			if _ai_clock != null and _ai_clock.due("garrison"):
-				_ai_garrison_soldiers()
-		10:
-			match phase:
-				Phase.PRODUCTION: _state_production(_last_delta)
-				Phase.DEVELOPMENT: _state_development(_last_delta)
-				Phase.ASSAULT: _state_assault(_last_delta)
-		11:
-			# 进攻阶段转换只在思考节流里判断；count_land_army 会遍历全部实体，不能每帧调用。
-			if phase == Phase.DEVELOPMENT:
-				# 曾经用"可出击野战军"判断，但军队调度接管后单位带角色，field 计数被扣空，
-				# ASSAULT 实际永远不触发（自对弈基线 t=480 仍停在 DEVELOPMENT）。
-				# 改为总陆军数（含守军/墙守/游击），阈值见 ASSAULT_LAND_ARMY_THRESHOLD。
-				if count_land_army() >= AIConfigScript.ASSAULT_LAND_ARMY_THRESHOLD:
-					phase = Phase.ASSAULT
-		12:
-			if _defense != null:
-				if _wall_planner == null:
-					_wall_planner = AIWallPlannerScript.new(self, _defense)
-					_wall_planner.set_context(_context)
-				_wall_planner.tick(_last_delta)
-		13:
-			# 前线闲兵补派：attack/attack_move 结束后（或被墙挡住停下）没人重新派单，
-			# 这些单位就长期待命。实测待命兵 45% 停在离家 25 米内、身边全有敌人。
-			# 计时已迁到 AIClock（P1），行为与旧的 _retask_timer 一致。
-			if _ai_clock != null and _ai_clock.due("retask"):
-				_retask_idle_front_units()
-		14:
-			# P2：快照放在轮末刷新，本轮 step 10 生产出来的单位本轮就能被统计到，
-			# 避免 count_land_army 读到「上一轮」的旧值导致派单滞后（实测待命比例偏高）。
-			_situation_shadow_tick()
-			if _water_crossing:
-				# 渡水模块按“决策轮次”推进，不是每帧推进。传入帧 delta 会让
-				# 船队集结/靠岸/搭桥的计时慢几十倍，看起来像 AI 永远不过河。
-				_water_crossing.tick(_decide_interval)
+	if step < 0 or step > DECIDE_LAST_STEP:
+		return
+	_pipeline.run(step)
+
+# A6：决策阶段 0
+func _decide_stage_0() -> void:
+	# 时钟已在 _ai_simulation_tick 逐帧推进，这里不再重复累加。
+	if my_peer_id != -1 and battle.has_method("update_player_limits"):
+		battle.update_player_limits(my_peer_id)
+		battle.update_player_population(my_peer_id)
+	else:
+		battle.update_resource_limits(my_team)
+		battle.update_population_limits()
+
+
+# A6：决策阶段 1
+func _decide_stage_1() -> void:
+	clear_invalid_targets()
+
+
+# A6：决策阶段 2
+func _decide_stage_2() -> void:
+	_refresh_visibility()
+
+
+# A6：决策阶段 3
+func _decide_stage_3() -> void:
+	_process_scout_recon()
+
+
+# A6：决策阶段 4
+func _decide_stage_4() -> void:
+	_refresh_primary_enemy()
+
+
+# A6：决策阶段 5
+func _decide_stage_5() -> void:
+	_update_resource_pressure(_last_delta)
+	_ensure_house_quota()
+	_ensure_military_producer_quota()
+
+
+# A6：决策阶段 6
+func _decide_stage_6() -> void:
+	# 升时代要求每 30 秒兜底检查一次：普通建造目标不一定包含瞭望塔等条件建筑；
+	# 同一轮里再检查一次能否直接进入新时代（不再按固定分钟数等待）。
+	# 计时已迁到 AIClock（P1），初始相位=1 表示首轮不触发，与旧初始值一致。
+	if _ai_clock != null and _ai_clock.due("age_build"):
+		_ensure_age_upgrade_buildings()
+		_try_start_age_upgrade()
+
+
+# A6：决策阶段 7
+func _decide_stage_7() -> void:
+	# 资源囤到接近上限时先泄压：补人口/建筑升级/多排兵，避免继续采集却被上限截断。
+	_relieve_resource_pressure()
+	_diplo_decide()
+
+
+# A6：决策阶段 8
+func _decide_stage_8() -> void:
+	if _defense == null:
+		_defense = AIDefenseScript.new(_context)
+	_defense.tick(_last_delta)
+
+
+# A6：决策阶段 9
+func _decide_stage_9() -> void:
+	# 守墙调度必须先于本帧的集结/主攻：新生产的远程兵在出生后的第一个
+	# AI 决策帧仍是空闲状态，若先执行 _state_* 里的 _rally_land_army_to_castle
+	# 或 attack_move，它们会被立刻拉去集结点/前线，之后一直是 MOVING/攻击移动，
+	# _is_ranged_wall_candidate 永远不满足，城墙也就永远等不到远程守军。
+	# 计时已迁到 AIClock（P1）；相位 0 表示首轮即触发，与旧初始值一致。
+	if _ai_clock != null and _ai_clock.due("wall_deploy"):
+		_deploy_ranged_units_to_walls()
+	# 守墙之后再安排塔内驻军：墙顶单位、赶路单位都已被占用，
+	# 不会把刚派去城墙的远程兵又抽回箭塔。
+	if _ai_clock != null and _ai_clock.due("garrison"):
+		_ai_garrison_soldiers()
+
+
+# A6：决策阶段 10
+func _decide_stage_10() -> void:
+	match phase:
+		Phase.PRODUCTION: _state_production(_last_delta)
+		Phase.DEVELOPMENT: _state_development(_last_delta)
+		Phase.ASSAULT: _state_assault(_last_delta)
+
+
+# A6：决策阶段 11
+func _decide_stage_11() -> void:
+	# 进攻阶段转换只在思考节流里判断；count_land_army 会遍历全部实体，不能每帧调用。
+	if phase == Phase.DEVELOPMENT:
+		# 曾经用"可出击野战军"判断，但军队调度接管后单位带角色，field 计数被扣空，
+		# ASSAULT 实际永远不触发（自对弈基线 t=480 仍停在 DEVELOPMENT）。
+		# 改为总陆军数（含守军/墙守/游击），阈值见 ASSAULT_LAND_ARMY_THRESHOLD。
+		if count_land_army() >= AIConfigScript.ASSAULT_LAND_ARMY_THRESHOLD:
+			phase = Phase.ASSAULT
+
+
+# A6：决策阶段 12
+func _decide_stage_12() -> void:
+	if _defense != null:
+		if _wall_planner == null:
+			_wall_planner = AIWallPlannerScript.new(self, _defense)
+			_wall_planner.set_context(_context)
+		_wall_planner.tick(_last_delta)
+
+
+# A6：决策阶段 13
+func _decide_stage_13() -> void:
+	# 前线闲兵补派：attack/attack_move 结束后（或被墙挡住停下）没人重新派单，
+	# 这些单位就长期待命。实测待命兵 45% 停在离家 25 米内、身边全有敌人。
+	# 计时已迁到 AIClock（P1），行为与旧的 _retask_timer 一致。
+	if _ai_clock != null and _ai_clock.due("retask"):
+		_retask_idle_front_units()
+
+
+# A6：决策阶段 14
+func _decide_stage_14() -> void:
+	# P2：快照放在轮末刷新，本轮 step 10 生产出来的单位本轮就能被统计到，
+	# 避免 count_land_army 读到「上一轮」的旧值导致派单滞后（实测待命比例偏高）。
+	_situation_shadow_tick()
+	if _water_crossing:
+		# 渡水模块按“决策轮次”推进，不是每帧推进。传入帧 delta 会让
+		# 船队集结/靠岸/搭桥的计时慢几十倍，看起来像 AI 永远不过河。
+		_water_crossing.tick(_decide_interval)
+
 func get_team_castle(tm) -> Building:
 	for entity in _cached_buildings():
 		if not is_instance_valid(entity) or entity.health <= 0:
