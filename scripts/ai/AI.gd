@@ -1308,6 +1308,33 @@ func _enemy_army_within(pos: Vector3, radius: float = BUILD_ENEMY_ARMY_SAFE_RADI
 			return true
 	return false
 
+# 基地是否正在挨打：只看城堡 15 米内是否已经有"真正有威胁的"敌军。
+# 不能直接用 _defense.threat_level：六 AI 混战时它经常全局 >=2，
+# 会把所有主攻永久取消，导致 AI 只守不攻、双方僵持。
+# 也不能只按"有没有敌人"算：实测敌方一个侦察兵路过城堡 15 米，就会让整个 AI
+# 在整局里再也不敢出主攻（420 秒里 4~6 个 AI 几乎每帧都是"家被打"）。
+# 现在的门槛：最近的真实战斗单位 < 8 米，或者 15 米内至少有 2 个真实战斗单位。
+func _base_under_attack() -> bool:
+	if battle == null:
+		return false
+	var castle = get_peer_castle(my_peer_id)
+	if castle == null:
+		return false
+	var count: int = 0
+	var nearest: float = 999.0
+	for e in battle.get_nearby_entities(castle.global_position, 15.0):
+		if not (e is Army) or e.health <= 0:
+			continue
+		if int(e.target_type) <= 0 and float(e.attack) <= 0.0:
+			continue
+		if int(e.entity_id) == 10 or _is_scout_unit(e):
+			continue
+		if not _entity_is_enemy(e):
+			continue
+		count += 1
+		nearest = minf(nearest, castle.global_position.distance_to(e.global_position))
+	return nearest < 8.0 or count >= 2
+
 # 最终落位校验：AI 的所有建造入口（随机仓库、防线规划、补建队列）都必须过这一关，
 # 防止建筑重叠、建到水面/山坡上，或直接压住资源点。
 func _can_place_ai_building(building_id: int, pos: Vector3) -> bool:
@@ -3399,6 +3426,15 @@ func update_tactic(_delta):
 	if player_mil > my_mil * 1.5:
 		return
 
+	# 兵力成型（>=20 野战兵）时不再满足于骚扰小队：直接切成全军压上，
+	# 否则大部队会长期待在主城里，实际参战比很低（实测 27 兵只有 8 个在交战）。
+	if my_mil >= 20 and current_tactic in [LateTactic.HARASS, LateTactic.RAID, LateTactic.NONE] \
+			and now - last_tactic_time >= TACTIC_COOLDOWN:
+		current_tactic = LateTactic.OVERWHELM
+		execute_overwhelm()
+		last_tactic_time = now
+		return
+
 	if now - last_tactic_time < TACTIC_COOLDOWN and current_tactic != LateTactic.NONE: return
 
 	if my_mil > player_mil * 1.1 and my_mil > 10:
@@ -4737,21 +4773,30 @@ func _ensure_military_producer_quota() -> void:
 		build_building(21, hp)
 
 func _process_line_4():
-	# 威胁上升 / 防守姿态时不再把主力送出去；骚扰、突袭、全军压上时仍允许补发主攻
-	if _defense != null and int(_defense.threat_level) >= 2:
+	# 只保留"危急"（敌军确实压上基地）时的守家优先；普通警戒交给守军处理，
+	# 否则六 AI 混战里 threat 长期 >=2，主攻会被永久取消。
+	if _defense != null and int(_defense.threat_level) >= 3:
 		return
 	if current_tactic == LateTactic.DEFEND:
 		return
+	# 主城 15 米内有敌不再取消整场主攻：守家兵有 ai_home_guard 标签，
+	# attack_move() 本来就跳过它们，野战部队可以照常出门。
+	var my_key_gate = my_peer_id if my_peer_id != -1 else my_team
+	var want_attack_gate: bool = an_attack()
+	# 解锁守军的时机提前：原来它排在"家被打就 return"之后，导致守军永远解锁不了，
+	# 每个 AI 都有约 1/3 的兵被 ai_home_guard 永久锁在主城（实测 27 兵里锁 5 个）。
+	if want_attack_gate and _defense != null and count_field_military(my_key_gate) < 12:
+		_defense.release_guards_for_attack()
 	# 压制姿态必须持续给实际部队下主攻命令：不要求先满 12 人，也不等 120 秒，
 	# 否则队列里的兵会让“压制”提前亮起，但场上实际部队一直不出门。
 	if current_tactic == LateTactic.OVERWHELM:
-		if not an_attack():
+		if not want_attack_gate:
 			return
 		if _defense != null:
 			_defense.release_guards_for_attack()
 		var overwhem_target = _get_attack_target_castle()
 		if overwhem_target:
-			attack_move(overwhem_target.global_position, 30)
+			attack_move(overwhem_target.global_position, 40)
 		return
 	# 发育阶段保留原来的 ASSAULT 门槛，但兵力成型且开局时间已过就先发起主攻，
 	# 避免一直等到 30 人、结果因为人口/产能卡住而永远不出门
@@ -4760,14 +4805,22 @@ func _process_line_4():
 	# 骚扰小队出门时主力仍可进攻；attack_move 会跳过 ai_harass 单位
 	# 主攻前先解除主城守军：守军会计入军队总数但不计入可出击野战军，
 	# 不解锁就会被“账面 30、野战 5”卡住 12 人主攻门槛。
-	var want_attack: bool = an_attack()
+	var want_attack: bool = want_attack_gate
 	if want_attack and _defense != null:
 		_defense.release_guards_for_attack()
-	var my_key = my_peer_id if my_peer_id != -1 else my_team
-	if count_field_military(my_key) >= 12 and want_attack:
+	var my_key = my_key_gate
+	# 主攻门槛不再固定 12：六 AI 混战时很多 AI 的野战兵长期只有 4~10 个
+	# （实测 t=420 时 6 个 AI 里 4 个 <12），固定门槛会让它们整局都不出门，
+	# 家里一堆兵站着待命。开局 180 秒后、主城没有被真打，6 个野战兵就允许出门。
+	var field_now: int = count_field_military(my_key)
+	var attack_threshold: int = 12
+	if battle.game_time >= 180.0 and not _base_under_attack():
+		attack_threshold = 6
+	if field_now >= attack_threshold and want_attack:
 		var target = _get_attack_target_castle()
 		if target:
-			attack_move(target.global_position, 30)
+			# 上限从 30 提到 40：后期野战兵常常多于 30，剩下的人一直待命
+			attack_move(target.global_position, 40)
 
 func _process_line_5():
 	var shipyards = []
