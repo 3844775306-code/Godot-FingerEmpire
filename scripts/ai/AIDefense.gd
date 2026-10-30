@@ -614,10 +614,34 @@ func _plan_terrain_ring(castle, ring_index: int) -> bool:
 	var max_r: int = clampi(desired, RING_MIN_RADIUS + 2,
 			RING_FIRST_MAX if ring_index == 0 else RING_MAX_RADIUS)
 	var center: Vector2i = ai.battle.world_to_grid(castle.global_position)
-	var region: Dictionary = _flood_region(center, max_r)
-	if region.size() < 24:
-		return false
 	var cpos: Vector3 = castle.global_position
+	# 墙是按 1 米一格摆的，一圈要“真的没有缝”就需要 ≈ 周长米数的墙段（半径 18 米要 113 段）。
+	# 之前的实现只按预算挑了前 N 个边界格，剩下 60% 的周长是空的，判“闭合”却挡不住人。
+	# 所以这里先把半径收到“周长墙数 ≤ 预算”的档位：18 → 14 → 12 → 10。
+	var ring_budget: int = mini(RING_WALL_MAX, 96)
+	var region: Dictionary = {}
+	var pick_r: int = max_r
+	for rr in [max_r, 14, 12, 10, 8]:
+		if int(rr) > max_r:
+			continue
+		var reg_try: Dictionary = _flood_region(center, int(rr))
+		if reg_try.size() < 24:
+			continue
+		var edge_n: int = 0
+		for key in reg_try.keys():
+			var tt: Vector2i = key
+			if Vector2(tt.x - center.x, tt.y - center.y).length() < float(RING_MIN_RADIUS):
+				continue
+			for dd in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+				if not reg_try.has(tt + dd):
+					edge_n += 1
+					break
+		if edge_n <= ring_budget:
+			region = reg_try
+			pick_r = int(rr)
+			break
+	if region.is_empty():
+		return false
 	var threat_ang: float = atan2(_defense_dir.z, _defense_dir.x)
 	var pieces: Array = []
 	var sum_r: float = 0.0
@@ -641,7 +665,7 @@ func _plan_terrain_ring(castle, ring_index: int) -> bool:
 		var diff: float = absf(wrapf(ang - threat_ang, -PI, PI))
 		pieces.append({"pos": wp, "prio": 1.0 + diff * 2.0})
 		sum_r += dd
-	if pieces.size() < 20:
+	if pieces.size() < 16:
 		return false
 	pieces.sort_custom(func(a, b): return float(a["prio"]) < float(b["prio"]))
 	var queue_before: int = _defense_queue.size()

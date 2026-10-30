@@ -1804,7 +1804,11 @@ func _get_terrain_cost(tile: Vector2i, bm: RTSBattleManager, wall_cache: Diction
 	# 梯子使敌方城墙可通行
 	if _ladder_set.has(tile): return 3.0
 	# 普通建筑/资源阻挡
-	if wall_cache.has(tile): return 5.0
+	# 敌方城墙必须判为“不可通行”：这里返回 5.0 会让 _straight_terrain_ok 认为直线可走，
+	# 单位就会直接穿过墙皮走到主城脚下（实测破防：14 个敌人 11 秒内穿墙到 13.7 米，墙一段没掉血）。
+	# A* 那边本来就用 wall_cache.has() 显式跳过墙格，改成 999 不影响寻路，只堵住“直走穿墙”。
+	# 梯子（_ladder_set）在上面已经 3.0 放行；己方城墙根本不进 wall_cache。
+	if wall_cache.has(tile): return 999.0
 	var terrain = bm.get_terrain_at_grid(tile.x, tile.y)
 	var ov := bm.get_overlay_at_grid(tile.x, tile.y)
 	var cost: float
