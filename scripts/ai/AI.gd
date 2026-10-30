@@ -48,6 +48,8 @@ const MERCHANT_UNIT_IDS: Array = [43, 44, 45, 51]
 # 民居数量上限：第 X 分钟至少 X 座（X 最多 8），提前一分钟开工保证到点时已建成
 const HOUSE_TARGET_MAX: int = 8
 const HOUSE_BUILD_LEAD_MINUTES: int = 1
+# 战役 AI 的总建筑软上限：避免后期把基地铺成上百座建筑，既堵路又拖慢战斗。
+const CAMPAIGN_AI_BUILDING_CAP: int = 50
 var target_house_count: int = HOUSE_TARGET_MAX
 var desired_worker_count: int = 8
 var _resource_pressure_time: float = 0.0
@@ -673,6 +675,20 @@ func count_building(id: int) -> int:
 			if my_peer_id == -1 and entity.team != my_team: continue
 			cnt += 1
 	return cnt
+
+# 战役 AI 的总建筑数（不计城墙/梯子/墙顶炮台，这些有独立上限）
+func _campaign_ai_building_count() -> int:
+	var cnt := 0
+	for entity in _cached_buildings():
+		if not is_instance_valid(entity) or entity.health <= 0:
+			continue
+		if not entity_belongs_to_me(entity):
+			continue
+		if int(entity.entity_id) in [8, 27, WALL_CANNON_ID]:
+			continue
+		cnt += 1
+	return cnt
+
 func count_military(peer: int) -> int:
 	var total = 0
 	for entity in _cached_armies():
@@ -1437,6 +1453,11 @@ func build_building(building_id: int, pos: Vector3, facing: Vector3 = Vector3.ZE
 	if not cfg: return false
 	# Check castle level requirement (matches RTSBattleManager.is_building_unlocked)
 	if not _ai_can_build(building_id): return false
+	# 战役敌方 AI 的总建筑软上限，避免铺满地图后堵住寻路。
+	if GameSettings.campaign_mode and my_peer_id == -1 \
+			and building_id != 8 and building_id != 27 and building_id != WALL_CANNON_ID \
+			and _campaign_ai_building_count() >= CAMPAIGN_AI_BUILDING_CAP:
+		return false
 	# 已经规划好一座桥时，先给桥留住木材：农民修桥需要 50 木，
 	# 如果 AI 同时把木材花在仓库/民房上，桥会永远差最后几块木头。
 	if building_id != 7:

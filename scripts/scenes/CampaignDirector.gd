@@ -1013,6 +1013,10 @@ func _spawn_escort() -> void:
 	var unit = bm.spawn_entity(EntityDatabase.get_config(_escort_unit_id), bm.player_team, pos, 1)
 	if unit == null:
 		return
+	# 护送目标要比普通侦察兵更耐打，否则第一轮伏击齐射就容易直接失败。
+	var boosted_hp := float(unit.max_health) * 1.6
+	unit.max_health = boosted_hp
+	unit.health = boosted_hp
 	_escort_unit = unit
 	unit.died.connect(_on_escort_died)
 	var marker := Label3D.new()
@@ -1350,11 +1354,11 @@ func _endless_wave_data(w: int) -> Dictionary:
 
 # 无尽挑战没有"胜利"，按坚持的波数给星
 func _endless_stars() -> int:
-	if _endless_waves >= 15:
+	if _endless_waves >= 12:
 		return 3
-	if _endless_waves >= 10:
+	if _endless_waves >= 8:
 		return 2
-	if _endless_waves >= 5:
+	if _endless_waves >= 4:
 		return 1
 	return 0
 

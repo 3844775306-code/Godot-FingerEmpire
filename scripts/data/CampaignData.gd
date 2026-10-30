@@ -51,6 +51,9 @@ extends RefCounted
 const TIME_LIMIT := 600.0
 const STAR_TWO_TIME := 600.0
 const STAR_THREE_TIME := 420.0
+# 生存/防守关要撑满整段倒计时，固定 420 秒会让“卡点通关”几乎拿不到 3 星；
+# 给这类关卡留 30 秒余量。
+const STAR_THREE_TIME_DEFENSE := 450.0
 
 # 把统一时限与星级门槛套到关卡副本上；无尽挑战不设时限，保持原样
 static func _normalize_level(lv: Dictionary) -> Dictionary:
@@ -58,13 +61,15 @@ static func _normalize_level(lv: Dictionary) -> Dictionary:
 		if String(o.get("type", "")) == "endless":
 			return lv
 	lv["time_limit"] = TIME_LIMIT
-	lv["stars"] = {"two": STAR_TWO_TIME, "three": STAR_THREE_TIME}
+	var three_time := STAR_THREE_TIME
 	# 存活/防守目标不能比 3 星门槛更长，否则这类关卡永远拿不到 3 星
 	for o in lv.get("objectives", []):
 		var t := String(o.get("type", ""))
 		if t == "survive" or t == "defend_targets":
+			three_time = STAR_THREE_TIME_DEFENSE
 			if float(o.get("duration", 0.0)) > STAR_THREE_TIME:
 				o["duration"] = STAR_THREE_TIME
+	lv["stars"] = {"two": STAR_TWO_TIME, "three": three_time}
 	return lv
 
 const CHAPTERS := [
@@ -102,27 +107,32 @@ const LEVELS := [
 		"chapter": 1,
 		"index": 1,
 		"name": "渡口奇袭",
-		"subtitle": "无主城 · 纯军队进攻",
+		"subtitle": "无主城 · 前线兵站进攻",
 		"map_id": "ford",
 		"map_seed": 4021,
-		"brief": "我军连夜渡河，只带得动一支轻军，没有主城也没有后勤。\n对面在白垩渡口筑起了主城、一圈围墙和箭塔，正在慢慢经营。\n趁他城防还没成形，一次打穿。",
+		"brief": "我军连夜渡河，只带得动一支轻军，没有主城，只在前线架起临时兵站。\n对面在白垩渡口筑起了主城、一圈围墙和箭塔，正在慢慢经营。\n趁他城防还没成形，一次打穿。",
 		"tips": [
-			"开局就有 12 步兵 / 6 弓箭手 / 3 骑兵 / 3 攻城车，全部集中在一起。",
+			"开局有 12 步兵 / 6 弓箭手 / 3 骑兵 / 3 攻城车，兵站和仓库已经架好，还有 4 个农民。",
 			"攻城车对建筑伤害极高，先让步兵扛住箭塔，再用攻城车拆开围墙、直取主城。",
-			"全军覆没而敌方主城还在，任务立即失败；没有主城就没法补兵。",
+			"兵站可以补兵但产能有限；全军覆没而敌方主城还在，任务立即失败。",
 		],
 		"time_limit": 600.0,
 		"stars": {"two": 600.0, "three": 420.0},
 		"player": {
 			"nation": 2,
 			"castle": false,
+			"buildings": [
+				{"id": 22, "offset": [0.0, 10.0]},
+				{"id": 21, "offset": [-6.0, 7.0]},
+			],
 			"units": [
+				{"id": 10, "count": 4},
 				{"id": 11, "count": 12},
 				{"id": 12, "count": 6},
 				{"id": 15, "count": 3},
 				{"id": 18, "count": 3},
 			],
-			"resources": {"gold": 0, "wood": 0, "stone": 0, "food": 0, "oil": 0},
+			"resources": {"gold": 600, "wood": 500, "stone": 300, "food": 300, "oil": 0},
 			"pop_cap": 80,
 		},
 		"enemy": {
@@ -138,7 +148,7 @@ const LEVELS := [
 				{"id": 11, "count": 6},
 				{"id": 12, "count": 4},
 			],
-			"resources": {"gold": 300, "wood": 300, "stone": 200, "food": 200, "oil": 0},
+			"resources": {"gold": 150, "wood": 150, "stone": 0, "food": 100, "oil": 0},
 			"pop_cap": 60,
 		},
 		"objectives": [
@@ -163,7 +173,7 @@ const LEVELS := [
 			"主城被拆就失败；撑过 7 分钟即胜利，主城血量越高星级越高。",
 		],
 		"time_limit": 600.0,
-		"stars": {"two": 600.0, "three": 420.0},
+		"stars": {"two": 600.0, "three": 450.0},
 		"player": {
 			"nation": 0,
 			"castle": true,
@@ -248,14 +258,14 @@ const LEVELS := [
 		"chapter": 1,
 		"index": 3,
 		"name": "绿洲争夺",
-		"subtitle": "区域控制 · 累计占领 120 秒",
+		"subtitle": "区域控制 · 累计占领 90 秒",
 		"map_id": "desert",
 		"map_seed": 2024,
 		"brief": "沙漠里只有中央绿洲能养兵。\n双方主城都缺水，谁控制绿洲超过两分钟，谁就能把对方耗死。\n把兵压在绿洲上，敌人一进来就把他们赶出去。",
 		"tips": [
 			"地图中央的地面绿色色块 + 空中倒计时就是控制区，小地图上也会定时闪点。",
 			"占领按人数比：我军比敌人多才计时（混战半速），双方一样就暂停，敌人多就倒退。",
-			"累计占满 120 秒即胜利；主城被拆或超过 10 分钟失败。",
+			"累计占满 90 秒即胜利；主城被拆或超过 10 分钟失败。",
 		],
 		"time_limit": 600.0,
 		"stars": {"two": 600.0, "three": 420.0},
@@ -264,10 +274,10 @@ const LEVELS := [
 			"castle": true,
 			"units": [
 				{"id": 10, "count": 8},
-				{"id": 11, "count": 4},
-				{"id": 12, "count": 2},
+				{"id": 11, "count": 6},
+				{"id": 12, "count": 3},
 			],
-			"resources": {"gold": 400, "wood": 400, "stone": 300, "food": 300, "oil": 0},
+			"resources": {"gold": 500, "wood": 450, "stone": 300, "food": 300, "oil": 0},
 			"pop_cap": 60,
 		},
 		"enemy": {
@@ -279,15 +289,15 @@ const LEVELS := [
 				{"id": 10, "count": 6},
 				{"id": 11, "count": 4},
 			],
-			"resources": {"gold": 400, "wood": 400, "stone": 300, "food": 300, "oil": 0},
+			"resources": {"gold": 250, "wood": 250, "stone": 150, "food": 150, "oil": 0},
 			"pop_cap": 60,
 		},
 		"objectives": [
 			{
 				"type": "hold_zone",
-				"zone": {"offset": [0.0, 0.0], "radius": 12.0},
-				"hold": 120.0,
-				"label": "占领中央绿洲 120 秒",
+				"zone": {"offset": [0.0, 0.0], "radius": 14.0},
+				"hold": 90.0,
+				"label": "占领中央绿洲 90 秒",
 			},
 		],
 		"fail": ["castle_lost", "timeout"],
@@ -333,10 +343,10 @@ const LEVELS := [
 			"castle": false,
 			"ai": false,
 			"waves": [
-				{"time": 90.0, "label": "伏兵一", "units": [{"id": 11, "count": 6}, {"id": 12, "count": 4}]},
-				{"time": 150.0, "label": "伏兵二", "units": [{"id": 11, "count": 8}, {"id": 12, "count": 4}, {"id": 15, "count": 2}]},
-				{"time": 210.0, "label": "伏兵三", "units": [{"id": 11, "count": 8}, {"id": 12, "count": 6}, {"id": 15, "count": 3}]},
-				{"time": 270.0, "label": "伏兵四", "units": [{"id": 11, "count": 10}, {"id": 12, "count": 6}, {"id": 15, "count": 3}, {"id": 16, "count": 2}]},
+				{"time": 110.0, "label": "伏兵一", "units": [{"id": 11, "count": 6}, {"id": 12, "count": 4}]},
+				{"time": 190.0, "label": "伏兵二", "units": [{"id": 11, "count": 8}, {"id": 12, "count": 4}, {"id": 15, "count": 2}]},
+				{"time": 270.0, "label": "伏兵三", "units": [{"id": 11, "count": 8}, {"id": 12, "count": 5}, {"id": 15, "count": 2}]},
+				{"time": 350.0, "label": "伏兵四", "units": [{"id": 11, "count": 9}, {"id": 12, "count": 5}, {"id": 15, "count": 3}, {"id": 16, "count": 1}]},
 			],
 			"resources": {"gold": 0, "wood": 0, "stone": 0, "food": 0, "oil": 0},
 			"pop_cap": 80,
@@ -405,14 +415,14 @@ const LEVELS := [
 		"chapter": 2,
 		"index": 6,
 		"name": "三层台地",
-		"subtitle": "攻击任务 · 拔掉 4 座防御塔",
+		"subtitle": "攻击任务 · 拔掉 3 座防御塔",
 		"map_id": "terrace",
 		"map_seed": 7711,
-		"brief": "敌人把营寨修在三层台地上，三面都是缓坡，正面已经围起一圈城墙和四座塔。\n不拔掉这些塔，攻城车还没靠近就会被点掉。\n带上火炮和攻城车，把台地上的 4 座防御塔全部拆掉。",
+		"brief": "敌人把营寨修在三层台地上，三面都是缓坡，正面已经围起一圈城墙和四座塔。\n不拔掉这些塔，攻城车还没靠近就会被点掉。\n带上火炮和攻城车，拆掉台地上的 3 座防御塔即可。",
 		"tips": [
 			"火炮（16）射程比箭塔远，先用火炮点掉墙后的塔；攻城车再拆开一段城墙。",
 			"攻城车（18）专门拆建筑，但很脆，需要步兵在前面挡刀。",
-			"4 座塔全倒即胜利；主城被拆或超过 10 分钟失败。",
+			"拆掉任意 3 座塔即胜利；主城被拆或超过 10 分钟失败。",
 		],
 		"time_limit": 600.0,
 		"stars": {"two": 600.0, "three": 420.0},
@@ -445,11 +455,11 @@ const LEVELS := [
 				{"id": 11, "count": 6},
 				{"id": 12, "count": 4},
 			],
-			"resources": {"gold": 500, "wood": 400, "stone": 300, "food": 300, "oil": 0},
+			"resources": {"gold": 300, "wood": 250, "stone": 150, "food": 150, "oil": 0},
 			"pop_cap": 70,
 		},
 		"objectives": [
-			{"type": "destroy_targets", "building_ids": [25, 26], "count": 4, "label": "摧毁台地上的 4 座防御塔"},
+			{"type": "destroy_targets", "building_ids": [25, 26], "count": 3, "label": "摧毁台地上的 3 座防御塔"},
 		],
 		"fail": ["castle_lost", "timeout"],
 	},
@@ -462,13 +472,13 @@ const LEVELS := [
 		"chapter": 3,
 		"index": 7,
 		"name": "海峡封锁",
-		"subtitle": "海战 · 击沉 8 艘敌船",
+		"subtitle": "海战 · 击沉 6 艘敌船",
 		"map_id": "strait",
 		"map_seed": 8811,
-		"brief": "敌国的运兵船队要从海峡过去增援北线，我们只有一支小舰队和几座岸炮。\n把海面封死：击沉 8 艘敌船，他们的援军就断在海峡里。",
+		"brief": "敌国的运兵船队要从海峡过去增援北线，我们有一支小舰队和几座岸炮。\n把海面封死：击沉 6 艘敌船，他们的援军就断在海峡里。",
 		"tips": [
-			"开局有 4 艘战船（13）和一排岸炮，战船要主动出海拦截，别停在岸边。",
-			"敌船会从第 45 秒起分批闯入海峡，共 12 艘，击沉 8 艘就完成任务。",
+			"开局有 6 艘战船（13）和一排岸炮，战船要主动出海拦截，别停在岸边。",
+			"敌船会从第 45 秒起分批闯入海峡，共 12 艘，击沉 6 艘就完成任务。",
 			"主城被毁或超过 10 分钟失败；岸炮和战船集火先打最前面那艘。",
 		],
 		"time_limit": 600.0,
@@ -483,7 +493,7 @@ const LEVELS := [
 				{"id": 25, "offset": [14.0, 8.0]},
 			],
 			"navy": [
-				{"id": 13, "count": 4},
+				{"id": 13, "count": 6},
 			],
 			"units": [
 				{"id": 10, "count": 4},
@@ -507,7 +517,7 @@ const LEVELS := [
 			"pop_cap": 80,
 		},
 		"objectives": [
-			{"type": "kill_units", "unit_ids": [13], "count": 8, "label": "击沉 8 艘敌船"},
+			{"type": "kill_units", "unit_ids": [13], "count": 6, "label": "击沉 6 艘敌船"},
 		],
 		"fail": ["castle_lost", "timeout"],
 	},
@@ -641,7 +651,7 @@ const LEVELS := [
 			"主城被拆即失败；撑满 7 分钟胜利，主城血量越高星级越高。",
 		],
 		"time_limit": 600.0,
-		"stars": {"two": 600.0, "three": 420.0},
+		"stars": {"two": 600.0, "three": 450.0},
 		"player": {
 			"nation": 2,
 			"castle": true,
@@ -752,12 +762,12 @@ const LEVELS := [
 		"chapter": 4,
 		"index": 12,
 		"name": "双河三岸",
-		"subtitle": "双点争夺 · 两个渡口各占 60 秒",
+		"subtitle": "双点争夺 · 两个渡口各占 45 秒",
 		"map_id": "tworivers",
 		"map_seed": 11404,
 		"brief": "两条大河把战场切成三块，东西两处渡口是唯一的陆路通道。\n两个渡口必须都占满一分钟，分兵两线，谁也舍不得放弃任何一边。\n骑兵是唯一能在两线之间来回救火的力量。",
 		"tips": [
-			"两个渡口各有一个控制区，都会在地图上标出，各累计占满 60 秒才算胜利。",
+			"两个渡口各有一个控制区，都会在地图上标出，各累计占满 45 秒才算胜利。",
 			"两边同时告急时优先保住已经计时较多的一边，别来回跑空。",
 			"主城被拆或超过 10 分钟失败。",
 		],
@@ -793,10 +803,10 @@ const LEVELS := [
 			{
 				"type": "hold_zones",
 				"zones": [
-					{"offset": [-16.0, 0.0], "radius": 6.5, "hold": 60.0, "name": "西渡口"},
-					{"offset": [16.0, 0.0], "radius": 6.5, "hold": 60.0, "name": "东渡口"},
+					{"offset": [-16.0, 0.0], "radius": 8.5, "hold": 45.0, "name": "西渡口"},
+					{"offset": [16.0, 0.0], "radius": 8.5, "hold": 45.0, "name": "东渡口"},
 				],
-				"label": "东西两个渡口各累计占领 60 秒",
+				"label": "东西两个渡口各累计占领 45 秒",
 			},
 		],
 		"fail": ["castle_lost", "timeout"],
@@ -807,12 +817,12 @@ const LEVELS := [
 		"chapter": 4,
 		"index": 13,
 		"name": "官渡焚粮",
-		"subtitle": "攻坚任务 · 摧毁敌军 3 座粮仓",
+		"subtitle": "攻坚任务 · 摧毁敌军 2 座粮仓",
 		"map_id": "guandu",
 		"map_seed": 11505,
-		"brief": "敌军前线全靠三座粮仓续命，粮仓就屯在主城前面。\n拆掉全部粮仓，对面的攻势就会自己垮掉。\n但敌军不会看着你拆，每一波反扑都比上一波更凶。",
+		"brief": "敌军前线全靠粮仓续命，粮仓就屯在主城前面。\n拆掉其中两座，对面的攻势就会自己垮掉。\n但敌军不会看着你拆，每一波反扑都比上一波更凶。",
 		"tips": [
-			"三座粮仓比主城靠前，先拆粮仓再考虑主城。",
+			"粮仓比主城靠前，先拆任意两座粮仓再考虑主城。",
 			"敌军每隔一分半反扑一次，拆粮时别把部队全送进去。",
 			"主城被拆或超过 10 分钟失败。",
 		],
@@ -855,11 +865,11 @@ const LEVELS := [
 				{"time": 330.0, "label": "第四波反扑", "units": [{"id": 11, "count": 10}, {"id": 12, "count": 5}, {"id": 15, "count": 3}, {"id": 18, "count": 1}]},
 				{"time": 420.0, "label": "第五波反扑", "units": [{"id": 11, "count": 12}, {"id": 12, "count": 6}, {"id": 15, "count": 4}, {"id": 18, "count": 2}]},
 			],
-			"resources": {"gold": 800, "wood": 600, "stone": 400, "food": 400, "oil": 0},
+			"resources": {"gold": 500, "wood": 400, "stone": 250, "food": 250, "oil": 0},
 			"pop_cap": 80,
 		},
 		"objectives": [
-			{"type": "destroy_targets", "building_ids": [22], "count": 3, "label": "摧毁敌军 3 座粮仓"},
+			{"type": "destroy_targets", "building_ids": [22], "count": 2, "label": "摧毁敌军 2 座粮仓"},
 		],
 		"fail": ["castle_lost", "timeout"],
 	},
@@ -872,9 +882,9 @@ const LEVELS := [
 		"subtitle": "经营任务 · 从零开始 10 分钟破城",
 		"map_id": "marsh",
 		"map_seed": 11202,
-		"brief": "渡河之后烧掉退路，粮草只够十日。\n你手里没有一兵一卒，只有一群农民和一座空城。\n是时候把经济变成刀锋了。",
+		"brief": "渡河之后烧掉退路，粮草只够十日。\n你手里只有一小队守军、一群农民和一座空城。\n是时候把经济变成刀锋了。",
 		"tips": [
-			"开局没有任何军队，先造兵营、拉满人口，再出兵。",
+			"开局只有少量守军，先造兵营、拉满人口，再用经济爆兵。",
 			"资源给得不少，别舍不得花；拖到 10 分钟就是死。",
 			"主城被拆或超过 10 分钟失败。",
 		],
@@ -885,6 +895,8 @@ const LEVELS := [
 			"castle": true,
 			"units": [
 				{"id": 10, "count": 12},
+				{"id": 11, "count": 6},
+				{"id": 12, "count": 2},
 			],
 			"resources": {"gold": 2000, "wood": 1500, "stone": 800, "food": 800, "oil": 0},
 			"pop_cap": 100,
@@ -932,8 +944,8 @@ const LEVELS := [
 				{"id": 25, "offset": [10, 12]},
 			],
 			"navy": [
-				{"id": 9, "count": 3},
-				{"id": 13, "count": 2},
+				{"id": 9, "count": 4},
+				{"id": 13, "count": 3},
 			],
 			"units": [
 				{"id": 10, "count": 4},
@@ -948,7 +960,7 @@ const LEVELS := [
 			"nation": 1,
 			"castle": true,
 			"ai": true,
-			"ai_difficulty": 2,
+			"ai_difficulty": 1,
 			"buildings": [
 				{"id": 25, "offset": [-10, 8]},
 				{"id": 25, "offset": [10, 8]},
@@ -1008,25 +1020,23 @@ const LEVELS := [
 			"nation": 5,
 			"castle": true,
 			"ai": true,
-			"ai_difficulty": 3,
+			"ai_difficulty": 2,
 			"buildings": [
 				{"id": 25, "offset": [-10, 6]},
 				{"id": 25, "offset": [10, 6]},
 				{"id": 25, "offset": [-10, -6]},
 				{"id": 25, "offset": [10, -6]},
-				{"id": 25, "offset": [0, 12]},
-				{"id": 25, "offset": [0, -12]},
 			],
 			"units": [
 				{"id": 11, "count": 8},
 				{"id": 12, "count": 4},
 			],
 			"waves": [
-				{"time": 60.0, "label": "第一支援军", "units": [{"id": 11, "count": 8}, {"id": 12, "count": 3}]},
-				{"time": 120.0, "label": "第二支援军", "units": [{"id": 11, "count": 9}, {"id": 12, "count": 3}, {"id": 15, "count": 2}]},
-				{"time": 180.0, "label": "第三支援军", "units": [{"id": 11, "count": 10}, {"id": 12, "count": 4}, {"id": 15, "count": 3}, {"id": 18, "count": 1}]},
-				{"time": 240.0, "label": "第四支援军", "units": [{"id": 11, "count": 12}, {"id": 12, "count": 5}, {"id": 15, "count": 3}, {"id": 18, "count": 1}]},
-				{"time": 300.0, "label": "最后援军", "units": [{"id": 11, "count": 14}, {"id": 12, "count": 6}, {"id": 15, "count": 4}, {"id": 18, "count": 2}]},
+				{"time": 90.0, "label": "第一支援军", "units": [{"id": 11, "count": 6}, {"id": 12, "count": 3}]},
+				{"time": 180.0, "label": "第二支援军", "units": [{"id": 11, "count": 8}, {"id": 12, "count": 3}, {"id": 15, "count": 2}]},
+				{"time": 270.0, "label": "第三支援军", "units": [{"id": 11, "count": 9}, {"id": 12, "count": 4}, {"id": 15, "count": 2}, {"id": 18, "count": 1}]},
+				{"time": 360.0, "label": "第四支援军", "units": [{"id": 11, "count": 10}, {"id": 12, "count": 4}, {"id": 15, "count": 2}, {"id": 18, "count": 1}]},
+				{"time": 450.0, "label": "最后援军", "units": [{"id": 11, "count": 12}, {"id": 12, "count": 5}, {"id": 15, "count": 3}, {"id": 18, "count": 1}]},
 			],
 			"resources": {"gold": 800, "wood": 600, "stone": 400, "food": 400, "oil": 0},
 			"pop_cap": 120,
@@ -1042,10 +1052,10 @@ const LEVELS := [
 		"chapter": 5,
 		"index": 102,
 		"name": "云顶争锋",
-		"subtitle": "挑战 · 双点争夺 · 两座台地各占 60 秒",
+		"subtitle": "挑战 · 双点争夺 · 两座台地各占 90 秒",
 		"map_id": "cloud_mesa",
 		"map_seed": 11802,
-		"brief": "五座平顶台地拔地而起，台缘全是绝壁，只有几条长坡能登顶。\n两处高地上的控制区都得占满一分钟。\n上坡慢、下坡无路，抢点就是抢坡道。",
+		"brief": "五座平顶台地拔地而起，台缘全是绝壁，只有几条长坡能登顶。\n两处高地上的控制区都得占满一分半。\n上坡慢、下坡无路，抢点就是抢坡道。",
 		"tips": [
 			"两个控制区分别在两座台地顶上，坡道是唯一入口，先堵坡再占点。",
 			"台地视野 +25%，站上高点能提前看到敌人从哪条坡道上。",
@@ -1083,10 +1093,10 @@ const LEVELS := [
 			{
 				"type": "hold_zones",
 				"zones": [
-					{"offset": [-18.0, 0.0], "radius": 7.0, "hold": 60.0, "name": "东台"},
-					{"offset": [18.0, 0.0], "radius": 7.0, "hold": 60.0, "name": "西台"},
+					{"offset": [-18.0, 0.0], "radius": 6.0, "hold": 90.0, "name": "东台"},
+					{"offset": [18.0, 0.0], "radius": 6.0, "hold": 90.0, "name": "西台"},
 				],
-				"label": "东台、西台各累计占领 60 秒",
+				"label": "东台、西台各累计占领 90 秒",
 			},
 		],
 		"fail": ["castle_lost", "timeout"],
@@ -1102,7 +1112,7 @@ const LEVELS := [
 		"map_seed": 11903,
 		"brief": "陨石坑里的残军被围在中心，四面八方都是敌人。\n没有增援，没有尽头，每一波都比上一波更强。\n把城守住，看看自己能撑到第几波。",
 		"tips": [
-			"波次一轮比一轮强，活过 5 波就有 1 星，10 波 2 星，15 波 3 星。",
+			"波次一轮比一轮强，活过 4 波就有 1 星，8 波 2 星，12 波 3 星。",
 			"主城一倒就结束，你的波数与得分会记进档案，下次挑战可以超过自己。",
 			"别急着拆敌方——他们只是波次的来源，没有主城可拆。",
 		],
@@ -1118,7 +1128,7 @@ const LEVELS := [
 			],
 			"units": [
 				{"id": 10, "count": 4},
-				{"id": 11, "count": 8},
+				{"id": 11, "count": 10},
 				{"id": 12, "count": 6},
 				{"id": 15, "count": 2},
 				{"id": 18, "count": 1},
@@ -1134,7 +1144,7 @@ const LEVELS := [
 			"pop_cap": 150,
 		},
 		"objectives": [
-			{"type": "endless", "first_wave": 20.0, "interval": 30.0, "label": "一波接一波，撑到第 15 波"},
+			{"type": "endless", "first_wave": 20.0, "interval": 30.0, "label": "一波接一波，撑到第 12 波"},
 		],
 		"fail": ["castle_lost"],
 	},
@@ -1144,14 +1154,14 @@ const LEVELS := [
 		"chapter": 5,
 		"index": 101,
 		"name": "赤壁火攻",
-		"subtitle": "挑战 · 海上火攻 · 击沉 12 艘火船",
+		"subtitle": "挑战 · 海上火攻 · 击沉 8 艘火船",
 		"map_id": "chibi",
 		"map_seed": 11701,
-		"brief": "长江天堑，敌军把装满柴薪的火船顺风放来，撞上岸就是一片火海。\n你手里只有六艘战船和几门岸炮，江面就是主战场。\n把火船拦在水上，一艘都别让它靠岸。",
+		"brief": "长江天堑，敌军把装满柴薪的火船顺风放来，撞上岸就是一片火海。\n你手里有八艘战船和几门岸炮，江面就是主战场。\n把火船拦在水上，尽量别让它靠岸。",
 		"tips": [
 			"火船会朝岸边撞，战船要主动迎上去，别让它们贴近主城。",
 			"岸炮能覆盖近岸水面，把战船的火力集中在江心。",
-			"击沉 12 艘火船即胜利；主城被拆或超过 10 分钟失败。",
+			"击沉 8 艘火船即胜利；漏过 8 艘或主城被拆、超过 10 分钟失败。",
 		],
 		"time_limit": 600.0,
 		"stars": {"two": 600.0, "three": 420.0},
@@ -1163,7 +1173,7 @@ const LEVELS := [
 				{"id": 26, "offset": [10, 8]},
 			],
 			"navy": [
-				{"id": 13, "count": 6},
+				{"id": 13, "count": 8},
 			],
 			"units": [
 				{"id": 10, "count": 4},
@@ -1188,7 +1198,7 @@ const LEVELS := [
 			"pop_cap": 60,
 		},
 		"objectives": [
-			{"type": "kill_units", "unit_ids": [40], "count": 12, "intercept_dist": 16.0, "max_slip": 6, "label": "击沉 12 艘敌军火船（靠岸漏过超过 6 艘即失败）"},
+			{"type": "kill_units", "unit_ids": [40], "count": 8, "intercept_dist": 16.0, "max_slip": 8, "label": "击沉 8 艘敌军火船（靠岸漏过超过 8 艘即失败）"},
 		],
 		"fail": ["castle_lost", "timeout"],
 	},
