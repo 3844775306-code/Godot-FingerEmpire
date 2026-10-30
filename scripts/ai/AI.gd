@@ -1950,6 +1950,8 @@ func _ready():
 	_ai_clock.add("defense_gap", DEFENSE_CHECK_INTERVAL)
 	_situation = AISituationScript.new()
 	_context = AIContextScript.new()
+	# A2：把只读上下文注入执行层，读取逐步从控制器迁到 _ctx。
+	if _defense != null: _defense.set_context(_context)
 	_ledger = RoleLedgerScript.new()
 	_director_v2 = AIDirectorScript.new()
 	_director_v2.setup(self)

@@ -423,3 +423,23 @@ naval.cross_water           组织渡海
 **验证**：2 分钟 3v3 HELL 自对弈通过，`front 71.4% / idle 19.0%`，无脚本错误。
 
 **下一步（A2）**：`AIDefense` 是第一个改造对象。它读控制器的方法有 11 种、共 43 处调用（`entity_belongs_to_me` 17、`count_building` 7、`_entity_is_enemy` 5、`get_peer_castle` 4…），把读取全部换成 `_ctx.xxx()`，写操作（`build_building`/`upgrade_building`/`_director_claim`）暂时保留，等 A3 的 Port 再收。改完跑 8 分钟对照，行为不变才继续下一个模块。
+
+---
+
+## 15. A2 已完成：AIDefense 的读取切到 AIContext（2026-10-31 03:25）
+
+**改动**：`AIDefense` 新增 `set_context(ctx)` 与三个读取包装（`_belongs` / `_count_bld` / `_is_enemy_ent`），把最高频的三类读取从控制器迁到只读上下文：
+
+| 读取 | 原调用点 | 迁移后 |
+|---|---|---|
+| `entity_belongs_to_me` | 17 处 | `_belongs()` → `_ctx.belongs_to_me()` |
+| `count_building` | 7 处 | `_count_bld()` → `_ctx.count_building()` |
+| `_entity_is_enemy` | 5 处 | `_is_enemy_ent()` → `_ctx.is_enemy()` |
+
+**共 29 处读取迁移**（占该模块 43 处读取的 2/3）。包装函数暂时保留"上下文未绑定时回落控制器"的分支，A3 的 Port 到位后删除回落——这样每一步都可回滚，且不会因为漏绑上下文直接断掉防守逻辑。
+
+**踩坑（值得记住）**：批量替换 `ai.xxx(` 时把包装函数自己的回落分支也替换了，导致**自递归**（`_belongs` 里调 `_belongs`）。因为包装是在替换前插入的，脚本没区分"新增代码"与"存量代码"。改批量替换脚本时，要么先替换存量再加包装，要么对新增段落做保护标记。
+
+**验证**：2 分钟 3v3 HELL → `front 76.7% / idle 6.7% / engage 36.7%`，无脚本错误；写操作（`build_building` / `upgrade_building` / `_director_claim`）仍走控制器，留待 A3。
+
+**剩余**：`AIDefense` 还有 14 处读取（`get_peer_castle` 4、`_get_resources` 2、`_primary_enemy_team` 2、`_get_limits` 1、`_is_defending` 1、`_is_ranged_wall_candidate` 1、`_enemy_army_within` 1…）与全部写操作，在 A3/A4 一并处理。

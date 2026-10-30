@@ -206,6 +206,27 @@ var watchtower_positions: Array = []
 var _resource_guard_ids: Dictionary = {}
 var _resource_guard_hold_until: float = -999.0
 
+# A2：只读上下文。读取优先走 AIContext，未绑定时回落到控制器（A3 之后删回落）。
+var _ctx = null
+
+func set_context(c) -> void:
+	_ctx = c
+
+func _belongs(e) -> bool:
+	if _ctx != null:
+		return _ctx.belongs_to_me(e)
+	return ai.entity_belongs_to_me(e) if ai != null else false
+
+func _count_bld(building_id: int) -> int:
+	if _ctx != null:
+		return _ctx.count_building(building_id)
+	return int(ai.count_building(building_id)) if ai != null else 0
+
+func _is_enemy_ent(e) -> bool:
+	if _ctx != null:
+		return _ctx.is_enemy(e)
+	return ai._entity_is_enemy(e) if ai != null else false
+
 func _init(owner_ai) -> void:
 	ai = owner_ai
 	# P3.3：模块内计时器统一走 AIClock（按帧推进），不再各自维护浮点计时。
@@ -412,7 +433,7 @@ func _enemy_castle_dir(castle) -> Vector3:
 	var ec = ai.get_team_castle(enemy_team)
 	if ec == null:
 		for e in ai.battle.entities.get_children():
-			if e is Building and int(e.entity_id) == 20 and e.health > 0 and ai._entity_is_enemy(e):
+			if e is Building and int(e.entity_id) == 20 and e.health > 0 and _is_enemy_ent(e):
 				ec = e
 				break
 	if ec:
@@ -428,7 +449,7 @@ func _is_combat_enemy(e) -> bool:
 	# 中立动物/中立单位不是敌军，不能触发防守
 	if int(e.team) == RTSConfig.Team.NEUTRAL:
 		return false
-	if not ai._entity_is_enemy(e):
+	if not _is_enemy_ent(e):
 		return false
 	return int(e.target_type) > 0 or float(e.attack) > 0.0
 
@@ -531,7 +552,7 @@ func _wall_ring_desired_radius(castle, ring_index: int) -> int:
 				else NORMAL_RING_MIN_RADIUS
 	var samples: Array = []
 	for e in ai.battle.entities.get_children():
-		if not (e is Building) or e.health <= 0 or not ai.entity_belongs_to_me(e):
+		if not (e is Building) or e.health <= 0 or not _belongs(e):
 			continue
 		# 城墙本身不参与“势力范围”计算，否则外圈会被已规划的内圈墙拖着走。
 		if int(e.entity_id) == 27:
@@ -2159,7 +2180,7 @@ func _plan_ring_towers(castle, radius: int) -> void:
 
 # 已建 + 已规划的数量。规划中的塔还没有进入 battle 的实体缓存，必须单独算。
 func _watchtower_total() -> int:
-	return maxi(ai.count_building(OUTPOST_ID), _count_planned(OUTPOST_ID))
+	return maxi(_count_bld(OUTPOST_ID), _count_planned(OUTPOST_ID))
 
 # 已建或已规划的瞭望塔是否离目标太近。太近只会重复已有的 25 米视野。
 func _watchtower_near(pos: Vector3, radius: float = WATCHTOWER_MIN_SEP) -> bool:
@@ -2171,7 +2192,7 @@ func _watchtower_near(pos: Vector3, radius: float = WATCHTOWER_MIN_SEP) -> bool:
 	if ai.battle.has_method("get_nearby_buildings"):
 		for e in ai.battle.get_nearby_buildings(pos, radius):
 			if e is Building and e.health > 0 and int(e.entity_id) == OUTPOST_ID \
-					and ai.entity_belongs_to_me(e):
+					and _belongs(e):
 				if e.global_position.distance_to(pos) < radius:
 					return true
 	return false
@@ -2284,7 +2305,7 @@ func _score_watchtower_candidate(pos: Vector3, anchor: Vector3, mode: String) ->
 			continue
 		if not (e is Army or e is Building):
 			continue
-		if not ai._entity_is_enemy(e):
+		if not _is_enemy_ent(e):
 			continue
 		var ed: float = e.global_position.distance_to(pos)
 		if ed < 12.0:
@@ -2436,7 +2457,7 @@ func _resource_watchtower_count() -> int:
 	for e in ai.battle.entities.get_children():
 		if not (e is Building) or e.health <= 0:
 			continue
-		if int(e.entity_id) != OUTPOST_ID or not ai.entity_belongs_to_me(e):
+		if int(e.entity_id) != OUTPOST_ID or not _belongs(e):
 			continue
 		for z in resource_zones:
 			if not z.has("center"):
@@ -2806,7 +2827,7 @@ func _build_defense_step() -> void:
 			_defense_queue.remove_at(i)
 			continue
 		var cap: int = WALL_BUILD_CAP if b_id == 27 else 10
-		if ai.count_building(b_id) >= cap:
+		if _count_bld(b_id) >= cap:
 			_defense_queue.remove_at(i)
 			continue
 		# 墙的石耗按“一圈周长”设预算：超了就不再往墙上堆石头（实测有 AI 堆到 112 段，
@@ -2814,7 +2835,7 @@ func _build_defense_step() -> void:
 		# 塔没建满之前别把钱全砸在墙上：箭塔要 80 木 50 石，石头低于 80 就先攒着，
 		# 否则队列里 8 个塔位永远缺石头（实测破防时塔只有 1 座，墙却有 21~38 段）。
 		if b_id == 27:
-			var towers_built: int = ai.count_building(25) + ai.count_building(26)
+			var towers_built: int = _count_bld(25) + _count_bld(26)
 			if towers_built < MIN_TOWERS:
 				var res_now: Dictionary = ai._get_resources()
 				if float(res_now.get("stone", 0)) < 80.0 or float(res_now.get("wood", 0)) < 110.0:
@@ -2889,19 +2910,19 @@ func _pos_has_building(b_id: int, pos: Vector3) -> bool:
 	if ai.battle.has_method("get_nearby_buildings"):
 		for e in ai.battle.get_nearby_buildings(pos, 1.2):
 			if e is Building and e.health > 0 and int(e.entity_id) == b_id \
-					and ai.entity_belongs_to_me(e):
+					and _belongs(e):
 				if e.global_position.distance_to(pos) < 1.2:
 					return true
 		return false
 	if ai.battle.has_method("get_nearby_entities"):
 		for e in ai.battle.get_nearby_entities(pos, 1.2):
 			if e is Building and e.health > 0 and int(e.entity_id) == b_id \
-					and ai.entity_belongs_to_me(e):
+					and _belongs(e):
 				if e.global_position.distance_to(pos) < 1.2:
 					return true
 		return false
 	for e in ai.battle.entities.get_children():
-		if e is Building and e.health > 0 and int(e.entity_id) == b_id and ai.entity_belongs_to_me(e):
+		if e is Building and e.health > 0 and int(e.entity_id) == b_id and _belongs(e):
 			if e.global_position.distance_to(pos) < 1.2:
 				return true
 	return false
@@ -2911,7 +2932,7 @@ func _pos_has_building(b_id: int, pos: Vector3) -> bool:
 func _ensure_min_towers(castle) -> void:
 	# 只认"已经建成的塔"：以前把队列里排着的也算进去，结果塔位排了 8 个、一块石头没花，
 	# 保底逻辑以为够了就再也不补（实测破防时塔只有 1 座）。
-	var built: int = ai.count_building(25) + ai.count_building(26)
+	var built: int = _count_bld(25) + _count_bld(26)
 	var planned: int = _count_planned(25) + _count_planned(26)
 	if built >= MIN_TOWERS or planned > 0:
 		return
@@ -2958,7 +2979,7 @@ func _maybe_reactive_tower(castle) -> void:
 	if threat_level >= 3:
 		ids.append(26)
 	for b_id in ids:
-		if ai.count_building(int(b_id)) >= (8 if int(b_id) == 25 else 4):
+		if _count_bld(int(b_id)) >= (8 if int(b_id) == 25 else 4):
 			continue
 		if not _can_spend_building(int(b_id), _defense_reserve()):
 			continue
@@ -2968,7 +2989,7 @@ func _maybe_reactive_tower(castle) -> void:
 
 func _own_tower_near(pos: Vector3, radius: float) -> bool:
 	for e in ai.battle.entities.get_children():
-		if e is Building and e.health > 0 and int(e.entity_id) in TOWER_IDS and ai.entity_belongs_to_me(e):
+		if e is Building and e.health > 0 and int(e.entity_id) in TOWER_IDS and _belongs(e):
 			if e.global_position.distance_to(pos) < radius:
 				return true
 	return false
@@ -2984,7 +3005,7 @@ func _manage_defense_upgrades(castle, delta: float) -> void:
 	for e in ai.battle.entities.get_children():
 		if not (e is Building) or e.health <= 0:
 			continue
-		if not ai.entity_belongs_to_me(e):
+		if not _belongs(e):
 			continue
 		if int(e.entity_id) not in TOWER_IDS:
 			continue
@@ -3024,7 +3045,7 @@ func _detect_building_attacks() -> void:
 		if int(e.team) == RTSConfig.Team.NEUTRAL:
 			continue
 		# 友方建筑包括自己的和同队玩家的建筑；敌方建筑不处理
-		if ai._entity_is_enemy(e):
+		if _is_enemy_ent(e):
 			continue
 		var uid: int = e.get_instance_id()
 		seen[uid] = true
@@ -3148,7 +3169,7 @@ func _skip_near_castle_active(unit, castle) -> bool:
 func _has_valid_walls() -> bool:
 	for b in ai.battle.entities.get_children():
 		if b is Building and int(b.entity_id) == 27 and b.health > 0 and b.build_timer <= 0.0 \
-				and ai.entity_belongs_to_me(b):
+				and _belongs(b):
 			return true
 	return false
 
@@ -3419,7 +3440,7 @@ func _land_combat_units() -> Array:
 	for e in ai.battle.entities.get_children():
 		if not (e is Army) or e.health <= 0:
 			continue
-		if not ai.entity_belongs_to_me(e):
+		if not _belongs(e):
 			continue
 		if int(e.target_type) <= 0:
 			continue
@@ -3473,7 +3494,7 @@ func _manage_resource_security(castle, delta: float) -> void:
 func _refresh_resource_zones(castle) -> void:
 	var clusters: Array = []
 	for w in ai.battle.entities.get_children():
-		if not (w is Army) or w.health <= 0 or not ai.entity_belongs_to_me(w):
+		if not (w is Army) or w.health <= 0 or not _belongs(w):
 			continue
 		if int(w.entity_id) != 10:
 			continue
@@ -3523,7 +3544,7 @@ func _defend_resources(castle) -> void:
 	var now: float = float(ai.battle.game_time)
 	var workers: Array = []
 	for w in ai.battle.entities.get_children():
-		if w is Army and w.health > 0 and int(w.entity_id) == 10 and ai.entity_belongs_to_me(w):
+		if w is Army and w.health > 0 and int(w.entity_id) == 10 and _belongs(w):
 			workers.append(w)
 
 	# 1) 农民避险：只有敌人贴到 8m 才短暂躲避，往远离敌人的方向挪 6m，
@@ -3640,7 +3661,7 @@ func _prune_resource_guards() -> void:
 
 func _own_outpost_near(pos: Vector3, radius: float) -> bool:
 	for e in ai.battle.entities.get_children():
-		if e is Building and e.health > 0 and int(e.entity_id) == OUTPOST_ID and ai.entity_belongs_to_me(e):
+		if e is Building and e.health > 0 and int(e.entity_id) == OUTPOST_ID and _belongs(e):
 			if e.global_position.distance_to(pos) < radius:
 				return true
 	return false
@@ -3716,7 +3737,7 @@ func _is_valid_defense_ground(pos: Vector3, radius: float = 1.0,
 			# 塔圈规划时连敌方军队也跳过，避免敌人临时站在环线上导致整圈规划被否。
 			if ignore_armies:
 				continue
-			if allow_under_fire and ai.entity_belongs_to_me(e):
+			if allow_under_fire and _belongs(e):
 				continue
 			if d < radius + float(e.body_radius) + 0.5:
 				return false
@@ -3724,7 +3745,7 @@ func _is_valid_defense_ground(pos: Vector3, radius: float = 1.0,
 		for e in ai._visible_enemies:
 			if not is_instance_valid(e) or not (e is Army or e is Building) or e.health <= 0:
 				continue
-			if not ai._entity_is_enemy(e):
+			if not _is_enemy_ent(e):
 				continue
 			if e.global_position.distance_to(pos) < 5.0:
 				return false
@@ -3739,7 +3760,7 @@ func _has_friendly_vision(pos: Vector3) -> bool:
 	if castle != null and castle.global_position.distance_to(pos) <= 18.0:
 		return true
 	for e in ai.battle.entities.get_children():
-		if e is GameEntity and e.health > 0 and ai.entity_belongs_to_me(e):
+		if e is GameEntity and e.health > 0 and _belongs(e):
 			if e.global_position.distance_to(pos) <= float(e.vision_range):
 				return true
 	return false
@@ -3751,12 +3772,12 @@ func _defense_pos_visible(pos: Vector3) -> bool:
 	# 只查附近实体；己方最远视野 25 米，不需要为每个墙位遍历全图。
 	if ai.battle.has_method("get_nearby_entities"):
 		for e in ai.battle.get_nearby_entities(world_pos, DEFENSE_VISION_QUERY_RADIUS):
-			if e is GameEntity and e.health > 0 and ai.entity_belongs_to_me(e):
+			if e is GameEntity and e.health > 0 and _belongs(e):
 				if e.global_position.distance_to(world_pos) <= float(e.vision_range):
 					return true
 		return false
 	for e in ai.battle.entities.get_children():
-		if e is GameEntity and e.health > 0 and ai.entity_belongs_to_me(e):
+		if e is GameEntity and e.health > 0 and _belongs(e):
 			if e.global_position.distance_to(world_pos) <= float(e.vision_range):
 				return true
 	return false
