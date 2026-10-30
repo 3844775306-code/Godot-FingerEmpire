@@ -1538,9 +1538,12 @@ func build_building(building_id: int, pos: Vector3, facing: Vector3 = Vector3.ZE
 	if building_id == WALL_CANNON_ID:
 		_cap = WALL_COUNT_MAX
 	if count_building(building_id) >= _cap: return false
-	# 周围 10 单位内不能有敌方作战军队；否则直接放弃本次建造，不扣资源
+	# 周围 10 单位内不能有敌方作战军队；否则直接放弃本次建造，不扣资源。
+	# 但民居/兵营被拆且基地正在挨打时，必须允许在城堡背侧紧急重建，
+	# 否则会出现“被打→建筑没了→永远不敢造→人口/产能彻底停摆”的死循环。
 	if _enemy_army_within(pos):
-		return false
+		if building_id not in [21, 28] or not _base_under_attack():
+			return false
 	# Non-shipyard buildings: must be within AI vision range
 	if building_id == 7:
 		# 桥从己方岸边向对岸延伸：第一段允许在 20 距离内建造，
@@ -2599,12 +2602,48 @@ func find_valid_build_position(near_pos: Vector3, building_id: int) -> Vector3:
 			if _is_valid_build_ground(fp): return fp
 	return Vector3.ZERO
 
+# 基地被压制时，优先把民居/兵营补在敌军来的反方向，而不是继续围着主城
+# 随机找位置。找不到合格背侧点时返回 ZERO，交给普通搜索兜底。
+func _find_rebuild_position(building_id: int) -> Vector3:
+	var castle = get_peer_castle(my_peer_id)
+	if castle == null:
+		return Vector3.ZERO
+	var threat_pos: Vector3 = Vector3.ZERO
+	var best_d: float = INF
+	for e in _cached_armies():
+		if not is_instance_valid(e) or not (e is Army) or e.health <= 0:
+			continue
+		if int(e.target_type) <= 0 or not _entity_is_enemy(e):
+			continue
+		var d: float = e.global_position.distance_squared_to(castle.global_position)
+		if d < best_d and d <= 45.0 * 45.0:
+			best_d = d
+			threat_pos = e.global_position
+	if threat_pos == Vector3.ZERO:
+		return Vector3.ZERO
+	var away: Vector3 = castle.global_position - threat_pos
+	away.y = 0.0
+	if away.length_squared() < 0.01:
+		away = Vector3.BACK
+	away = away.normalized()
+	for dist in [8, 10, 12, 16, 20, 26, 32]:
+		for deg in [-70, -45, -20, 0, 20, 45, 70]:
+			var ang: float = float(deg) * PI / 180.0
+			var test: Vector3 = castle.global_position + away.rotated(Vector3.UP, ang) * dist
+			if not _enemy_army_within(test, 8.0) and _can_place_ai_building(building_id, test):
+				return test
+	return Vector3.ZERO
+
 # 主城周围找不到位置时，再围绕自己的外围建筑找。经典大陆上主城常被资源点/
 # 建筑围死，只围绕主城搜索会让 AI 永远补不到民居和兵营。
 func _find_build_position_near_own(building_id: int) -> Vector3:
 	var castle = get_peer_castle(my_peer_id)
 	if castle == null:
 		return Vector3.ZERO
+	if building_id in [21, 28] and _base_under_attack():
+		var rebuild_pos: Vector3 = _find_rebuild_position(building_id)
+		if rebuild_pos != Vector3.ZERO:
+			return rebuild_pos
 	var pos: Vector3 = find_valid_build_position(castle.global_position, building_id)
 	if pos != Vector3.ZERO:
 		return pos
@@ -4662,7 +4701,29 @@ func _retarget_attacked_siege_units() -> void:
 			continue
 		e.attack_target(attacker)
 
+func _emergency_army_stalled() -> bool:
+	if battle == null or count_building(21) <= 0:
+		return false
+	var my_key = my_peer_id if my_peer_id != -1 else my_team
+	if count_military(my_key) >= 10:
+		return false
+	if _resource_pressure_ratio() < 0.75:
+		return false
+	return _can_train_unit_with_queue()
+
+func _try_produce_emergency_defender() -> bool:
+	# 优先最便宜的步兵/弓箭手；骑兵和重装兵只在便宜兵不可训练时兜底。
+	for u_id in [11, 12, 35, 15]:
+		if _can_produce_unit(u_id) and can_afford(u_id) and produce_unit(u_id):
+			return true
+	return false
+
 func _process_line_military():
+	# 资源已经压满、兵营也有，但军队仍低于 10 时，说明 AI 被别的逻辑
+	# （投石机攒钱、错误兵种目标、守军/队列判断）卡住了。先强制补最便宜的
+	# 可训练兵种，避免“资源满仓却不出兵”。
+	if _emergency_army_stalled() and _try_produce_emergency_defender():
+		return
 	# 59优先排产；如果已经解锁但资源不够，进入短暂攒钱模式，避免普通兵种把资源吃干
 	if _try_produce_trebuchet():
 		return
