@@ -4802,7 +4802,10 @@ func _retarget_attacked_siege_units() -> void:
 	for e in battle.entities.get_children():
 		if not (e is Army) or e.health <= 0 or not entity_belongs_to_me(e):
 			continue
-		if not (e.current_target is Building):
+		# 先判活再判类型：current_target 可能是刚被摧毁/释放的实例，
+		# 直接 `is Building` 会报 Left operand of 'is' is a previously freed instance。
+		var siege_target = e.current_target
+		if siege_target == null or not is_instance_valid(siege_target) or not (siege_target is Building):
 			continue
 		if int(e.entity_id) in [16, 17, 18, 58, 59]:
 			continue
