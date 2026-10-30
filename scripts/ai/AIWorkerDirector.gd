@@ -1,7 +1,6 @@
 # scripts/ai/AIWorkerDirector.gd
-# WorkerDirector 第 2 阶段：接管补农 + 基础采集分配。
-# 建造/修理/逃跑仍然由旧逻辑负责；Director 只保证农民数量有保底、
-# 空闲农民有采集目标、满仓资源不会继续吸农民。
+# WorkerDirector：统一补农、采集、建造/修理、逃跑与打猎的农民调度。
+# 当前阶段：补农、基础采集、建造者租约、逃跑接管；打猎仍由旧入口派单。
 class_name AIWorkerDirector
 extends RefCounted
 
