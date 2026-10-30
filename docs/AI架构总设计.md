@@ -467,3 +467,28 @@ naval.cross_water           组织渡海
 2. `AIContext` 的 `team_castle_of` 插入锚点没匹配上（`is_ranged_wall_candidate` 那行已被前一次替换改过），运行期才暴露 `Nonexistent function`。**教训：新增方法后必须跑一次真实对局**，仅靠"脚本报 ok"不可信。
 
 **下一步（A4）**：`AIWorkerDirector`（30 个 `ai.*` 读取）与 `AIWaterCrossing`（22 个）改用 `_ctx`；重点是**删掉它们的跨模块调用**（`ai.allocate_workers` / `ai._release_wall_guard`），改为发 `AIEvents` 由对应模块自行处理。
+
+---
+
+## 17. A4 落地：农民与渡海改用上下文/端口，跨模块调用清零（2026-10-31 04:05）
+
+**AIWorkerDirector（609 行）**
+- 新增 `set_context` + `_belongs()` / `_phase_v()` / `_threat_level()` 三个包装；
+- `ai.entity_belongs_to_me` 3 处、`ai.phase` 4 处、`ai._defense.threat_level` 1 处全部改走 `_ctx`；
+- **跨模块依赖清除**：不再直接读防守模块对象，改问上下文 `defense_threat_level()`。
+
+**AIWaterCrossing（1648 行）**
+- 新增 `set_context` / `set_ports`，读取包装 9 个：`_belongs` / `_castle` / `_castle_of` / `_count_unit` / `_count_bld` / `_is_enemy_ent` / `_afford` / `_afford_bld` / `_afford_upg`；
+- 迁移 26 处读取（`entity_belongs_to_me` 9、`get_peer_castle` 5、`count_unit` 3、其余各 2…）；
+- 4 处建造/升级改走 `_ports.build`（`build_building` 2、`upgrade_building` 2）；
+- **两处跨模块越权调用清除**：
+  - `ai.allocate_workers()` → `_ports.command.request_worker_rebalance()`
+  - `ai._release_wall_guard(u)` → `_ports.command.release_wall_guard(u)`
+
+**结果**：`AIWaterCrossing` 对其它模块的**直接调用归零**，全部经 `CommandPort` 转达；`AIWorkerDirector` 对防守模块的直接读取归零。
+
+**验证**：3 分钟 3v3 HELL → `front 48.0% / idle 20.6% / engage 19.2%`，脚本错误 0；与该随机种子短期波动区间（47.9~62.5）一致，无明显劣化。
+
+**踩坑（第三次同类）**：批量替换 `int(ai._defense.threat_level)` 只替换了内层表达式，外层 `ai._defense != null and` 残留，生成了语法合法但语义错误的 `elif a and b if c else d`——**GDScript 不报错但逻辑错**，靠人工 review 发现。教训：批量替换涉及条件表达式时，必须整行替换而不是替换子串。
+
+**剩余**：`battle` 直接访问（AIDefense 121 处、WaterCrossing/WorkerDirector 各 20+）是 R4 的核心存量，需 A5 引入 `AISituation` 局部视图逐步替换。

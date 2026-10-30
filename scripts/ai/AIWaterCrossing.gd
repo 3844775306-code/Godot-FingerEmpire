@@ -157,7 +157,7 @@ func _refresh_plan():
 		if SimTime.now_ms() - _shores_set_at_ms < int(SHORES_REFRESH_SEC * 1000.0):
 			return
 		# 到点：继续走下面的重算流程，用新的登陆/停泊岸点替换（船队状态不变）
-	var my_castle = ai.get_peer_castle(ai.my_peer_id)
+	var my_castle = _castle()
 	var enemy_castle = ai._get_attack_target_castle()
 	if not is_instance_valid(my_castle) or not is_instance_valid(enemy_castle):
 		_stop_all()
@@ -309,7 +309,7 @@ func _find_bridge_plan(own_set: Dictionary, enemy_set: Dictionary, bridges: Dict
 	var best_line: Array = []
 	var best_score: float = INF
 	var dirs: Array = [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
-	var existing_bridges: int = ai.count_building(BRIDGE_ID)
+	var existing_bridges: int = _count_bld(BRIDGE_ID)
 	for c in own_set.keys():
 		for d in dirs:
 			var line: Array = []
@@ -385,7 +385,7 @@ func can_builder_reach(from_pos: Vector3, target_pos: Vector3) -> bool:
 	if _reachable_land.is_empty():
 		# 渡水规划还没跑过（刚开局/防守关没有敌方城堡）时，用己方主城补一次
 		# 连通集，避免 AI 每造一座建筑都做一次全图 BFS。
-		var castle = ai.get_peer_castle(ai.my_peer_id)
+		var castle = _castle()
 		if is_instance_valid(castle):
 			_reachable_land = _bfs_land(battle.world_to_grid(castle.global_position), bridges)
 	if _reachable_land.has(start) and _reachable_land.has(goal):
@@ -430,7 +430,7 @@ func plan_bridge_to(target_pos: Vector3, from_pos: Vector3 = Vector3.ZERO) -> bo
 		return false
 	var start_pos: Vector3 = from_pos if not from_pos.is_zero_approx() else Vector3.ZERO
 	if start_pos == Vector3.ZERO:
-		var castle = ai.get_peer_castle(ai.my_peer_id)
+		var castle = _castle()
 		if not is_instance_valid(castle):
 			return false
 		start_pos = castle.global_position
@@ -484,7 +484,7 @@ func _find_resource_bridge_plan(own_set: Dictionary, bridges: Dictionary, own_gr
 		return []
 
 	var dirs: Array = [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
-	var existing_bridges: int = ai.count_building(BRIDGE_ID)
+	var existing_bridges: int = _count_bld(BRIDGE_ID)
 	var best_score: float = INF
 	var best_line: Array = []
 	for c in own_set.keys():
@@ -597,7 +597,7 @@ func _find_transport_shores(own_set: Dictionary, enemy_set: Dictionary, bridges:
 			enemy_land[n] = c
 	if own_shores.is_empty() or enemy_shores.is_empty():
 		return {}
-	var my_castle = ai.get_peer_castle(ai.my_peer_id)
+	var my_castle = _castle()
 	var enemy_castle = ai._get_attack_target_castle()
 	if not is_instance_valid(my_castle) or not is_instance_valid(enemy_castle):
 		return {}
@@ -729,7 +729,7 @@ func _collect_landing_defenses() -> Array:
 			continue
 		if int(e.team) == RTSConfig.Team.NEUTRAL:
 			continue
-		if not ai._entity_is_enemy(e):
+		if not _is_enemy_ent(e):
 			continue
 		var uid: int = int(e.entity_id)
 		if uid == 10 or uid == 14 or uid in [43, 44, 45, 46, 47, 48, 49, 50, 51]:
@@ -745,7 +745,7 @@ func _collect_landing_defenses() -> Array:
 			continue
 		if int(b.team) == RTSConfig.Team.NEUTRAL or b.build_timer > 0.0:
 			continue
-		if not ai._entity_is_enemy(b):
+		if not _is_enemy_ent(b):
 			continue
 		var bid: int = int(b.entity_id)
 		var bscore: float = 0.0
@@ -813,7 +813,7 @@ func _tick_bridge(delta: float):
 			_bridge_pending_stall = 0.0
 		_bridge_afford_timer = 0.0
 		return
-	if not ai.can_afford_building(BRIDGE_ID):
+	if not _afford_bld(BRIDGE_ID):
 		_bridge_afford_timer += delta
 		if _bridge_afford_timer >= BRIDGE_AFFORD_TIMEOUT:
 			# 木材长期不够：放弃这条桥，让下一次规划改走运载船或更短的资源桥。
@@ -829,7 +829,7 @@ func _tick_bridge(delta: float):
 		_register_bridge_failure()
 		_request_plan_in(1.0)
 		return
-	if ai.build_building(BRIDGE_ID, pos):
+	if _ports.build.build(BRIDGE_ID, pos):
 		_bridge_fail_count = 0
 		_bridge_retry_at_ms = 0
 		_bridge_afford_timer = 0.0
@@ -851,13 +851,13 @@ func _register_bridge_failure():
 
 func _recalculate_army_paths():
 	for e in battle.entities.get_children():
-		if e is Army and e.health > 0 and ai.entity_belongs_to_me(e):
+		if e is Army and e.health > 0 and _belongs(e):
 			if e.has_method("recalculate_path"):
 				e.recalculate_path()
 	# 新桥会让对岸资源变得可达；立刻重分配一次农民，
 	# 否则他们可能还停在修桥前的旧目标/闲置状态里。
 	if ai != null and ai.has_method("allocate_workers"):
-		ai.allocate_workers()
+		_ports.command.request_worker_rebalance()
 
 # ═══════════════════════ 运载船 ═══════════════════════
 
@@ -902,7 +902,7 @@ func _refresh_fleet():
 	for e in battle.entities.get_children():
 		if not (e is Army) or e.health <= 0:
 			continue
-		if not ai.entity_belongs_to_me(e):
+		if not _belongs(e):
 			continue
 		if e.entity_id == TRANSPORT_ID:
 			# 在远处油田水塘/另一片海湾/内陆湖建造后永远开不到出发岸的船，
@@ -922,7 +922,7 @@ func _refresh_fleet():
 	# 先清掉上一轮的护航标记，再把当前选中的护航舰重新标记，
 	# 防止海军巡逻/总攻把护航舰队拉去别处。
 	for e in battle.entities.get_children():
-		if e is Army and int(e.entity_id) in ESCORT_IDS and ai.entity_belongs_to_me(e):
+		if e is Army and int(e.entity_id) in ESCORT_IDS and _belongs(e):
 			e.remove_meta("ai_escorting")
 	var transport_cap: int = maxi(1, _wave_transport_target)
 	var escort_cap: int = maxi(1, _wave_escort_target)
@@ -938,7 +938,7 @@ func _usable_transport_count() -> int:
 	var n: int = 0
 	for e in battle.entities.get_children():
 		if e is Army and e.health > 0 and int(e.entity_id) == TRANSPORT_ID \
-				and ai.entity_belongs_to_me(e) and not e.has_meta("ai_transport_excluded"):
+				and _belongs(e) and not e.has_meta("ai_transport_excluded"):
 			n += 1
 	return n
 
@@ -1109,7 +1109,7 @@ func _tick_fleet_idle(delta: float):
 			u.remove_meta("ai_resource_guard")
 			if u.has_meta("ai_wall_guard"):
 				if ai != null and ai.has_method("_release_wall_guard"):
-					ai._release_wall_guard(u)
+					_ports.command.release_wall_guard(u)
 				else:
 					u.remove_meta("ai_wall_guard")
 					u.hold_position = false
@@ -1413,7 +1413,7 @@ func _pick_units(max_count: int) -> Array:
 	for e in battle.entities.get_children():
 		if not (e is Army) or e.health <= 0:
 			continue
-		if not ai.entity_belongs_to_me(e):
+		if not _belongs(e):
 			continue
 		if int(e.entity_id) in exclusions:
 			continue
@@ -1549,7 +1549,7 @@ func _ensure_shore_shipyard():
 	for e in battle.entities.get_children():
 		if not (e is Building) or e.entity_id != SHIPYARD_ID or e.health <= 0:
 			continue
-		if not ai.entity_belongs_to_me(e):
+		if not _belongs(e):
 			continue
 		var near: bool = e.global_position.distance_to(own_shore_water) <= 16.0 \
 			and _shipyard_reaches_own_water(e)
@@ -1569,16 +1569,16 @@ func _ensure_shore_shipyard():
 		best.set_meta("ai_transport_shipyard", true)
 		_drop_remote_transport_orders(best)
 		return
-	if not ai.can_afford_building(SHIPYARD_ID):
+	if not _afford_bld(SHIPYARD_ID):
 		return
 	var pos: Vector3 = _find_shore_shipyard_pos()
 	if pos == Vector3.ZERO:
 		return
-	if not ai.build_building(SHIPYARD_ID, pos):
+	if not _ports.build.build(SHIPYARD_ID, pos):
 		return
 	var built: Building = null
 	for e in battle.entities.get_children():
-		if e is Building and e.entity_id == SHIPYARD_ID and e.health > 0 and ai.entity_belongs_to_me(e):
+		if e is Building and e.entity_id == SHIPYARD_ID and e.health > 0 and _belongs(e):
 			if e.global_position.distance_to(pos) <= 3.0:
 				built = e
 				break
@@ -1592,7 +1592,7 @@ func _drop_remote_transport_orders(keep: Building) -> void:
 	for e in battle.entities.get_children():
 		if not (e is Building) or e.entity_id != SHIPYARD_ID or e == keep or e.health <= 0:
 			continue
-		if not ai.entity_belongs_to_me(e):
+		if not _belongs(e):
 			continue
 		while e.production_queue.has(TRANSPORT_ID):
 			e.production_queue.erase(TRANSPORT_ID)
@@ -1634,7 +1634,7 @@ func _find_transport_shipyard() -> Building:
 	for e in battle.entities.get_children():
 		if not (e is Building) or e.health <= 0 or e.entity_id != SHIPYARD_ID:
 			continue
-		if not ai.entity_belongs_to_me(e) or not e.has_meta("ai_transport_shipyard"):
+		if not _belongs(e) or not e.has_meta("ai_transport_shipyard"):
 			continue
 		if not _shipyard_reaches_own_water(e):
 			continue
@@ -1654,13 +1654,13 @@ func _ensure_transport_tech():
 		return
 	if sy.upgrade_level >= TRANSPORT_SHIPYARD_LEVEL:
 		return
-	var castle = ai.get_peer_castle(ai.my_peer_id)
+	var castle = _castle()
 	if is_instance_valid(castle) and castle.upgrade_level <= sy.upgrade_level:
-		if ai.can_afford_upgrade(20):
-			ai.upgrade_building(20)
+		if _afford_upg(20):
+			_ports.build.upgrade(20)
 			return
-	if sy.can_upgrade() and ai.can_afford_upgrade(SHIPYARD_ID):
-		# 直接升级这座“渡水专用”船坞。ai.upgrade_building(23) 会从所有船坞里
+	if sy.can_upgrade() and _afford_upg(SHIPYARD_ID):
+		# 直接升级这座“渡水专用”船坞。upgrade_building(23) 会从所有船坞里
 		# 挑第一个可升级的，经常升级到内陆油田船坞，而登陆岸这座一直停在 2 级，
 		# 运载船科技永远不够。
 		sy.perform_upgrade(battle)
@@ -1685,7 +1685,7 @@ func _ensure_transport_fleet():
 		sy.production_list.append({"unit_id": TRANSPORT_ID, "cooldown": 15.0, "queue_limit": 3})
 	if not ai._can_train_unit():
 		return
-	if ai.can_afford(TRANSPORT_ID):
+	if _afford(TRANSPORT_ID):
 		if sy.try_produce(TRANSPORT_ID):
 			# 船坞平时会被战船/渔船排满；运载船如果排在十几艘船后面，
 			# AI 可能几分钟都凑不齐本波次的运载船。把运载船插到当前生产项之后，
@@ -1697,7 +1697,7 @@ func _ensure_transport_fleet():
 
 func _ensure_escort_ships():
 	# 同上：只算已经下水的护航舰，队列里的不计入“已具备”。
-	var total: int = ai.count_unit(13, false) + ai.count_unit(39, false) + ai.count_unit(40, false)
+	var total: int = _count_unit(13, false) + _count_unit(39, false) + _count_unit(40, false)
 	if total >= _wave_escort_target:
 		return
 	var sy = _find_transport_shipyard()
@@ -1714,5 +1714,60 @@ func _ensure_escort_ships():
 		sy.production_list.append({"unit_id": 13, "cooldown": 7.0, "queue_limit": 5})
 	if not ai._can_train_unit():
 		return
-	if ai.can_afford(13):
+	if _afford(13):
 		sy.try_produce(13)
+# A4：只读上下文 + 写端口（未绑定时回落控制器）。
+var _ctx = null
+var _ports = null
+
+func set_context(c) -> void:
+	_ctx = c
+
+func set_ports(p) -> void:
+	_ports = p
+
+func _belongs(e) -> bool:
+	if _ctx != null:
+		return _ctx.belongs_to_me(e)
+	return ai.entity_belongs_to_me(e) if ai != null else false
+
+func _castle():
+	if _ctx != null:
+		return _ctx.castle()
+	return ai.get_peer_castle(ai.my_peer_id) if ai != null else null
+
+func _castle_of(team: int):
+	if _ctx != null:
+		return _ctx.team_castle_of(team)
+	return ai.get_team_castle(team) if ai != null else null
+
+func _count_unit(unit_id: int, include_queue: bool = true) -> int:
+	if _ctx != null:
+		return _ctx.count_unit(unit_id, include_queue)
+	return int(ai.count_unit(unit_id, include_queue)) if ai != null else 0
+
+func _count_bld(building_id: int) -> int:
+	if _ctx != null:
+		return _ctx.count_building(building_id)
+	return int(ai.count_building(building_id)) if ai != null else 0
+
+func _is_enemy_ent(e) -> bool:
+	if _ctx != null:
+		return _ctx.is_enemy(e)
+	return ai._entity_is_enemy(e) if ai != null else false
+
+func _afford(id: int) -> bool:
+	if _ctx != null:
+		return _ctx.can_afford(id)
+	return ai.can_afford(id) if ai != null else false
+
+func _afford_bld(id: int) -> bool:
+	if _ctx != null:
+		return _ctx.can_afford_building(id)
+	return ai.can_afford_building(id) if ai != null else false
+
+func _afford_upg(id: int) -> bool:
+	if _ctx != null:
+		return _ctx.can_afford_upgrade(id)
+	return ai.can_afford_upgrade(id) if ai != null else false
+

@@ -76,6 +76,15 @@ class CommandPort:
 			return
 		_ai._director_release(uid)
 
+	# 跨模块请求统一走这里，模块代码不再直连其它模块。
+	func request_worker_rebalance() -> void:
+		if _ai != null:
+			_ai.allocate_workers()
+
+	func release_wall_guard(unit) -> void:
+		if _ai != null:
+			_ai._release_wall_guard(unit)
+
 	func has_claim(unit) -> bool:
 		return bool(_ai._unit_has_claim(unit)) if _ai != null else false
 

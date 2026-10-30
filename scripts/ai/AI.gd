@@ -1959,6 +1959,10 @@ func _ready():
 	# A2：把只读上下文注入执行层，读取逐步从控制器迁到 _ctx。
 	if _defense != null: _defense.set_context(_context)
 	if _defense != null: _defense.set_ports(_ports.build, _ports.command)
+	if _worker_director != null: _worker_director.set_context(_context)
+	if _water_crossing != null:
+		_water_crossing.set_context(_context)
+		_water_crossing.set_ports(_ports)
 	_ledger = RoleLedgerScript.new()
 	_director_v2 = AIDirectorScript.new()
 	_director_v2.setup(self)

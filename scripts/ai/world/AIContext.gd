@@ -77,8 +77,8 @@ func enemy_castle():
 func count_building(building_id: int) -> int:
 	return int(_ai.count_building(building_id)) if _ai != null else 0
 
-func count_unit(unit_id: int) -> int:
-	return int(_ai.count_unit(unit_id)) if _ai != null else 0
+func count_unit(unit_id: int, include_queue: bool = true) -> int:
+	return int(_ai.count_unit(unit_id, include_queue)) if _ai != null else 0
 
 # ── 敌情（优先当轮快照；快照为空时回落到实时缓存，A2 之后再收紧）──
 func visible_enemies() -> Array:
@@ -112,3 +112,6 @@ func debug_snapshot() -> Dictionary:
 
 func team_castle_of(team: int):
 	return _ai.get_team_castle(team) if _ai != null else null
+
+func defense_threat_level() -> int:
+	return int(_ai._defense.threat_level) if _ai != null and _ai._defense != null else 0

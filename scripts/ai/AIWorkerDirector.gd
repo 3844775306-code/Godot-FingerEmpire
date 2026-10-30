@@ -332,7 +332,7 @@ func _sync_roster() -> void:
 			continue
 		if int(entity.entity_id) != 10:
 			continue
-		if not ai.entity_belongs_to_me(entity):
+		if not _belongs(entity):
 			continue
 		var uid: int = entity.get_instance_id()
 		seen[uid] = {
@@ -423,7 +423,7 @@ func _nearest_enemy(pos: Vector3, radius: float):
 			continue
 		if _is_animal_target(e):
 			continue
-		if ai.entity_belongs_to_me(e):
+		if _belongs(e):
 			continue
 		w = e
 		break
@@ -456,7 +456,7 @@ func _count_queued_workers() -> int:
 	for entity in ai._cached_buildings():
 		if not is_instance_valid(entity) or not (entity is Building) or entity.health <= 0:
 			continue
-		if not ai.entity_belongs_to_me(entity):
+		if not _belongs(entity):
 			continue
 		for pid in entity.production_queue:
 			if int(pid) == 10:
@@ -464,16 +464,16 @@ func _count_queued_workers() -> int:
 	return total
 
 func _worker_target_count() -> int:
-	if ai.phase >= 2:
+	if _phase_v() >= 2:
 		return 15
-	if ai.phase == 1:
+	if _phase_v() == 1:
 		return 12
 	return 8
 
 func _worker_floor_count() -> int:
-	if ai.phase >= 2:
+	if _phase_v() >= 2:
 		return 8
-	if ai.phase == 1:
+	if _phase_v() == 1:
 		return 6
 	return 4
 
@@ -617,7 +617,7 @@ func _log_metrics() -> void:
 		mode = "WORKER_CRISIS"
 	elif ai._food_emergency():
 		mode = "FOOD_CRISIS"
-	elif ai._defense != null and int(ai._defense.threat_level) >= 2:
+	elif _threat_level() >= 2:
 		mode = "BASE_ALERT"
 	print("[WORKER] t=%d pid=%d mode=%s live=%d queued=%d target=%d floor=%d idle=%d flee=%d builders=%d roles=%s train=%s block=%s" % [
 		int(ai.battle.game_time), int(ai.my_peer_id), mode, live, queued,
@@ -646,3 +646,23 @@ func debug_snapshot() -> Dictionary:
 		"builders": _builder_reservations.size(),
 		"train_block": _last_train_block,
 	}
+# A4：只读上下文（未绑定时回落控制器）。
+var _ctx = null
+
+func set_context(c) -> void:
+	_ctx = c
+
+func _belongs(e) -> bool:
+	if _ctx != null:
+		return _ctx.belongs_to_me(e)
+	return ai.entity_belongs_to_me(e) if ai != null else false
+
+func _phase_v() -> int:
+	if _ctx != null:
+		return _ctx.phase()
+	return int(ai.phase) if ai != null else 0
+
+func _threat_level() -> int:
+	if _ctx != null:
+		return _ctx.defense_threat_level()
+	return int(ai._defense.threat_level) if ai != null and ai._defense != null else 0
