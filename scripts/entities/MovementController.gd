@@ -465,10 +465,14 @@ func process_move(delta, bm: RTSBattleManager):
 	if _pending_path:
 		if not _army.is_attack_moving and not _army._order_is(_army.UnitState.MOVING) \
 				and not _army._order_is(_army.UnitState.ATTACKING) \
-				and not _army._order_is(_army.UnitState.BUILDING):
-			# 只有真正不需要寻路的命令才丢弃待处理请求；施工和攻击索敌一样
-			# 必须有终点，A* 预算连续几帧排不到时不能把请求丢掉，否则农民
+				and not _army._order_is(_army.UnitState.BUILDING) \
+				and not _army._order_is(_army.UnitState.GATHERING) \
+				and not _army._order_is(_army.UnitState.DELIVERING):
+			# 只有真正不需要寻路的命令才丢弃待处理请求；施工、采集、交付和攻击索敌
+			# 一样必须有终点，A* 预算连续几帧排不到时不能把请求丢掉，否则农民
 			# 会在半路彻底失去路径，表现为原地卡住。
+			# 实测：原先采集/交付不在放行名单里，请求每帧被丢一次，农民永远拿不到路径
+			# （静止样本 100% 是「路径0 待处理true」）。
 			_pending_path = false
 			_pending_since_ms = 0
 		else:
