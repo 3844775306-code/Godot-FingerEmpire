@@ -547,6 +547,11 @@ func _plan_wall_ring(castle, ring_index: int, force_radius: int = 0) -> bool:
 		_defense_queue.resize(queue_before)
 		_defense_slots.resize(slots_before)
 		wall_positions.resize(walls_before)
+		# 首选“贴地形闭合环”：从主城做一次有界洪泛，把可达区域的边界整圈砌墙——
+		# 天然被河/山/地图边缘挡住的方向不需要墙，其余方向正好封死，闭合成败由洪泛保证，
+		# 而不是靠“固定半径圆”去碰地形（实测圆形候选在河岸侧必然留出 200° 以上的缺口）。
+		if _plan_terrain_ring(castle, ring_index):
+			return true
 		# 这一档半径闭合不了时，先把半径往内收再试（更小的圈更容易被地形封住），
 		# 而不是直接退化成半圈墙。实测按缺口验收会让多个 AI 直接掉到半圈。
 		if force_radius <= 0:
@@ -577,6 +582,148 @@ func _plan_wall_ring(castle, ring_index: int, force_radius: int = 0) -> bool:
 	# 队列按优先级从低到高建；首圈墙排在塔和外圈之前。
 	_defense_queue.sort_custom(func(a, b): return float(a["priority"]) < float(b["priority"]))
 	return true
+
+# 从主城出发的“有界洪泛”：只走可通行地形，限制在半径 limit 格内，返回可达格集合。
+func _flood_region(center: Vector2i, limit: int) -> Dictionary:
+	var region: Dictionary = {center: true}
+	var queue: Array = [center]
+	var head: int = 0
+	var lim_sq: int = limit * limit
+	while head < queue.size():
+		var cur: Vector2i = queue[head]
+		head += 1
+		for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var n: Vector2i = cur + d
+			if region.has(n):
+				continue
+			if (n - center).length_squared() > lim_sq:
+				continue
+			# 只穿过“平地格”扩张：坡地/浅滩是单位能走的天然隘口，但墙建不上去。
+			# 若把它们算进可达区域，边界会贴在坡地/浅滩上导致整圈墙 60% 落不下去（实测可用边界格只有 19/84）。
+			if not _terrain_plain_grid(n.x, n.y):
+				continue
+			region[n] = true
+			queue.append(n)
+	return region
+
+# 贴地形闭合环：洪泛可达区域的边界就是天然的“围一圈”，沿边界逐格砌墙。
+# 相比固定半径圆，它会把墙压在河岸/山脚/地图边缘上，闭合成败不依赖半径候选。
+func _plan_terrain_ring(castle, ring_index: int) -> bool:
+	var desired: int = _wall_ring_desired_radius(castle, ring_index)
+	var max_r: int = clampi(desired, RING_MIN_RADIUS + 2,
+			RING_FIRST_MAX if ring_index == 0 else RING_MAX_RADIUS)
+	var center: Vector2i = ai.battle.world_to_grid(castle.global_position)
+	var region: Dictionary = _flood_region(center, max_r)
+	if region.size() < 24:
+		return false
+	var cpos: Vector3 = castle.global_position
+	var threat_ang: float = atan2(_defense_dir.z, _defense_dir.x)
+	var pieces: Array = []
+	var sum_r: float = 0.0
+	for key in region.keys():
+		var t: Vector2i = key
+		var rel := Vector2(t.x - center.x, t.y - center.y)
+		var dd: float = rel.length()
+		if dd < float(RING_MIN_RADIUS):
+			continue
+		var edge: bool = false
+		for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			if region.has(t + d):
+				continue
+			edge = true
+			break
+		if not edge:
+			continue
+		var wp: Vector3 = Vector3(float(t.x) - RTSConfig.MAP_SIZE / 2.0 + 0.5, cpos.y,
+				float(t.y) - RTSConfig.MAP_SIZE / 2.0 + 0.5)
+		var ang: float = atan2(wp.z - cpos.z, wp.x - cpos.x)
+		var diff: float = absf(wrapf(ang - threat_ang, -PI, PI))
+		pieces.append({"pos": wp, "prio": 1.0 + diff * 2.0})
+		sum_r += dd
+	if pieces.size() < 20:
+		return false
+	pieces.sort_custom(func(a, b): return float(a["prio"]) < float(b["prio"]))
+	var queue_before: int = _defense_queue.size()
+	var slots_before: int = _defense_slots.size()
+	var wall_before: int = wall_positions.size()
+	for it in pieces:
+		_add_defense_slot(27, it["pos"], float(it["prio"]), "wall", true, false, false)
+	var planned: int = wall_positions.size() - wall_before
+	# 真正判“闭合”的办法：把墙、建筑、资源点都当成障碍，从主城做一次洪泛，
+	# 看能不能走到环外——走不出去才算封死。只看“墙格数”会漏掉建筑/矿山天然封住的方向。
+	if planned < 12 or not _ring_sealed(castle, desired):
+		_defense_queue.resize(queue_before)
+		_defense_slots.resize(slots_before)
+		wall_positions.resize(wall_before)
+		return false
+	var mean_r: int = maxi(RING_MIN_RADIUS, int(round(sum_r / float(pieces.size()))))
+	_wall_ring_radii.append(mean_r)
+	_wall_rings_planned = ring_index + 1
+	_castle_ring_planned = true
+	_castle_ring_radius = mean_r
+	_castle_ring_wall_count = planned
+	_ring_gap_count = int(ceil(_ring_gap_deg(castle, mean_r)))
+	_defense_terrain_text = "地形环%d段(闭)" % planned
+	if ring_index == 0:
+		_first_ring_planned_at = float(ai.battle.game_time)
+		_first_ring_wall_start = wall_before
+	_plan_ring_towers(castle, mean_r)
+	_defense_queue.sort_custom(func(a, b): return float(a["priority"]) < float(b["priority"]))
+	return true
+
+# 从主城洪泛，判断“墙 + 建筑 + 资源点 + 地形”是否真的把主城围死。
+# 逃不出去 = 闭合；能走到 radius + 6 格以外 = 有缺口（这个判定直接对应“敌人能不能走进来”）。
+func _ring_sealed(castle, radius: int) -> bool:
+	var b = ai.battle
+	if b == null:
+		return false
+	var center: Vector2i = b.world_to_grid(castle.global_position)
+	var blocked: Dictionary = {}
+	for e in b.entities.get_children():
+		if not is_instance_valid(e) or e.health <= 0:
+			continue
+		if e is Building:
+			var br: float = float(e.body_radius)
+			var cg: Vector2i = b.world_to_grid(e.global_position)
+			var span: int = int(ceil(br)) + 1
+			for dx in range(-span, span + 1):
+				for dz in range(-span, span + 1):
+					var gg: Vector2i = cg + Vector2i(dx, dz)
+					var gp: Vector3 = Vector3(float(gg.x) - RTSConfig.MAP_SIZE / 2.0 + 0.5, 0.0,
+							float(gg.y) - RTSConfig.MAP_SIZE / 2.0 + 0.5)
+					if Vector2(gp.x - e.global_position.x, gp.z - e.global_position.z).length() <= br + 0.4:
+						blocked[gg] = true
+		elif e is WorldResource:
+			var rr: float = float(e.body_radius) + 0.3
+			var rg: Vector2i = b.world_to_grid(e.global_position)
+			var rspan: int = int(ceil(rr)) + 1
+			for dx in range(-rspan, rspan + 1):
+				for dz in range(-rspan, rspan + 1):
+					var gg2: Vector2i = rg + Vector2i(dx, dz)
+					var gp2: Vector3 = Vector3(float(gg2.x) - RTSConfig.MAP_SIZE / 2.0 + 0.5, 0.0,
+							float(gg2.y) - RTSConfig.MAP_SIZE / 2.0 + 0.5)
+					if Vector2(gp2.x - e.global_position.x, gp2.z - e.global_position.z).length() <= rr:
+						blocked[gg2] = true
+	var escaped: bool = false
+	var seen: Dictionary = {center: true}
+	var queue: Array = [center]
+	var head: int = 0
+	var escape_r: int = radius + 6
+	while head < queue.size():
+		var cur: Vector2i = queue[head]
+		head += 1
+		if (cur - center).length() > float(escape_r):
+			escaped = true
+			break
+		for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var n: Vector2i = cur + d
+			if seen.has(n) or blocked.has(n):
+				continue
+			if not _terrain_passable_grid(n.x, n.y):
+				continue
+			seen[n] = true
+			queue.append(n)
+	return not escaped
 
 # 统计某一圈（半径 ring_r ± 容差）上的最大角度缺口（度）。
 # 天然屏障（不可通行地形/地图边缘）算作已经封住，不算缺口。
@@ -629,6 +776,11 @@ func _ring_gap_deg(castle, ring_r: int) -> float:
 		head += 1
 	max_gap = maxi(max_gap, tail + head)
 	return float(max_gap) * 2.0
+
+func _terrain_plain_grid(gx: int, gz: int) -> bool:
+	if gx < 0 or gz < 0 or gx >= RTSConfig.MAP_SIZE or gz >= RTSConfig.MAP_SIZE:
+		return false
+	return ai.battle.get_terrain_at_grid(gx, gz) == 0
 
 func _terrain_passable_grid(gx: int, gz: int) -> bool:
 	if gx < 0 or gz < 0 or gx >= RTSConfig.MAP_SIZE or gz >= RTSConfig.MAP_SIZE:
