@@ -1728,6 +1728,7 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 		var eid2 = info.get("entity_id", 0)
 		var br = info.get("body_radius", 0.5)
 		WeaponAttachment.attach(entity, int(eid2), float(br))
+		FarmerBackpackVisual.attach(entity, int(eid2))
 		var mpath = ""
 		if eid2 in [15, 19, 38, 66, 67]: mpath = "res://models/pets/animal-dog.glb"
 		elif eid2 == 34: mpath = "res://models/pets/animal-elephant.glb"

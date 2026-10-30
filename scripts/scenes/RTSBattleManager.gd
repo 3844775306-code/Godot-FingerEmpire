@@ -3501,6 +3501,10 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 		_apply_team_tint(entity, tint)
 		if entity is Building and entity.entity_id == 27:
 			WallTierVisual.apply(entity, maxi(entity.upgrade_level, entity.level), tint)
+	# 农民背包在队伍色之后挂，避免皮革材质被当成身体模型一起染色；
+	# 联机主机由 ClientRenderer 统一生成，避免服务端和客户端各挂一个。
+	if entity is Army and entity.entity_id == 10 and NetworkManager.mode == NetworkManager.Mode.NONE:
+		FarmerBackpackVisual.attach(entity, entity.entity_id)
 	# 有坐骑的单位抬高主模型；侦察兵坐骑按固定倍率缩放，狗背比 0.5*体半径更高，
 	# 需要按坐骑包围盒顶面继续抬高，否则士兵会整个人陷进坐骑里。
 	if RTSConfig.is_mounted(entity.entity_id) and entity.has_meta("_model_instance"):
