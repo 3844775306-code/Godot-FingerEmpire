@@ -52,6 +52,7 @@ const RING_WALL_MAX: int = 160
 # 环闭合验收：墙圈上任意 30° 以上的缺口都等于“给敌人留门”，实测有 AI 出现 156° 缺口，
 # 结果 BFS 上敌军的进攻路线完全没有被绕开（绕行增量 0%）。规划必须按缺口验收，而不是按墙段数量。
 const RING_MAX_GAP_DEG: float = 30.0
+const MIN_TOWERS: int = 6
 # 判定“这一段墙属于本圈”的径向容差（米）。
 const RING_RADIAL_TOL: float = 1.6
 const RING_WALL_MIN: int = 8
@@ -698,7 +699,9 @@ func _plan_terrain_ring(castle, ring_index: int) -> bool:
 			if i == closed_angles.size() - 1:
 				da += TAU
 			max_gap_m = maxf(max_gap_m, da * float(desired))
-	if planned < 12 or max_gap_m > 1.6 or not _ring_sealed(castle, desired):
+	# 落墙覆盖率：边界格里有 20% 以上没落下墙，说明这一圈半径根本摆不满，直接失败去收缩半径。
+	var fill_ratio: float = float(planned) / maxf(float(pieces.size()), 1.0)
+	if planned < 12 or fill_ratio < 0.8 or max_gap_m > 1.6 or not _ring_sealed(castle, desired):
 		_defense_queue.resize(queue_before)
 		_defense_slots.resize(slots_before)
 		wall_positions.resize(wall_before)
@@ -2848,14 +2851,16 @@ func _pos_has_building(b_id: int, pos: Vector3) -> bool:
 # 不管环规划成不成功，都要保证主城周围至少有几座塔。
 # 实测闭合判据收紧后“环规划失败”的 AI 会掉到 1 座塔，火力等于没有。
 func _ensure_min_towers(castle) -> void:
+	# 只认"已经建成的塔"：以前把队列里排着的也算进去，结果塔位排了 8 个、一块石头没花，
+	# 保底逻辑以为够了就再也不补（实测破防时塔只有 1 座）。
 	var built: int = ai.count_building(25) + ai.count_building(26)
 	var planned: int = _count_planned(25) + _count_planned(26)
-	if built + planned >= 4:
+	if built >= MIN_TOWERS or planned > 0:
 		return
 	var now: float = float(ai.battle.game_time)
 	if now < 150.0 or now < _next_reactive_tower:
 		return
-	_next_reactive_tower = now + 25.0
+	_next_reactive_tower = now + 22.0
 	var base_dir: Vector3 = _defense_dir
 	if base_dir.length_squared() < 0.01:
 		base_dir = _enemy_castle_dir(castle)
@@ -2863,17 +2868,23 @@ func _ensure_min_towers(castle) -> void:
 	if base_dir.length_squared() < 0.01:
 		base_dir = Vector3.FORWARD
 	base_dir = base_dir.normalized()
-	for i in range(6):
-		var ang: float = TAU * float(i) / 6.0
+	# 塔贴墙外侧环形分布：射程覆盖整条墙线，而不是全挤在主城一个点。
+	var ring_r: float = float(_castle_ring_radius)
+	if ring_r < 8.0:
+		ring_r = float(maxi(RING_MIN_RADIUS, 10))
+	for i in range(8):
+		var ang: float = TAU * float(i) / 8.0
 		var dir: Vector3 = base_dir.rotated(Vector3.UP, ang)
-		for tr in [11.0, 9.0, 13.0]:
-			var p: Vector3 = castle.global_position + dir * float(tr)
+		for off in [2.2, 1.0, 3.6, 5.0, -1.5]:
+			var p: Vector3 = castle.global_position + dir * (ring_r + float(off))
 			var spot: Vector3 = _find_anchor_spot(p, 25, 2.0)
-			if spot != Vector3.ZERO:
-				_add_defense_slot(25, spot, 0.4 + float(i) * 0.05, "tower", true, false, false)
-				if _count_planned(25) + built >= 4:
-					_defense_queue.sort_custom(func(a, b): return float(a["priority"]) < float(b["priority"]))
-					return
+			if spot == Vector3.ZERO:
+				continue
+			_add_defense_slot(25, spot, 0.35 + float(i) * 0.06, "tower", true, false, false)
+			if _count_planned(25) + built >= MIN_TOWERS:
+				_defense_queue.sort_custom(func(a, b): return float(a["priority"]) < float(b["priority"]))
+				return
+			break
 
 func _maybe_reactive_tower(castle) -> void:
 	if threat_level < 1:
