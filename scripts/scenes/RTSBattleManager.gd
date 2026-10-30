@@ -2936,6 +2936,10 @@ func _apply_entity_model(entity: GameEntity) -> bool:
 	if entity.entity_id == 16: model_instance.rotation.y = deg_to_rad(180)
 	elif entity.entity_id == 17: model_instance.rotation.y = deg_to_rad(90)
 	elif entity.entity_id == 18: model_instance.rotation.y = deg_to_rad(90)
+	elif entity.entity_id in [5, 6]:
+		# 手推车/贸易车模型的原生车头朝 +Z，和单位前方 -Z 相反；
+		# 转 180° 后车头才和移动方向一致，牵引杆也落在靠主人一侧。
+		model_instance.rotation.y = deg_to_rad(180)
 	elif entity.entity_id == 58:
 		# 连弩：ballista 模型炮口/弩箭沿局部 +X，顺时针转 90° 让 +X 对齐实体前方 -Z
 		model_instance.rotation.y = deg_to_rad(90)
@@ -3124,6 +3128,9 @@ func _update_entity_animation(entity: GameEntity):
 			anim = "idle"
 	else:
 		anim = "idle"
+	# 农民推手推车时用模型自带的 drive 姿态，双手向前扶把，不再空手摆臂。
+	if entity is Army and entity.entity_id == 10 and entity.has_meta("_has_cart") and anim == "walk":
+		anim = "drive"
 	# 骑乘单位：坐骑负责走路，骑手保持坐姿；否则士兵会在狗背上原地摆腿。
 	if entity is Army and RTSConfig.is_mounted(entity.entity_id):
 		var mount_army := entity as Army
@@ -3139,10 +3146,10 @@ func _update_entity_animation(entity: GameEntity):
 	var force_proc: bool = entity is Army and entity.entity_id in PROC_ATTACK_IDS
 	if ap != null and anim != "" and ap.has_animation(anim) and not (force_proc and anim == "attack-melee-left"):
 		var spd := 1.0
-		if anim != "walk" and anim != "idle" and anim != "die":
+		if anim != "walk" and anim != "drive" and anim != "idle" and anim != "die":
 			# 出手动作按攻击冷却循环；GATHERING 也复用攻击动作，让采集有挥动反馈
 			spd = AnimationHelper.attack_speed_scale(ap, anim, entity.attack_speed)
-		elif anim == "walk":
+		elif anim == "walk" or anim == "drive":
 			var actual_speed: float = entity.speed
 			if entity is Army:
 				var army_walk := entity as Army
@@ -3154,7 +3161,7 @@ func _update_entity_animation(entity: GameEntity):
 					actual_speed = army_walk._visual_speed
 			spd = AnimationHelper.walk_speed_scale(actual_speed)
 		ap.speed_scale = spd
-		if anim == "walk":
+		if anim == "walk" or anim == "drive":
 			AnimationHelper.play_looped(ap, anim, true)
 		elif ap.current_animation != anim:
 			ap.play(anim)

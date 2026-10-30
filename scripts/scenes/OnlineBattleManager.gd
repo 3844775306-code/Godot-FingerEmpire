@@ -2227,13 +2227,18 @@ func _serialize_entity_compact(entity: GameEntity, snapshot_key: String) -> Arra
 	var unit_extra = null
 	if entity is Army:
 		if entity.entity_id == 10:
-			unit_extra = {"cargo": entity.cargo.duplicate(), "max_cargo": entity.max_cargo}
+			unit_extra = {"cargo": entity.cargo.duplicate(), "max_cargo": entity.max_cargo,
+				"cart_id": int(entity.get_meta("_has_cart", 0))}
 		elif MerchantMarker.is_merchant(entity.entity_id):
 			unit_extra = {
 				"merchant_resource": entity._merchant_resource,
 				"merchant_volume": entity._merchant_trade_volume,
 				"merchant_state": entity._merchant_state,
+				"cart_id": int(entity.get_meta("_has_cart", 0)),
 			}
+		elif entity.entity_id in [5, 6]:
+			# 车和主人的配对：客户端据此生成牵引杆，避免联机端仍各走各的。
+			unit_extra = {"cart_owner_id": entity.get_cart_owner_id()}
 	a[E.UNIT_EXTRA] = unit_extra
 	# Building extra
 	if entity is Building:

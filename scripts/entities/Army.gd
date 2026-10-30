@@ -166,7 +166,8 @@ enum CartState { IDLE, CHASING, FOLLOWING }
 var _cart_state: int = CartState.IDLE
 var _cart_owner: WeakRef = null
 var _cart_search_timer: float = 0.0
-const CART_FOLLOW_DIST: float = 1.5     # 后方跟随距离
+const CART_FOLLOW_DIST: float = 1.35    # 贸易车在商人后方的跟随距离
+const CART_HANDCART_LEAD_DIST: float = 1.25 # 手推车在农民前方的推车距离
 const CART_CHASE_SPEED_MULT: float = 2.0 # 追赶速度倍数
 
 # 爆破船/运载船 vars
@@ -530,11 +531,12 @@ func _update_walk_dust(delta: float) -> void:
 # 攻城器械行走动画：轮子按实际位移滚动，火炮没有轮子就靠炮架腿摆动表现拖行。
 # 只驱动 GLB 内部节点，不碰实体位置，因此不会和攻击动画抢同一属性。
 func _update_siege_walk(delta: float) -> void:
-	if entity_id == SUPPORT_UNIT_ID:
+	if entity_id == SUPPORT_UNIT_ID or SupportCartAnim.is_simple_cart(entity_id):
 		var support_model := _get_entity_model()
 		if support_model != null:
-			SupportCartAnim.update(support_model, delta, _visual_speed)
-		return
+			SupportCartAnim.update(support_model, delta, _visual_speed, entity_id)
+		if entity_id == SUPPORT_UNIT_ID:
+			return
 	if not SiegeWalkAnim.is_walker(entity_id):
 		return
 	var model := _get_entity_model()
@@ -5249,6 +5251,7 @@ func _process_cart(delta):
 					_cart_owner = weakref(new_owner)
 					new_owner.set_meta("_has_cart", get_instance_id())
 					_cart_state = CartState.CHASING
+					_ensure_cart_link(new_owner)
 
 		CartState.CHASING:
 			if not owner:
@@ -5257,25 +5260,65 @@ func _process_cart(delta):
 			var dist = global_position.distance_to(owner.global_position)
 			if dist < 3.0:
 				_cart_state = CartState.FOLLOWING
+				_ensure_cart_link(owner)
 			else:
 				var chase_speed = owner.speed * CART_CHASE_SPEED_MULT
 				var dir = (owner.global_position - global_position).normalized()
 				global_position += dir * chase_speed * delta
+				global_position.y = _cart_ground_y(bm, global_position)
 				look_at(Vector3(owner.global_position.x, global_position.y, owner.global_position.z), Vector3.UP)
+				_ensure_cart_link(owner)
 				_apply_cart_buff(owner)
 
 		CartState.FOLLOWING:
 			if not owner:
 				_cart_state = CartState.IDLE
 				return
-			# Godot 单位前方是 -Z：rotation.y 后的前方向为 (-sin, 0, -cos)，
-			# 取反即正后方 (sin, 0, cos)。旧代码用的是 (-cos, 0, sin)，实际是左侧。
-			var back_dir := Vector3(sin(owner.rotation.y), 0, cos(owner.rotation.y))
-			var target_pos = owner.global_position + back_dir * CART_FOLLOW_DIST
-			target_pos.y = global_position.y
-			global_position = global_position.lerp(target_pos, min(delta * 3.0, 1.0))
-			rotation.y = owner.rotation.y 
+			# 手推车在农民前方（推车），贸易车在商人后方（拉车）。
+			var target_pos = _cart_target_position(owner)
+			var distance = global_position.distance_to(target_pos)
+			if distance > 6.0:
+				global_position = target_pos
+			else:
+				# 比旧版 lerp(delta*3) 收敛快一倍，移动中只落后约 0.3~0.5 米，
+				# 急停/转向时不会拖出一大截。
+				global_position = global_position.lerp(target_pos, 1.0 - exp(-8.0 * delta))
+			global_position.y = _cart_ground_y(bm, global_position)
+			rotation.y = lerp_angle(rotation.y, owner.rotation.y, 1.0 - exp(-10.0 * delta))
+			_ensure_cart_link(owner)
 			_apply_cart_buff(owner)
+
+func _cart_target_position(owner: Node3D) -> Vector3:
+	var forward := -owner.global_transform.basis.z
+	forward.y = 0.0
+	if forward.length_squared() < 0.001:
+		forward = Vector3.FORWARD
+	forward = forward.normalized()
+	var offset := -CART_FOLLOW_DIST
+	if entity_id == 5:
+		offset = CART_HANDCART_LEAD_DIST
+	var target := owner.global_position + forward * offset
+	target.y = global_position.y
+	return target
+
+func _cart_ground_y(bm, pos: Vector3) -> float:
+	var map = bm.get_node_or_null("Map") if bm != null else null
+	if map != null and map.has_method("get_height_at"):
+		return float(map.get_height_at(pos))
+	return pos.y
+
+func _ensure_cart_link(owner) -> void:
+	# 联机主机由 ClientRenderer 统一生成，避免服务端实体和客户端实体各挂一根。
+	if NetworkManager.mode == NetworkManager.Mode.NONE:
+		CartLinkVisual.ensure(self, owner, entity_id)
+
+func get_cart_owner_id() -> int:
+	if _cart_owner == null:
+		return 0
+	var owner = _cart_owner.get_ref()
+	if owner == null or not is_instance_valid(owner):
+		return 0
+	return owner.get_instance_id()
 
 func _find_cart_owner() -> GameEntity:
 	var bm = _get_bm()
@@ -5312,6 +5355,7 @@ func _apply_cart_buff(owner):
 			owner.set_meta("_cart_trade_bonus", 80)
 
 func _clear_cart_owner():
+	CartLinkVisual.remove(self)
 	var owner = _cart_owner.get_ref() if _cart_owner else null
 	if owner and is_instance_valid(owner):
 		if owner.has_meta("_cart_orig_speed"):

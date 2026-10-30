@@ -513,12 +513,23 @@ func _repair_status_str(info: Dictionary) -> String:
 
 func _unit_goods_text(info: Dictionary) -> String:
 	var eid: int = int(info.get("entity_id", -1))
+	var cart_id := int(info.get("cart_id", 0))
+	var cart_owner_id := int(info.get("cart_owner_id", 0))
 	if eid == 10:
-		return EntityInfoText.peasant_cargo_text(info.get("cargo", {}), int(info.get("max_cargo", 50)))
+		var text := EntityInfoText.peasant_cargo_text(info.get("cargo", {}), int(info.get("max_cargo", 50)))
+		if cart_id > 0:
+			text += "\n🛒 [color=%s]已挂载[/color]:  手推车（+50 载重）" % UITheme.hex_str(UITheme.EMERALD)
+		return text
 	if MerchantMarker.is_merchant(eid):
-		return EntityInfoText.merchant_goods_text(
+		var text := EntityInfoText.merchant_goods_text(
 			eid, str(info.get("merchant_resource", "")),
 			int(info.get("merchant_volume", 0)), int(info.get("merchant_state", 0)))
+		if cart_id > 0:
+			text += "\n🛒 [color=%s]已挂载[/color]:  贸易车（+80 贸易收益）" % UITheme.hex_str(UITheme.EMERALD)
+		return text
+	if eid in [5, 6] and cart_owner_id > 0:
+		return "\n🛒 [color=%s]已挂载[/color]:  跟随%s" % [
+			UITheme.hex_str(UITheme.EMERALD), "农民" if eid == 5 else "商人"]
 	return ""
 
 func _building_garrison_limit(eid: int) -> int:

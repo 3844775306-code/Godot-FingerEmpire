@@ -911,6 +911,7 @@ func _update_single_entity(info):
 	_refresh_client_level_visual(node, info)
 	_refresh_client_damage_visual(node, info)
 	_refresh_client_garrison_badge(node, info)
+	_update_cart_link(node, info)
 	# Client-side sound effects (detect state transitions, visible entities only)
 	var prev_info = node.get_meta("_prev_info") if node.has_meta("_prev_info") else {}
 	if not prev_info.is_empty() and _is_audible(node.global_position):
@@ -1092,6 +1093,34 @@ func _play_client_step_sfx(pos: Vector3, terrain: int, overlay: int, vehicle: bo
 		pitch *= 0.82
 	AudioManager.play_sfx_3d(key, pos, _get_cam_pos(), pitch)
 
+func _update_cart_link(node: Node3D, info: Dictionary) -> void:
+	var eid := int(info.get("entity_id", -1))
+	if eid in [5, 6]:
+		var old_owner_id := int(node.get_meta("_cart_owner_id", 0))
+		var owner_id := int(info.get("cart_owner_id", 0))
+		node.set_meta("_cart_owner_id", owner_id)
+		if owner_id > 0:
+			var owner_node = entity_nodes.get(owner_id)
+			if owner_node is Node3D and is_instance_valid(owner_node):
+				CartLinkVisual.ensure(node, owner_node, eid)
+			elif old_owner_id > 0:
+				CartLinkVisual.remove(node)
+		else:
+			CartLinkVisual.remove(node)
+	else:
+		var old_cart_id := int(node.get_meta("_cart_id", 0))
+		var cart_id := int(info.get("cart_id", 0))
+		node.set_meta("_cart_id", cart_id)
+		if cart_id > 0:
+			var cart_node = entity_nodes.get(cart_id)
+			if cart_node is Node3D and is_instance_valid(cart_node):
+				var cart_info = cart_node.get_meta("snapshot_info", {})
+				CartLinkVisual.ensure(cart_node, node, int(cart_info.get("entity_id", 5)))
+		elif old_cart_id > 0:
+			var old_cart = entity_nodes.get(old_cart_id)
+			if old_cart is Node3D and is_instance_valid(old_cart):
+				CartLinkVisual.remove(old_cart)
+
 func _update_entity_animation(node: Node3D, info: Dictionary):
 	var ap: AnimationPlayer = null
 	if node.has_meta("_anim_player"):
@@ -1136,6 +1165,10 @@ func _update_entity_animation(node: Node3D, info: Dictionary):
 		anim = "walk"
 	else:
 		anim = "idle"
+	# 农民推手推车时用模型自带的 drive 姿态，和服务端保持一致。
+	var has_cart := entity_id == 10 and int(node.get_meta("_cart_id", 0)) > 0
+	if has_cart and anim == "walk":
+		anim = "drive"
 	# 骑乘单位：坐骑迈腿，骑手保持坐姿。只让 Mount 子节点播放 walk，
 	# 避免士兵模型一边坐狗背一边摆动双腿。
 	if RTSConfig.is_mounted(entity_id):
@@ -1151,11 +1184,11 @@ func _update_entity_animation(node: Node3D, info: Dictionary):
 	if ap != null:
 		if anim != "" and ap.has_animation(anim):
 			var spd := 1.0
-			if anim != "walk" and anim != "idle" and anim != "die":
+			if anim != "walk" and anim != "drive" and anim != "idle" and anim != "die":
 				var atk_raw = info.get("attack_speed", 1.0)
 				var atk_spd := float(atk_raw) if atk_raw != null else 1.0
 				spd = AnimationHelper.attack_speed_scale(ap, anim, atk_spd)
-			elif anim == "walk":
+			elif anim == "walk" or anim == "drive":
 				var mv_raw = info.get("speed", 2.0)
 				var mv_spd := float(mv_raw) if mv_raw != null else 2.0
 				if node.has_meta("_visual_speed"):
@@ -1164,7 +1197,7 @@ func _update_entity_animation(node: Node3D, info: Dictionary):
 						mv_spd = measured
 				spd = AnimationHelper.walk_speed_scale(mv_spd)
 			ap.speed_scale = spd
-			if anim == "walk":
+			if anim == "walk" or anim == "drive":
 				AnimationHelper.play_looped(ap, anim, true)
 			elif ap.current_animation != anim:
 				ap.play(anim)
@@ -1193,10 +1226,10 @@ func _update_entity_animation(node: Node3D, info: Dictionary):
 			node.set_meta("_weapon_attack_seq", weapon_seq)
 			if int(info.get("health", 0)) > 0:
 				WeaponAttachment.play_attack(node, entity_id)
-	if entity_id == 33:
+	if entity_id in [33]:
 		var support_model = node.get_meta("_model_instance", null)
 		if support_model is Node3D:
-			SupportCartAnim.update(support_model, 0.1, float(node.get_meta("_visual_speed", 0.0)))
+			SupportCartAnim.update(support_model, 0.1, float(node.get_meta("_visual_speed", 0.0)), entity_id)
 
 # 联机客户端没有 Army/真实目标引用，只能根据 attack_seq 按朝向和射程
 # 放一枚视觉法术弹；伤害/治疗仍由服务端在命中时结算，客户端只负责表现。
@@ -1641,6 +1674,9 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 			# 炮台：顺时针旋转 90°，并按模型高度下移 30%，与服务端保持一致
 			loaded_model.rotation.y = deg_to_rad(-90)
 			loaded_model.position.y -= aabb.size.y * scale_factor * 0.3
+		elif info.get("entity_id", 0) in [5, 6]:
+			# 手推车/贸易车模型原生车头朝 +Z，转 180° 对齐单位前方 -Z。
+			loaded_model.rotation.y = deg_to_rad(180)
 		# character 与步兵模型默认朝向相反，统一绕 Y 轴旋转 180° 掉头（entity 10 原特例已并入）
 		if RTSConfig.model_needs_flip(model_path):
 			loaded_model.rotation.y = deg_to_rad(180)
@@ -1759,6 +1795,8 @@ func _create_entity_node(info: Dictionary) -> Node3D:
 
 	# 存储 owner_peer_id 元数据，供后续使用
 	entity.set_meta("owner_peer_id", owner_id)
+	if int(info.get("entity_id", -1)) in [5, 6]:
+		entity.add_to_group("cart_visual")
 	# 攻城单位：以首次快照为动画基线，避免第一次攻击时把旧序号当成新事件
 	if SiegeAttackAnim.is_siege(int(info.get("entity_id", -1))):
 		entity.set_meta("_siege_attack_seq", int(info.get("attack_seq", 0)))
@@ -2870,6 +2908,16 @@ func _process(delta):
 			# 城墙朝向
 			if inf.get("entity_id", 0) == 27:
 				_update_wall_orientation(n, inf)
+	# 手推车/贸易车没有骨骼动画，车轮要逐帧滚动，30 帧一跳会明显卡顿。
+	for cart_node in get_tree().get_nodes_in_group("cart_visual"):
+		if not is_instance_valid(cart_node):
+			continue
+		var cart_info = cart_node.get_meta("snapshot_info", {})
+		if cart_info.is_empty():
+			continue
+		var cart_model = cart_node.get_meta("_model_instance", null)
+		if cart_model is Node3D:
+			SupportCartAnim.update(cart_model, delta, float(cart_node.get_meta("_visual_speed", 0.0)), int(cart_info.get("entity_id", 0)))
 	if health_bar_timer <= 0:
 		health_bar_timer = HEALTH_BAR_INTERVAL
 		_update_health_bars()

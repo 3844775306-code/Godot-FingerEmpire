@@ -1,19 +1,27 @@
 class_name SupportCartAnim
 extends RefCounted
 
-# 木牛流马的车轮/车斗动画。
+# 木牛流马的车轮/车斗动画；手推车/贸易车也复用这里的车轮滚动。
 # 牛腿由 animal-cow.glb 自带的 AnimationPlayer 播放 walk / idle；
 # 这里只驱动挂车上的木轮和轻微颠簸，避免和牛骨动画抢节点。
 
 const SUPPORT_ID := 33
+const CART_IDS := [5, 6]
 const CART_NODE := "Cart"
 const META_ROLL := "_support_cart_roll"
+const WHEEL_RADIUS := 0.23
 
 static func is_support(entity_id: int) -> bool:
 	return entity_id == SUPPORT_ID
 
-static func update(model: Node3D, delta: float, speed: float) -> void:
+static func is_simple_cart(entity_id: int) -> bool:
+	return entity_id in CART_IDS
+
+static func update(model: Node3D, delta: float, speed: float, entity_id: int = -1) -> void:
 	if not _valid(model):
+		return
+	if is_simple_cart(entity_id):
+		_update_simple_cart(model, delta, speed)
 		return
 	var cart := model.get_node_or_null(CART_NODE) as Node3D
 	if cart == null:
@@ -29,6 +37,20 @@ static func update(model: Node3D, delta: float, speed: float) -> void:
 		return
 	_spin_wheels(model, cart, roll)
 	_bob_cart(model, cart, roll, speed)
+
+# 手推车/贸易车模型没有 AnimationPlayer，也没有 Cart 子节点；
+# 顶层就是车身，两个 Group 是左右车轮。按位移滚动轮子，消除“贴地滑行”感。
+static func _update_simple_cart(model: Node3D, delta: float, speed: float) -> void:
+	var model_scale: float = absf(model.scale.x)
+	if model_scale < 0.01:
+		model_scale = 1.0
+	var roll: float = float(model.get_meta(META_ROLL, 0.0))
+	if speed > 0.02:
+		roll = fposmod(roll + speed * delta / (WHEEL_RADIUS * model_scale), TAU)
+		model.set_meta(META_ROLL, roll)
+	elif absf(roll) < 0.001:
+		return
+	_spin_wheels(model, model, roll)
 
 static func _spin_wheels(model: Node3D, cart: Node3D, roll: float) -> void:
 	for wheel in cart.find_children("Group*", "MeshInstance3D", true, false):

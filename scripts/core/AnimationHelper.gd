@@ -5,7 +5,7 @@ extends RefCounted
 # idle/walk/attack 播放一遍就会停在最后一帧。这里统一给循环型动作打开循环。
 # die 保持一次性，不能循环。
 const LOOPED_ANIMATIONS := [
-	"idle", "walk", "attack-melee-left", "attack-melee-right",
+	"idle", "walk", "drive", "attack-melee-left", "attack-melee-right",
 	"holding-left-shoot", "holding-right-shoot", "holding-both-shoot",
 	"interact-left", "interact-right",
 ]

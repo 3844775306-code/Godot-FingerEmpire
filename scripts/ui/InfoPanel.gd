@@ -878,6 +878,12 @@ func update_info(entity):
 			t += EntityInfoText.merchant_goods_text(
 				entity.entity_id, str(entity._merchant_resource),
 				int(entity._merchant_trade_volume), int(entity._merchant_state))
+		if entity.entity_id in [5, 6] and entity.has_method("get_cart_owner_id") and entity.get_cart_owner_id() > 0:
+			t += "\n🛒 [color=%s]已挂载[/color]:  跟随%s" % [
+				UITheme.hex_str(UITheme.EMERALD), "农民" if entity.entity_id == 5 else "商人"]
+		elif entity.has_meta("_has_cart"):
+			t += "\n🛒 [color=%s]已挂载[/color]:  %s" % [
+				UITheme.hex_str(UITheme.EMERALD), "手推车（+50 载重）" if entity.entity_id == 10 else "贸易车（+80 贸易收益）"]
 		t += "\n🧭 [color=%s]任务[/color]:  [color=white]%s[/color]" % [
 			UITheme.hex_str(UITheme.SAPPHIRE), _army_task_text(entity)]
 	t += _bonus_text(entity)
