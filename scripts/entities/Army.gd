@@ -211,6 +211,13 @@ var _legacy_action_accum: float = 0.0
 var _gather_repath_timer: float = 0.0
 # 采集站位点换角度重试计数（资源被围住时逐个角度试）
 var _gather_alt_tries: int = 0
+# 农民/平民卡死看门狗：采集或交付指令下长时间原地不动就强制重试，重试多次仍不动就放弃任务
+var _stuck_watch_pos: Vector3 = Vector3.ZERO
+var _stuck_watch_time: float = 0.0
+var _stuck_watch_retries: int = 0
+const STUCK_WATCH_WINDOW: float = 4.0
+const STUCK_WATCH_MIN_MOVE: float = 0.4
+const STUCK_WATCH_MAX_RETRIES: int = 4
 
 # 目标重选：锁定目标不在攻击范围时，每秒找一次更近的敌人
 const TARGET_RETARGET_INTERVAL: float = 1.0
@@ -905,6 +912,9 @@ func _set_order(state: UnitState):
 	if state != UnitState.BUILDING and _work_target_id != -1:
 		_detach_from_building()
 	current_order = new_order
+	_stuck_watch_time = 0.0
+	_stuck_watch_retries = 0
+	_stuck_watch_pos = global_position
 	# 主机端也即时切换动画，避免只靠每 30 帧轮询导致走/停/攻击动作延迟半秒
 	if not is_inside_tree():
 		return
@@ -3532,6 +3542,38 @@ func _think(delta, bm):
 		_think_combat(delta, bm)
 		return
 	# 施工中的农民不自动采集/索敌；目标建筑失效时由 _process_action 收尾。
+	# 兜底看门狗（只针对平民的采集/交付）：有命令却长时间原地不动时强制重试寻路，
+	# 连续多次仍不动就放弃当前任务回空闲交给 AI 重新分配。
+	# 实测"有命令却不动"的根因是分散的（施工锁、A* 请求被丢弃、站位点不可达、配额饥饿），
+	# 逐个修完仍有个别顽固个体，这个看门狗保证它们不会永久凝固。
+	if target_type == 0 and _order_in([UnitState.GATHERING, UnitState.DELIVERING]):
+		_stuck_watch_time += delta
+		if _stuck_watch_time >= STUCK_WATCH_WINDOW:
+			var watch_moved: float = global_position.distance_to(_stuck_watch_pos)
+			_stuck_watch_pos = global_position
+			_stuck_watch_time = 0.0
+			if watch_moved < STUCK_WATCH_MIN_MOVE:
+				_stuck_watch_retries += 1
+				if _movement != null:
+					_movement.cancel_pending_path()
+					var goal_now: Vector3 = _movement.astar_target
+					if goal_now != Vector3.ZERO:
+						_movement.clear_blacklist_at(goal_now)
+					if current_target != null and is_instance_valid(current_target):
+						var retry_goal: Vector3 = current_target.global_position
+						if current_target is WorldResource:
+							retry_goal = _gather_standoff_position(current_target)
+						_movement.set_move_target(retry_goal)
+				if _stuck_watch_retries >= STUCK_WATCH_MAX_RETRIES:
+					_stuck_watch_retries = 0
+					current_target = null
+					delivery_target = null
+					if _movement != null:
+						_movement.stop()
+					_set_order(UnitState.IDLE)
+					return
+			else:
+				_stuck_watch_retries = 0
 	if _order_is(UnitState.BUILDING):
 		if _work_target_id == -1:
 			_finish_work()
