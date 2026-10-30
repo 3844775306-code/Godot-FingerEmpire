@@ -1025,6 +1025,7 @@ func _tick_fleet_idle(delta: float):
 		# 已经靠近出发岸的船先组织登陆，远处的船排除并让船坞补造。
 		if _fleet_idle_timer >= 20.0:
 			var usable: Array = []
+			var excluded_any: bool = false
 			for i in range(_transports.size()):
 				var s = _transports[i]
 				if not is_instance_valid(s):
@@ -1033,14 +1034,18 @@ func _tick_fleet_idle(delta: float):
 					usable.append(s)
 				else:
 					s.set_meta("ai_transport_excluded", true)
-			if not usable.is_empty():
-				_transports = usable
-				slots = _shore_slots(own_shore_water, _transports.size(), 2.5)
-				all_close = true
-				_fleet_idle_timer = 0.0
-			else:
+					excluded_any = true
+			if usable.is_empty():
 				_stall_transport()
 				return
+			if excluded_any:
+				_transports = usable
+				slots = _shore_slots(own_shore_water, _transports.size(), 2.5)
+				_fleet_idle_timer = 0.0
+				return
+			# 船都在 30 米内但还没到停泊点：继续 move_to，不能把 all_close 强行置真。
+			# 旧实现这里直接继续上兵，陆军会走到岸边而船还停在十几米外，
+			# 最后只能等 BOARD_WAIT_TIMEOUT 反复超时，看起来像“AI 永远不登陆”。
 		if not all_close:
 			if _fleet_idle_timer >= FLEET_IDLE_TIMEOUT:
 				_stall_transport()
@@ -1057,9 +1062,18 @@ func _tick_fleet_idle(delta: float):
 			escorts_home = false
 	if not escorts_home:
 		_fleet_idle_timer += delta
-		if _fleet_idle_timer >= FLEET_IDLE_TIMEOUT:
-			_stall_transport()
-		return
+		# 护航舰可能被海战/浅滩卡住，不能为了等它们让整波登陆无限期停摆。
+		# 超过编队集结时限后先让运载船单独出发，下一波再重新组织护航。
+		if _fleet_idle_timer >= FLEET_ASSEMBLY_TIMEOUT:
+			for e in _escorts:
+				if is_instance_valid(e):
+					e.set_meta("ai_escort_released", true)
+			_escorts.clear()
+			_fleet_idle_timer = 0.0
+		else:
+			if _fleet_idle_timer >= FLEET_IDLE_TIMEOUT:
+				_stall_transport()
+			return
 	_fleet_idle_timer = 0.0
 	# 本波次实际目标兵力：不超过本次运载船总容量。
 	# 编队缩水时最低人数也随运力下降，否则 2 艘船永远达不到 30 人。
