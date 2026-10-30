@@ -74,7 +74,7 @@ func stop_music():
 	_current_music = ""
 	_music_player.stop()
 
-func play_sfx(key: String):
+func play_sfx(key: String, volume_scale: float = 1.0):
 	var frame = Engine.get_process_frames()
 	if _cooldowns.get(key, -99) + 5 > frame: return  # 5-frame cooldown
 	_cooldowns[key] = frame
@@ -83,7 +83,7 @@ func play_sfx(key: String):
 	var p = _sfx_pool[_sfx_index]
 	_sfx_index = (_sfx_index + 1) % SFX_POOL_SIZE
 	p.stream = stream
-	p.volume_db = linear_to_db(_sfx_volume)
+	p.volume_db = linear_to_db(_sfx_volume * clampf(volume_scale, 0.0, 1.0))
 	p.pitch_scale = 1.0
 	p.play()
 

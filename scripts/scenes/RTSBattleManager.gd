@@ -5103,7 +5103,7 @@ func is_mobile_ui_point(pos: Vector2) -> bool:
 # 无法判定时传 -1，只显示消息本体。
 # target_team：联机模式下只推给哪个阵营；-1 表示广播给双方。单机忽略这个参数。
 func _show_hud_alert(msg: String, color: Color = Color(1.0, 0.2, 0.1), source_teams = -1, target_team: int = -1, alert_kind: int = 0, is_castle: bool = false, nations: Array = [], alert_pos: Vector3 = Vector3.ZERO, source_owner: int = -1):
-	if color == Color(1.0, 0.2, 0.1) or color == Color(1.0, 0.8, 0.1): AudioManager.play_sfx("alert")
+	if color == Color(1.0, 0.2, 0.1) or color == Color(1.0, 0.8, 0.1): AudioManager.play_sfx("alert", 0.72)
 	if has_node("UI"):
 		var hud = $UI
 		if hud and hud.has_method("show_alert_message"):

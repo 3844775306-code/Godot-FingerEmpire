@@ -1210,7 +1210,7 @@ func show_server_alert(msg: String, color: Color, alert_id: int = 0, teams = [],
 			_seen_server_alert_ids.clear()
 		_seen_server_alert_ids[alert_id] = true
 	if color == ALERT_DANGER or color == ALERT_WARNING:
-		AudioManager.play_sfx("alert")
+		AudioManager.play_sfx("alert", 0.72)
 	show_alert_message(msg, color, teams, alert_kind, is_castle, nations, alert_pos, source_owner)
 
 func _make_cmd_button(text: String, cb: Callable, danger: bool) -> Button:
