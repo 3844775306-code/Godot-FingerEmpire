@@ -907,8 +907,9 @@ func _can_push_to(pos: Vector3, bm: RTSBattleManager) -> bool:
 		if _is_cliff_between_positions(bm, _army.global_position, pos):
 			return false
 		return true
-	# 陆军允许浅滩和桥面，河流/海面等深水一律拒绝。
-	return bm.get_overlay_at_grid(g.x, g.y) == 3 or _bridge_set.has(g)
+	# 陆军允许浅滩和桥面，河流/海面等深水一律拒绝；只有正在登船的单位才用运载船水域。
+	return bm.get_overlay_at_grid(g.x, g.y) == 3 or _bridge_set.has(g) \
+			or (_transport_water.has(g) and _boarding_intent())
 
 # 陆地单位落点是否压在深水/普通山壁上（只看地形，不看建筑/单位）。
 # 用于移动后的最后一道安全校验，避免实际位置被挤进不可通行地形。
@@ -919,7 +920,8 @@ func _is_land_terrain_blocked(bm: RTSBattleManager, pos: Vector3) -> bool:
 	if terrain == 2:
 		# 只有踩到水格时才需要桥/运载船缓存；平地单位每帧不必重建队伍缓存。
 		_ensure_current_team_static_caches(bm)
-		return ov != 3 and not _bridge_set.has(g) and not _transport_water.has(g)
+		return ov != 3 and not _bridge_set.has(g) \
+				and not (_transport_water.has(g) and _boarding_intent())
 	if terrain == 1:
 		return ov != 4 and ov != 5
 	return terrain != 0
@@ -1804,6 +1806,10 @@ func _pick_ford_cell(start: Vector2i, goal: Vector2i, bm: RTSBattleManager) -> V
 func _heuristic(a: Vector2i, b: Vector2i) -> float:
 	return abs(a.x - b.x) + abs(a.y - b.y)
 
+# 单位是否正在执行"上运载船"命令（只有这种单位才允许踩运载船周围的水格）
+func _boarding_intent() -> bool:
+	return _army != null and is_instance_valid(_army) and _army.has_meta("_auto_board_ship")
+
 func _get_terrain_cost(tile: Vector2i, bm: RTSBattleManager, wall_cache: Dictionary) -> float:
 	# 梯子使敌方城墙可通行
 	if _ladder_set.has(tile): return 3.0
@@ -1836,7 +1842,9 @@ func _get_terrain_cost(tile: Vector2i, bm: RTSBattleManager, wall_cache: Diction
 			match terrain:
 				0: cost = 1.0
 				1: cost = 999.0
-				2: cost = 1.5 if _bridge_set.has(tile) or _transport_water.has(tile) else 999.0
+				# 运载船周围的水格只对“正在登船”的单位放行；否则陆军会把水路当陆路，
+				# 走进去每秒掉 20% 最大生命（实测 attack_move 的步兵在船边 2.5~3.2 米处淹死）。
+				2: cost = 1.5 if _bridge_set.has(tile) or (_transport_water.has(tile) and _boarding_intent()) else 999.0
 				_: cost = 999.0
 	# 山脚平地加高成本，避免格心路线贴着山壁擦角；缓坡/台地仍能通过。
 	if not _army.water_capable and cost < 999.0 and _mountain_edge.has(tile):
