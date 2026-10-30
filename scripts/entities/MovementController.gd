@@ -1222,8 +1222,11 @@ func _ensure_static_caches(bm: RTSBattleManager) -> void:
 			if not (e is GameEntity) or e.health <= 0: continue
 			if not (e is Building or e is WorldResource): continue
 			var eg = bm.world_to_grid(e.global_position)
-			# 桥不阻挡通行，单独记录
+			# 桥不阻挡通行，单独记录；施工中的桥不算可通行（和梯子一致），
+			# 否则部队会沿施工中的桥过河，踩进底下仍是深水的河面淹死。
 			if e is Building and e.entity_id == 7:
+				if float(e.build_timer) > 0.0:
+					continue
 				_bridge_set[eg] = true
 				continue
 			# 梯子不阻挡通行，且使其相邻敌方城墙可通行；施工中的梯子不能翻墙

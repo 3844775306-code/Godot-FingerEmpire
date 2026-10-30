@@ -691,7 +691,11 @@ func _rebuild_entity_cache():
 			if b.build_timer <= 0.0:
 				_ladder_entity_grid[world_to_grid(b.global_position)] = b
 		elif b.entity_id == 7:
-			_bridge_entity_grid[world_to_grid(b.global_position)] = b
+			# 施工中的桥不能提前当可站立桥面：否则部队会沿“还没建好的桥”过河，
+			# 走到一半桥面底下的格子仍是深水，每秒掉 20% 最大生命淹死。
+			# 完工后由 notify_bridge_ready() 递增缓存版本，寻路/落水判定才认这座桥。
+			if float(b.build_timer) <= 0.0:
+				_bridge_entity_grid[world_to_grid(b.global_position)] = b
 	# 相邻墙段中心距约 1.5~2 米，落在两格之间时接缝格本身不是墙格；
 	# 远程弹道只检查中心格会从接缝“漏射”，这里把段间中点也标成墙体。
 	# 只查每面墙周围 2 格，避免几千面墙两两配对形成 O(n²) 的卡顿。
@@ -744,6 +748,13 @@ func acquire_ai_decide_slot(_peer_id: int) -> bool:
 # 不会收录这把梯子，若只标脏而不递增版本，MovementController 的静态缓存
 # 会一直沿用“不能翻墙”的旧版本，直到下一次建筑布局变化。
 func notify_ladder_ready() -> void:
+	mark_entity_cache_dirty()
+	_wall_cache_version += 1
+	_group_attack_path_cache.clear()
+
+# 桥完工后同理：施工期间桥格既不算可站立也不可通行，完工必须立刻让缓存失效，
+# 否则部队会继续按“河里没有桥”的旧数据绕路或放弃渡河。
+func notify_bridge_ready() -> void:
 	mark_entity_cache_dirty()
 	_wall_cache_version += 1
 	_group_attack_path_cache.clear()

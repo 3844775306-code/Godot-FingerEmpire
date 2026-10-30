@@ -417,6 +417,9 @@ func _finish_construction():
 	# 完工时必须让寻路缓存立刻失效，否则部队会继续按旧路径去拆墙。
 	if bm and int(entity_id) == 8 and bm.has_method("notify_ladder_ready"):
 		bm.notify_ladder_ready()
+	# 桥完工同理会改变可通行地形（河面变成桥面），必须立刻让寻路缓存失效。
+	if bm and int(entity_id) == 7 and bm.has_method("notify_bridge_ready"):
+		bm.notify_bridge_ready()
 	if bm and bm.has_method("get_building_type_level"):
 		var glv = bm.get_building_type_level(team, entity_id, owner_peer_id)
 		var from_level: int = _construction_from_level if _construction_from_level > 0 else upgrade_level
