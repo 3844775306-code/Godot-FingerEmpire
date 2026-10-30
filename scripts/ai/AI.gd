@@ -2093,8 +2093,14 @@ func _state_production(_delta):
 	var workers = count_unit(10)
 	var warehouses = count_building(22)
 	if production_step == 0:
-		if workers < desired_worker_count and can_afford(10) and _can_train_unit():
-			produce_unit(10)
+		if workers < desired_worker_count:
+			if _worker_director != null:
+				if not _worker_director.ensure_worker_count() and can_afford_upgrade(20):
+					upgrade_building(20)
+			elif can_afford(10) and _can_train_unit():
+				produce_unit(10)
+			elif can_afford_upgrade(20):
+				upgrade_building(20)
 		else:
 			if can_afford_upgrade(20):
 				upgrade_building(20)
@@ -2711,6 +2717,13 @@ var allocate_timers = 0
 var _worker_threat_cache: Dictionary = {}
 
 func allocate_workers():
+	if _worker_director != null:
+		_worker_director.allocate()
+		return
+	_legacy_allocate_workers()
+
+# 保留旧实现作为回滚路径；第 2 阶段起正常流程走 WorkerDirector。
+func _legacy_allocate_workers():
 	_worker_threat_cache.clear()
 	var workers = []
 	for entity in battle.entities.get_children():
