@@ -224,6 +224,7 @@ var _ledger = null
 var _ledger_checks: int = 0
 var _ledger_mismatch_total: int = 0
 var _ledger_conflicts: int = 0
+var _worker_claim_skips: int = 0
 var _situation_checks: int = 0
 var _situation_mismatch_total: int = 0
 # 防御建筑驻军：AI 会把部分闲置士兵/农民送进箭塔、炮塔和城堡，
@@ -5079,7 +5080,7 @@ func _director_release(uid: int) -> void:
 
 func _director_role_count(role: int) -> int:
 	if USE_LEDGER_READS and _ledger != null:
-		return _ledger.count(role)
+		return _ledger.count_of(LEDGER_SRC_DIRECTOR, role)
 	var n: int = 0
 	for uid in _roles.keys():
 		var ent: Dictionary = _roles[uid]
@@ -5143,7 +5144,7 @@ func get_role_summary() -> String:
 	var names: Array = ["IDLE", "侦察", "驻军", "守墙", "守家", "资源守", "回防", "骚扰", "突袭", "主攻", "攻城", "运输", "护航", "撤退", "待命"]
 	var counts: Dictionary = {}
 	if USE_LEDGER_READS and _ledger != null:
-		counts = _ledger.counts()
+		counts = _ledger.counts_of(LEDGER_SRC_DIRECTOR)
 	else:
 		for uid in _roles.keys():
 			var ent: Dictionary = _roles[uid]
@@ -6318,6 +6319,32 @@ const USE_SITUATION_COUNTS: bool = false
 const USE_LEDGER_READS: bool = true
 # P3.1 第三步：账本来源名（后续农民/防御也登记到同一本账时用于区分）。
 const LEDGER_SRC_DIRECTOR: String = "director"
+const LEDGER_SRC_WORKER: String = "worker"
+# 账本 kind 命名空间：0~99 是陆军角色(UnitRole)，1000+ 是农民角色，2000+ 留给防御。
+const LEDGER_KIND_WORKER_BASE: int = 1000
+
+# P3.1 第四步：把农民角色登记进统一账本（来源 worker，kind = 1000 + 农民角色号）。
+# 每一轮先清掉上一轮的 worker 占用再重新登记，等价于"心跳"；被别的来源占用的单位
+# 会被账本拒绝并计入冲突，这正是多套调度抢同一个单位的证据。
+func _mirror_worker_claims(now: float) -> void:
+	if _ledger == null or _worker_director == null:
+		return
+	_ledger.release_by_source(LEDGER_SRC_WORKER)
+	if not _worker_director.has_method("worker_claims"):
+		return
+	var claims: Dictionary = _worker_director.worker_claims()
+	for uid in claims.keys():
+		# 已被别的来源占用（典型是 director 把农民征去骚扰）时，农民这一侧让位：
+		# 只统计"让位次数"，不算冲突，也不改行为。
+		if _ledger.has(int(uid)) and _ledger.source_of(int(uid)) != LEDGER_SRC_WORKER:
+			_worker_claim_skips += 1
+			continue
+		var kind: int = LEDGER_KIND_WORKER_BASE + int(claims[uid])
+		if not _ledger.claim(int(uid), kind, LEDGER_SRC_WORKER, now, 6.0):
+			_ledger_conflicts += 1
+			if _ledger_conflicts <= 5 or _ledger_conflicts % 50 == 0:
+				print("[LEDGER] CONFLICT t=%.0f uid=%d want=w%d holder=%s kind=%d" % [
+					now, int(uid), int(claims[uid]), _ledger.source_of(int(uid)), _ledger.kind_of(int(uid))])
 
 func _situation_shadow_tick() -> void:
 	if _situation == null or battle == null:
@@ -6350,6 +6377,7 @@ func _situation_shadow_tick() -> void:
 			_situation.count_building(20), _situation.visible_enemies.size(),
 			_situation_usec_ema / 1000.0, float(_situation.visibility_usec) / 1000.0])
 	_ledger_check()
+	_mirror_worker_claims(gt)
 
 # P3.1 影子对账：统一账本必须与 _roles 完全一致（键集合 + 每个单位的角色号）。
 func _ledger_check() -> void:
@@ -6357,8 +6385,8 @@ func _ledger_check() -> void:
 		return
 	_ledger_checks += 1
 	var diff: int = 0
-	if _roles.size() != _ledger.size():
-		diff = absi(_roles.size() - _ledger.size())
+	if _roles.size() != _ledger.size_of(LEDGER_SRC_DIRECTOR):
+		diff = absi(_roles.size() - _ledger.size_of(LEDGER_SRC_DIRECTOR))
 	else:
 		for uid in _roles.keys():
 			if int(_roles[uid].get("role", -1)) != _ledger.kind_of(int(uid)):
@@ -6387,4 +6415,5 @@ func get_situation_summary() -> Dictionary:
 	d["ledger_checks"] = _ledger_checks
 	d["ledger_mismatch"] = _ledger_mismatch_total
 	d["ledger_conflicts"] = _ledger_conflicts
+	d["worker_claim_skips"] = _worker_claim_skips
 	return d

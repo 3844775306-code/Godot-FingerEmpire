@@ -90,6 +90,27 @@ func holders(kind: int) -> Array:
 func count(kind: int) -> int:
 	return holders(kind).size()
 
+# 按来源统计：同一本账里有 director / worker / defense 多个来源，
+# 对账与摘要必须只看自己那一份，否则表里的数字会互相污染。
+func size_of(source: String) -> int:
+	return (_by_source.get(source, {}) as Dictionary).size()
+
+func counts_of(source: String) -> Dictionary:
+	var out: Dictionary = {}
+	var src: Dictionary = _by_source.get(source, {})
+	for uid in src.keys():
+		var kind: int = int(_claims[uid].get("kind", -1))
+		out[kind] = int(out.get(kind, 0)) + 1
+	return out
+
+func count_of(source: String, kind: int) -> int:
+	var n: int = 0
+	var src: Dictionary = _by_source.get(source, {})
+	for uid in src.keys():
+		if int(_claims[uid].get("kind", -1)) == kind:
+			n += 1
+	return n
+
 func counts() -> Dictionary:
 	var out: Dictionary = {}
 	for uid in _claims.keys():

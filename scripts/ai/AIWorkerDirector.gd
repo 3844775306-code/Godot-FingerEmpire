@@ -624,6 +624,17 @@ func _log_metrics() -> void:
 		_builder_reservations.size(), _format_role_counts(counts), _last_train_block,
 		String(ai._last_spend_block)])
 
+# P3.1 第四步：把农民当前角色以 uid→role 的形式交给 AI 登记进统一账本。
+# 只上报"正在干活"的角色（IDLE 视为空闲、不占用），避免账本被无效占用塞满。
+func worker_claims() -> Dictionary:
+	var out: Dictionary = {}
+	for uid in _workers.keys():
+		var role: int = int(_workers[uid].get("role", ROLE_IDLE))
+		if role == ROLE_IDLE:
+			continue
+		out[int(uid)] = role
+	return out
+
 func debug_snapshot() -> Dictionary:
 	return {
 		"live": _workers.size(),

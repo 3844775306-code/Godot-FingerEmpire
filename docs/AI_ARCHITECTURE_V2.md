@@ -544,3 +544,17 @@ AIClock.fast (4Hz)
 **冒烟结果**：3 分钟 3v3 HELL，无脚本错误，`SITUATION/LEDGER MISMATCH` = 0，`CONFLICT` = 0，front 56.5% / idle 15.3%，行为正常。
 
 **下一步（第四步）**：把 `AIWorkerDirector` 的农民角色与 `AIDefense` 的守军/预留登记为 `worker` / `defense` 来源（kind 用不同偏移避免与 `UnitRole` 撞号），观察 `CONFLICT` 分布；确认无真实冲突后删除 `_roles` 主写。
+
+### 12.3.7 P3.1 第四步：农民角色登记进统一账本（2026-10-30 23:10）
+
+| 项 | 实现 |
+|---|---|
+| 上报接口 | `AIWorkerDirector.worker_claims() -> {uid: role}`（只上报非 IDLE 的"正在干活"角色） |
+| 登记 | `AI._mirror_worker_claims()`，来源 `worker`，`kind = 1000 + 农民角色号`（与陆军 `UnitRole` 0~99 分命名空间） |
+| 心跳语义 | 每 5 秒先 `release_by_source("worker")` 再整批重登记，租约 6 秒；农民死了自然过期 |
+| 让位规则 | 单位已被其它来源占用时**农民侧让位**（`worker_claim_skips += 1`），不改行为、不算冲突——农民被 director 征去骚扰是正常设计 |
+| 对账收窄 | `_ledger_check` / `_director_role_count` / `get_role_summary` 只看 `director` 来源，避免被 `worker` 的 kind 污染（新增 `size_of/count_of/counts_of`） |
+
+**冒烟**：3 分钟 3v3 HELL，无错误，`SITUATION/LEDGER MISMATCH` = 0、`CONFLICT` = 0，front 80.3% / idle 4.2%。
+
+**说明**：农民让位意味着目前 `CONFLICT` 仍为 0；真正的冲突要等 `defense` 来源登记进来（守军与 director 都会挑陆军单位），那时 `CONFLICT` 才会指认真实抢单位点。
