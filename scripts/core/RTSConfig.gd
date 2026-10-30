@@ -367,7 +367,8 @@ static func get_rider_base_y(entity_id: int, body_radius: float, mount_top: floa
 const DEMOLISHED_MODELS = {
 	17: "res://models/castle/siege-catapult-demolished.glb",
 	18: "res://models/castle/siege-ram-demolished.glb",
-	27: "res://models/arena/bricks.glb",
+	# 27 城墙的废墟由 WallRuinVisual 基于当前 wall.glb / wall-corner.glb 生成，
+	# 不再固定使用 bricks.glb，避免城墙换模型后废墟还是旧砖块。
 	58: "res://models/castle/siege-ballista-demolished.glb",
 	59: "res://models/castle/siege-trebuchet-demolished.glb",
 	41: "res://models/castle/siege-tower-demolished.glb",

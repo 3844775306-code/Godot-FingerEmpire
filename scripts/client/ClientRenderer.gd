@@ -1000,6 +1000,9 @@ func _update_wall_orientation(wall_node: Node3D, info: Dictionary):
 					wall_node.add_child(inst)
 					wall_node.set_meta("_model_instance", inst)
 					WallTierVisual.apply(wall_node, int(info.get("upgrade_level", 1)), _get_entity_color(info))
+					WallRuinVisual.forget(wall_node)
+					if int(info.get("team", -1)) == RTSConfig.Team.NEUTRAL:
+						WallRuinVisual.apply(wall_node)
 					BuildingConstructionVisual.rebind(wall_node)
 	
 	# Rotation — matches server exactly
@@ -1337,6 +1340,7 @@ func _refresh_client_level_visual(node: Node3D, info: Dictionary) -> void:
 	if int(info.get("entity_id", -1)) in LevelVisualScript.EXCLUDE_IDS:
 		return
 	var lv := int(info.get("upgrade_level", 1))
+	node.set_meta("_upgrade_level", lv)
 	var visible := float(info.get("build_timer", 0.0)) <= 0.0
 	var team_color: Color = _get_entity_color(info)
 	# 等级变了要重建；中立废墟被占领后等级不变但队伍色变了，同样要重建，
@@ -1349,6 +1353,10 @@ func _refresh_client_level_visual(node: Node3D, info: Dictionary) -> void:
 		LevelVisualScript.set_visible(node, visible)
 	if int(info.get("entity_id", 0)) == 27:
 		WallTierVisual.apply(node, lv, team_color)
+		if int(info.get("team", -1)) == RTSConfig.Team.NEUTRAL:
+			WallRuinVisual.apply(node)
+		else:
+			WallRuinVisual.restore(node)
 
 # 联机端没有 Building.gd 的 _process，驻军剪影由快照字段驱动。
 # 有驻军时在屋顶显示守军矛尖，和单机端保持同样表现。

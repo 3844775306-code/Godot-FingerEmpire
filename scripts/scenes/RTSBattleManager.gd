@@ -2956,6 +2956,9 @@ func _apply_entity_model(entity: GameEntity) -> bool:
 		model_instance.rotation.y = deg_to_rad(180)
 	# 存储模型引用用于动画
 	entity.set_meta("_model_instance", model_instance)
+	# 地图边缘的中立废弃城墙使用“断墙残段”外观；被占领后由 capture 恢复完整城墙。
+	if entity.entity_id == 27 and entity.team == RTSConfig.Team.NEUTRAL:
+		WallRuinVisual.apply(entity)
 	# GLB 动画默认不循环；统一配置 idle/walk/attack 循环，避免播放一次后定格
 	var ap := AnimationHelper.configure_loops(model_instance)
 	if entity is Army:
@@ -5296,6 +5299,8 @@ func _capture_abandoned_site(site: Building, army: Army) -> void:
 	var tint: Color = get_entity_color(site)
 	tint = Color(0.2 + tint.r * 0.8, 0.2 + tint.g * 0.8, 0.2 + tint.b * 0.8)
 	_apply_team_tint(site, tint)
+	if site.entity_id == 27:
+		WallRuinVisual.restore(site)
 	# 等级旗帜/底座色环/等级徽章是按「生成时的队伍色」烘出来的，占领后必须按新国家色重建，
 	# 否则废墟会一直挂着中立灰旗（联机客户端收到新 team 的快照后会自己重刷）
 	LevelVisualScript.apply(

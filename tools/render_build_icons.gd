@@ -80,6 +80,12 @@ func _render_building(id: int) -> void:
 		return
 	var node = scene.instantiate()
 	_slot.add_child(node)
+	# 城墙的等级外观是运行时程序化材质，直接渲染 GLB 会得到未染色的白模；
+	# 建造菜单/信息面板统一按 1 级木墙出图，和玩家刚放下的城墙一致。
+	if id == 27:
+		node.set_meta("_model_instance", node)
+		node.set_meta("_entity_id", 27)
+		WallTierVisual.apply(node, 1, Color.WHITE)
 	await get_tree().process_frame
 	await get_tree().process_frame
 

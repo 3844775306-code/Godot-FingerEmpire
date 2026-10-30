@@ -4,6 +4,7 @@ extends GameEntity
 const LevelVisualScript = preload("res://scripts/effects/BuildingLevelVisual.gd")
 
 var upgrade_level: int = 1                         # 当前等级
+var _construction_from_level: int = 0               # 开工前等级：完工时据此补升级加成
 var upgrade_data: Array = []                       # 从配置加载的升级表
 var max_upgrade_level: int = 5
 var building_data: Dictionary = {}   # 保存原始配置
@@ -50,6 +51,17 @@ func _owner_is_ai() -> bool:
 
 func start_construction(time: float, data: Dictionary):
 	building_data = data
+	# 施工外观要直接显示“建成后的等级”，否则城墙升到 2/3 级后，
+	# 新放的墙在施工期间仍会套 1 级木墙材质，直到完工才跳变。
+	_construction_from_level = maxi(1, upgrade_level)
+	var target_bm = _get_bm()
+	if target_bm != null and target_bm.has_method("get_building_type_level"):
+		var target_level: int = int(target_bm.get_building_type_level(team, entity_id, owner_peer_id))
+		if target_level > upgrade_level:
+			upgrade_level = target_level
+			level = target_level
+			if entity_id == 27 and target_bm.has_method("get_entity_color"):
+				WallTierVisual.apply(self, upgrade_level, target_bm.get_entity_color(self))
 	_release_builders()
 	repair_pending = false
 	repair_timer = 0.0
@@ -377,6 +389,9 @@ func _reload_wall_model(bm, path):
 			var tint: Color = bm.get_entity_color(self) if bm.has_method("get_entity_color") else (Color(0.3, 0.6, 1.0) if team == RTSConfig.Team.BLUE else Color(1.0, 0.4, 0.4))
 			bm._apply_team_tint(self, tint)
 			WallTierVisual.apply(self, maxi(upgrade_level, level), tint)
+			WallRuinVisual.forget(self)
+			if team == RTSConfig.Team.NEUTRAL:
+				WallRuinVisual.apply(self)
 
 func _finish_construction():
 	BuildingConstructionVisual.finish(self)
@@ -404,8 +419,9 @@ func _finish_construction():
 		bm.notify_ladder_ready()
 	if bm and bm.has_method("get_building_type_level"):
 		var glv = bm.get_building_type_level(team, entity_id, owner_peer_id)
-		if glv > upgrade_level:
-			for lv in range(upgrade_level, glv):
+		var from_level: int = _construction_from_level if _construction_from_level > 0 else upgrade_level
+		if glv > from_level:
+			for lv in range(from_level, glv):
 				if lv <= upgrade_data.size():
 					var ug = upgrade_data[lv - 1]
 					max_health += ug.get("health_bonus", 0)
@@ -416,6 +432,7 @@ func _finish_construction():
 			upgrade_level = glv
 			level = glv
 			_sync_production_unlocks()
+	_construction_from_level = 0
 	# start_construction 为了隐藏施工期生产入口清空了 production_list；
 	# 1 级建筑 glv == upgrade_level，不会进入上面的分支，必须在这里无条件重建，
 	# 否则新建的 1 级兵营建好后生产列表仍为空，无法训练步兵。
