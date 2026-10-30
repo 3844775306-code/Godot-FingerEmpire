@@ -796,11 +796,67 @@ func _clamp_spawn_to_map(pos: Vector3, margin: float) -> Vector3:
 	var safe: float = maxf(0.5, margin)
 	return Vector3(clampf(pos.x, -half + safe, half - safe), pos.y, clampf(pos.z, -half + safe, half - safe))
 
+# 陆军生产兜底：只沿建筑所在的连通陆地找空位，绝不跨海。
+# 旧版从建筑中心按整张地图找最近可站立格，四岛图基地拥挤时会越过海水，
+# 把新兵直接刷到另一座岛（包括玩家岛），看起来像“隔空生产”。
+func _find_nearest_connected_land_tile(bm: RTSBattleManager, center: Vector3, margin: float) -> Vector3:
+	var center_tile: Vector2i = bm.world_to_grid(center)
+	var half: float = RTSConfig.MAP_SIZE / 2.0
+	var tile_margin: int = maxi(1, int(ceil(margin)))
+	var visited: Dictionary = {center_tile: true}
+	var queue: Array[Vector2i] = [center_tile]
+	var head: int = 0
+	var scanned: int = 0
+	# 正常情况下几十格内就能找到空位；上限只用于极端拥挤/全岛无平地时止损。
+	while head < queue.size() and scanned < 6000:
+		var tile: Vector2i = queue[head]
+		head += 1
+		scanned += 1
+		if not _is_spawn_route_tile(bm, tile):
+			continue
+		var terrain: int = bm.get_terrain_at_grid(tile.x, tile.y)
+		if terrain != 2:
+			var world_pos := Vector3(tile.x - half, 0.0, tile.y - half)
+			if _is_flat_spawn_pos(bm, world_pos) and not _spawn_pos_blocked(world_pos):
+				return _clamp_spawn_to_map(world_pos, margin)
+		for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var nt: Vector2i = tile + d
+			if nt.x < tile_margin or nt.x > RTSConfig.MAP_SIZE - 1 - tile_margin:
+				continue
+			if nt.y < tile_margin or nt.y > RTSConfig.MAP_SIZE - 1 - tile_margin:
+				continue
+			if visited.has(nt):
+				continue
+			if not _is_spawn_route_tile(bm, nt):
+				continue
+			visited[nt] = true
+			queue.append(nt)
+	return Vector3.ZERO
+
+# 陆军可通行的寻路底图：普通陆地/缓冲地，水面只有桥或浅滩(overlay=3)能过。
+func _is_spawn_route_tile(bm: RTSBattleManager, tile: Vector2i) -> bool:
+	var terrain: int = bm.get_terrain_at_grid(tile.x, tile.y)
+	if not _is_spawn_blocked_terrain(terrain):
+		return true
+	if terrain != 2:
+		return false
+	var wp := Vector3(tile.x - RTSConfig.MAP_SIZE / 2.0, 0.0, tile.y - RTSConfig.MAP_SIZE / 2.0)
+	if bm.has_method("is_bridge_at") and bm.is_bridge_at(wp):
+		return true
+	if bm.has_method("get_overlay_at_grid") and bm.get_overlay_at_grid(tile.x, tile.y) == 3:
+		return true
+	return false
+
 # 随机候选都失败时，从建筑中心向外按环搜索最近的可出生格子；保证落点仍在地图内
 func _find_nearest_spawn_tile(center: Vector3, want_water: bool, margin: float) -> Vector3:
 	var bm = get_tree().get_first_node_in_group("battle_manager") as RTSBattleManager
 	if not bm or not bm.has_method("world_to_grid"):
 		return Vector3.ZERO
+	# 陆军兜底必须限制在建筑所在连通的陆地上。旧实现从建筑向外按整张地图
+	# 找最近的可站立格，岛屿图（四大岛/三岛登陆/海岸登陆）上基地一旦挤满，
+	# 就会越过海水把兵刷到另一座岛——包括玩家岛。
+	if not want_water:
+		return _find_nearest_connected_land_tile(bm, center, margin)
 	var center_tile: Vector2i = bm.world_to_grid(center)
 	var half: float = RTSConfig.MAP_SIZE / 2.0
 	var tile_margin: int = maxi(1, int(ceil(margin)))
