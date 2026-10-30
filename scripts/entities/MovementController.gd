@@ -318,6 +318,23 @@ func pending_path_age_ms() -> int:
 		return 0
 	return maxi(0, SimTime.now_ms() - _pending_since_ms)
 
+# 移动卡死诊断：给出“下一步航点、还差多远、是否被坡度/失败标记拦住”，
+# 避免只看到“有路径但不移动”却不知道卡在路径点还是碰撞。
+func debug_motion_snapshot() -> Dictionary:
+	var next_pos: Vector3 = astar_path[0] if not astar_path.is_empty() else Vector3.ZERO
+	return {
+		"path_left": astar_path.size(),
+		"next": next_pos,
+		"next_dist": _army.global_position.distance_to(next_pos) if next_pos != Vector3.ZERO else -1.0,
+		"dest": astar_target,
+		"target": get_current_target(),
+		"pending": _pending_path,
+		"age_ms": pending_path_age_ms(),
+		"path_failed": move_path_failed or attack_path_failed,
+		"partial": path_partial,
+		"cliff_block": _cliff_block_streak,
+	}
+
 func _get_bm() -> RTSBattleManager:
 	if _army == null or not is_instance_valid(_army) or not _army.is_inside_tree():
 		return null

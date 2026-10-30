@@ -4566,7 +4566,9 @@ func _is_active_command_same(cmd: Dictionary) -> bool:
 		return current_target == cmd.get("target") and String(current_order) == "gather"
 	if type == "move":
 		var p: Vector3 = cmd.get("pos", Vector3.ZERO)
-		return String(current_order) == "move" and _movement.astar_target.distance_to(p) < 0.5
+		# 建造/采集农民的当前状态可能是 build/gather，但底层仍走 move_to；
+		# 同终点重复下发同样会重置 pending，因此这里不限定 current_order。
+		return _movement.astar_target.distance_to(p) < 0.5
 	if type == "attack":
 		if bool(cmd.get("forced", false)):
 			return false
