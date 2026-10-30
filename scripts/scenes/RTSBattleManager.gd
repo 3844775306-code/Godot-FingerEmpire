@@ -153,6 +153,12 @@ var _spawn_counter: int = 0
 # 初始实体全部生成完毕后才允许推进确定性模拟/AI；否则同一次录像可能因为
 # 延迟初始化落在不同物理帧而出现 AI 决策时机差异。
 var sim_ready: bool = false
+
+func _mark_sim_ready() -> void:
+	if GameSettings.deterministic_sim:
+		SimTime.reset(Engine.get_physics_frames())
+		_sim_tick = 0
+	sim_ready = true
 var battle_stats = null          # 战斗统计器（累计 + 实时采样）
 var _team_castle_count: Dictionary = {}   # 单机2v2: 每队存活城堡数
 var game_time: float = 0.0
@@ -1806,6 +1812,7 @@ func _init_ffa_single(_nation_count: int):
 		var cam = get_viewport().get_camera_3d()
 		if cam:
 			cam.global_position = Vector3(player_castle.global_position.x, cam.global_position.y, player_castle.global_position.z)
+	_mark_sim_ready()
 
 # 乱斗：某国城堡被摧毁 → 该国淘汰。玩家被灭即败；存活国剩 1 时判定胜者。
 func _on_ffa_castle_died(owner: int):
@@ -1938,6 +1945,7 @@ func _init_2v2_single():
 		var cam = get_viewport().get_camera_3d()
 		if cam:
 			cam.global_position = Vector3(player_castle.global_position.x, cam.global_position.y, player_castle.global_position.z)
+	_mark_sim_ready()
 
 # 随机 AI 国家池：排除玩家国家，尽量让每个 AI 国家不同
 func _random_ai_nation_pool(count: int) -> Array:
@@ -2073,6 +2081,7 @@ func _init_multi_single(mode: int):
 		var cam = get_viewport().get_camera_3d()
 		if cam:
 			cam.global_position = Vector3(player_castle.global_position.x, cam.global_position.y, player_castle.global_position.z)
+	_mark_sim_ready()
 # 训练营 2v2 / 1v2：复用单机团队战的 owner_peer_id / ai_players 体系，
 # 但固定阵营、固定国家，不随机交换红蓝，也不创建多余的 AI 盟友。
 func _init_training_multi(mode: String) -> void:
@@ -2971,10 +2980,7 @@ func _init_entities_deferred():
 	var cam = get_viewport().get_camera_3d()
 	if cam and player_castle:
 		cam.global_position = Vector3(player_castle.global_position.x, cam.global_position.y, player_castle.global_position.z)
-	if GameSettings.deterministic_sim:
-		SimTime.reset(Engine.get_physics_frames())
-		_sim_tick = 0
-	sim_ready = true
+	_mark_sim_ready()
 
 # ==================== 实体生成 ====================
 # 模型缩放：普通模型按最大边等比缩放到实体直径；城墙另外处理横向占地，

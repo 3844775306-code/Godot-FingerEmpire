@@ -39,6 +39,7 @@ func _ready() -> void:
 		size = UILayout.view_size()
 		add_child(OrientationReload.new())
 		_build_mobile_ui()
+		_update_replay_mode_availability()
 		return
 
 	# 桌面/网页：按当前实际画布铺满，避免专属界面又缩回中间一条。
@@ -46,6 +47,7 @@ func _ready() -> void:
 	size = design_size
 	position = Vector2.ZERO
 	_build_desktop_ui()
+	_update_replay_mode_availability()
 
 # ---------------- 桌面版 ----------------
 func _build_desktop_ui() -> void:
@@ -464,6 +466,7 @@ func _on_nation_selected(idx: int) -> void:
 
 func _on_mode_selected(idx: int) -> void:
 	_last_mode_idx = clampi(idx, 0, 5)
+	_update_replay_mode_availability()
 	if _mode_desc == null:
 		return
 	match _last_mode_idx:
@@ -474,6 +477,20 @@ func _on_mode_selected(idx: int) -> void:
 		_:
 			_mode_desc.text = "乱斗：多国混战，可结盟、纳贡或背叛，最后存活者获胜。"
 	_update_summary()
+
+func _update_replay_mode_availability() -> void:
+	if replay_check == null:
+		return
+	# 严格指令回放目前只验证了单机 1v1；团队战/乱斗仍使用快照录像，
+	# 避免录出无法严格重演的文件。
+	var supported: bool = mode_select == null or mode_select.selected == 0
+	replay_check.disabled = not supported
+	if not supported:
+		replay_check.button_pressed = false
+		GameSettings.replay_mode = "snapshot"
+		replay_check.tooltip_text = "指令回放当前仅支持单机 1v1；团队战和乱斗请使用快照录像。"
+	else:
+		replay_check.tooltip_text = "不勾选：按快照录像，兼容现有回放；勾选：只记录你的操作与随机种子，回放时重新模拟。"
 
 func _on_option_changed(_idx: int) -> void:
 	_update_summary()
@@ -495,7 +512,7 @@ func _update_summary() -> void:
 	var map_name := String(MapPresets.get_info(GameSettings.map_id)["name"])
 	var progression := "科研 · 四时代科技树" if GameSettings.is_research_mode() else "经典 · 升级解锁"
 	var pace := "快速" if (fast_check != null and fast_check.button_pressed) else "标准"
-	var replay := "指令回放" if (replay_check != null and replay_check.button_pressed) else "快照录像"
+	var replay := "指令回放" if (replay_check != null and replay_check.button_pressed and not replay_check.disabled) else "快照录像"
 	_summary.text = "文明\n%s\n\n难度\n%s\n\n模式\n%s\n\n地形\n%s\n\n发展\n%s\n\n节奏\n%s\n\n录像\n%s" % [
 		nation_name, diff_name, mode_name, map_name, progression, pace, replay
 	]
@@ -520,7 +537,7 @@ func _start_battle() -> void:
 		GameSettings.ai_mode = mode_idx + 1
 	GameSettings.fast_mode = fast_check.button_pressed if fast_check != null else false
 	GameSettings.progression_mode = GameSettings.ProgressionMode.RESEARCH if (research_check != null and research_check.button_pressed) else GameSettings.ProgressionMode.CLASSIC
-	GameSettings.replay_mode = "command" if (replay_check != null and replay_check.button_pressed) else "snapshot"
+	GameSettings.replay_mode = "command" if (replay_check != null and replay_check.button_pressed and (mode_select == null or mode_select.selected == 0)) else "snapshot"
 	GameSettings.command_replay = false
 	GameSettings.command_replay_file = ""
 	GameSettings.deterministic_sim = false
