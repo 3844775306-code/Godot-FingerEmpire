@@ -1077,11 +1077,17 @@ func _tick_fleet_idle(delta: float):
 		_transport_timer = 0.0
 	_wave_troop_quota = units.size()
 	_transport_units = units
-	# 被征用的守家兵转为登陆部队，避免 AI 防守逻辑下一帧又把它们拉回城堡。
+	# 被征用的守家/守资源/守墙兵转为登陆部队，避免 AI 防守逻辑下一帧又把它们拉回去。
 	for u in units:
 		if is_instance_valid(u):
 			u.remove_meta("ai_home_guard")
 			u.remove_meta("ai_resource_guard")
+			if u.has_meta("ai_wall_guard"):
+				if ai != null and ai.has_method("_release_wall_guard"):
+					ai._release_wall_guard(u)
+				else:
+					u.remove_meta("ai_wall_guard")
+					u.hold_position = false
 	_unit_ship.clear()
 	# 按“离哪艘船最近 + 该船还有空位”分配，而不是按队列顺序硬塞。
 	# 多艘船沿岸排开时，靠岸单位如果被分到另一端的船，很容易永远走不到
@@ -1370,9 +1376,10 @@ func _clean_transport_units():
 	_transport_units = alive
 
 func _transport_candidate_less(a: Dictionary, b: Dictionary) -> bool:
-	# 空闲兵优先于守家兵；同类里离出发岸近的优先。
-	if bool(a["guard"]) != bool(b["guard"]):
-		return not bool(a["guard"])
+	# 渡海征用优先级：空闲兵 > 守家/守资源兵 > 守墙兵。
+	# 只有前两类不够时才抽守墙兵，避免为了登陆把城墙直接抽空。
+	if int(a["priority"]) != int(b["priority"]):
+		return int(a["priority"]) < int(b["priority"])
 	return float(a["dist"]) < float(b["dist"])
 
 func _pick_units(max_count: int) -> Array:
@@ -1398,14 +1405,19 @@ func _pick_units(max_count: int) -> Array:
 		var gb = e.get("_garrison_building")
 		if gb != null and gb.get_ref() != null:
 			continue
-		if e.has_meta("ai_harass") or e.has_meta("ai_transporting") or e.has_meta("ai_wall_guard"):
+		if e.has_meta("ai_harass") or e.has_meta("ai_transporting"):
 			continue
-		# 岛屿图上 AI 常常把全部野战兵都分去守家/守资源，真正“空闲”的兵只有几个，
-		# 运输波次因此永远凑不满人。守家兵作为第二优先级征用：先送空闲兵，
-		# 人数不够时再从守家里抽，抽中后由调用方清掉守家标记。
-		var is_guard: bool = e.has_meta("ai_home_guard") or e.has_meta("ai_resource_guard")
+		# 守墙兵是最后一级可征用兵：岛屿图的 AI 常把全部陆军派去守墙，
+		# 如果这里直接排除，渡海模块就会永远显示 0 个可用士兵。
+		# 仍按“空闲 > 守家/守资源 > 守墙”的顺序抽人，前两类足够时不会动城墙。
+		var is_wall_guard: bool = e.has_meta("ai_wall_guard")
+		var priority: int = 0
+		if is_wall_guard:
+			priority = 2
+		elif e.has_meta("ai_home_guard") or e.has_meta("ai_resource_guard"):
+			priority = 1
 		var dist: float = e.global_position.distance_to(own_shore_land)
-		candidates.append({"unit": e, "dist": dist, "guard": is_guard})
+		candidates.append({"unit": e, "dist": dist, "priority": priority})
 	if candidates.is_empty():
 		return []
 	candidates.sort_custom(_transport_candidate_less)
@@ -1504,14 +1516,34 @@ func _shipyard_reaches_own_water(sy: Building) -> bool:
 func _ensure_shore_shipyard():
 	if own_shore_water == Vector3.ZERO or own_shore_land == Vector3.ZERO:
 		return
+	# 只保留一座“离出发岸最近”的渡水专用船坞。
+	# 之前只要 16 米内有船坞就标记并返回，岛屿图第二座船坞也容易留下旧标记，
+	# 运载船就会从远处船坞下水，随后又被 _refresh_fleet 以“离岸超过20米”排除。
+	var best: Building = null
+	var best_dist: float = INF
 	for e in battle.entities.get_children():
-		if e is Building and e.entity_id == SHIPYARD_ID and e.health > 0 and ai.entity_belongs_to_me(e):
-			# 只认贴着出发岸的船坞；40 米外的船坞即使水域相连也要绕很远，
-			# 运输船在绕行途中很容易被海战/巡逻拉走，波次永远集不齐。
-			if e.global_position.distance_to(own_shore_water) <= 16.0 and _shipyard_reaches_own_water(e):
-				# 标记为渡水专用，避免 _manage_shipyards 因“附近无油田”把它拆掉
-				e.set_meta("ai_transport_shipyard", true)
-				return
+		if not (e is Building) or e.entity_id != SHIPYARD_ID or e.health <= 0:
+			continue
+		if not ai.entity_belongs_to_me(e):
+			continue
+		var near: bool = e.global_position.distance_to(own_shore_water) <= 16.0 \
+			and _shipyard_reaches_own_water(e)
+		if not near:
+			if e.has_meta("ai_transport_shipyard"):
+				e.remove_meta("ai_transport_shipyard")
+			continue
+		var d: float = e.global_position.distance_to(own_shore_water)
+		if d < best_dist:
+			best = e
+			best_dist = d
+	if is_instance_valid(best):
+		for e in battle.entities.get_children():
+			if e is Building and e.entity_id == SHIPYARD_ID and e != best:
+				if e.has_meta("ai_transport_shipyard"):
+					e.remove_meta("ai_transport_shipyard")
+		best.set_meta("ai_transport_shipyard", true)
+		_drop_remote_transport_orders(best)
+		return
 	if not ai.can_afford_building(SHIPYARD_ID):
 		return
 	var pos: Vector3 = _find_shore_shipyard_pos()
@@ -1519,10 +1551,26 @@ func _ensure_shore_shipyard():
 		return
 	if not ai.build_building(SHIPYARD_ID, pos):
 		return
+	var built: Building = null
 	for e in battle.entities.get_children():
 		if e is Building and e.entity_id == SHIPYARD_ID and e.health > 0 and ai.entity_belongs_to_me(e):
 			if e.global_position.distance_to(pos) <= 3.0:
-				e.set_meta("ai_transport_shipyard", true)
+				built = e
+				break
+	if is_instance_valid(built):
+		built.set_meta("ai_transport_shipyard", true)
+		_drop_remote_transport_orders(built)
+
+# 运载船只能从渡水专用船坞生产。远处船坞排出的运载船开不到出发岸，
+# 留下来只会白吃木头/金币和人口，所以每次确认专用船坞后清掉这些排队项。
+func _drop_remote_transport_orders(keep: Building) -> void:
+	for e in battle.entities.get_children():
+		if not (e is Building) or e.entity_id != SHIPYARD_ID or e == keep or e.health <= 0:
+			continue
+		if not ai.entity_belongs_to_me(e):
+			continue
+		while e.production_queue.has(TRANSPORT_ID):
+			e.production_queue.erase(TRANSPORT_ID)
 
 func _find_shore_shipyard_pos() -> Vector3:
 	var base: Vector2i = battle.world_to_grid(own_shore_land)
