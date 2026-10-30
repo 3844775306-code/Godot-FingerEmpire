@@ -1,7 +1,7 @@
 class_name BuildingLevelVisual
 extends RefCounted
 
-# 建筑等级外观：不依赖新的 GLB，用程序化旗帜、底座色环和等级徽章区分 Lv.1～Lv.5。
+# 建筑等级外观：不依赖新的 GLB，用程序化旗帜、底座色环和满级光效区分 Lv.1～Lv.5。
 # 单机服务端和联机客户端共用同一套生成逻辑，避免两边看起来不一致。
 #
 # 设计约束：
@@ -79,7 +79,6 @@ static func apply(building: Node3D, level: int, fallback_radius: float = 0.0, te
 	var top := bounds.end.y
 	if top < 0.2:
 		top = 1.8
-	var center := bounds.get_center() if bounds.size.x > 0.01 else Vector3.ZERO
 
 	var color: Color = TIER_COLORS[level - 1]
 	var root := Node3D.new()
@@ -89,7 +88,6 @@ static func apply(building: Node3D, level: int, fallback_radius: float = 0.0, te
 
 	_add_base_ring(root, radius, color, level)
 	_add_flags(root, radius, top, team_color, level)
-	_add_level_badge(root, center, top, color, level)
 	if level >= 5:
 		_add_max_level_glow(root, radius, color)
 
@@ -262,32 +260,6 @@ static func _add_base_ring(root: Node3D, radius: float, color: Color, level: int
 	var ring_mat := _mat("level_ring_%d" % level, color.darkened(0.08), 0.0, 0.45)
 	ring.material_override = ring_mat
 	root.add_child(ring)
-
-static func _add_level_badge(root: Node3D, center: Vector3, top: float, color: Color, level: int) -> void:
-	var label := Label3D.new()
-	label.name = "LevelBadge"
-	label.text = "Lv.%d" % level
-	setup_world_badge(label, color)
-	label.position = Vector3(center.x, top + 0.62, center.z)
-	root.add_child(label)
-
-# 建筑头顶的 3D 识别牌（等级/驻军）统一用这套样式：
-# - billboard + no_depth_test + 高 render_priority：无论俯视、平视还是被屋顶挡住都浮在最上层；
-# - fixed_size：不随相机距离缩小，拉远看全图时也能读清；
-# - 关闭 visibility_range，避免超过原来的 55/80 米就直接消失。
-static func setup_world_badge(label: Label3D, color: Color) -> void:
-	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	label.no_depth_test = true
-	label.render_priority = 20
-	label.fixed_size = true
-	label.font_size = 22
-	label.outline_size = 6
-	label.pixel_size = 0.01
-	label.modulate = color
-	label.outline_modulate = Color(0.0, 0.0, 0.0, 0.92)
-	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	label.visibility_range_begin = 0.0
-	label.visibility_range_end = 0.0
 
 static func _add_max_level_glow(root: Node3D, radius: float, color: Color) -> void:
 	var glow := MeshInstance3D.new()

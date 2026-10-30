@@ -910,7 +910,7 @@ func _update_single_entity(info):
 	_refresh_client_construction_visual(node, info)
 	_refresh_client_level_visual(node, info)
 	_refresh_client_damage_visual(node, info)
-	_refresh_client_garrison_badge(node, info)
+	_refresh_client_garrison_visual(node, info)
 	_update_cart_link(node, info)
 	# Client-side sound effects (detect state transitions, visible entities only)
 	var prev_info = node.get_meta("_prev_info") if node.has_meta("_prev_info") else {}
@@ -1332,27 +1332,24 @@ func _refresh_client_level_visual(node: Node3D, info: Dictionary) -> void:
 	if int(info.get("entity_id", 0)) == 27:
 		WallTierVisual.apply(node, lv, team_color)
 
-# 联机端没有 Building.gd 的 _process，驻军识别牌由快照字段驱动。
-# 有驻军时在建筑头顶显示“驻军 N”，与单机端保持同样样式。
-func _refresh_client_garrison_badge(node: Node3D, info: Dictionary) -> void:
+# 联机端没有 Building.gd 的 _process，驻军剪影由快照字段驱动。
+# 有驻军时在屋顶显示守军矛尖，和单机端保持同样表现。
+func _refresh_client_garrison_visual(node: Node3D, info: Dictionary) -> void:
 	if int(info.get("type", -1)) != 1:
 		return
-	var count := int(info.get("garrisoned_soldier_count", 0))
-	var badge := node.get_node_or_null("GarrisonBadge") as Label3D
-	if count <= 0 or float(info.get("build_timer", 0.0)) > 0.0:
-		if badge != null:
-			badge.visible = false
+	var entity_id := int(info.get("entity_id", -1))
+	var limit := GarrisonVisual.limit_for(entity_id)
+	if limit <= 0:
 		return
-	if badge == null:
-		badge = Label3D.new()
-		badge.name = "GarrisonBadge"
-		LevelVisualScript.setup_world_badge(badge, Color(0.35, 1.0, 0.55, 1.0))
-		node.add_child(badge)
-		badge.position = Vector3(0.0, float(info.get("body_radius", 1.0)) * 2.0 + 1.2, 0.0)
-	if int(badge.get_meta("_garrison_count", -1)) != count:
-		badge.text = "驻军 %d" % count
-		badge.set_meta("_garrison_count", count)
-	badge.visible = true
+	var count := int(info.get("garrisoned_soldier_count", 0))
+	var is_visible := count > 0 and limit > 0 and float(info.get("build_timer", 0.0)) <= 0.0 and float(info.get("health", 0.0)) > 0.0
+	GarrisonVisual.update(
+		node,
+		count,
+		limit,
+		float(info.get("body_radius", 1.0)),
+		_get_entity_color(info),
+		is_visible)
 
 func _refresh_client_damage_visual(node: Node3D, info: Dictionary) -> void:
 	var max_hp := float(info.get("max_health", 0.0))
