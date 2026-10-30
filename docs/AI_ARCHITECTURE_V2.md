@@ -558,3 +558,21 @@ AIClock.fast (4Hz)
 **冒烟**：3 分钟 3v3 HELL，无错误，`SITUATION/LEDGER MISMATCH` = 0、`CONFLICT` = 0，front 80.3% / idle 4.2%。
 
 **说明**：农民让位意味着目前 `CONFLICT` 仍为 0；真正的冲突要等 `defense` 来源登记进来（守军与 director 都会挑陆军单位），那时 `CONFLICT` 才会指认真实抢单位点。
+
+### 12.3.8 P3.1 第五步：删除 `_roles`，账本成为唯一事实来源（2026-10-30 23:25）
+
+| 原 `_roles` 用途 | 现在 |
+|---|---|
+| 写入/擦除（`_director_set_role` / `_director_release`） | 只写账本 |
+| 过期回收（`_director_prune` 遍历 `_roles`） | 遍历 `_ledger.entries_of("director")`，`until` 由账本维护 |
+| 角色计数（`_director_role_count`）/ 摘要（`get_role_summary`） | `count_of` / `counts_of("director")` |
+| 释放时取角色（`_director_release_role`） | `_ledger.kind_of(uid)` |
+| 占用判定（`_unit_has_claim` / 集结 / 主攻派单） | `_ledger.has(uid)` |
+| 与 `_roles` 对账（`_ledger_check`） | 改为**账本自检**：每条占用必须指向活着的、属于我的单位，且与 `ai_role` 元数据一致 |
+
+`USE_LEDGER_READS` 开关随之删除（读取点已全部走账本，没有回退必要）。
+自检里对"单位已死但本轮 prune 未跑到"的条目单独记为 `pending`（正常回收窗口），不算错误。
+
+**4 分钟 3v3 HELL 验证**：无脚本错误，`STALE` = 0、`CONFLICT` = 0、`SITUATION MISMATCH` = 0，front 71.4% / idle 15.1% / land 5.3，与迁移前区间一致。
+
+至此 P3.1 完成：**角色占用只有一本账**，director 与 worker 分来源登记，抢单位会被显式拒绝并计数。

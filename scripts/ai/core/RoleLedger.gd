@@ -111,6 +111,13 @@ func count_of(source: String, kind: int) -> int:
 			n += 1
 	return n
 
+func entries_of(source: String) -> Dictionary:
+	var out: Dictionary = {}
+	var src: Dictionary = _by_source.get(source, {})
+	for uid in src.keys():
+		out[int(uid)] = _claims[uid].duplicate()
+	return out
+
 func counts() -> Dictionary:
 	var out: Dictionary = {}
 	for uid in _claims.keys():

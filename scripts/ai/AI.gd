@@ -219,7 +219,7 @@ var _ai_clock = null
 var _situation = null
 var _situation_usec_ema: float = 0.0
 var _situation_last_t: float = -1.0
-# P3.1：统一角色账本的影子副本（_roles 仍是唯一事实来源，这里只镜像 + 对账）。
+# P3.1：统一角色账本（角色占用的唯一事实来源，director/worker 分来源登记）。
 var _ledger = null
 var _ledger_checks: int = 0
 var _ledger_mismatch_total: int = 0
@@ -3157,10 +3157,7 @@ func _is_local_defense_active(u) -> bool:
 func _unit_has_claim(u) -> bool:
 	if u == null or not is_instance_valid(u):
 		return true
-	if USE_LEDGER_READS and _ledger != null:
-		if _ledger.has(u.get_instance_id()):
-			return true
-	elif _roles.has(u.get_instance_id()):
+	if _ledger != null and _ledger.has(u.get_instance_id()):
 		return true
 	return u.has_meta("ai_home_guard") or u.has_meta("ai_resource_guard") or u.has_meta("ai_wall_guard") \
 		or u.has_meta("ai_harass") or u.has_meta("ai_transporting") or u.has_meta("ai_escorting") \
@@ -3190,7 +3187,7 @@ func attack_move(target_position: Vector3, max_units: int):
 			if _is_local_defense_active(entity):
 				continue
 			# 账本里已有角色（守军/守墙/驻军/骚扰/待命）的单位不归主攻调度。
-			if _roles.has(entity.get_instance_id()):
+			if _ledger != null and _ledger.has(entity.get_instance_id()):
 				continue
 			# 主攻只调度真正空闲的野战部队。正在交战/移动/攻击移动/排队命令的单位
 			# 如果被重新下发，会清空 current_target 和命令队列，表现为“打两下就转身”。
@@ -4968,7 +4965,7 @@ func _retask_idle_front_units() -> void:
 				sent += 1
 
 # ═══ ArmyDirector（第 1 步：安全网）═══
-# 只做两件事：维护角色账本 _roles（谁因为什么角色被占用、租约何时到期），
+# 只做两件事：维护角色账本（谁因为什么角色被占用、租约何时到期），
 # 并把既没有角色、也没有任何命令的陆军战斗单位兜底派出去。
 # 旧的各调度器暂时保留，后续步骤会逐个改成向 director 提需求。
 enum UnitRole { IDLE, SCOUT, GARRISON, WALL, HOME_GUARD, RESOURCE_GUARD, BUILDING_DEFENSE, HARASS, RAID, FIELD, SIEGE, TRANSPORT, ESCORT, RETREAT, STANDBY }
@@ -4980,7 +4977,6 @@ const DIRECTOR_STANDBY_MIN_DIST: float = 10.0
 const DIRECTOR_LOG_INTERVAL: float = 5.0
 
 var director_debug: bool = false
-var _roles: Dictionary = {}
 var _director_timer: float = 0.0
 var _director_log_timer: float = 0.0
 
@@ -4997,7 +4993,7 @@ func _tick_director(delta: float) -> void:
 	for u in _cached_armies():
 		if not _director_is_land_combat(u):
 			continue
-		if _roles.has(u.get_instance_id()):
+		if _ledger != null and _ledger.has(u.get_instance_id()):
 			continue
 		if _director_is_busy(u):
 			continue
@@ -5038,13 +5034,13 @@ func _director_is_busy(u) -> bool:
 	return false
 
 func _director_prune(now: float) -> void:
-	if _roles.is_empty():
+	if _ledger == null or _ledger.size_of(LEDGER_SRC_DIRECTOR) == 0:
 		return
 	var drop: Array = []
-	for uid in _roles.keys():
-		var ent: Dictionary = _roles[uid]
+	var entries: Dictionary = _ledger.entries_of(LEDGER_SRC_DIRECTOR)
+	for uid in entries.keys():
 		var u = instance_from_id(int(uid))
-		if u == null or not is_instance_valid(u) or not entity_belongs_to_me(u) or float(ent.get("until", 0.0)) <= now:
+		if u == null or not is_instance_valid(u) or not entity_belongs_to_me(u) or float(entries[uid].get("until", 0.0)) <= now:
 			drop.append(uid)
 	for uid in drop:
 		_director_release_role(int(uid))
@@ -5063,7 +5059,6 @@ func _director_set_role(u, role: int, lease: float, now: float) -> void:
 					float(battle.game_time), uid, role,
 					_ledger.source_of(uid), _ledger.kind_of(uid)])
 			return
-	_roles[uid] = {"role": role, "since": now, "until": now + lease}
 	u.set_meta("ai_role", role)
 
 # 统一认领接口：旧的 4 个防务调度器（守家/守墙/驻军/资源守卫）改走这里登记角色，
@@ -5074,27 +5069,20 @@ func _director_claim(u, role: int, lease: float) -> void:
 	_director_set_role(u, role, lease, float(battle.game_time))
 
 func _director_release(uid: int) -> void:
-	_roles.erase(uid)
 	if _ledger != null:
 		_ledger.release(uid)
 
 func _director_role_count(role: int) -> int:
-	if USE_LEDGER_READS and _ledger != null:
-		return _ledger.count_of(LEDGER_SRC_DIRECTOR, role)
-	var n: int = 0
-	for uid in _roles.keys():
-		var ent: Dictionary = _roles[uid]
-		if int(ent.get("role", -1)) == role:
-			n += 1
-	return n
+	if _ledger == null:
+		return 0
+	return _ledger.count_of(LEDGER_SRC_DIRECTOR, role)
 
 func _director_release_role(uid: int) -> void:
-	var ent = _roles.get(uid)
-	if ent == null:
+	if _ledger == null or not _ledger.has(uid):
 		return
+	var role: int = _ledger.kind_of(uid)
 	var u = instance_from_id(uid)
 	if u != null and is_instance_valid(u):
-		var role: int = int(ent.get("role", 0))
 		match role:
 			UnitRole.WALL:
 				u.remove_meta("ai_wall_guard")
@@ -5108,9 +5096,7 @@ func _director_release_role(uid: int) -> void:
 				u._garrison_target_id = -1
 			UnitRole.RESOURCE_GUARD:
 				u.remove_meta("ai_resource_guard")
-	_roles.erase(uid)
-	if _ledger != null:
-		_ledger.release(uid)
+	_ledger.release(uid)
 
 func _director_dispatch(idle: Array, now: float) -> void:
 	var threatened: bool = _defense != null and int(_defense.threat_level) >= 2
@@ -5143,13 +5129,8 @@ func _director_dispatch(idle: Array, now: float) -> void:
 func get_role_summary() -> String:
 	var names: Array = ["IDLE", "侦察", "驻军", "守墙", "守家", "资源守", "回防", "骚扰", "突袭", "主攻", "攻城", "运输", "护航", "撤退", "待命"]
 	var counts: Dictionary = {}
-	if USE_LEDGER_READS and _ledger != null:
+	if _ledger != null:
 		counts = _ledger.counts_of(LEDGER_SRC_DIRECTOR)
-	else:
-		for uid in _roles.keys():
-			var ent: Dictionary = _roles[uid]
-			var k: int = int(ent.get("role", 0))
-			counts[k] = int(counts.get(k, 0)) + 1
 	var parts: Array = []
 	for k in counts.keys():
 		var idx: int = clampi(int(k), 0, names.size() - 1)
@@ -5389,7 +5370,7 @@ func _rally_land_army_to_castle():
 		if entity.water_capable: continue
 		# 账本里已有角色（集结/守军/守墙/驻军/骚扰）的单位不再重复集结。
 		# 以前用永久的 ai_rallied 标记，导致首波之后新生产的兵再也不会被集结。
-		if _roles.has(entity.get_instance_id()): continue
+		if _ledger != null and _ledger.has(entity.get_instance_id()): continue
 		if _unit_has_claim(entity): continue
 		if _is_held_by_garrison(entity): continue
 		# 已登船单位由 AIWaterCrossing 管理，不再被集结点重新下令
@@ -6315,8 +6296,6 @@ const USE_TRUE_ROUND_ELAPSED: bool = true
 # 默认 false：AISituation 已通过影子对账（0 不一致），但切换后还没在无并发实例的环境跑过基线，
 # 先保持旧路径；verify 通过后再置 true。
 const USE_SITUATION_COUNTS: bool = false
-# P3.1 第二步开关：true=读取点走统一账本，false=读旧 _roles（默认 false，验证后再打开）。
-const USE_LEDGER_READS: bool = true
 # P3.1 第三步：账本来源名（后续农民/防御也登记到同一本账时用于区分）。
 const LEDGER_SRC_DIRECTOR: String = "director"
 const LEDGER_SRC_WORKER: String = "worker"
@@ -6379,26 +6358,34 @@ func _situation_shadow_tick() -> void:
 	_ledger_check()
 	_mirror_worker_claims(gt)
 
-# P3.1 影子对账：统一账本必须与 _roles 完全一致（键集合 + 每个单位的角色号）。
+# P3.1 第五步：账本已是唯一事实来源，这里做自检（不再和 _roles 对账）：
+# 每条 director 占用都必须指向"存在、活着、属于我"的单位，且与单位上的 ai_role 元数据一致；
+# 失效占用由 _director_prune 自动回收，这里只负责把异常暴露出来。
 func _ledger_check() -> void:
 	if _ledger == null:
 		return
 	_ledger_checks += 1
-	var diff: int = 0
-	if _roles.size() != _ledger.size_of(LEDGER_SRC_DIRECTOR):
-		diff = absi(_roles.size() - _ledger.size_of(LEDGER_SRC_DIRECTOR))
-	else:
-		for uid in _roles.keys():
-			if int(_roles[uid].get("role", -1)) != _ledger.kind_of(int(uid)):
-				diff += 1
-	if diff == 0:
+	var entries: Dictionary = _ledger.entries_of(LEDGER_SRC_DIRECTOR)
+	var bad: int = 0
+	var pending: int = 0
+	for uid in entries.keys():
+		var u = instance_from_id(int(uid))
+		if u == null or not is_instance_valid(u) or u.health <= 0 or not entity_belongs_to_me(u):
+			# 单位已死/已消灭但本轮 prune 还没跑到：属于正常回收窗口，不算错误。
+			pending += 1
+			continue
+		if int(entries[uid].get("kind", -1)) != int(u.get_meta("ai_role", -1)):
+			bad += 1
+	if bad == 0:
 		if _ledger_checks <= 3 or _ledger_checks % 20 == 0:
-			print("[LEDGER] ok t=%.0f roles=%d ledger=%d rejected=%d expired=%d" % [
-				float(battle.game_time), _roles.size(), _ledger.size(), int(_ledger.rejected), int(_ledger.expired)])
+			print("[LEDGER] ok t=%.0f director=%d worker=%d pending=%d rejected=%d expired=%d conflicts=%d" % [
+				float(battle.game_time), entries.size(), _ledger.size_of(LEDGER_SRC_WORKER), pending,
+				int(_ledger.rejected), int(_ledger.expired), _ledger_conflicts])
 	else:
 		_ledger_mismatch_total += 1
-		print("[LEDGER] MISMATCH t=%.0f roles=%d ledger=%d diff=%d" % [
-			float(battle.game_time), _roles.size(), _ledger.size(), diff])
+		if _ledger_mismatch_total <= 5 or _ledger_mismatch_total % 20 == 0:
+			print("[LEDGER] STALE t=%.0f director=%d bad=%d" % [
+				float(battle.game_time), entries.size(), bad])
 
 func get_situation_summary() -> Dictionary:
 	if _situation == null:
