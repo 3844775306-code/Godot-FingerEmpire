@@ -501,8 +501,11 @@ func _init_team_mode():
 	var map_node = load("res://scripts/map/Ground.gd").new()
 	map_node.name = "Map"
 	add_child(map_node)
-	# 为新地图设置自定义种子（可选）
-	map_node.custom_seed = randi()
+	# P4：地图种子记到 GameSettings.map_seed，回放/复现时同一张图；
+	# 随机源改走 SimRandom，避免联机对局的状态随机来自不可复现的全局 RNG。
+	if int(GameSettings.map_seed) == 0:
+		GameSettings.map_seed = int(SimRandom.randi() & 0x7fffffff)
+	map_node.custom_seed = int(GameSettings.map_seed)
 	# 手动调用 _ready 来生成地形、城堡、资源
 	map_node._ready()
 	# 确保 terrain_grid 已经填充
@@ -652,7 +655,7 @@ func _pick_ai_nation() -> int:
 		for n in range(RTSConfig.Nation.size()):
 			if n != GameSettings.player_nation:
 				pool.append(n)
-	return pool[randi() % pool.size()]
+	return pool[SimRandom.randi() % pool.size()]
 
 func _create_ai_player(peer_id: int, team: int, slot: int):
 	var ai_nation = _pick_ai_nation()
@@ -704,8 +707,8 @@ func find_valid_build_position(near_pos: Vector3, building_id: int) -> Vector3:
 	var cfg = EntityDatabase.get_config(building_id)
 	var radius = cfg.get("body_radius", 1.0)
 	for _try in range(20):
-		var angle = randf_range(0, TAU)
-		var dist = randf_range(3.0, 10.0)
+		var angle = SimRandom.randf_range(0, TAU)
+		var dist = SimRandom.randf_range(3.0, 10.0)
 		var test_pos = near_pos + Vector3(cos(angle) * dist, 0, sin(angle) * dist)
 		# 地形检查：必须为平原（0）
 		if get_terrain_at(test_pos) != 0:
@@ -812,7 +815,7 @@ func _init_all_castles_team():
 		var peasant_cfg = EntityDatabase.get_config(10)
 		peasant_cfg["team"] = info.team
 		for i in range(3):
-			var spawn_pos = pos + Vector3(randf_range(-4,4), 0, randf_range(-4,4))
+			var spawn_pos = pos + Vector3(SimRandom.randf_range(-4,4), 0, SimRandom.randf_range(-4,4))
 			var cfg = peasant_cfg.duplicate()
 			cfg["owner_peer_id"] = pid
 			spawn_entity(cfg, info.team, spawn_pos, 1)
@@ -863,7 +866,7 @@ func _global_retreat(team: int):
 	if not home: return
 	for entity in entities.get_children():
 		if entity is Army and entity.team == team and entity.target_type > 0:
-			entity.move_to(home.global_position + Vector3(randf_range(-3,3), 0, randf_range(-3,3)))
+			entity.move_to(home.global_position + Vector3(SimRandom.randf_range(-3,3), 0, SimRandom.randf_range(-3,3)))
 
 # ---------- 命令处理（兼容两种模式） ----------
 func process_command(peer_id: int, data: Dictionary):
@@ -1349,7 +1352,7 @@ func _2v2_global_retreat(peer_id: int):
 	if not castle: return
 	for entity in entities.get_children():
 		if entity is Army and entity.get("owner_peer_id") == peer_id and entity.target_type > 0:
-			entity.move_to(castle.global_position + Vector3(randf_range(-3,3), 0, randf_range(-3,3)))
+			entity.move_to(castle.global_position + Vector3(SimRandom.randf_range(-3,3), 0, SimRandom.randf_range(-3,3)))
 
 func _2v2_rally(peer_id: int, x: float, y: float, z: float):
 	var pos = Vector3(x, y, z)
