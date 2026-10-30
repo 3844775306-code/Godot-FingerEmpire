@@ -18,6 +18,8 @@ const ROLE_NAMES: Array = ["IDLE", "GATHER", "HAULER", "BUILDER", "REPAIRER", "F
 const TICK_INTERVAL: float = 1.0
 const LOG_INTERVAL: float = 5.0
 const TRAIN_COOLDOWN: float = 1.5
+const BUILDER_LEASE: float = 90.0
+const BUILDER_ASSIGN_GRACE: float = 3.0
 
 var ai = null
 var _timer: float = 0.0
@@ -25,6 +27,8 @@ var _log_timer: float = 0.0
 var _workers: Dictionary = {}   # uid -> snapshot + unit
 var _last_train_at: float = -999.0
 var _last_train_block: String = ""
+# uid -> {unit, building, kind, source, created_at, assigned_at, expires_at}
+var _builder_reservations: Dictionary = {}
 
 func setup(controller) -> void:
 	ai = controller
@@ -39,6 +43,7 @@ func tick(delta: float) -> void:
 		return
 	_timer = TICK_INTERVAL
 	_sync_roster()
+	_release_finished_builders()
 	_log_timer -= TICK_INTERVAL
 	if _log_timer <= 0.0:
 		_log_timer = LOG_INTERVAL
@@ -108,6 +113,131 @@ func _try_train_worker(reason: String) -> bool:
 	_last_train_at = now
 	_last_train_block = "trained_" + reason
 	return true
+
+# 建造/修理统一从这里领取农民。
+# critical=true 时允许从正在采集的农民里抽 1 个，用于民居/兵营紧急重建。
+func acquire_builder(pos: Vector3, critical: bool = false, max_dist: float = 60.0,
+		source: String = "build") -> Army:
+	if ai == null or ai.battle == null:
+		return null
+	_sync_roster()
+	_release_finished_builders()
+	var now: float = float(ai.battle.game_time)
+	var best = null
+	var best_priority: int = 99
+	var best_dist: float = INF
+	var max_dist_sq: float = max_dist * max_dist
+	for uid in _workers:
+		if _builder_reservations.has(uid):
+			continue
+		var rec: Dictionary = _workers[uid]
+		var w = rec.get("unit")
+		if w == null or not is_instance_valid(w) or w.health <= 0 or not w.can_move:
+			continue
+		if ai._worker_is_fleeing(w) or _is_garrisoned(w):
+			continue
+		if String(w.current_order) == "build":
+			continue
+		if ai._unit_has_claim(w):
+			continue
+		var order: String = String(w.current_order)
+		var work_id: int = int(w.get("_work_target_id"))
+		var priority: int = 99
+		if order == "" or order == "idle":
+			priority = 0
+		elif order == "gather" and work_id == -1:
+			priority = 1
+		elif critical and order == "gather":
+			priority = 2
+		if priority > 2:
+			continue
+		if priority == 2 and not critical:
+			continue
+		var d: float = w.global_position.distance_squared_to(pos)
+		if d > max_dist_sq:
+			continue
+		if priority < best_priority or (priority == best_priority and d < best_dist):
+			best = w
+			best_priority = priority
+			best_dist = d
+	if best == null:
+		return null
+	# 关键建造可以打断“正在采集”的农民；普通建造只拿空闲/未锁定目标的农民。
+	if best_priority >= 2:
+		if best.has_method("_detach_from_building"):
+			best._detach_from_building()
+		if best.has_method("stop_movement"):
+			best.stop_movement()
+		best.current_order = ""
+		best.current_target = null
+		best._work_target_id = -1
+	var uid: int = best.get_instance_id()
+	_builder_reservations[uid] = {
+		"unit": best,
+		"building": null,
+		"kind": "repair" if source.begins_with("repair") else "build",
+		"source": source,
+		"created_at": now,
+		"assigned_at": -1.0,
+		"expires_at": now + BUILDER_LEASE,
+	}
+	return best
+
+func on_builder_assigned(builder, building, kind: String = "") -> void:
+	if builder == null or not is_instance_valid(builder):
+		return
+	var uid: int = builder.get_instance_id()
+	if not _builder_reservations.has(uid):
+		return
+	var rec: Dictionary = _builder_reservations[uid]
+	rec["building"] = building
+	if kind != "":
+		rec["kind"] = kind
+	rec["assigned_at"] = float(ai.battle.game_time) if ai != null and ai.battle != null else 0.0
+	_builder_reservations[uid] = rec
+
+func release_builder(builder, reason: String = "") -> void:
+	if builder == null:
+		return
+	_builder_reservations.erase(builder.get_instance_id())
+
+func _release_finished_builders() -> void:
+	if _builder_reservations.is_empty():
+		return
+	var now: float = float(ai.battle.game_time) if ai != null and ai.battle != null else 0.0
+	for uid in _builder_reservations.keys():
+		var rec: Dictionary = _builder_reservations[uid]
+		var w = rec.get("unit")
+		if w == null or not is_instance_valid(w) or w.health <= 0:
+			_builder_reservations.erase(uid)
+			continue
+		var b = rec.get("building")
+		if b != null:
+			if not is_instance_valid(b) or b.health <= 0:
+				_builder_reservations.erase(uid)
+				continue
+			var working: bool = b.build_timer > 0.0 or (b.has_method("is_under_repair") and b.is_under_repair())
+			if not working and now - float(rec.get("assigned_at", -1.0)) > BUILDER_ASSIGN_GRACE:
+				_builder_reservations.erase(uid)
+				continue
+			# 已指派但农民没有真正进入施工/修理（寻路失败、命令被覆盖），释放租约。
+			if now - float(rec.get("assigned_at", -1.0)) > BUILDER_ASSIGN_GRACE:
+				var kind: String = String(rec.get("kind", "build"))
+				if kind == "build" and String(w.current_order) != "build":
+					_builder_reservations.erase(uid)
+					continue
+				if kind == "repair" and not (b.has_method("is_under_repair") and b.is_under_repair()):
+					_builder_reservations.erase(uid)
+					continue
+		elif now - float(rec.get("created_at", now)) > BUILDER_ASSIGN_GRACE:
+			# 拿到农民但建造没落地（资源/校验失败），尽快释放，避免锁死。
+			_builder_reservations.erase(uid)
+			continue
+		if now > float(rec.get("expires_at", now + BUILDER_LEASE)):
+			_builder_reservations.erase(uid)
+
+func has_builder_reservation(builder) -> bool:
+	return builder != null and _builder_reservations.has(builder.get_instance_id())
 
 func _live_workers() -> Array:
 	var result: Array = []
@@ -351,10 +481,11 @@ func _log_metrics() -> void:
 		mode = "FOOD_CRISIS"
 	elif ai._defense != null and int(ai._defense.threat_level) >= 2:
 		mode = "BASE_ALERT"
-	print("[WORKER] t=%d pid=%d mode=%s live=%d queued=%d target=%d floor=%d idle=%d flee=%d roles=%s train=%s block=%s" % [
+	print("[WORKER] t=%d pid=%d mode=%s live=%d queued=%d target=%d floor=%d idle=%d flee=%d builders=%d roles=%s train=%s block=%s" % [
 		int(ai.battle.game_time), int(ai.my_peer_id), mode, live, queued,
 		_worker_target_count(), _worker_floor_count(), idle, flee,
-		_format_role_counts(counts), _last_train_block, String(ai._last_spend_block)])
+		_builder_reservations.size(), _format_role_counts(counts), _last_train_block,
+		String(ai._last_spend_block)])
 
 func debug_snapshot() -> Dictionary:
 	return {
@@ -363,5 +494,6 @@ func debug_snapshot() -> Dictionary:
 		"target": _worker_target_count(),
 		"floor": _worker_floor_count(),
 		"roles": _role_counts(),
+		"builders": _builder_reservations.size(),
 		"train_block": _last_train_block,
 	}

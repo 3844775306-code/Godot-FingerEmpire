@@ -1599,8 +1599,14 @@ func build_building(building_id: int, pos: Vector3, facing: Vector3 = Vector3.ZE
 	if not _can_place_ai_building(building_id, pos):
 		return false
 	# 建造必须有农民到场：先找一个能派过去的农民，找不到就不扣资源、不拍地基
-	var builder = battle.find_nearest_idle_builder(my_team, my_peer_id, pos, 60.0) \
-			if battle.has_method("find_nearest_idle_builder") else null
+	var builder = null
+	if _worker_director != null:
+		builder = _worker_director.acquire_builder(
+				pos, building_id in [21, 28] and _base_under_attack(), 60.0,
+				"build_%d" % building_id)
+	else:
+		builder = battle.find_nearest_idle_builder(my_team, my_peer_id, pos, 60.0) \
+				if battle.has_method("find_nearest_idle_builder") else null
 	if builder == null:
 		return false
 	# 农民脚下到建造点没有陆路（被水隔开）时，不要先拍一个永远修不完的地基：
@@ -1609,12 +1615,19 @@ func build_building(building_id: int, pos: Vector3, facing: Vector3 = Vector3.ZE
 	if building_id != 7 and _water_crossing != null \
 			and not _water_crossing.can_builder_reach(builder.global_position, pos):
 		_water_crossing.plan_bridge_to(pos, builder.global_position)
+		if _worker_director != null:
+			_worker_director.release_builder(builder, "no_path")
 		return false
 	var cost = cfg.get("cost", {})
 	if _research_age_reserve_active() and building_id != 28 and not (building_id == 22 and _resource_overflow()) \
 			and not _can_pay_with_reserve(cost, _research_age_reserve_cost()):
+		if _worker_director != null:
+			_worker_director.release_builder(builder, "reserve")
 		return false
-	if not _deduct_resources(cost): return false
+	if not _deduct_resources(cost):
+		if _worker_director != null:
+			_worker_director.release_builder(builder, "cost")
+		return false
 	cfg["owner_peer_id"] = my_peer_id
 	# 队伍判定：在线走 player_info；本地乱斗/多人各 AI 有唯一 team(my_team)，
 	# 若始终用 RED 会让 AI 建筑建错阵营，被自己和盟友攻击。
@@ -1633,6 +1646,10 @@ func build_building(building_id: int, pos: Vector3, facing: Vector3 = Vector3.ZE
 		b.start_construction(5.0, cfg)
 		if builder != null and is_instance_valid(builder):
 			battle.assign_builders(b, [builder.get_instance_id()])
+			if _worker_director != null:
+				_worker_director.on_builder_assigned(builder, b, "build")
+	elif _worker_director != null:
+		_worker_director.release_builder(builder, "spawn_failed")
 	return b != null
 
 func upgrade_building(building_id: int):
@@ -1689,12 +1706,20 @@ func _tick_building_repair() -> void:
 		# 双保险：BattleManager 按 owner/team 取资源判断，口径与 AI 自己的查询保持一致
 		if battle.has_method("can_repair_building") and not battle.can_repair_building(b):
 			continue
-		var builder = battle.find_nearest_idle_builder(my_team, my_peer_id, b.global_position, 60.0) \
-				if battle.has_method("find_nearest_idle_builder") else null
+		var builder = null
+		if _worker_director != null:
+			builder = _worker_director.acquire_builder(b.global_position, false, 60.0, "repair")
+		else:
+			builder = battle.find_nearest_idle_builder(my_team, my_peer_id, b.global_position, 60.0) \
+					if battle.has_method("find_nearest_idle_builder") else null
 		if builder == null:
 			continue
 		if battle.request_repair(b, [builder.get_instance_id()]):
+			if _worker_director != null:
+				_worker_director.on_builder_assigned(builder, b, "repair")
 			started += 1
+		elif _worker_director != null:
+			_worker_director.release_builder(builder, "repair_rejected")
 
 # 单座建筑优先级 = 重要度 × (0.4 + 0.6 × 已损比例)
 # 权重决定「同类里更该修的」，已损比例保证残血建筑不会被小修拖后。
@@ -5038,6 +5063,10 @@ func _process_line_3():
 # 人口满时房屋是解锁兵营/登陆兵的唯一出路。找不到空闲农民时，
 # 从采集/运输里的农民临时抽一个出来建房，避免"没房→人口满→没兵→永远没房"。
 func _force_house_builder(pos: Vector3) -> bool:
+	# WorkerDirector 统一分配建造者；这里只保留“是否有建造请求”的语义，
+	# 不再提前清空某个农民的采集命令，避免和 Director 的租约打架。
+	if _worker_director != null:
+		return true
 	if battle == null or not battle.has_method("find_nearest_idle_builder"):
 		return false
 	var existing = battle.find_nearest_idle_builder(my_team, my_peer_id, pos, 60.0)
