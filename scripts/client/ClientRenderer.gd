@@ -1313,16 +1313,7 @@ func _refresh_client_garrison_badge(node: Node3D, info: Dictionary) -> void:
 	if badge == null:
 		badge = Label3D.new()
 		badge.name = "GarrisonBadge"
-		badge.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-		badge.no_depth_test = true
-		badge.font_size = 48
-		badge.pixel_size = 0.014
-		badge.outline_size = 12
-		badge.outline_modulate = Color(0.0, 0.0, 0.0, 0.92)
-		badge.modulate = Color(0.35, 1.0, 0.55, 1.0)
-		badge.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-		badge.visibility_range_begin = 0.0
-		badge.visibility_range_end = 80.0
+		LevelVisualScript.setup_world_badge(badge, Color(0.35, 1.0, 0.55, 1.0))
 		node.add_child(badge)
 		badge.position = Vector3(0.0, float(info.get("body_radius", 1.0)) * 2.0 + 1.2, 0.0)
 	if int(badge.get_meta("_garrison_count", -1)) != count:

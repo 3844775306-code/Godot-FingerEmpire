@@ -267,17 +267,27 @@ static func _add_level_badge(root: Node3D, center: Vector3, top: float, color: C
 	var label := Label3D.new()
 	label.name = "LevelBadge"
 	label.text = "Lv.%d" % level
-	label.font_size = 40
-	label.pixel_size = 0.012
-	label.outline_size = 10
-	label.modulate = color
-	label.outline_modulate = Color(0.0, 0.0, 0.0, 0.9)
-	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
-	label.no_depth_test = false
+	setup_world_badge(label, color)
 	label.position = Vector3(center.x, top + 0.62, center.z)
-	label.visibility_range_begin = 0.0
-	label.visibility_range_end = 55.0
 	root.add_child(label)
+
+# 建筑头顶的 3D 识别牌（等级/驻军）统一用这套样式：
+# - billboard + no_depth_test + 高 render_priority：无论俯视、平视还是被屋顶挡住都浮在最上层；
+# - fixed_size：不随相机距离缩小，拉远看全图时也能读清；
+# - 关闭 visibility_range，避免超过原来的 55/80 米就直接消失。
+static func setup_world_badge(label: Label3D, color: Color) -> void:
+	label.billboard = BaseMaterial3D.BILLBOARD_ENABLED
+	label.no_depth_test = true
+	label.render_priority = 20
+	label.fixed_size = true
+	label.font_size = 22
+	label.outline_size = 6
+	label.pixel_size = 0.01
+	label.modulate = color
+	label.outline_modulate = Color(0.0, 0.0, 0.0, 0.92)
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.visibility_range_begin = 0.0
+	label.visibility_range_end = 0.0
 
 static func _add_max_level_glow(root: Node3D, radius: float, color: Color) -> void:
 	var glow := MeshInstance3D.new()
