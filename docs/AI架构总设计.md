@@ -1,0 +1,267 @@
+# AI 总体架构设计（v3）
+
+> 目标：把现有 14 个 AI 文件、约 13000 行代码，收敛成**职责单一、依赖单向、跨模块调用受控**的架构。
+> 判据不是"文件拆得够细"，而是：**任何两个模块之间都不允许出现隐式双向调用；任何状态都只有一个写者；任何时刻出问题都能在一个地方看到因果。**
+> 前置阅读：[AI架构分析.md](AI架构分析.md)（现状诊断）、[AI_ARCHITECTURE_V2.md](AI_ARCHITECTURE_V2.md)（已完成的 v2 迁移记录）。
+
+---
+
+## 1. 现状：为什么"互相调用"会出问题
+
+基于实际代码扫描，当前 `AI.gd` 与各模块的调用关系是**星型但双向**的：
+
+| 模块 | 调用 `ai.*` 的**不同方法数** | 典型调用 |
+|---|---|---|
+| `AIDefense.gd` | 27 | `_director_claim`、`_visible_enemies`、`build_building`、`upgrade_building`、`_get_resources` |
+| `AIWorkerDirector.gd` | 30 | `_unit_has_claim`、`produce_unit`、`find_best_resource_for_worker`、`_get_limits` |
+| `AIWaterCrossing.gd` | 22 | `_cached_armies`、`_get_phase_weights`、`can_afford_building`、`allocate_workers` |
+| `AILadderSiege.gd` | 14 | `count_field_military`、`_get_attack_target_castle`、`build_ladder` |
+| `AIWallPlanner.gd` | 6 | `_get_enemy_army_direction`、`_cached_buildings` |
+
+**四个具体病症**（都是真实存在的，不是理论风险）：
+
+1. **控制器变成公共黑板**：150+ 个 `ai.xxx()` 调用点意味着 `AI.gd` 的每个私有方法都事实上成了公共 API，改一个私有方法可能打破任意模块。
+2. **模块之间偷偷互相调**：`AIWaterCrossing` 直接调 `ai.allocate_workers()`（农民模块的活）、`_release_wall_guard()`（防守模块的活）；`AIWallPlanner` 构造时直接吃进 `_defense` 对象。这是"各司其职"被破坏的根源。
+3. **状态多写者**：兵的角色曾同时写在 `_roles`、`RoleLedger`、`garrison_point`、`current_target`、`current_order` 五处（账本迁移已完成一部分，但"命令"这一层仍是多写者）。
+4. **调用顺序靠人肉记忆**：`AI.gd` 的决策轮是一段 14 步的流水，谁在谁之前、谁依赖谁刚算完的结果，没有声明，只能靠读代码。
+
+---
+
+## 2. 设计原则（5 条，后面所有规则都从这里推出来）
+
+| 原则 | 含义 | 对应的硬规则 |
+|---|---|---|
+| **P1 单一写者** | 每类状态只有一个模块能改 | 角色/占用 → 只 `RoleLedger`；资源扣减 → 只 `EconomyPort`；建筑落位 → 只 `BuildPort` |
+| **P2 只读上下文** | 模块读世界通过只读对象，不持有控制器 | 模块构造只收 `AIContext`（只读），禁止持有 `ai` 节点引用 |
+| **P3 单向依赖** | 依赖方向固定，禁止同层互调 | 分层矩阵见 §4；L3 之间只能通过事件或端口间接交互 |
+| **P4 意图与执行分离** | 决策产"意图数据"，执行者消费；决策者不直接调兵 | `AIDirector` 只产 `Intent`；`Executor` 只执行 `Intent` |
+| **P5 顺序显式化** | 流水线声明式注册，不写死在函数体里 | `AITickPipeline` 声明阶段与依赖，`tick()` 按注册顺序跑并做断言 |
+
+---
+
+## 3. 目标分层
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│ L5  演示/调试层   AIDebugPanel（读快照，只读）                  │
+├──────────────────────────────────────────────────────────────┤
+│ L4  编排层        AIController（AI.gd）                        │
+│      职责：生命周期、tick 顺序、对外接口（被 BattleManager 调）  │
+├──────────────────────────────────────────────────────────────┤
+│ L3  决策层        AIDirector（意图）+ AIPhaseMachine（阶段）     │
+│      只读 AIContext，只产 Intent，不执行                        │
+├──────────────────────────────────────────────────────────────┤
+│ L2  执行层（专业模块，彼此不互调）                                │
+│   AIDefense  AIWorkerDirector  AIWaterCrossing                 │
+│   AIWallPlanner  AILadderSiege  AIMilitary（主攻/骚扰/撤退）     │
+│      只读 AIContext，写只经 Port，产出事件                       │
+├──────────────────────────────────────────────────────────────┤
+│ L1  世界层        AISituation（快照）+ AIContext（只读门面）      │
+│      每轮刷新一次，之后所有模块共享同一份只读视图                 │
+├──────────────────────────────────────────────────────────────┤
+│ L0  基础设施      AIClock / AIRng / AIConfig / AIEvents         │
+│                   RoleLedger（纯数据结构） / Ports（接口）       │
+└──────────────────────────────────────────────────────────────┘
+依赖方向：只允许 ↑（上层依赖下层）。L2 之间横向依赖 = 违规。
+```
+
+### 3.1 每层的职责边界（"各司其职"的定义）
+
+| 层 | 能做 | **不能做** |
+|---|---|---|
+| L0 基础设施 | 计时、随机、常量、事件、账本存取 | 不知道任何游戏业务概念（不许出现"农民/城墙/主攻"） |
+| L1 世界层 | 扫描实体、生成只读快照、提供查询 | 修改任何状态；缓存跨轮复用（每轮重建） |
+| L2 执行层 | 按自己的专业领域决策并**通过 Port** 落地 | 调其它 L2 模块；持有 `AIController`；直接扣资源/直接改角色 |
+| L3 决策层 | 产出 `Intent`（想做什么、优先级、前提） | 直接派兵、直接建建筑、直接改阶段以外的状态 |
+| L4 编排层 | 排定顺序、组装依赖、异常隔离、对外接口 | 包含业务决策（不许出现"如果敌人多就派兵"这类分支） |
+
+### 3.2 端口（Port）——L2 唯一的写出口
+
+L2 模块不允许再出现 `ai.build_building(...)` 这种调用，统一改成端口：
+
+| 端口 | 方法 | 现在的对应物 |
+|---|---|---|
+| `EconomyPort` | `can_afford`、`spend`、`resources`、`limits` | `ai._get_resources` / `can_afford` / `_get_limits` |
+| `BuildPort` | `can_place`、`request_build`、`request_upgrade` | `ai._can_place_ai_building` / `build_building` / `upgrade_building` |
+| `RecruitPort` | `can_train`、`request_train` | `ai._can_train_unit_with_queue` / `produce_unit` |
+| `CommandPort` | `claim`、`release`、`order_attack`、`order_move`、`order_gather` | `ai._director_claim` / `_director_release` / 直接改 `current_target` |
+| `EventSink` | `emit(kind, payload)` | 现在散落的 `print` 与隐式副作用 |
+
+**端口是接口不是实现**：`AI.gd` 提供实现（它是唯一知道 BattleManager 细节的地方），L2 只认接口。这样 L2 模块可以脱离 `AI.gd` 单测。
+
+---
+
+## 4. 依赖矩阵（谁可以调谁）
+
+| 调用方 ↓ 被调 → | L0 | L1 | L2 | L3 | L4 |
+|---|---|---|---|---|---|
+| **L0** | ✅ 同层工具 | ❌ | ❌ | ❌ | ❌ |
+| **L1 快照/上下文** | ✅ | ❌ | ❌ | ❌ | ❌ |
+| **L2 专业模块** | ✅ | ✅ 只读 | ❌ **禁止** | ❌ | ❌ 只经 Port |
+| **L3 决策** | ✅ | ✅ 只读 | ❌ | ❌ | ❌ |
+| **L4 编排** | ✅ | ✅ | ✅ | ✅ | — |
+
+**四条硬规则**（可以用脚本自动检查，见 §8）：
+
+- **R1**：L2 文件里禁止出现 `ai.` 前缀调用（只能出现 `_ctx.`、`_cmd.`、`_eco.` 等端口对象）。
+- **R2**：L2 文件里禁止出现其它 L2 模块的类型（如 `AIDefense` 出现在 `AIWaterCrossing` 里）。
+- **R3**：L2 模块构造签名只允许 `(context, ports...)`，禁止 `(ai)`。
+- **R4**：任何模块禁止调用 `battle.`（战斗管理器）——它属于 L4 的实现细节，经 Port 暴露。
+
+---
+
+## 5. 一轮决策的时序（显式流水线）
+
+```text
+每帧（_process/physics）:
+  AIClock.advance(delta)                    ← L0，唯一时间来源
+
+决策轮（到点触发）:
+  ① AISituation.refresh()                   ← L1，一次扫描，产出只读快照
+  ② AIContext.rebuild(situation, ledger)    ← L1，只读门面绑定本轮的快照
+  ③ AIPhaseMachine.evaluate(ctx)            ← L3，决定阶段（PRODUCTION/DEVELOPMENT/ASSAULT）
+  ④ AIDirector.produce_intents(ctx)         ← L3，产出 Intent 列表（带优先级与前提）
+  ⑤ AITickPipeline.run()                    ← L4，按注册顺序执行 L2
+       5.1 AIDefense.tick(ctx, ports)        （消费 defend / reinforce 意图）
+       5.2 AIMilitary.tick(ctx, ports)       （消费 push / harass 意图）
+       5.3 AIWorkerDirector.tick(ctx, ports) （消费 gather / economy 意图）
+       5.4 AIWaterCrossing.tick(ctx, ports)  （消费 cross_water 意图）
+       5.5 AIWallPlanner / AILadderSiege     （消费 fortify / siege 意图）
+  ⑥ RoleLedger.sweep(now)                   ← L0，过期回收
+  ⑦ 自检（debug 构建才跑）                    ← 账本自审计、快照对账、意图-执行闭环检查
+```
+
+**阶段的显式依赖**（由 `AITickPipeline` 声明，而不是靠代码位置）：
+
+```text
+situation → context → phase → director → defense → military → workers → naval → siege → sweep → audit
+```
+
+规则：**同一阶段内模块按声明顺序执行；不同阶段只能读前一阶段之后写入的状态**。加新模块只需注册，不改 `AI.gd`。
+
+---
+
+## 6. 状态归属表（"一个状态只有一个写者"）
+
+| 状态 | 唯一写者 | 读者 | 落地方式 |
+|---|---|---|---|
+| 兵的角色/占用/租约 | `RoleLedger` | 所有 L2、L3 | `CommandPort.claim/release` |
+| 兵的当前命令（target/order/garrison） | `CommandPort` | L2、L1 快照 | 端口内部写，外部只读 `unit` 字段 |
+| 资源/人口 | `EconomyPort` | 所有层 | 只经端口扣减，禁止直接改 `battle.player_resources` |
+| 建筑落位/升级 | `BuildPort` | L2、L1 | 端口内部做校验，模块只表达"想建什么、在哪" |
+| 生产队列 | `RecruitPort` | L2 | 同上 |
+| 阶段（PRODUCTION/DEVELOPMENT/ASSAULT） | `AIPhaseMachine` | L2、L3 | 模块只读 `ctx.phase`，禁止自行切阶段 |
+| 意图（本轮想做什么） | `AIDirector` | L2 | 每轮重建，不跨轮缓存 |
+| 世界快照 | `AISituation` | 所有层 | 每轮重建，模块不得缓存跨轮引用 |
+| 外交（盟友/背叛） | `AIDiplomacy`（L3） | L2 | 独立模块，不进执行层 |
+
+---
+
+## 7. 关键机制：让"互相调用"在结构上不可能出错
+
+### 7.1 只读上下文（替代 `ai` 引用）
+
+```gdscript
+# AIContext：每轮重建，L2/L3 只读
+class AIContext:
+	var phase: int                  # 当前阶段
+	var my_team / my_peer
+	var resources / limits          # 只读副本（本帧快照）
+	var castle
+	var own_army: Array             # 只读数组（不要在模块里 sort/改）
+	var visible_enemies: Array
+	var counts: Dictionary          # land/field/workers/buildings…
+	var ledger_view: LedgerView     # 只读视图：holders(kind)、count(source, kind)
+```
+
+**为什么必须有副本**：现在模块直接拿 `ai.battle.entities` 遍历，中途其它模块 spawn/kill 实体会让遍历行为不确定（之前就出现过"单位已死但仍在列表里"的 `[LEDGER] STALE`）。快照把这一层隔离掉。
+
+### 7.2 意图（Intent）而不是直接调兵
+
+```gdscript
+class Intent:
+	var kind: String      # "defend" / "push" / "gather" / "fortify" / "cross_water" / "siege"
+	var priority: int
+	var payload: Dictionary   # 目标、数量、区域
+	var preconditions: Array  # 例如 ["has_reserve:300"]
+```
+
+- **L3 只产 Intent**，不执行；**L2 只消费 Intent**，不自己发明全局目标。
+- 一个 Intent 被谁消费、是否被满足，记进 `AIEvents`，调试面板一眼能看出"这轮想推进但没人接"。
+
+### 7.3 重入与异常隔离
+
+- 每个模块 `tick` 外包一层守卫：同一模块同一帧重复进入 → 记 `AIEvents` 并跳过（现在没有，`_defense.tick` 在 `_ready` 和决策轮各调一次就是隐患）。
+- 模块内抛错（`push_error`/脚本错误）→ 编排层捕获、记录、该模块本轮跳过，**不拖垮整局 AI**。
+- 所有模块 tick 必须在 `AITickPipeline` 内执行，禁止在 `_ready`/`_process` 里零散调用。
+
+### 7.4 一次扫描，多处复用
+
+`AISituation` 已经做到"每轮一次扫描"（成本 0.19~0.40ms，可见性 0.34~0.52ms）。新架构把它升格为**唯一的世界读取入口**：模块禁止自己遍历 `battle.entities`（R4 已禁 `battle.`）。这一条同时解决"同一轮里不同模块看到不同世界"的不一致。
+
+---
+
+## 8. 可自动检查的约束（不靠自觉）
+
+| 检查 | 实现 | 违反时 |
+|---|---|---|
+| R1：L2 不得 `ai.` 调用 | `tools/ai_arch_check.ps1` 扫 `scripts/ai/*.gd` 的 `\bai\.` | 构建失败（本地脚本） |
+| R2：L2 不得跨模块引用 | 同上，扫 L2 文件名互现 | 构建失败 |
+| R3：模块构造签名 | 正则校验 `func _init(` / `setup(` 参数 | 构建失败 |
+| R4：L2 不得碰 `battle.` | 同上 | 构建失败 |
+| 账本自审计 | 现有 `[LEDGER] ok/STALE` | STALE > 0 记告警 |
+| 快照对账 | 现有 `[SITUATION] MISMATCH` | MISMATCH > 0 记告警 |
+| 意图闭环 | `[DIRECTOR-V2] intents=N consumed=M`，N≠M 时要解释 | 每轮日志 |
+| 行为基线 | `tools/ai_selfplay_runner.gd` 的 front/idle/engage 表 | 回归 > 5pt 需说明 |
+
+---
+
+## 9. 迁移路径（每步可发布、可回滚）
+
+沿用 v2 已验证的"影子 → 切换 → 删除旧路径"三段式，**不一次性重写**：
+
+| 步 | 内容 | 风险 | 回滚方式 |
+|---|---|---|---|
+| **A1** | 新增 `AIContext`（只读门面），内部先直接转发到现有实现；模块继续用 `ai` | 极低 | 删文件即可 |
+| **A2** | `AIDefense` 改用 `_ctx` 读世界（写留 `ai`），一次一个模块 | 低 | 单模块回退 |
+| **A3** | 新增 `CommandPort/EconomyPort/BuildPort` 实现（包一层现有方法），模块写改端口 | 中 | 端口内部转发回旧方法 |
+| **A4** | `AIWorkerDirector`、`AIWaterCrossing` 改端口，并删掉它们对 `ai.allocate_workers` 等跨模块调用，改发 `EventSink` | 中 | 单模块回退 |
+| **A5** | `AIDirector` 从"影子"升级为"唯一意图来源"，L2 只消费意图；老的"模块自己判断要不要进攻"逐步下线 | 中高 | `USE_DIRECTOR_INTENTS` 开关 |
+| **A6** | `AITickPipeline` 接管顺序，`AI.gd` 只剩组装与对外接口 | 低 | 保留旧流水分支 |
+| **A7** | 打开 §8 的 R1~R4 检查，清理存量违规（预计 150+ 处 `ai.` 调用） | 低（纯重构） | 分批提交 |
+
+**每一步之后都跑 8 分钟 3v3 自对弈对照 front/idle**，劣化就回退——v2 的 P3.3 已经证明"看起来是纯重构"的改动也会真实改变行为。
+
+---
+
+## 10. 验收标准（做完是什么样）
+
+1. **依赖可枚举**：`scripts/ai/` 内任意文件，用一条 grep 就能列出它依赖谁；不存在双向引用。
+2. **模块可单测**：每个 L2 模块能只喂 `AIContext` + 假端口跑通一轮，不需要真 `BattleManager`。
+3. **改一处不炸别处**：修改 `AI.gd` 的私有实现不影响 L2（因为 L2 只见端口）。
+4. **顺序可断言**：`AITickPipeline` 能在运行时打印"本轮谁先谁后、各花多久"。
+5. **行为可对照**：任一次改动都能用自对弈出 front/idle/engage 对照表。
+6. **新模块 = 注册一行**：加一个专业模块不需要改 `AI.gd` 的 14 步流水。
+
+---
+
+## 11. 与现有代码的对应关系（哪些已经有了）
+
+| 设计元素 | 现状 | 差距 |
+|---|---|---|
+| 统一节拍 `AIClock` | ✅ 已落地（含帧级推进） | 无 |
+| 确定性随机 `AIRng`/`SimRandom` | ✅ AI 侧 12 处全走 SimRandom；联机 7 处已收口 | 联机双端待真机验证 |
+| 统一角色账本 `RoleLedger` | ✅ 唯一写者（`_roles` 已删） | "命令"这一层仍是多写者 |
+| 只读世界快照 `AISituation` | ✅ 每轮一次 + 对账 | 未升格为唯一读取入口 |
+| 意图层 `AIDirector` | ✅ 影子五类意图 + defend 接线（默认关） | 未成为唯一决策来源 |
+| 只读上下文 `AIContext` | ❌ 没有 | §9 A1 |
+| 端口 `Economy/Build/Recruit/Command` | ❌ 没有 | §9 A3 |
+| 流水线 `AITickPipeline` | ❌ 顺序写死在 `AI.gd` | §9 A6 |
+| 架构约束检查脚本 | ❌ 没有 | §9 A7 |
+| 行为基线自对弈 | ✅ `tools/ai_selfplay*` | 需固定"跑前清 Godot 进程" |
+
+---
+
+## 12. 一句话总结
+
+**现在的 AI 是"一个大控制器 + 五个能反过来指挥控制器的模块"；目标形态是"一个薄编排器 + 一个只读世界 + 一个意图层 + 一组只能通过端口动手的专业执行者"。** 数据流向是单向的：世界 → 意图 → 执行 → 账本，任何写操作都能溯源到唯一的端口调用点。
