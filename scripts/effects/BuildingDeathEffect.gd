@@ -34,6 +34,7 @@ static func play(host: Node3D, entity_id: int, body_radius: float, model_overrid
 	host.set_physics_process(false)
 
 	var tier := _get_tier(entity_id)
+	_play_collapse_sfx(host, tier)
 	var radius := maxf(0.35, body_radius)
 	var collapse_time := _get_collapse_time(tier)
 	var total_time := _get_total_time(tier)
@@ -82,6 +83,18 @@ static func _get_tier(entity_id: int) -> int:
 	if entity_id in [20, 53]:
 		return TIER_CASTLE
 	return TIER_BUILDING
+
+# 单机和联机主机走服务端特效，联机客户端走 ClientRenderer 的 dead_ids 特效；
+# 每边只播一次。无头服务器在上面已提前返回，不会播放。
+static func _play_collapse_sfx(host: Node3D, tier: int) -> void:
+	var pitch := 1.0
+	if tier == TIER_WALL:
+		pitch = 1.22
+	elif tier == TIER_CASTLE:
+		pitch = 0.84
+	var cam: Camera3D = host.get_viewport().get_camera_3d()
+	var cam_pos: Vector3 = cam.global_position if cam else host.global_position
+	AudioManager.play_sfx_3d("building_collapse", host.global_position, cam_pos, pitch)
 
 static func _get_collapse_time(tier: int) -> float:
 	if tier == TIER_WALL:
