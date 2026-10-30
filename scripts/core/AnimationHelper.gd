@@ -79,6 +79,15 @@ static func attack_speed_scale(ap: AnimationPlayer, anim_name: String, cooldown:
 	# 冷却极短时限制最大播放速度，避免动作糊成一片；冷却极长时保留慢动作。
 	return clampf(anim.length / maxf(cooldown, 0.1), 0.1, 5.0)
 
+# 真正出手的瞬间强制把攻击动作拨回第一帧，和武器补间同帧起手。
+# 只停止/重播状态而不改关键帧，保证剑、矛、弓和手部动作相位一致。
+static func restart_attack(ap: AnimationPlayer, anim_name: String, cooldown: float) -> void:
+	if ap == null or anim_name == "" or not ap.has_animation(anim_name):
+		return
+	ap.speed_scale = attack_speed_scale(ap, anim_name, cooldown)
+	ap.play(anim_name)
+	ap.seek(0.0, true)
+
 # 统一切换循环动作。walk 首次进入时随机相位，避免几十个单位同手同脚；
 # 已在播放同一个 walk 时不重新 seek，否则会不断把脚步卡回起点。
 static func play_looped(ap: AnimationPlayer, anim_name: String, randomize_walk: bool = true) -> void:

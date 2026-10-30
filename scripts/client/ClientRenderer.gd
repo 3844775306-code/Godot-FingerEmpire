@@ -1225,7 +1225,11 @@ func _update_entity_animation(node: Node3D, info: Dictionary):
 		elif weapon_seq != weapon_prev:
 			node.set_meta("_weapon_attack_seq", weapon_seq)
 			if int(info.get("health", 0)) > 0:
-				WeaponAttachment.play_attack(node, entity_id)
+				var weapon_speed := float(info.get("attack_speed", 1.0))
+				# 客户端没有 Army 的攻击循环，只能按攻击序号重播；这里把手部动作
+				# 和武器补间同时拨回第一帧，并让补间时长跟攻击动作一样长。
+				AnimationHelper.restart_attack(ap, AnimationHelper.attack_anim_for(entity_id), weapon_speed)
+				WeaponAttachment.play_attack(node, entity_id, weapon_speed)
 	if entity_id in [33]:
 		var support_model = node.get_meta("_model_instance", null)
 		if support_model is Node3D:

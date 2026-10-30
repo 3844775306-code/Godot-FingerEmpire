@@ -167,7 +167,7 @@ static func has_custom_attack(entity_id: int) -> bool:
 
 # 怪物/单位攻击时，除了骨骼攻击动作，再给武器本身叠一层动作：
 # 弓拉弦后回弹、剑补一记横斩、矛向前突刺、盾轻微前顶。
-static func play_attack(entity: Node3D, entity_id: int) -> void:
+static func play_attack(entity: Node3D, entity_id: int, swing_duration: float = 0.0) -> void:
 	if entity == null or not is_instance_valid(entity) or not has_custom_attack(entity_id):
 		return
 	if not entity.is_inside_tree():
@@ -176,15 +176,15 @@ static func play_attack(entity: Node3D, entity_id: int) -> void:
 	var weapon := _find_weapon(entity, weapon_bone)
 	if weapon != null:
 		if entity_id in BOW_IDS:
-			_play_bow_attack(weapon)
+			_play_bow_attack(weapon, swing_duration)
 		elif entity_id in SPEAR_IDS:
-			_play_spear_attack(weapon)
+			_play_spear_attack(weapon, swing_duration)
 		else:
-			_play_sword_attack(weapon)
+			_play_sword_attack(weapon, swing_duration)
 	var shield_bone := "arm-right" if entity_id in BOW_IDS else "arm-left"
 	var shield := _find_weapon(entity, shield_bone)
 	if shield != null:
-		_play_shield_bump(shield)
+		_play_shield_bump(shield, swing_duration)
 
 static func _weapon_base(weapon: Node3D) -> Array:
 	if not weapon.has_meta("_wa_base"):
@@ -205,65 +205,76 @@ static func _begin_weapon_anim(weapon: Node3D) -> Array:
 	weapon.rotation = base[1]
 	return base
 
-static func _play_bow_attack(bow: Node3D) -> void:
+# 武器补间默认按 0.3~0.4 秒设计；实际攻击动作被拉伸到整个攻击冷却，
+# 武器也必须按同一倍率放慢，否则手还在抬剑、剑已经劈完了。
+static func _period_scale(swing_duration: float, base_duration: float) -> float:
+	if swing_duration <= 0.01:
+		return 1.0
+	return clampf(swing_duration / base_duration, 0.35, 6.0)
+
+static func _play_bow_attack(bow: Node3D, swing_duration: float = 0.0) -> void:
 	var base := _begin_weapon_anim(bow)
 	var base_pos: Vector3 = base[0]
 	var base_rot: Vector3 = base[1]
+	var k := _period_scale(swing_duration, 0.32)
 	var arrow = bow.get_meta("_wa_nocked_arrow", null)
 	# 箭离弦：先隐藏搭在弓上的那支，动作结束再补一支。
 	if arrow is Node3D and is_instance_valid(arrow):
 		arrow.visible = false
 	var tw := bow.create_tween()
 	bow.set_meta("_wa_tween", tw)
-	tw.tween_property(bow, "position", base_pos + Vector3(0.0, 0.0, 0.07), 0.07)
-	tw.parallel().tween_property(bow, "rotation", base_rot + Vector3(0.10, 0.0, 0.0), 0.07)
-	tw.tween_property(bow, "position", base_pos - Vector3(0.0, 0.0, 0.05), 0.05)
-	tw.parallel().tween_property(bow, "rotation", base_rot - Vector3(0.05, 0.0, 0.0), 0.05)
-	tw.tween_property(bow, "position", base_pos, 0.20)
-	tw.parallel().tween_property(bow, "rotation", base_rot, 0.20)
+	tw.tween_property(bow, "position", base_pos + Vector3(0.0, 0.0, 0.07), 0.07 * k)
+	tw.parallel().tween_property(bow, "rotation", base_rot + Vector3(0.10, 0.0, 0.0), 0.07 * k)
+	tw.tween_property(bow, "position", base_pos - Vector3(0.0, 0.0, 0.05), 0.05 * k)
+	tw.parallel().tween_property(bow, "rotation", base_rot - Vector3(0.05, 0.0, 0.0), 0.05 * k)
+	tw.tween_property(bow, "position", base_pos, 0.20 * k)
+	tw.parallel().tween_property(bow, "rotation", base_rot, 0.20 * k)
 	tw.tween_callback(func() -> void:
 		if is_instance_valid(bow) and arrow is Node3D and is_instance_valid(arrow):
 			arrow.visible = true)
 
-static func _play_sword_attack(sword: Node3D) -> void:
+static func _play_sword_attack(sword: Node3D, swing_duration: float = 0.0) -> void:
 	var base := _begin_weapon_anim(sword)
 	var base_pos: Vector3 = base[0]
 	var base_rot: Vector3 = base[1]
+	var k := _period_scale(swing_duration, 0.35)
 	var tw := sword.create_tween()
 	sword.set_meta("_wa_tween", tw)
 	# 蓄力：剑向右后方抬起；随后沿正前方斜劈下去。
 	# 只绕 Z 轴左右摆会变成横向平移，必须叠加 X 轴的前倾/下劈和向前的位移。
 	# 近战停止距离约等于双方半径 + 攻击距离，剑还要再向前探一段才够得着敌方，
 	# 所以劈砍段把剑压到接近水平并向前送，让剑尖真正扫到目标身上。
-	tw.tween_property(sword, "rotation", base_rot + Vector3(-0.24, 0.0, -0.58), 0.07)
-	tw.parallel().tween_property(sword, "position", base_pos + Vector3(0.0, 0.03, -0.05), 0.07)
-	tw.tween_property(sword, "rotation", base_rot + Vector3(1.35, 0.0, 0.18), 0.10)
-	tw.parallel().tween_property(sword, "position", base_pos + Vector3(0.02, -0.02, 0.60), 0.10)
-	tw.tween_property(sword, "rotation", base_rot, 0.18)
-	tw.parallel().tween_property(sword, "position", base_pos, 0.18)
+	tw.tween_property(sword, "rotation", base_rot + Vector3(-0.24, 0.0, -0.58), 0.07 * k)
+	tw.parallel().tween_property(sword, "position", base_pos + Vector3(0.0, 0.03, -0.05), 0.07 * k)
+	tw.tween_property(sword, "rotation", base_rot + Vector3(1.35, 0.0, 0.18), 0.10 * k)
+	tw.parallel().tween_property(sword, "position", base_pos + Vector3(0.02, -0.02, 0.60), 0.10 * k)
+	tw.tween_property(sword, "rotation", base_rot, 0.18 * k)
+	tw.parallel().tween_property(sword, "position", base_pos, 0.18 * k)
 
-static func _play_spear_attack(spear: Node3D) -> void:
+static func _play_spear_attack(spear: Node3D, swing_duration: float = 0.0) -> void:
 	var base := _begin_weapon_anim(spear)
 	var base_pos: Vector3 = base[0]
 	var base_rot: Vector3 = base[1]
+	var k := _period_scale(swing_duration, 0.42)
 	var tw := spear.create_tween()
 	spear.set_meta("_wa_tween", tw)
-	tw.tween_property(spear, "position", base_pos + Vector3(0.0, 0.0, 0.10), 0.08)
-	tw.parallel().tween_property(spear, "rotation", base_rot + Vector3(0.12, 0.0, 0.0), 0.08)
-	tw.tween_property(spear, "position", base_pos - Vector3(0.0, 0.0, 0.20), 0.10)
-	tw.parallel().tween_property(spear, "rotation", base_rot - Vector3(0.08, 0.0, 0.0), 0.10)
-	tw.tween_property(spear, "position", base_pos, 0.24)
-	tw.parallel().tween_property(spear, "rotation", base_rot, 0.24)
+	tw.tween_property(spear, "position", base_pos + Vector3(0.0, 0.0, 0.10), 0.08 * k)
+	tw.parallel().tween_property(spear, "rotation", base_rot + Vector3(0.12, 0.0, 0.0), 0.08 * k)
+	tw.tween_property(spear, "position", base_pos - Vector3(0.0, 0.0, 0.20), 0.10 * k)
+	tw.parallel().tween_property(spear, "rotation", base_rot - Vector3(0.08, 0.0, 0.0), 0.10 * k)
+	tw.tween_property(spear, "position", base_pos, 0.24 * k)
+	tw.parallel().tween_property(spear, "rotation", base_rot, 0.24 * k)
 
-static func _play_shield_bump(shield: Node3D) -> void:
+static func _play_shield_bump(shield: Node3D, swing_duration: float = 0.0) -> void:
 	var base := _begin_weapon_anim(shield)
 	var base_pos: Vector3 = base[0]
 	var base_rot: Vector3 = base[1]
+	var k := _period_scale(swing_duration, 0.30)
 	var tw := shield.create_tween()
 	shield.set_meta("_wa_tween", tw)
-	tw.tween_property(shield, "position", base_pos - Vector3(0.0, 0.0, 0.09), 0.08)
-	tw.tween_property(shield, "position", base_pos, 0.22)
-	tw.parallel().tween_property(shield, "rotation", base_rot, 0.22)
+	tw.tween_property(shield, "position", base_pos - Vector3(0.0, 0.0, 0.09), 0.08 * k)
+	tw.tween_property(shield, "position", base_pos, 0.22 * k)
+	tw.parallel().tween_property(shield, "rotation", base_rot, 0.22 * k)
 
 static func _find_skeleton(node: Node) -> Skeleton3D:
 	if node is Skeleton3D:

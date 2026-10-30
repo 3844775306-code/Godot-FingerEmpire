@@ -3090,6 +3090,11 @@ func _on_entity_attack_started(entity: Army) -> void:
 		return
 	if SiegeAttackAnim.is_siege(entity.entity_id):
 		_play_entity_attack_anim(entity, model as Node3D)
+	elif WeaponAttachment.has_custom_attack(entity.entity_id):
+		# 剑/矛/弓的程序化补间和手部攻击动作必须在同一次出手时从头开始，
+		# 否则两者各按自己的循环相位播放，会看到剑劈完了手还在抬。
+		var ap := AnimationHelper.find_player(model)
+		AnimationHelper.restart_attack(ap, AnimationHelper.attack_anim_for(entity.entity_id), entity.attack_speed)
 
 func _update_entity_animation(entity: GameEntity):
 	if not entity.has_meta("_model_instance"): return

@@ -3834,7 +3834,7 @@ func _play_attack_feedback() -> void:
 			or WeaponAttachment.has_custom_attack(entity_id):
 		attack_seq += 1
 	# 单机/服务端本地的武器动作；联机客户端在快照 attack_seq 变化时补播。
-	WeaponAttachment.play_attack(self, entity_id)
+	WeaponAttachment.play_attack(self, entity_id, attack_speed)
 	var bm = _get_bm()
 	if bm:
 		# 攻城器械在这里直接播放一次分层动画；联机客户端没有 Army，
