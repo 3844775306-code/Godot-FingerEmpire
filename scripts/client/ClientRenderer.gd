@@ -1105,7 +1105,7 @@ func _update_cart_link(node: Node3D, info: Dictionary) -> void:
 		node.set_meta("_cart_owner_id", owner_id)
 		if owner_id > 0:
 			var owner_node = entity_nodes.get(owner_id)
-			if owner_node is Node3D and is_instance_valid(owner_node):
+			if is_instance_valid(owner_node) and owner_node is Node3D:
 				CartLinkVisual.ensure(node, owner_node, eid)
 			elif old_owner_id > 0:
 				CartLinkVisual.remove(node)
@@ -1117,12 +1117,12 @@ func _update_cart_link(node: Node3D, info: Dictionary) -> void:
 		node.set_meta("_cart_id", cart_id)
 		if cart_id > 0:
 			var cart_node = entity_nodes.get(cart_id)
-			if cart_node is Node3D and is_instance_valid(cart_node):
+			if is_instance_valid(cart_node) and cart_node is Node3D:
 				var cart_info = cart_node.get_meta("snapshot_info", {})
 				CartLinkVisual.ensure(cart_node, node, int(cart_info.get("entity_id", 5)))
 		elif old_cart_id > 0:
 			var old_cart = entity_nodes.get(old_cart_id)
-			if old_cart is Node3D and is_instance_valid(old_cart):
+			if is_instance_valid(old_cart) and old_cart is Node3D:
 				CartLinkVisual.remove(old_cart)
 
 # 联机车的货物由服务端快照携带；没有配对的农民/商人时自然隐藏。

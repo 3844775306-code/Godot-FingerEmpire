@@ -103,7 +103,7 @@ static func node_head_height(node: Node3D) -> float:
 	if node == null or not is_instance_valid(node):
 		return 0.0
 	var model = node.get_meta("_model_instance", null)
-	if model is Node3D and is_instance_valid(model):
+	if is_instance_valid(model) and model is Node3D:
 		var points: Array = []
 		_collect_model_points(model, model.transform, points)
 		if not points.is_empty():

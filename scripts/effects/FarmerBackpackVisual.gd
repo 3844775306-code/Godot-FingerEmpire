@@ -117,7 +117,7 @@ static func _material(color: Color, roughness: float, metallic: float = 0.0) -> 
 static func _find_model(entity: Node3D) -> Node3D:
 	if entity.has_meta("_model_instance"):
 		var cached = entity.get_meta("_model_instance")
-		if cached is Node3D and is_instance_valid(cached):
+		if is_instance_valid(cached) and cached is Node3D:
 			return cached as Node3D
 	for child in entity.get_children():
 		if child is Node3D:

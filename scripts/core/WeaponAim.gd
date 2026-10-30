@@ -18,7 +18,9 @@ func _process(_delta: float) -> void:
 	# 没有目标才回到单位正前方。
 	var yaw: float = owner_entity.global_rotation.y + PI
 	var target = owner_entity.get("current_target")
-	if target is Node3D and is_instance_valid(target):
+	# 必须先判存活再判类型：目标在上一步里被击杀 queue_free 后，
+	# `target is Node3D` 会直接报 "Left operand of 'is' is a previously freed instance"。
+	if is_instance_valid(target) and target is Node3D:
 		var to_target: Vector3 = target.global_position - owner_entity.global_position
 		to_target.y = 0.0
 		if to_target.length_squared() > 0.0001:

@@ -219,7 +219,7 @@ static func _play_bow_attack(bow: Node3D, swing_duration: float = 0.0) -> void:
 	var k := _period_scale(swing_duration, 0.32)
 	var arrow = bow.get_meta("_wa_nocked_arrow", null)
 	# 箭离弦：先隐藏搭在弓上的那支，动作结束再补一支。
-	if arrow is Node3D and is_instance_valid(arrow):
+	if is_instance_valid(arrow) and arrow is Node3D:
 		arrow.visible = false
 	var tw := bow.create_tween()
 	bow.set_meta("_wa_tween", tw)
@@ -230,7 +230,7 @@ static func _play_bow_attack(bow: Node3D, swing_duration: float = 0.0) -> void:
 	tw.tween_property(bow, "position", base_pos, 0.20 * k)
 	tw.parallel().tween_property(bow, "rotation", base_rot, 0.20 * k)
 	tw.tween_callback(func() -> void:
-		if is_instance_valid(bow) and arrow is Node3D and is_instance_valid(arrow):
+		if is_instance_valid(bow) and is_instance_valid(arrow) and arrow is Node3D:
 			arrow.visible = true)
 
 static func _play_sword_attack(sword: Node3D, swing_duration: float = 0.0) -> void:
