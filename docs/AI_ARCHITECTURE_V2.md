@@ -305,3 +305,15 @@ AIClock.fast (4Hz)
 1. `AIClock` 替换其余散落计时器（1s/2s/3s/5s/10s…），并给每个 key 配相位偏移削峰；
 2. `AIRng` 替换 AI 决策中的全部全局随机点（含 `AILadderSiege` / `AIWaterCrossing`）；
 3. `OnlineBattleManager` 建局 RNG（当前 7 处 `randi/randf_range`）迁到 `SimRandom`/`AIRng`，并保证服务端种子随地图数据下发——此项需单独验证联机一致性，暂未动。
+
+### 11.3 P1 收尾完成（2026-10-30 20:00）
+
+| 项 | 结果 |
+|---|---|
+| `AI.gd` 内裸计时器 | **0 个**（原 4 个：retask / age_build / wall_deploy / garrison 全部迁到 `AIClock`） |
+| 行为等价性 | 相位按旧初始值设定（`age_build` phase=1 表示首轮不触发；其余 phase=0 首轮即触发）；`timer += interval` 只修正长期累积漂移，不改变节奏 |
+| AI 随机点现状 | **AI 目录内已 100% 使用 `SimRandom`**（复审确认无裸 `randi/randf_range`），故 `AIRng` 并非紧急替换项，定位改为"未来 per-AI 独立流 / 联机回放"的预留能力 |
+| 其余模块计时器 | `AIDefense` 11 处、`AIWorkerDirector` 2 处、`AIWaterCrossing` 1 处——属于各自模块 tick 内部节流，留到 P3 统一 Director 时一并收口 |
+| 冒烟验证 | 无头自对弈 3 分钟：5 AI 正常、无解析/运行错误、front≈58~73%（噪声范围内） |
+
+**P1 结论**：基础设施四件套可用，`AI.gd` 的节流与参数入口已统一；下一步进入 **P2 世界模型（Situation 快照 + 空间索引）**。

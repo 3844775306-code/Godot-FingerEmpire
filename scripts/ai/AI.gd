@@ -208,9 +208,7 @@ const WALL_GUARD_SMALL_META: String = "ai_wall_guard_small"
 const WALL_GUARD_SLOT_META: String = "ai_wall_guard_slot"
 const WALL_GUARD_POS_META: String = "ai_wall_guard_pos"
 const WALL_GUARD_SMALL_BODY: float = 0.5
-var _wall_deploy_timer: float = 0.0
-var _retask_timer: float = 0.0
-# P1：统一节拍器（见 scripts/ai/core/AIClock.gd）。目前接管 retask，其余计时器后续逐步迁入。
+# P1：统一节拍器（见 scripts/ai/core/AIClock.gd），目前已接管 retask / age_build / wall_deploy / garrison。
 var _ai_clock = null
 # 防御建筑驻军：AI 会把部分闲置士兵/农民送进箭塔、炮塔和城堡，
 # 让它们吃到多子弹齐射加成，而不是只在塔外站着。
@@ -220,7 +218,6 @@ const GARRISON_CASTLE_WANT: int = 2
 const GARRISON_TOWER_WANT_DEFEND: int = 3
 const GARRISON_CASTLE_WANT_DEFEND: int = 4
 const GARRISON_MAX_DISTANCE: float = 42.0
-var _garrison_timer: float = 0.0
 var defense_wall_axis: Vector3 = Vector3.RIGHT
 const TOWER_SPACING: float = 3.0
 const DEFENSE_FRONT_DIST: float = 8.0
@@ -285,7 +282,6 @@ var _repair_scan_timer: float = 0.0
 # 像黑暗时代必需的瞭望塔(41)不在 wanted_buildings 里，AI 会一直差建筑。
 # 每 30 秒同时检查一次：缺建筑就补建筑；条件齐备就直接开始升时代。
 const AGE_BUILDING_CHECK_INTERVAL: float = 30.0
-var _age_building_check_timer: float = AGE_BUILDING_CHECK_INTERVAL
 
 # ═══ Resource wrappers ═══
 func _get_resources() -> Dictionary:
@@ -1880,9 +1876,12 @@ func _ready():
 	_ladder_siege = AILadderSiegeScript.new(self)
 	_worker_director = AIWorkerDirectorScript.new()
 	_worker_director.setup(self)
-	# P1：统一节拍器；目前接管 retask，其余计时器后续逐步迁入。
+	# P1：统一节拍器；目前接管 retask / age_build / wall_deploy / garrison。
 	_ai_clock = AIClockScript.new()
 	_ai_clock.add("retask", RETASK_IDLE_INTERVAL)
+	_ai_clock.add("age_build", AGE_BUILDING_CHECK_INTERVAL, 1.0)
+	_ai_clock.add("wall_deploy", WALL_DEPLOY_INTERVAL)
+	_ai_clock.add("garrison", GARRISON_CHECK_INTERVAL)
 
 # 后期实体数越多，AI 的周期性全量扫描越贵；返回统一的降频倍率。
 func _late_game_scale() -> float:
@@ -2368,9 +2367,8 @@ func _run_decide_step(step: int) -> void:
 		6:
 			# 升时代要求每 30 秒兜底检查一次：普通建造目标不一定包含瞭望塔等条件建筑；
 			# 同一轮里再检查一次能否直接进入新时代（不再按固定分钟数等待）。
-			_age_building_check_timer -= _last_delta
-			if _age_building_check_timer <= 0.0:
-				_age_building_check_timer = AGE_BUILDING_CHECK_INTERVAL
+			# 计时已迁到 AIClock（P1），初始相位=1 表示首轮不触发，与旧初始值一致。
+			if _ai_clock != null and _ai_clock.due("age_build"):
 				_ensure_age_upgrade_buildings()
 				_try_start_age_upgrade()
 		7:
@@ -2386,15 +2384,12 @@ func _run_decide_step(step: int) -> void:
 			# AI 决策帧仍是空闲状态，若先执行 _state_* 里的 _rally_land_army_to_castle
 			# 或 attack_move，它们会被立刻拉去集结点/前线，之后一直是 MOVING/攻击移动，
 			# _is_ranged_wall_candidate 永远不满足，城墙也就永远等不到远程守军。
-			_wall_deploy_timer -= _last_delta
-			if _wall_deploy_timer <= 0.0:
-				_wall_deploy_timer = WALL_DEPLOY_INTERVAL
+			# 计时已迁到 AIClock（P1）；相位 0 表示首轮即触发，与旧初始值一致。
+			if _ai_clock != null and _ai_clock.due("wall_deploy"):
 				_deploy_ranged_units_to_walls()
 			# 守墙之后再安排塔内驻军：墙顶单位、赶路单位都已被占用，
 			# 不会把刚派去城墙的远程兵又抽回箭塔。
-			_garrison_timer -= _last_delta
-			if _garrison_timer <= 0.0:
-				_garrison_timer = GARRISON_CHECK_INTERVAL
+			if _ai_clock != null and _ai_clock.due("garrison"):
 				_ai_garrison_soldiers()
 		10:
 			match phase:
