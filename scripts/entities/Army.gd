@@ -49,13 +49,6 @@ var _cached_speed_mod: float = 1.0
 const WATER_DAMAGE_INTERVAL: float = 1.0
 const WATER_DAMAGE_RATIO: float = 0.2
 var _water_damage_timer: float = WATER_DAMAGE_INTERVAL
-# 半山腰自救：单位被生产/推挤/登陆等异常放到山坡上后，长时间无法移动时
-# 自动落到最近的低地，避免永久卡在山体里。
-const MOUNTAIN_STUCK_TIMEOUT: float = 2.5
-const MOUNTAIN_CHECK_INTERVAL: float = 0.5
-var _mountain_check_timer: float = 0.0
-var _mountain_stuck_time: float = 0.0
-var _mountain_last_pos: Vector3 = Vector3.ZERO
 # ²É¼¯½»¸¶
 var cargo: Dictionary = {"gold": 0, "wood": 0, "stone": 0, "food": 0, "oil": 0}
 var max_cargo: int = 50
@@ -1566,83 +1559,6 @@ func _should_sink_death() -> bool:
 		return true
 	return entity_id in [9, 13, 14, 39, 40]
 
-# 检测是否停在半山腰：山地(terrain=1)且不是山顶台地(overlay=5)。
-# 缓坡(overlay=4)正常行走/移动时不触发；只有长时间没有速度才判定为卡住。
-func _tick_mountain_stuck(delta: float) -> void:
-	if water_capable:
-		_mountain_stuck_time = 0.0
-		return
-	_mountain_check_timer -= delta
-	if _mountain_check_timer > 0.0:
-		return
-	_mountain_check_timer = MOUNTAIN_CHECK_INTERVAL
-	if _is_unit_on_wall():
-		_mountain_stuck_time = 0.0
-		return
-	var bm = _get_bm()
-	if bm == null:
-		return
-	var g: Vector2i = bm.world_to_grid(global_position)
-	if bm.get_terrain_at_grid(g.x, g.y) != 1 or bm.get_overlay_at_grid(g.x, g.y) == 5:
-		_mountain_stuck_time = 0.0
-		return
-	# 用实际位移判断是否卡住：正常沿缓坡走动时每 0.5s 会移动明显距离；
-	# 原地抖动/被卡住时即使速度不为 0 也会累计超时。
-	var moved: float = global_position.distance_to(_mountain_last_pos)
-	_mountain_last_pos = global_position
-	if moved > 0.1:
-		_mountain_stuck_time = 0.0
-		return
-	_mountain_stuck_time += MOUNTAIN_CHECK_INTERVAL
-	if _mountain_stuck_time < MOUNTAIN_STUCK_TIMEOUT:
-		return
-	_mountain_stuck_time = 0.0
-	var fall_pos: Vector3 = _find_mountain_fall_position(bm, g)
-	if fall_pos == Vector3.ZERO:
-		return
-	global_position = fall_pos
-	velocity = Vector3.ZERO
-	if _movement:
-		_movement.stop()
-	current_target = null
-	is_attack_moving = false
-	attack_move_target = Vector3.ZERO
-	combat_state = CombatState.IDLE
-	combat_destination = Vector3.ZERO
-	combat_resume_destination = Vector3.ZERO
-	combat_resume_advance = false
-	_set_order(UnitState.IDLE)
-	_refresh_animation_now()
-
-# 从当前山腰格向外找最近的低地：只考虑平地(terrain=0)且高度明显更低，
-# 跳过建筑/单位占用的位置。山脚常常紧贴山壁，所以这里不再要求四邻都是平地。
-func _find_mountain_fall_position(bm: RTSBattleManager, current_tile: Vector2i) -> Vector3:
-	var current_h: float = bm.get_height_at_grid(current_tile.x, current_tile.y)
-	var half: float = RTSConfig.MAP_SIZE / 2.0
-	var max_r: int = mini(40, RTSConfig.MAP_SIZE - 1)
-	for r in range(1, max_r + 1):
-		var ring: Array[Vector2i] = []
-		for dx in range(-r, r + 1):
-			ring.append(Vector2i(current_tile.x + dx, current_tile.y - r))
-			ring.append(Vector2i(current_tile.x + dx, current_tile.y + r))
-		for dy in range(-r + 1, r):
-			ring.append(Vector2i(current_tile.x - r, current_tile.y + dy))
-			ring.append(Vector2i(current_tile.x + r, current_tile.y + dy))
-		for tile in ring:
-			if tile.x < 0 or tile.y < 0 or tile.x >= RTSConfig.MAP_SIZE or tile.y >= RTSConfig.MAP_SIZE:
-				continue
-			# 只落到普通平地；水系和山体/台地不作为“掉下来”的落点
-			if bm.get_terrain_at_grid(tile.x, tile.y) != 0:
-				continue
-			var h: float = bm.get_height_at_grid(tile.x, tile.y)
-			if h >= current_h - 0.15:
-				continue
-			var world_pos := Vector3(tile.x - half, h, tile.y - half)
-			if _spawn_pos_blocked(world_pos):
-				continue
-			return world_pos
-	return Vector3.ZERO
-
 func _physics_process(delta):
 	if health <= 0:
 		die_official_cleanup()
@@ -1723,10 +1639,6 @@ func _physics_process(delta):
 	if entity_id in [43, 44, 45, 51]:
 		_process_merchant(delta)
 		return
-
-	# 长时间停在半山腰/山壁上的陆军自动落回最近的低地
-	if _detail_tick:
-		_tick_mountain_stuck(delta * 2.0)
 
 	# ËÙ¶ÈÓëµØÐÎ
 	
