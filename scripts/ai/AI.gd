@@ -6306,7 +6306,7 @@ const USE_TRUE_ROUND_ELAPSED: bool = true
 # 先保持旧路径；verify 通过后再置 true。
 const USE_SITUATION_COUNTS: bool = false
 # P3.1 第二步开关：true=读取点走统一账本，false=读旧 _roles（默认 false，验证后再打开）。
-const USE_LEDGER_READS: bool = false
+const USE_LEDGER_READS: bool = true
 
 func _situation_shadow_tick() -> void:
 	if _situation == null or battle == null:
