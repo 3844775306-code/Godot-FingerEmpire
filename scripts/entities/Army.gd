@@ -209,6 +209,8 @@ var _legacy_action_accum: float = 0.0
 # 采集接近：不要每次行为更新都重发 A* 请求。资源是静止的，只要当前路径
 # 仍指向同一个站位点就继续走；路径走完/目标明显偏移时才重算。
 var _gather_repath_timer: float = 0.0
+# 采集站位点换角度重试计数（资源被围住时逐个角度试）
+var _gather_alt_tries: int = 0
 
 # 目标重选：锁定目标不在攻击范围时，每秒找一次更近的敌人
 const TARGET_RETARGET_INTERVAL: float = 1.0
@@ -3307,6 +3309,23 @@ func _process_action(delta, bm):
 				if need_gather_path and _gather_repath_timer <= 0.0:
 					_gather_repath_timer = 0.6
 					_movement.set_move_target(gather_goal)
+					# 站位点不可达（资源被别的资源/建筑/水围住）：绕资源换角度再试，
+					# 试完一圈还不行才判该资源不可达并换下一个。
+					if _movement.move_path_failed and _movement.astar_path.is_empty():
+						_gather_alt_tries += 1
+						if _gather_alt_tries <= 8:
+							var alt: Vector3 = _gather_standoff_alt(current_target, _gather_alt_tries)
+							if alt != Vector3.ZERO:
+								_gather_repath_timer = 0.25
+								_movement.set_move_target(alt)
+								if not (_movement.move_path_failed and _movement.astar_path.is_empty()):
+									return
+						_mark_resource_unreachable(current_target)
+						_gather_alt_tries = 0
+						current_target = null
+						_set_order(UnitState.IDLE)
+						_movement.stop()
+						return
 		elif _order_is(UnitState.GATHERING):
 			# 采集状态却锁着非资源目标（命令误给/资源点被替换）：清掉回空闲，避免永久假采集
 			current_target = null
@@ -4089,6 +4108,25 @@ func _spawn_effect_marker(target, color: Color):
 # 采集站位点：资源碰撞边缘外 GATHER_STANDOFF_GAP 米，方向取「资源 → 农民」。
 # 寻路终点落在资源旁边的可走格上（资源中心格是 A* 阻挡格），
 # 这样单位才会真的走到 0.5 米的采集停靠间距，而不是停在两米开外。
+# 采集站位点的备选角度：资源被别的资源/建筑/水围住时，原来的站位点可能根本没路，
+# 农民会一直"有采集命令但不动"（实测这类占静止样本 34/103，且 A* 队列为 0、寻路标记为失败）。
+func _gather_standoff_alt(res, attempt: int) -> Vector3:
+	if res == null or not is_instance_valid(res):
+		return Vector3.ZERO
+	var base_dir := Vector3(global_position.x - res.global_position.x, 0.0,
+			global_position.z - res.global_position.z)
+	if base_dir.length() < 0.001:
+		base_dir = Vector3(1.0, 0.0, 0.0)
+	base_dir = base_dir.normalized()
+	var offsets: Array = [0.0, 0.8, -0.8, 1.6, -1.6, 2.4, -2.4, PI]
+	var ang: float = float(offsets[attempt % offsets.size()])
+	var dir: Vector3 = base_dir.rotated(Vector3.UP, ang)
+	var target_radius: float = 0.0
+	if res is GameEntity:
+		target_radius = float(res.body_radius)
+	var dist: float = maxf(float(body_radius) + target_radius + GATHER_STANDOFF_GAP - 0.05, 0.1)
+	return Vector3(res.global_position.x, global_position.y, res.global_position.z) + dir * dist
+
 func _gather_standoff_position(res) -> Vector3:
 	var target_radius: float = 0.0
 	if res is GameEntity:
@@ -4673,6 +4711,7 @@ func gather_at(source):
 		return
 	# 玩家手动点采集时解除“不可达”标记，让命令立即生效；失败次数保留用于退避
 	_clear_resource_mark(source)
+	_gather_alt_tries = 0
 	_queue_command({"type": "gather", "target": source})
 
 func attack_move_to(pos: Vector3):
