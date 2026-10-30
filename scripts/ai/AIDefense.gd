@@ -3196,7 +3196,20 @@ func _manage_home_guard(castle, delta: float) -> void:
 					_release_guard(active_uid)
 		desired = maxi(0, desired - active_near)
 
+	# 第 5 阶段：优先按守军分配器的建议顺序选兵（先保留现有守军，再按威胁扇区
+	# 选候选）；分配器不可用时退回原来的“离主城最近”排序。后面的任务/兵种/
+	# 城墙保留过滤仍然保留，所以不会抢走正在交战的部队。
+	var preferred: Array = []
+	if _force_allocator != null:
+		preferred = _force_allocator.get_preferred_ids()
+	var preferred_rank: Dictionary = {}
+	for i in range(preferred.size()):
+		preferred_rank[int(preferred[i])] = i
 	own.sort_custom(func(a, b):
+		var ar: int = int(preferred_rank.get(a.get_instance_id(), 999999))
+		var br: int = int(preferred_rank.get(b.get_instance_id(), 999999))
+		if ar != br:
+			return ar < br
 		return a.global_position.distance_squared_to(castle.global_position) < b.global_position.distance_squared_to(castle.global_position)
 	)
 	var rally: Vector3 = _guard_rally(castle)
@@ -3520,6 +3533,9 @@ func _defend_resources(castle) -> void:
 	# 1) 农民避险：只有敌人贴到 8m 才短暂躲避，往远离敌人的方向挪 6m，
 	#    不再把所有农民都召回主城；防守状态下资源采集也尽量保持。
 	for w in workers:
+		# 第 4 阶段起农民逃跑由 WorkerDirector 接管，避免两套逻辑每帧互相推目标。
+		if ai._worker_director != null:
+			continue
 		var danger = _nearest_enemy_combat(w.global_position, WORKER_FLEE_RADIUS)
 		if danger:
 			# 已经在躲避中就不要每 1.5 秒重复改目标，否则农民会被一路推着跑

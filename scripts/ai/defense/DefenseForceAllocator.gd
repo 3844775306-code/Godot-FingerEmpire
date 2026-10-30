@@ -183,6 +183,15 @@ func clear() -> void:
 	metrics = {}
 	updated_at = 0.0
 
+# 给 AIDefense 实际选兵用的优先顺序：先 KEEP 现有守军，再 PROPOSE 新候选。
+# 只作为排序权重，最终是否选中仍由 AIDefense 现有的任务/兵种/城墙保留规则决定。
+func get_preferred_ids() -> Array:
+	var out: Array = []
+	for item in claims:
+		if int(item["claim"]) != Claim.RELEASE:
+			out.append(int(item["unit_id"]))
+	return out
+
 func to_dictionary() -> Dictionary:
 	return {
 		"claims": claims.duplicate(true),
