@@ -15,6 +15,7 @@ const AIConfigScript = preload("res://scripts/ai/core/AIConfig.gd")
 const AIClockScript = preload("res://scripts/ai/core/AIClock.gd")
 const AITraceScript = preload("res://scripts/ai/core/AITrace.gd")
 const AIContextScript = preload("res://scripts/ai/world/AIContext.gd")
+const AIPortsScript = preload("res://scripts/ai/ports/AIPorts.gd")
 const AISituationScript = preload("res://scripts/ai/world/AISituation.gd")
 const RoleLedgerScript = preload("res://scripts/ai/core/RoleLedger.gd")
 const AIDirectorScript = preload("res://scripts/ai/AIDirector.gd")
@@ -217,6 +218,8 @@ var _ai_clock = null
 var _situation = null
 # A1：只读世界上下文（L2 模块逐步改用它的读取接口）。
 var _context = null
+# A3：写出口（Economy/Build/Command）。
+var _ports = null
 var _situation_usec_ema: float = 0.0
 var _situation_last_t: float = -1.0
 # P3.1：统一角色账本（角色占用的唯一事实来源，director/worker 分来源登记）。
@@ -1950,8 +1953,12 @@ func _ready():
 	_ai_clock.add("defense_gap", DEFENSE_CHECK_INTERVAL)
 	_situation = AISituationScript.new()
 	_context = AIContextScript.new()
+	# A3：执行层唯一写出口。
+	_ports = AIPortsScript.new()
+	_ports.bind(self)
 	# A2：把只读上下文注入执行层，读取逐步从控制器迁到 _ctx。
 	if _defense != null: _defense.set_context(_context)
+	if _defense != null: _defense.set_ports(_ports.build, _ports.command)
 	_ledger = RoleLedgerScript.new()
 	_director_v2 = AIDirectorScript.new()
 	_director_v2.setup(self)

@@ -109,3 +109,6 @@ func debug_snapshot() -> Dictionary:
 		"castles": count_building(20),
 		"ledger_director": _ledger.size_of("director") if _ledger != null else -1,
 	}
+
+func team_castle_of(team: int):
+	return _ai.get_team_castle(team) if _ai != null else null

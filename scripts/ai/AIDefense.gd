@@ -227,6 +227,14 @@ func _is_enemy_ent(e) -> bool:
 		return _ctx.is_enemy(e)
 	return ai._entity_is_enemy(e) if ai != null else false
 
+# A3：写操作只经端口（BuildPort/CommandPort），不再直接调控制器。
+var _build_port = null
+var _cmd_port = null
+
+func set_ports(build_port, cmd_port) -> void:
+	_build_port = build_port
+	_cmd_port = cmd_port
+
 func _init(owner_ai) -> void:
 	ai = owner_ai
 	# P3.3：模块内计时器统一走 AIClock（按帧推进），不再各自维护浮点计时。
@@ -258,7 +266,7 @@ func tick(delta: float) -> void:
 		return
 	if _clock != null:
 		_clock.advance(delta)
-	var castle = ai.get_peer_castle(ai.my_peer_id)
+	var castle = _castle()
 	if castle == null or not is_instance_valid(castle):
 		# 没有主城时不能保留上一场战斗的高威胁分数，否则调试面板会显示“敌军 0 却高度警戒”
 		if _threat_model != null:
@@ -291,7 +299,7 @@ func tick(delta: float) -> void:
 	_manage_defense_upgrades(castle, delta)
 
 func start_defense() -> void:
-	var castle = ai.get_peer_castle(ai.my_peer_id)
+	var castle = _castle()
 	if castle == null:
 		return
 	_force_guard_until = float(ai.battle.game_time) + FORCE_GUARD_TIME
@@ -429,8 +437,8 @@ func get_force_allocator_summary() -> String:
 	return _force_allocator.describe()
 
 func _enemy_castle_dir(castle) -> Vector3:
-	var enemy_team: int = ai._primary_enemy_team()
-	var ec = ai.get_team_castle(enemy_team)
+	var enemy_team: int = _primary_team()
+	var ec = _team_castle(enemy_team)
 	if ec == null:
 		for e in ai.battle.entities.get_children():
 			if e is Building and int(e.entity_id) == 20 and e.health > 0 and _is_enemy_ent(e):
@@ -474,7 +482,7 @@ func _manage_early_defense(castle, delta: float) -> void:
 		if threat_level >= 1 and castle.can_upgrade():
 			var up_cost: Dictionary = castle.get_upgrade_cost()
 			if not up_cost.is_empty() and _can_spend(up_cost, _defense_reserve()):
-				ai.upgrade_building(20)
+				_build_port.upgrade(20)
 		return
 	if defense_initialized:
 		_defense_check_timer -= delta
@@ -1202,8 +1210,8 @@ func _fort_tech_ready(castle) -> bool:
 	return int(castle.upgrade_level) >= 2
 
 func _enemy_dir_for_pass(castle) -> Vector3:
-	var enemy_team: int = ai._primary_enemy_team()
-	var ec = ai.get_team_castle(enemy_team)
+	var enemy_team: int = _primary_team()
+	var ec = _team_castle(enemy_team)
 	if ec != null and is_instance_valid(ec):
 		var d: Vector3 = ec.global_position - castle.global_position
 		d.y = 0.0
@@ -1230,7 +1238,7 @@ func _find_pass_line_spot(base: Vector3, perp: Vector3, lateral: float) -> Vecto
 		if not _is_valid_defense_ground(p, 1.0, true, false, false, true):
 			continue
 		# 直接用 AI 的实际建造校验，避免规划通过、建造时因为坡度/资源重叠反复失败。
-		if ai.has_method("_can_place_ai_building") and not ai._can_place_ai_building(27, p):
+		if ai.has_method("_can_place_ai_building") and not _build_port.can_place(27, p):
 			continue
 		if _defense_slot_clear(p, 1.0, 27):
 			return p
@@ -1246,7 +1254,7 @@ func _count_clear_wall_spots(base: Vector3, dir: Vector3, perp: Vector3, width: 
 			var p: Vector3 = base + perp * lateral + dir * float(dd)
 			if not _is_valid_defense_ground(p, 1.0, true, false, false, true):
 				continue
-			if ai.has_method("_can_place_ai_building") and not ai._can_place_ai_building(27, p):
+			if ai.has_method("_can_place_ai_building") and not _build_port.can_place(27, p):
 				continue
 			if _defense_slot_clear(p, 1.0, 27):
 				clear += 1
@@ -2207,7 +2215,7 @@ func _watchtower_centers() -> Array:
 # 一片格子值多少：敌人来路/隘口/资源区附近值钱，主城内部已经看得见的区域不值钱。
 func _watchtower_cell_weight(world_pos: Vector3, anchor: Vector3, mode: String) -> float:
 	var weight: float = 1.0
-	var castle = ai.get_peer_castle(ai.my_peer_id)
+	var castle = _castle()
 	if castle != null and is_instance_valid(castle):
 		var rel: Vector3 = world_pos - castle.global_position
 		rel.y = 0.0
@@ -2837,7 +2845,7 @@ func _build_defense_step() -> void:
 		if b_id == 27:
 			var towers_built: int = _count_bld(25) + _count_bld(26)
 			if towers_built < MIN_TOWERS:
-				var res_now: Dictionary = ai._get_resources()
+				var res_now: Dictionary = _res()
 				if float(res_now.get("stone", 0)) < 80.0 or float(res_now.get("wood", 0)) < 110.0:
 					i += 1
 					continue
@@ -2868,14 +2876,14 @@ func _build_defense_step() -> void:
 				break
 		# 敌人临时站在山口、或瞭望塔链还没把视野铺到时，不要把这一个队列项
 		# 当成“失败”消耗掉；等下一轮条件满足再建，否则山口防线会被敌人一次路过清空。
-		if ai._enemy_army_within(b_pos):
+		if _enemy_army_near(b_pos):
 			i += 1
 			continue
 		if not _defense_pos_visible(b_pos):
 			i += 1
 			continue
 		var facing: Vector3 = _defense_dir if b_id in TOWER_IDS else Vector3.ZERO
-		if ai.build_building(b_id, b_pos, facing):
+		if _build_port.build(b_id, b_pos, facing):
 			built += 1
 			_defense_queue.remove_at(i)
 			continue
@@ -2984,7 +2992,7 @@ func _maybe_reactive_tower(castle) -> void:
 		if not _can_spend_building(int(b_id), _defense_reserve()):
 			continue
 		if _is_valid_defense_ground(p, float(EntityDatabase.get_config(int(b_id)).get("body_radius", 1.0))):
-			ai.build_building(int(b_id), p, threat_dir)
+			_build_port.build(int(b_id), p, threat_dir)
 			return
 
 func _own_tower_near(pos: Vector3, radius: float) -> bool:
@@ -3151,7 +3159,7 @@ func _defense_mode_active() -> bool:
 	if ai != null and float(ai.battle.game_time) < _force_guard_until:
 		return true
 	if ai != null and ai.has_method("_is_defending"):
-		return bool(ai._is_defending())
+		return bool(_is_defending_v())
 	return false
 
 # 判断“防守回撤”时是否应跳过该单位：
@@ -3176,7 +3184,7 @@ func _has_valid_walls() -> bool:
 func _reserve_ranged_for_wall(unit, walls_exist: bool) -> bool:
 	if not walls_exist or unit == null or not is_instance_valid(unit):
 		return false
-	if not ai.has_method("_is_ranged_wall_candidate") or not ai._is_ranged_wall_candidate(unit):
+	if not ai.has_method("_is_ranged_wall_candidate") or not _ranged_wall_ok(unit):
 		return false
 	return true
 
@@ -3402,7 +3410,7 @@ func _assign_guard(unit, rally: Vector3) -> void:
 	var is_new: bool = not unit.has_meta("ai_home_guard")
 	_home_guard_ids[uid] = true
 	unit.set_meta("ai_home_guard", true)
-	ai._director_claim(unit, ai.UnitRole.HOME_GUARD, 60.0)
+	_cmd_port.claim(unit, ai.UnitRole.HOME_GUARD, 60.0)
 	# 驻军点只为“新守军/换了集结点”更新，避免每 0.8 秒重建一次旗帜标记
 	if is_new or unit.garrison_point.distance_to(rally) > 1.0:
 		unit.set_garrison(rally)
@@ -3411,7 +3419,7 @@ func _assign_guard(unit, rally: Vector3) -> void:
 
 func _release_guard(uid: int) -> void:
 	_home_guard_ids.erase(uid)
-	ai._director_release(uid)
+	_cmd_port.release(uid)
 	var u = instance_from_id(uid)
 	if u == null or not is_instance_valid(u):
 		return
@@ -3630,7 +3638,7 @@ func _defend_resources(castle) -> void:
 				var u = item["u"]
 				_resource_guard_ids[u.get_instance_id()] = true
 				u.set_meta("ai_resource_guard", true)
-				ai._director_claim(u, ai.UnitRole.RESOURCE_GUARD, 45.0)
+				_cmd_port.claim(u, ai.UnitRole.RESOURCE_GUARD, 45.0)
 				u.set_garrison(hot_zone["center"])
 				if u.global_position.distance_to(hot_zone["center"]) > 5.0:
 					u.move_to(hot_zone["center"])
@@ -3698,7 +3706,7 @@ func _maybe_build_outpost(castle) -> void:
 			12, best["center"], "resource", true, true)
 	if spot == Vector3.ZERO:
 		return
-	if ai.build_building(OUTPOST_ID, spot):
+	if _build_port.build(OUTPOST_ID, spot):
 		watchtower_positions.append(spot)
 
 # ═══════════════════════════════════════════════════════════════
@@ -3756,7 +3764,7 @@ func _is_valid_defense_ground(pos: Vector3, radius: float = 1.0,
 func _has_friendly_vision(pos: Vector3) -> bool:
 	# 主城默认视野 10m，而外墙在 12m 外；先按“防线包络”允许规划，
 	# 实际建造时前面几座箭塔会提供视野，build_building 仍会做最终校验。
-	var castle = ai.get_peer_castle(ai.my_peer_id)
+	var castle = _castle()
 	if castle != null and castle.global_position.distance_to(pos) <= 18.0:
 		return true
 	for e in ai.battle.entities.get_children():
@@ -3790,8 +3798,8 @@ func _can_spend_building(b_id: int, reserve_ratio: float) -> bool:
 	return _can_spend(cost, reserve_ratio)
 
 func _can_spend(cost: Dictionary, reserve_ratio: float) -> bool:
-	var res: Dictionary = ai._get_resources()
-	var limits: Dictionary = ai._get_limits()
+	var res: Dictionary = _res()
+	var limits: Dictionary = _limits()
 	for k in cost:
 		var need: float = float(cost[k])
 		if float(res.get(k, 0)) < need:
@@ -3829,3 +3837,42 @@ func _count_enemy_combat_near(pos: Vector3, radius: float) -> int:
 		if e.global_position.distance_to(pos) <= radius:
 			n += 1
 	return n
+
+# ── A2 收尾：剩余读取的上下文包装（未绑定时回落控制器，A3 之后删除回落）──
+func _castle():
+	return _ctx.castle() if _ctx != null else (ai.get_peer_castle(ai.my_peer_id) if ai != null else null)
+
+func _team_castle(team: int):
+	return _ctx.team_castle_of(team) if _ctx != null else (ai.get_team_castle(team) if ai != null else null)
+
+func _res() -> Dictionary:
+	return _ctx.resources() if _ctx != null else (ai._get_resources() if ai != null else {})
+
+func _limits() -> Dictionary:
+	return _ctx.limits() if _ctx != null else (ai._get_limits() if ai != null else {})
+
+func _is_defending_v() -> bool:
+	return _ctx.is_defending() if _ctx != null else (ai._is_defending() if ai != null else false)
+
+func _primary_team() -> int:
+	return _ctx.primary_enemy_team() if _ctx != null else (int(ai._primary_enemy_team()) if ai != null else -1)
+
+func _ranged_wall_ok(unit) -> bool:
+	return _ctx.is_ranged_wall_candidate(unit) if _ctx != null else (ai._is_ranged_wall_candidate(unit) if ai != null else false)
+
+func _enemy_army_near(pos: Vector3, radius: float = -1.0) -> bool:
+	if radius < 0.0:
+		if _ctx != null:
+			return _ctx.enemy_army_within(pos, 10.0)
+		return ai._enemy_army_within(pos) if ai != null else false
+	return _ctx.enemy_army_within(pos, radius) if _ctx != null else (ai._enemy_army_within(pos, radius) if ai != null else false)
+
+func _afford(id: int) -> bool:
+	return _ctx.can_afford(id) if _ctx != null else (ai.can_afford(id) if ai != null else false)
+
+func _afford_bld(id: int) -> bool:
+	return _ctx.can_afford_building(id) if _ctx != null else (ai.can_afford_building(id) if ai != null else false)
+
+func _afford_upg(id: int) -> bool:
+	return _ctx.can_afford_upgrade(id) if _ctx != null else (ai.can_afford_upgrade(id) if ai != null else false)
+

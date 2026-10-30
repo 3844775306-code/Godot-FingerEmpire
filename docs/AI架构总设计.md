@@ -443,3 +443,27 @@ naval.cross_water           组织渡海
 **验证**：2 分钟 3v3 HELL → `front 76.7% / idle 6.7% / engage 36.7%`，无脚本错误；写操作（`build_building` / `upgrade_building` / `_director_claim`）仍走控制器，留待 A3。
 
 **剩余**：`AIDefense` 还有 14 处读取（`get_peer_castle` 4、`_get_resources` 2、`_primary_enemy_team` 2、`_get_limits` 1、`_is_defending` 1、`_is_ranged_wall_candidate` 1、`_enemy_army_within` 1…）与全部写操作，在 A3/A4 一并处理。
+
+---
+
+## 16. A2 收尾 + A3 落地：读取全迁 + 写操作进端口（2026-10-31 03:50）
+
+**A2 收尾**：`AIDefense` 剩余 14 处读取（`get_peer_castle` 4、`_get_resources` 2、`_primary_enemy_team` 2、`get_team_castle` 2、`_get_limits`/`_is_defending`/`_is_ranged_wall_candidate`/`_enemy_army_within` 各 1）全部改走 `_ctx`，包装函数保留控制器回落。至此该模块**业务读取 100% 走只读上下文**，只剩 `battle`（121 处，R4 尚未处理）、身份字段与写操作。
+
+**A3 落地**：新增 `scripts/ai/ports/AIPorts.gd`，三个端口：
+
+| 端口 | 方法 | 转发到 |
+|---|---|---|
+| `EconomyPort` | `resources` / `limits` / `can_afford` / `last_spend_block` | `ai._get_resources` 等 |
+| `BuildPort` | `can_place` / `can_build` / `build` / `upgrade` / `castle_lv` | `ai._can_place_ai_building` / `build_building` / `upgrade_building` |
+| `CommandPort` | `claim` / `release` / `has_claim` / `role_of` | `ai._director_claim` / `_director_release` / `_unit_has_claim` |
+
+`AIDefense` 的 9 处写操作（`build_building` 3、`_can_place_ai_building` 2、`_director_claim` 2、`upgrade_building` 1、`_director_release` 1）已改为 `_build_port.xxx` / `_cmd_port.xxx`。**"谁在建、谁在抢兵"从此有单一入口。**
+
+**验证**：2 分钟 3v3 HELL → `front 74.4% / idle 10.3% / engage 28.2%`，脚本错误 0。
+
+**踩坑两条**：
+1. `_enemy_army_near(pos)` 丢了默认半径 → `Too few arguments` 编译失败，补默认值；
+2. `AIContext` 的 `team_castle_of` 插入锚点没匹配上（`is_ranged_wall_candidate` 那行已被前一次替换改过），运行期才暴露 `Nonexistent function`。**教训：新增方法后必须跑一次真实对局**，仅靠"脚本报 ok"不可信。
+
+**下一步（A4）**：`AIWorkerDirector`（30 个 `ai.*` 读取）与 `AIWaterCrossing`（22 个）改用 `_ctx`；重点是**删掉它们的跨模块调用**（`ai.allocate_workers` / `ai._release_wall_guard`），改为发 `AIEvents` 由对应模块自行处理。
