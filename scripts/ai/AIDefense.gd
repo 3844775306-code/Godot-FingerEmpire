@@ -227,18 +227,15 @@ var _cmd_port = null
 func set_ports(build_port, cmd_port) -> void:
 	_build_port = build_port
 	_cmd_port = cmd_port
+	if _defense_context != null:
+		_defense_context.set_ports(_build_port)
 
 # A6 收尾：角色常量本地化（数值须与 AI.UnitRole 枚举一致）。
 const ROLE_HOME_GUARD: int = 4
 const ROLE_RESOURCE_GUARD: int = 5
 
-# 兼容字段：defense/ 子包与调试面板仍按 ai 取控制器，构造时由上下文回填。
-var ai = null
-
 func _init(ctx = null) -> void:
 	_ctx = ctx
-	if ctx != null and ctx.has_method("controller_ref"):
-		ai = ctx.controller_ref()
 	# P3.3：模块内计时器统一走 AIClock（按帧推进），不再各自维护浮点计时。
 	_clock = AIClockScript.new()
 	_clock.add("threat", THREAT_INTERVAL)
@@ -248,7 +245,7 @@ func _init(ctx = null) -> void:
 	_clock.add("guard", GUARD_INTERVAL)
 	_clock.add("defense_upgrade", DEFENSE_UPGRADE_INTERVAL, 4.0 / DEFENSE_UPGRADE_INTERVAL)
 	_clock.add("zone", RESOURCE_ZONE_INTERVAL)
-	_defense_context = DefenseContextScript.new(_ctx.controller_ref())
+	_defense_context = DefenseContextScript.new(_ctx, _build_port)
 	_threat_model = DefenseThreatModelScript.new(_defense_context)
 	_defense_director = DefenseDirectorScript.new(_defense_context)
 	_defense_plan = DefensePlanScript.new()
@@ -258,6 +255,9 @@ func _init(ctx = null) -> void:
 # 主入口
 # ═══════════════════════════════════════════════════════════════
 
+# 子包 DefensePlan 只需要当前时间；不暴露控制器。
+func get_game_time() -> float:
+	return _ctx.game_time() if _ctx != null else 0.0
 func tick(delta: float) -> void:
 	if _ctx == null:
 		return

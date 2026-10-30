@@ -24,9 +24,15 @@ $modules = [ordered]@{
 	'AIWaterCrossing' = 'scripts/ai/AIWaterCrossing.gd'
 	'AILadderSiege'   = 'scripts/ai/AILadderSiege.gd'
 	'AIWallPlanner'   = 'scripts/ai/AIWallPlanner.gd'
+	'DefenseContext'  = 'scripts/ai/defense/DefenseContext.gd'
+	'DefensePlan'     = 'scripts/ai/defense/DefensePlan.gd'
+	'DefenseThreat'   = 'scripts/ai/defense/DefenseThreatModel.gd'
+	'DefenseDirector' = 'scripts/ai/defense/DefenseDirector.gd'
+	'DefenseAlloc'    = 'scripts/ai/defense/DefenseForceAllocator.gd'
 }
 
 $moduleNames = @('AIDefense','AIWorkerDirector','AIWaterCrossing','AILadderSiege','AIWallPlanner')
+# R2 只统计 5 个平级执行模块之间的互相引用；defense/ 是 AIDefense 的子包，不算违规。
 
 $result = [ordered]@{}
 $total = [ordered]@{ r1 = 0; r1_fallback = 0; r2 = 0; r3 = 0; r4 = 0 }

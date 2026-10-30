@@ -731,3 +731,29 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/ai_arch_check.ps1
 **验证**：2 分钟 3v3 HELL → `front 66.7% / idle 6.7% / engage 16.7%`，脚本错误 0；`ai_arch_check.ps1` 仍为 R1=R2=R3=R4=0。
 
 **踩坑（第十一个）**：从 `match` 抽方法时，分支体原本是 3 级 Tab，抽到函数里要**正好去掉 2 级**——少去一级会变成缩进错误，多去一级会把内层 `if` 的逻辑改掉。抽完必须抽查 2~3 个阶段方法的缩进，再跑一次自对弈。
+
+---
+
+## 26. defense/ 子包迁移：控制器引用彻底消失（2026-10-31 08:40）
+
+上一章留下的唯一控制器暴露点（`AIContext.controller_ref()` + `AIDefense.ai` 兼容字段）已删除。
+
+**改造内容**：
+1. `DefenseContext` 改为 `_init(ctx, build_port)`，本身只依赖 `AIContext`（读）+ `BuildPort`（写），20 个访问方法逐一改到 `_ctx.xxx()`；`build/can_build` 走端口，`assign_builders`/`world_to_grid` 等走上下文。
+2. `DefensePlan` 不再读 `defense.ai.battle.game_time`，改为 `defense.get_game_time()`（AIDefense 新增的唯一公开访问器）。
+3. `AIDefense` 删除 `var ai` 与 `controller_ref` 回填；`set_ports` 把建造端口透传给 `DefenseContext`。
+4. `AIContext.controller_ref()` 删除 —— 全仓库已无使用者。
+5. **检查脚本纳入 defense/ 5 个文件**：`DefenseContext / DefensePlan / DefenseThreatModel / DefenseDirector / DefenseForceAllocator` 现在和 5 个平级执行模块一起被 R1/R3/R4 扫描；R2 仍只统计 5 个平级模块之间的互相引用（defense/ 是 AIDefense 的子包，不算违规）。
+
+**结果**（10 个文件全 0）：
+
+```
+AIDefense 0/0/0/0  AIWorkerDirector 0/0/0/0  AIWaterCrossing 0/0/0/0
+AILadderSiege 0/0/0/0  AIWallPlanner 0/0/0/0
+DefenseContext/Plan/Threat/Director/Alloc 全部 0/0/0/0
+```
+
+**验证**：2 分钟 3v3 HELL → `front 69.6% / idle 4.4% / engage 39.1%`，脚本错误 0。
+
+**踩坑（第十二个，代价最大）**：给 `AIDefense` 插入 `get_game_time()` 时，用了「`func _init(...)` + 下一行」当锚点做替换，结果把 `_init` 后面**剩下的整个函数体**（`_clock` 初始化 + 4 个子对象构造）挤进了新方法里、`return` 之后变成死代码。运行期报 `Nonexistent function 'due' in base 'Nil'`（63 条），表现是防守模块完全不工作。
+**教训：给函数插入新方法时，锚点必须包含函数结束边界**（下一个 `func ` 之前），不能只匹配函数头两行。

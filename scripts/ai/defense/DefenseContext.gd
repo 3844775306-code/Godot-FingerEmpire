@@ -1,16 +1,22 @@
 # scripts/ai/defense/DefenseContext.gd
 # 防御架构的只读上下文/命令适配层。
-# 目标：让威胁、规划、建造、守军分配模块不再到处直接访问 AI.gd 的内部字段，
-# 而是通过这个薄层读取战场事实、提交建造/单位命令。第 1 阶段只服务威胁模型。
+# 目标：让威胁、规划、建造、守军分配模块不再直接访问 AI.gd 的内部字段，
+# 而是通过这个薄层读取战场事实、提交建造/单位命令。
+#
+# A8：适配层本身也改为只依赖 AIContext（读）+ BuildPort（写），
+# 不再持有 AI 控制器引用。
 extends RefCounted
 
-var ai = null
-var battle = null
+var _ctx = null
+var _build_port = null
 var castle = null
 
-func _init(ai_ref) -> void:
-	ai = ai_ref
-	battle = ai.battle if ai != null else null
+func _init(context = null, build_port = null) -> void:
+	_ctx = context
+	_build_port = build_port
+
+func set_ports(build_port) -> void:
+	_build_port = build_port
 
 func set_castle(castle_ref) -> void:
 	castle = castle_ref
@@ -19,29 +25,23 @@ func get_castle():
 	return castle
 
 func get_game_time() -> float:
-	if battle == null:
-		return 0.0
-	return float(battle.game_time)
+	return _ctx.game_time() if _ctx != null else 0.0
 
 func get_meta_flag(meta_name: String, default_value: bool = false) -> bool:
-	if ai == null:
-		return default_value
-	return bool(ai.get_meta(meta_name, default_value))
+	return bool(_ctx.meta(meta_name, default_value)) if _ctx != null else default_value
 
 func get_visible_enemies() -> Array:
-	if ai == null:
-		return []
-	return ai._visible_enemies
+	return _ctx.visible_enemies() if _ctx != null else []
 
 func is_enemy(entity) -> bool:
-	if ai == null or entity == null or not is_instance_valid(entity):
+	if _ctx == null or entity == null or not is_instance_valid(entity):
 		return false
-	return ai._entity_is_enemy(entity)
+	return _ctx.is_enemy(entity)
 
 func belongs_to_me(entity) -> bool:
-	if ai == null or entity == null or not is_instance_valid(entity):
+	if _ctx == null or entity == null or not is_instance_valid(entity):
 		return false
-	return ai.entity_belongs_to_me(entity)
+	return _ctx.belongs_to_me(entity)
 
 # 与旧 AIDefense._is_combat_enemy 保持同一口径：
 # 中立动物/中立单位不算敌军；没有攻击能力的单位也不触发防守。
@@ -57,20 +57,16 @@ func is_combat_enemy(entity) -> bool:
 	return int(entity.target_type) > 0 or float(entity.attack) > 0.0
 
 func get_primary_enemy_team() -> int:
-	if ai == null:
-		return -1
-	return ai._primary_enemy_team()
+	return _ctx.primary_enemy_team() if _ctx != null else -1
 
 func get_team_castle(team: int):
-	if ai == null:
-		return null
-	return ai.get_team_castle(team)
+	return _ctx.team_castle_of(team) if _ctx != null else null
 
 func get_enemy_castle_dir(castle_ref) -> Vector3:
 	var enemy_team: int = get_primary_enemy_team()
 	var enemy_castle = get_team_castle(enemy_team)
-	if enemy_castle == null and battle != null:
-		for entity in battle.entities.get_children():
+	if enemy_castle == null and _ctx != null:
+		for entity in _ctx.entities_children():
 			if entity is Building and int(entity.entity_id) == 20 and entity.health > 0 \
 					and is_enemy(entity):
 				enemy_castle = entity
@@ -83,58 +79,46 @@ func get_enemy_castle_dir(castle_ref) -> Vector3:
 	return Vector3.FORWARD
 
 func get_own_buildings() -> Array:
-	if ai == null:
-		return []
-	return ai._cached_buildings()
+	return _ctx.cached_buildings() if _ctx != null else []
 
 func get_own_armies() -> Array:
-	if ai == null:
-		return []
-	return ai._cached_armies()
+	return _ctx.cached_armies() if _ctx != null else []
 
 func get_idle_builder(pos: Vector3, max_dist: float = 60.0):
-	if battle == null or not battle.has_method("find_nearest_idle_builder"):
+	if _ctx == null:
 		return null
-	return battle.find_nearest_idle_builder(ai.my_team, ai.my_peer_id, pos, max_dist)
+	return _ctx.nearest_idle_builder(_ctx.my_team(), _ctx.my_peer_id(), pos, max_dist)
 
 func get_resources() -> Dictionary:
-	if ai == null:
-		return {}
-	return ai._get_resources()
+	return _ctx.resources() if _ctx != null else {}
 
 func get_limits() -> Dictionary:
-	if ai == null:
-		return {}
-	return ai._get_limits()
+	return _ctx.limits() if _ctx != null else {}
 
 func is_research_mode() -> bool:
-	return battle != null and battle.has_method("is_research_mode") and battle.is_research_mode()
+	return _ctx.is_research_mode() if _ctx != null else false
 
 func get_age() -> int:
-	if not is_research_mode():
+	if _ctx == null or not is_research_mode():
 		return 0
-	var state: Dictionary = battle.get_research_state(ai.my_peer_id, ai.my_team)
+	var state: Dictionary = _ctx.research_state(_ctx.my_peer_id(), _ctx.my_team())
 	return int(state.get("age", 0))
 
 func can_build(building_id: int) -> bool:
-	return ai != null and ai._ai_can_build(building_id)
+	return bool(_build_port.can_build(building_id)) if _build_port != null else false
 
 func build(building_id: int, pos: Vector3, facing: Vector3 = Vector3.ZERO) -> bool:
-	return ai != null and ai.build_building(building_id, pos, facing)
+	return bool(_build_port.build(building_id, pos, facing)) if _build_port != null else false
 
 func assign_builders(building, builders: Array) -> void:
-	if battle != null and battle.has_method("assign_builders"):
-		battle.assign_builders(building, builders)
+	if _ctx != null:
+		_ctx.assign_builders(building, builders)
 
 func enemy_army_within(pos: Vector3) -> bool:
-	return ai != null and ai._enemy_army_within(pos)
+	return _ctx.enemy_army_within(pos) if _ctx != null else false
 
 func world_to_grid(pos: Vector3) -> Vector2i:
-	if battle == null:
-		return Vector2i.ZERO
-	return battle.world_to_grid(pos)
+	return _ctx.world_to_grid(pos) if _ctx != null else Vector2i.ZERO
 
 func grid_to_world(cell: Vector2i) -> Vector3:
-	if battle == null:
-		return Vector3.ZERO
-	return battle.grid_to_world(cell.x, cell.y)
+	return _ctx.grid_to_world(cell) if _ctx != null else Vector3.ZERO

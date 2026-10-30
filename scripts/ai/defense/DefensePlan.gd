@@ -82,7 +82,7 @@ func rebuild(defense, director, snapshot: Dictionary = {}) -> Dictionary:
 			"is_wall": int(item.get("id", 0)) == 27,
 		})
 
-	updated_at = float(defense.ai.battle.game_time) if defense.ai != null and defense.ai.battle != null else 0.0
+	updated_at = defense.get_game_time() if defense != null else 0.0
 	revision += 1
 	return to_dictionary()
 
