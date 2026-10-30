@@ -1934,6 +1934,9 @@ func _process(delta):
 			_panel_refresh_timer = PANEL_REFRESH_INTERVAL_COLLAPSED if _panel_collapsed else PANEL_REFRESH_INTERVAL_OPEN
 			update_debug_label()
 	# 部队积累判定放到 decide() 的 AI 思考节流里，避免每帧全实体扫描
+	# 军队调度安全网：0.5 秒一次，只处理没有任何角色、也没有任何命令的陆军战斗单位，
+	# 保证不会有兵在无人派单的情况下长期站着（设计见 docs/AI_ARMY_DISPATCH_DESIGN.md）。
+	_tick_director(delta)
 
 # ═══ 科研模式 AI：按难度节奏升时代，再按优先表研究科技 ═══
 const RESEARCH_PRIORITY: Array = [
@@ -4806,6 +4809,133 @@ func _retask_idle_front_units() -> void:
 			if castle_target != null and is_instance_valid(castle_target):
 				u.attack_move_to(castle_target.global_position)
 				sent += 1
+
+# ═══ ArmyDirector（第 1 步：安全网）═══
+# 只做两件事：维护角色账本 _roles（谁因为什么角色被占用、租约何时到期），
+# 并把既没有角色、也没有任何命令的陆军战斗单位兜底派出去。
+# 旧的各调度器暂时保留，后续步骤会逐个改成向 director 提需求。
+enum UnitRole { IDLE, SCOUT, GARRISON, WALL, HOME_GUARD, RESOURCE_GUARD, BUILDING_DEFENSE, HARASS, RAID, FIELD, SIEGE, TRANSPORT, ESCORT, RETREAT, STANDBY }
+
+const DIRECTOR_INTERVAL: float = 0.5
+const DIRECTOR_FIELD_LEASE: float = 30.0
+const DIRECTOR_STANDBY_LEASE: float = 25.0
+const DIRECTOR_STANDBY_MIN_DIST: float = 10.0
+const DIRECTOR_LOG_INTERVAL: float = 5.0
+
+var director_debug: bool = false
+var _roles: Dictionary = {}
+var _director_timer: float = 0.0
+var _director_log_timer: float = 0.0
+
+func _tick_director(delta: float) -> void:
+	if battle == null or bool(battle.game_over):
+		return
+	_director_timer -= delta
+	if _director_timer > 0.0:
+		return
+	_director_timer = DIRECTOR_INTERVAL
+	var now: float = float(battle.game_time)
+	_director_prune(now)
+	var idle: Array = []
+	for u in _cached_armies():
+		if not _director_is_land_combat(u):
+			continue
+		if _roles.has(u.get_instance_id()):
+			continue
+		if _director_is_busy(u):
+			continue
+		idle.append(u)
+	if not idle.is_empty():
+		_director_dispatch(idle, now)
+	if director_debug:
+		_director_log_timer -= DIRECTOR_INTERVAL
+		if _director_log_timer <= 0.0:
+			_director_log_timer = DIRECTOR_LOG_INTERVAL
+			_director_log()
+
+func _director_is_land_combat(u) -> bool:
+	if not is_instance_valid(u) or u.health <= 0:
+		return false
+	if not entity_belongs_to_me(u):
+		return false
+	if int(u.entity_id) == 10 or int(u.attack) <= 0:
+		return false
+	if _is_scout_unit(u) or bool(u.water_capable) or bool(u.hold_position):
+		return false
+	if u.has_meta("ai_home_guard") or u.has_meta("ai_resource_guard") or u.has_meta("ai_wall_guard") \
+		or u.has_meta("ai_harass") or u.has_meta("ai_transporting") or u.has_meta("ai_escorting"):
+		return false
+	return true
+
+func _director_is_busy(u) -> bool:
+	if String(u.current_order) != "" or u.current_target != null:
+		return true
+	if not u.command_queue.is_empty():
+		return true
+	if u.garrison_point != Vector3.ZERO:
+		return true
+	if _is_held_by_garrison(u) or _is_local_defense_active(u):
+		return true
+	var boarded = u.get("_boarded_on")
+	if boarded != null and int(boarded) != -1:
+		return true
+	return false
+
+func _director_prune(now: float) -> void:
+	if _roles.is_empty():
+		return
+	var drop: Array = []
+	for uid in _roles.keys():
+		var ent: Dictionary = _roles[uid]
+		var u = instance_from_id(int(uid))
+		if u == null or not is_instance_valid(u) or not entity_belongs_to_me(u) or float(ent.get("until", 0.0)) <= now:
+			drop.append(uid)
+	for uid in drop:
+		_roles.erase(uid)
+
+func _director_set_role(u, role: int, lease: float, now: float) -> void:
+	_roles[u.get_instance_id()] = {"role": role, "since": now, "until": now + lease}
+	u.set_meta("ai_role", role)
+
+func _director_dispatch(idle: Array, now: float) -> void:
+	var threatened: bool = _defense != null and int(_defense.threat_level) >= 2
+	var castle = get_peer_castle(my_peer_id)
+	var field_target = _get_attack_target_castle() if not threatened else null
+	var can_field: bool = field_target != null and is_instance_valid(field_target) and phase != Phase.PRODUCTION
+	var rally: Vector3 = castle.global_position if castle != null and is_instance_valid(castle) else Vector3.ZERO
+	for u in idle:
+		if not is_instance_valid(u) or u.health <= 0:
+			continue
+		# 身边 40 米内有敌：直接接敌，这是最高优先级（避免站在敌群里发呆）
+		var enemy = u._find_nearest_enemy_near(u.global_position, 40.0)
+		if enemy != null and is_instance_valid(enemy):
+			if u.global_position.distance_to(enemy.global_position) <= 25.0:
+				u.attack_target(enemy)
+			else:
+				u.attack_move_to(enemy.global_position)
+			_director_set_role(u, UnitRole.FIELD, DIRECTOR_FIELD_LEASE, now)
+			continue
+		if can_field:
+			u.attack_move_to(field_target.global_position)
+			_director_set_role(u, UnitRole.FIELD, DIRECTOR_FIELD_LEASE, now)
+			continue
+		# 兜底：回主城集结点待命。离得近就不重复下命令，只登记租约。
+		if castle != null and is_instance_valid(castle) and u.global_position.distance_to(rally) > DIRECTOR_STANDBY_MIN_DIST:
+			u.attack_move_to(rally)
+		_director_set_role(u, UnitRole.STANDBY, DIRECTOR_STANDBY_LEASE, now)
+
+func _director_log() -> void:
+	var names: Array = ["IDLE", "SCOUT", "GARRISON", "WALL", "HOME_GUARD", "RESOURCE_GUARD", "BUILDING_DEFENSE", "HARASS", "RAID", "FIELD", "SIEGE", "TRANSPORT", "ESCORT", "RETREAT", "STANDBY"]
+	var counts: Dictionary = {}
+	for uid in _roles.keys():
+		var ent: Dictionary = _roles[uid]
+		var k: int = int(ent.get("role", 0))
+		counts[k] = int(counts.get(k, 0)) + 1
+	var parts: Array = []
+	for k in counts.keys():
+		var idx: int = clampi(int(k), 0, names.size() - 1)
+		parts.append("%s=%d" % [String(names[idx]), int(counts[k])])
+	print("[DIRECTOR] p%d t=%.0f %s" % [my_peer_id, float(battle.game_time), " ".join(parts)])
 
 func _process_line_3():
 	if count_building(28) < _effective_house_target() and can_afford_building(28):
