@@ -27,6 +27,8 @@ var _log_timer: float = 0.0
 var _workers: Dictionary = {}   # uid -> snapshot + unit
 var _last_train_at: float = -999.0
 var _last_train_block: String = ""
+# uid -> 逃跑前的资源点；危险解除后优先回到原资源点。
+var _flee_resume: Dictionary = {}
 # uid -> {unit, building, kind, source, created_at, assigned_at, expires_at}
 var _builder_reservations: Dictionary = {}
 
@@ -44,6 +46,7 @@ func tick(delta: float) -> void:
 	_timer = TICK_INTERVAL
 	_sync_roster()
 	_release_finished_builders()
+	_update_flee()
 	_log_timer -= TICK_INTERVAL
 	if _log_timer <= 0.0:
 		_log_timer = LOG_INTERVAL
@@ -290,6 +293,72 @@ func _classify(worker, now: float) -> int:
 		if tgt is Army and _is_animal_target(tgt):
 			return ROLE_HUNT
 	return ROLE_IDLE
+
+# 第 4 阶段：逃跑由 Director 统一接管。
+# 危险靠近时先记录原资源点，再按“有货交付、无货远离”处理；危险解除后回原资源点。
+func _update_flee() -> void:
+	if ai == null or ai.battle == null:
+		return
+	var now: float = float(ai.battle.game_time)
+	for uid in _workers.keys():
+		var rec: Dictionary = _workers[uid]
+		var w = rec.get("unit")
+		if w == null or not is_instance_valid(w) or w.health <= 0:
+			_flee_resume.erase(uid)
+			continue
+		if _is_garrisoned(w):
+			continue
+		var danger = _nearest_enemy(w.global_position, 8.0)
+		if danger != null:
+			if w.has_meta("ai_flee_until") and now < float(w.get_meta("ai_flee_until")):
+				continue
+			var tgt = w.current_target
+			if is_instance_valid(tgt) and tgt is WorldResource:
+				_flee_resume[uid] = tgt
+			elif not _flee_resume.has(uid):
+				_flee_resume[uid] = null
+			w.set_meta("ai_flee_until", now + 9.0)
+			var has_cargo: bool = false
+			for rk in ["gold", "wood", "stone", "food", "oil"]:
+				if int(w.cargo.get(rk, 0)) > 0:
+					has_cargo = true
+					break
+			if has_cargo:
+				if w.current_order != "deliver" and w.current_order != "move" and w.has_method("_return_to_deliver"):
+					w.call("_return_to_deliver")
+			elif String(w.current_order) != "move":
+				var away: Vector3 = w.global_position - danger.global_position
+				away.y = 0.0
+				if away.length_squared() < 0.01:
+					away = Vector3.RIGHT
+				var flee_pos: Vector3 = w.global_position + away.normalized() * 6.0
+				var half_limit: float = RTSConfig.MAP_SIZE / 2.0 - 3.0
+				flee_pos.x = clampf(flee_pos.x, -half_limit, half_limit)
+				flee_pos.z = clampf(flee_pos.z, -half_limit, half_limit)
+				w.move_to(flee_pos)
+		elif w.has_meta("ai_flee_until") and now >= float(w.get_meta("ai_flee_until")):
+			w.remove_meta("ai_flee_until")
+			var resume = _flee_resume.get(uid)
+			if is_instance_valid(resume) and resume is WorldResource:
+				var rk: String = String(resume.resource_type)
+				if ai._resource_ratio(rk) < ai._pressure_threshold():
+					w.gather_at(resume)
+			_flee_resume.erase(uid)
+
+func _nearest_enemy(pos: Vector3, radius: float):
+	if ai == null or ai.battle == null or not ai.battle.has_method("get_nearby_enemies"):
+		return null
+	var w = null
+	for e in ai.battle.get_nearby_enemies(pos, radius, ai.my_team, ai.my_peer_id, true):
+		if not (e is Army) or e.health <= 0:
+			continue
+		if _is_animal_target(e):
+			continue
+		if ai.entity_belongs_to_me(e):
+			continue
+		w = e
+		break
+	return w
 
 func _is_garrisoned(worker) -> bool:
 	var gb = worker.get("_garrison_building")

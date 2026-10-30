@@ -3462,7 +3462,7 @@ func _ai_hunt_animals(delta):
 		if not entity_belongs_to_me(e): continue
 		if _is_held_by_garrison(e): continue
 		peasants.append(e)
-	if peasants.size() <= HUNT_MIN_PEASANTS: return
+	if peasants.size() < HUNT_MIN_PEASANTS: return
 
 	# 统计已经在打猎的农民（攻击目标带 _animal_type）
 	var hunters: Array = []
@@ -5904,7 +5904,8 @@ var _last_relation: int = -2               # 上次计算的敌我关系，避�
 var _last_panel_nation: Color = Color(-1, -1, -1, -1)  # 上次使用的国家底色，用于检测 nation 延迟写入
 # 狩猎：固定派几个农民持续打猎，农民总数超过阈值才开始（避免前期断经济）
 const HUNT_PEASANT_COUNT: int = 5
-const HUNT_MIN_PEASANTS: int = 15
+# 目标农民数 12 时也要能分出猎手；旧值 15 与阶段目标 15 重合，条件永远不成立。
+const HUNT_MIN_PEASANTS: int = 12
 
 const PANEL_WIDTH: float = 540.0
 const PANEL_HEIGHT: float = 400.0
