@@ -312,6 +312,12 @@ func cancel_pending_path() -> void:
 	_pending_path = false
 	_pending_since_ms = 0
 
+# 供 AI/调试面板判断“单位到底排队多久”，避免把新命令误判成长时间寻路。
+func pending_path_age_ms() -> int:
+	if not _pending_path:
+		return 0
+	return maxi(0, SimTime.now_ms() - _pending_since_ms)
+
 func _get_bm() -> RTSBattleManager:
 	if _army == null or not is_instance_valid(_army) or not _army.is_inside_tree():
 		return null

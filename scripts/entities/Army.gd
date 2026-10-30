@@ -4536,6 +4536,10 @@ func _queue_command(cmd: Dictionary):
 	# 玩家主动下达的移动/采集/攻击命令仍然立即生效，由 battle 的玩家命令上下文放行。
 	if _work_command_locked():
 		return
+	# 同目标命令去重：上一路径仍在排队时重复下发会清空 pending 请求，
+	# 让单位重新排队，表现为“接了任务却一直站着”。强制玩家攻击不受影响。
+	if _is_active_command_same(cmd):
+		return
 	var _cmd_bm = _get_bm()
 	if _cmd_bm != null and _cmd_bm.has_method("record_player_army_command"):
 		_cmd_bm.record_player_army_command(self, cmd)
@@ -4551,6 +4555,27 @@ func _queue_command(cmd: Dictionary):
 	else:
 		_clear_command_queue()
 		_execute_command(cmd)
+
+func _is_active_command_same(cmd: Dictionary) -> bool:
+	if _movement == null or not _movement._pending_path:
+		return false
+	if not command_queue.is_empty():
+		return false
+	var type: String = String(cmd.get("type", ""))
+	if type == "gather":
+		return current_target == cmd.get("target") and String(current_order) == "gather"
+	if type == "move":
+		var p: Vector3 = cmd.get("pos", Vector3.ZERO)
+		return String(current_order) == "move" and _movement.astar_target.distance_to(p) < 0.5
+	if type == "attack":
+		if bool(cmd.get("forced", false)):
+			return false
+		return current_target == cmd.get("target") \
+				and String(current_order) in ["attack", "attack_move"]
+	if type == "attack_move":
+		var ap: Vector3 = cmd.get("pos", Vector3.ZERO)
+		return String(current_order) == "attack_move" and attack_move_target.distance_to(ap) < 1.0
+	return false
 
 func _clear_command_queue():
 	command_queue.clear()
