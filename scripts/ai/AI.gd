@@ -44,6 +44,11 @@ var target_army_count: int = 7
 # 旧逻辑用「每个兵种 7 个」当军队目标；可生产兵种少时总兵力只能到 7~28。
 # 这里额外给一个总野战军目标，按当前可生产兵种均分，保证 3 倍速 5 分钟能到 50 左右。
 const TARGET_FIELD_ARMY_TOTAL: int = 50
+# 进入 ASSAULT 的总陆军门槛。旧版用 count_field_military() >= 30，但军队账本接管后
+# 单位普遍带角色（FIELD/STANDBY/HARASS/守军），field 计数被扣到个位数，永远进不了 ASSAULT。
+# 改为总陆军数（含守军/墙守/游击）。实测 3v3 HELL：总陆军 14 约在 t≈8~9 分钟出现，
+# 18 要到 12 分钟；取 14 让 ASSAULT 在常规对局中段真正发生。
+const ASSAULT_LAND_ARMY_THRESHOLD: int = 14
 # 贸易车只跟随这四种商人；AI 生产贸易车时数量必须小于商人数量，避免刷出一堆闲置车
 const TRADE_CART_ID: int = 6
 # 官员/商人由各自的生产逻辑管理（官员一栋建筑只能一个），
@@ -2392,12 +2397,12 @@ func _run_decide_step(step: int) -> void:
 				Phase.DEVELOPMENT: _state_development(_last_delta)
 				Phase.ASSAULT: _state_assault(_last_delta)
 		11:
-			# 进攻阶段转换只在思考节流里判断；count_field_military 会遍历全部实体，不能每帧调用。
+			# 进攻阶段转换只在思考节流里判断；count_land_army 会遍历全部实体，不能每帧调用。
 			if phase == Phase.DEVELOPMENT:
-				# 用可出击野战军而不是总军事人口：守墙/守家/队列里的兵不会出门，
-				# 用总数判断会让 AI 提前进入 ASSAULT，却只有少量部队可派。
-				var army_count = count_field_military(my_peer_id if my_peer_id != -1 else my_team)
-				if army_count >= 30:
+				# 曾经用"可出击野战军"判断，但军队调度接管后单位带角色，field 计数被扣空，
+				# ASSAULT 实际永远不触发（自对弈基线 t=480 仍停在 DEVELOPMENT）。
+				# 改为总陆军数（含守军/墙守/游击），阈值见 ASSAULT_LAND_ARMY_THRESHOLD。
+				if count_land_army() >= ASSAULT_LAND_ARMY_THRESHOLD:
 					phase = Phase.ASSAULT
 		12:
 			if _defense != null:

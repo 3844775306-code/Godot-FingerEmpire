@@ -1,0 +1,31 @@
+{
+  "config": {
+    "difficulty": "HELL",
+    "immortal": true,
+    "minutes": 8.0,
+    "mode": "3v3",
+    "progression": "research",
+    "sample": 60.0,
+    "seeds": [
+      24680
+    ],
+    "time_scale": 8.0
+  },
+  "generated_at": "2026-10-30T19:33:52",
+  "seeds": [
+    {
+      "ai_count": 5,
+      "end_reason": "time",
+      "engage_pct": 41.0909090909091,
+      "frame_p95_ms_max": 196.462,
+      "front_pct": 62.9090909090909,
+      "idle_pct": 23.2727272727273,
+      "land_avg": 6.6,
+      "last_t": 480.084615249953,
+      "push_pct": 21.8181818181818,
+      "samples": 8,
+      "seed": 24680,
+      "workers_avg": 11.875
+    }
+  ]
+}

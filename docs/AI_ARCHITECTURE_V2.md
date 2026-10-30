@@ -1,0 +1,291 @@
+# AI 架构 v2 设计提案（草案，待拍板）
+
+> 基线：HEAD `bf2aeba`（AI 约 13,860 行；防御 5 阶段、农民 6 阶段、军队 3/4 步已落地）
+> 依据：[AI 架构分析](AI架构分析.md) 第 5 章 + 作者施工图 [AI_ARMY_DISPATCH_DESIGN.md](AI_ARMY_DISPATCH_DESIGN.md)、[AI_WORKER_DIRECTOR_DESIGN.md](AI_WORKER_DIRECTOR_DESIGN.md)
+> 定位：**重构而非重写**——保留已验证的行为与数据口径，把已经出现的正确模式（账本/租约/需求表/影子迁移）提升为全局骨架。
+
+---
+
+## 1. 现状诊断（只列架构级问题）
+
+| # | 问题 | 证据 |
+|---|------|------|
+| 1 | **决策与调度混在 6,240 行的 `AI.gd`**：经济/军事/外交/侦察/海军/UI 全部内联，`_process_line_1/3/4/5` + `_state_*` 两套流程交叉调用 | 第 1 章 §14 |
+| 2 | **同一思想两套实现**：军队账本 `_roles` 内联在 AI.gd，农民账本在独立 `AIWorkerDirector`；租约/需求/优先级各自写一遍 | AI.gd:3110 vs AIWorkerDirector.gd:590 |
+| 3 | **三套状态互相约束**：`Phase`(3) / `LateTactic`(4) / `UnitRole`(15)，更新点分散在 step 11、`update_tactic`、AIDefense | 第 1 章 §14.3 |
+| 4 | **多个 ad-hoc 计时器**：1s/2s/3s/5s/10s/120s…约 20 个，各自全量扫描，全靠 `_late_game_scale()` 兜底 | AI.gd:1926-1958 |
+| 5 | **约定式 meta 契约**：`ai_home_guard/ai_wall_guard/ai_role/ai_flee_until…` 跨 6 个文件共享，无常量表 | 第 1 章 §14.2 |
+| 6 | **防御子系统仍有 3,818 行**且规划/建造/守军混在一起，4 个 defense/ 子模块 + 影子双份状态 | 第 5 章 §5.3 |
+| 7 | **死代码与旧入口持续累积**：`decide()`、旧防线 5 函数、`_legacy_allocate_workers`，本轮又新增 ~10 个待删旧函数 | 第 5 章 §5.7 |
+| 8 | **门槛口径两套**：阶段推进用 `count_field_military()`，主攻用 `count_land_army()` | AI.gd:2389 vs :5220 |
+| 9 | **无行为回归基线**：每次重构只能靠作者手工观察 + 提交信息里的实测数字 | 提交 `ba217a1` 正文 |
+
+---
+
+## 2. 设计原则（5 条）
+
+1. **单一事实源**：世界状态只有 `Situation`，单位归属只有 `RoleLedger`，参数只有 `AIConfig`。
+2. **单一入口**：任何单位改角色只能 `assign/release`；任何 tick 只在 `AIClock` 某档执行一次。
+3. **决策/调度/执行三层分离**：Planner 决定"要什么"（Intent），Director 决定"谁去做"（Demand→Lease），Executor 只调用 `battle` API 不写业务判断。
+4. **行为可回归**：每个阶段都有"行为等价"验收指标（自对弈固定种子），重构期间用 feature flag 一键回滚。
+5. **确定性默认开**：随机只走 `AIRng`，遍历顺序稳定（按 entity_id），禁墙钟。
+
+---
+
+## 3. 目标架构
+
+### 3.1 分层
+
+```
+┌───────────────────────────────────────────────────────────────┐
+│ Facade        AIController（≤400 行）                          │
+│               只做：装配、生命周期、对外 getter、调试面板入口      │
+├───────────────────────────────────────────────────────────────┤
+│ Brain          AIClock → 每 4Hz 一次 AIBrain.tick()             │
+│  Planner        EconomyPlanner / MilitaryPlanner / DiploPlanner  │
+│                输出 Intent 列表（建造/训练/升级/进攻/防守姿态）    │
+├───────────────────────────────────────────────────────────────┤
+│ Director       EntityDirector ×2（Army / Worker，同一实现）      │
+│                DemandTable（每 tick 生成）→ 抢占/租约 → Lease    │
+├───────────────────────────────────────────────────────────────┤
+│ Services       DefenseService / NavyService / WaterService /     │
+│                SiegeService / ScoutService / TradeService        │
+│                读 Situation，产出 Intent 或 Demand，不直接囤逻辑  │
+├───────────────────────────────────────────────────────────────┤
+│ Executor       BuildExec / TrainExec / MoveExec / CombatExec      │
+│                薄适配：参数校验 + 调 battle API + 失败原因回传     │
+├───────────────────────────────────────────────────────────────┤
+│ Infra          AIClock · AIRng · AIEvents · AIConfig · AILog      │
+│                Situation（每 tick 只读快照）· ExecutiveCache      │
+└───────────────────────────────────────────────────────────────┘
+```
+
+### 3.2 目录结构（建议）
+
+```
+scripts/ai/
+  ai_controller.gd            # Facade
+  core/  ai_clock.gd  ai_rng.gd  ai_events.gd  ai_config.gd  ai_log.gd
+  world/ ai_situation.gd      # 快照 + 空间索引 + 可见性
+  brain/ ai_brain.gd  economy_planner.gd  military_planner.gd  diplomacy_planner.gd  intents.gd
+  director/ entity_director.gd  demand_table.gd  role_ledger.gd  role_defs.gd
+  services/ defense_service.gd  navy_service.gd  water_service.gd
+            siege_service.gd  scout_service.gd  trade_service.gd
+  defense/  threat_model.gd  director.gd  plan.gd  force_allocator.gd   # 现有文件收敛进来
+  exec/ build_exec.gd  train_exec.gd  move_exec.gd
+  data/ unit_table.gd  building_table.gd  difficulty_profile.gd
+  debug/ panel.gd  selfplay.gd  metrics.gd
+```
+
+### 3.3 七个核心抽象（接口级）
+
+```gdscript
+# 1) AIClock：唯一 tick 源，三档节流
+clock.every(0.25, _fast)   # 决策/调度主循环
+clock.every(1.0,  _medium) # 侦察/修理/建造请求
+clock.every(5.0,  _slow)   # 外交/普查/日志
+
+# 2) AIRng：单流确定性随机（按 peer 播种），禁止全局 randi
+AIRng.range(a,b) / AIRng.pick(arr) / AIRng.shuffle(arr)
+
+# 3) Situation：每 tick 一次只读快照
+situation.armies / workers / buildings / resources / visible_enemies / threats
+situation.count_land_army() / count_field() / ratio(rk) / nearest(...)
+
+# 4) RoleLedger：唯一单位归属账本（军队/农民共用一个实现）
+ledger.assign(unit, role, lease_s, target) -> bool
+ledger.release(unit, reason) -> void
+ledger.has_claim(unit) / count_by_role(role) / units_with(role) / expire(now)
+
+# 5) DemandTable：每 tick 由 Planner+Services 生成的需求表
+{role=WALL, budget=槽位数, pick=Callable, order=Callable, priority=70}
+
+# 6) Intent：高层意图（不含单位）
+{kind=BUILD/TRAIN/RESEARCH/ATTACK/DEFEND, payload, priority, source, expires}
+
+# 7) Executor：执行 + 结构化失败原因（驱动下一轮决策，避免"静默失败"）
+exec.build(intent, builder) -> {ok, block_reason}
+```
+
+### 3.4 一次 tick 的数据流
+
+```
+AIClock.fast (4Hz)
+  → Situation.refresh()                 # 一次扫描，全模块复用
+  → Brain.plan(situation)               # 3 个 Planner 产出 Intent[]
+  → Director.build_demands(situation, intents)
+  → Director.fill(demands)              # 账本抢占 + 下单 + 失败原因回收
+  → Services.tick(situation)            # 防御/海军/渡水/攻城/侦察的慢节奏动作
+  → Executor 由 Director/Services 调用
+  → AILog.record(tick, intents, demands, ledger_delta, timings)
+```
+
+关键约束：**每 tick 只扫描一次实体**（Situation 承担），Planner/Director/Services 一律读快照，禁止再遍历 `battle.entities`。这是把当前 20 个计时器各自全扫的根因去掉。
+
+---
+
+## 4. 关键机制
+
+### 4.1 统一账本（合并两支 Director）
+
+- 角色按**族**分组：`Economy{IDLE,GATHER,HAULER,BUILDER,REPAIRER,FLEE,HUNT}`、`Army{IDLE,SCOUT,GARRISON,WALL,HOME_GUARD,RESOURCE_GUARD,BUILDING_DEFENSE,HARASS,RAID,FIELD,SIEGE,TRANSPORT,ESCORT,RETREAT,STANDBY}`。
+- 同一套 `RoleDefs` 表描述：租约、是否可抢占、抢占优先级、释放条件、是否计入 `count_field`/`count_land`。
+- 收益：删掉 `_roles` 与 `AIWorkerDirector._workers` 两套实现，`_unit_has_claim()` 只剩一行 `ledger.has_claim(u)`；旧 meta 用**只读适配器**过渡（读取兼容、写入逐步迁移）。
+
+### 4.2 需求表 + 抢占优先级（沿用作者设计并统一）
+
+| 优先级 | 角色族 |
+|---|---|
+| 100 | FLEE / RETREAT |
+| 90 | BUILDING_DEFENSE / 关键民居兵营重建 |
+| 80 | HOME_GUARD |
+| 70 | WALL |
+| 60 | GARRISON |
+| 50 | RESOURCE_GUARD / REPAIR |
+| 40 | HARASS / RAID |
+| 30 | FIELD / GATHER |
+| 10 | HUNT |
+| 0 | IDLE 兜底 |
+
+规则沿用设计文档：只从低优先级未满额处拿人；行军/交战单位不可抢占（例外 RETREAT/BUILDING_DEFENSE）；同优先级先到先得；所有租约到期即回池、同一 tick 内重新分配。
+
+### 4.3 Planner：把散落的 if 变成"意图 + 打分"
+
+- `EconomyPlanner`：根据阶段、库存水位、建造需求、军队生产，产出 `BUILD/TRAIN/RESEARCH` 意图（替代 `_process_line_1/3/4/5` 里的顺序 if）。
+- `MilitaryPlanner`：根据 `count_land_army`、敌情、威胁姿态，产出 `ATTACK/HARASS/DEFEND` 意图与兵种配比。
+- 打分制（utility）：`score = 收益 × 紧急度 − 成本惩罚`，同 tick 取 top-N；阈值集中进 `AIConfig`，**难度只改这张表**。
+
+### 4.4 阶段与战术：保留概念，改为派生值
+
+`Phase` / `LateTactic` 对外仍暴露（HUD、调试面板、日志、平衡都在用），但改为 `StrategyState.derive(situation)` 纯函数计算（带滞回），不再由 step 11、`update_tactic` 各自写。这样消灭"三套状态互相打架"的根因，同时不破坏观感。
+
+### 4.5 事件与缓存
+
+- `AIEvents` 订阅 `battle` 现有信号（实体死亡、建筑受损、资源耗尽、生产完成），维护增量索引；Situation 只做增量+周期性全量校验（例如每 5s 一次，开销可控）。
+- 目标：消灭 O(N) 重复扫描，把 AI 每帧成本从"随实体数线性 × 计时器个数"降到"每 tick 一次"。
+
+### 4.6 确定性
+
+- 所有 AI 随机 → `AIRng`；遍历统一按 `entity_id` 升序；时间只读 `SimTime`。
+- `OnlineBattleManager` 建局阶段的 `randi/randf_range` 一并迁移（当前唯一 P0 残留）。
+- 目标：同 seed + 同指令序列 → 校验和一致（回放可用作 bug 复现与回归）。
+
+### 4.7 配置与难度参数化
+
+- `AIConfig`（Resource，可热改）：兵种/建筑 ID 表、排除表、阈值、距离。
+- `DifficultyProfile`：思考频率、防线阈值（12/6/2）、侦察频率、战术触发、资源倍率、允许的"作弊项"（默认 0）——**难度从"更快"变成"更准/更敢/更会算"**。
+
+---
+
+## 5. 旧 → 新 映射（迁移时照此对位）
+
+| 现状 | 新归属 |
+|---|---|
+| `_run_decide_step` 15 段 | `AIClock.fast` + `Situation` + Planner/Director/Services 的固定顺序 |
+| `_state_production/development/assault` | `StrategyState.derive()` + Planner 意图集 |
+| `_process_line_1/3/4/5` | `EconomyPlanner` / `MilitaryPlanner` |
+| `_roles` + `_director_*` | `RoleLedger` + `EntityDirector(Army)` |
+| `AIWorkerDirector` | `EntityDirector(Worker)` + `EntityDirector` 复用 |
+| `AIDefense`(3,818) | `DefenseService`（规划/建造/守军拆到 4 个现有 defense/ 模块 + 服务壳） |
+| 各专项计时器 | `AIClock` 三档 |
+| `Phase/LateTactic` 写点 | `StrategyState` 派生 |
+| 旧 meta | `RoleLedger` claim + 只读适配器 |
+| 硬编码 ID/阈值 | `data/*_table.gd` + `AIConfig` |
+
+---
+
+## 6. 迁移路线（6 阶段，每阶段可单独发布/回滚）
+
+| 阶段 | 内容 | 验收 | 预估 |
+|---|---|---|---|
+| **P0 基线** | 自对弈回归脚本（固定种子 8 局，抓 idle 率/前线参与率/首攻时间/胜负/帧耗时） | 基线数据入库，后续每阶段对比 | 0.5 天 |
+| **P1 基础设施** | AIClock/AIRng/AIEvents/AIConfig/AILog（行为零变化） | 同 seed 校验和一致；帧耗时无回退 | 1~2 天 |
+| **P2 世界模型** | Situation 快照 + 空间索引，替换散落全扫 | 扫描耗时对比；行为指标 ±2% 内 | 2~3 天 |
+| **P3 统一 Director** | `RoleLedger` + `EntityDirector` 两实例，旧 meta 适配器 | idle 率、卡死数不劣化；`_unit_has_claim` 单入口 | 2~3 天 |
+| **P4 规划器** | Economy/Military Planner 替换 `_process_line_*`/`_state_*` | 建造序列、首攻时间、胜率对比 | 3~4 天 |
+| **P5 服务化** | 防御/海军/渡水/攻城/侦察/外交收为 Service | 防御阶段指标、单文件行数达标 | 3~5 天 |
+| **P6 清理调优** | 删死代码/旧 meta/旧入口；难度参数表；平衡迭代 | 死代码清零、难度差异可测、`AI.gd ≤ 400` 行 | 2~3 天 |
+
+**总工期**：约 2.5~3 周（单人）。每个阶段结束跑 P0 的回归，任一指标劣化超阈值就回滚该阶段 feature flag。
+
+---
+
+## 7. 验收指标（写进 P0 脚本，自动出表）
+
+| 指标 | 现状 | 目标 |
+|---|---|---|
+| AI 决策单帧耗时 p95 | 未系统测量（>80ms 才记日志） | ≤ 4ms（不降频情况下） |
+| 单位 idle 率（t=480） | ~19.7%（重构前） | < 8% |
+| 前线参与率 | 31.6% → 67.6%（Ba217a1 实测） | > 75% |
+| 卡死在 transport/garrison 预约 | 存在 | 0（租约保证） |
+| 农民保底恢复时间 | 未测 | ≤ 30s |
+| 建造请求无 builder > 5s | 未测 | 0（不安全点除外） |
+| `AI.gd` 行数 | 6,240 | ≤ 400（Facade） |
+| 硬编码兵种/建筑 ID 数组 | 20+ 处 | ≤ 3 处（全在 data） |
+| 同 seed 回放校验和 | 单机部分成立 | 单机+联机一致 |
+
+---
+
+## 8. 风险与对策
+
+| 风险 | 对策 |
+|---|---|
+| 大规模移动代码导致行为回归，且难定位 | 每阶段 feature flag + P0 回归指标 + 影子对比（先只读后接管，沿用你已验证的 5 阶段防御打法） |
+| Situation 快照引入"数据过期"（伤害/死亡延迟一 tick） | 事件即时标记 + 快照内保留 `stale` 标记，决策层对关键实体做二次校验 |
+| Planner 打分制调参失控 | 阈值全部进 AIConfig + 自对弈扫参；保留旧行为作为 fallback profile |
+| 联机 AI 与单机 AI 分叉 | 只保留一个 `AIController`，联机差异只体现在 `Situation` 数据源与命令通道（现有封装已具备） |
+| 工期拖长 | P1~P3 是纯结构性收益，可随时停在任一阶段交付；P4/P5 才动行为 |
+
+---
+
+## 9. 需要你拍板的 4 个决策
+
+1. **范围**：只做单机 AI（联机共用同一 Facade，后续自然复用）/ 同时覆盖联机（多 1 周，含建局确定性）。
+2. **路径**：渐进式 strangler（推荐，每阶段可发布）/ 新分支大改（快但风险集中）。
+3. **优先级**：先可维护性（行为保持不变，P1→P3）→ 再强化行为（P4/P5）；还是先要"AI 更强"（Planner 提前）。
+4. **P0 基线口径**：沿用作者提交信息里的手工实测口径（3v3、6 AI HELL、8 倍速、固定种子 24680），还是我另建一套无头自对弈脚本（更慢但可自动化）。
+
+拍板后我按阶段出可执行的改动清单（文件级 + 函数级 diff 计划），每阶段单独提交、单独回归。
+
+
+---
+
+## 10. 决策记录（2026-10-30，已锁定）
+
+| 决策 | 选择 | 影响 |
+|------|------|------|
+| 范围 | **同时覆盖联机 + 建局确定性** | P1 起把 `OnlineBattleManager` 的全局 RNG 一并迁到 `AIRng`；联机 AI 局回放可用 |
+| 路径 | **渐进式 strangler，每阶段可发布可回滚** | 每阶段独立提交 + P0 回归对比，劣化即回滚该阶段 feature flag |
+| 优先级 | **先可维护性（行为保持不变），再强化行为** | P1~P3 不动行为；P4/P5 才改决策质量 |
+| 基线 | **另建无头自对弈脚本**（已落地，见第 11 节） | 每阶段自动出 CSV/JSON，回归可量化 |
+
+## 11. P0 已落地：无头自对弈基线（2026-10-30 19:34）
+
+代码：`tools/ai_selfplay.tscn` + `tools/ai_selfplay.gd`（启动器）+ `tools/ai_selfplay_runner.gd`（逻辑），说明见 [tools/ai_selfplay.md](../tools/ai_selfplay.md)。
+
+首轮基线（seed=24680，3v3、5 AI、HELL、8x、research、城堡锁血，8 游戏分钟，墙钟 73s）：
+
+| t(游戏秒) | 实体 | 军队 | 交战中 | 推进中 | 待命 | 帧 p95 |
+|---|---|---|---|---|---|---|
+| 61 | 409 | 103 | 2 | 8 | 1 | 141ms |
+| 180 | 455 | 131 | 13 | 7 | 4 | 196ms |
+| 300 | 485 | 138 | 26 | 1 | 7 | 187ms |
+| 480 | 513 | 147 | 12 | 16 | 12 | 145ms |
+
+汇总：`engage 41.1% / push 21.8% / idle 23.3% / front 62.9%`、`workers_avg 11.9`、`land_avg 6.6`。
+与作者提交 `ba217a1` 实测（t=360：交战 45.4% / 推进 22.2% / 待命 8.5%，前线 67.6%）相比，前线参与接近，**待命率明显偏高**；已定位两个原因：
+
+1. **阶段门槛卡死**：基线中所有 AI 的 `phase` 始终为 1（DEVELOPMENT），t=480 仍未进 ASSAULT；`peers.csv` 里 `field` 长期 0~9，而门槛是 `count_field_military() >= 30`。军队账本接管后单位普遍带角色，field 计数被扣空 → **这是"两套门槛口径"的直接证据**，建议 P1 前先把 step 11 统一为 `count_land_army()`。
+2. **idle 口径包含驻军/船上单位**（order 为空即计 idle），与作者手工口径不完全同源；后续在指标里拆 `garrisoned` 列，主口径保持稳定。
+
+基准数据：`docs/ai-analysis/selfplay/`（`seed_24680_samples.csv`、`seed_24680_peers.csv`、`summary.json`）。
+
+### 11.1 已修复：阶段门槛卡死（本次提交）
+
+| 项 | 修复前 | 修复后 |
+|----|--------|--------|
+| 判断口径 | `count_field_military(...) >= 30`（被角色扣空，长期 0~9） | `count_land_army() >= 14`（总陆军，含守军/墙守/游击） |
+| 实测 | 12 分钟所有 AI 仍 `phase=DEVELOPMENT` | `phase=ASSAULT` 在 t=420 / 540 / 600 分别触发（peer 2000 / 2001 / 1001） |
+| 依据 | 自对弈基线 `docs/ai-analysis/selfplay/` | 修复后对照 `docs/ai-analysis/selfplay/after_phase_fix/` |
+
+阈值定 14 的实测依据：总陆军 14 在 t≈8~9 分钟出现、18 要到 12 分钟、21 到 12 分钟仍未普及；取 14 保证 ASSAULT 在常规对局中段真正发生。
