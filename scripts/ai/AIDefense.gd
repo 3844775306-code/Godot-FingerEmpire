@@ -12,11 +12,14 @@
 extends RefCounted
 const DefenseContextScript = preload("res://scripts/ai/defense/DefenseContext.gd")
 const DefenseThreatModelScript = preload("res://scripts/ai/defense/DefenseThreatModel.gd")
+const DefenseDirectorScript = preload("res://scripts/ai/defense/DefenseDirector.gd")
+const DefensePlanScript = preload("res://scripts/ai/defense/DefensePlan.gd")
 
 const THREAT_RADIUS: float = 15.0
 # 威胁的外圈：15~26 米内的可见敌军按低权重计入，避免“敌人已经压到墙下但威胁仍为 0”
 const THREAT_OUTER_RADIUS: float = 26.0
 const THREAT_INTERVAL: float = 2.5
+const PLAN_SHADOW_INTERVAL: float = 1.0
 const DEFENSE_FRONT: float = 7.2
 const DEFENSE_WALL_RADIUS: float = 12.2
 # 防线地形搜索：在城堡朝敌方向的前方扇形里找隘口/浅滩，把墙线横在通道上
@@ -124,6 +127,10 @@ var ai = null
 var _defense_context = null
 var _threat_model = null
 var _last_threat_snapshot: Dictionary = {}
+# 第 2 阶段：姿态导演 + 只读计划视图，不参与现有决策。
+var _defense_director = null
+var _defense_plan = null
+var _plan_shadow_timer: float = 0.0
 
 # ── 威胁状态 ──
 var threat_level: int = 0             # 0 平静 / 1 警戒 / 2 防守 / 3 危急
@@ -203,6 +210,8 @@ func _init(owner_ai) -> void:
 	ai = owner_ai
 	_defense_context = DefenseContextScript.new(ai)
 	_threat_model = DefenseThreatModelScript.new(_defense_context)
+	_defense_director = DefenseDirectorScript.new(_defense_context)
+	_defense_plan = DefensePlanScript.new()
 
 # ═══════════════════════════════════════════════════════════════
 # 主入口
@@ -222,6 +231,9 @@ func tick(delta: float) -> void:
 		if _threat_model != null:
 			_threat_model.reset()
 			_last_threat_snapshot = _threat_model.get_snapshot()
+		if _defense_plan != null:
+			_defense_plan.clear()
+		_plan_shadow_timer = 0.0
 		threat_level = 0
 		threat_score = 0.0
 		_threat_smoothed = 0.0
@@ -239,6 +251,7 @@ func tick(delta: float) -> void:
 		_building_alert_timer = BUILDING_ALERT_INTERVAL
 		_detect_building_attacks()
 	_manage_defense(castle, delta)
+	_update_defense_plan_shadow(castle, delta)
 	_manage_home_guard(castle, delta)
 	_quick_fill_home_guard(castle, delta)
 	_manage_resource_security(castle, delta)
@@ -320,6 +333,44 @@ func get_primary_threat_sector() -> int:
 	if _threat_model == null:
 		return -1
 	return _threat_model.get_primary_sector()
+
+# 第 2 阶段影子刷新：每秒把威胁快照翻译成姿态/预算/只读计划。
+# 本函数只读旧状态，不写回 _wall_ring_target、队列或守军。
+func _update_defense_plan_shadow(_castle, delta: float) -> void:
+	if _defense_director == null or _defense_plan == null:
+		return
+	_plan_shadow_timer -= delta
+	if _plan_shadow_timer > 0.0:
+		return
+	_plan_shadow_timer = PLAN_SHADOW_INTERVAL
+	var snapshot: Dictionary = _last_threat_snapshot
+	if snapshot.is_empty():
+		snapshot = get_threat_snapshot()
+	var now: float = 0.0
+	if ai != null and ai.battle != null:
+		now = float(ai.battle.game_time)
+	_defense_director.evaluate(snapshot, _wall_ring_target, now)
+	_defense_plan.rebuild(self, _defense_director, snapshot)
+
+func get_defense_plan() -> Dictionary:
+	if _defense_plan == null:
+		return {}
+	return _defense_plan.to_dictionary()
+
+func get_defense_posture() -> int:
+	if _defense_director == null:
+		return 0
+	return int(_defense_director.posture)
+
+func get_defense_budget_reserve() -> float:
+	if _defense_director == null:
+		return 0.35
+	return float(_defense_director.budget_reserve)
+
+func get_defense_director_summary() -> String:
+	if _defense_director == null:
+		return "-"
+	return _defense_director.describe()
 
 func _enemy_castle_dir(castle) -> Vector3:
 	var enemy_team: int = ai._primary_enemy_team()
