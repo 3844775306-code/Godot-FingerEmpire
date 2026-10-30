@@ -14,12 +14,14 @@ const DefenseContextScript = preload("res://scripts/ai/defense/DefenseContext.gd
 const DefenseThreatModelScript = preload("res://scripts/ai/defense/DefenseThreatModel.gd")
 const DefenseDirectorScript = preload("res://scripts/ai/defense/DefenseDirector.gd")
 const DefensePlanScript = preload("res://scripts/ai/defense/DefensePlan.gd")
+const DefenseForceAllocatorScript = preload("res://scripts/ai/defense/DefenseForceAllocator.gd")
 
 const THREAT_RADIUS: float = 15.0
 # 威胁的外圈：15~26 米内的可见敌军按低权重计入，避免“敌人已经压到墙下但威胁仍为 0”
 const THREAT_OUTER_RADIUS: float = 26.0
 const THREAT_INTERVAL: float = 2.5
 const PLAN_SHADOW_INTERVAL: float = 1.0
+const FORCE_SHADOW_INTERVAL: float = 2.0
 const DEFENSE_FRONT: float = 7.2
 const DEFENSE_WALL_RADIUS: float = 12.2
 # 防线地形搜索：在城堡朝敌方向的前方扇形里找隘口/浅滩，把墙线横在通道上
@@ -131,6 +133,8 @@ var _last_threat_snapshot: Dictionary = {}
 var _defense_director = null
 var _defense_plan = null
 var _plan_shadow_timer: float = 0.0
+var _force_allocator = null
+var _allocator_shadow_timer: float = 0.0
 
 # ── 威胁状态 ──
 var threat_level: int = 0             # 0 平静 / 1 警戒 / 2 防守 / 3 危急
@@ -212,6 +216,7 @@ func _init(owner_ai) -> void:
 	_threat_model = DefenseThreatModelScript.new(_defense_context)
 	_defense_director = DefenseDirectorScript.new(_defense_context)
 	_defense_plan = DefensePlanScript.new()
+	_force_allocator = DefenseForceAllocatorScript.new(_defense_context)
 
 # ═══════════════════════════════════════════════════════════════
 # 主入口
@@ -233,7 +238,10 @@ func tick(delta: float) -> void:
 			_last_threat_snapshot = _threat_model.get_snapshot()
 		if _defense_plan != null:
 			_defense_plan.clear()
+		if _force_allocator != null:
+			_force_allocator.clear()
 		_plan_shadow_timer = 0.0
+		_allocator_shadow_timer = 0.0
 		threat_level = 0
 		threat_score = 0.0
 		_threat_smoothed = 0.0
@@ -252,6 +260,7 @@ func tick(delta: float) -> void:
 		_detect_building_attacks()
 	_manage_defense(castle, delta)
 	_update_defense_plan_shadow(castle, delta)
+	_update_force_allocator_shadow(castle, delta)
 	_manage_home_guard(castle, delta)
 	_quick_fill_home_guard(castle, delta)
 	_manage_resource_security(castle, delta)
@@ -371,6 +380,29 @@ func get_defense_director_summary() -> String:
 	if _defense_director == null:
 		return "-"
 	return _defense_director.describe()
+
+# 第 4 阶段影子分配：每 2 秒算一次主城守军建议，不写回任何 meta 或角色账本。
+func _update_force_allocator_shadow(castle, delta: float) -> void:
+	if _force_allocator == null or _defense_director == null:
+		return
+	_allocator_shadow_timer -= delta
+	if _allocator_shadow_timer > 0.0:
+		return
+	_allocator_shadow_timer = FORCE_SHADOW_INTERVAL
+	var snapshot: Dictionary = _last_threat_snapshot
+	if snapshot.is_empty():
+		snapshot = get_threat_snapshot()
+	_force_allocator.build_plan(castle, _defense_director, self, snapshot)
+
+func get_force_allocation_shadow() -> Dictionary:
+	if _force_allocator == null:
+		return {}
+	return _force_allocator.to_dictionary()
+
+func get_force_allocator_summary() -> String:
+	if _force_allocator == null:
+		return "-"
+	return _force_allocator.describe()
 
 func _enemy_castle_dir(castle) -> Vector3:
 	var enemy_team: int = ai._primary_enemy_team()
