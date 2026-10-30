@@ -10,6 +10,7 @@
 #
 # 本模块保持无 class_name，由 AI.gd 通过 preload 加载，避免全局类缓存不同步。
 extends RefCounted
+const AIClockScript = preload("res://scripts/ai/core/AIClock.gd")
 const SimTime = preload("res://scripts/core/SimTime.gd")
 const DefenseContextScript = preload("res://scripts/ai/defense/DefenseContext.gd")
 const DefenseThreatModelScript = preload("res://scripts/ai/defense/DefenseThreatModel.gd")
@@ -143,7 +144,7 @@ var threat_score: float = 0.0
 var threat_enemy_count: int = 0
 var threat_dir: Vector3 = Vector3.FORWARD
 var threat_center: Vector3 = Vector3.ZERO
-var _threat_timer: float = 0.0
+var _clock = null
 var _threat_smoothed: float = 0.0
 var _castle_damage_until: float = -999.0
 var _last_castle_id: int = -1
@@ -192,8 +193,6 @@ var _upgrade_timer: float = 4.0
 # ── 守军状态 ──
 var _home_guard_ids: Dictionary = {}
 var _guard_timer: float = 0.0
-var _guard_refill_timer: float = 0.0
-var _building_alert_timer: float = 0.0
 var _force_guard_until: float = -999.0
 # 主攻前解除守军后的静默期：期间不再抢人，避免刚放出去又被守军抓回
 var _guard_block_until: float = -999.0
@@ -203,7 +202,6 @@ var _building_health: Dictionary = {}
 
 # ── 资源区状态 ──
 var resource_zones: Array = []        # [{"center","type","workers","nodes","enemy_count"}]
-var _resource_timer: float = 0.0
 var _zone_timer: float = 0.0
 var _next_outpost: float = 0.0
 # 记录已经落位的资源区瞭望塔，便于限制每片资源区只建一座。
@@ -213,6 +211,12 @@ var _resource_guard_hold_until: float = -999.0
 
 func _init(owner_ai) -> void:
 	ai = owner_ai
+	# P3.3：模块内计时器统一走 AIClock（按帧推进），不再各自维护浮点计时。
+	_clock = AIClockScript.new()
+	_clock.add("threat", THREAT_INTERVAL)
+	_clock.add("building_alert", BUILDING_ALERT_INTERVAL)
+	_clock.add("guard_refill", GUARD_REFILL_INTERVAL)
+	_clock.add("resource", RESOURCE_INTERVAL)
 	_defense_context = DefenseContextScript.new(ai)
 	_threat_model = DefenseThreatModelScript.new(_defense_context)
 	_defense_director = DefenseDirectorScript.new(_defense_context)
@@ -231,6 +235,8 @@ func tick(delta: float) -> void:
 		return
 	if b.game_over:
 		return
+	if _clock != null:
+		_clock.advance(delta)
 	var castle = ai.get_peer_castle(ai.my_peer_id)
 	if castle == null or not is_instance_valid(castle):
 		# 没有主城时不能保留上一场战斗的高威胁分数，否则调试面板会显示“敌军 0 却高度警戒”
@@ -248,16 +254,12 @@ func tick(delta: float) -> void:
 		_threat_smoothed = 0.0
 		threat_enemy_count = 0
 		return
-	_threat_timer -= delta
-	if _threat_timer <= 0.0:
-		_threat_timer = THREAT_INTERVAL
+	if _clock.due("threat"):
 		_evaluate_threat(castle)
 	# 先检测建筑掉血并给附近空闲部队下反击命令，再调度守军；
 	# 被本地防守标记的部队会在守军调度里跳过，避免刚出击就被拉回主城。
 	# 检测本身要遍历全部实体，不能每帧跑；0.5 秒一次已经足够及时。
-	_building_alert_timer -= delta
-	if _building_alert_timer <= 0.0:
-		_building_alert_timer = BUILDING_ALERT_INTERVAL
+	if _clock.due("building_alert"):
 		_detect_building_attacks()
 	_manage_defense(castle, delta)
 	_update_defense_plan_shadow(castle, delta)
@@ -3267,10 +3269,8 @@ func _manage_home_guard(castle, delta: float) -> void:
 # 主城守军每 2 秒做一次轻量补员：守卫阵亡/被调走时不必等满一分钟审计。
 # 数量/威胁等级变化仍由每 60 秒的 _manage_home_guard 完整审计处理。
 func _quick_fill_home_guard(castle, delta: float) -> void:
-	_guard_refill_timer -= delta
-	if _guard_refill_timer > 0.0:
+	if not _clock.due("guard_refill"):
 		return
-	_guard_refill_timer = GUARD_REFILL_INTERVAL
 	if _guard_timer <= 0.0:
 		return
 	if threat_level >= 2:
@@ -3467,10 +3467,8 @@ func _unit_has_existing_task(u) -> bool:
 # ═══════════════════════════════════════════════════════════════
 
 func _manage_resource_security(castle, delta: float) -> void:
-	_resource_timer -= delta
-	if _resource_timer > 0.0:
+	if not _clock.due("resource"):
 		return
-	_resource_timer = RESOURCE_INTERVAL
 	_zone_timer -= RESOURCE_INTERVAL
 	if _zone_timer <= 0.0:
 		_zone_timer = RESOURCE_ZONE_INTERVAL

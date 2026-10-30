@@ -1,5 +1,6 @@
 class_name AIWaterCrossing
 extends RefCounted
+const AIClockScript = preload("res://scripts/ai/core/AIClock.gd")
 const SimTime = preload("res://scripts/core/SimTime.gd")
 
 # AI 渡水行为：
@@ -70,7 +71,6 @@ var _resource_bridges_started: int = 0
 # 只有目标不在同一块陆地时才启动小范围 BFS，避免每次 AI 造建筑都扫全图。
 var _reachable_land: Dictionary = {}
 
-var _plan_timer: float = 2.0
 var _bridge_fail_count: int = 0
 var _bridge_retry_at_ms: int = 0
 var own_shore_water: Vector3 = Vector3.ZERO
@@ -116,18 +116,28 @@ var _bridge_pending_left: float = -1.0
 var _bridge_pending_stall: float = 0.0
 var _fleet_idle_timer: float = 0.0
 var _fleet_sail_timer: float = 0.0
+var _clock = null
 
 func _init(owner):
 	ai = owner
 	battle = ai.battle
+	_clock = AIClockScript.new()
+	# 首轮延迟 2 秒（原 _plan_timer 初始值），之后每 PLAN_INTERVAL 一次。
+	_clock.add("plan", PLAN_INTERVAL, 1.0 - 2.0 / PLAN_INTERVAL)
+
+# P3.3：把"若干秒后重新规划"的旧写法收敛成一个入口（旧代码直接改 _plan_timer 字段）。
+func _request_plan_in(seconds: float) -> void:
+	if _clock == null:
+		return
+	_clock.reset("plan", clampf(seconds / PLAN_INTERVAL, 0.0, 1.0))
 
 func tick(delta: float):
 	if battle == null or not is_instance_valid(battle):
 		return
-	_plan_timer -= delta
-	if _plan_timer <= 0.0:
-		_plan_timer = PLAN_INTERVAL
-		_refresh_plan()
+	if _clock != null:
+		_clock.advance(delta)
+		if _clock.due("plan"):
+			_refresh_plan()
 	if mode == MODE_BRIDGE:
 		_tick_bridge(delta)
 	elif mode == MODE_TRANSPORT:
@@ -249,7 +259,7 @@ func _stall_transport():
 		if is_instance_valid(s) and s.global_position.distance_to(own_shore_water) > 15.0:
 			s.set_meta("ai_transport_excluded", true)
 	_transport_shores_valid = false
-	_plan_timer = 0.0
+	_request_plan_in(0.0)
 	_abort_transport()
 
 func _collect_bridges() -> Dictionary:
@@ -766,7 +776,7 @@ func _landing_defense_score(pos: Vector3, defenses: Array) -> float:
 func _tick_bridge(delta: float):
 	if bridge_plan.is_empty():
 		_bridge_afford_timer = 0.0
-		_plan_timer = minf(_plan_timer, 1.0)
+		_request_plan_in(1.0)
 		return
 	var pos: Vector3 = bridge_plan[0]
 	var g: Vector2i = battle.world_to_grid(pos)
@@ -810,14 +820,14 @@ func _tick_bridge(delta: float):
 			bridge_plan.clear()
 			_bridge_afford_timer = 0.0
 			_register_bridge_failure()
-			_plan_timer = 1.0
+			_request_plan_in(1.0)
 		return
 	_bridge_afford_timer = 0.0
 	if battle.has_method("is_valid_bridge_position") and not battle.is_valid_bridge_position(pos):
 		# 这个桥位被单位/建筑挡住或地形已变，下一周期重新找
 		bridge_plan.clear()
 		_register_bridge_failure()
-		_plan_timer = 1.0
+		_request_plan_in(1.0)
 		return
 	if ai.build_building(BRIDGE_ID, pos):
 		_bridge_fail_count = 0
@@ -825,13 +835,13 @@ func _tick_bridge(delta: float):
 		_bridge_afford_timer = 0.0
 		bridge_plan.pop_front()
 		if bridge_plan.is_empty():
-			_plan_timer = 0.0
+			_request_plan_in(0.0)
 			_recalculate_army_paths()
 	else:
 		# 附近有敌军或位置被占：放弃本段，下一周期重新找线
 		bridge_plan.clear()
 		_register_bridge_failure()
-		_plan_timer = 1.0
+		_request_plan_in(1.0)
 
 func _register_bridge_failure():
 	_bridge_fail_count += 1

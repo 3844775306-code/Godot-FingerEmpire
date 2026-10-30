@@ -707,3 +707,19 @@ AIClock.fast (4Hz)
 2. `AIDefense` 内部仍有 10 个自维护计时器，未并入 AIClock（并入需要单独 A/B，参考 12.7 的方法）；
 3. `AIWaterCrossing` 的 `_plan_timer`、`AIWorkerDirector` 的 `_timer` 同理；
 4. 决策逻辑分散在约 10 个模块，`AIDirector` 目前只覆盖 defend/push/reinforce/gather/idle_warn 五类意图的影子计算，尚未接管真实派单。
+
+### 12.12 模块内计时器收口：WorkerDirector / WaterCrossing / Defense（2026-10-31 00:45）
+
+三个模块各自维护浮点计时器，节拍精度与 AI 主时钟不一致。这次给每个模块配一个自己的 `AIClock`（`advance(delta)` 在各自 `tick` 里调用），把固定周期计时器换掉：
+
+| 模块 | 迁移的计时器 | 保留 |
+|---|---|---|
+| `AIWorkerDirector` | `_timer`(2s 主节拍)、`_log_timer`(日志) | 建造请求 TTL、租约到期（都是"截止时间"语义，不是节拍） |
+| `AIWaterCrossing` | `_plan_timer`(6s 规划，初始 2s 延迟) | `_fleet_*` 系列（按事件计时的等待窗口） |
+| `AIDefense` | `_threat_timer`(2.5s)、`_building_alert_timer`(0.5s)、`_guard_refill_timer`(2s)、`_resource_timer`(1.5s) | `_guard_timer`(60s，被多处当"距上次完整审计"条件读取)、`_defense_check_timer`(25s)、`_upgrade_timer`、`_zone_timer`、两个影子计时器 |
+
+**踩到的坑**：`const AIClockScript = preload(...)` 不能插在 `extends` 之前，否则整个模块 `Unexpected "extends" in class body` 解析失败、AI 全部停摆。已按"`extends` 之后、其它 const 之前"放置。
+
+**验证**（5 分钟 3v3 HELL，种子 24680）：front 58.95 / 51.00，idle 23.58 / 22.00 —— 落在基线噪声区间（54.9~63.7 / 9.7~24.8）内，无脚本错误。
+
+**剩余**：`_guard_timer` 等"跨函数当条件读"的计时器没有迁移——它们的语义不是"到点触发"，而是"距上次事件多久"，改成时钟会引入 `due()` 的消费语义歧义，需要先改调用结构再迁移。

@@ -3,6 +3,7 @@
 # 当前阶段：补农、基础采集、建造者租约、逃跑接管；打猎仍由旧入口派单。
 class_name AIWorkerDirector
 extends RefCounted
+const AIClockScript = preload("res://scripts/ai/core/AIClock.gd")
 
 const ROLE_IDLE: int = 0
 const ROLE_GATHER: int = 1
@@ -21,8 +22,8 @@ const BUILDER_LEASE: float = 90.0
 const BUILDER_ASSIGN_GRACE: float = 3.0
 
 var ai = null
-var _timer: float = 0.0
-var _log_timer: float = 0.0
+# P3.3：模块内计时器统一用 AIClock（按帧推进，不再自己维护浮点计时）。
+var _clock = null
 var _workers: Dictionary = {}   # uid -> snapshot + unit
 var _last_train_at: float = -999.0
 var _last_train_block: String = ""
@@ -38,22 +39,22 @@ const BUILD_REQUEST_TRIES: int = 3
 
 func setup(controller) -> void:
 	ai = controller
-	_timer = 0.0
-	_log_timer = 0.0
+	_clock = AIClockScript.new()
+	_clock.add("tick", TICK_INTERVAL)
+	_clock.add("log", LOG_INTERVAL)
 
 func tick(delta: float) -> void:
 	if ai == null:
 		return
-	_timer -= delta
-	if _timer > 0.0:
+	if _clock == null:
 		return
-	_timer = TICK_INTERVAL
+	_clock.advance(delta)
+	if not _clock.due("tick"):
+		return
 	_sync_roster()
 	_release_finished_builders()
 	_update_flee()
-	_log_timer -= TICK_INTERVAL
-	if _log_timer <= 0.0:
-		_log_timer = LOG_INTERVAL
+	if _clock.due("log"):
 		_log_metrics()
 
 # 每 3 秒由 AI.gd 的 allocate_workers() 调用。
