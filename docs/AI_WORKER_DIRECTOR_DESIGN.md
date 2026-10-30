@@ -4,6 +4,9 @@
 > 里的补农、采集、逃跑、建造、修理、打猎逻辑，收敛成
 > **一个调度器 + 一张需求表 + 一套角色租约**。
 >
+> 实施状态：**第 1 阶段（只读账本）已接入**。`AIWorkerDirector.gd` 只观察并输出
+> `[WORKER]` 日志，不改变任何农民命令；补农/采集/建造/逃跑迁移尚未开始。
+>
 > 这套结构可以视为 [AI_ARMY_DISPATCH_DESIGN.md](AI_ARMY_DISPATCH_DESIGN.md)
 > 的农民版：军队用 ArmyDirector，农民用 WorkerDirector，两者共用同一套
 > 「单一账本、唯一入口、租约、优先级需求」原则。

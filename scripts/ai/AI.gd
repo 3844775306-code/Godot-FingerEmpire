@@ -8,6 +8,7 @@ const AIDefenseScript = preload("res://scripts/ai/AIDefense.gd")
 const AIWaterCrossingScript = preload("res://scripts/ai/AIWaterCrossing.gd")
 const AIWallPlannerScript = preload("res://scripts/ai/AIWallPlanner.gd")
 const AILadderSiegeScript = preload("res://scripts/ai/AILadderSiege.gd")
+const AIWorkerDirectorScript = preload("res://scripts/ai/AIWorkerDirector.gd")
 
 enum Phase { PRODUCTION, DEVELOPMENT, ASSAULT }
 enum LateTactic { NONE, HARASS, OVERWHELM, RAID, DEFEND }
@@ -86,6 +87,7 @@ var _defense = null                      # AIDefense 模块：威胁/防线/守�
 var _wall_planner = null                 # AIWallPlanner 模块：城墙施工顺序/墙顶炮选点
 var _water_crossing = null               # AIWaterCrossing 模块：搭桥/运载船渡水
 var _ladder_siege = null                 # AILadderSiege 模块：造梯子翻越敌方城墙
+var _worker_director = null              # WorkerDirector 模块：农民只读账本（第 1 阶段）
 var _harass_ids: Dictionary = {}         # 当前骚扰小队 instance_id -> true
 var _harass_until: float = -999.0        # 骚扰小队回收时间
 var _upgrade_cycle_timer: float = 20.0   # 每20秒切换
@@ -1810,6 +1812,8 @@ func _ready():
 	_defense = AIDefenseScript.new(self)
 	_water_crossing = AIWaterCrossingScript.new(self)
 	_ladder_siege = AILadderSiegeScript.new(self)
+	_worker_director = AIWorkerDirectorScript.new()
+	_worker_director.setup(self)
 
 # 后期实体数越多，AI 的周期性全量扫描越贵；返回统一的降频倍率。
 func _late_game_scale() -> float:
@@ -1897,6 +1901,9 @@ func _process(delta):
 	if worker_allocate_timer <= 0:
 		worker_allocate_timer = WORKER_ALLOCATE_INTERVAL * late_scale
 		allocate_workers()
+	# WorkerDirector 第 1 阶段：只读账本/日志，不改农民命令。
+	if _worker_director != null:
+		_worker_director.tick(delta)
 	_naval_patrol_timer -= delta
 	if _naval_patrol_timer <= 0:
 		_naval_patrol_timer = NAVAL_PATROL_INTERVAL * late_scale
