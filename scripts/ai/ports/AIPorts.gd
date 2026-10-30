@@ -46,10 +46,14 @@ class BuildPort:
 			return false
 		return bool(_ai._ai_can_build(building_id)) if _ai.has_method("_ai_can_build") else true
 
-	func build(building_id: int, pos: Vector3) -> bool:
+	func build(building_id: int, pos = null, facing = null) -> bool:
 		if _ai == null:
 			return false
-		return bool(_ai.build_building(building_id, pos))
+		if pos == null:
+			return bool(_ai.build_building(building_id))
+		if facing == null:
+			return bool(_ai.build_building(building_id, pos))
+		return bool(_ai.build_building(building_id, pos, facing))
 
 	func upgrade(building_id: int) -> bool:
 		if _ai == null:
@@ -58,6 +62,24 @@ class BuildPort:
 
 	func castle_lv() -> int:
 		return int(_ai.get_peer_castle(_ai.my_peer_id).upgrade_level) if _ai != null and _ai.get_peer_castle(_ai.my_peer_id) != null else 0
+
+# ───────────────────────── RecruitPort ─────────────────────────
+class RecruitPort:
+	var _ai = null
+
+	func _init(ai) -> void:
+		_ai = ai
+
+	func produce(unit_id: int, rule: String = "") -> bool:
+		if _ai == null:
+			return false
+		return bool(_ai.produce_unit(unit_id, rule))
+
+	func can_train() -> bool:
+		return bool(_ai._can_train_unit()) if _ai != null else false
+
+	func can_train_with_queue() -> bool:
+		return bool(_ai._can_train_unit_with_queue()) if _ai != null else false
 
 # ───────────────────────── CommandPort ─────────────────────────
 class CommandPort:
@@ -95,11 +117,13 @@ class CommandPort:
 var economy = null
 var build = null
 var command = null
+var recruit = null
 
 func bind(ai) -> void:
 	economy = EconomyPort.new(ai)
 	build = BuildPort.new(ai)
 	command = CommandPort.new(ai)
+	recruit = RecruitPort.new(ai)
 
 func debug_snapshot() -> Dictionary:
 	return {"bound": economy != null}

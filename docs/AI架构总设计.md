@@ -529,3 +529,35 @@ R4 从约 170 降到 92，主要是 AIDefense（121→44）。
 **验证**：2 分钟 3v3 HELL → `front 77.6% / idle 18.4% / engage 34.7%`，脚本错误 0。
 
 **剩余（A5 第二步）**：R1 的 89 处里，WorkerDirector 30、WaterCrossing 22、LadderSiege 11 仍是直接调用（生产/调兵/升级），需接入 A3 建立的端口；R2 的 5 处需改为事件或端口；R3 的 `_init(owner_ai)` 改造需连带 AI.gd 的实例化顺序。
+
+---
+
+## 19. A5 第二步：生产/建造/占用改走端口，R1 从 89 降到 75（2026-10-31 04:55）
+
+**新增 `RecruitPort`**（生产唯一入口）：`produce(unit_id, rule)` / `can_train()` / `can_train_with_queue()`。
+
+**AIWorkerDirector**（10 处改端口/上下文）
+- `ai.produce_unit` → `_ports.recruit.produce`（保留规则 ID 追踪）
+- `ai.build_building` → `_ports.build.build`（支持 pos/facing 三种重载）
+- `ai._unit_has_claim` → `_ports.command.has_claim`
+- `ai._get_resources` / `_get_limits` / `can_afford` / `entity_belongs_to_me` / `_can_train_unit_with_queue` / `_cached_buildings` / `_cached_armies` → `_ctx.*`
+
+**AILadderSiege**（4 处改上下文）
+- `entity_belongs_to_me` 3、`_entity_is_enemy` / `_is_defending` / `count_building` / `can_afford_building` → `_ctx.*`
+
+**检查结果**（R1 = 直接调 ai.xxx）：
+
+| 模块 | A5 前 | A5 第二步后 |
+|---|---|---|
+| AIDefense | 22 | 22 |
+| AIWorkerDirector | 30 | 20 |
+| AIWaterCrossing | 22 | 22 |
+| AILadderSiege | 11 | 7 |
+| AIWallPlanner | 4 | 4 |
+| **合计** | **89** | **75** |
+
+**验证**：2 分钟 3v3 HELL → `front 78.4% / idle 18.9% / engage 46.0%`，脚本错误 0。
+
+**踩坑（第五个）**：`BuildPort.build` 起初只接受 2 个参数，但原 `build_building` 有第三个 `facing` 参数，且部分调用点只传 1 个参数。端口的签名必须**兼容原方法的全部重载形态**，否则运行期才发现 `Expected 2 argument(s)`。最终改为 `build(id, pos = null, facing = null)` 三态分发。
+
+**剩余**：R1 75 处集中在 AIDefense（22，含 11 处包装兜底）、AIWaterCrossing（22）、AIWorkerDirector（20）——多为策略查询（`_get_phase_weights` / `_food_emergency` / `_resource_ratio` / `find_best_resource_for_worker`）与专项九动作（`_get_attack_target_castle` / `build_ladder`），需要 A5 第三步按"纯查询进上下文、动作进端口"继续拆。

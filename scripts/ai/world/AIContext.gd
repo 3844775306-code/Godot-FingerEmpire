@@ -146,3 +146,19 @@ func nearby_enemies(pos, radius: float, team: int, owner: int = -1, only_visible
 
 func is_research_mode() -> bool:
 	return bool(_ai.battle.is_research_mode()) if _ai != null and _ai.battle.has_method("is_research_mode") else false
+
+# ── 缓存视图（只读；调用方不得修改返回数组内容）──
+func cached_buildings() -> Array:
+	return _ai._cached_buildings() if _ai != null else []
+
+func cached_armies() -> Array:
+	return _ai._cached_armies() if _ai != null else []
+
+func can_train_unit() -> bool:
+	return bool(_ai._can_train_unit()) if _ai != null else false
+
+func can_train_unit_with_queue() -> bool:
+	return bool(_ai._can_train_unit_with_queue()) if _ai != null else false
+
+func phase_weights() -> Dictionary:
+	return _ai._get_phase_weights() if _ai != null else {}

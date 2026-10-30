@@ -1,5 +1,5 @@
 ﻿{
-    "time":  "2026-10-31 01:51:40",
+    "time":  "2026-10-31 01:54:17",
     "version":  "const VERSION: String = \"v4.0.53\"",
     "detail":  {
                    "AIDefense":  {
@@ -10,7 +10,7 @@
                                      "r4":  44
                                  },
                    "AIWorkerDirector":  {
-                                            "r1":  30,
+                                            "r1":  20,
                                             "r1_fallback":  0,
                                             "r2":  1,
                                             "r3":  0,
@@ -24,7 +24,7 @@
                                            "r4":  20
                                        },
                    "AILadderSiege":  {
-                                         "r1":  11,
+                                         "r1":  7,
                                          "r1_fallback":  0,
                                          "r2":  0,
                                          "r3":  0,
@@ -38,7 +38,7 @@
                                          "r4":  6
                                      },
                    "TOTAL":  {
-                                 "r1":  89,
+                                 "r1":  75,
                                  "r1_fallback":  11,
                                  "r2":  5,
                                  "r3":  1,

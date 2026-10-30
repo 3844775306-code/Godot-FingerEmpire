@@ -88,9 +88,9 @@ func _try_start() -> void:
 		return
 	if _field_unit_count() < MIN_FIELD_UNITS:
 		return
-	if not ai.can_afford_building(LADDER_ID):
+	if not _ctx.can_afford_building(LADDER_ID):
 		return
-	if ai.count_building(LADDER_ID) >= MAX_LADDERS:
+	if _ctx.count_building(LADDER_ID) >= MAX_LADDERS:
 		return
 	var walls := _wall_candidates(castle, army_pos)
 	for item in walls:
@@ -115,7 +115,7 @@ func _can_try() -> bool:
 		return false
 	if battle.game_time < MIN_GAME_TIME:
 		return false
-	if ai.has_method("_is_defending") and ai._is_defending():
+	if ai.has_method("_is_defending") and _ctx.is_defending():
 		return false
 	if int(ai.current_tactic) == TACTIC_DEFEND:
 		return false
@@ -148,7 +148,7 @@ func _main_army_position(castle: Building) -> Vector3:
 	for e in battle._armies:
 		if not is_instance_valid(e) or e.health <= 0:
 			continue
-		if not ai.entity_belongs_to_me(e):
+		if not _ctx.belongs_to_me(e):
 			continue
 		if int(e.target_type) <= 0 or e.water_capable:
 			continue
@@ -171,7 +171,7 @@ func _wall_candidates(castle: Building, army_pos: Vector3) -> Array:
 			continue
 		if int(e.entity_id) != 27 or e.build_timer > 0.0:
 			continue
-		if not ai._entity_is_enemy(e):
+		if not _ctx.is_enemy(e):
 			continue
 		var to_castle: float = e.global_position.distance_to(castle.global_position)
 		if to_castle > WALL_SEARCH_RADIUS:
@@ -240,7 +240,7 @@ func _find_ladder_near(pos: Vector3) -> Building:
 			continue
 		if int(e.entity_id) != LADDER_ID:
 			continue
-		if e.global_position.distance_to(pos) <= 1.5 and ai.entity_belongs_to_me(e):
+		if e.global_position.distance_to(pos) <= 1.5 and _ctx.belongs_to_me(e):
 			return e
 	return null
 
@@ -252,7 +252,7 @@ func _send_breach() -> void:
 	for e in battle._armies:
 		if not is_instance_valid(e) or e.health <= 0:
 			continue
-		if not (e is Army) or not ai.entity_belongs_to_me(e):
+		if not (e is Army) or not _ctx.belongs_to_me(e):
 			continue
 		if int(e.target_type) <= 0 or e.water_capable:
 			continue
@@ -264,3 +264,14 @@ func _send_breach() -> void:
 			continue
 		if e.has_method("force_attack_move_to"):
 			e.force_attack_move_to(target_pos)
+
+# A5：只读上下文（未绑定时回落控制器）。
+var _ctx = null
+
+func set_context(c) -> void:
+	_ctx = c
+
+func _count_field() -> int:
+	if _ctx != null:
+		return int(ai.count_field_military())
+	return int(ai.count_field_military()) if ai != null else 0

@@ -112,13 +112,13 @@ func _try_train_worker(reason: String) -> bool:
 	if now - _last_train_at < TRAIN_COOLDOWN:
 		_last_train_block = "cooldown"
 		return false
-	if not ai.can_afford(10):
+	if not _ctx.can_afford(10):
 		_last_train_block = "no_food"
 		return false
-	if not ai._can_train_unit_with_queue():
+	if not _ports.recruit.can_train_with_queue():
 		_last_train_block = "population"
 		return false
-	ai.produce_unit(10, "worker.train_peasant")
+	_ports.recruit.produce(10, "worker.train_peasant")
 	_last_train_at = now
 	_last_train_block = "trained_" + reason
 	return true
@@ -147,7 +147,7 @@ func acquire_builder(pos: Vector3, critical: bool = false, max_dist: float = 60.
 			continue
 		if String(w.current_order) == "build":
 			continue
-		if ai._unit_has_claim(w):
+		if _ports.command.has_claim(w):
 			continue
 		var order: String = String(w.current_order)
 		var work_id: int = int(w.get("_work_target_id"))
@@ -247,7 +247,7 @@ func _process_build_requests() -> void:
 		if not has_available_builder(req.pos, bool(req.critical), 60.0):
 			continue
 		_processing_build_request = true
-		var ok: bool = ai.build_building(int(req.building_id), req.pos, req.facing)
+		var ok: bool = _ports.build.build(int(req.building_id), req.pos, req.facing)
 		_processing_build_request = false
 		if ok:
 			_build_requests.erase(key)
@@ -327,7 +327,7 @@ func _sync_roster() -> void:
 		now = float(_ctx.game_time())
 	ai.desired_worker_count = _worker_target_count()
 	var seen: Dictionary = {}
-	for entity in ai._cached_armies():
+	for entity in _ctx.cached_armies():
 		if not is_instance_valid(entity) or not (entity is Army) or entity.health <= 0:
 			continue
 		if int(entity.entity_id) != 10:
@@ -453,7 +453,7 @@ func _target_desc(target) -> String:
 
 func _count_queued_workers() -> int:
 	var total: int = 0
-	for entity in ai._cached_buildings():
+	for entity in _ctx.cached_buildings():
 		if not is_instance_valid(entity) or not (entity is Building) or entity.health <= 0:
 			continue
 		if not _belongs(entity):
@@ -526,8 +526,8 @@ func _periodic_rebalance(workers: Array) -> void:
 		return
 	ai.consider_warehouse_near_farmer()
 	ai.allocate_timers = 0
-	var res: Dictionary = ai._get_resources()
-	var limits: Dictionary = ai._get_limits()
+	var res: Dictionary = _ctx.resources()
+	var limits: Dictionary = _ctx.limits()
 	var phase_weights: Dictionary = ai._worker_resource_weights()
 	var scarcity: Dictionary = {}
 	var total_weight: float = 0.0
@@ -648,6 +648,7 @@ func debug_snapshot() -> Dictionary:
 	}
 # A4：只读上下文（未绑定时回落控制器）。
 var _ctx = null
+var _ports = null
 
 func set_context(c) -> void:
 	_ctx = c
@@ -655,7 +656,7 @@ func set_context(c) -> void:
 func _belongs(e) -> bool:
 	if _ctx != null:
 		return _ctx.belongs_to_me(e)
-	return ai.entity_belongs_to_me(e) if ai != null else false
+	return _belongs(e) if ai != null else false
 
 func _phase_v() -> int:
 	if _ctx != null:
@@ -669,3 +670,5 @@ func _threat_level() -> int:
 func _now() -> float:
 	return _ctx.game_time() if _ctx != null else float(ai.battle.game_time)
 
+func set_ports(p) -> void:
+	_ports = p
