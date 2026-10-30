@@ -64,6 +64,12 @@ const PITCH_FAR_DEG: float = 78.0    # size 最大时（全景俯瞰）的相机
 const HEIGHT_AT_MIN: float = 10.0    # size 最小时相机的离地高度
 const HEIGHT_AT_MAX: float = 95.0    # size 最大时相机的离地高度
 
+# ── 开发者全图视角（F10）──
+# 仅调试构建 + 单机由 HUD 提供入口；相机拉到整张地图并锁定在中心，
+# 不改变视野/迷雾算法，只改变观察范围。
+var _dev_full_map: bool = false
+var _dev_full_saved: Dictionary = {}
+
 # ── 镜头轻微震动（攻城器械重击/开炮时由特效层触发）──
 var _shake_left: float = 0.0
 var _shake_total: float = 0.0
@@ -91,6 +97,8 @@ func zoom_max() -> float:
 
 # 设置面板拖动「相机放大倍数」时调用：边拖边生效，不打断当前视野中心
 func apply_zoom_mult(mult: float) -> void:
+	if _dev_full_map:
+		_exit_dev_full_map()
 	var m: float = clampf(mult, GameSettings.CAMERA_ZOOM_MIN, GameSettings.CAMERA_ZOOM_MAX)
 	if absf(m - _zoom_mult) < 0.001:
 		return
@@ -99,6 +107,44 @@ func apply_zoom_mult(mult: float) -> void:
 	size = clampf(size * _zoom_mult / m, min_zoom / m, max_zoom / m)
 	_zoom_mult = m
 	_rig_over_center(center)
+
+# ═══ 开发者全图视角 ═══
+func is_dev_full_map() -> bool:
+	return _dev_full_map
+
+# 切换全图视角；返回切换后是否处于全图状态。
+func toggle_dev_full_map() -> bool:
+	if _dev_full_map:
+		_exit_dev_full_map()
+		return false
+	if _follow_target:
+		stop_follow()
+	var prev_center: Vector3 = _screen_center_ground()
+	_dev_full_saved = {
+		"size": size,
+		"yaw": yaw_deg,
+		"center": prev_center,
+	}
+	_dev_full_map = true
+	var map_size: float = maxf(float(RTSConfig.MAP_SIZE), 1.0)
+	# 正交相机 size 是竖直方向的世界高度；HUD 顶部/底部会遮住一部分画面，
+	# 留 50% 边距保证整张地图（含边缘城郊）都落在可见区域里。
+	size = maxf(zoom_max(), map_size * 1.5)
+	yaw_deg = 0.0
+	_rig_over_center(Vector3.ZERO)
+	return true
+
+func _exit_dev_full_map() -> void:
+	if not _dev_full_map:
+		return
+	_dev_full_map = false
+	var prev: Dictionary = _dev_full_saved
+	_dev_full_saved = {}
+	if prev.is_empty():
+		return
+	size = clampf(float(prev.get("size", size)), zoom_min(), zoom_max())
+	yaw_deg = float(prev.get("yaw", yaw_deg))
+	_rig_over_center(prev.get("center", Vector3.ZERO))
 
 # 开局把水平朝向对准太阳，形成逆光：地形和单位有明显的背光明暗对比
 func _apply_initial_sun_yaw() -> void:
@@ -124,7 +170,7 @@ func _apply_initial_sun_yaw() -> void:
 # 手机端「按住旋转」：命令栏按钮按下 → 传入 +1（顺时针）/-1（逆时针），松开传 0。
 # 每个事件都现读，所以松手立刻停住，不需要额外信号。
 func set_hold_rotate(dir: float) -> void:
-	if _follow_target:
+	if _follow_target or _dev_full_map:
 		return
 	if absf(dir) < 0.001:
 		_hold_rotate = 0.0
@@ -135,8 +181,8 @@ func set_hold_rotate(dir: float) -> void:
 	_hold_rotate = 1.0 if dir > 0.0 else -1.0
 
 func _input(event):
-	# 跟随视角模式：禁用平移/缩放输入，画面完全由跟随逻辑控制
-	if _follow_target:
+	# 跟随视角/全图视角：禁用平移/缩放输入，画面完全由对应模式控制
+	if _follow_target or _dev_full_map:
 		return
 
 	# ========== PC 鼠标操作 ==========
@@ -242,7 +288,7 @@ func zoom_by_pinch_ratio(ratio: float) -> void:
 
 # 按捏合比例缩放视野（内部统一入口：自算与 router 驱动都走这里，保证去重时间戳一致）
 func _apply_pinch_ratio(ratio: float) -> void:
-	if _follow_target:
+	if _follow_target or _dev_full_map:
 		return
 	if not is_finite(ratio) or ratio <= 0.0:
 		return
@@ -252,7 +298,7 @@ func _apply_pinch_ratio(ratio: float) -> void:
 
 # 供手机端旋转按钮调用：绕当前屏幕中心的地面点转指定角度（正数向右转）
 func rotate_by(deg: float) -> void:
-	if _follow_target:
+	if _follow_target or _dev_full_map:
 		return
 	rotate_center = _screen_center_ground()
 	yaw_deg = fposmod(yaw_deg + deg, 360.0)
@@ -270,7 +316,7 @@ func _view_forward() -> Vector3:
 
 # 触屏单指拖动平移：把屏幕位移按当前视野比例换算成世界位移（跟手）
 func pan_by_screen_delta(screen_delta: Vector2) -> void:
-	if _follow_target:
+	if _follow_target or _dev_full_map:
 		return
 	var view_h := get_viewport().get_visible_rect().size.y
 	var world_per_px := size / maxf(view_h, 1.0)
@@ -301,6 +347,10 @@ func _update_shake(delta: float) -> void:
 
 func _process(delta):
 	_update_shake(delta)
+	# 开发者全图视角：锁定在地图中心，不响应平移/缩放/旋转输入。
+	if _dev_full_map:
+		_rig_over_center(Vector3.ZERO)
+		return
 	# 设置面板的放大倍数滑条：每帧比对一次，拖动立即生效（面板也会直接调 apply_zoom_mult）
 	if absf(GameSettings.camera_zoom_mult - _zoom_mult) > 0.001:
 		apply_zoom_mult(GameSettings.camera_zoom_mult)
@@ -372,6 +422,8 @@ func _screen_center_ground() -> Vector3:
 # 直接改 global_position.x/z 会把“相机眼睛”放到目标点，而屏幕中心在斜前方十几米处。
 # 这里保持当前高度与俯角，把相机沿视线方向后退，使目标点正好落在屏幕中心。
 func focus_on_ground(world_pos: Vector3) -> void:
+	if _dev_full_map:
+		_exit_dev_full_map()
 	if _follow_target:
 		stop_follow()
 	var target := Vector3(world_pos.x, 0.0, world_pos.z)
@@ -414,6 +466,8 @@ func toggle_follow(target: Node3D) -> bool:
 	if _follow_target:
 		stop_follow()
 		return false
+	if _dev_full_map:
+		_exit_dev_full_map()
 	if target == null or not is_instance_valid(target):
 		return false
 	_follow_saved = {"transform": global_transform, "size": size, "projection": projection}

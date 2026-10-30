@@ -75,6 +75,8 @@ var _tribute_panel: Control = null
 const DEV_SPEEDS: Array = [1.0, 2.0, 4.0, 8.0]
 var _dev_speed_index: int = 0
 var _dev_speed_btn: Button = null
+# 开发者全图视角：调试构建 + 单机可用，F10/点击切换。
+var _dev_full_map_btn: Button = null
 # 全局指令按钮底板（6 个按钮排两行）
 var _cmd_panel: Panel = null
 var _cmd_research_btn: Button = null
@@ -184,6 +186,8 @@ func hide_stat_panels() -> void:
 		_stats_capsule.visible = false
 	if _dev_speed_btn:
 		_dev_speed_btn.visible = false
+	if _dev_full_map_btn:
+		_dev_full_map_btn.visible = false
 	if _diplo_panel:
 		_diplo_panel.visible = false
 	if _quick_panel:
@@ -198,6 +202,8 @@ func _set_stats_collapsed(collapsed: bool) -> void:
 		_stats_capsule.visible = collapsed and unit_stats_visible
 	if _dev_speed_btn != null and is_instance_valid(_dev_speed_btn):
 		_dev_speed_btn.visible = collapsed and _dev_speed_available()
+	if _dev_full_map_btn != null and is_instance_valid(_dev_full_map_btn):
+		_dev_full_map_btn.visible = collapsed and _dev_speed_available()
 
 func _on_stats_collapse_pressed() -> void:
 	_set_stats_collapsed(true)
@@ -302,6 +308,48 @@ func _create_dev_speed_button() -> void:
 	_dev_speed_btn.pressed.connect(_cycle_dev_speed)
 	add_child(_dev_speed_btn)
 	_update_dev_speed_button()
+	_create_dev_full_map_button()
+
+# 开发者全图按钮：与倍速按钮同一条开发者工具列，只在调试构建 + 单机出现。
+func _create_dev_full_map_button() -> void:
+	if not _dev_speed_available():
+		return
+	_dev_full_map_btn = Button.new()
+	_dev_full_map_btn.name = "DevFullMapButton"
+	_dev_full_map_btn.position = Vector2(10, 108)
+	_dev_full_map_btn.size = Vector2(118, 32)
+	_dev_full_map_btn.z_index = 100
+	_dev_full_map_btn.focus_mode = Control.FOCUS_NONE
+	_dev_full_map_btn.text = "🗺 全图"
+	_dev_full_map_btn.tooltip_text = "开发者全图视角：F10 或点击切换（仅单机调试）"
+	UITheme.apply_muted_button(_dev_full_map_btn, UITheme.FONT_SM)
+	_dev_full_map_btn.pressed.connect(_toggle_dev_full_map)
+	add_child(_dev_full_map_btn)
+	_update_dev_full_map_button()
+
+func _dev_full_map_available() -> bool:
+	return _dev_speed_available()
+
+func _update_dev_full_map_button() -> void:
+	if _dev_full_map_btn == null or not is_instance_valid(_dev_full_map_btn):
+		return
+	var cam = get_viewport().get_camera_3d() if is_inside_tree() else null
+	var on: bool = cam != null and cam.has_method("is_dev_full_map") and bool(cam.call("is_dev_full_map"))
+	_dev_full_map_btn.text = "🗺 全图：开" if on else "🗺 全图"
+	_dev_full_map_btn.add_theme_color_override("font_color", UITheme.GOLD if on else Color(0.8, 0.82, 0.86))
+
+func _toggle_dev_full_map() -> void:
+	if not _dev_full_map_available():
+		return
+	var cam = get_viewport().get_camera_3d()
+	if cam == null or not cam.has_method("toggle_dev_full_map"):
+		return
+	var on: bool = bool(cam.call("toggle_dev_full_map"))
+	_update_dev_full_map_button()
+	if on:
+		show_alert_message("开发者全图视角：开（F10 退出）", UITheme.GOLD)
+	else:
+		show_alert_message("开发者全图视角：关", Color(0.8, 0.82, 0.86))
 
 func _dev_speed_available() -> bool:
 	return OS.is_debug_build() and NetworkManager.mode == NetworkManager.Mode.NONE
@@ -764,6 +812,11 @@ func _input(event):
 		# F9：开发者倍速（仅调试构建 + 单机对局）
 		if event.keycode == KEY_F9 and not event.echo and _dev_speed_available():
 			_cycle_dev_speed()
+			get_viewport().set_input_as_handled()
+			return
+		# F10：开发者全图视角（仅调试构建 + 单机对局）
+		if event.keycode == KEY_F10 and not event.echo and _dev_full_map_available():
+			_toggle_dev_full_map()
 			get_viewport().set_input_as_handled()
 			return
 		match event.keycode:
