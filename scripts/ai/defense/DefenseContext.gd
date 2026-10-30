@@ -23,6 +23,11 @@ func get_game_time() -> float:
 		return 0.0
 	return float(battle.game_time)
 
+func get_meta_flag(meta_name: String, default_value: bool = false) -> bool:
+	if ai == null:
+		return default_value
+	return bool(ai.get_meta(meta_name, default_value))
+
 func get_visible_enemies() -> Array:
 	if ai == null:
 		return []

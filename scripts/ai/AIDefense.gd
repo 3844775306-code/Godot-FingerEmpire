@@ -406,15 +406,10 @@ func _is_combat_enemy(e) -> bool:
 #   经典：主城 3/4/5 级 -> 1/2/3 圈
 #   科研：封建/城堡/帝国 -> 1/2/3 圈
 func _required_wall_ring_count(castle) -> int:
-	if castle == null or not is_instance_valid(castle):
+	# 第 3 阶段：圈数规则已迁到 DefenseDirector，本函数保留为旧调用点入口。
+	if _defense_director == null:
 		return 0
-	# 战役进攻关的敌基地开局已有预置外围墙圈，不再按主城等级额外套圈。
-	if bool(ai.get_meta("campaign_prebuilt_ring", false)):
-		return 1
-	if ai.battle != null and ai.battle.has_method("is_research_mode") and ai.battle.is_research_mode():
-		var st: Dictionary = ai.battle.get_research_state(ai.my_peer_id, ai.my_team)
-		return clampi(int(st.get("age", 0)), 0, 3)
-	return clampi(int(castle.upgrade_level) - 2, 0, 3)
+	return _defense_director.required_ring_count(castle)
 
 # 还没到 3 级/封建时代时保留旧版前线防守：有威胁或开局 150 秒后仍会布地形防线，
 # 避免为了等城墙圈把 AI 前期的防御塔/墙线全部取消。
@@ -3741,13 +3736,12 @@ func _can_spend(cost: Dictionary, reserve_ratio: float) -> bool:
 	return true
 
 func _defense_reserve() -> float:
+	# 第 3 阶段：预算规则已迁到 DefenseDirector；直接按当前威胁等级取同口径值。
 	# 防守建设/升级必须先留出一部分资源给补兵，否则 AIDefense 在 AI 生产之前把资源花光，
 	# 就会出现“进入防守后不再生产军队”的情况。
-	if threat_level >= 2:
-		return 0.22
-	if threat_level == 1:
-		return 0.2
-	return 0.35
+	if _defense_director == null:
+		return 0.35
+	return _defense_director.reserve_for_level(threat_level)
 
 func _nearest_enemy_combat(pos: Vector3, radius: float):
 	var best = null

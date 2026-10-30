@@ -28,6 +28,20 @@ var updated_at: float = 0.0
 func _init(context_ref) -> void:
 	context = context_ref
 
+# 圈数目标从 AIDefense 迁移到这里；口径与旧实现完全一致：
+# 战役预置圈=1；科研模式按时代 0~3；经典模式按主城等级 3/4/5 -> 1/2/3。
+func required_ring_count(castle) -> int:
+	if context == null or castle == null or not is_instance_valid(castle):
+		return 0
+	if context.get_meta_flag("campaign_prebuilt_ring", false):
+		return 1
+	if context.is_research_mode():
+		return clampi(context.get_age(), 0, 3)
+	return clampi(int(castle.upgrade_level) - 2, 0, 3)
+
+func reserve_for_level(level: int) -> float:
+	return _reserve_for(clampi(level, 0, 3))
+
 # snapshot 来自 DefenseThreatModel；ring_target 沿用当前 AIDefense 的圈数判断。
 # 返回值是给 DefensePlan / 调试面板读的只读摘要。
 func evaluate(snapshot: Dictionary, ring_target: int, now: float) -> Dictionary:
