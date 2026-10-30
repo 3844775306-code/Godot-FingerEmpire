@@ -11,6 +11,8 @@ const ROTATION_FIT: float = 0.70
 var terrain_colors: Array = []
 var explored_grid: Array = []
 var visible_grid: Array = []
+# 开发者全图视野：小地图也一并取消迷雾，否则 3D 能看到、小地图仍是黑的。
+var dev_reveal_all: bool = false
 var entity_snapshots: Array = []
 var player_team: int = 1
 var camera: Camera3D = null
@@ -98,6 +100,23 @@ func set_data(p_explored: Array, p_visible: Array, p_entities: Array, p_terrain_
 		_tex_dirty = true
 	queue_redraw()
 
+func set_dev_reveal_all(on: bool) -> void:
+	if dev_reveal_all == on:
+		return
+	dev_reveal_all = on
+	_tex_dirty = true
+	queue_redraw()
+
+func _cell_explored(gx: int, gz: int) -> bool:
+	if dev_reveal_all:
+		return true
+	return gx >= 0 and gx < explored_grid.size() and gz >= 0 and gz < explored_grid[gx].size() and bool(explored_grid[gx][gz])
+
+func _cell_visible(gx: int, gz: int) -> bool:
+	if dev_reveal_all:
+		return true
+	return gx >= 0 and gx < visible_grid.size() and gz >= 0 and gz < visible_grid[gx].size() and bool(visible_grid[gx][gz])
+
 func _rebuild_terrain_texture():
 	var ms = RTSConfig.MAP_SIZE
 	if ms <= 0 or terrain_colors.is_empty() or explored_grid.is_empty():
@@ -114,10 +133,10 @@ func _rebuild_terrain_texture():
 		var px_start = int(gx * cell_px)
 		var px_end = int((gx + 1) * cell_px)
 		for gy in range(min(ms, row.size())):
-			if not row[gy]:
+			if not dev_reveal_all and not row[gy]:
 				continue
 			var col = trow[gy]
-			if not vrow[gy]:
+			if not dev_reveal_all and not vrow[gy]:
 				col = col.darkened(0.7) * Color(TERRAIN_BRIGHTNESS, TERRAIN_BRIGHTNESS, TERRAIN_BRIGHTNESS)
 			else:
 				col = col * Color(TERRAIN_BRIGHTNESS, TERRAIN_BRIGHTNESS, TERRAIN_BRIGHTNESS)
@@ -188,11 +207,11 @@ func _draw():
 		var gz = int(ent["z"] + ms / 2)
 		if gx < 0 or gx >= ms or gz < 0 or gz >= ms: continue
 		if gx >= explored_grid.size() or gz >= explored_grid[gx].size(): continue
-		if not explored_grid[gx][gz]: continue
+		if not _cell_explored(gx, gz): continue
 		var eid = ent.get("entity_id", -1)
 		var rkey = ["gold", "wood", "stone", "food", "oil"][eid] if eid >= 0 and eid <= 4 else "gold"
 		var rc: Color = UITheme.RESOURCE_COLORS.get(rkey, Color(0.4, 0.4, 0.2)).darkened(0.35)
-		var res_visible = visible_grid[gx][gz] if gx < visible_grid.size() and gz < visible_grid[gx].size() else false
+		var res_visible = _cell_visible(gx, gz)
 		rc.a = 0.5 if res_visible else 0.28
 		var rpos = Vector2(gx * cell, gz * cell)
 		draw_rect(Rect2(rpos - Vector2(1, 1), Vector2(2, 2)), rc)
@@ -208,9 +227,9 @@ func _draw():
 		if ent["team"] == player_team:
 			show = true
 		elif ent["team"] == RTSConfig.Team.NEUTRAL:
-			show = explored_grid[gx][gz] if gx < explored_grid.size() and gz < explored_grid[gx].size() else false
+			show = _cell_explored(gx, gz)
 		else:
-			show = visible_grid[gx][gz] if gx < visible_grid.size() and gz < visible_grid[gx].size() else false
+			show = _cell_visible(gx, gz)
 		if not show: continue
 
 		var owner = ent.get("owner_peer_id", -1)
@@ -253,9 +272,9 @@ func _draw():
 		if cteam != player_team:
 			var cshow: bool = false
 			if cteam == RTSConfig.Team.NEUTRAL:
-				cshow = explored_grid[cgx][cgz] if cgx < explored_grid.size() and cgz < explored_grid[cgx].size() else false
+				cshow = _cell_explored(cgx, cgz)
 			else:
-				cshow = visible_grid[cgx][cgz] if cgx < visible_grid.size() and cgz < visible_grid[cgx].size() else false
+				cshow = _cell_visible(cgx, cgz)
 			if not cshow: continue
 		var cpos = Vector2(cgx * cell, cgz * cell)
 		var ccolor: Color = _castle_color(ent, bm, pc, cteam)

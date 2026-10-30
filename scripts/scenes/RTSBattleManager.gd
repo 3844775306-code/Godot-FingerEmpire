@@ -109,6 +109,10 @@ var map_modifiers: Dictionary = {}   # 当前地图的规则修正（视野/高�
 var _fog_cover: Array = []
 var _fog_sources: Dictionary = {}    # instance_id -> {"x","y","r"}
 var _fog_host_team: int = -999
+# 开发者全图视野：仅调试构建 + 单机，取消迷雾并强制显示所有敌方/中立单位。
+# 不修改 explored_grid/visible_grid，关闭后正常迷雾立即恢复。
+var dev_reveal_all: bool = false
+var _dev_reveal_grid: Array = []
 # 每个视野源缓存的可见格集合：height/半径不变就不重算，队伍视野掩码只做并集。
 var _vision_cells_cache: Dictionary = {}
 # 每个队伍的可见格掩码（PackedByteArray，gx*MAP_SIZE+gy），AI/联机快照/建造预览共用。
@@ -4953,12 +4957,49 @@ func is_position_in_player_vision(world_pos: Vector3) -> bool:
 	return is_position_visible_to_team(get_host_team(), world_pos)
 
 func _apply_fog():
+	if dev_reveal_all:
+		var all_true: Array = _get_dev_reveal_grid()
+		if $Map and $Map.has_method("apply_fog"):
+			if $Map.apply_fog(all_true, all_true):
+				fog_version += 1
+		return
 	if $Map and $Map.has_method("apply_fog"):
 		if $Map.apply_fog(explored_grid, visible_grid):
 			fog_version += 1
 
+# 开发者全图视野开关：即时刷新迷雾贴图和单位可见性。
+func is_dev_reveal_all() -> bool:
+	return dev_reveal_all
+
+func toggle_dev_reveal_all() -> bool:
+	dev_reveal_all = not dev_reveal_all
+	fog_timer = 0.0
+	_update_visibility()
+	_apply_fog()
+	var mm = get_node_or_null("UI/Minimap")
+	if mm and mm.has_method("set_dev_reveal_all"):
+		mm.call("set_dev_reveal_all", dev_reveal_all)
+	return dev_reveal_all
+
+func _get_dev_reveal_grid() -> Array:
+	var n: int = RTSConfig.MAP_SIZE
+	if _dev_reveal_grid.size() == n and (n == 0 or _dev_reveal_grid[0].size() == n):
+		return _dev_reveal_grid
+	_dev_reveal_grid.clear()
+	for x in range(n):
+		var col: Array = []
+		col.resize(n)
+		col.fill(true)
+		_dev_reveal_grid.append(col)
+	return _dev_reveal_grid
+
 func _update_visibility():
 	if not entities: return
+	if dev_reveal_all:
+		for e in entities.get_children():
+			if e is GameEntity:
+				e.visible = true
+		return
 	if visible_grid.is_empty():
 		_init_fog_grid()
 	var host_team = get_host_team()
@@ -5439,6 +5480,8 @@ func _process(delta):
 		if mm:
 			mm.explored_grid = explored_grid
 			mm.visible_grid = visible_grid
+			if mm.has_method("set_dev_reveal_all"):
+				mm.set_dev_reveal_all(dev_reveal_all)
 
 	# 更新警报冷却
 	for key in _alert_cooldowns.keys():
