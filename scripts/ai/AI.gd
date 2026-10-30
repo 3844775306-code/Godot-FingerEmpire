@@ -15,6 +15,7 @@ const AIConfigScript = preload("res://scripts/ai/core/AIConfig.gd")
 const AIClockScript = preload("res://scripts/ai/core/AIClock.gd")
 const AISituationScript = preload("res://scripts/ai/world/AISituation.gd")
 const RoleLedgerScript = preload("res://scripts/ai/core/RoleLedger.gd")
+const AIDirectorScript = preload("res://scripts/ai/AIDirector.gd")
 
 enum Phase { PRODUCTION, DEVELOPMENT, ASSAULT }
 enum LateTactic { NONE, HARASS, OVERWHELM, RAID, DEFEND }
@@ -221,6 +222,8 @@ var _situation_usec_ema: float = 0.0
 var _situation_last_t: float = -1.0
 # P3.1：统一角色账本（角色占用的唯一事实来源，director/worker 分来源登记）。
 var _ledger = null
+# P3.2：影子 Director（只按快照+账本产出意图并打日志，不接管决策）。
+var _director_v2 = null
 var _ledger_checks: int = 0
 var _ledger_mismatch_total: int = 0
 var _ledger_conflicts: int = 0
@@ -1910,6 +1913,8 @@ func _ready():
 	_ai_clock.add("garrison", GARRISON_CHECK_INTERVAL)
 	_situation = AISituationScript.new()
 	_ledger = RoleLedgerScript.new()
+	_director_v2 = AIDirectorScript.new()
+	_director_v2.setup(self)
 
 # 后期实体数越多，AI 的周期性全量扫描越贵；返回统一的降频倍率。
 func _late_game_scale() -> float:
@@ -6357,6 +6362,9 @@ func _situation_shadow_tick() -> void:
 			_situation_usec_ema / 1000.0, float(_situation.visibility_usec) / 1000.0])
 	_ledger_check()
 	_mirror_worker_claims(gt)
+	# P3.2 影子 Director：同一份快照 + 同一本账算出「这一轮想做什么」，只观测不执行。
+	if _director_v2 != null:
+		_director_v2.tick(_situation, _ledger, gt)
 
 # P3.1 第五步：账本已是唯一事实来源，这里做自检（不再和 _roles 对账）：
 # 每条 director 占用都必须指向"存在、活着、属于我"的单位，且与单位上的 ai_role 元数据一致；
@@ -6403,4 +6411,5 @@ func get_situation_summary() -> Dictionary:
 	d["ledger_mismatch"] = _ledger_mismatch_total
 	d["ledger_conflicts"] = _ledger_conflicts
 	d["worker_claim_skips"] = _worker_claim_skips
+	d["director_v2"] = _director_v2.debug_snapshot() if _director_v2 != null else {}
 	return d

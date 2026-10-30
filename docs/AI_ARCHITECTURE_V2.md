@@ -576,3 +576,23 @@ AIClock.fast (4Hz)
 **4 分钟 3v3 HELL 验证**：无脚本错误，`STALE` = 0、`CONFLICT` = 0、`SITUATION MISMATCH` = 0，front 71.4% / idle 15.1% / land 5.3，与迁移前区间一致。
 
 至此 P3.1 完成：**角色占用只有一本账**，director 与 worker 分来源登记，抢单位会被显式拒绝并计数。
+
+### 12.4 P3.2 影子 AIDirector（2026-10-30 23:40）
+
+新文件 `scripts/ai/AIDirector.gd`（RefCounted，无 `class_name`，走 preload）。每轮（跟着 `AISituation` 的 5 秒对账节奏）拿**同一份快照 + 同一本账**算出意图，只打印不执行：
+
+| 意图 | 判定 | 优先级 |
+|---|---|---|
+| `defend` | 视野敌人 > 账本里守墙/守家/回防/驻军占用 | 0 |
+| `push` | 陆军 ≥ 进攻阈值，且主攻/突袭/攻城占比不足 | 1 |
+| `reinforce` | 陆军未达进攻阈值，缺口数 | 2 |
+| `gather` | 农民 < 目标数，缺口数 | 2 |
+| `idle_warn` | 占用率 < 25%（或陆军 ≥ 4 但账本零占用） | 3 |
+
+日志形如 `[DIRECTOR-V2] t=26 intents=3 defend(1) reinforce(12) gather(2)`；`get_situation_summary()["director_v2"]` 暴露 `ticks/intents/kinds/summary`。
+
+**为什么先做影子**：现在的决策分散在 ~10 个模块里，直接搬会让"没验证的行为变化"和"重构"混在一起。影子期先用同一份输入重算一遍意图，能直接和真实决策对照——一旦某轮意图与实际行动背离，就是后续搬逻辑时要修的缺口。
+
+**约束**：不能反向 `preload("res://scripts/ai/AI.gd")`（循环依赖），角色号以本地常量镜像 `UnitRole`，改动枚举时必须同步。
+
+**4 分钟验证**：无脚本错误，意图日志正常，front 74.0% / idle 10.4% / land 3.5，行为与迁移前一致。
