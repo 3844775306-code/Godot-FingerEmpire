@@ -453,6 +453,7 @@ func _manage_defense(castle, delta: float) -> void:
 		_defense_check_timer = DEFENSE_GAP_INTERVAL
 		_queue_defense_gaps()
 	_build_defense_step()
+	_ensure_min_towers(castle)
 	if _wall_rings_planned >= _wall_ring_target:
 		_maybe_reactive_tower(castle)
 
@@ -646,12 +647,34 @@ func _plan_terrain_ring(castle, ring_index: int) -> bool:
 	var queue_before: int = _defense_queue.size()
 	var slots_before: int = _defense_slots.size()
 	var wall_before: int = wall_positions.size()
+	# 逐格处理边界：已有建筑/资源点占住的格本来就是障碍，跳过；地形不是平地建不了墙，算缺口；
+	# 其余平地格必须落墙，落不下就是“能走人的缺口”。
+	var closed_angles: Array = []
 	for it in pieces:
-		_add_defense_slot(27, it["pos"], float(it["prio"]), "wall", true, false, false)
+		var pos: Vector3 = it["pos"]
+		if _cell_obstructed(pos):
+			closed_angles.append(atan2(pos.z - cpos.z, pos.x - cpos.x))
+			continue
+		var gcell: Vector2i = ai.battle.world_to_grid(pos)
+		if not _terrain_plain_grid(gcell.x, gcell.y):
+			continue
+		if _add_defense_slot(27, pos, float(it["prio"]), "wall", true, false, false):
+			closed_angles.append(atan2(pos.z - cpos.z, pos.x - cpos.x))
 	var planned: int = wall_positions.size() - wall_before
-	# 真正判“闭合”的办法：把墙、建筑、资源点都当成障碍，从主城做一次洪泛，
-	# 看能不能走到环外——走不出去才算封死。只看“墙格数”会漏掉建筑/矿山天然封住的方向。
-	if planned < 12 or not _ring_sealed(castle, desired):
+	# 物理闭合判据：相邻两个“已封闭点”（墙或天然障碍）之间的角度空档换算成弧长，
+	# 超过 1.6 米就说明单位（半径 0.5 米）能挤过去 —— 实测用“洪泛封闭”会漏判，
+	# 敌人在 t+11s 就有 8/14 走进了环内。
+	closed_angles.sort()
+	var max_gap_m: float = 0.0
+	if closed_angles.size() >= 2:
+		for i in range(closed_angles.size()):
+			var a1: float = float(closed_angles[i])
+			var a2: float = float(closed_angles[(i + 1) % closed_angles.size()])
+			var da: float = a2 - a1
+			if i == closed_angles.size() - 1:
+				da += TAU
+			max_gap_m = maxf(max_gap_m, da * float(desired))
+	if planned < 12 or max_gap_m > 1.6 or not _ring_sealed(castle, desired):
 		_defense_queue.resize(queue_before)
 		_defense_slots.resize(slots_before)
 		wall_positions.resize(wall_before)
@@ -670,6 +693,17 @@ func _plan_terrain_ring(castle, ring_index: int) -> bool:
 	_plan_ring_towers(castle, mean_r)
 	_defense_queue.sort_custom(func(a, b): return float(a["priority"]) < float(b["priority"]))
 	return true
+
+# 该格是否已经被建筑/资源点的实体本身占住（这种格不需要砌墙，敌人也过不去）。
+func _cell_obstructed(pos: Vector3) -> bool:
+	for e in ai.battle.entities.get_children():
+		if not is_instance_valid(e) or e.health <= 0:
+			continue
+		if not (e is Building) and not (e is WorldResource):
+			continue
+		if e.global_position.distance_to(pos) <= float(e.body_radius) + 0.45:
+			return true
+	return false
 
 # 从主城洪泛，判断“墙 + 建筑 + 资源点 + 地形”是否真的把主城围死。
 # 逃不出去 = 闭合；能走到 radius + 6 格以外 = 有缺口（这个判定直接对应“敌人能不能走进来”）。
@@ -2786,6 +2820,36 @@ func _pos_has_building(b_id: int, pos: Vector3) -> bool:
 			if e.global_position.distance_to(pos) < 1.2:
 				return true
 	return false
+
+# 不管环规划成不成功，都要保证主城周围至少有几座塔。
+# 实测闭合判据收紧后“环规划失败”的 AI 会掉到 1 座塔，火力等于没有。
+func _ensure_min_towers(castle) -> void:
+	var built: int = ai.count_building(25) + ai.count_building(26)
+	var planned: int = _count_planned(25) + _count_planned(26)
+	if built + planned >= 4:
+		return
+	var now: float = float(ai.battle.game_time)
+	if now < 150.0 or now < _next_reactive_tower:
+		return
+	_next_reactive_tower = now + 25.0
+	var base_dir: Vector3 = _defense_dir
+	if base_dir.length_squared() < 0.01:
+		base_dir = _enemy_castle_dir(castle)
+	base_dir.y = 0.0
+	if base_dir.length_squared() < 0.01:
+		base_dir = Vector3.FORWARD
+	base_dir = base_dir.normalized()
+	for i in range(6):
+		var ang: float = TAU * float(i) / 6.0
+		var dir: Vector3 = base_dir.rotated(Vector3.UP, ang)
+		for tr in [11.0, 9.0, 13.0]:
+			var p: Vector3 = castle.global_position + dir * float(tr)
+			var spot: Vector3 = _find_anchor_spot(p, 25, 2.0)
+			if spot != Vector3.ZERO:
+				_add_defense_slot(25, spot, 0.4 + float(i) * 0.05, "tower", true, false, false)
+				if _count_planned(25) + built >= 4:
+					_defense_queue.sort_custom(func(a, b): return float(a["priority"]) < float(b["priority"]))
+					return
 
 func _maybe_reactive_tower(castle) -> void:
 	if threat_level < 1:
