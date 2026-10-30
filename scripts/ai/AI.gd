@@ -22,7 +22,7 @@ var _decide_cost_scale: float = 1.0  # decide 实测耗时过长时自动拉长�
 # 200~500ms，就是玩家看到的「隔几秒一顿」。这里把它拆成阶段，每帧只跑固定预算，
 # 剩余阶段留给后续帧，把单帧峰值摊平（总工作量不变，但不再整段堵住主线程）。
 const DECIDE_BUDGET_USEC: int = 7000
-const DECIDE_LAST_STEP: int = 13
+const DECIDE_LAST_STEP: int = 14
 var _decide_cursor: int = 0        # 下次要执行的阶段；> LAST 表示本轮结束
 var _decide_running: bool = false
 var _decide_interval: float = 2.0
@@ -191,6 +191,8 @@ const WALL_MAX_HALF_SPAN: float = 11.0  # 墙线从正中向两侧各延伸的�
 # 远程单位上墙：墙未破时只吃远程伤害，近战必须先拆墙，因此优先把闲置远程兵铺到墙格上；
 # 每面城墙独立选择“墙顶炮台”或“远程驻军”，赶路中的单位用 ai_wall_guard 预留墙格。
 const WALL_DEPLOY_INTERVAL: float = 10.0
+# 前线闲兵补派间隔：待命单位大多是攻击命令结束后无人重新派单，2 秒补一次足够
+const RETASK_IDLE_INTERVAL: float = 2.0
 const WALL_DEPLOY_MAX_DISTANCE: float = 60.0
 const WALL_CANNON_ID: int = 64
 const WALL_GUARD_MODE_META: String = "ai_wall_guard_mode"
@@ -200,6 +202,7 @@ const WALL_GUARD_SLOT_META: String = "ai_wall_guard_slot"
 const WALL_GUARD_POS_META: String = "ai_wall_guard_pos"
 const WALL_GUARD_SMALL_BODY: float = 0.5
 var _wall_deploy_timer: float = 0.0
+var _retask_timer: float = 0.0
 # 防御建筑驻军：AI 会把部分闲置士兵/农民送进箭塔、炮塔和城堡，
 # 让它们吃到多子弹齐射加成，而不是只在塔外站着。
 const GARRISON_CHECK_INTERVAL: float = 4.0
@@ -2310,6 +2313,13 @@ func _run_decide_step(step: int) -> void:
 					_wall_planner = AIWallPlannerScript.new(self, _defense)
 				_wall_planner.tick(_last_delta)
 		13:
+			# 前线闲兵补派：attack/attack_move 结束后（或被墙挡住停下）没人重新派单，
+			# 这些单位就长期待命。实测待命兵 45% 停在离家 25 米内、身边全有敌人。
+			_retask_timer -= _last_delta
+			if _retask_timer <= 0.0:
+				_retask_timer = RETASK_IDLE_INTERVAL
+				_retask_idle_front_units()
+		14:
 			if _water_crossing:
 				# 渡水模块按“决策轮次”推进，不是每帧推进。传入帧 delta 会让
 				# 船队集结/靠岸/搭桥的计时慢几十倍，看起来像 AI 永远不过河。
@@ -4752,6 +4762,50 @@ func _process_line_military():
 			while trained < train_budget and count_unit(u_id) < unit_target \
 					and _can_train_unit_with_queue() and can_afford(u_id) and produce_unit(u_id):
 				trained += 1
+
+# 把"打完仗就站着"的野战兵重新推上去：身边 40 米内有敌就直接锁敌，
+# 没有敌人但刚因为走不到目标停下过（ai_stalled_attack）就重新压向敌方主城。
+func _retask_idle_front_units() -> void:
+	if battle == null:
+		return
+	if _defense != null and int(_defense.threat_level) >= 3:
+		return
+	var sent: int = 0
+	var now_ms: int = Time.get_ticks_msec()
+	var castle_target = null
+	for u in _cached_armies():
+		if sent >= 10:
+			break
+		if not is_instance_valid(u) or u.health <= 0 or not entity_belongs_to_me(u):
+			continue
+		if int(u.entity_id) == 10 or int(u.attack) <= 0 or bool(u.water_capable):
+			continue
+		if u.has_meta("ai_home_guard") or u.has_meta("ai_resource_guard") or u.has_meta("ai_harass") \
+				or u.has_meta("ai_wall_guard") or u.has_meta("ai_transporting") or u.has_meta("ai_escorting"):
+			continue
+		if String(u.current_order) != "" or u.current_target != null or not u.command_queue.is_empty():
+			continue
+		if u.garrison_point != Vector3.ZERO:
+			continue
+		var enemy = u._find_nearest_enemy_near(u.global_position, 40.0)
+		if enemy != null and is_instance_valid(enemy):
+			# 远处敌人用攻击移动过去（attack_target 对超出射程的目标会被目标校验拒绝），
+			# 近距离才直接锁敌。
+			var ed: float = u.global_position.distance_to(enemy.global_position)
+			if ed <= 25.0:
+				u.attack_target(enemy)
+			else:
+				u.attack_move_to(enemy.global_position)
+			sent += 1
+			continue
+		if u.has_meta("ai_stalled_attack") \
+				and now_ms - int(u.get_meta("ai_stalled_attack")) <= 20000:
+			u.remove_meta("ai_stalled_attack")
+			if castle_target == null:
+				castle_target = _get_attack_target_castle()
+			if castle_target != null and is_instance_valid(castle_target):
+				u.attack_move_to(castle_target.global_position)
+				sent += 1
 
 func _process_line_3():
 	if count_building(28) < _effective_house_target() and can_afford_building(28):

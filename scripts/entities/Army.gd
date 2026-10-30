@@ -2541,6 +2541,17 @@ func _process_combat_march(delta: float) -> void:
 			and not _movement._pending_path \
 			and _movement.astar_target.distance_to(combat_destination) <= 0.5
 	if path_exhausted:
+		# 目标在城墙圈内/建筑群里时，A* 只能走到"离目标最近的可达格"（常常是外墙脚下），
+		# 以前这里直接判定"到达"并结束命令，部队就停在外墙待命（实测待命兵多停在离家 25 米内）。
+		# 现在先量一下还差多远：确实没到，就改打挡路的建筑/城墙，并记下标记让 AI 重新派单。
+		var gap: float = global_position.distance_to(combat_destination)
+		if gap > attack_range + 3.0:
+			set_meta("ai_stalled_attack", Time.get_ticks_msec())
+			var bm_now = _get_bm()
+			var fallback = _find_attack_fallback_building(bm_now) if bm_now != null else null
+			if fallback != null and is_instance_valid(fallback) and _can_attack_target(fallback):
+				attack_target(fallback)
+				return
 		_finish_combat_move()
 		return
 	if _retry_partial_combat_path(combat_destination, delta):
