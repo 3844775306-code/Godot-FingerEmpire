@@ -92,6 +92,8 @@ const BUILD_APPROACH_GIVEUP: float = 25.0
 var _work_approach_total: float = 0.0
 var _work_approach_best: float = -1.0
 var _work_slot_tries: int = 0
+# 已经走过但走不进去的施工位（换位时回避，避免重挑回同一个点）
+var _work_slot_avoid: Array = []
 var _deliver_total_time: float = 0.0
 # 连续交付失败的主城/仓库暂时不再选，避免一直往同一个不可达点跑
 var _delivery_failed_targets: Dictionary = {}
@@ -932,6 +934,8 @@ func work_on_building(b) -> bool:
 	if _order_is(UnitState.BUILDING) and _work_target_id == b.get_instance_id():
 		return true
 	_detach_from_building()
+	_work_slot_tries = 0
+	_work_slot_avoid.clear()
 	var slot: int = b.register_builder(self)
 	if slot < 0:
 		return false
@@ -1023,6 +1027,8 @@ func _finish_work() -> void:
 		b.remove_builder(self)
 	_work_target_id = -1
 	_work_slot = 0
+	_work_slot_tries = 0
+	_work_slot_avoid.clear()
 	_at_work_site = false
 	_work_repath_timer = 0.0
 	_work_last_dist = -1.0
@@ -2895,7 +2901,10 @@ func _tick_building_action(delta: float, bm) -> void:
 					if _work_slot_tries >= 4:
 						_finish_work()
 						return
-					var alt_slot: Vector3 = b.get_builder_slot_for(global_position, _work_slot + _work_slot_tries, self)
+					if _work_slot_pos != Vector3.ZERO:
+						_work_slot_avoid.append(_work_slot_pos)
+					var alt_slot: Vector3 = b.get_builder_slot_for(global_position, _work_slot,
+							self, Vector3.ZERO, _work_slot_avoid)
 					if alt_slot != Vector3.ZERO:
 						_work_slot_pos = alt_slot
 						_work_repath_timer = 0.0

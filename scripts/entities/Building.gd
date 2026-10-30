@@ -626,7 +626,7 @@ func get_builder_slot(index: int) -> Vector3:
 # 结果就是农民隔着好几米就开始建造/修理。只有第一圈全被水/山/别的建筑
 # 挡住时才逐圈向外退，保证施工位贴着建筑外缘。
 func get_builder_slot_for(from_pos: Vector3, index: int = 0, for_unit = null,
-		exclude_pos: Vector3 = Vector3.ZERO) -> Vector3:
+		exclude_pos: Vector3 = Vector3.ZERO, avoid: Array = []) -> Vector3:
 	var bm = _get_bm()
 	if bm == null:
 		return global_position
@@ -674,6 +674,14 @@ func get_builder_slot_for(from_pos: Vector3, index: int = 0, for_unit = null,
 				continue
 			if exclude_pos != Vector3.ZERO \
 					and Vector2(wp.x - exclude_pos.x, wp.z - exclude_pos.z).length_squared() < 0.81:
+				continue
+			# 已经试过、走不进去的施工位不要再返回（否则重挑拿到同一个点，永远走不到）。
+			var avoided := false
+			for ap in avoid:
+				if Vector2(wp.x - ap.x, wp.z - ap.z).length_squared() < 0.81:
+					avoided = true
+					break
+			if avoided:
 				continue
 			var dx: float = wp.x - from_pos.x
 			var dz: float = wp.z - from_pos.z
