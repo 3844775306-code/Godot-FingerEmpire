@@ -788,7 +788,16 @@ func count_field_military(peer: int) -> int:
 # 全部本方陆军战斗单位（含守军/守墙/骚扰/驻军/待命），只排除农民、侦察兵和海军。
 # 主攻门槛必须用这个口径：旧的 count_field_military 扣掉所有角色，守军一多野战兵就变少，
 # 于是越强越不敢打，和守军抓人形成自锁（详见 docs/AI_ARMY_DISPATCH_DESIGN.md）。
+#
+# P2：优先读 AISituation 的每轮快照（step 0 刷新），避免每个调用点都全量遍历一次。
+# 快照最多滞后一个决策步（step 10 生产的单位下一轮才计入），对阶段判断无实质影响；
+# 需要精确值的地方（对账/调试）用 _count_land_army_live()。
 func count_land_army() -> int:
+	if USE_SITUATION_COUNTS and _situation != null and _situation.valid:
+		return int(_situation.own_land_count)
+	return _count_land_army_live()
+
+func _count_land_army_live() -> int:
 	var n: int = 0
 	for e in _cached_armies():
 		if not is_instance_valid(e) or e.health <= 0:
@@ -6255,6 +6264,10 @@ func _get_tactic_name(tactic: int) -> String:
 # ═══ P2 世界模型（影子） ═══
 # 只读快照 + 与现有 count_* 对账；不改变任何决策。
 const SITUATION_CHECK_INTERVAL: float = 5.0
+# 读取点切换开关：true=读快照，false=全量扫描。
+# 默认 false：AISituation 已通过影子对账（0 不一致），但切换后还没在无并发实例的环境跑过基线，
+# 先保持旧路径；verify 通过后再置 true。
+const USE_SITUATION_COUNTS: bool = false
 
 func _situation_shadow_tick() -> void:
 	if _situation == null or battle == null:
@@ -6273,7 +6286,7 @@ func _situation_shadow_tick() -> void:
 	_situation_last_t = gt
 	_situation_checks += 1
 	# 对账：快照计数必须与现有 count_* 完全一致（影子迁移的验收条件）。
-	var land_gap: int = int(_situation.own_land_count) - count_land_army()
+	var land_gap: int = int(_situation.own_land_count) - _count_land_army_live()
 	var worker_gap: int = int(_situation.own_worker_count) - count_unit(10, false)
 	var castle_gap: int = _situation.count_building(20) - count_building(20)
 	if land_gap != 0 or worker_gap != 0 or castle_gap != 0:

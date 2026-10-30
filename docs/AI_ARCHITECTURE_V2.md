@@ -346,3 +346,22 @@ AIClock.fast (4Hz)
 **成本变化**：资源索引低频化后，单轮 refresh 从 0.8ms 降到 **0.25~0.40ms**；对账仍 **0 不一致**。
 
 **下一步（P2 收尾）**：把读取点切到快照——优先 `count_land_army()` / `count_field_military()` 与防御的"附近敌人"查询；切换后用 P0 基线对比扫描成本与 front/idle 指标。
+
+### 11.6 P2 读取点切换（已实现，开关默认关闭，待验证）
+
+**已做**：
+- `count_land_army()` 增加快照分支（`USE_SITUATION_COUNTS`），旧实现保留为 `_count_land_army_live()`；阴影对账改用 live 值与快照比较（避免"自比自"）。
+- 快照最多滞后一个决策步（step 10 生产的单位下一轮才计入），对阶段判断无实质影响。
+- **默认 `USE_SITUATION_COUNTS = false`**：本机验证时有正在运行的游戏实例，无法做干净的无头基线对比；先保持旧路径，验证通过后再置 true。
+
+**验证待办（环境干净时执行）**：
+```powershell
+# 1) 关闭游戏/编辑器实例后跑 12 分钟基线
+<Godot> --headless --path . res://tools/ai_selfplay.tscn -- `
+  --seeds=24680 --minutes=12 --sample=60 --mode=3v3 --diff=HELL --time-scale=8 --immortal=1 `
+  --out=res://docs/ai-analysis/selfplay/baseline_pre
+# 2) 把 USE_SITUATION_COUNTS 置 true，再跑同参数一遍
+# 3) 对比 front/idle/land/阶段触发时间，劣化超 2% 就回退开关
+```
+
+**顺带修复**：`docs/ai-analysis/selfplay/` 下的 CSV 被 Godot 当成翻译资源导入了（生成一堆 `.import`/`.translation`）。已加上 `.gdignore` 并清理，后续该目录不会再被导入。
