@@ -2229,6 +2229,7 @@ func _run_decide_step(step: int) -> void:
 		5:
 			_update_resource_pressure(_last_delta)
 			_ensure_house_quota()
+			_ensure_military_producer_quota()
 		6:
 			# 升时代要求每 30 秒兜底检查一次：普通建造目标不一定包含瞭望塔等条件建筑；
 			# 同一轮里再检查一次能否直接进入新时代（不再按固定分钟数等待）。
@@ -2544,8 +2545,10 @@ func _diplo_send_tribute(ally: int):
 func find_valid_build_position(near_pos: Vector3, building_id: int) -> Vector3:
 	var cfg = EntityDatabase.get_config(building_id)
 	var radius = cfg.get("body_radius", 1.0)
-	for dist in [3, 5, 8, 12, 16, 20]:
-		for _try in range(8):
+	# 3v3/经典大陆的基地更拥挤：原来只搜到 20 米，且每个距离只试 8 个角度，
+	# 常常找不到空位就放弃，导致民居/兵营长期只有 1~4 座。向外扩到 38 米并增加采样。
+	for dist in [3, 5, 8, 12, 16, 20, 26, 32, 38]:
+		for _try in range(12):
 			var test = near_pos + Vector3(cos(randf_range(0, TAU))*dist, 0, sin(randf_range(0, TAU))*dist)
 			var overlap = false
 			# 旧实现每个候选点都全表扫一遍建筑/资源；6×8 个候选点会放大成
@@ -2563,17 +2566,40 @@ func find_valid_build_position(near_pos: Vector3, building_id: int) -> Vector3:
 			if not overlap and _is_valid_build_ground(test):
 				return test
 	# 兜底也要走地形校验；找不到就返回 ZERO 让调用方跳过，绝不能盲目偏移硬塞
-	for _fb in range(10):
-		var fp = near_pos + Vector3(cos(randf_range(0, TAU))*20, 0, sin(randf_range(0, TAU))*20)
-		if _is_valid_build_ground(fp): return fp
+	for dist in [20, 26, 32, 38]:
+		for _fb in range(12):
+			var fp = near_pos + Vector3(cos(randf_range(0, TAU))*dist, 0, sin(randf_range(0, TAU))*dist)
+			if _is_valid_build_ground(fp): return fp
 	return Vector3.ZERO
-	
-	
+
+# 主城周围找不到位置时，再围绕自己的外围建筑找。经典大陆上主城常被资源点/
+# 建筑围死，只围绕主城搜索会让 AI 永远补不到民居和兵营。
+func _find_build_position_near_own(building_id: int) -> Vector3:
+	var castle = get_peer_castle(my_peer_id)
+	if castle == null:
+		return Vector3.ZERO
+	var pos: Vector3 = find_valid_build_position(castle.global_position, building_id)
+	if pos != Vector3.ZERO:
+		return pos
+	var bases: Array = []
+	for e in _cached_buildings():
+		if not is_instance_valid(e) or not (e is Building) or e.health <= 0 or e.build_timer > 0.0:
+			continue
+		if not entity_belongs_to_me(e) or int(e.entity_id) in [7, 8]:
+			continue
+		bases.append(e)
+	bases.sort_custom(func(a, b):
+		return a.global_position.distance_squared_to(castle.global_position) \
+				< b.global_position.distance_squared_to(castle.global_position)
+	)
+	for b in bases:
+		pos = find_valid_build_position(b.global_position, building_id)
+		if pos != Vector3.ZERO:
+			return pos
+	return Vector3.ZERO
 
 func _get_build_position(b_id: int) -> Vector3:
-	var castle = get_peer_castle(my_peer_id)
-	if castle: return find_valid_build_position(castle.global_position, b_id)
-	return Vector3.ZERO
+	return _find_build_position_near_own(b_id)
 
 # ═══ Worker allocation ═══
 var allocate_timers = 0
@@ -4632,21 +4658,18 @@ func _process_line_military():
 
 func _process_line_3():
 	if count_building(28) < _effective_house_target() and can_afford_building(28):
-		var castle = get_peer_castle(my_peer_id)
-		if castle:
-			var hp2 = find_valid_build_position(castle.global_position, 28)
-			if hp2 != Vector3.ZERO:
-				_force_house_builder(hp2)
-				build_building(28, hp2)
+		var hp2 = _find_build_position_near_own(28)
+		if hp2 != Vector3.ZERO and _force_house_builder(hp2):
+			build_building(28, hp2)
 
 # 人口满时房屋是解锁兵营/登陆兵的唯一出路。找不到空闲农民时，
 # 从采集/运输里的农民临时抽一个出来建房，避免"没房→人口满→没兵→永远没房"。
-func _force_house_builder(pos: Vector3) -> void:
+func _force_house_builder(pos: Vector3) -> bool:
 	if battle == null or not battle.has_method("find_nearest_idle_builder"):
-		return
+		return false
 	var existing = battle.find_nearest_idle_builder(my_team, my_peer_id, pos, 60.0)
 	if existing != null:
-		return
+		return true
 	var best = null
 	var best_d: float = INF
 	for e in _cached_armies():
@@ -4656,20 +4679,24 @@ func _force_house_builder(pos: Vector3) -> void:
 			continue
 		if e.has_meta("ai_transporting") or e.has_meta("ai_home_guard") or e.has_meta("ai_wall_guard"):
 			continue
-		if String(e.current_order) == "build" or int(e._work_target_id) != -1:
+		# 采集中也要能抽走；旧逻辑把 _work_target_id != -1 的农民全跳过，
+		# 六 AI 混战时 15 个农民都在采集，结果一个建房工人都找不到。
+		if String(e.current_order) == "build":
 			continue
 		var d: float = e.global_position.distance_squared_to(pos)
 		if d < best_d:
 			best_d = d
 			best = e
 	if best == null:
-		return
+		return false
 	if best.has_method("_detach_from_building"):
 		best._detach_from_building()
 	if best.has_method("stop_movement"):
 		best.stop_movement()
 	best.current_order = ""
+	best.current_target = null
 	best._work_target_id = -1
+	return true
 
 # 第 X 分钟至少 X 座民居，8 座封顶；提前一分钟开工，给建造时间留出余量。
 func _required_house_count() -> int:
@@ -4681,7 +4708,9 @@ func _required_house_count() -> int:
 # 民居优先于造兵/攒投石机资源；这里绕过 reserve 检查，只确认木材足够。
 # 否则人口满时 AI 会先把木材花在别处，导致“到点没有 X 座民居”。
 func _ensure_house_quota() -> void:
-	var required: int = _required_house_count()
+	# 接近人口上限时 effective 会抬到 12；旧实现只按“第 X 分钟 X 座”造到 8，
+	# 结果人口满了但民居目标还是 8，军队长期卡在 40/50 人口。
+	var required: int = maxi(_required_house_count(), _effective_house_target())
 	if required <= 0 or count_building(28) >= required:
 		return
 	var cfg = EntityDatabase.get_config(28)
@@ -4692,13 +4721,20 @@ func _ensure_house_quota() -> void:
 	for k in cost:
 		if int(res.get(k, 0)) < int(cost[k]):
 			return
-	var castle = get_peer_castle(my_peer_id)
-	if castle == null:
-		return
-	var hp: Vector3 = find_valid_build_position(castle.global_position, 28)
-	if hp != Vector3.ZERO:
-		_force_house_builder(hp)
+	var hp: Vector3 = _find_build_position_near_own(28)
+	if hp != Vector3.ZERO and _force_house_builder(hp):
 		build_building(28, hp)
+
+# 六 AI 混战时经常只有 0~1 座兵营：普通建造循环被升级/资源储备打断后，
+# 人口一满就再也补不上生产建筑。这里每轮决策兜底保证至少 2 座兵营。
+func _ensure_military_producer_quota() -> void:
+	if battle == null or count_building(21) >= 2:
+		return
+	if not can_afford_building(21):
+		return
+	var hp: Vector3 = _find_build_position_near_own(21)
+	if hp != Vector3.ZERO and _force_house_builder(hp):
+		build_building(21, hp)
 
 func _process_line_4():
 	# 威胁上升 / 防守姿态时不再把主力送出去；骚扰、突袭、全军压上时仍允许补发主攻
@@ -4711,6 +4747,8 @@ func _process_line_4():
 	if current_tactic == LateTactic.OVERWHELM:
 		if not an_attack():
 			return
+		if _defense != null:
+			_defense.release_guards_for_attack()
 		var overwhem_target = _get_attack_target_castle()
 		if overwhem_target:
 			attack_move(overwhem_target.global_position, 30)
@@ -4720,8 +4758,13 @@ func _process_line_4():
 	if phase == Phase.DEVELOPMENT and battle.game_time < 120.0:
 		return
 	# 骚扰小队出门时主力仍可进攻；attack_move 会跳过 ai_harass 单位
+	# 主攻前先解除主城守军：守军会计入军队总数但不计入可出击野战军，
+	# 不解锁就会被“账面 30、野战 5”卡住 12 人主攻门槛。
+	var want_attack: bool = an_attack()
+	if want_attack and _defense != null:
+		_defense.release_guards_for_attack()
 	var my_key = my_peer_id if my_peer_id != -1 else my_team
-	if count_field_military(my_key) >= 12 and an_attack():
+	if count_field_military(my_key) >= 12 and want_attack:
 		var target = _get_attack_target_castle()
 		if target:
 			attack_move(target.global_position, 30)
