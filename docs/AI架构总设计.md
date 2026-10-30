@@ -402,3 +402,24 @@ naval.cross_water           组织渡海
 **4. 修复后同配置实测**：`locked` 从 111 → **0**，总指令 226 → 145（少了 36% 的无用动作），`unattributed` 保持 0；剩下的拒绝全是 `no_queue`（队列忙，属正常节流）。行为指标 front 62.5% / idle 16.0%，与基线一致。
 
 **结论**：这一步验证了"可追溯性不只是好看"——两个隐藏多年的空转，是靠 `rule + reject_reason` 两列一排序就看见的。
+
+---
+
+## 14. A1 已落地：AIContext 只读门面（2026-10-31 03:10）
+
+**做了什么**：新增 `scripts/ai/world/AIContext.gd`，在 `AI.gd` 每轮快照刷新后 `bind(self, _situation, _ledger, round_no)`，对外提供只读查询：
+
+| 分类 | 接口 |
+|---|---|
+| 身份 | `my_peer_id()` / `my_team()` / `phase()` / `round_no()` |
+| 经济 | `resources()` / `limits()` / `can_afford*()` |
+| 归属 | `belongs_to_me()` / `is_enemy()` / `is_defending()` / `primary_enemy_team()` |
+| 建筑 | `castle()` / `enemy_castle()` / `count_building()` / `count_unit()` |
+| 敌情 | `visible_enemies()`（优先当轮快照）/ `enemy_army_within()` / `is_ranged_wall_candidate()` |
+| 账本 | `ledger_holders(kind)` / `ledger_count(kind)` |
+
+**当前状态**：转发式实现（内部仍指向控制器与快照），**还没有任何模块改用它**——A1 只是把门面立起来，行为零变化。摘要里已暴露 `context` 段，便于确认绑定时机。
+
+**验证**：2 分钟 3v3 HELL 自对弈通过，`front 71.4% / idle 19.0%`，无脚本错误。
+
+**下一步（A2）**：`AIDefense` 是第一个改造对象。它读控制器的方法有 11 种、共 43 处调用（`entity_belongs_to_me` 17、`count_building` 7、`_entity_is_enemy` 5、`get_peer_castle` 4…），把读取全部换成 `_ctx.xxx()`，写操作（`build_building`/`upgrade_building`/`_director_claim`）暂时保留，等 A3 的 Port 再收。改完跑 8 分钟对照，行为不变才继续下一个模块。

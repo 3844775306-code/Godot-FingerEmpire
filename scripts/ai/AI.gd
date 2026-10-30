@@ -14,6 +14,7 @@ const AIWorkerDirectorScript = preload("res://scripts/ai/AIWorkerDirector.gd")
 const AIConfigScript = preload("res://scripts/ai/core/AIConfig.gd")
 const AIClockScript = preload("res://scripts/ai/core/AIClock.gd")
 const AITraceScript = preload("res://scripts/ai/core/AITrace.gd")
+const AIContextScript = preload("res://scripts/ai/world/AIContext.gd")
 const AISituationScript = preload("res://scripts/ai/world/AISituation.gd")
 const RoleLedgerScript = preload("res://scripts/ai/core/RoleLedger.gd")
 const AIDirectorScript = preload("res://scripts/ai/AIDirector.gd")
@@ -214,6 +215,8 @@ const WALL_GUARD_SMALL_BODY: float = 0.5
 var _ai_clock = null
 # P2：世界模型影子快照（只读，不接管决策；用于对账与成本测量）。
 var _situation = null
+# A1：只读世界上下文（L2 模块逐步改用它的读取接口）。
+var _context = null
 var _situation_usec_ema: float = 0.0
 var _situation_last_t: float = -1.0
 # P3.1：统一角色账本（角色占用的唯一事实来源，director/worker 分来源登记）。
@@ -1946,6 +1949,7 @@ func _ready():
 	_ai_clock.add("upgrade_cycle", 20.0)
 	_ai_clock.add("defense_gap", DEFENSE_CHECK_INTERVAL)
 	_situation = AISituationScript.new()
+	_context = AIContextScript.new()
 	_ledger = RoleLedgerScript.new()
 	_director_v2 = AIDirectorScript.new()
 	_director_v2.setup(self)
@@ -6434,6 +6438,8 @@ func _situation_shadow_tick() -> void:
 	var is_check: bool = gt - _situation_last_t >= SITUATION_CHECK_INTERVAL
 	# 可见性判定较贵（每敌人一次视野检查），只在低频对账轮开启。
 	_situation.refresh(self, is_check, is_check)
+	if _context != null:
+		_context.bind(self, _situation, _ledger, _decide_seq_no)
 	if AITraceScript.is_enabled():
 		AITraceScript.end_round()
 	var us: float = float(_situation.cost_usec)
@@ -6513,4 +6519,5 @@ func get_situation_summary() -> Dictionary:
 	d["worker_claim_skips"] = _worker_claim_skips
 	d["director_v2"] = _director_v2.debug_snapshot() if _director_v2 != null else {}
 	d["director_defend_actions"] = _director_defend_actions
+	d["context"] = _context.debug_snapshot() if _context != null else {}
 	return d
