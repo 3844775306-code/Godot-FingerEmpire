@@ -90,6 +90,14 @@ var _work_repath_timer: float = 0.0
 # 超过预算就丢弃旧路径重新找施工位，避免农民永久顶在半路。
 var _work_last_dist: float = -1.0
 var _work_stuck_time: float = 0.0
+# 站在施工位但建筑进度不推进的累计时间（缺资源停工），超时就让农民回去干活
+var _work_idle_watch: float = 0.0
+var _work_last_build_timer: float = -1.0
+const BUILD_SITE_IDLE_TIMEOUT: float = 6.0
+# 走向施工位超过这个时间还没到，就放弃施工
+const BUILD_APPROACH_GIVEUP: float = 10.0
+var _work_approach_total: float = 0.0
+var _work_approach_best: float = -1.0
 var _deliver_total_time: float = 0.0
 # 连续交付失败的主城/仓库暂时不再选，避免一直往同一个不可达点跑
 var _delivery_failed_targets: Dictionary = {}
@@ -939,6 +947,8 @@ func work_on_building(b) -> bool:
 	_work_repath_timer = 0.0
 	_work_last_dist = -1.0
 	_work_stuck_time = 0.0
+	_work_approach_total = 0.0
+	_work_approach_best = -1.0
 	_set_order(UnitState.BUILDING)
 	_movement.set_move_target(_work_slot_pos, 0.25)
 	return true
@@ -2937,6 +2947,14 @@ func _tick_building_action(delta: float, bm) -> void:
 				_movement.stop()
 			velocity = Vector3.ZERO
 		else:
+			# 走了很久还是到不了施工位（施工位被围死/隔水/在敌墙后）：放弃这次施工，
+			# 回去采集，别一直原地顶着（实测这类农民会永久静止、AI 又因为施工锁无法改派）。
+			_work_approach_total += delta
+			if _work_approach_best < 0.0 or dist < _work_approach_best:
+				_work_approach_best = dist
+			if _work_approach_total > BUILD_APPROACH_GIVEUP:
+				_finish_work()
+				return
 			_work_repath_timer -= delta
 			var need_repath: bool = _work_repath_timer <= 0.0
 			if _movement:
@@ -2971,6 +2989,18 @@ func _tick_building_action(delta: float, bm) -> void:
 			velocity = Vector3.ZERO
 			if _movement:
 				_movement.stop()
+			# 站在施工位却一直没进度（缺资源停工/建筑被占位卡住）：别干站着，
+			# 退出施工状态回去采集，AI 之后会重新派人来建。
+			# 实测对局里 20% 的农民卡在"命令=build 却不动"就是这个原因。
+			if _work_last_build_timer >= 0.0 and absf(float(b.build_timer) - _work_last_build_timer) < 0.01 \
+					and not b.repair_pending:
+				_work_idle_watch += delta
+				if _work_idle_watch > BUILD_SITE_IDLE_TIMEOUT:
+					_finish_work()
+					return
+			else:
+				_work_idle_watch = 0.0
+			_work_last_build_timer = float(b.build_timer)
 			# 面向建筑，施工动作才朝向正确
 			var face_dir: Vector3 = b.global_position - global_position
 			face_dir.y = 0.0
@@ -3479,6 +3509,13 @@ func _think(delta, bm):
 	# 施工中的农民不自动采集/索敌；目标建筑失效时由 _process_action 收尾。
 	if _order_is(UnitState.BUILDING):
 		if _work_target_id == -1:
+			_finish_work()
+			return
+		# 施工目标建筑已经被拆掉、没建起来、或者已经完工：必须退出施工状态。
+		# 否则 _work_command_locked() 会把 AI 后续所有命令全部丢弃，
+		# 农民就永久停在原地（实测对局里 20% 的农民处于"命令=build 却没目标、不动"）。
+		var wb := _get_work_building()
+		if wb == null or wb.health <= 0 or float(wb.build_timer) <= 0.0:
 			_finish_work()
 		return
 	if current_target != null and not is_instance_valid(current_target):
