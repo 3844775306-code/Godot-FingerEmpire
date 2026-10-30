@@ -188,11 +188,9 @@ var _next_build_step: float = 0.0
 var _first_ring_priority_cache: bool = false
 var _first_ring_priority_cache_at: float = -999.0
 var _next_reactive_tower: float = 0.0
-var _upgrade_timer: float = 4.0
 
 # ── 守军状态 ──
 var _home_guard_ids: Dictionary = {}
-var _guard_timer: float = 0.0
 var _force_guard_until: float = -999.0
 # 主攻前解除守军后的静默期：期间不再抢人，避免刚放出去又被守军抓回
 var _guard_block_until: float = -999.0
@@ -202,7 +200,6 @@ var _building_health: Dictionary = {}
 
 # ── 资源区状态 ──
 var resource_zones: Array = []        # [{"center","type","workers","nodes","enemy_count"}]
-var _zone_timer: float = 0.0
 var _next_outpost: float = 0.0
 # 记录已经落位的资源区瞭望塔，便于限制每片资源区只建一座。
 var watchtower_positions: Array = []
@@ -217,6 +214,9 @@ func _init(owner_ai) -> void:
 	_clock.add("building_alert", BUILDING_ALERT_INTERVAL)
 	_clock.add("guard_refill", GUARD_REFILL_INTERVAL)
 	_clock.add("resource", RESOURCE_INTERVAL)
+	_clock.add("guard", GUARD_INTERVAL)
+	_clock.add("defense_upgrade", DEFENSE_UPGRADE_INTERVAL, 4.0 / DEFENSE_UPGRADE_INTERVAL)
+	_clock.add("zone", RESOURCE_ZONE_INTERVAL)
 	_defense_context = DefenseContextScript.new(ai)
 	_threat_model = DefenseThreatModelScript.new(_defense_context)
 	_defense_director = DefenseDirectorScript.new(_defense_context)
@@ -274,7 +274,7 @@ func start_defense() -> void:
 	if castle == null:
 		return
 	_force_guard_until = float(ai.battle.game_time) + FORCE_GUARD_TIME
-	_guard_timer = 0.0
+	_clock.reset("guard", 0.0)
 	_ensure_layout(castle)
 	_assign_home_guard(castle, true)
 
@@ -2975,10 +2975,8 @@ func _own_tower_near(pos: Vector3, radius: float) -> bool:
 
 # ── 防守升级：只升级塔/墙，优先威胁方向 ──
 func _manage_defense_upgrades(castle, delta: float) -> void:
-	_upgrade_timer -= delta
-	if _upgrade_timer > 0.0:
+	if not _clock.due("defense_upgrade"):
 		return
-	_upgrade_timer = DEFENSE_UPGRADE_INTERVAL
 	var now: float = float(ai.battle.game_time)
 	if threat_level == 0 and now < 240.0:
 		return
@@ -3162,10 +3160,8 @@ func _reserve_ranged_for_wall(unit, walls_exist: bool) -> bool:
 	return true
 
 func _manage_home_guard(castle, delta: float) -> void:
-	_guard_timer -= delta
-	if _guard_timer > 0.0:
+	if not _clock.due("guard"):
 		return
-	_guard_timer = GUARD_INTERVAL
 	_prune_guard_ids()
 
 	var own: Array = _land_combat_units()
@@ -3271,11 +3267,11 @@ func _manage_home_guard(castle, delta: float) -> void:
 func _quick_fill_home_guard(castle, delta: float) -> void:
 	if not _clock.due("guard_refill"):
 		return
-	if _guard_timer <= 0.0:
+	if _clock.remaining("guard") <= 0.0:
 		return
 	if threat_level >= 2:
 		# 进入防守/危急时立刻走完整守军调度，不等一分钟。
-		_guard_timer = 0.0
+		_clock.reset("guard", 0.0)
 		_manage_home_guard(castle, 0.0)
 		return
 	_prune_guard_ids()
@@ -3317,7 +3313,7 @@ func _quick_fill_home_guard(castle, delta: float) -> void:
 # 主攻前调用：解除主城守军的驻扎，避免 attack_move 被 garrison_point 拉回主城
 func release_guards_for_attack() -> void:
 	_force_guard_until = -999.0
-	_guard_timer = 0.0
+	_clock.reset("guard", 0.0)
 	# 解除后 20 秒内不再抓人：否则 2 秒一次的守军快补马上又把同一批兵抓回主城，
 	# 主攻刚放出去的人又被 garrison_point 卡住，等于没解锁。
 	_guard_block_until = float(ai.battle.game_time) + 20.0
@@ -3469,9 +3465,7 @@ func _unit_has_existing_task(u) -> bool:
 func _manage_resource_security(castle, delta: float) -> void:
 	if not _clock.due("resource"):
 		return
-	_zone_timer -= RESOURCE_INTERVAL
-	if _zone_timer <= 0.0:
-		_zone_timer = RESOURCE_ZONE_INTERVAL
+	if _clock.due("zone"):
 		_refresh_resource_zones(castle)
 	_defend_resources(castle)
 	_maybe_build_outpost(castle)

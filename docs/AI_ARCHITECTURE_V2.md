@@ -725,3 +725,19 @@ AIClock.fast (4Hz)
 **剩余**：`_guard_timer` 等"跨函数当条件读"的计时器没有迁移——它们的语义不是"到点触发"，而是"距上次事件多久"，改成时钟会引入 `due()` 的消费语义歧义，需要先改调用结构再迁移。
 
 **8 分钟复验**（迁移后、含本次模块收口）：front **69.58%** / idle **14.89%** / engage 50.49% / land 7.25 / workers 12.18 —— 与 12.10 的迁移后基线（70.91 / 15.68）一致，模块计时器收口没有引入劣化。
+
+### 12.13 AIDefense 剩余计时器收口 + 一个真 bug（2026-10-31 01:10）
+
+沿用 12.12 的做法，把 AIDefense 里"跨函数当条件读"的计时器也迁到时钟上，靠 `remaining()` 表达"还有多久"，靠 `reset(key, 0.0)` 表达"立刻触发"：
+
+| 计时器 | 新键 | 处理方式 |
+|---|---|---|
+| `_guard_timer`(60s) | `guard` | 审计用 `due()`；快补里用 `remaining() <= 0` 判"审计快到了就跳过"；`start_defense`/`release_guards_for_attack`/危急时 `reset("guard", 0.0)` 立刻审计 |
+| `_upgrade_timer`(9s，初始 4s) | `defense_upgrade` | 初始相位 `4/9`，之后 `due()` |
+| `_zone_timer`(12s) | `zone` | `due()` |
+
+**顺带发现一个真 bug（未改行为，先记录）**：`_defense_check_timer`（`DEFENSE_GAP_INTERVAL = 25s`）被 `_manage_early_defense()` 和 `_manage_defense()` **各自减一次 delta**，同一帧里被减两次 → 实际每 ~12.5 秒就 `_queue_defense_gaps()` 一次，是设计间隔的一半。因为两处都会调 `_queue_defense_gaps()`，直接改成单消费者会把节奏改慢一倍、影响防线补建速度，所以这次**只记录不修改**，等有防守专项验证时再一起改。
+
+**验证**：5 分钟 3v3 HELL、种子 24680 → front **78.85%** / idle **7.69%** / engage 48.08% / p95 266.7ms，无脚本错误。
+
+**运维踩坑**：超时的无头对弈进程如果没清掉会一直占 CPU（本轮就残留了 3 个 Godot 进程，把 8 分钟对局拖到跑不完、p95 700ms+）。跑基准前先 `Get-Process Godot*` 清一遍，否则测出来的数据全是负载噪声。
