@@ -365,3 +365,93 @@ AIClock.fast (4Hz)
 ```
 
 **顺带修复**：`docs/ai-analysis/selfplay/` 下的 CSV 被 Godot 当成翻译资源导入了（生成一堆 `.import`/`.translation`）。已加上 `.gdignore` 并清理，后续该目录不会再被导入。
+
+## 12. P3 施工图：统一 Director + 节拍修正（文件级计划）
+
+### 12.1 目标与非目标
+
+**目标**：让"谁在干什么"只有一本账，"谁该多久动一次"只有一个钟。
+**非目标**：不新增战术行为、不改难度参数、不动联机协议。
+
+### 12.2 现状盘点（已核对代码）
+
+| 记录"占用"的地方 | 位置 | 问题 |
+|---|---|---|
+| `AI._roles` | `AI.gd:4960` | 军队角色账本，AI 自己写 |
+| `AIWorkerDirector._workers / _flee_resume / _builder_reservations / _build_requests` | `AIWorkerDirector.gd:26-35` | 农民账本，模块自己写 |
+| `AIDefense` 内部守军/预留 | `AIDefense.gd` | 防御自己写，靠 `_unit_has_claim()` / `_is_held_by_garrison()` 互相查询来"避免撞车" |
+
+三本账互相查询 → 每次判断都要跨模块问一遍，且新增模块必须记得问，是当前最容易出"同一单位被两处调度"的结构性风险。
+
+**计时器分两类**：
+
+| 类型 | 例子 | 正确性 |
+|---|---|---|
+| 帧级（每帧 `tick(delta)`） | `AIDefense` 11 个、`AIWorkerDirector` 2 个 | ✅ 正确 |
+| 轮次级（决策 step 内递减） | `AI.gd` 的 4 个（已迁 `AIClock`） | ❌ 每轮只减一帧 delta，名义 10s 实际几十秒 |
+
+### 12.3 施工步骤
+
+**P3.0 节拍修正（最小、可独立验证）**
+- `AI.gd`：`_process` 每帧累加 `_elapsed_since_round += delta`；`_begin_decide` 时取出并清零。
+- `_ai_clock.advance(_elapsed_since_round)` 替换现在的 `advance(_last_delta)`。
+- 开关 `USE_TRUE_ROUND_ELAPSED`（默认 false，先量成本再开）：开启后 `retask=2s / wall=10s / garrison / age_build=30s` 才是真实秒数，触发频率会明显上升。
+- 验收：同种子 12 分钟，AIClock `next_in()` 与 `battle.game_time` 推进一致；p95 帧耗时上升 < 5%。
+
+**P3.1 统一账本 `RoleLedger`**
+- 新增 `scripts/ai/core/RoleLedger.gd`（`class_name RoleLedger`）：
+  - `claim(unit, kind, source, ttl=-1.0)`、`release(unit)`、`release_by_source(source)`、`get(unit)`、`holders(kind)`、`counts()`、`sweep(now)`（死亡/TTL 自动回收）
+  - 不变式：一个单位同时最多一条 claim；单位死亡当帧必须被回收（`sweep` + 死亡信号双保险）。
+- `AI._roles` 改为 `_ledger` 的薄包装：`_unit_has_claim` / `_role_of` 等签名不变，内部改查 `_ledger`（调用点零改动）。
+- `AIWorkerDirector` 的 `_workers` 退化为"快照视图"（每 tick 从 `_ledger` + `_cached_armies` 重建），删除 `_flee_resume` / `_builder_reservations` 里的重复状态，改登记 claim。
+- `AIDefense` 的守军/预留改为在 `_ledger` 登记（source=`"defense"`），`_is_held_by_garrison` 改查账本。
+- 影子期：旧账本与新账本**双写**，每 5 秒断言两者一致，不一致打印 `[LEDGER] MISMATCH`。
+
+**P3.2 `AIDirector` 统一调度**
+- 新增 `scripts/ai/AIDirector.gd`：持有 `ai._situation` 与 `ai._ledger`，按固定顺序调度 `production → worker → military → defense → naval`。
+- 每个模块只声明"我要什么"（如防御要 `situation.visible_enemies`、军事要 `situation.own_land_count`），不再各自遍历 `battle._armies`。
+- 一次 `situation.refresh()` 供所有模块使用（现在影子快照已经是每轮一次，切换成本低）。
+
+**P3.3 计时器收口**
+| 模块 | 现状 | 迁移后 keys |
+|---|---|---|
+| `AI.gd` | 4 个（已迁 AIClock） | `retask / wall_deploy / garrison / age_build` |
+| `AIDefense.gd` | 11 个裸计时器 | `threat(0.5s) / guard(1s) / alert(1s) / resource(2s) / zone(2s) / defense_check(3s) / upgrade(4s)` |
+| `AIWorkerDirector.gd` | 2 个 | `worker_tick` + `worker_log` |
+| `AIWaterCrossing.gd` | 1 个 | `water_check` |
+
+所有 key 用同一 `AIClock`，相位按 AI 序号错开，避免 5 个 AI 同帧触发。
+
+### 12.4 文件级改动清单
+
+| 文件 | 动作 | 风险 |
+|---|---|---|
+| `scripts/ai/core/RoleLedger.gd` | 新增（约 120 行） | 低（纯数据结构 + 不变式） |
+| `scripts/ai/AIDirector.gd` | 新增（约 150 行） | 中（调度顺序变化会改行为） |
+| `scripts/ai/AI.gd` | 改：`_roles`→`_ledger` 包装、`_elapsed_since_round`、4 处时间源 | 中 |
+| `scripts/ai/AIWorkerDirector.gd` | 改：状态改登记 claim，`_workers` 变视图 | 中高（农民行为最敏感） |
+| `scripts/ai/AIDefense.gd` | 改：11 个计时器→AIClock；守军登记账本 | 中 |
+| `scripts/ai/AIWaterCrossing.gd` | 改：1 个计时器 | 低 |
+| `tools/ai_selfplay_runner.gd` | 改：CSV 增加 `ledger_mismatch` 列 | 低 |
+
+### 12.5 验证与回滚
+
+每步独立提交，独立开关，可单独回退：
+
+| 步骤 | 开关 | 验收指标 | 回退方式 |
+|---|---|---|---|
+| P3.0 | `USE_TRUE_ROUND_ELAPSED` | AIClock 间隔准确性；p95 帧耗时 | 开关置 false |
+| P3.1 | `USE_ROLE_LEDGER` | `[LEDGER] MISMATCH` = 0；workers/land/front 与基线差 < 2% | 开关置 false（旧账本仍在） |
+| P3.2 | `USE_DIRECTOR` | front/idle/engage、ASSAULT 触发时间 | 开关置 false |
+| P3.3 | 按模块 | 各模块日志频率符合预期 | 单模块回退 |
+
+**确定性**：每步用同种子跑 `simulation_checksum`，必须与改动前逐 tick 一致（除 P3.0 有意改变触发频率外）。
+
+### 12.6 建议顺序与工期
+
+1. P3.0（半天）——先修钟，否则后面所有"多久一次"都在错的基础上调；
+2. P3.1（1~2 天）——账本统一，风险最高但收益最大，影子双写降低风险；
+3. P3.2（1 天）——调度收口，依赖 1 的账本和已有 Situation；
+4. P3.3（1 天）——纯搬运，机械改动。
+
+**不建议**先做 P3.2：没有统一账本时，Director 只会变成一个新的"第五本账"。
