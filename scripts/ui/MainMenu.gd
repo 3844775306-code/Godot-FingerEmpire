@@ -205,6 +205,7 @@ func _build_desktop_layout() -> void:
 		["📘", "操作指南", "鼠标键盘与进阶技巧", "book", Callable(self, "_on_guide_pressed")],
 		["🎓", "新兵训练营", "26 关渐进教学 · 经典模式", "muted", Callable(self, "_on_tutorial_pressed")],
 		["📜", "科技总览", "四时代科技树", "book", Callable(self, "_on_tech_overview_pressed")],
+		["🎬", "录像回放", "回看单机/联机对局录像", "book", Callable(self, "_on_replays_pressed")],
 		["📜", "更新日志", "版本改动一览", "muted", Callable(self, "_on_changelog_pressed")],
 	]
 	for data in secondary_data:
@@ -454,6 +455,9 @@ func _find_ui(node_name: String) -> Node:
 func _on_play_pressed():
 	# 单机配置改到专属界面，主菜单只负责入口。
 	get_tree().change_scene_to_file("res://scenes/single_player_menu.tscn")
+
+func _on_replays_pressed():
+	get_tree().change_scene_to_file("res://scenes/replay_menu.tscn")
 
 func _on_multiplayer_pressed():
 	GameSettings.tutorial_mode = false
@@ -870,6 +874,7 @@ func _build_mobile_layout() -> void:
 		["📜", "科技总览", _on_tech_overview_pressed, "book"],
 		["📘", "操作指南", _on_guide_pressed, "book"],
 		["🎓", "新兵训练", _on_tutorial_pressed, "muted"],
+		["🎬", "录像回放", _on_replays_pressed, "book"],
 		["⚙️", "设  置", _on_settings_pressed, "muted"],
 		["📜", "更新日志", _on_changelog_pressed, "muted"],
 		["🚪", "退出游戏", _on_quit_pressed, "danger"],

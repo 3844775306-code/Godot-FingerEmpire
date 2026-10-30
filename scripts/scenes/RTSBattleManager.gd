@@ -136,6 +136,8 @@ const CLICK_DELAY: float = 0.1
 var game_over_panel: Control = null
 var game_over_label: Label = null
 var game_over: bool = false
+# 录像采集器：对局中按固定频率记录实体快照，结束时自动写入 user://replays
+var replay_recorder = null
 var battle_stats = null          # 战斗统计器（累计 + 实时采样）
 var _team_castle_count: Dictionary = {}   # 单机2v2: 每队存活城堡数
 var game_time: float = 0.0
@@ -1594,6 +1596,23 @@ func _ready():
 		call_deferred("_spawn_tutorial_hint")
 	if GameSettings.training_mode and not is_online:
 		call_deferred("_spawn_training_hint")
+	# 单机与联机主机自动录像；战役/训练不写入，避免覆盖玩家对局录像。
+	call_deferred("_start_replay_recording")
+
+func _start_replay_recording() -> void:
+	if replay_recorder != null:
+		return
+	if DisplayServer.get_name() == "headless":
+		return
+	if GameSettings.campaign_mode or GameSettings.tutorial_mode or GameSettings.training_mode:
+		return
+	if is_online and NetworkManager.mode == NetworkManager.Mode.CLIENT:
+		return
+	var rec = preload("res://scripts/replay/ReplayRecorder.gd").new()
+	rec.name = "ReplayRecorder"
+	add_child(rec)
+	rec.start(self)
+	replay_recorder = rec
 
 func _spawn_training_hint() -> void:
 	if not GameSettings.training_mode or is_online:
