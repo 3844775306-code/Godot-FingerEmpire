@@ -223,6 +223,7 @@ var _ledger_checks: int = 0
 var _ledger_mismatch_total: int = 0
 var _ledger_conflicts: int = 0
 var _worker_claim_skips: int = 0
+var _director_defend_actions: int = 0
 var _situation_checks: int = 0
 var _situation_mismatch_total: int = 0
 # 防御建筑驻军：AI 会把部分闲置士兵/农民送进箭塔、炮塔和城堡，
@@ -6300,9 +6301,58 @@ const USE_TRUE_ROUND_ELAPSED: bool = true
 const USE_SITUATION_COUNTS: bool = false
 # P3.1 第三步：账本来源名（后续农民/防御也登记到同一本账时用于区分）。
 const LEDGER_SRC_DIRECTOR: String = "director"
+# P3.2 落地开关：true = Director 的 defend 意图真正参与调兵（默认 false，A/B 验证后再定）。
+const USE_DIRECTOR_DEFEND: bool = false
 const LEDGER_SRC_WORKER: String = "worker"
 # 账本 kind 命名空间：0~99 是陆军角色(UnitRole)，1000+ 是农民角色，2000+ 留给防御。
 const LEDGER_KIND_WORKER_BASE: int = 1000
+
+# P3.2 落地（开关 USE_DIRECTOR_DEFEND）：把影子 Director 的 defend 意图接到真实派单。
+# 意图说"可见敌人比已分配守军多 N 个"，这里就从"未被占用、且没有任何命令"的陆军里
+# 挑最近的 N 个登记为守家（HOME_GUARD，租约 12 秒），让它们回家防守。
+# 默认关闭：必须先 A/B 验证不如"只观测"再打开。
+func _director_apply_defend_intent(now: float) -> void:
+	if not USE_DIRECTOR_DEFEND or _director_v2 == null or battle == null:
+		return
+	# 威胁等级已经很高时交给 AIDefense，避免两套逻辑同时调兵。
+	if _defense != null and int(_defense.threat_level) >= 3:
+		return
+	var need: int = 0
+	for it in _director_v2.intents():
+		if String(it.get("kind", "")) == "defend":
+			need = int(it.get("count", 0))
+			break
+	if need <= 0:
+		return
+	var castle = get_peer_castle(my_peer_id) if my_peer_id != -1 else get_team_castle(my_team)
+	if castle == null or not is_instance_valid(castle):
+		return
+	var cand: Array = []
+	for u in _cached_armies():
+		if not is_instance_valid(u) or u.health <= 0 or not entity_belongs_to_me(u):
+			continue
+		if int(u.entity_id) == 10 or int(u.attack) <= 0 or bool(u.water_capable):
+			continue
+		if _unit_has_claim(u):
+			continue
+		if String(u.current_order) != "" or u.current_target != null or not u.command_queue.is_empty():
+			continue
+		if u.garrison_point != Vector3.ZERO:
+			continue
+		cand.append({"u": u, "d": u.global_position.distance_to(castle.global_position)})
+	if cand.is_empty():
+		return
+	cand.sort_custom(func(a, b): return float(a["d"]) < float(b["d"]))
+	var claimed: int = 0
+	for i in range(mini(need, cand.size())):
+		var u = cand[i]["u"]
+		_director_claim(u, UnitRole.HOME_GUARD, 12.0)
+		claimed += 1
+	if claimed > 0:
+		_director_defend_actions += claimed
+		if _director_defend_actions <= 5 or _director_defend_actions % 20 == 0:
+			print("[DIRECTOR-V2] apply t=%.0f defend_claim=%d total=%d" % [
+				now, claimed, _director_defend_actions])
 
 # P3.1 第四步：把农民角色登记进统一账本（来源 worker，kind = 1000 + 农民角色号）。
 # 每一轮先清掉上一轮的 worker 占用再重新登记，等价于"心跳"；被别的来源占用的单位
@@ -6362,6 +6412,7 @@ func _situation_shadow_tick() -> void:
 	# P3.2 影子 Director：同一份快照 + 同一本账算出「这一轮想做什么」，只观测不执行。
 	if _director_v2 != null:
 		_director_v2.tick(_situation, _ledger, gt)
+		_director_apply_defend_intent(gt)
 
 # P3.1 第五步：账本已是唯一事实来源，这里做自检（不再和 _roles 对账）：
 # 每条 director 占用都必须指向"存在、活着、属于我"的单位，且与单位上的 ai_role 元数据一致；
@@ -6409,4 +6460,5 @@ func get_situation_summary() -> Dictionary:
 	d["ledger_conflicts"] = _ledger_conflicts
 	d["worker_claim_skips"] = _worker_claim_skips
 	d["director_v2"] = _director_v2.debug_snapshot() if _director_v2 != null else {}
+	d["director_defend_actions"] = _director_defend_actions
 	return d
