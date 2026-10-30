@@ -18,6 +18,9 @@ var _saved: bool = false
 var _last_snapshot: Dictionary = {}
 var _last_static: Dictionary = {}
 var _last_keyframe_time: float = -99999.0
+var _stats_samples: Array = []
+var _stats_timer: float = 0.0
+var _last_stats_time: float = -1.0
 
 func start(manager: Node) -> void:
 	if _active:
@@ -32,7 +35,9 @@ func start(manager: Node) -> void:
 		"duration": 0.0,
 		"meta": _build_meta(),
 		"map": _capture_map(),
+		"stats": [],
 	}
+	_capture_stats()
 	_capture_frame()
 
 func finish(reason: String = "对局结束") -> void:
@@ -50,6 +55,8 @@ func finish(reason: String = "对局结束") -> void:
 	var meta: Dictionary = _header.get("meta", {})
 	meta["result"] = reason
 	_header["meta"] = meta
+	_capture_stats()
+	_header["stats"] = _stats_samples
 	var path := ReplayStoreScript.new_path(meta)
 	if ReplayStoreScript.save(path, _header, _frames):
 		print("[录像] 已保存: ", path, "  时长 ", ReplayStoreScript.format_duration(_elapsed), "  帧数 ", _frames.size())
@@ -67,6 +74,10 @@ func _process(delta: float) -> void:
 		return
 	_elapsed += delta
 	_accum += delta
+	_stats_timer -= delta
+	if _stats_timer <= 0.0:
+		_stats_timer = 1.0
+		_capture_stats()
 	if _accum >= CAPTURE_INTERVAL:
 		_accum = fmod(_accum, CAPTURE_INTERVAL)
 		_capture_frame()
@@ -140,11 +151,19 @@ func _capture_frame(force_keyframe: bool = false) -> void:
 		if hp <= 0.0:
 			continue
 		var lv_value = e.get("upgrade_level")
+		var mh_value = e.get("max_health")
+		var bt_value = e.get("build_timer")
 		var d := {
 			"i": e.get_instance_id(),
 			"e": int(e.get("entity_id")),
+			"ty": int(e.get("entity_type")),
+			"tm": int(e.get("team")),
+			"o": int(e.get("owner_peer_id")),
 			"p": [e.global_position.x, e.global_position.y, e.global_position.z],
 			"r": e.rotation.y,
+			"h": hp,
+			"mh": float(mh_value) if mh_value != null else hp,
+			"bt": float(bt_value) if bt_value != null else 0.0,
 			"lv": int(lv_value) if lv_value != null else 1,
 			"c": bool(e.get_meta("_wall_is_corner", false)),
 			"ruin": int(e.get("entity_id")) == 27 and int(e.get("team")) == RTSConfig.Team.NEUTRAL,
@@ -174,7 +193,7 @@ func _capture_frame(force_keyframe: bool = false) -> void:
 		if keyframe:
 			changed.append(d.duplicate())
 			continue
-		var entry := {"i": id, "p": d["p"], "r": d["r"]}
+		var entry := {"i": id, "p": d["p"], "r": d["r"], "h": d["h"], "bt": d["bt"]}
 		if stat_changed:
 			entry["d"] = stat
 		changed.append(entry)
@@ -198,16 +217,30 @@ func _capture_frame(force_keyframe: bool = false) -> void:
 
 func _static_of(d: Dictionary) -> Dictionary:
 	var out := {}
-	for key in ["e", "mp", "mo", "mr", "ms", "col", "lv", "c", "ruin"]:
+	for key in ["e", "ty", "tm", "o", "mh", "mp", "mo", "mr", "ms", "col", "lv", "c", "ruin"]:
 		if d.has(key):
 			out[key] = d[key]
 	return out
 
 func _static_changed(prev: Dictionary, cur: Dictionary) -> bool:
-	for key in ["e", "mp", "mo", "mr", "ms", "col", "lv", "c", "ruin"]:
+	for key in ["e", "ty", "tm", "o", "mh", "mp", "mo", "mr", "ms", "col", "lv", "c", "ruin"]:
 		if prev.get(key) != cur.get(key):
 			return true
 	return false
 
 func _snapshot_moved(prev: Dictionary, cur: Dictionary) -> bool:
-	return prev.get("p") != cur.get("p") or prev.get("r") != cur.get("r")
+	return prev.get("p") != cur.get("p") or prev.get("r") != cur.get("r") or prev.get("h") != cur.get("h") or prev.get("bt") != cur.get("bt")
+
+func _capture_stats() -> void:
+	var bs = _manager.get("battle_stats") if _manager != null else null
+	if bs == null:
+		return
+	var samples = bs.get("samples")
+	if not (samples is Array) or samples.is_empty():
+		return
+	var last: Dictionary = samples[samples.size() - 1]
+	var t := float(last.get("time", 0.0))
+	if absf(t - _last_stats_time) < 0.01 and not _stats_samples.is_empty():
+		return
+	_stats_samples.append(last.duplicate(true))
+	_last_stats_time = t

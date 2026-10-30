@@ -9,6 +9,7 @@ var _path: String = ""
 var _header: Dictionary = {}
 var _frames: Array = []
 var _format: int = 1
+var _stats_samples: Array = []
 var _duration: float = 0.0
 var _time: float = 0.0
 var _speed: float = 1.0
@@ -16,17 +17,27 @@ var _playing: bool = true
 var _last_frame_idx: int = -1
 var _snap_next: bool = false
 var _error: String = ""
+var _panel_timer: float = 0.0
+var _selected_id: int = 0
 
 var _entities_root: Node3D = null
 var _entity_nodes: Dictionary = {}
 var _static_defs: Dictionary = {}
 var _camera: Camera3D = null
+var _selection_ring: MeshInstance3D = null
 
 var _play_btn: Button = null
 var _slider: HSlider = null
 var _time_label: Label = null
 var _title_label: Label = null
 var _speed_opt: OptionButton = null
+var _stats_label: RichTextLabel = null
+var _stats_panel: PanelContainer = null
+var _info_panel: PanelContainer = null
+var _info_name: Label = null
+var _info_body: RichTextLabel = null
+var _info_hp_bg: ColorRect = null
+var _info_hp_fill: ColorRect = null
 var _ui_updating: bool = false
 
 func _ready() -> void:
@@ -45,6 +56,9 @@ func _ready() -> void:
 	_header = data.get("header", {})
 	_frames = data.get("frames", [])
 	_format = int(_header.get("version", 1))
+	_stats_samples = _header.get("stats", [])
+	if not (_stats_samples is Array):
+		_stats_samples = []
 	if _frames.is_empty():
 		_error = "录像里没有可回放的帧。"
 		_build_ui()
@@ -90,6 +104,22 @@ func _build_world() -> void:
 	_entities_root = Node3D.new()
 	_entities_root.name = "ReplayEntities"
 	add_child(_entities_root)
+
+	_selection_ring = MeshInstance3D.new()
+	var ring_mesh := CylinderMesh.new()
+	ring_mesh.top_radius = 1.5
+	ring_mesh.bottom_radius = 1.5
+	ring_mesh.height = 0.08
+	ring_mesh.radial_segments = 32
+	_selection_ring.mesh = ring_mesh
+	var ring_mat := StandardMaterial3D.new()
+	ring_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	ring_mat.albedo_color = Color(0.45, 1.0, 0.55, 0.9)
+	ring_mat.emission_enabled = true
+	ring_mat.emission = Color(0.25, 0.8, 0.35)
+	_selection_ring.material_override = ring_mat
+	_selection_ring.visible = false
+	add_child(_selection_ring)
 
 	_camera = Camera3D.new()
 	_camera.name = "ReplayCamera"
@@ -207,7 +237,239 @@ func _build_ui() -> void:
 
 	var title := String(_header.get("meta", {}).get("map_name", "对局录像"))
 	_title_label.text = "🎬 " + title
+	_build_panels(root)
 	_update_time_ui()
+
+func _build_panels(parent: Control) -> void:
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.035, 0.04, 0.055, 0.88)
+	style.border_color = Color(0.55, 0.45, 0.25, 0.75)
+	style.set_border_width_all(1)
+	style.set_corner_radius_all(8)
+
+	_stats_panel = PanelContainer.new()
+	_stats_panel.add_theme_stylebox_override("panel", style)
+	_stats_panel.anchor_left = 0.0
+	_stats_panel.anchor_top = 0.0
+	_stats_panel.anchor_right = 0.0
+	_stats_panel.anchor_bottom = 0.0
+	_stats_panel.offset_left = 12.0
+	_stats_panel.offset_top = 64.0
+	_stats_panel.offset_right = 442.0
+	_stats_panel.offset_bottom = 330.0
+	_stats_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	parent.add_child(_stats_panel)
+	var stats_box := VBoxContainer.new()
+	stats_box.add_theme_constant_override("separation", 4)
+	_stats_panel.add_child(stats_box)
+	var stats_title := Label.new()
+	stats_title.text = "📊 对局统计"
+	stats_title.add_theme_font_size_override("font_size", 17)
+	stats_title.add_theme_color_override("font_color", Color(0.95, 0.82, 0.55))
+	stats_box.add_child(stats_title)
+	_stats_label = RichTextLabel.new()
+	_stats_label.bbcode_enabled = true
+	_stats_label.fit_content = true
+	_stats_label.scroll_active = false
+	_stats_label.add_theme_font_size_override("normal_font_size", 13)
+	_stats_label.add_theme_color_override("default_color", Color(0.88, 0.88, 0.82))
+	stats_box.add_child(_stats_label)
+
+	_info_panel = PanelContainer.new()
+	_info_panel.add_theme_stylebox_override("panel", style)
+	_info_panel.anchor_left = 1.0
+	_info_panel.anchor_top = 0.0
+	_info_panel.anchor_right = 1.0
+	_info_panel.anchor_bottom = 0.0
+	_info_panel.offset_left = -342.0
+	_info_panel.offset_top = 64.0
+	_info_panel.offset_right = -12.0
+	_info_panel.offset_bottom = 420.0
+	_info_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	_info_panel.visible = false
+	parent.add_child(_info_panel)
+	var info_box := VBoxContainer.new()
+	info_box.add_theme_constant_override("separation", 6)
+	_info_panel.add_child(info_box)
+	var info_head := HBoxContainer.new()
+	info_box.add_child(info_head)
+	_info_name = Label.new()
+	_info_name.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	_info_name.add_theme_font_size_override("font_size", 18)
+	_info_name.add_theme_color_override("font_color", Color(0.96, 0.88, 0.68))
+	info_head.add_child(_info_name)
+	var close := Button.new()
+	close.text = "✕"
+	close.custom_minimum_size = Vector2(36, 30)
+	close.pressed.connect(func(): _select_entity(0))
+	info_head.add_child(close)
+	_info_hp_bg = ColorRect.new()
+	_info_hp_bg.color = Color(0.05, 0.05, 0.06, 0.9)
+	_info_hp_bg.custom_minimum_size = Vector2(0, 12)
+	info_box.add_child(_info_hp_bg)
+	_info_hp_fill = ColorRect.new()
+	_info_hp_fill.color = Color(0.35, 0.9, 0.45)
+	_info_hp_fill.anchor_bottom = 1.0
+	_info_hp_fill.anchor_right = 1.0
+	_info_hp_fill.offset_right = 0.0
+	_info_hp_bg.add_child(_info_hp_fill)
+	_info_body = RichTextLabel.new()
+	_info_body.bbcode_enabled = true
+	_info_body.fit_content = true
+	_info_body.scroll_active = false
+	_info_body.add_theme_font_size_override("normal_font_size", 14)
+	_info_body.add_theme_color_override("default_color", Color(0.86, 0.87, 0.84))
+	info_box.add_child(_info_body)
+
+func _process(delta: float) -> void:
+	if not _error.is_empty():
+		return
+	if _playing:
+		_time = minf(_time + delta * _speed, _duration)
+		_update_frame_for_time()
+		if _time >= _duration:
+			_playing = false
+			_update_play_button()
+	_update_smoothing(delta)
+	_update_time_ui()
+	_panel_timer -= delta
+	if _panel_timer <= 0.0:
+		_panel_timer = 0.2
+		_update_stats_panel()
+		if _selected_id != 0:
+			_update_info_panel()
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventScreenTouch and event.pressed:
+		_select_at(event.position)
+		return
+	if not (event is InputEventMouseButton) or not event.pressed:
+		return
+	if event.button_index != MOUSE_BUTTON_LEFT:
+		return
+	_select_at(event.position)
+
+func _select_at(screen_pos: Vector2) -> void:
+	if _camera == null:
+		return
+	var best_id := 0
+	var best_dist := 30.0
+	for id in _entity_nodes:
+		var slot: Dictionary = _entity_nodes[id]
+		var node: Node3D = slot.get("node")
+		if not is_instance_valid(node):
+			continue
+		var world_pos: Vector3 = node.global_position + Vector3(0.0, 1.2, 0.0)
+		if _camera.is_position_behind(world_pos):
+			continue
+		var sp := _camera.unproject_position(world_pos)
+		var d := sp.distance_to(screen_pos)
+		if d < best_dist:
+			best_dist = d
+			best_id = int(id)
+	_select_entity(best_id)
+
+func _select_entity(id: int) -> void:
+	_selected_id = id
+	if _selection_ring == null:
+		return
+	if id == 0 or not _entity_nodes.has(id):
+		_selection_ring.visible = false
+		if _info_panel:
+			_info_panel.visible = false
+		return
+	var slot: Dictionary = _entity_nodes[id]
+	var node: Node3D = slot.get("node")
+	if not is_instance_valid(node):
+		return
+	_selection_ring.visible = true
+	_selection_ring.global_position = node.global_position + Vector3(0.0, 0.08, 0.0)
+	_info_panel.visible = true
+	_update_info_panel()
+
+func _update_stats_panel() -> void:
+	if _stats_label == null:
+		return
+	if _stats_samples.is_empty():
+		_stats_label.text = "本局没有记录统计信息"
+		return
+	var sample: Dictionary = _stats_samples[0]
+	for s in _stats_samples:
+		if float(s.get("time", 0.0)) <= _time + 0.05:
+			sample = s
+		else:
+			break
+	var owners: Dictionary = sample.get("owners", {})
+	var keys := owners.keys()
+	keys.sort_custom(func(a, b): return int(owners[a].get("team", -1)) < int(owners[b].get("team", -1)))
+	var lines: Array = []
+	for key in keys:
+		var o: Dictionary = owners[key]
+		var team := int(o.get("team", -1))
+		if team == RTSConfig.Team.NEUTRAL:
+			continue
+		var color: Color = RTSConfig.TEAM_BASE_COLORS.get(team, Color(0.75, 0.75, 0.75))
+		var label := _owner_label(o)
+		lines.append("[color=#%s]■[/color] %s" % [color.to_html(false), label])
+		lines.append("  资源 %d  军队 %d  建筑 %d" % [
+			int(o.get("resources", 0)), int(o.get("army", 0)), int(o.get("buildings", 0))])
+		lines.append("  采 %.0f  产 %.0f  歼 %.0f  伤 %.0f" % [
+			float(o.get("gathered", 0.0)), float(o.get("produced", 0.0)),
+			float(o.get("kills", 0.0)), float(o.get("damage", 0.0))])
+	if lines.is_empty():
+		lines.append("暂无统计")
+	_stats_label.text = "\n".join(lines)
+
+func _owner_label(o: Dictionary) -> String:
+	var nation := int(o.get("nation", -1))
+	var names := ["维京", "英格兰", "法兰西", "中国", "匈牙利", "日本", "拜占庭", "蒙古", "波斯", "西班牙"]
+	var nn: String = String(names[nation]) if nation >= 0 and nation < names.size() else "未知"
+	var owner := int(o.get("owner", -1))
+	if owner < 0:
+		return "%s（%s）" % ["玩家" if nation == int(GameSettings.player_nation) else "对手", nn]
+	return "%s%d（%s）" % ["玩家", owner, nn]
+
+func _update_info_panel() -> void:
+	if _info_panel == null or _info_body == null:
+		return
+	if not _entity_nodes.has(_selected_id):
+		_info_panel.visible = false
+		return
+	var slot: Dictionary = _entity_nodes[_selected_id]
+	var d: Dictionary = slot.get("data", {})
+	if d.is_empty():
+		return
+	var eid := int(d.get("e", 0))
+	var cfg: Dictionary = EntityDatabase.get_config(eid) if eid >= 0 else {}
+	var name := String(cfg.get("name", "实体 #%d" % eid))
+	_info_name.text = name
+	var team := int(d.get("tm", -1))
+	var team_color: Color = RTSConfig.TEAM_BASE_COLORS.get(team, Color(0.75, 0.75, 0.75))
+	var team_text := "中立" if team == RTSConfig.Team.NEUTRAL else ("蓝队" if team == RTSConfig.Team.BLUE else "红队")
+	if team == RTSConfig.Team.NEUTRAL:
+		team_color = Color(0.7, 0.7, 0.7)
+	var hp := float(d.get("h", 0.0))
+	var max_hp := maxf(float(d.get("mh", 0.0)), 1.0)
+	var ratio := clampf(hp / max_hp, 0.0, 1.0)
+	_info_hp_fill.anchor_right = ratio
+	_info_hp_fill.color = team_color
+	var type_names := ["资源", "建筑", "军队"]
+	var ty := int(d.get("ty", -1))
+	var type_text: String = String(type_names[ty]) if ty >= 0 and ty < type_names.size() else "实体"
+	var lines: Array = []
+	lines.append("[color=#%s]■[/color] %s  ·  %s" % [team_color.to_html(false), team_text, type_text])
+	lines.append("生命：%.0f / %.0f" % [hp, max_hp])
+	lines.append("等级：%d" % int(d.get("lv", 1)))
+	if cfg.has("attack"):
+		lines.append("攻击：%d  ·  攻速：%.1f  ·  射程：%.1f" % [
+			int(cfg.get("attack", 0)), float(cfg.get("attack_speed", 1.0)), float(cfg.get("attack_range", 0.0))])
+	if cfg.has("melee_armor"):
+		lines.append("近防：%d  ·  盾防：%d  ·  速度：%.1f" % [
+			int(cfg.get("melee_armor", 0)), int(cfg.get("shield_armor", 0)), float(cfg.get("speed", 0.0))])
+	if float(d.get("bt", 0.0)) > 0.0:
+		lines.append("建造剩余：%.1f 秒" % float(d.get("bt", 0.0)))
+	lines.append("坐标：%.1f, %.1f" % [float(d.get("p", [0, 0, 0])[0]), float(d.get("p", [0, 0, 0])[2])])
+	_info_body.text = "\n".join(lines)
 
 func _toggle_play() -> void:
 	_playing = not _playing
@@ -315,6 +577,10 @@ func _apply_entity(d: Dictionary, snap: bool) -> void:
 		merged["i"] = id
 		merged["p"] = d.get("p", [0, 0, 0])
 		merged["r"] = d.get("r", 0.0)
+		if d.has("h"):
+			merged["h"] = d["h"]
+		if d.has("bt"):
+			merged["bt"] = d["bt"]
 	else:
 		_static_defs[id] = _static_of(d)
 	var slot: Dictionary
@@ -328,6 +594,7 @@ func _apply_entity(d: Dictionary, snap: bool) -> void:
 			_entity_nodes.erase(id)
 			slot = _create_entity(merged)
 			_entity_nodes[id] = slot
+	slot["data"] = merged
 	var p: Array = merged.get("p", [0, 0, 0])
 	slot["target"] = Vector3(float(p[0]), float(p[1]), float(p[2]))
 	slot["target_rot"] = float(merged.get("r", 0.0))
@@ -451,18 +718,6 @@ func _tint_recursive(node: Node, tint: Color) -> void:
 					child.set_surface_override_material(si, mat2)
 		_tint_recursive(child, tint)
 
-func _process(delta: float) -> void:
-	if not _error.is_empty():
-		return
-	if _playing:
-		_time = minf(_time + delta * _speed, _duration)
-		_update_frame_for_time()
-		if _time >= _duration:
-			_playing = false
-			_update_play_button()
-	_update_smoothing(delta)
-	_update_time_ui()
-
 func _update_smoothing(delta: float) -> void:
 	var t := clampf(delta * 12.0, 0.0, 1.0)
 	for slot in _entity_nodes.values():
@@ -471,6 +726,13 @@ func _update_smoothing(delta: float) -> void:
 			continue
 		node.position = node.position.lerp(slot.get("target", node.position), t)
 		node.rotation.y = lerp_angle(node.rotation.y, float(slot.get("target_rot", node.rotation.y)), t)
+	if _selected_id != 0:
+		if not _entity_nodes.has(_selected_id):
+			_select_entity(0)
+		elif _selection_ring:
+			var node: Node3D = _entity_nodes[_selected_id].get("node")
+			if is_instance_valid(node):
+				_selection_ring.global_position = node.global_position + Vector3(0.0, 0.08, 0.0)
 
 func _update_time_ui() -> void:
 	if _slider == null or _time_label == null:
