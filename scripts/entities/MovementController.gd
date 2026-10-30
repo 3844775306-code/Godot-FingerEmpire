@@ -2,6 +2,8 @@
 # Extracted from Army.gd — handles all movement, pathfinding, and collision separation
 class_name MovementController
 extends RefCounted
+const SimRandom = preload("res://scripts/core/SimRandom.gd")
+const SimTime = preload("res://scripts/core/SimTime.gd")
 
 var _army: Army  # parent unit reference
 
@@ -123,7 +125,7 @@ const MOVE_BLACKLIST_TTL_MS: int = 4000
 func _init(army: Army):
 	_army = army
 	# 错开各单位首次碰撞分离的帧，避免几百个单位在同一物理帧集中做近邻查询
-	collision_timer = randf_range(0.0, COLLISION_INTERVAL)
+	collision_timer = SimRandom.randf_range(0.0, COLLISION_INTERVAL)
 	# 单位死亡/离场时清理挂在 battle_manager 下的路径指引带。不能用
 	# MovementController 的 PREDELETE 通知里再调方法，RefCounted 析构阶段方法表已不可用。
 	if army != null and not army.tree_exiting.is_connected(_hide_path):
@@ -156,7 +158,7 @@ func set_move_target(pos: Vector3, stop_range: float = 0.0):
 	# 否则目标站在曾经寻路失败过的格子上时，单位会连攻击路径都不再计算。
 	if not is_attack_move and _blacklist.has(key):
 		var blacklist_until: int = int(_blacklist[key])
-		if Time.get_ticks_msec() < blacklist_until:
+		if SimTime.now_ms() < blacklist_until:
 			_pending_path = false
 			move_path_failed = true
 			path_partial = false
@@ -176,11 +178,12 @@ func set_move_target(pos: Vector3, stop_range: float = 0.0):
 		# 已经有一个请求在排队时不要重复占预算；process_move 会按重试配额继续处理
 		if _pending_path and astar_path.is_empty():
 			return
-		var now_ms := Time.get_ticks_msec()
+		var now_ms := SimTime.now_ms()
 		# 首次追击按 unit id 分 16 个相位错峰，避免全军在同一帧集中跑 A*；
 		# 后续只加少量抖动，保证追击路径不会滞后太久。
-		var phase_ms := int(_army.get_instance_id() % 16) * 30
-		var cooldown_ms := ATTACK_PATH_COOLDOWN_MS + int(_army.get_instance_id() % 5) * 15
+		var sim_phase := int(_army.get_meta("_sim_phase", 0)) if GameSettings.deterministic_sim else int(_army.get_instance_id() % 16)
+		var phase_ms := int(sim_phase % 16) * 30
+		var cooldown_ms := ATTACK_PATH_COOLDOWN_MS + int(sim_phase % 5) * 15
 		# 队列已经排长时，追击路径降频到约 2.2 秒一次；路径为空时下面的
 		# 冷却分支会放行补发请求，不会让单位因为降频而永久站着。
 		if pressure:
@@ -209,7 +212,7 @@ func set_move_target(pos: Vector3, stop_range: float = 0.0):
 	if not _try_compute_path(pos, stop_range):
 		var was_pending: bool = _pending_path
 		if not was_pending or _pending_target.distance_to(pos) > 2.0:
-			_pending_since_ms = Time.get_ticks_msec()
+			_pending_since_ms = SimTime.now_ms()
 		_pending_path = true
 		_pending_target = pos
 		_pending_stop_range = stop_range
@@ -232,7 +235,7 @@ func _try_compute_path(pos: Vector3, stop_range: float, bm: RTSBattleManager = n
 	# 开阔地直走不消耗 A* 预算：这是后期队列增长的主要来源。
 	# 必须放在 reserve 之前，否则“直走”虽然不跑 A*，仍会占掉其他单位的寻路名额。
 	if bm != null:
-		var now_ms := Time.get_ticks_msec()
+		var now_ms := SimTime.now_ms()
 		# 只在同一目标近期判定为“不能直走”时跳过采样，避免待处理请求
 		# 每一帧都把整条长路径重新扫一遍；A* 失败/排队仍会正常处理。
 		var cached_blocked: bool = not _direct_check_result \
@@ -293,7 +296,7 @@ func _apply_path(pos: Vector3, path: Array, stop_range: float) -> void:
 	else:
 		attack_path_failed = false
 		move_path_failed = true
-		_blacklist[key] = Time.get_ticks_msec() + MOVE_BLACKLIST_TTL_MS
+		_blacklist[key] = SimTime.now_ms() + MOVE_BLACKLIST_TTL_MS
 	if _is_selected: _show_path()
 
 func _try_compute_pending_path(bm: RTSBattleManager, force: bool = false) -> bool:
@@ -379,7 +382,7 @@ func _try_reissue_missing_path(target_pos: Vector3) -> bool:
 		return false
 	if move_path_failed or attack_path_failed or path_partial:
 		return false
-	var now_ms := Time.get_ticks_msec()
+	var now_ms := SimTime.now_ms()
 	if now_ms < _next_no_path_reissue_ms:
 		return false
 	_next_no_path_reissue_ms = now_ms + NO_PATH_REISSUE_INTERVAL_MS
@@ -435,7 +438,7 @@ func _try_continue_partial_path(target_pos: Vector3, allow_empty: bool) -> bool:
 		return false
 	if not allow_empty and astar_path.is_empty():
 		return false
-	var now_ms := Time.get_ticks_msec()
+	var now_ms := SimTime.now_ms()
 	if now_ms < _next_partial_continue_ms:
 		return false
 	_next_partial_continue_ms = now_ms + PARTIAL_PATH_CONTINUE_MS
@@ -481,7 +484,7 @@ func process_move(delta, bm: RTSBattleManager):
 			# 是每渲染帧重置的；重复重试只会在预算耗尽后反复做直路扫描。
 			if frame != _last_pending_frame:
 				_last_pending_frame = frame
-				var pending_age_ms: int = Time.get_ticks_msec() - _pending_since_ms
+				var pending_age_ms: int = SimTime.now_ms() - _pending_since_ms
 				if pending_age_ms >= PENDING_PATH_URGENT_MS:
 					# 排队过久：强制放行一次（每帧限额），不能再等普通配额。
 					# 这样即使队列一直被新请求插队，队尾单位也一定能拿到一次真正的寻路结果：
@@ -960,7 +963,7 @@ func _unit_slide_dir(push_dir: Vector3, velocity: Vector3) -> Vector3:
 	if side_dot < -0.0001:
 		tangent = -tangent
 	elif absf(side_dot) <= 0.0001:
-		if _army.get_instance_id() % 2 == 0:
+		if (int(_army.get_meta("_sim_phase", 0)) if GameSettings.deterministic_sim else _army.get_instance_id()) % 2 == 0:
 			tangent = -tangent
 	return (radial * 0.55 + tangent * 0.85).normalized()
 
@@ -983,7 +986,7 @@ func _building_slide_dir(push_dir: Vector3, velocity: Vector3) -> Vector3:
 		tangent = -tangent
 	elif absf(side_dot) <= 0.0001:
 		# 正面顶住建筑时固定往一侧滑，避免两侧来回切换导致抖动
-		if _army.get_instance_id() % 2 == 0:
+		if (int(_army.get_meta("_sim_phase", 0)) if GameSettings.deterministic_sim else _army.get_instance_id()) % 2 == 0:
 			tangent = -tangent
 	return (radial * 0.55 + tangent * 0.85).normalized()
 

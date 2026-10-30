@@ -1,8 +1,10 @@
 # scripts/ai/AI.gd
 # Merged AI Controller — single-player + online dual-mode
+class_name AIController
 extends Node
 
-class_name AIController
+const SimRandom = preload("res://scripts/core/SimRandom.gd")
+const SimTime = preload("res://scripts/core/SimTime.gd")
 
 const AIDefenseScript = preload("res://scripts/ai/AIDefense.gd")
 const AIWaterCrossingScript = preload("res://scripts/ai/AIWaterCrossing.gd")
@@ -1602,7 +1604,7 @@ func build_building(building_id: int, pos: Vector3, facing: Vector3 = Vector3.ZE
 	var builder = null
 	if _worker_director != null:
 		builder = _worker_director.acquire_builder(
-				pos, building_id in [21, 28] and _base_under_attack(), 60.0,
+				pos, building_id in [21, 28] or _base_under_attack(), 60.0,
 				"build_%d" % building_id)
 	else:
 		builder = battle.find_nearest_idle_builder(my_team, my_peer_id, pos, 60.0) \
@@ -1867,6 +1869,18 @@ func _late_game_scale() -> float:
 	return 1.0
 
 func _process(delta):
+	if GameSettings.deterministic_sim:
+		return
+	_ai_simulation_tick(delta)
+
+func _physics_process(delta):
+	if not GameSettings.deterministic_sim:
+		return
+	_ai_simulation_tick(delta)
+
+func _ai_simulation_tick(delta):
+	if GameSettings.deterministic_sim and battle != null and not battle.sim_ready:
+		return
 	# Set think interval based on difficulty (once) + 错开各 AI 的计时器。
 	# 多 AI 同时开局时，timer/worker/naval 都为 0，会在同一帧集中做全实体扫描和寻路，
 	# 造成明显的周期性卡顿；按 peer/instance id 相位错开可把峰值摊到不同帧。
@@ -1880,7 +1894,7 @@ func _process(delta):
 		elif diff == GameSettings.AIDifficulty.HARD: think_interval = 1.5
 		elif diff == GameSettings.AIDifficulty.HELL: think_interval = 1.0
 		var seed_id: int = my_peer_id if my_peer_id >= 0 else my_team
-		var phase: float = float((seed_id * 7 + get_instance_id() % 13) % 17) / 17.0
+		var phase: float = float((seed_id * 7 + (get_instance_id() % 13 if not GameSettings.deterministic_sim else 0)) % 17) / 17.0
 		timer = think_interval * phase
 		worker_allocate_timer = WORKER_ALLOCATE_INTERVAL * phase
 		_naval_patrol_timer = NAVAL_PATROL_INTERVAL * phase
@@ -2001,7 +2015,7 @@ const RESEARCH_PRIORITY: Array = [
 # 当前是否应该为下一次时代升级锁资源。
 # 返回空字典 = 不预留；返回 {资源: 数量} = 在付款后必须仍保留这些资源。
 func _research_age_reserve_cost() -> Dictionary:
-	var stamp := Engine.get_physics_frames()
+	var stamp := SimTime.frame()
 	if stamp == _research_age_reserve_stamp:
 		return _research_age_reserve_value
 	_research_age_reserve_stamp = stamp
@@ -2258,7 +2272,7 @@ func _pump_decide() -> void:
 		_run_decide_step(_decide_cursor)
 		_decide_step_usec[_decide_cursor] = int(_decide_step_usec[_decide_cursor]) + (Time.get_ticks_usec() - step_start)
 		_decide_cursor += 1
-		if Time.get_ticks_usec() - frame_start >= DECIDE_BUDGET_USEC:
+		if not GameSettings.deterministic_sim and Time.get_ticks_usec() - frame_start >= DECIDE_BUDGET_USEC:
 			break
 	if _decide_cursor > DECIDE_LAST_STEP:
 		_finish_decide()
@@ -2267,17 +2281,20 @@ func _finish_decide() -> void:
 	var total_ms: float = float(Time.get_ticks_usec() - _decide_start_usec) / 1000.0
 	_decide_running = false
 	_decide_cursor = 0
+	if GameSettings.deterministic_sim:
+		_decide_cost_scale = 1.0
 	timer = _decide_interval * _decide_cost_scale
 	# 整轮耗时超过 60ms 就自动拉长下一轮间隔，避免高规模/低配机器上频繁卡顿。
-	if total_ms > 250.0:
-		_decide_cost_scale = minf(_decide_cost_scale * 1.5, 8.0)
-	elif total_ms > 120.0:
-		_decide_cost_scale = minf(_decide_cost_scale * 1.35, 6.0)
-	elif total_ms > 60.0:
-		_decide_cost_scale = minf(_decide_cost_scale * 1.3, 5.0)
-	elif total_ms < 25.0:
-		_decide_cost_scale = maxf(_decide_cost_scale * 0.97, 1.0)
-	if total_ms > 80.0:
+	if not GameSettings.deterministic_sim:
+		if total_ms > 250.0:
+			_decide_cost_scale = minf(_decide_cost_scale * 1.5, 8.0)
+		elif total_ms > 120.0:
+			_decide_cost_scale = minf(_decide_cost_scale * 1.35, 6.0)
+		elif total_ms > 60.0:
+			_decide_cost_scale = minf(_decide_cost_scale * 1.3, 5.0)
+		elif total_ms < 25.0:
+			_decide_cost_scale = maxf(_decide_cost_scale * 0.97, 1.0)
+	if total_ms > 80.0 and not GameSettings.deterministic_sim:
 		_log_decide_profile(total_ms)
 	if battle != null and battle.has_method("is_research_mode") and battle.is_research_mode():
 		_tick_research()
@@ -2647,7 +2664,7 @@ func find_valid_build_position(near_pos: Vector3, building_id: int) -> Vector3:
 	# 常常找不到空位就放弃，导致民居/兵营长期只有 1~4 座。向外扩到 38 米并增加采样。
 	for dist in [3, 5, 8, 12, 16, 20, 26, 32, 38]:
 		for _try in range(12):
-			var test = near_pos + Vector3(cos(randf_range(0, TAU))*dist, 0, sin(randf_range(0, TAU))*dist)
+			var test = near_pos + Vector3(cos(SimRandom.randf_range(0, TAU))*dist, 0, sin(SimRandom.randf_range(0, TAU))*dist)
 			var overlap = false
 			# 旧实现每个候选点都全表扫一遍建筑/资源；6×8 个候选点会放大成
 			# 几十次全场扫描。先用空间索引取附近实体，再按同样半径规则判断。
@@ -2666,7 +2683,7 @@ func find_valid_build_position(near_pos: Vector3, building_id: int) -> Vector3:
 	# 兜底也要走地形校验；找不到就返回 ZERO 让调用方跳过，绝不能盲目偏移硬塞
 	for dist in [20, 26, 32, 38]:
 		for _fb in range(12):
-			var fp = near_pos + Vector3(cos(randf_range(0, TAU))*dist, 0, sin(randf_range(0, TAU))*dist)
+			var fp = near_pos + Vector3(cos(SimRandom.randf_range(0, TAU))*dist, 0, sin(SimRandom.randf_range(0, TAU))*dist)
 			if _is_valid_build_ground(fp): return fp
 	return Vector3.ZERO
 
@@ -3130,7 +3147,7 @@ func attack_move(target_position: Vector3, max_units: int):
 			sent += 1
 
 func an_attack() -> bool:
-	var now = Time.get_ticks_msec() / 1000.0
+	var now = SimTime.now_ms() / 1000.0
 	if now - last_attack_time < 10.0: return false
 	last_attack_time = now
 	return true
@@ -3203,9 +3220,9 @@ func consider_warehouse_near_farmer():
 			if score > best_score:
 				best_score = score
 				for _t in range(5):
-					var tp = rp + Vector3(randf_range(-2.5,2.5), 0, randf_range(-2.5,2.5))
+					var tp = rp + Vector3(SimRandom.randf_range(-2.5,2.5), 0, SimRandom.randf_range(-2.5,2.5))
 					if _is_valid_build_ground(tp): best_pos = tp; break
-				if best_pos == Vector3.ZERO: best_pos = rp + Vector3(randf_range(-2,2), 0, randf_range(-2,2))
+				if best_pos == Vector3.ZERO: best_pos = rp + Vector3(SimRandom.randf_range(-2,2), 0, SimRandom.randf_range(-2,2))
 		if best_pos != Vector3.ZERO and (best_score >= 2.0 or overflow) and _can_afford_warehouse():
 			build_building(22, best_pos)
 			return
@@ -3248,7 +3265,7 @@ func _ai_garrison_officials():
 	for entity in battle.entities.get_children():
 		if not (entity is Army and entity.entity_id >= 46 and entity.entity_id <= 50 and entity.health > 0): continue
 		if not entity_belongs_to_me(entity): continue
-		if Time.get_ticks_msec() < int(entity.get_meta("_official_retry_after", 0)): continue
+		if SimTime.now_ms() < int(entity.get_meta("_official_retry_after", 0)): continue
 		var gb = entity.get("_garrison_building")
 		if gb and gb.get_ref():
 			# 之前因为缺少对应建筑而临时退回主城的官员，一旦 AI 补回仓库/塔/
@@ -3280,7 +3297,7 @@ func _ai_garrison_officials():
 				entity._garrison_target_id = -1
 				entity._set_order(Army.UnitState.IDLE)
 				entity._movement.stop()
-				entity.set_meta("_official_retry_after", Time.get_ticks_msec() + 3000)
+				entity.set_meta("_official_retry_after", SimTime.now_ms() + 3000)
 			continue
 		# 统帅(49)不占建筑，只需要待在城堡/主力附近提供光环；
 		# 原逻辑没有 49 的分支，AI 造出来后会永远闲置。
@@ -3288,14 +3305,14 @@ func _ai_garrison_officials():
 			if entity._order_is(Army.UnitState.MOVING):
 				continue
 			var commander_hold_until := int(entity.get_meta("_ai_commander_hold_until", 0))
-			if Time.get_ticks_msec() < commander_hold_until:
+			if SimTime.now_ms() < commander_hold_until:
 				continue
 			var station := _find_commander_station_s()
 			if station:
 				entity.command_garrison(station)
 				# 统帅不占建筑，到达后 _garrison_target_id 仍是 -1；
 				# 加一个冷却，避免 AI 每轮 think 都重新下发移动命令。
-				entity.set_meta("_ai_commander_hold_until", Time.get_ticks_msec() + 15000)
+				entity.set_meta("_ai_commander_hold_until", SimTime.now_ms() + 15000)
 			continue
 		var target: Building = null
 		match entity.entity_id:
@@ -3518,7 +3535,7 @@ func _check_hunt_cleanup():
 
 # ═══ Tactics ═══
 func update_tactic(_delta):
-	var now = Time.get_ticks_msec() / 1000.0
+	var now = SimTime.now_ms() / 1000.0
 	var my_key = my_peer_id if my_peer_id != -1 else my_team
 	var my_mil = count_field_military(my_key)
 	# 战术判断只看当前视野内看到的敌军，不读取全图敌人军力
@@ -3568,7 +3585,7 @@ func update_tactic(_delta):
 		current_tactic = LateTactic.OVERWHELM
 		execute_overwhelm()
 	elif my_mil >= 4:
-		if randf() < 0.65:
+		if SimRandom.randf() < 0.65:
 			current_tactic = LateTactic.HARASS
 			execute_harass()
 		elif my_mil >= 10:
@@ -3748,8 +3765,8 @@ func execute_raid():
 		else: break
 		_raid_attempts += 1
 	var enemy_dir = _get_enemy_army_direction(enemy_pos)
-	var flank = randf_range(RAID_FLANK_MIN, RAID_FLANK_MAX)
-	var side = sign(randf() - 0.5)
+	var flank = SimRandom.randf_range(RAID_FLANK_MIN, RAID_FLANK_MAX)
+	var side = sign(SimRandom.randf() - 0.5)
 	var waypoint = enemy_pos + enemy_dir.rotated(Vector3.UP, deg_to_rad(90*side)) * flank
 	if _is_near_enemy_tower(waypoint, AVOID_DEFENSE_RANGE, enemy_team):
 		waypoint = enemy_pos + enemy_dir.rotated(Vector3.UP, deg_to_rad(-90*side)) * (flank + 12)
@@ -4243,7 +4260,7 @@ func _find_shipyard_pos_near_oil() -> Vector3:
 	if not castle: return Vector3.ZERO
 	for radius in [8, 15, 25]:
 		for _try in range(40):
-			var tp = castle.global_position + Vector3(cos(randf_range(0,TAU))*randf_range(3,radius), 0, sin(randf_range(0,TAU))*randf_range(3,radius))
+			var tp = castle.global_position + Vector3(cos(SimRandom.randf_range(0,TAU))*SimRandom.randf_range(3,radius), 0, sin(SimRandom.randf_range(0,TAU))*SimRandom.randf_range(3,radius))
 			if battle.get_terrain_at(tp) != 0: continue
 			var gx = int(tp.x + RTSConfig.MAP_SIZE/2); var gz = int(tp.z + RTSConfig.MAP_SIZE/2)
 			var adj = false
@@ -4330,7 +4347,7 @@ func _find_random_prod_or_def_s() -> Building:
 		if e is Building and e.entity_id in [21,23,24,29,25,26] and e.team == my_team and e.health > 0 and e.build_timer <= 0:
 			if not _official_slot_claimed(e, 48):
 				cand.append(e)
-	return cand[randi() % cand.size()] if cand.size() > 0 else null
+	return cand[SimRandom.randi() % cand.size()] if cand.size() > 0 else null
 
 func _find_most_officiated_s() -> Building:
 	var best: Building = null; var best_cnt = -1
@@ -4769,7 +4786,7 @@ func _try_produce_scout() -> bool:
 func _retarget_attacked_siege_units() -> void:
 	if battle == null:
 		return
-	var now: float = Time.get_ticks_msec() / 1000.0
+	var now: float = SimTime.now_ms() / 1000.0
 	for e in battle.entities.get_children():
 		if not (e is Army) or e.health <= 0 or not entity_belongs_to_me(e):
 			continue
@@ -4850,7 +4867,7 @@ func _retask_idle_front_units() -> void:
 	if _defense != null and int(_defense.threat_level) >= 3:
 		return
 	var sent: int = 0
-	var now_ms: int = Time.get_ticks_msec()
+	var now_ms: int = SimTime.now_ms()
 	var castle_target = null
 	for u in _cached_armies():
 		if sent >= 10:
@@ -5495,7 +5512,7 @@ func _deploy_ranged_units_to_walls() -> void:
 			if first == null:
 				continue
 			want_small = _is_small_wall_guard(first)
-			target = randi_range(2, 3) if want_small else 1
+			target = SimRandom.randi_range(2, 3) if want_small else 1
 			wall.set_meta(WALL_GUARD_TARGET_META, target)
 			wall.set_meta(WALL_GUARD_SMALL_META, want_small)
 			var first_slot: int = _find_free_wall_slot(used_slots.get(wid, {}), target)
@@ -5552,7 +5569,7 @@ func _pick_random_wall_candidate(candidates: Array, wall, want_small: int):
 		pool.append(u)
 	if pool.is_empty():
 		return null
-	return pool.pick_random()
+	return pool[SimRandom.randi() % pool.size()]
 
 func _wall_has_cannon(wall) -> bool:
 	for b in _cached_buildings():
@@ -5701,7 +5718,7 @@ func _find_nearby_fish(pos: Vector3, fish_list: Array) -> Army:
 func _find_water_patrol_point(near_pos: Vector3) -> Vector3:
 	for radius in [8, 15, 25, 35]:
 		for _try in range(30):
-			var angle = randf_range(0, TAU)
+			var angle = SimRandom.randf_range(0, TAU)
 			var test = near_pos + Vector3(cos(angle) * radius, 0, sin(angle) * radius)
 			var gx = int(test.x + RTSConfig.MAP_SIZE / 2)
 			var gz = int(test.z + RTSConfig.MAP_SIZE / 2)
@@ -6159,7 +6176,7 @@ func set_panel_collapsed(collapsed: bool, relayout: bool = true):
 	debug_panel.custom_minimum_size = Vector2(PANEL_WIDTH, h)
 	debug_panel.size = Vector2(PANEL_WIDTH, h)
 	if not collapsed:
-		debug_panel.set_meta("expanded_at", Time.get_ticks_msec())
+		debug_panel.set_meta("expanded_at", SimTime.now_ms())
 		# 展开的瞬间就补一次数据，之后由 _process 里的 1 秒计时器稳定刷新。
 		# 之前面板内容只在每 30 帧的定时刷新里更新，点开后要等下一次 tick
 		# 才能看到第一屏统计，低帧率时尤其像“卡住”。

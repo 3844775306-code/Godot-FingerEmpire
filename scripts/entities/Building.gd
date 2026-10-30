@@ -28,7 +28,7 @@ var _garrison_marker: Node3D = null
 var garrisoned_soldiers: Array = []      # Array of WeakRef — 进驻的单位
 var garrison_max: int = 0                # 进驻上限（城堡10/箭塔炮塔5/其他0）
 # 防御塔索敌：每帧扫描在后期几百实体时会形成稳定热点，改为错峰低频扫描。
-var _target_scan_timer: float = randf_range(0.0, 0.25)
+var _target_scan_timer: float = SimRandom.randf_range(0.0, 0.25)
 
 # Hell difficulty speed bonus
 
@@ -87,7 +87,23 @@ func start_construction(time: float, data: Dictionary):
 	# 建造期间先隐藏等级旗帜/徽章，等脚手架撤掉、等级确定后再显示。
 	LevelVisualScript.set_visible(self, false)
 func _process(delta):
-	super._process(delta)
+	if GameSettings.deterministic_sim:
+		return
+	_building_simulation_tick(delta)
+
+func _physics_process(delta):
+	if not GameSettings.deterministic_sim:
+		return
+	var _bm_ready = _get_bm()
+	if _bm_ready != null and not _bm_ready.sim_ready:
+		return
+	_building_simulation_tick(delta)
+
+func _building_simulation_tick(delta):
+	if GameSettings.deterministic_sim:
+		super._entity_simulation_tick(delta)
+	else:
+		super._process(delta)
 	# 城墙动态朝向 + 拐角模型切换
 	if entity_id == 27 and Engine.get_process_frames() % 30 == 0:
 		var has_x_neg = false; var has_x_pos = false
@@ -297,7 +313,7 @@ func _fire_garrison_volley(bm, primary, gcount: int) -> void:
 		bullet.splash_damage_mult = splash_damage_mult
 		bullet.global_position = WeaponAttachment.projectile_origin(self, entity_id, shot_target.global_position)
 		if i > 0:
-			bullet.global_position += Vector3(randf_range(-0.35, 0.35), 0, randf_range(-0.35, 0.35))
+			bullet.global_position += Vector3(SimRandom.randf_range(-0.35, 0.35), 0, SimRandom.randf_range(-0.35, 0.35))
 		bullet.aim_initial(shot_target.global_position)
 
 func _attack(target, delta):
@@ -354,7 +370,7 @@ func _attack(target, delta):
 				extra.source = self
 				extra.damage_radius = damage_radius
 				extra.splash_damage_mult = splash_damage_mult
-				extra.global_position = bullet.global_position + Vector3(randf_range(-0.35, 0.35), 0, randf_range(-0.35, 0.35))
+				extra.global_position = bullet.global_position + Vector3(SimRandom.randf_range(-0.35, 0.35), 0, SimRandom.randf_range(-0.35, 0.35))
 	else:
 		target.take_damage(attack, self)
 	attack_timer = attack_speed
@@ -1299,7 +1315,7 @@ var max_repair_time: float = 0.0
 var _repair_from_health: int = 0
 var _repair_to_health: int = 0
 var _repair_enemy_near: bool = false
-var _repair_scan_timer: float = randf_range(0.0, REPAIR_SCAN_INTERVAL)
+var _repair_scan_timer: float = SimRandom.randf_range(0.0, REPAIR_SCAN_INTERVAL)
 
 func is_under_repair() -> bool:
 	return repair_pending or repair_timer > 0.0
@@ -1590,8 +1606,8 @@ func release_all_garrisoned():
 
 func _find_land_nearby(map) -> Vector3:
 	for _attempt in range(20):
-		var angle = randf() * TAU
-		var radius = body_radius + randf() * 3.0
+		var angle = SimRandom.randf() * TAU
+		var radius = body_radius + SimRandom.randf() * 3.0
 		var pos = global_position + Vector3(cos(angle) * radius, 0, sin(angle) * radius)
 		if map and map.has_method("get_terrain_at"):
 			if map.get_terrain_at(pos) == 0:  # 平原

@@ -10,6 +10,7 @@
 #
 # 本模块保持无 class_name，由 AI.gd 通过 preload 加载，避免全局类缓存不同步。
 extends RefCounted
+const SimTime = preload("res://scripts/core/SimTime.gd")
 const DefenseContextScript = preload("res://scripts/ai/defense/DefenseContext.gd")
 const DefenseThreatModelScript = preload("res://scripts/ai/defense/DefenseThreatModel.gd")
 const DefenseDirectorScript = preload("res://scripts/ai/defense/DefenseDirector.gd")
@@ -1897,7 +1898,7 @@ func _ring_fill_gaps(castle, center: Vector2i, radius: int,
 		ring_sealed["walls"] = positions.size()
 		ring_sealed["gaps"] = positions.size() - int(built.get("walls", positions.size()))
 		return ring_sealed
-	var started_ms: int = Time.get_ticks_msec()
+	var started_ms: int = SimTime.now_ms()
 	for attempt in range(6):
 		if _ring_is_sealed(castle, radius, base_blocked, wall_cells):
 			var sealed_built: Dictionary = built.duplicate(true)
@@ -1905,7 +1906,7 @@ func _ring_fill_gaps(castle, center: Vector2i, radius: int,
 			sealed_built["walls"] = positions.size()
 			sealed_built["gaps"] = attempt
 			return sealed_built
-		if Time.get_ticks_msec() - started_ms >= RING_PLAN_BUDGET_MS:
+		if SimTime.now_ms() - started_ms >= RING_PLAN_BUDGET_MS:
 			break
 		var gap: Vector2i = _find_ring_gap_cell(castle, center, radius, base_blocked, wall_cells)
 		if gap == Vector2i(-9999, -9999):
@@ -2029,13 +2030,13 @@ func _pick_ring_radius(castle, forced_radius: int = 0, center_override: Vector2i
 	else:
 		add_radius.call(min_r)
 		add_radius.call(min_r + 4)
-	var started_ms: int = Time.get_ticks_msec()
+	var started_ms: int = SimTime.now_ms()
 	var tried: int = 0
 	for r in radii:
 		if int(r) > RING_MAX_RADIUS:
 			continue
 		# 第一个候选必算，之后超时立即收手，用已经拿到的近似圈兜底。
-		if tried > 0 and Time.get_ticks_msec() - started_ms >= RING_PLAN_BUDGET_MS:
+		if tried > 0 and SimTime.now_ms() - started_ms >= RING_PLAN_BUDGET_MS:
 			break
 		tried += 1
 		# 贴地图边缘的基地允许墙圈伸出地图：超出边界的部分天然不可通行，

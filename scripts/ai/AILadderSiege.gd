@@ -1,5 +1,6 @@
 class_name AILadderSiege
 extends RefCounted
+const SimTime = preload("res://scripts/core/SimTime.gd")
 
 # AI 梯子攻城模块：
 # 1) 主攻目标外围有敌方城墙时，选一段外侧裸露墙，派农民贴墙造梯子；
@@ -55,7 +56,7 @@ func _tick_active() -> void:
 	if not is_instance_valid(_active_ladder) or _active_ladder.health <= 0 \
 			or int(_active_ladder.entity_id) != LADDER_ID:
 		_clear_active()
-		_retry_at_ms = Time.get_ticks_msec() + RETRY_COOLDOWN_MS
+		_retry_at_ms = SimTime.now_ms() + RETRY_COOLDOWN_MS
 		return
 	if _active_ladder.build_timer > 0.0:
 		# 农民中途死亡时梯子会停在“等待建造者”状态，补派一个空闲农民。
@@ -70,7 +71,7 @@ func _tick_active() -> void:
 		# 墙已经被普通拆墙部队打掉，梯子不再有价值，直接收掉计划。
 		_clear_active()
 		return
-	var now := Time.get_ticks_msec()
+	var now := SimTime.now_ms()
 	if now - _breach_sent_ms < BREACH_REISSUE_MS:
 		return
 	_breach_sent_ms = now
@@ -106,7 +107,7 @@ func _try_start() -> void:
 			_attempts += 1
 			return
 	_attempts += 1
-	_retry_at_ms = Time.get_ticks_msec() + RETRY_COOLDOWN_MS
+	_retry_at_ms = SimTime.now_ms() + RETRY_COOLDOWN_MS
 
 func _can_try() -> bool:
 	var phase_id: int = int(ai.phase)
@@ -121,7 +122,7 @@ func _can_try() -> bool:
 	if battle.has_method("is_training_building_allowed") \
 			and not battle.is_training_building_allowed(LADDER_ID):
 		return false
-	var now := Time.get_ticks_msec()
+	var now := SimTime.now_ms()
 	if now < _retry_at_ms:
 		return false
 	if _attempts >= MAX_ATTEMPTS:

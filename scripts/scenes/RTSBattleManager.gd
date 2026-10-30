@@ -1,5 +1,7 @@
 class_name RTSBattleManager
 extends Node3D
+const SimRandom = preload("res://scripts/core/SimRandom.gd")
+const SimTime = preload("res://scripts/core/SimTime.gd")
 const BattleStatsScript = preload("res://scripts/core/BattleStats.gd")
 # 强制走程序化攻击动作的兵种：模型即使自带 attack 动画幅度也太小，看不出来
 const PROC_ATTACK_IDS = [18, 16, 17, 59, 13, 39]
@@ -138,6 +140,10 @@ var game_over_label: Label = null
 var game_over: bool = false
 # 录像采集器：对局中按固定频率记录实体快照，结束时自动写入 user://replays
 var replay_recorder = null
+var _spawn_counter: int = 0
+# 初始实体全部生成完毕后才允许推进确定性模拟/AI；否则同一次录像可能因为
+# 延迟初始化落在不同物理帧而出现 AI 决策时机差异。
+var sim_ready: bool = false
 var battle_stats = null          # 战斗统计器（累计 + 实时采样）
 var _team_castle_count: Dictionary = {}   # 单机2v2: 每队存活城堡数
 var game_time: float = 0.0
@@ -312,6 +318,11 @@ func recycle_bullet(b: Bullet) -> void:
 # force 为 true 时给排队过久的请求开放强制通道：绕过普通名额/耗时预算，
 # 每帧最多放行 ASTAR_FORCE_REQUESTS_PER_FRAME 个，下一帧继续消化队尾。
 func reserve_astar_request(is_retry: bool = false, force: bool = false) -> bool:
+	# 指令回放模式不能按真实帧耗时/机器负载丢请求，否则同一录像在不同机器上会走出不同路径。
+	if GameSettings.deterministic_sim:
+		_astar_budget_count += 1
+		_astar_alloc_total += 1
+		return true
 	var frame: int = Engine.get_process_frames()
 	if frame != _astar_budget_frame:
 		_astar_budget_frame = frame
@@ -1517,6 +1528,23 @@ func can_train_unit(team: int) -> bool:
 
 	
 # ==================== 初始化 ====================
+func _enter_tree():
+	# 父节点先于 Map/HUD 子节点进入场景树，必须在 Map._ready 生成地图前固定随机源。
+	SimTime.reset(Engine.get_physics_frames())
+	if GameSettings.command_replay:
+		GameSettings.deterministic_sim = true
+	if GameSettings.deterministic_sim:
+		if GameSettings.sim_seed == 0:
+			randomize()
+			GameSettings.sim_seed = int(randi() & 0x7fffffff)
+		# 让程序化地图使用同一个种子，避免重演时重新生成出不同地形。
+		if GameSettings.map_seed == 0:
+			GameSettings.map_seed = GameSettings.sim_seed
+		SimRandom.reset(GameSettings.sim_seed)
+	else:
+		randomize()
+		SimRandom.reset(int(randi() & 0x7fffffff))
+
 func _ready():
 	# 新手教程沿用原有成长节奏，强制经典模式，避免教程目标与科技解锁冲突。
 	# 战役可由选关界面选择科研模式，不再在这里强制回经典。
@@ -1545,7 +1573,7 @@ func _ready():
 	if not is_online and not GameSettings.is_ffa and not GameSettings.campaign_mode:
 		# 单机版每局随机分配红/蓝阵营（1v1/2v2/3v3 的出生侧与颜色一起交换）。
 		# 乱斗模式玩家固定蓝方（其余国家使用独立 team 3..），不参与红蓝对调。
-		if randi() % 2 == 1:
+		if SimRandom.randi() % 2 == 1:
 			player_team = RTSConfig.Team.RED
 			enemy_team = RTSConfig.Team.BLUE
 		else:
@@ -1665,7 +1693,7 @@ func _init_ffa_single(_nation_count: int):
 	for n in range(RTSConfig.Nation.size()):
 		if n != GameSettings.player_nation:
 			ai_nation_pool.append(n)
-	ai_nation_pool.shuffle()
+	SimRandom.shuffle(ai_nation_pool)
 	var ai_nations = ai_nation_pool.slice(0, count - 1)
 
 	# 玩家与 AI 都使用国家色；乱斗各国国家唯一，不会撞色。
@@ -1692,7 +1720,7 @@ func _init_ffa_single(_nation_count: int):
 	for i in range(3):
 		var cfg = peasant_cfg.duplicate()
 		cfg["owner_peer_id"] = player_owner_id
-		spawn_entity(cfg, RTSConfig.Team.BLUE, layout[0] + Vector3(randf_range(-3, 3), 0, randf_range(-3, 3)), 1)
+		spawn_entity(cfg, RTSConfig.Team.BLUE, layout[0] + Vector3(SimRandom.randf_range(-3, 3), 0, SimRandom.randf_range(-3, 3)), 1)
 
 	# —— AI 国家循环：独立资源/人口/上限/唯一 team/国家色/AI 控制器 ——
 	for ai_index in range(ai_nations.size()):
@@ -1724,7 +1752,7 @@ func _init_ffa_single(_nation_count: int):
 		for j in range(3):
 			var cfg = peasant_cfg.duplicate()
 			cfg["owner_peer_id"] = pid
-			spawn_entity(cfg, team, castle_pos + Vector3(randf_range(-3, 3), 0, randf_range(-3, 3)), 1)
+			spawn_entity(cfg, team, castle_pos + Vector3(SimRandom.randf_range(-3, 3), 0, SimRandom.randf_range(-3, 3)), 1)
 
 		var ai = AIController.new()
 		ai.my_peer_id = pid
@@ -1801,9 +1829,9 @@ func _init_2v2_single():
 	# 阵营每局随机，所以这里按 player_team/enemy_team 生成，而不是写死蓝/红。
 	var setup = [
 		{ "peer_id": 1, "team": player_team, "slot": 0, "is_human": true, "nation": GameSettings.player_nation },
-		{ "peer_id": 2, "team": player_team, "slot": 1, "is_human": false, "nation": randi() % RTSConfig.Nation.size() },
-		{ "peer_id": 3, "team": enemy_team, "slot": 0, "is_human": false, "nation": randi() % RTSConfig.Nation.size() },
-		{ "peer_id": 4, "team": enemy_team, "slot": 1, "is_human": false, "nation": randi() % RTSConfig.Nation.size() },
+		{ "peer_id": 2, "team": player_team, "slot": 1, "is_human": false, "nation": SimRandom.randi() % RTSConfig.Nation.size() },
+		{ "peer_id": 3, "team": enemy_team, "slot": 0, "is_human": false, "nation": SimRandom.randi() % RTSConfig.Nation.size() },
+		{ "peer_id": 4, "team": enemy_team, "slot": 1, "is_human": false, "nation": SimRandom.randi() % RTSConfig.Nation.size() },
 	]
 
 	var map = $Map
@@ -1811,7 +1839,7 @@ func _init_2v2_single():
 	var positions = map.get_four_castle_positions()   # [blue1, blue2, red1, red2]
 	var enemy_nation = GameSettings.enemy_nation
 	if enemy_nation < 0 or enemy_nation >= RTSConfig.Nation.size():
-		enemy_nation = randi() % RTSConfig.Nation.size()
+		enemy_nation = SimRandom.randi() % RTSConfig.Nation.size()
 	team_nations = {
 		player_team: GameSettings.player_nation,
 		enemy_team: enemy_nation
@@ -1865,7 +1893,7 @@ func _init_2v2_single():
 		var peasant_cfg = EntityDatabase.get_config(10)
 		peasant_cfg["team"] = team
 		for i in range(3):
-			var pos = castle_pos + Vector3(randf_range(-3,3), 0, randf_range(-3,3))
+			var pos = castle_pos + Vector3(SimRandom.randf_range(-3,3), 0, SimRandom.randf_range(-3,3))
 			var cfg = peasant_cfg.duplicate()
 			cfg["owner_peer_id"] = pid
 			spawn_entity(cfg, team, pos, 1)
@@ -1889,14 +1917,14 @@ func _random_ai_nation_pool(count: int) -> Array:
 	for n in range(RTSConfig.Nation.size()):
 		if n != GameSettings.player_nation:
 			pool.append(n)
-	pool.shuffle()
+	SimRandom.shuffle(pool)
 	var out: Array = []
 	while out.size() < count:
 		if pool.is_empty():
 			for n in range(RTSConfig.Nation.size()):
 				if n != GameSettings.player_nation:
 					pool.append(n)
-			pool.shuffle()
+			SimRandom.shuffle(pool)
 		out.append(pool.pop_back())
 	return out
 
@@ -1916,7 +1944,7 @@ func _init_multi_single(mode: int):
 	# 阵营每局随机：玩家可能占用蓝/红任意一侧，AI 队友和敌人随之整体对调。
 	var enemy_nation = GameSettings.enemy_nation
 	if enemy_nation < 0 or enemy_nation >= RTSConfig.Nation.size():
-		enemy_nation = randi() % RTSConfig.Nation.size()
+		enemy_nation = SimRandom.randi() % RTSConfig.Nation.size()
 	team_nations = {
 		player_team: GameSettings.player_nation,
 		enemy_team: enemy_nation
@@ -1953,7 +1981,7 @@ func _init_multi_single(mode: int):
 	for i in range(3):
 		var cfg = peasant_cfg.duplicate()
 		cfg["owner_peer_id"] = player_owner_id
-		spawn_entity(cfg, player_team, player_pos + Vector3(randf_range(-3,3), 0, randf_range(-3,3)), 1)
+		spawn_entity(cfg, player_team, player_pos + Vector3(SimRandom.randf_range(-3,3), 0, SimRandom.randf_range(-3,3)), 1)
 
 	# 玩家阵营 AI（队友）与敌方 AI，各自独立资源/人口/上限/国家色/AI控制器
 	for team in [player_team, enemy_team]:
@@ -1962,7 +1990,7 @@ func _init_multi_single(mode: int):
 		var base_pid = 1000 if team == RTSConfig.Team.BLUE else 2000
 		for ai_index in range(count):
 			var pid = base_pid + ai_index
-			var nation = ai_nation_order[ai_nation_idx] if ai_nation_idx < ai_nation_order.size() else (randi() % RTSConfig.Nation.size())
+			var nation = ai_nation_order[ai_nation_idx] if ai_nation_idx < ai_nation_order.size() else (SimRandom.randi() % RTSConfig.Nation.size())
 			ai_nation_idx += 1
 			# 玩家阵营 AI 队友占 1..mode-1 号位，敌方 AI 占 0..mode-1 号位
 			var slot = (ai_index + 1) if is_ally_team else ai_index
@@ -1990,7 +2018,7 @@ func _init_multi_single(mode: int):
 			for j in range(3):
 				var cfg = peasant_cfg.duplicate()
 				cfg["owner_peer_id"] = pid
-				spawn_entity(cfg, team, castle_pos + Vector3(randf_range(-3,3), 0, randf_range(-3,3)), 1)
+				spawn_entity(cfg, team, castle_pos + Vector3(SimRandom.randf_range(-3,3), 0, SimRandom.randf_range(-3,3)), 1)
 
 			# 创建AI控制器
 			var ai = AIController.new()
@@ -2848,7 +2876,7 @@ func _init_entities_deferred():
 	var player_nation = GameSettings.player_nation
 	var enemy_nation = GameSettings.enemy_nation
 	if enemy_nation < 0 or enemy_nation >= RTSConfig.Nation.size():
-		enemy_nation = randi() % RTSConfig.Nation.size()
+		enemy_nation = SimRandom.randi() % RTSConfig.Nation.size()
 
 	team_nations = {
 		get_host_team(): player_nation,
@@ -2887,23 +2915,23 @@ func _init_entities_deferred():
 	# 初始农民（随机在城堡周围平原上生成）
 	var peasant_cfg = EntityDatabase.get_config(10)
 	for _i in range(3):
-		var fx = player_castle_pos.x + randf_range(-3, 3)
-		var fz = player_castle_pos.z + randf_range(-3, 3)
+		var fx = player_castle_pos.x + SimRandom.randf_range(-3, 3)
+		var fz = player_castle_pos.z + SimRandom.randf_range(-3, 3)
 		var ft = get_terrain_at(Vector3(fx, 0, fz))
 		var cfg = peasant_cfg.duplicate()
 		cfg["owner_peer_id"] = player_owner_id
 		if ft == 0:
 			spawn_entity(cfg, get_host_team(), Vector3(fx, 0, fz))
 		else:
-			spawn_entity(cfg, get_host_team(), player_castle_pos + Vector3(randf_range(-3,3), 0, randf_range(-3,3)))
+			spawn_entity(cfg, get_host_team(), player_castle_pos + Vector3(SimRandom.randf_range(-3,3), 0, SimRandom.randf_range(-3,3)))
 	for _i in range(3):
-		var fx = enemy_castle_pos.x + randf_range(-3, 3)
-		var fz = enemy_castle_pos.z + randf_range(-3, 3)
+		var fx = enemy_castle_pos.x + SimRandom.randf_range(-3, 3)
+		var fz = enemy_castle_pos.z + SimRandom.randf_range(-3, 3)
 		var ft = get_terrain_at(Vector3(fx, 0, fz))
 		if ft == 0:
 			spawn_entity(peasant_cfg, get_enemy_team(), Vector3(fx, 0, fz))
 		else:
-			spawn_entity(peasant_cfg, get_enemy_team(), enemy_castle_pos + Vector3(randf_range(-3,3), 0, randf_range(-3,3)))
+			spawn_entity(peasant_cfg, get_enemy_team(), enemy_castle_pos + Vector3(SimRandom.randf_range(-3,3), 0, SimRandom.randf_range(-3,3)))
 
 	# 1v1 静态 AI 默认写死红方；玩家随机到红方时必须同步改成蓝方。
 	if not is_online:
@@ -2915,6 +2943,9 @@ func _init_entities_deferred():
 	var cam = get_viewport().get_camera_3d()
 	if cam and player_castle:
 		cam.global_position = Vector3(player_castle.global_position.x, cam.global_position.y, player_castle.global_position.z)
+	if GameSettings.deterministic_sim:
+		SimTime.reset(Engine.get_physics_frames())
+	sim_ready = true
 
 # ==================== 实体生成 ====================
 # 模型缩放：普通模型按最大边等比缩放到实体直径；城墙另外处理横向占地，
@@ -3495,6 +3526,39 @@ func _model_local_min_y(model: Node3D) -> float:
 		return 0.0
 	return merged.position.y
 
+func simulation_checksum() -> Dictionary:
+	var parts: Array = []
+	for e in entities.get_children():
+		if not (e is GameEntity) or e.health <= 0:
+			continue
+		var p: Vector3 = e.global_position
+		var lv_value = e.get("upgrade_level")
+		var bt_value = e.get("build_timer")
+		parts.append("%d|%d|%d|%.3f|%.3f|%.3f|%.2f|%d|%d" % [
+			int(e.get_meta("_sim_uid", -1)), int(e.entity_id), int(e.team),
+			p.x, p.y, p.z, float(e.health),
+			int(lv_value) if lv_value != null else 1,
+			int(float(bt_value) * 100.0) if bt_value != null else 0,
+		])
+	parts.sort()
+	var meta_parts: Array = [
+		"RNG|%d|%d" % [SimRandom.count(), SimRandom.trace()],
+		"P|%d|%d|%d|%d|%d" % [int(player_resources.get("gold", 0)), int(player_resources.get("wood", 0)), int(player_resources.get("stone", 0)), int(player_resources.get("food", 0)), int(player_resources.get("oil", 0))],
+		"E|%d|%d|%d|%d|%d" % [int(enemy_resources.get("gold", 0)), int(enemy_resources.get("wood", 0)), int(enemy_resources.get("stone", 0)), int(enemy_resources.get("food", 0)), int(enemy_resources.get("oil", 0))],
+	]
+	var ai_keys: Array = ai_resources.keys()
+	ai_keys.sort()
+	for k in ai_keys:
+		var r: Dictionary = ai_resources[k]
+		meta_parts.append("A%d|%d|%d|%d|%d|%d" % [int(k), int(r.get("gold", 0)), int(r.get("wood", 0)), int(r.get("stone", 0)), int(r.get("food", 0)), int(r.get("oil", 0))])
+	var text := "\n".join(meta_parts + parts)
+	return {
+		"tick": int(round(game_time * 60.0)),
+		"count": parts.size(),
+		"hash": str(text.hash()),
+		"text": text,
+	}
+
 func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -> GameEntity:
 	if not entities or config.is_empty(): return null
 
@@ -3512,6 +3576,10 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 	# 暂停时冻结所有游戏实体；管理器本身是 ALWAYS，只负责接指令和建造预览。
 	entity.process_mode = Node.PROCESS_MODE_PAUSABLE
 	entities.add_child(entity)
+	entity.set_meta("_sim_phase", _spawn_counter % 8)
+	entity.set_meta("_sim_uid", _spawn_counter)
+	if GameSettings.deterministic_sim and _spawn_counter >= 141:
+	_spawn_counter += 1
 	# 实体以任何方式离开场景树（死亡动画结束、销毁、场景退出）都立即标记缓存失效，
 	# 避免 AI/统计缓存里残留已释放实例，访问属性时报 "previously freed"。
 	if not entity.tree_exiting.is_connected(mark_entity_cache_dirty):
@@ -3520,7 +3588,7 @@ func spawn_entity(config: Dictionary, team: int, pos: Vector3, level: int = 1) -
 	# 错开索敌相位：所有单位的 think_timer 默认都是 0，同一批生产/刷出的
 	# 几百个单位会在同一物理帧一起做可见性射线和目标搜索，形成周期性大卡顿。
 	if entity is Army:
-		entity.think_timer = randf_range(0.0, 0.75)
+		entity.think_timer = SimRandom.randf_range(0.0, 0.75)
 	# 尝试加载3D模型
 	var model_loaded = _apply_entity_model(entity)
 	# 武器/坐骑必须在模型加载后创建：武器需要挂到手臂骨骼上，
@@ -5224,7 +5292,7 @@ func _spawn_abandoned_sites() -> void:
 			cands.append(Vector2i(along, size - margin - d))
 			cands.append(Vector2i(margin + d, along))
 			cands.append(Vector2i(size - margin - d, along))
-	cands.shuffle()
+	SimRandom.shuffle(cands)
 	var picks: Array = []
 	# 间距从宽松到紧凑三档重试，保证任何地图都能撒满
 	for spacing in [0.14, 0.10, 0.07]:
@@ -5264,7 +5332,7 @@ func _spawn_abandoned_sites() -> void:
 			if far_enough:
 				picks.append(wp)
 	for wp in picks:
-		var type_id: int = int(ABANDONED_TYPE_IDS[randi() % ABANDONED_TYPE_IDS.size()])
+		var type_id: int = int(ABANDONED_TYPE_IDS[SimRandom.randi() % ABANDONED_TYPE_IDS.size()])
 		var cfg: Dictionary = EntityDatabase.get_config(type_id)
 		if cfg.is_empty():
 			continue
@@ -5398,6 +5466,18 @@ func _loot_text(loot: Dictionary) -> String:
 # ==================== 每帧更新 ====================
 var _limit_update_timer: float = 0.0
 func _process(delta):
+	if GameSettings.deterministic_sim:
+		return
+	_simulation_tick(delta)
+
+func _physics_process(delta):
+	if not GameSettings.deterministic_sim:
+		return
+	_simulation_tick(delta)
+
+func _simulation_tick(delta):
+	if GameSettings.deterministic_sim and not sim_ready:
+		return
 	_tick_astar_stats()
 	# 手机端居中建造：地图被单指平移后，预览始终落在新的屏幕中心
 	if build_mode and mobile_centered_build and build_preview:
@@ -5791,6 +5871,8 @@ func _tick_animation_lod(delta: float) -> void:
 var _physics_entity_heavy: bool = false
 
 func _tick_physics_rate(delta: float) -> void:
+	if GameSettings.deterministic_sim:
+		return
 	if game_over:
 		return
 	_physics_tick_timer -= delta

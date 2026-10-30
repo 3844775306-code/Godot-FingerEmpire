@@ -39,7 +39,7 @@ func _ready():
 func setup(config: Dictionary):
 	super.setup(config)
 	resource_type = config.get("resource_type", "gold")
-	var lv = randi_range(1,5)
+	var lv = SimRandom.randi_range(1,5)
 	level = lv
 	max_health  *= 0.4 + (level - 1.0) * 0.3
 	

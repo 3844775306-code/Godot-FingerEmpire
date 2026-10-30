@@ -1,6 +1,7 @@
 # scripts/entities/Bullet.gd
 class_name Bullet
 extends Area3D
+const SimRandom = preload("res://scripts/core/SimRandom.gd")
 
 var team: int
 var owner_peer_id: int = -1   # 发射方 owner_peer_id（乱斗 FFA 溅射/命中按 owner 过滤敌对）
@@ -709,7 +710,7 @@ func _on_hit(entity: GameEntity):
 		to_arrow.y = 0.0
 		var hdir: Vector3 = to_arrow.normalized() if to_arrow.length() > 0.01 else Vector3.RIGHT
 		# 多支箭命中同一目标时绕竖直轴随机偏转，让箭散布在身体表面而不是叠在一处
-		hdir = hdir.rotated(Vector3.UP, randf_range(-0.7, 0.7))
+		hdir = hdir.rotated(Vector3.UP, SimRandom.randf_range(-0.7, 0.7))
 		# 竖直方向保留命中时的高度差，但限制在目标身体高度范围内（最高约 1.8 倍半径）
 		var rel_y: float = clampf(global_position.y - entity.global_position.y, -0.05, er * 1.8)
 		_stuck_offset = hdir * (er * 1.02) + Vector3(0.0, rel_y, 0.0)

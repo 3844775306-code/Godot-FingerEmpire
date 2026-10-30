@@ -1,5 +1,6 @@
 # scripts/map/MapGenerator.gd
 extends Node3D
+const SimRandom = preload("res://scripts/core/SimRandom.gd")
 
 const MapPresets = preload("res://scripts/map/MapPresets.gd")
 
@@ -196,7 +197,7 @@ func _generate_classic(size: int):
 	if custom_seed != 0:
 		noise.seed = custom_seed
 	else:
-		noise.seed = randi()
+		noise.seed = SimRandom.randi()
 	noise.frequency = 0.03
 	noise.fractal_octaves = 4
 
@@ -412,7 +413,7 @@ func _cleanup_small_mountains(size: int) -> void:
 
 func _op_noise_base(size: int, params: Dictionary) -> void:
 	var noise := FastNoiseLite.new()
-	noise.seed = custom_seed if custom_seed != 0 else randi()
+	noise.seed = custom_seed if custom_seed != 0 else SimRandom.randi()
 	noise.frequency = float(params.get("freq", 0.03))
 	noise.fractal_octaves = int(params.get("octaves", 4))
 	_mountain_threshold = float(params.get("mountain_threshold", 0.3))
@@ -577,7 +578,7 @@ func _op_river_path(size: int, params: Dictionary) -> void:
 		var w := lerpf(base_w, end_w, t) * (1.0 + width_wave * sin(t * TAU * width_freq + width_phase))
 		samples.append({"pos": raw[i] + nrm * lateral, "tan": tan, "w": maxf(2.0, w)})
 	# 河岸带一点噪声，避免边缘像圆规画出来的
-	var seed_val := custom_seed if custom_seed != 0 else randi()
+	var seed_val := custom_seed if custom_seed != 0 else SimRandom.randi()
 	var noise := FastNoiseLite.new()
 	noise.seed = seed_val + 3329
 	noise.frequency = float(params.get("bank_freq", 0.18))
@@ -614,7 +615,7 @@ func _op_lake(size: int, params: Dictionary) -> void:
 	var radius := maxf(2.0, float(params.get("radius", 0.16)) * float(size))
 	var aspect := clampf(float(params.get("aspect", 1.0)), 0.5, 1.8)
 	var rough := clampf(float(params.get("rough", 0.22)), 0.0, 0.55)
-	var seed_val := custom_seed if custom_seed != 0 else randi()
+	var seed_val := custom_seed if custom_seed != 0 else SimRandom.randi()
 	var noise := FastNoiseLite.new()
 	noise.seed = seed_val + 6421
 	noise.frequency = float(params.get("freq", 0.09))
@@ -732,7 +733,7 @@ func _op_forest(size: int, params: Dictionary) -> void:
 	var coverage := clampf(float(params.get("coverage", 0.38)), 0.05, 0.85)
 	var freq := float(params.get("freq", 0.045))
 	var clearing := float(params.get("clearing", 0.45))
-	var seed_val := custom_seed if custom_seed != 0 else randi()
+	var seed_val := custom_seed if custom_seed != 0 else SimRandom.randi()
 	var noise := FastNoiseLite.new()
 	noise.seed = seed_val
 	noise.frequency = freq
@@ -767,7 +768,7 @@ func _op_forest(size: int, params: Dictionary) -> void:
 func _op_marsh(size: int, params: Dictionary) -> void:
 	var coverage := clampf(float(params.get("coverage", 0.32)), 0.05, 0.85)
 	var freq := float(params.get("freq", 0.05))
-	var seed_val := custom_seed if custom_seed != 0 else randi()
+	var seed_val := custom_seed if custom_seed != 0 else SimRandom.randi()
 	var noise := FastNoiseLite.new()
 	noise.seed = seed_val + 613
 	noise.frequency = freq
@@ -823,7 +824,7 @@ func _op_islets(size: int, params: Dictionary) -> void:
 	var r_max := maxi(r_min, int(params.get("radius_max", 4)))
 	var big_r := maxi(r_max + 1, int(params.get("big_radius", 6)))
 	var half_width := maxf(3.0, _sea_width * 0.5)
-	var seed_val := custom_seed if custom_seed != 0 else randi()
+	var seed_val := custom_seed if custom_seed != 0 else SimRandom.randi()
 	var isl := FastNoiseLite.new()
 	isl.seed = seed_val + 1327
 	isl.frequency = float(params.get("freq", 0.07))
@@ -834,8 +835,8 @@ func _op_islets(size: int, params: Dictionary) -> void:
 	while planted_count < count + big_count and guard < (count + big_count) * 120:
 		guard += 1
 		var is_big := big_count > 0 and planted_count >= count
-		var rad := big_r if is_big else randi_range(r_min, r_max)
-		var gy := randi_range(int(float(size) * 0.08), int(float(size) * 0.92))
+		var rad := big_r if is_big else SimRandom.randi_range(r_min, r_max)
+		var gy := SimRandom.randi_range(int(float(size) * 0.08), int(float(size) * 0.92))
 		var skip := false
 		for p in avoid:
 			if absi(gy - int(float(p) * float(size))) <= 6:
@@ -844,7 +845,7 @@ func _op_islets(size: int, params: Dictionary) -> void:
 		if skip:
 			continue
 		var cx: int = int(_river_center[clampi(gy, 0, _river_center.size() - 1)])
-		var gx := cx + int(round(half_width * band * randf_range(-1.0, 1.0)))
+		var gx := cx + int(round(half_width * band * SimRandom.randf_range(-1.0, 1.0)))
 		if gx < 3 or gx >= size - 3:
 			continue
 		if terrain_grid[gx][gy] != 2:
@@ -898,7 +899,7 @@ func _op_oasis(size: int, params: Dictionary) -> void:
 	var frac_r := float(params.get("radius_frac", 0.0))
 	if frac_r > 0.0:
 		base_r = maxi(2, int(round(frac_r * float(size))))
-	var seed_val := custom_seed if custom_seed != 0 else randi()
+	var seed_val := custom_seed if custom_seed != 0 else SimRandom.randi()
 	for s in spots:
 		var cx := int(float(s[0]) * float(size))
 		var cy := int(float(s[1]) * float(size))
@@ -921,7 +922,7 @@ func _op_ring_river(size: int, params: Dictionary) -> void:
 	_ring_radius = radius_frac
 	_ring_width = width_frac
 	var wave := float(params.get("wave", 0.012))
-	var seed_val := custom_seed if custom_seed != 0 else randi()
+	var seed_val := custom_seed if custom_seed != 0 else SimRandom.randi()
 	var noise := FastNoiseLite.new()
 	noise.seed = seed_val + 4177
 	noise.frequency = 0.05
@@ -981,7 +982,7 @@ func _op_canyon(size: int, params: Dictionary) -> void:
 	var pinch_sigma := maxf(2.0, float(params.get("pinch_width", 0.06)) * float(size))
 	var gates: Array = params.get("gates", [0.14, 0.86])
 	var gate_w := maxi(2, int(params.get("gate_width", 4)))
-	var seed_val := custom_seed if custom_seed != 0 else randi()
+	var seed_val := custom_seed if custom_seed != 0 else SimRandom.randi()
 	var noise := FastNoiseLite.new()
 	noise.seed = seed_val + 5519
 	noise.frequency = float(params.get("edge_freq", 0.06))
@@ -1034,7 +1035,7 @@ func _op_terrace(size: int, params: Dictionary) -> void:
 	var ridge_h := maxf(float(params.get("ridge_height", WALL_CLIFF_HEIGHT)), WALL_CLIFF_HEIGHT)
 	var gaps: Array = params.get("gaps", [0.22, 0.5, 0.78])
 	var gap_w := maxi(2, int(params.get("gap_width", 4)))
-	var seed_val := custom_seed if custom_seed != 0 else randi()
+	var seed_val := custom_seed if custom_seed != 0 else SimRandom.randi()
 	var noise := FastNoiseLite.new()
 	noise.seed = seed_val + 9137
 	noise.frequency = float(params.get("edge_freq", 0.08))
@@ -1101,7 +1102,7 @@ func _op_mountain_slopes(size: int, params: Dictionary) -> void:
 	var slope_half := maxi(1, int(round(float(params.get("slope_half_frac", 0.022)) * float(size))))
 	var plateau_h := float(params.get("plateau_height", 5.0))
 	var centers: Array = params.get("centers", [0.25, 0.5, 0.75])
-	var seed_val := custom_seed if custom_seed != 0 else randi()
+	var seed_val := custom_seed if custom_seed != 0 else SimRandom.randi()
 	var noise := FastNoiseLite.new()
 	noise.seed = seed_val + 8309
 	noise.frequency = 0.06
@@ -1151,7 +1152,7 @@ func _op_mesa_field(size: int, params: Dictionary) -> void:
 	var half_w := int(ramp_width / 2.0)
 	var add_pass_feet := bool(params.get("pass_feet", false))
 	var base_ramp_len := maxi(4, int(round(float(params.get("ramp_len_frac", 0.10)) * float(size))))
-	var seed_val := custom_seed if custom_seed != 0 else randi()
+	var seed_val := custom_seed if custom_seed != 0 else SimRandom.randi()
 	var noise := FastNoiseLite.new()
 	noise.seed = seed_val + 1217
 	noise.frequency = 0.08
@@ -1225,7 +1226,7 @@ func _op_switchback(size: int, params: Dictionary) -> void:
 	var ramp_angles: Array = params.get("ramp_angles", [90, 270])
 	var ramp_width := maxi(2, int(params.get("ramp_width", 4)))
 	var half_w := float(ramp_width) * 0.5
-	var seed_val := custom_seed if custom_seed != 0 else randi()
+	var seed_val := custom_seed if custom_seed != 0 else SimRandom.randi()
 	var noise := FastNoiseLite.new()
 	noise.seed = seed_val + 4409
 	noise.frequency = 0.07
@@ -1295,7 +1296,7 @@ func _op_basin(size: int, params: Dictionary) -> void:
 		var over := outer_r + slope_w - float(size) * 0.47
 		floor_r = maxf(float(size) * 0.10, floor_r - over)
 		outer_r = floor_r + rim_w
-	var seed_val := custom_seed if custom_seed != 0 else randi()
+	var seed_val := custom_seed if custom_seed != 0 else SimRandom.randi()
 	var noise := FastNoiseLite.new()
 	noise.seed = seed_val + 7717
 	noise.frequency = 0.055
@@ -1349,7 +1350,7 @@ func _op_crater(size: int, params: Dictionary) -> void:
 	var width_frac := clampf(float(params.get("width_frac", 0.07)), 0.03, 0.14)
 	var gates: Array = params.get("gates", [0, 90, 180, 270])
 	var gate_w := maxi(3, int(params.get("gate_width", 6)))
-	var seed_val := custom_seed if custom_seed != 0 else randi()
+	var seed_val := custom_seed if custom_seed != 0 else SimRandom.randi()
 	var noise := FastNoiseLite.new()
 	noise.seed = seed_val + 7331
 	noise.frequency = 0.07
@@ -1399,7 +1400,7 @@ func _op_crater(size: int, params: Dictionary) -> void:
 func _op_coast(size: int, params: Dictionary) -> void:
 	var width_frac := clampf(float(params.get("width_frac", 0.16)), 0.08, 0.26)
 	var island_frac := clampf(float(params.get("island_frac", 0.20)), 0.10, 0.30)
-	var seed_val := custom_seed if custom_seed != 0 else randi()
+	var seed_val := custom_seed if custom_seed != 0 else SimRandom.randi()
 	var coast_noise := FastNoiseLite.new()
 	coast_noise.seed = seed_val + 9973
 	coast_noise.frequency = float(params.get("coast_freq", 0.055))
@@ -1516,7 +1517,7 @@ func _op_coastal_siege(size: int, params: Dictionary) -> void:
 			height_grid[x][y] = water_h
 			overlay_grid[x][y] = 0
 
-	var seed_val := custom_seed if custom_seed != 0 else randi()
+	var seed_val := custom_seed if custom_seed != 0 else SimRandom.randi()
 	var rng := RandomNumberGenerator.new()
 	rng.seed = seed_val + 6151
 	var coast := FastNoiseLite.new()
@@ -2014,8 +2015,8 @@ func get_ffa_castle_positions(n: int) -> Array:
 func _find_flat_near_point(cx: int, cy: int, search_radius: int) -> Vector3:
 	var size = _get_map_size()
 	for _try in range(200):
-		var tx = cx + randi_range(-search_radius, search_radius)
-		var ty = cy + randi_range(-search_radius, search_radius)
+		var tx = cx + SimRandom.randi_range(-search_radius, search_radius)
+		var ty = cy + SimRandom.randi_range(-search_radius, search_radius)
 		if tx < 5 or ty < 5 or tx > size - 6 or ty > size - 6:
 			continue
 		var ok = true
@@ -2106,8 +2107,8 @@ func _find_flat_plain(gx_min,gy_min,gx_max,gy_max,ps:int) -> Vector3:
 	gy_min=clampi(gy_min,0,size-1);gy_max=clampi(gy_max,0,size-1)
 	var hp=ps/2
 	for _try in range(500):
-		var cx=randi_range(gx_min+hp,gx_max-hp)
-		var cy=randi_range(gy_min+hp,gy_max-hp)
+		var cx=SimRandom.randi_range(gx_min+hp,gx_max-hp)
+		var cy=SimRandom.randi_range(gy_min+hp,gy_max-hp)
 		var ok=true
 		for dx in range(-hp,hp+1):
 			for dy in range(-hp,hp+1):
@@ -2168,8 +2169,8 @@ func _find_castle_spot_in_region(gx_min, gy_min, gx_max, gy_max, safe_size: int 
 	gy_max = clampi(gy_max, 0, size - 1)
 
 	for _attempt in range(500):
-		var cx = randi_range(gx_min + safe_size, gx_max - safe_size)
-		var cy = randi_range(gy_min + safe_size, gy_max - safe_size)
+		var cx = SimRandom.randi_range(gx_min + safe_size, gx_max - safe_size)
+		var cy = SimRandom.randi_range(gy_min + safe_size, gy_max - safe_size)
 		var valid = true
 		for dx in range(-safe_size, safe_size + 1):
 			for dy in range(-safe_size, safe_size + 1):
@@ -2365,22 +2366,22 @@ func _place_resources():
 	# 沙漠等以狩猎为主的图：food=0 后动物是主要食物来源，兽群数量按 animals 倍率放大
 	var herd_count := int(round(8.0 * mult * animal_mult))
 	for _i in range(herd_count):
-		var cx = randi_range(8, size - 9); var cy = randi_range(8, size - 9)
+		var cx = SimRandom.randi_range(8, size - 9); var cy = SimRandom.randi_range(8, size - 9)
 		# 孤岛上的兽群猎不到，直接换位置（海峡图）
 		if not _reach_tiles.is_empty() and not _reach_tiles.has(Vector2i(cx, cy)):
 			continue
 		var t = terrain_grid[cx][cy]
 		var atype = -1
 		if t == 0:
-			var r = randf()
+			var r = SimRandom.randf()
 			if r < 0.35: atype = 60
 			elif r < 0.65: atype = 61
 			else: atype = 62
 		elif t == 2: atype = 63
 		if atype >= 0:
-			var herd_size = 3 + randi_range(0, 2)
+			var herd_size = 3 + SimRandom.randi_range(0, 2)
 			for _j in range(herd_size):
-				var ax = cx + randi_range(-4, 4); var ay = cy + randi_range(-4, 4)
+				var ax = cx + SimRandom.randi_range(-4, 4); var ay = cy + SimRandom.randi_range(-4, 4)
 				if ax >= 0 and ax < size and ay >= 0 and ay < size:
 					if not _reach_tiles.is_empty() and not _reach_tiles.has(Vector2i(ax, ay)):
 						continue
@@ -2550,7 +2551,7 @@ func _place_forest_wood(size: int, castles: Array, placed: Dictionary, mult: flo
 			if placed.has("r1,%d,%d" % [x, y]):
 				continue
 			cands.append(Vector2i(x, y))
-	cands.shuffle()
+	SimRandom.shuffle(cands)
 	# 密度：林线要连成一片树墙，1V1 约 400 株，团队按规模放大（上限 900 防止实体爆炸）
 	var target := mini(900, int(round(400.0 * mult)))
 	var nodes: Array = []
@@ -2643,8 +2644,8 @@ func _cell_near_castle(tx: int, ty: int, min_dist: int) -> bool:
 func _place_group_near(rtype, min_sz, max_sz, cx, cy, max_dist, terrain, placed, size, near_mountain=false, adjacent_mountains=0):
 	var best_x = -1; var best_y = -1
 	for _attempt in range(200):
-		var tx = cx + randi_range(-max_dist, max_dist)
-		var ty = cy + randi_range(-max_dist, max_dist)
+		var tx = cx + SimRandom.randi_range(-max_dist, max_dist)
+		var ty = cy + SimRandom.randi_range(-max_dist, max_dist)
 		if tx < 0 or tx >= size or ty < 0 or ty >= size: continue
 		if terrain_grid[tx][ty] != terrain: continue
 		if _cell_near_castle(tx, ty, 3): continue
@@ -2687,7 +2688,7 @@ func _place_group_random(rtype, min_sz, max_sz, terrain, placed, size, castles, 
 			total_w += float(c["weight"])
 		if total_w <= 0.0:
 			return
-		var pick := randf() * total_w
+		var pick := SimRandom.randf() * total_w
 		var chosen: Vector2i = cands[cands.size() - 1]["cell"]
 		for c in cands:
 			pick -= float(c["weight"])
@@ -2699,7 +2700,7 @@ func _place_group_random(rtype, min_sz, max_sz, terrain, placed, size, castles, 
 		_spawn_group(rtype, min_sz, max_sz, cx, cy, terrain, placed, size, adjacent_mountains)
 		return
 	for _attempt in range(100):
-		var tx = randi_range(5, size - 6); var ty = randi_range(5, size - 6)
+		var tx = SimRandom.randi_range(5, size - 6); var ty = SimRandom.randi_range(5, size - 6)
 		if terrain_grid[tx][ty] != terrain: continue
 		if _cell_near_castle(tx, ty, 3): continue
 		if placed.has("g%d,%d,%d" % [rtype, tx, ty]): continue
@@ -2725,12 +2726,12 @@ func _place_group_random(rtype, min_sz, max_sz, terrain, placed, size, castles, 
 
 # ── Spawn individual resources in a group ──
 func _spawn_group(rtype, min_sz, max_sz, cx, cy, terrain, placed, size, adjacent_mountains=0):
-	var count = min_sz + randi_range(0, max_sz - min_sz)
+	var count = min_sz + SimRandom.randi_range(0, max_sz - min_sz)
 	resource_positions.append({"pos": grid_to_world(cx, cy), "type": rtype})
 	var placed_count = 1
 	for _mt in range(count * 5):
 		if placed_count >= count: break
-		var mx = cx + randi_range(-4, 4); var my = cy + randi_range(-4, 4)
+		var mx = cx + SimRandom.randi_range(-4, 4); var my = cy + SimRandom.randi_range(-4, 4)
 		if mx < 0 or mx >= size or my < 0 or my >= size: continue
 		if terrain_grid[mx][my] != terrain: continue
 		# 油井群内的其余油点也必须在水域内部，不能补到岸边

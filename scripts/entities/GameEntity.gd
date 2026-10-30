@@ -1,6 +1,8 @@
 
 class_name GameEntity
 extends CharacterBody3D
+const SimRandom = preload("res://scripts/core/SimRandom.gd")
+const SimTime = preload("res://scripts/core/SimTime.gd")
 
 signal died
 
@@ -213,6 +215,16 @@ func setup(config: Dictionary):
 		if entity_id == 20 or entity_id == 22 or entity_id == 23:
 			add_to_group("storage_buildings")
 func _process(delta):
+	if GameSettings.deterministic_sim:
+		return
+	_entity_simulation_tick(delta)
+
+func _physics_process(delta):
+	if not GameSettings.deterministic_sim:
+		return
+	_entity_simulation_tick(delta)
+
+func _entity_simulation_tick(delta):
 	if health <= 0:
 		return
 	if entity_type == 0 and regeneration_rate > 0:
@@ -310,7 +322,7 @@ func take_damage(amount: float, source = null):
 	var eff_armor: float = melee_armor
 	if source:
 		_last_damager = source
-		_last_damage_time = Time.get_ticks_msec() / 1000.0
+		_last_damage_time = SimTime.now_ms() / 1000.0
 		if source is Army:
 			_last_unit_attacker = source
 			_last_unit_attack_time = _last_damage_time
@@ -1002,8 +1014,8 @@ func _find_outside_spawn_pos() -> Vector3:
 	var required_clearance = 1.2
 
 	while attempts < max_attempts:
-		var angle = randf_range(0, TAU)
-		var dist = randf_range(search_radius, search_radius + 2.0)
+		var angle = SimRandom.randf_range(0, TAU)
+		var dist = SimRandom.randf_range(search_radius, search_radius + 2.0)
 		var test_pos = global_position + Vector3(cos(angle) * dist, 0, sin(angle) * dist)
 
 		var conflict = false

@@ -1,5 +1,6 @@
 class_name AIWaterCrossing
 extends RefCounted
+const SimTime = preload("res://scripts/core/SimTime.gd")
 
 # AI 渡水行为：
 # 1) 如果敌方城堡与己方城堡在陆地上不连通，先尝试在较窄的水面搭桥；
@@ -143,7 +144,7 @@ func _refresh_plan():
 	# 岸点可能在几处候选之间来回跳，运载船永远开不到停泊点，也就不会上船。
 	# 例外：上岸点每分钟强制换一次，避免固定登陆场被对手守死。
 	if mode == MODE_TRANSPORT and _transport_shores_valid and (not _transports.is_empty() or _transport_state != STATE_IDLE):
-		if Time.get_ticks_msec() - _shores_set_at_ms < int(SHORES_REFRESH_SEC * 1000.0):
+		if SimTime.now_ms() - _shores_set_at_ms < int(SHORES_REFRESH_SEC * 1000.0):
 			return
 		# 到点：继续走下面的重算流程，用新的登陆/停泊岸点替换（船队状态不变）
 	var my_castle = ai.get_peer_castle(ai.my_peer_id)
@@ -168,7 +169,7 @@ func _refresh_plan():
 	# 连续失败 3 次后暂时走运载船，但不要永久放弃搭桥：
 	# 敌人退走、资源恢复或桥位空出来后，AI 仍应重新尝试。
 	if _bridge_fail_count >= 3:
-		if Time.get_ticks_msec() >= _bridge_retry_at_ms:
+		if SimTime.now_ms() >= _bridge_retry_at_ms:
 			_bridge_fail_count = 0
 		else:
 			plan = []
@@ -196,7 +197,7 @@ func _refresh_plan():
 		enemy_shore_water = shores["enemy_water"]
 		enemy_shore_land = shores["enemy_land"]
 		_transport_shores_valid = true
-		_shores_set_at_ms = Time.get_ticks_msec()
+		_shores_set_at_ms = SimTime.now_ms()
 		mode = MODE_TRANSPORT
 	else:
 		_stop_all()
@@ -415,7 +416,7 @@ func plan_bridge_to(target_pos: Vector3, from_pos: Vector3 = Vector3.ZERO) -> bo
 	# 正在组织登陆船队时不强行改道；等这波登陆结束再考虑为建造搭桥。
 	if mode == MODE_TRANSPORT:
 		return false
-	if _bridge_fail_count >= 3 and Time.get_ticks_msec() < _bridge_retry_at_ms:
+	if _bridge_fail_count >= 3 and SimTime.now_ms() < _bridge_retry_at_ms:
 		return false
 	var start_pos: Vector3 = from_pos if not from_pos.is_zero_approx() else Vector3.ZERO
 	if start_pos == Vector3.ZERO:
@@ -836,7 +837,7 @@ func _register_bridge_failure():
 	_bridge_fail_count += 1
 	if _bridge_fail_count >= 3:
 		# 45 秒后允许再次尝试，避免一次临时失败就让 AI 永远只会坐船
-		_bridge_retry_at_ms = Time.get_ticks_msec() + 45000
+		_bridge_retry_at_ms = SimTime.now_ms() + 45000
 
 func _recalculate_army_paths():
 	for e in battle.entities.get_children():

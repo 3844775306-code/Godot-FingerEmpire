@@ -587,7 +587,7 @@ func _play_step_sfx(terrain: int, overlay: int, vehicle: bool) -> void:
 	var pitch := 1.0
 	if terrain == 2 or overlay == 3:
 		key = "water_step"
-		pitch = randf_range(0.90, 1.0)
+		pitch = SimRandom.randf_range(0.90, 1.0)
 	elif terrain == 1:
 		pitch = 0.82
 	elif overlay == 2:
@@ -595,7 +595,7 @@ func _play_step_sfx(terrain: int, overlay: int, vehicle: bool) -> void:
 	elif overlay == 1:
 		pitch = 0.95
 	else:
-		pitch = randf_range(0.94, 1.06)
+		pitch = SimRandom.randf_range(0.94, 1.06)
 	if vehicle:
 		pitch *= 0.82
 	AudioManager.play_sfx_3d(key, global_position, _get_cam_pos(), pitch)
@@ -1571,6 +1571,11 @@ func _should_sink_death() -> bool:
 	return entity_id in [9, 13, 14, 39, 40]
 
 func _physics_process(delta):
+	if GameSettings.deterministic_sim:
+		var _bm_ready = _get_bm()
+		if _bm_ready != null and not _bm_ready.sim_ready:
+			return
+	super._physics_process(delta)
 	if health <= 0:
 		die_official_cleanup()
 		return
@@ -1593,6 +1598,10 @@ func _physics_process(delta):
 	# 的固定顿卡（600 实体时该步实体物理 30~50ms，其它步很轻）。
 	var _phys_lod: int = int(get_meta("_phys_lod", 1))
 	var _phys_phase: int = Engine.get_physics_frames() + int(get_instance_id() % 8)
+	if GameSettings.deterministic_sim:
+		# 指令回放不能依赖 instance_id / 屏幕 LOD：换成 spawn 顺序相位，并关闭 LOD。
+		_phys_lod = 1
+		_phys_phase = SimTime.frame() + int(get_meta("_sim_phase", 0))
 	if _phys_lod > 1:
 		if _phys_phase % _phys_lod != 0:
 			return
@@ -1852,7 +1861,7 @@ func _tick_legacy_action(delta: float, bm) -> void:
 		_legacy_action_timer = 0.0
 	else:
 		# 按 instance id 错开，避免几百个农民在同一帧集中跑建造/交付逻辑。
-		_legacy_action_timer = interval + float(get_instance_id() % 11) * 0.004
+		_legacy_action_timer = interval + float((int(get_meta("_sim_phase", 0)) if GameSettings.deterministic_sim else get_instance_id() % 11)) * 0.004
 	var action_delta: float = _legacy_action_accum
 	_legacy_action_accum = 0.0
 	_process_action(action_delta, bm)
@@ -1884,7 +1893,7 @@ func _is_target_marked_unreachable(target) -> bool:
 	var until: int = int(_unreachable_targets.get(tid, 0))
 	if until <= 0:
 		return false
-	if Time.get_ticks_msec() >= until:
+	if SimTime.now_ms() >= until:
 		_unreachable_targets.erase(tid)
 		return false
 	return true
@@ -1892,7 +1901,7 @@ func _is_target_marked_unreachable(target) -> bool:
 func _mark_target_unreachable(target) -> void:
 	if target == null or not is_instance_valid(target) or not (target is GameEntity):
 		return
-	_unreachable_targets[target.get_instance_id()] = Time.get_ticks_msec() + UNREACHABLE_TARGET_MEMORY_MS
+	_unreachable_targets[target.get_instance_id()] = SimTime.now_ms() + UNREACHABLE_TARGET_MEMORY_MS
 
 # 资源点连续失败时逐步延长冷却：5s→10s→20s→40s→60s。
 # 5 秒太短时，采空基地里被水/墙隔开的最近资源会在记忆过期后又被选回来，
@@ -1904,7 +1913,7 @@ func _mark_resource_unreachable(target) -> void:
 	var count: int = int(_resource_fail_counts.get(tid, 0)) + 1
 	_resource_fail_counts[tid] = count
 	var ttl: int = UNREACHABLE_TARGET_MEMORY_MS * (1 << mini(count - 1, 4))
-	_unreachable_targets[tid] = Time.get_ticks_msec() + mini(ttl, 60000)
+	_unreachable_targets[tid] = SimTime.now_ms() + mini(ttl, 60000)
 
 func _clear_resource_unreachable(target) -> void:
 	if target == null or not is_instance_valid(target):
@@ -2141,7 +2150,7 @@ func _update_attack_target_progress(delta: float) -> bool:
 func _try_temporary_self_defense(bm: RTSBattleManager, old_target) -> bool:
 	if bm == null or old_target == null or not is_instance_valid(old_target):
 		return false
-	var now_ms: int = Time.get_ticks_msec()
+	var now_ms: int = SimTime.now_ms()
 	if now_ms < _self_defense_until_ms:
 		return false
 	var rescue = _find_combat_enemy(vision_range, false)
@@ -2194,7 +2203,7 @@ func _handle_unreachable_attack_target(bm: RTSBattleManager, preserve_attack_mov
 			current_target = old_target
 			_attack_watch_target_id = old_target.get_instance_id()
 			_attack_stall_time = 0.0
-			var now_ms: int = Time.get_ticks_msec()
+			var now_ms: int = SimTime.now_ms()
 			if _movement and now_ms >= _commanded_unreachable_retry_at_ms:
 				# 逐步重试寻路；失败期间绝不放掉手动锁定。
 				_commanded_unreachable_retry_at_ms = now_ms + 4000
@@ -2478,8 +2487,8 @@ func _process_combat_target_cleanup(delta, bm) -> void:
 				_target_lost_since_ms = 0
 				return
 			if _target_lost_since_ms == 0:
-				_target_lost_since_ms = Time.get_ticks_msec()
-			elif Time.get_ticks_msec() - _target_lost_since_ms >= TARGET_LOST_GRACE_MS:
+				_target_lost_since_ms = SimTime.now_ms()
+			elif SimTime.now_ms() - _target_lost_since_ms >= TARGET_LOST_GRACE_MS:
 				_on_combat_target_lost()
 		else:
 			_target_lost_since_ms = 0
@@ -2512,7 +2521,7 @@ func _process_combat_march(delta: float) -> void:
 		# 以前这里直接结束命令，表现为大部队走了两步就全部站住；现在保留任务并重试。
 		# 但目的地真被封死时必须设上限，否则会永久保持行军状态、一步不走。
 		# 用时间戳而不是累计 delta：失败标记只出现一帧，之后要等 0.75 秒重试。
-		var now_ms: int = Time.get_ticks_msec()
+		var now_ms: int = SimTime.now_ms()
 		if _march_path_fail_since_ms == 0:
 			_march_path_fail_since_ms = now_ms
 		elif now_ms - _march_path_fail_since_ms >= int(MARCH_PATH_FAIL_TIMEOUT * 1000.0):
@@ -2546,7 +2555,7 @@ func _process_combat_march(delta: float) -> void:
 		# 现在先量一下还差多远：确实没到，就改打挡路的建筑/城墙，并记下标记让 AI 重新派单。
 		var gap: float = global_position.distance_to(combat_destination)
 		if gap > attack_range + 3.0:
-			set_meta("ai_stalled_attack", Time.get_ticks_msec())
+			set_meta("ai_stalled_attack", SimTime.now_ms())
 			var bm_now = _get_bm()
 			var fallback = _find_attack_fallback_building(bm_now) if bm_now != null else null
 			if fallback != null and is_instance_valid(fallback) and _can_attack_target(fallback):
@@ -3086,7 +3095,7 @@ func _process_action(delta, bm):
 			# 普通移动失败不要立刻清命令：A* 可能只因这一帧预算/临时挡路失败。
 			# 先保留 MOVING 状态并低频重试，给桥/浅滩/绕行路径一个恢复窗口；
 			# 持续无路（约 4 秒）后才真正取消，避免“贴到水边/山脚就发呆”。
-			var move_fail_now: int = Time.get_ticks_msec()
+			var move_fail_now: int = SimTime.now_ms()
 			if _ground_move_fail_since_ms == 0:
 				_ground_move_fail_since_ms = move_fail_now
 			if move_fail_now - _ground_move_fail_since_ms < int(GROUND_MOVE_FAIL_TIMEOUT * 1000.0):
@@ -3663,7 +3672,7 @@ func _attack_tick(target, delta, bm) -> void:
 			stride = 3
 		elif total > 420:
 			stride = 2
-	if stride > 1 and (Engine.get_physics_frames() + get_instance_id()) % stride != 0:
+	if stride > 1 and (SimTime.frame() + (int(get_meta("_sim_phase", 0)) if GameSettings.deterministic_sim else get_instance_id())) % stride != 0:
 		return
 	_attack(target, delta * stride)
 
@@ -3844,8 +3853,8 @@ func _attack(target, delta):
 			if entity_id == 17 or entity_id == 59:
 				var tpos = target.global_position
 				# 巨型投石机50%概率打偏；F7 望山定距降低散布（accuracy_mult < 1 更准）
-				if entity_id == 59 and randf() < 0.5 * accuracy_mult:
-					var miss_offset = Vector3(randf_range(-attack_range, attack_range), 0, randf_range(-attack_range, attack_range)) * accuracy_mult
+				if entity_id == 59 and SimRandom.randf() < 0.5 * accuracy_mult:
+					var miss_offset = Vector3(SimRandom.randf_range(-attack_range, attack_range), 0, SimRandom.randf_range(-attack_range, attack_range)) * accuracy_mult
 					tpos += miss_offset
 				bullet.target_pos = tpos
 			else:
@@ -4155,7 +4164,7 @@ func _tick_support_aura(delta: float, bm) -> void:
 	if radius <= 0.0 or amount <= 0.0:
 		return
 	bm._ensure_cache_fresh()
-	var frame := Engine.get_physics_frames()
+	var frame := SimTime.frame()
 	for e in bm._armies:
 		if e == self or not is_instance_valid(e) or e.health <= 0:
 			continue
@@ -4252,7 +4261,7 @@ func _abandon_delivery_target() -> void:
 	_deliver_total_time = 0.0
 	if delivery_target != null and is_instance_valid(delivery_target):
 		_delivery_failed_targets[delivery_target.get_instance_id()] = \
-				Time.get_ticks_msec() + DELIVERY_FAILED_MEMORY_MS
+				SimTime.now_ms() + DELIVERY_FAILED_MEMORY_MS
 	delivery_target = null
 	current_target = null
 	if not _return_to_deliver():
@@ -4267,7 +4276,7 @@ func find_delivery_point() -> Building:
 	# 农民每次回城交付都会调用；优先使用 battle 的 Building 缓存，避免全实体扫描
 	var bm = _get_bm()
 	var candidates = bm._buildings if bm else get_tree().get_nodes_in_group("entities")
-	var now_ms: int = Time.get_ticks_msec()
+	var now_ms: int = SimTime.now_ms()
 	for key in _delivery_failed_targets.keys():
 		if int(_delivery_failed_targets[key]) <= now_ms:
 			_delivery_failed_targets.erase(key)
@@ -4300,7 +4309,7 @@ func _find_nearest_resource():
 				and bm.is_quartermaster_enabled_for(int(owner_peer_id), int(team)):
 			return
 		# 附近没有资源时不要每 0.3 秒反复扫一遍大范围；短暂节流即可。
-		var now_ms: int = Time.get_ticks_msec()
+		var now_ms: int = SimTime.now_ms()
 		if now_ms < _gather_search_retry_ms:
 			return
 		var best = _pick_gather_resource(bm, search_r)
@@ -5882,7 +5891,7 @@ func _update_animal_wander(delta: float) -> void:
 	to_target.y = 0.0
 	if to_target.length() <= ANIMAL_ARRIVE_DIST:
 		_animal_has_target = false
-		_animal_pause = randf_range(ANIMAL_PAUSE_MIN, ANIMAL_PAUSE_MAX)
+		_animal_pause = SimRandom.randf_range(ANIMAL_PAUSE_MIN, ANIMAL_PAUSE_MAX)
 		_animal_moving = false
 		return
 
@@ -5891,7 +5900,7 @@ func _update_animal_wander(delta: float) -> void:
 	if not _animal_can_stand_at(next_pos):
 		# 前方是水/岸，放弃这个目标，停一下再换一个
 		_animal_has_target = false
-		_animal_pause = randf_range(1.5, 3.0)
+		_animal_pause = SimRandom.randf_range(1.5, 3.0)
 		_animal_moving = false
 		return
 
@@ -5904,9 +5913,9 @@ func _update_animal_wander(delta: float) -> void:
 # 在离家半径内均匀撒点找一个能站的位置；最多试 8 次，全失败就先歇一下
 func _pick_animal_wander_target() -> bool:
 	for i in range(8):
-		var ang: float = randf() * TAU
+		var ang: float = SimRandom.randf() * TAU
 		# 至少走 ANIMAL_MIN_WALK_DIST，避免频繁选到脚边目标导致一走一停
-		var dist: float = ANIMAL_MIN_WALK_DIST + sqrt(randf()) * (ANIMAL_WANDER_RADIUS - ANIMAL_MIN_WALK_DIST)
+		var dist: float = ANIMAL_MIN_WALK_DIST + sqrt(SimRandom.randf()) * (ANIMAL_WANDER_RADIUS - ANIMAL_MIN_WALK_DIST)
 		var cand: Vector3 = _animal_home + Vector3(cos(ang) * dist, 0.0, sin(ang) * dist)
 		if not _animal_can_stand_at(cand):
 			continue
@@ -5973,7 +5982,7 @@ func _animal_separate(delta: float) -> void:
 		if dd >= min_d:
 			continue
 		if dd < 0.001:
-			off = Vector3(randf_range(-1.0, 1.0), 0.0, randf_range(-1.0, 1.0))
+			off = Vector3(SimRandom.randf_range(-1.0, 1.0), 0.0, SimRandom.randf_range(-1.0, 1.0))
 			dd = maxf(off.length(), 0.001)
 		push += off.normalized() * (min_d - dd)
 	if push.length_squared() < 0.0004:
@@ -6002,7 +6011,7 @@ func _spawn_baby_animal():
 	if not bm: return
 	var cfg = EntityDatabase.get_config(entity_id)
 	if cfg.is_empty(): return
-	var baby = bm.spawn_entity(cfg, team, global_position + Vector3(randf_range(-3,3), 0, randf_range(-3,3)), 1)
+	var baby = bm.spawn_entity(cfg, team, global_position + Vector3(SimRandom.randf_range(-3,3), 0, SimRandom.randf_range(-3,3)), 1)
 	if baby != null and is_instance_valid(baby) and baby is Army:
 		baby.level = 1
 		baby._animal_grow_timer = 20.0
@@ -6338,7 +6347,7 @@ func _on_soldier_garrison_building_died(my_id: int):
 	var bm = _get_bm()
 	var map = bm.get_node_or_null("Map") if bm else null
 	for _attempt in range(20):
-		var angle = randf() * TAU
+		var angle = SimRandom.randf() * TAU
 		var pos = global_position + Vector3(cos(angle) * 2, 0, sin(angle) * 2)
 		if map and map.has_method("get_terrain_at"):
 			if map.get_terrain_at(pos) == 0:

@@ -1,4 +1,5 @@
 extends Node
+const SimRandom = preload("res://scripts/core/SimRandom.gd")
 
 static var MAP_SIZE: int = 100
 const GRID_SIZE = 1.0
@@ -47,7 +48,7 @@ static var _nation_colors: Dictionary = {}
 # 每局初始化时调用一次：随机打乱颜色池，再把前 N 个颜色分配给 N 个国家。
 static func randomize_nation_colors() -> void:
 	var pool: Array = COLOR_POOL.duplicate()
-	pool.shuffle()
+	SimRandom.shuffle(pool)
 	_nation_colors.clear()
 	for i in range(mini(pool.size(), Nation.size())):
 		_nation_colors[i] = pool[i]
@@ -170,7 +171,7 @@ const ENTITY_MODELS = {
 const CHARACTERS = ["character-female-a","character-female-b","character-female-c","character-female-d","character-female-e","character-female-f","character-male-a","character-male-b","character-male-c","character-male-d","character-male-e","character-male-f"]
 
 static func _random_character() -> String:
-	var c = CHARACTERS[randi() % CHARACTERS.size()]
+	var c = CHARACTERS[SimRandom.randi() % CHARACTERS.size()]
 	return "res://models/characters/%s.glb" % c
 
 # 人物类按职业分池。原来农民、商人、官员、僧侣/长老/宗师这 13 个 ID 全部从同一套
@@ -194,7 +195,7 @@ static func _character_pool_for(entity_id: int) -> Array:
 static func get_entity_model(entity_id: int, level: int = 1) -> String:
 	var pool := _character_pool_for(entity_id)
 	if not pool.is_empty():
-		return "res://models/characters/%s.glb" % pool[randi() % pool.size()]
+		return "res://models/characters/%s.glb" % pool[SimRandom.randi() % pool.size()]
 	if entity_id == 1:
 		return "res://models/town/tree-high-round.glb" if level >= 5 else ("res://models/town/tree-high.glb" if level >= 3 else "res://models/town/tree.glb")
 	if entity_id == 0:

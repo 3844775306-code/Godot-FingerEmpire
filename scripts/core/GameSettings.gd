@@ -79,6 +79,16 @@ static func default_camera_zoom_mult() -> float:
 
 var post_game_data: Dictionary = {}  # {power_history, player_is_blue} for results screen
 
+# ==================== 录像模式 / 确定性模拟 ====================
+# snapshot = 现有快照录像；command = 严格指令回放（固定 60Hz + 种子随机 + 命令重演）
+var replay_mode: String = "snapshot"
+# 指令回放用的模拟种子。0 表示本局开始时自动生成。
+var sim_seed: int = 0
+# 由指令回放场景设置：本次对局是重演，不记录、不响应玩家输入。
+var command_replay: bool = false
+# 指令录像正在录制：强制固定步长/固定随机源。
+var deterministic_sim: bool = false
+
 # ==================== 战报接收筛选 ====================
 # 战报类型。建造 / 升级 / 生产 / 科研需要按国家过滤，
 # 战斗、外交、经济这类与自己直接相关的消息始终接收。
