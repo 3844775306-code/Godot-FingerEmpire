@@ -14,6 +14,7 @@ const AIWorkerDirectorScript = preload("res://scripts/ai/AIWorkerDirector.gd")
 const AIConfigScript = preload("res://scripts/ai/core/AIConfig.gd")
 const AIClockScript = preload("res://scripts/ai/core/AIClock.gd")
 const AITraceScript = preload("res://scripts/ai/core/AITrace.gd")
+const AITickPipelineScript = preload("res://scripts/ai/core/AITickPipeline.gd")
 const AIContextScript = preload("res://scripts/ai/world/AIContext.gd")
 const AIPortsScript = preload("res://scripts/ai/ports/AIPorts.gd")
 const AISituationScript = preload("res://scripts/ai/world/AISituation.gd")
@@ -233,6 +234,14 @@ var _worker_claim_skips: int = 0
 var _director_defend_actions: int = 0
 # A0：决策轮序号，用于把同一条指令的意图/规则/结果串起来。
 var _decide_seq_no: int = 0
+# A6：决策阶段名与顺序的唯一事实来源（数值 step 只用于内部推进）。
+var _pipeline = AITickPipelineScript.new()
+const DECIDE_STAGE_NAMES: Array = [
+	"limits", "clear_targets", "visibility", "scout", "primary_enemy",
+	"pressure_house_military", "age_upgrade", "relieve_diplo", "defense",
+	"wall_garrison", "phase_state", "phase_transition", "wall_planner",
+	"retask_idle", "situation_naval",
+]
 # A0 收尾：上一次生产被拒的具体原因（no_cost/locked/cap/no_merchant/no_queue），供追踪与调试面板读取。
 var _last_produce_reject: String = ""
 var _situation_checks: int = 0
@@ -1952,6 +1961,9 @@ func _ready():
 	_ai_clock.add("upgrade_cycle", 20.0)
 	_ai_clock.add("defense_gap", DEFENSE_CHECK_INTERVAL)
 	_situation = AISituationScript.new()
+	_pipeline.register(DECIDE_STAGE_NAMES)
+	if _pipeline.size() != DECIDE_LAST_STEP + 1:
+		push_error("[PIPELINE] 阶段数与 DECIDE_LAST_STEP 不一致: %d vs %d" % [_pipeline.size(), DECIDE_LAST_STEP + 1])
 	_context = AIContextScript.new()
 	# A3：执行层唯一写出口。
 	_ports = AIPortsScript.new()
@@ -2383,6 +2395,7 @@ func _begin_decide(interval: float, d: float) -> void:
 	_decide_running = true
 	_decide_cursor = 0
 	_decide_start_usec = Time.get_ticks_usec()
+	_pipeline.begin_round()
 	if _decide_step_usec.size() != DECIDE_LAST_STEP + 1:
 		_decide_step_usec.resize(DECIDE_LAST_STEP + 1)
 	_decide_step_usec.fill(0)
@@ -2394,7 +2407,9 @@ func _pump_decide() -> void:
 	while _decide_cursor <= DECIDE_LAST_STEP:
 		var step_start: int = Time.get_ticks_usec()
 		_run_decide_step(_decide_cursor)
-		_decide_step_usec[_decide_cursor] = int(_decide_step_usec[_decide_cursor]) + (Time.get_ticks_usec() - step_start)
+		var _step_usec: int = Time.get_ticks_usec() - step_start
+		_decide_step_usec[_decide_cursor] = int(_decide_step_usec[_decide_cursor]) + _step_usec
+		_pipeline.record(_decide_cursor, float(_step_usec) / 1000.0)
 		_decide_cursor += 1
 		if not GameSettings.deterministic_sim and Time.get_ticks_usec() - frame_start >= DECIDE_BUDGET_USEC:
 			break
@@ -2403,6 +2418,7 @@ func _pump_decide() -> void:
 
 func _finish_decide() -> void:
 	var total_ms: float = float(Time.get_ticks_usec() - _decide_start_usec) / 1000.0
+	_pipeline.end_round(total_ms)
 	_decide_running = false
 	_decide_cursor = 0
 	if GameSettings.deterministic_sim:
@@ -2428,7 +2444,7 @@ func _finish_decide() -> void:
 func _log_decide_profile(total_ms: float) -> void:
 	var parts: PackedStringArray = PackedStringArray()
 	for i in range(DECIDE_LAST_STEP + 1):
-		parts.append("%d=%.0f" % [i, float(_decide_step_usec[i]) / 1000.0])
+		parts.append("%s=%.0f" % [_pipeline.name_of(i), float(_decide_step_usec[i]) / 1000.0])
 	var f: FileAccess = FileAccess.open("user://ai_decide.log", FileAccess.READ_WRITE)
 	if f == null:
 		f = FileAccess.open("user://ai_decide.log", FileAccess.WRITE)
@@ -6536,4 +6552,5 @@ func get_situation_summary() -> Dictionary:
 	d["director_v2"] = _director_v2.debug_snapshot() if _director_v2 != null else {}
 	d["director_defend_actions"] = _director_defend_actions
 	d["context"] = _context.debug_snapshot() if _context != null else {}
+	d["pipeline"] = _pipeline.debug_snapshot()
 	return d

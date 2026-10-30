@@ -589,3 +589,33 @@ R4 从约 170 降到 92，主要是 AIDefense（121→44）。
 **踩坑（第六个）**：删除 `if ai.has_method("_get_phase_weights"):` 这类守卫行时，**留下了缩进更深的子行**，形成非法缩进块（`var weight: float = 1.0` 后面直接跟三层 Tab 的赋值）。GDScript 解析报错。修法是保留一个 `if true:` 或整体降一级缩进——批量删守卫必须连带处理其子块缩进。
 
 **剩余**：R1 19 处（AIDefense 8、LadderSiege 7、WallPlanner 4）+ R2 5 处（WallPlanner 引用 AIDefense/AIWaterCrossing 类型）。R4 仍有 91 处 `battle.`（AIDefense 44、LadderSiege 20、WaterCrossing 19），这部分多与实体遍历相关，需要 AISituation 提供更完整的实体视图后再动。
+
+---
+
+## 21. A6 落地：决策阶段名与顺序显式化（2026-10-31 05:35）
+
+**新增 `scripts/ai/core/AITickPipeline.gd`**：把一轮决策的 15 个阶段做成**数据**而不是 match 里的数字。
+
+| step | 阶段名 | 内容 |
+|---|---|---|
+| 0 | limits | 资源/人口上限刷新 |
+| 1 | clear_targets | 清理失效目标 |
+| 2 | visibility | 可见性刷新 |
+| 3 | scout | 侦察 |
+| 4 | primary_enemy | 主敌解析 |
+| 5 | pressure_house_military | 资源压力 + 民居/军事产能配额 |
+| 6 | age_upgrade | 升时代兜底与触发 |
+| 7 | relieve_diplo | 泄压 + 外交 |
+| 8 | defense | 防守模块 |
+| 9 | wall_garrison | 上墙 + 箭塔驻军 |
+| 10 | phase_state | 阶段状态机主逻辑 |
+| 11 | phase_transition | DEVELOPMENT → ASSAULT 判定 |
+| 12 | wall_planner | 城墙规划 |
+| 13 | retask_idle | 前线闲兵补派 |
+| 14 | situation_naval | 快照刷新 + 渡海推进 |
+
+**接线**：`AI.gd` 用 `DECIDE_STAGE_NAMES` 常量注册（唯一事实来源），`_ready` 里校验 `阶段数 == DECIDE_LAST_STEP + 1`，不一致直接 `push_error`；每步耗时按名归档，profile 日志从 `0=3 1=1 …` 变成 `limits=3 visibility=1 …`，并新增 `slowest()` 直接指出瓶颈阶段；`get_situation_summary()` 暴露 `pipeline` 段（阶段名、次数、上轮总耗时、最慢阶段）。
+
+**验证**：1 分钟 3v3 HELL 跑通（`front 50% / idle 40% / engage 0%`，短局正常），脚本错误 0，无 `[PIPELINE]` 阶段数不一致告警。
+
+**下一步（A6 收尾）**：把 `_run_decide_step` 的 15 个分支各自抽成方法并注册为 Callable，由 `AITickPipeline.run(step)` 直接调度——那时"顺序"就完全由数据决定，新增阶段只要往数组里插一行。
