@@ -11,6 +11,8 @@ const AIWaterCrossingScript = preload("res://scripts/ai/AIWaterCrossing.gd")
 const AIWallPlannerScript = preload("res://scripts/ai/AIWallPlanner.gd")
 const AILadderSiegeScript = preload("res://scripts/ai/AILadderSiege.gd")
 const AIWorkerDirectorScript = preload("res://scripts/ai/AIWorkerDirector.gd")
+const AIConfigScript = preload("res://scripts/ai/core/AIConfig.gd")
+const AIClockScript = preload("res://scripts/ai/core/AIClock.gd")
 
 enum Phase { PRODUCTION, DEVELOPMENT, ASSAULT }
 enum LateTactic { NONE, HARASS, OVERWHELM, RAID, DEFEND }
@@ -44,11 +46,7 @@ var target_army_count: int = 7
 # 旧逻辑用「每个兵种 7 个」当军队目标；可生产兵种少时总兵力只能到 7~28。
 # 这里额外给一个总野战军目标，按当前可生产兵种均分，保证 3 倍速 5 分钟能到 50 左右。
 const TARGET_FIELD_ARMY_TOTAL: int = 50
-# 进入 ASSAULT 的总陆军门槛。旧版用 count_field_military() >= 30，但军队账本接管后
-# 单位普遍带角色（FIELD/STANDBY/HARASS/守军），field 计数被扣到个位数，永远进不了 ASSAULT。
-# 改为总陆军数（含守军/墙守/游击）。实测 3v3 HELL：总陆军 14 约在 t≈8~9 分钟出现，
-# 18 要到 12 分钟；取 14 让 ASSAULT 在常规对局中段真正发生。
-const ASSAULT_LAND_ARMY_THRESHOLD: int = 14
+# ASSAULT 门槛已收敛到 AIConfig（scripts/ai/core/AIConfig.gd），避免魔法数字散落。
 # 贸易车只跟随这四种商人；AI 生产贸易车时数量必须小于商人数量，避免刷出一堆闲置车
 const TRADE_CART_ID: int = 6
 # 官员/商人由各自的生产逻辑管理（官员一栋建筑只能一个），
@@ -212,6 +210,8 @@ const WALL_GUARD_POS_META: String = "ai_wall_guard_pos"
 const WALL_GUARD_SMALL_BODY: float = 0.5
 var _wall_deploy_timer: float = 0.0
 var _retask_timer: float = 0.0
+# P1：统一节拍器（见 scripts/ai/core/AIClock.gd）。目前接管 retask，其余计时器后续逐步迁入。
+var _ai_clock = null
 # 防御建筑驻军：AI 会把部分闲置士兵/农民送进箭塔、炮塔和城堡，
 # 让它们吃到多子弹齐射加成，而不是只在塔外站着。
 const GARRISON_CHECK_INTERVAL: float = 4.0
@@ -1880,6 +1880,9 @@ func _ready():
 	_ladder_siege = AILadderSiegeScript.new(self)
 	_worker_director = AIWorkerDirectorScript.new()
 	_worker_director.setup(self)
+	# P1：统一节拍器；目前接管 retask，其余计时器后续逐步迁入。
+	_ai_clock = AIClockScript.new()
+	_ai_clock.add("retask", RETASK_IDLE_INTERVAL)
 
 # 后期实体数越多，AI 的周期性全量扫描越贵；返回统一的降频倍率。
 func _late_game_scale() -> float:
@@ -2342,6 +2345,8 @@ func _run_decide_step(step: int) -> void:
 		return
 	match step:
 		0:
+			if _ai_clock != null:
+				_ai_clock.advance(_last_delta)
 			if my_peer_id != -1 and battle.has_method("update_player_limits"):
 				battle.update_player_limits(my_peer_id)
 				battle.update_player_population(my_peer_id)
@@ -2402,7 +2407,7 @@ func _run_decide_step(step: int) -> void:
 				# 曾经用"可出击野战军"判断，但军队调度接管后单位带角色，field 计数被扣空，
 				# ASSAULT 实际永远不触发（自对弈基线 t=480 仍停在 DEVELOPMENT）。
 				# 改为总陆军数（含守军/墙守/游击），阈值见 ASSAULT_LAND_ARMY_THRESHOLD。
-				if count_land_army() >= ASSAULT_LAND_ARMY_THRESHOLD:
+				if count_land_army() >= AIConfigScript.ASSAULT_LAND_ARMY_THRESHOLD:
 					phase = Phase.ASSAULT
 		12:
 			if _defense != null:
@@ -2412,9 +2417,8 @@ func _run_decide_step(step: int) -> void:
 		13:
 			# 前线闲兵补派：attack/attack_move 结束后（或被墙挡住停下）没人重新派单，
 			# 这些单位就长期待命。实测待命兵 45% 停在离家 25 米内、身边全有敌人。
-			_retask_timer -= _last_delta
-			if _retask_timer <= 0.0:
-				_retask_timer = RETASK_IDLE_INTERVAL
+			# 计时已迁到 AIClock（P1），行为与旧的 _retask_timer 一致。
+			if _ai_clock != null and _ai_clock.due("retask"):
 				_retask_idle_front_units()
 		14:
 			if _water_crossing:

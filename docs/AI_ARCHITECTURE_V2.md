@@ -289,3 +289,19 @@ AIClock.fast (4Hz)
 | 依据 | 自对弈基线 `docs/ai-analysis/selfplay/` | 修复后对照 `docs/ai-analysis/selfplay/after_phase_fix/` |
 
 阈值定 14 的实测依据：总陆军 14 在 t≈8~9 分钟出现、18 要到 12 分钟、21 到 12 分钟仍未普及；取 14 保证 ASSAULT 在常规对局中段真正发生。
+
+### 11.2 P1 基础设施已落地（第一批）
+
+| 模块 | 文件 | 状态 |
+|------|------|------|
+| `AIClock` | `scripts/ai/core/AIClock.gd` | 已接管 `retask` 计时器（行为等价：初始 0 首轮即触发）；其余 20 余个计时器待逐步迁入 |
+| `AIRng` | `scripts/ai/core/AIRng.gd` | 已就绪：确定性模式走独立流，非确定性模式降级全局 RNG（保证改造期行为不变）；AI 内的 `randi/randf_range` 替换待逐点进行 |
+| `AIEvents` | `scripts/ai/core/AIEvents.gd` | 容器与事件常量已就绪；接入 battle 信号属于 P2（世界模型） |
+| `AIConfig` | `scripts/ai/core/AIConfig.gd` | 已接管 `ASSAULT_LAND_ARMY_THRESHOLD`、决策预算/步数、难度思考间隔、农民目标数 |
+
+接入方式：`AI.gd` 顶部 `preload`（与项目现有风格一致，避免依赖编辑器生成的 global class 缓存）。
+
+剩余 P1 工作：
+1. `AIClock` 替换其余散落计时器（1s/2s/3s/5s/10s…），并给每个 key 配相位偏移削峰；
+2. `AIRng` 替换 AI 决策中的全部全局随机点（含 `AILadderSiege` / `AIWaterCrossing`）；
+3. `OnlineBattleManager` 建局 RNG（当前 7 处 `randi/randf_range`）迁到 `SimRandom`/`AIRng`，并保证服务端种子随地图数据下发——此项需单独验证联机一致性，暂未动。
