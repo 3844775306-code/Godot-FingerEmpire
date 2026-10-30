@@ -4,8 +4,9 @@ class_name ReplayRecorder
 const ReplayStoreScript = preload("res://scripts/replay/ReplayStore.gd")
 const AppVersionScript = preload("res://scripts/core/AppVersion.gd")
 
-# 每秒 2.5 帧足够还原移动轨迹，回放端再做插值；文件体积也远小于逐帧。
+# 每秒 2.5 次采样；普通帧只记录变化实体，每 15 秒补一个完整关键帧。
 const CAPTURE_INTERVAL: float = 0.4
+const KEYFRAME_INTERVAL: float = 15.0
 
 var _manager: Node = null
 var _header: Dictionary = {}
@@ -14,6 +15,9 @@ var _elapsed: float = 0.0
 var _accum: float = 0.0
 var _active: bool = false
 var _saved: bool = false
+var _last_snapshot: Dictionary = {}
+var _last_static: Dictionary = {}
+var _last_keyframe_time: float = -99999.0
 
 func start(manager: Node) -> void:
 	if _active:
@@ -22,8 +26,9 @@ func start(manager: Node) -> void:
 	_active = true
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	_header = {
-		"version": 1,
+		"version": 2,
 		"interval": CAPTURE_INTERVAL,
+		"keyframe_interval": KEYFRAME_INTERVAL,
 		"duration": 0.0,
 		"meta": _build_meta(),
 		"map": _capture_map(),
@@ -34,8 +39,9 @@ func finish(reason: String = "对局结束") -> void:
 	if not _active:
 		return
 	_active = false
+	# 最后一帧强制完整快照，确保回放能定位到终局画面。
 	if is_inside_tree():
-		_capture_frame()
+		_capture_frame(true)
 	if _saved or _frames.is_empty():
 		return
 	_saved = true
@@ -122,10 +128,10 @@ func _pack_overlay(grid, size: int) -> PackedByteArray:
 			i += 1
 	return packed
 
-func _capture_frame() -> void:
+func _capture_frame(force_keyframe: bool = false) -> void:
 	if not is_inside_tree():
 		return
-	var entities: Array = []
+	var current: Dictionary = {}
 	for e in get_tree().get_nodes_in_group("entities"):
 		if e == null or not is_instance_valid(e):
 			continue
@@ -151,5 +157,57 @@ func _capture_frame() -> void:
 			d["mo"] = [model.position.x, model.position.y, model.position.z]
 			d["mr"] = [model.rotation.x, model.rotation.y, model.rotation.z]
 			d["ms"] = [model.scale.x, model.scale.y, model.scale.z]
-		entities.append(d)
-	_frames.append({"t": snappedf(_elapsed, 0.01), "e": entities})
+		current[int(d["i"])] = d
+
+	var keyframe := force_keyframe or _frames.is_empty() or _elapsed - _last_keyframe_time >= KEYFRAME_INTERVAL
+	var changed: Array = []
+	var current_static: Dictionary = {}
+	for id in current:
+		var d: Dictionary = current[id]
+		var stat := _static_of(d)
+		current_static[id] = stat
+		var new_id := not _last_static.has(id)
+		var stat_changed := new_id or _static_changed(_last_static[id], stat)
+		var moved := keyframe or new_id or _snapshot_moved(_last_snapshot.get(id, {}), d) or stat_changed
+		if not moved:
+			continue
+		if keyframe:
+			changed.append(d.duplicate())
+			continue
+		var entry := {"i": id, "p": d["p"], "r": d["r"]}
+		if stat_changed:
+			entry["d"] = stat
+		changed.append(entry)
+	var removed: Array = []
+	for id in _last_snapshot:
+		if not current.has(id):
+			removed.append(id)
+	_last_snapshot = current
+	_last_static = current_static
+	if not keyframe and changed.is_empty() and removed.is_empty():
+		return
+	var frame := {"t": snappedf(_elapsed, 0.01)}
+	if keyframe:
+		frame["k"] = true
+		_last_keyframe_time = _elapsed
+	if not changed.is_empty():
+		frame["e"] = changed
+	if not removed.is_empty():
+		frame["r"] = removed
+	_frames.append(frame)
+
+func _static_of(d: Dictionary) -> Dictionary:
+	var out := {}
+	for key in ["e", "mp", "mo", "mr", "ms", "col", "lv", "c", "ruin"]:
+		if d.has(key):
+			out[key] = d[key]
+	return out
+
+func _static_changed(prev: Dictionary, cur: Dictionary) -> bool:
+	for key in ["e", "mp", "mo", "mr", "ms", "col", "lv", "c", "ruin"]:
+		if prev.get(key) != cur.get(key):
+			return true
+	return false
+
+func _snapshot_moved(prev: Dictionary, cur: Dictionary) -> bool:
+	return prev.get("p") != cur.get("p") or prev.get("r") != cur.get("r")

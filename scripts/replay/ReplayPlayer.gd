@@ -8,6 +8,7 @@ const WallTierVisual = preload("res://scripts/effects/WallTierVisual.gd")
 var _path: String = ""
 var _header: Dictionary = {}
 var _frames: Array = []
+var _format: int = 1
 var _duration: float = 0.0
 var _time: float = 0.0
 var _speed: float = 1.0
@@ -18,6 +19,7 @@ var _error: String = ""
 
 var _entities_root: Node3D = null
 var _entity_nodes: Dictionary = {}
+var _static_defs: Dictionary = {}
 var _camera: Camera3D = null
 
 var _play_btn: Button = null
@@ -42,6 +44,7 @@ func _ready() -> void:
 		return
 	_header = data.get("header", {})
 	_frames = data.get("frames", [])
+	_format = int(_header.get("version", 1))
 	if _frames.is_empty():
 		_error = "录像里没有可回放的帧。"
 		_build_ui()
@@ -242,9 +245,52 @@ func _update_frame_for_time() -> void:
 		idx += 1
 	if idx == _last_frame_idx:
 		return
+	if _format >= 2:
+		if _snap_next or _last_frame_idx < 0 or idx < _last_frame_idx:
+			_rebuild_v2(idx)
+		else:
+			for i in range(_last_frame_idx + 1, idx + 1):
+				_apply_v2_frame(_frames[i], false)
+		_last_frame_idx = idx
+		_snap_next = false
+		return
 	_last_frame_idx = idx
 	_apply_frame(_frames[idx], _snap_next)
 	_snap_next = false
+
+func _rebuild_v2(target_idx: int) -> void:
+	_clear_entities()
+	var key_idx := target_idx
+	while key_idx > 0 and not bool(_frames[key_idx].get("k", false)):
+		key_idx -= 1
+	for i in range(key_idx, target_idx + 1):
+		_apply_v2_frame(_frames[i], true)
+
+func _clear_entities() -> void:
+	for id in _entity_nodes.keys():
+		var slot: Dictionary = _entity_nodes[id]
+		var node: Node3D = slot.get("node")
+		if is_instance_valid(node):
+			node.queue_free()
+	_entity_nodes.clear()
+	_static_defs.clear()
+
+func _apply_v2_frame(frame: Dictionary, snap: bool) -> void:
+	var keyframe := bool(frame.get("k", false))
+	var seen: Dictionary = {}
+	for d in frame.get("e", []):
+		if not (d is Dictionary):
+			continue
+		var id := int(d.get("i", 0))
+		if id == 0:
+			continue
+		seen[id] = true
+		_apply_entity(d, snap)
+	if keyframe:
+		_remove_absent(seen)
+	else:
+		for id in frame.get("r", []):
+			_remove_entity(int(id))
 
 func _apply_frame(frame: Dictionary, snap: bool) -> void:
 	var seen: Dictionary = {}
@@ -255,49 +301,79 @@ func _apply_frame(frame: Dictionary, snap: bool) -> void:
 		if id == 0:
 			continue
 		seen[id] = true
-		var slot: Dictionary
-		if not _entity_nodes.has(id):
-			slot = _create_entity(d)
+		_apply_entity(d, snap)
+	_remove_absent(seen)
+
+func _apply_entity(d: Dictionary, snap: bool) -> void:
+	var id := int(d.get("i", 0))
+	if d.get("d") is Dictionary:
+		_static_defs[id] = d["d"]
+	var merged: Dictionary = d
+	if not d.has("e"):
+		var base: Dictionary = _static_defs.get(id, {})
+		merged = base.duplicate()
+		merged["i"] = id
+		merged["p"] = d.get("p", [0, 0, 0])
+		merged["r"] = d.get("r", 0.0)
+	else:
+		_static_defs[id] = _static_of(d)
+	var slot: Dictionary
+	if not _entity_nodes.has(id):
+		slot = _create_entity(merged)
+		_entity_nodes[id] = slot
+	else:
+		slot = _entity_nodes[id]
+		var node: Node3D = slot["node"]
+		if not is_instance_valid(node):
+			_entity_nodes.erase(id)
+			slot = _create_entity(merged)
 			_entity_nodes[id] = slot
-		else:
-			slot = _entity_nodes[id]
-			var node: Node3D = slot["node"]
-			if not is_instance_valid(node):
-				_entity_nodes.erase(id)
-				slot = _create_entity(d)
-				_entity_nodes[id] = slot
-		var p: Array = d.get("p", [0, 0, 0])
-		slot["target"] = Vector3(float(p[0]), float(p[1]), float(p[2]))
-		slot["target_rot"] = float(d.get("r", 0.0))
-		var eid := int(d.get("e", 0))
-		var mp := String(d.get("mp", ""))
-		var old_mp := String(slot.get("model_path", ""))
-		if mp != "" and mp != old_mp:
-			var old_model: Node3D = slot.get("model")
-			if is_instance_valid(old_model):
-				old_model.queue_free()
-			slot["model"] = _make_model(slot["node"], d)
-			slot["model_path"] = mp
-		var model: Node3D = slot.get("model")
-		if is_instance_valid(model):
-			_apply_model_transform(model, d)
-		if eid == 27:
-			var col: Array = d.get("col", [0.7, 0.7, 0.7])
-			var color := Color(float(col[0]), float(col[1]), float(col[2]))
-			var ruin := bool(d.get("ruin", false))
-			WallTierVisual.apply(slot["node"], 2 if ruin else int(d.get("lv", 1)), color)
-		if snap:
-			var node2: Node3D = slot["node"]
-			node2.position = slot["target"]
-			node2.rotation.y = slot["target_rot"]
+	var p: Array = merged.get("p", [0, 0, 0])
+	slot["target"] = Vector3(float(p[0]), float(p[1]), float(p[2]))
+	slot["target_rot"] = float(merged.get("r", 0.0))
+	var eid := int(merged.get("e", 0))
+	var mp := String(merged.get("mp", ""))
+	var old_mp := String(slot.get("model_path", ""))
+	if mp != "" and mp != old_mp:
+		var old_model: Node3D = slot.get("model")
+		if is_instance_valid(old_model):
+			old_model.queue_free()
+		slot["model"] = _make_model(slot["node"], merged)
+		slot["model_path"] = mp
+	var model: Node3D = slot.get("model")
+	if is_instance_valid(model):
+		_apply_model_transform(model, merged)
+	if eid == 27:
+		var col: Array = merged.get("col", [0.7, 0.7, 0.7])
+		var color := Color(float(col[0]), float(col[1]), float(col[2]))
+		var ruin := bool(merged.get("ruin", false))
+		WallTierVisual.apply(slot["node"], 2 if ruin else int(merged.get("lv", 1)), color)
+	if snap:
+		var node2: Node3D = slot["node"]
+		node2.position = slot["target"]
+		node2.rotation.y = slot["target_rot"]
+
+func _remove_absent(seen: Dictionary) -> void:
 	for id in _entity_nodes.keys():
 		if seen.has(id):
 			continue
-		var old: Dictionary = _entity_nodes[id]
-		var old_node: Node3D = old["node"]
-		if is_instance_valid(old_node):
-			old_node.queue_free()
-		_entity_nodes.erase(id)
+		_remove_entity(int(id))
+
+func _remove_entity(id: int) -> void:
+	if not _entity_nodes.has(id):
+		return
+	var old: Dictionary = _entity_nodes[id]
+	var old_node: Node3D = old["node"]
+	if is_instance_valid(old_node):
+		old_node.queue_free()
+	_entity_nodes.erase(id)
+
+func _static_of(d: Dictionary) -> Dictionary:
+	var out := {}
+	for key in ["e", "mp", "mo", "mr", "ms", "col", "lv", "c", "ruin"]:
+		if d.has(key):
+			out[key] = d[key]
+	return out
 
 func _create_entity(d: Dictionary) -> Dictionary:
 	var root := Node3D.new()
