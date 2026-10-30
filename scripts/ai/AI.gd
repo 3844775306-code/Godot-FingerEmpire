@@ -1073,7 +1073,7 @@ func prebuild_campaign_defense(castle, threat_dir: Vector3) -> bool:
 	if battle == null or castle == null or not is_instance_valid(castle):
 		return false
 	if _defense == null:
-		_defense = AIDefenseScript.new(self)
+		_defense = AIDefenseScript.new(_context)
 	return _defense.prebuild_campaign_castle_ring(castle, threat_dir)
 
 # 每个 think 周期调用：更新探索记录，并给侦察兵分配下一个前沿目标。
@@ -1945,7 +1945,7 @@ func _ready():
 		_create_debug_panel()
 	# A6 收尾：上下文先于模块创建，模块可在构造时即拿到只读视图。
 	_context = AIContextScript.new()
-	_defense = AIDefenseScript.new(self, _context)
+	_defense = AIDefenseScript.new(_context)
 	_water_crossing = AIWaterCrossingScript.new(self)
 	_ladder_siege = AILadderSiegeScript.new(self)
 	_worker_director = AIWorkerDirectorScript.new()
@@ -2495,7 +2495,7 @@ func _run_decide_step(step: int) -> void:
 			_diplo_decide()
 		8:
 			if _defense == null:
-				_defense = AIDefenseScript.new(self)
+				_defense = AIDefenseScript.new(_context)
 			_defense.tick(_last_delta)
 		9:
 			# 守墙调度必须先于本帧的集结/主攻：新生产的远程兵在出生后的第一个

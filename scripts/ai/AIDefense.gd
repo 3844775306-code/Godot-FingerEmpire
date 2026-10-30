@@ -124,7 +124,6 @@ const WATCHTOWER_GAIN_MIN: float = 18.0
 # 不会像逐格扫描那样把防线规划拖慢。
 const WATCHTOWER_SAMPLE_STEP: int = 2
 
-var ai = null
 
 # ── 新架构第 1 阶段：只读上下文 + 威胁模型 ──
 # AIDefense 暂时保留旧公开字段做镜像，后续模块逐步改读 _threat_model.snapshot。
@@ -233,9 +232,13 @@ func set_ports(build_port, cmd_port) -> void:
 const ROLE_HOME_GUARD: int = 4
 const ROLE_RESOURCE_GUARD: int = 5
 
-func _init(owner_ai, ctx = null) -> void:
-	ai = owner_ai
+# 兼容字段：defense/ 子包与调试面板仍按 ai 取控制器，构造时由上下文回填。
+var ai = null
+
+func _init(ctx = null) -> void:
 	_ctx = ctx
+	if ctx != null and ctx.has_method("controller_ref"):
+		ai = ctx.controller_ref()
 	# P3.3：模块内计时器统一走 AIClock（按帧推进），不再各自维护浮点计时。
 	_clock = AIClockScript.new()
 	_clock.add("threat", THREAT_INTERVAL)
@@ -245,7 +248,7 @@ func _init(owner_ai, ctx = null) -> void:
 	_clock.add("guard", GUARD_INTERVAL)
 	_clock.add("defense_upgrade", DEFENSE_UPGRADE_INTERVAL, 4.0 / DEFENSE_UPGRADE_INTERVAL)
 	_clock.add("zone", RESOURCE_ZONE_INTERVAL)
-	_defense_context = DefenseContextScript.new(ai)
+	_defense_context = DefenseContextScript.new(_ctx.controller_ref())
 	_threat_model = DefenseThreatModelScript.new(_defense_context)
 	_defense_director = DefenseDirectorScript.new(_defense_context)
 	_defense_plan = DefensePlanScript.new()
@@ -256,7 +259,7 @@ func _init(owner_ai, ctx = null) -> void:
 # ═══════════════════════════════════════════════════════════════
 
 func tick(delta: float) -> void:
-	if ai == null:
+	if _ctx == null:
 		return
 	var b = _ctx.battle_ref()
 	if b == null or not is_instance_valid(b):
@@ -387,7 +390,7 @@ func _update_defense_plan_shadow(_castle, delta: float) -> void:
 	if snapshot.is_empty():
 		snapshot = get_threat_snapshot()
 	var now: float = 0.0
-	if ai != null and _ctx.battle_ref() != null:
+	if _ctx != null and _ctx.battle_ref() != null:
 		now = float(_ctx.game_time())
 	_defense_director.evaluate(snapshot, _wall_ring_target, now)
 	_defense_plan.rebuild(self, _defense_director, snapshot)
@@ -995,7 +998,7 @@ func _plan_fallback_wall_arc(castle, ring_index: int) -> bool:
 # 复用塔圈规划器保证墙线沿地形闭合；这里只把规划结果一次性落成建筑，不扣资源、
 # 不等农民施工，避免玩家前 2 分钟就看到一个没有外围工事的敌基地。
 func prebuild_campaign_castle_ring(castle, threat_dir: Vector3) -> bool:
-	if ai == null or castle == null or not is_instance_valid(castle):
+	if _ctx == null or castle == null or not is_instance_valid(castle):
 		return false
 	if bool(_ctx.meta("campaign_prebuilt_ring", false)):
 		return true
@@ -3154,7 +3157,7 @@ func _is_local_building_defender(u, now: float) -> bool:
 func _defense_mode_active() -> bool:
 	if threat_level >= 2:
 		return true
-	if ai != null and float(_ctx.game_time()) < _force_guard_until:
+	if _ctx != null and float(_ctx.game_time()) < _force_guard_until:
 		return true
 	if true:
 		return bool(_is_defending_v())

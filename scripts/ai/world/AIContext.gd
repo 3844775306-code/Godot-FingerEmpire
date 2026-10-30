@@ -279,3 +279,8 @@ func spawn_entity(config, team: int, pos, level: int = 1):
 
 func is_valid_ladder_position(pos, team: int) -> bool:
 	return bool(_ai.battle.is_valid_ladder_position(pos, team)) if _ai != null and _ai.battle != null else false
+
+# 过渡出口：仅给尚未迁移的 defense/ 子包（DefenseContext 仍按控制器取 battle）。
+# 新代码不得使用；子包迁移后删除。
+func controller_ref():
+	return _ai

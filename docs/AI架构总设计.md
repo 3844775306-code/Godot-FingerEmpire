@@ -686,3 +686,28 @@ powershell -NoProfile -ExecutionPolicy Bypass -File tools/ai_arch_check.ps1
 **踩坑（第八、九个）**：
 1. 把 `battle.xxx(` 换成 `_ctx.xxx(` 时，`ai.battle.xxx(` 里的子串同样被命中，产生 40 处 `ai._ctx.xxx()`（访问控制器上不存在的 `_ctx`）——**批量替换必须带词边界**。这已经是同一类坑的第三次。
 2. 转发签名必须照抄原方法：`_is_terrain_flat(pos, radius)` 被写成 `(gx: int, gy: int)`、`get_team_visible_mask` 返回 `PackedByteArray` 却被包成 `int`、`nearest_idle_builder` 需要 4 个参数却只声明 1 个 —— 三个都在运行期才爆。
+
+---
+
+## 24. R3 达成：四条硬规则全部清零（2026-10-31 07:05）
+
+**R1 = R2 = R3 = R4 = 0。**
+
+| 模块 | R1 | R2 | R3 | R4 |
+|---|---|---|---|---|
+| AIDefense | 0 | 0 | **0** | 0 |
+| AIWorkerDirector | 0 | 0 | 0 | 0 |
+| AIWaterCrossing | 0 | 0 | 0 | 0 |
+| AILadderSiege | 0 | 0 | 0 | 0 |
+| AIWallPlanner | 0 | 0 | 0 | 0 |
+
+**R3 怎么达成**：
+1. `AIDefense._init(ctx = null)` —— 构造只收只读上下文，不再收控制器，`AI.gd` 三处构造点统一传 `_context`；
+2. `_context` 的创建**提前到模块创建之前**，保证"构造即拿到上下文"；
+3. 遗留 `defense/` 子包（`DefenseContext` / `DefensePlan`）仍按 `defense.ai` 取控制器，通过 `AIContext.controller_ref()` 回填兼容字段 —— 这是**唯一**剩余的控制器暴露点，已在注释里标注"子包迁移后删除"。
+
+**验证**：2 分钟 3v3 HELL → `front 55.6% / idle 16.7% / engage 19.4%`，脚本错误 0。
+
+**踩坑（第十个）**：删掉 `ai` 字段后，`DefensePlan.gd:85` 仍在读 `defense.ai.battle`，运行期报 `Invalid access to property 'ai'`（31 条）。**删除字段前必须全仓库搜索该字段的读取点**，不能只看本文件。
+
+**当前架构状态一句话**：执行层 5 个模块只依赖 `AIContext`（读）+ 5 个 Port（写），对控制器与 `battle` 的直接依赖为 **0**；决策顺序由 `AITickPipeline` 的 15 个具名阶段定义；四条硬规则可由 `tools/ai_arch_check.ps1` 一键验证。**A0~A7 全部完成。**
