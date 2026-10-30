@@ -80,7 +80,7 @@ func _tick_active() -> void:
 func _try_start() -> void:
 	if not _can_try():
 		return
-	var castle = ai._get_attack_target_castle()
+	var castle = _ctx.attack_target_castle()
 	if castle == null or not is_instance_valid(castle) or castle.health <= 0:
 		return
 	var army_pos = _main_army_position(castle)
@@ -100,7 +100,7 @@ func _try_start() -> void:
 		var spot := _best_ladder_spot(wall, castle, army_pos)
 		if spot == Vector3.ZERO:
 			continue
-		if ai.build_ladder(spot):
+		if _ctx.build_ladder(spot):
 			_active_wall = wall
 			_active_ladder = _find_ladder_near(spot)
 			_breach_sent_ms = 0
@@ -115,7 +115,7 @@ func _can_try() -> bool:
 		return false
 	if battle.game_time < MIN_GAME_TIME:
 		return false
-	if ai.has_method("_is_defending") and _ctx.is_defending():
+	if _ctx.is_defending():
 		return false
 	if int(ai.current_tactic) == TACTIC_DEFEND:
 		return false
@@ -140,7 +140,7 @@ func _clear_active() -> void:
 
 func _field_unit_count() -> int:
 	var key: int = ai.my_peer_id if ai.my_peer_id != -1 else ai.my_team
-	return ai.count_field_military(key)
+	return _ctx.field_military_count(int(key) if typeof(key) == TYPE_INT else null)
 
 func _main_army_position(castle: Building) -> Vector3:
 	var best := Vector3.ZERO
@@ -245,7 +245,7 @@ func _find_ladder_near(pos: Vector3) -> Building:
 	return null
 
 func _send_breach() -> void:
-	var target = ai._get_attack_target_castle()
+	var target = _ctx.attack_target_castle()
 	var target_pos: Vector3 = _active_wall.global_position if target == null else target.global_position
 	if _active_ladder == null or not is_instance_valid(_active_ladder):
 		return
@@ -273,5 +273,5 @@ func set_context(c) -> void:
 
 func _count_field() -> int:
 	if _ctx != null:
-		return int(ai.count_field_military())
-	return int(ai.count_field_military()) if ai != null else 0
+		return _ctx.field_military_count()
+	return _ctx.field_military_count()

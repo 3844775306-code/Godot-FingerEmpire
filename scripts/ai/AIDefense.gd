@@ -992,7 +992,7 @@ func _plan_fallback_wall_arc(castle, ring_index: int) -> bool:
 func prebuild_campaign_castle_ring(castle, threat_dir: Vector3) -> bool:
 	if ai == null or castle == null or not is_instance_valid(castle):
 		return false
-	if bool(ai.get_meta("campaign_prebuilt_ring", false)):
+	if bool(_ctx.meta("campaign_prebuilt_ring", false)):
 		return true
 	var dir := Vector3(threat_dir.x, 0.0, threat_dir.z)
 	if dir.length_squared() < 0.0001:
@@ -1033,7 +1033,7 @@ func prebuild_campaign_castle_ring(castle, threat_dir: Vector3) -> bool:
 	_castle_ring_wall_count = wall_buildings.size()
 	# 预置圈不需要再让经济给“首圈施工”让路。
 	_first_ring_planned_at = -1.0
-	ai.set_meta("campaign_prebuilt_ring", true)
+	_ctx.set_meta_value("campaign_prebuilt_ring", true)
 	return true
 
 # 预置外围防线每次重试前清掉上一轮的墙位/塔位；保留 _defense_dir。
@@ -1232,7 +1232,7 @@ func _find_pass_line_spot(base: Vector3, perp: Vector3, lateral: float) -> Vecto
 		if not _is_valid_defense_ground(p, 1.0, true, false, false, true):
 			continue
 		# 直接用 AI 的实际建造校验，避免规划通过、建造时因为坡度/资源重叠反复失败。
-		if ai.has_method("_can_place_ai_building") and not _build_port.can_place(27, p):
+		if not _build_port.can_place(27, p):
 			continue
 		if _defense_slot_clear(p, 1.0, 27):
 			return p
@@ -1248,7 +1248,7 @@ func _count_clear_wall_spots(base: Vector3, dir: Vector3, perp: Vector3, width: 
 			var p: Vector3 = base + perp * lateral + dir * float(dd)
 			if not _is_valid_defense_ground(p, 1.0, true, false, false, true):
 				continue
-			if ai.has_method("_can_place_ai_building") and not _build_port.can_place(27, p):
+			if not _build_port.can_place(27, p):
 				continue
 			if _defense_slot_clear(p, 1.0, 27):
 				clear += 1
@@ -2850,7 +2850,7 @@ func _build_defense_step() -> void:
 			if max_rr > 0 and wall_positions.size() >= _ring_wall_budget(null, max_rr):
 				i += 1
 				continue
-		if not ai._ai_can_build(b_id):
+		if not _build_port.can_build(b_id):
 			break
 		# 塔是防守火力支柱，不能因为“给补兵预留”的保留金被卡住：
 		# 实测墙把资源花完后 _can_spend_building(25) 变 false，塔永远等不到钱。
@@ -3152,7 +3152,7 @@ func _defense_mode_active() -> bool:
 		return true
 	if ai != null and float(_ctx.game_time()) < _force_guard_until:
 		return true
-	if ai != null and ai.has_method("_is_defending"):
+	if true:
 		return bool(_is_defending_v())
 	return false
 
@@ -3178,7 +3178,7 @@ func _has_valid_walls() -> bool:
 func _reserve_ranged_for_wall(unit, walls_exist: bool) -> bool:
 	if not walls_exist or unit == null or not is_instance_valid(unit):
 		return false
-	if not ai.has_method("_is_ranged_wall_candidate") or not _ranged_wall_ok(unit):
+	if not _ranged_wall_ok(unit):
 		return false
 	return true
 
@@ -3858,7 +3858,7 @@ func _enemy_army_near(pos: Vector3, radius: float = -1.0) -> bool:
 	if radius < 0.0:
 		if _ctx != null:
 			return _ctx.enemy_army_within(pos, 10.0)
-		return ai._enemy_army_within(pos) if ai != null else false
+		return _ctx.enemy_army_within(pos, 10.0)
 	return _ctx.enemy_army_within(pos, radius)
 
 func _afford(id: int) -> bool:

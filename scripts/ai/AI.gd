@@ -2523,6 +2523,7 @@ func _run_decide_step(step: int) -> void:
 			if _defense != null:
 				if _wall_planner == null:
 					_wall_planner = AIWallPlannerScript.new(self, _defense)
+					_wall_planner.set_context(_context)
 				_wall_planner.tick(_last_delta)
 		13:
 			# 前线闲兵补派：attack/attack_move 结束后（或被墙挡住停下）没人重新派单，

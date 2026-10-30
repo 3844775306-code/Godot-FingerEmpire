@@ -37,7 +37,8 @@ foreach ($name in $modules.Keys) {
 	$lines = Get-Content $path -Encoding UTF8
 
 	$r1 = 0; $r1fb = 0; $r2 = 0; $r4 = 0
-	foreach ($ln in $lines) {
+	foreach ($raw in $lines) {
+		$ln = $raw -replace '#.*$', ''
 		if ($ln -match '\bai\.[A-Za-z_][A-Za-z0-9_]*\s*\(') {
 			$r1++
 			if ($ln -match '_ctx\s*!=\s*null\s*else') { $r1fb++ }

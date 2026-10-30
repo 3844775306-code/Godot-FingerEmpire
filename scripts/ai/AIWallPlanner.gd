@@ -18,6 +18,7 @@ var _anchor_cache: Dictionary = {}
 var _built_walls: Array = []
 var _built_grid: Dictionary = {}
 var _castle_pos: Vector3 = Vector3.ZERO
+var _ctx = null
 var _enemy_dir: Vector3 = Vector3.FORWARD
 
 func _init(ai_ref, defense_ref) -> void:
@@ -33,11 +34,11 @@ func tick(delta: float) -> void:
 	_timer = RANK_INTERVAL
 	if not bool(defense.defense_initialized):
 		return
-	var castle = ai.get_peer_castle(ai.my_peer_id)
+	var castle = _ctx.castle()
 	if not is_instance_valid(castle):
 		return
 	_castle_pos = castle.global_position
-	_enemy_dir = ai._get_enemy_army_direction(_castle_pos)
+	_enemy_dir = _ctx.enemy_army_direction(_castle_pos)
 	_enemy_dir.y = 0.0
 	if _enemy_dir.length_squared() < 0.0001:
 		_enemy_dir = Vector3.FORWARD
@@ -82,12 +83,12 @@ func tick(delta: float) -> void:
 func _refresh_built_walls() -> void:
 	_built_walls.clear()
 	_built_grid.clear()
-	for b in ai._cached_buildings():
+	for b in _ctx.cached_buildings():
 		if not is_instance_valid(b) or not (b is Building):
 			continue
 		if int(b.entity_id) != 27 or b.health <= 0:
 			continue
-		if not ai.entity_belongs_to_me(b):
+		if not _ctx.belongs_to_me(b):
 			continue
 		_built_walls.append(b)
 		_built_grid[ai.battle.world_to_grid(b.global_position)] = true
@@ -141,3 +142,6 @@ func _front_score(p: Vector3) -> float:
 	if to_p.length_squared() < 0.0001:
 		return 0.0
 	return clampf(to_p.normalized().dot(_enemy_dir), -1.0, 1.0)
+
+func set_context(c) -> void:
+	_ctx = c

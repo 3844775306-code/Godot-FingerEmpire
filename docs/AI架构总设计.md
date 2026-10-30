@@ -619,3 +619,33 @@ R4 从约 170 降到 92，主要是 AIDefense（121→44）。
 **验证**：1 分钟 3v3 HELL 跑通（`front 50% / idle 40% / engage 0%`，短局正常），脚本错误 0，无 `[PIPELINE]` 阶段数不一致告警。
 
 **下一步（A6 收尾）**：把 `_run_decide_step` 的 15 个分支各自抽成方法并注册为 Callable，由 `AITickPipeline.run(step)` 直接调度——那时"顺序"就完全由数据决定，新增阶段只要往数组里插一行。
+
+---
+
+## 22. A7 达成：R1 / R2 清零，架构约束可自动检查（2026-10-31 05:55）
+
+**执行层对控制器的直接调用（R1）与模块互相引用（R2）已全部清零。**
+
+| 模块 | R1 | R2 | R3 | R4 |
+|---|---|---|---|---|
+| AIDefense | **0** | **0** | 1 | 44 |
+| AIWorkerDirector | **0** | **0** | 0 | 2 |
+| AIWaterCrossing | **0** | **0** | 0 | 19 |
+| AILadderSiege | **0** | **0** | 0 | 20 |
+| AIWallPlanner | **0** | **0** | 0 | 6 |
+| **合计** | **0** | **0** | 1 | **91** |
+
+**收尾动作**：
+1. 最后一批读取改走上下文：`get_meta/set_meta`（战役预建圈标记）、`_ai_can_build`→`BuildPort.can_build`、`_is_ranged_wall_candidate`/`_is_defending` 守卫直接删除、`count_field_military`→`field_military_count(peer)`、`build_ladder`→`_ctx.build_ladder`、`get_peer_castle`/`_get_enemy_army_direction`/`_cached_buildings`/`entity_belongs_to_me`（WallPlanner）全部入上下文；
+2. `AIWallPlanner` 补 `set_context`，由 `AI.gd` 在构造后注入；
+3. **检查脚本修正**：R2 之前把注释里出现的模块名也算违规（5 处全是注释），现在先剥离 `#` 注释再匹配，结果 0。
+
+**验证**：2 分钟 3v3 HELL → `front 80.5% / idle 9.8% / engage 48.8%`，脚本错误 **0**（3 分钟同配置为 `79.8% / 6.1% / 48.5%`）。
+
+**如何持续守住**：
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/ai_arch_check.ps1
+```
+输出表 + 存档 `docs/ai-analysis/arch_check.json`。目标值：**R1 = 0、R2 = 0** 已达成；R3 剩 1（`AIDefense._init(owner_ai)` 构造签名待 A6 收尾一并改）；R4 剩 91 处 `battle.` 直接访问（实体遍历为主，需要 `AISituation` 提供更完整的实体视图）。
+
+**踩坑（第七个）**：`AIContext.field_military_count(key = "")` 把参数当字符串用，但底层 `count_field_military(peer: int)` 要的是 peer id，运行期报 `Invalid operands 'int' and 'String'`（每个 AI 一次，共 6 条）。**转发层的参数类型必须和真实签名一致**，不能凭方法名猜。

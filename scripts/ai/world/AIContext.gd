@@ -191,3 +191,26 @@ func find_best_resource_for_worker(w, weights = null) -> Variant:
 
 func attack_target_castle():
 	return _ai._get_attack_target_castle() if _ai != null else null
+
+func attack_target_castle_v():
+	return attack_target_castle()
+
+func field_military_count(peer = null) -> int:
+	if _ai == null:
+		return 0
+	if peer == null:
+		return int(_ai.count_field_military(_ai.my_peer_id))
+	return int(_ai.count_field_military(int(peer)))
+
+func enemy_army_direction(pos) -> Vector3:
+	return _ai._get_enemy_army_direction(pos) if _ai != null else Vector3.ZERO
+
+func meta(key: String, default = null):
+	return _ai.get_meta(key, default) if _ai != null else default
+
+func set_meta_value(key: String, value) -> void:
+	if _ai != null:
+		_ai.set_meta(key, value)
+
+func build_ladder(spot) -> bool:
+	return bool(_ai.build_ladder(spot)) if _ai != null else false
