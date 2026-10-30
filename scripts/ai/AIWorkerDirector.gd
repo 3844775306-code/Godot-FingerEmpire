@@ -118,7 +118,7 @@ func _try_train_worker(reason: String) -> bool:
 	if not ai._can_train_unit_with_queue():
 		_last_train_block = "population"
 		return false
-	ai.produce_unit(10)
+	ai.produce_unit(10, "worker.train_peasant")
 	_last_train_at = now
 	_last_train_block = "trained_" + reason
 	return true

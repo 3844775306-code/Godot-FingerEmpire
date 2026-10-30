@@ -13,6 +13,7 @@ const AILadderSiegeScript = preload("res://scripts/ai/AILadderSiege.gd")
 const AIWorkerDirectorScript = preload("res://scripts/ai/AIWorkerDirector.gd")
 const AIConfigScript = preload("res://scripts/ai/core/AIConfig.gd")
 const AIClockScript = preload("res://scripts/ai/core/AIClock.gd")
+const AITraceScript = preload("res://scripts/ai/core/AITrace.gd")
 const AISituationScript = preload("res://scripts/ai/world/AISituation.gd")
 const RoleLedgerScript = preload("res://scripts/ai/core/RoleLedger.gd")
 const AIDirectorScript = preload("res://scripts/ai/AIDirector.gd")
@@ -224,6 +225,8 @@ var _ledger_mismatch_total: int = 0
 var _ledger_conflicts: int = 0
 var _worker_claim_skips: int = 0
 var _director_defend_actions: int = 0
+# A0：决策轮序号，用于把同一条指令的意图/规则/结果串起来。
+var _decide_seq_no: int = 0
 var _situation_checks: int = 0
 var _situation_mismatch_total: int = 0
 # 防御建筑驻军：AI 会把部分闲置士兵/农民送进箭塔、炮塔和城堡，
@@ -1239,7 +1242,7 @@ func _try_produce_trebuchet() -> bool:
 		return false
 	if not can_afford(TREBUCHET_ID):
 		return false
-	if produce_unit(TREBUCHET_ID):
+	if produce_unit(TREBUCHET_ID, "military.trebuchet"):
 		_trebuchet_save_started = -1.0
 		return true
 	return false
@@ -1322,7 +1325,14 @@ func can_afford_upgrade(building_id: int) -> bool:
 	return false
 
 # ═══ Production ═══
-func produce_unit(unit_id: int) -> bool:
+func produce_unit(unit_id: int, trace_rule: String = "") -> bool:
+	var _trace_seq: int = AITraceScript.command("recruit", "produce_unit", {"unit": unit_id, "rule": trace_rule})
+	var _trace_ok: bool = _produce_unit_impl(unit_id)
+	AITraceScript.result(_trace_seq, _trace_ok, "" if _trace_ok else "rejected", {"unit": unit_id})
+	return _trace_ok
+
+# produce_unit 的实际实现（A0 起由带追踪的外层包住，所有生产入口仍然只走这一个漏斗）。
+func _produce_unit_impl(unit_id: int) -> bool:
 	if battle != null and battle.has_method("is_research_mode") and battle.is_research_mode():
 		if battle.has_method("is_unit_unlocked") and not battle.is_unit_unlocked(unit_id, my_peer_id, my_team):
 			return false
@@ -1917,6 +1927,9 @@ func _ready():
 	_ledger = RoleLedgerScript.new()
 	_director_v2 = AIDirectorScript.new()
 	_director_v2.setup(self)
+	# A0：--trace 打开决策链路追踪（默认关闭，关闭时零分配）。
+	if "--trace" in OS.get_cmdline_user_args():
+		AITraceScript.configure(true)
 
 # 后期实体数越多，AI 的周期性全量扫描越贵；返回统一的降频倍率。
 func _late_game_scale() -> float:
@@ -2198,7 +2211,7 @@ func _state_production(_delta):
 				if not _worker_director.ensure_worker_count() and can_afford_upgrade(20):
 					upgrade_building(20)
 			elif can_afford(10) and _can_train_unit():
-				produce_unit(10)
+				produce_unit(10, "worker.train_peasant")
 			elif can_afford_upgrade(20):
 				upgrade_building(20)
 		else:
@@ -2216,7 +2229,7 @@ func _state_production(_delta):
 				if build_building(23, cached_shipyard_pos):
 					built_shipyard_pos.append(cached_shipyard_pos)
 		if count_building(23) > 0 and count_unit(14) < 3 and can_afford(14) and _can_train_unit():
-			produce_unit(14)
+			produce_unit(14, "military.opening_infantry")
 		if warehouses < WAREHOUSE_MAX_COUNT and can_afford_building(22):
 			var castle = get_peer_castle(my_peer_id)
 			if castle:
@@ -2315,6 +2328,9 @@ func decide(_delta):
 		_run_decide_step(step)
 
 func _begin_decide(interval: float, d: float) -> void:
+	_decide_seq_no += 1
+	if AITraceScript.is_enabled():
+		AITraceScript.begin_round("p%d" % my_peer_id, _decide_seq_no, float(battle.game_time) if battle != null else 0.0)
 	# P3.0：默认沿用旧行为（单帧 delta）；开关打开后用真实轮间时间。
 	if USE_TRUE_ROUND_ELAPSED:
 		_last_delta = _elapsed_since_round
@@ -2854,7 +2870,7 @@ func _legacy_allocate_workers():
 	# 步兵 70 食物继续吃掉，形成“农民越多、兵越造不出”的死循环。
 	var can_add_worker: bool = not (_food_emergency() and workers.size() >= 8)
 	if workers.size() < desired_worker_count and can_add_worker and not _all_gather_resources_full():
-		if can_afford(10) and _can_train_unit(): produce_unit(10)
+		if can_afford(10) and _can_train_unit(): produce_unit(10, "worker.train_peasant")
 		var train_weights: Dictionary = _worker_resource_weights()
 		if not train_weights.is_empty():
 			for w in non_delivering:
@@ -3827,7 +3843,7 @@ func execute_raid():
 		special_uid = 11
 	var _raid_attempts = 0
 	while count_unit(special_uid) < RAID_MIN_SPECIAL_TROOPS and _raid_attempts < 10:
-		if can_afford(special_uid) and _can_train_unit(): produce_unit(special_uid)
+		if can_afford(special_uid) and _can_train_unit(): produce_unit(special_uid, "military.nation_special")
 		else: break
 		_raid_attempts += 1
 	var enemy_dir = _get_enemy_army_direction(enemy_pos)
@@ -4752,7 +4768,7 @@ func _train_overflow_units() -> void:
 			_last_spend_block = _afford_block_reason(u_id)
 			_last_spend_block_time = battle.game_time
 		while budget > 0 and count_unit(u_id) < cap and _can_train_unit_with_queue() and can_afford(u_id):
-			if not produce_unit(u_id):
+			if not produce_unit(u_id, "military.assault_recruit"):
 				break
 			budget -= 1
 
@@ -4798,7 +4814,7 @@ func _upgrade_any_affordable_building() -> bool:
 func _try_produce_merchants_or_officials() -> bool:
 	for mid in [51, 44, 45, 43]:
 		if count_unit(mid) < 1 and can_afford(mid) and _can_train_unit():
-			if produce_unit(mid): return true
+			if produce_unit(mid, "military.assault_recruit"): return true
 	if count_building(42) > 0:
 		var alv = _get_academy_lv()
 		for i in range(alv):
@@ -4810,7 +4826,7 @@ func _try_produce_merchants_or_officials() -> bool:
 				# 避免官员出生后就长期闲置。
 				continue
 			if can_afford(oid) and _can_train_unit():
-				if produce_unit(oid): return true
+				if produce_unit(oid, "military.assault_recruit"): return true
 	return false
 
 # 修道院生产僧侣/长老/宗师
@@ -4819,7 +4835,7 @@ func _try_produce_monks():
 	var monk_order = [55, 56, 57]  # 僧侣→长老→宗师
 	for mid in monk_order:
 		if count_unit(mid) < 2 and can_afford(mid) and _can_train_unit():
-			produce_unit(mid); return
+			produce_unit(mid, "military.assault_recruit"); return
 
 func _try_produce_scout() -> bool:
 	if battle == null:
@@ -4836,7 +4852,7 @@ func _try_produce_scout() -> bool:
 		return false
 	if not can_afford(SCOUT_ID):
 		return false
-	if not produce_unit(SCOUT_ID):
+	if not produce_unit(SCOUT_ID, "military.scout"):
 		# 生产队列满/建筑暂时不可用时不要每个 think 都重试。
 		_scout_next_produce_at = battle.game_time + SCOUT_RETRY_AFTER_DEATH
 		return false
@@ -4885,7 +4901,7 @@ func _emergency_army_stalled() -> bool:
 func _try_produce_emergency_defender() -> bool:
 	# 优先最便宜的步兵/弓箭手；骑兵和重装兵只在便宜兵不可训练时兜底。
 	for u_id in [11, 12, 35, 15]:
-		if _can_produce_unit(u_id) and can_afford(u_id) and produce_unit(u_id):
+		if _can_produce_unit(u_id) and can_afford(u_id) and produce_unit(u_id, "military.front_recruit"):
 			return true
 	return false
 
@@ -4921,7 +4937,7 @@ func _process_line_military():
 			# 普通情况每轮补 1 个；资源临界满仓时一次多排几个，尽快把收入转成兵力。
 			var trained: int = 0
 			while trained < train_budget and count_unit(u_id) < unit_target \
-					and _can_train_unit_with_queue() and can_afford(u_id) and produce_unit(u_id):
+					and _can_train_unit_with_queue() and can_afford(u_id) and produce_unit(u_id, "military.front_recruit"):
 				trained += 1
 
 # 把"打完仗就站着"的野战兵重新推上去：身边 40 米内有敌就直接锁敌，
@@ -5301,12 +5317,12 @@ func _process_line_5():
 		var military_water: bool = _shipyard_has_military_water(sy)
 		if military_water:
 			while warships < 2 and total_warships < army_target and can_afford(13) and _can_train_unit():
-				if not produce_unit(13):
+				if not produce_unit(13, "naval.ship"):
 					break
 				warships += 1
 				total_warships += 1
 			while gunboats < 2 and total_gunboats < army_target and can_afford(39) and _can_train_unit():
-				if not produce_unit(39):
+				if not produce_unit(39, "naval.ship"):
 					break
 				gunboats += 1
 				total_gunboats += 1
@@ -6387,6 +6403,8 @@ func _situation_shadow_tick() -> void:
 	var is_check: bool = gt - _situation_last_t >= SITUATION_CHECK_INTERVAL
 	# 可见性判定较贵（每敌人一次视野检查），只在低频对账轮开启。
 	_situation.refresh(self, is_check, is_check)
+	if AITraceScript.is_enabled():
+		AITraceScript.end_round()
 	var us: float = float(_situation.cost_usec)
 	_situation_usec_ema = us if _situation_usec_ema <= 0.0 else _situation_usec_ema * 0.9 + us * 0.1
 	if not is_check:
@@ -6412,6 +6430,9 @@ func _situation_shadow_tick() -> void:
 	# P3.2 影子 Director：同一份快照 + 同一本账算出「这一轮想做什么」，只观测不执行。
 	if _director_v2 != null:
 		_director_v2.tick(_situation, _ledger, gt)
+		if AITraceScript.is_enabled():
+			for _it in _director_v2.intents():
+				AITraceScript.intent(String(_it.get("kind", "")), int(_it.get("count", 0)), {"prio": int(_it.get("priority", 9))})
 		_director_apply_defend_intent(gt)
 
 # P3.1 第五步：账本已是唯一事实来源，这里做自检（不再和 _roles 对账）：

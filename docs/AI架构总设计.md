@@ -351,3 +351,29 @@ naval.cross_water           组织渡海
 ### 13.7 迁移插入点
 
 在 §9 的 A1 之前加 **A0：加 AITrace + 只覆盖"生产"这一条竖切路径**（`military.reinforce_gap` → `RecruitPort` → `battle.produce_unit`），跑通 13.4 的端到端链路，再按模块逐个接规则 ID。**先做一条能看的链路，比先做全量框架有效。**
+
+### 13.8 A0 竖切已落地（2026-10-31 02:15）
+
+**已实现**：`scripts/ai/core/AITrace.gd` + 生产漏斗挂点。
+
+1. `produce_unit(unit_id, trace_rule := "")` 成为唯一的带追踪漏斗——所有 17 个生产调用点都经它（实现体改名 `_produce_unit_impl`）；
+2. 14 个调用点已标注稳定规则 ID：`military.assault_recruit` / `military.front_recruit` / `worker.train_peasant` / `military.opening_infantry` / `military.nation_special` / `military.trebuchet` / `military.scout` / `naval.ship`；
+3. 每轮 `_begin_decide` 开轮、决策末轮 `end_round`；`AIDirector` 的意图每轮作为 `intent` 行写入；
+4. 命令行加 `--trace` 即开启，输出 `docs/ai-analysis/trace/trace.jsonl`（默认关闭，关闭时只多一次 bool 判断）；
+5. 建 `docs/ai-analysis/trace/.gdignore` 防止 Godot 导入，`*.jsonl` 加入 `.gitignore`。
+
+**首次实测**（3 分钟 3v3 HELL，种子 24680）：257 行 / 45KB，
+`command=167`（成功 92、被拒 75）、`intent=90`、**`unattributed=0`**（所有生产都有规则归属）。
+
+按规则分布：
+
+| 规则 | 成功 | 被拒 |
+|---|---|---|
+| `military.assault_recruit` | 14 | **75** |
+| `worker.train_peasant` | 46 | 0 |
+| `military.front_recruit` | 28 | 0 |
+| `military.scout` | 4 | 0 |
+
+**立刻暴露了一个真问题**：`assault_recruit` 有 **84%（75/89）的尝试被拒**——主攻集结时反复尝试造兵、反复失败。这正是做可追溯性的价值：以前这类"静默失败"只会拖慢节奏，没人能看见。
+
+**下一步（A0 收尾）**：给 `RecruitPort` 补细粒度拒绝原因（`no_gold` / `pop_full` / `queue_busy` / `no_building` / `locked`），把现在笼统的 `rejected` 拆开；再据此修 assault 集结的重复失败。
