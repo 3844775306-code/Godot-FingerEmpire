@@ -358,3 +358,16 @@ Server→client snapshots are delta-compressed arrays sent at ~10Hz. Compact for
 3. 若有可交付文件（文档、截图、表格等），用 `present` 出示文件卡片。
 
 > 备注：Git 的 `post-commit` hook 在本机沙箱环境下无法运行（sh 启动时报 `couldn't create signal pipe, Win32 error 5`，沙箱禁止命名管道），因此不依赖 hook，而是在完成任务时主动调用提示脚本。若换到非受限环境，可在 hook 里调用同一个 `tools/notify_done.ps1` 实现全自动提示。
+
+## AI 改动门禁（架构约束）
+
+改动 `scripts/ai/` 下任一执行层文件（`AIDefense.gd` / `AIWorkerDirector.gd` / `AIWaterCrossing.gd` / `AILadderSiege.gd` / `AIWallPlanner.gd` / `scripts/ai/defense/*.gd`）之后、提交之前，必须跑一次：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/ai_check_gate.ps1
+```
+
+- 退出码 0：R1~R4 全部为 0，可以提交；
+- 退出码 1：有违规，先修再提交。
+
+规则定义见 [docs/AI架构总设计.md](docs/AI架构总设计.md) §4：执行层不得直接调用控制器（R1）、不得互相引用（R2）、构造签名只收上下文与端口（R3）、不得直接访问 `battle`（R4）。检查明细会写入 `docs/ai-analysis/arch_check.json`。

@@ -1,0 +1,61 @@
+{
+  "config": {
+    "difficulty": "HELL",
+    "immortal": true,
+    "minutes": 8.0,
+    "mode": "3v3",
+    "progression": "research",
+    "sample": 60.0,
+    "seeds": [
+      24680,
+      13579,
+      97531
+    ],
+    "time_scale": 8.0
+  },
+  "generated_at": "2026-10-31T02:40:12",
+  "seeds": [
+    {
+      "ai_count": 5,
+      "end_reason": "time",
+      "engage_pct": 28.9473684210526,
+      "frame_p95_ms_max": 234.805,
+      "front_pct": 57.5657894736842,
+      "idle_pct": 21.0526315789474,
+      "land_avg": 6.875,
+      "last_t": 480.050277333336,
+      "push_pct": 28.6184210526316,
+      "samples": 8,
+      "seed": 24680,
+      "workers_avg": 12.325
+    },
+    {
+      "ai_count": 5,
+      "end_reason": "time",
+      "engage_pct": 41.8316831683168,
+      "frame_p95_ms_max": 355.451,
+      "front_pct": 61.6336633663366,
+      "idle_pct": 14.1089108910891,
+      "land_avg": 9.275,
+      "last_t": 480.139312888889,
+      "push_pct": 19.8019801980198,
+      "samples": 8,
+      "seed": 13579,
+      "workers_avg": 12.35
+    },
+    {
+      "ai_count": 5,
+      "end_reason": "time",
+      "engage_pct": 27.6923076923077,
+      "frame_p95_ms_max": 371.827,
+      "front_pct": 61.7948717948718,
+      "idle_pct": 18.7179487179487,
+      "land_avg": 8.975,
+      "last_t": 480.089954481481,
+      "push_pct": 34.1025641025641,
+      "samples": 8,
+      "seed": 97531,
+      "workers_avg": 12.525
+    }
+  ]
+}

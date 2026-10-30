@@ -757,3 +757,47 @@ DefenseContext/Plan/Threat/Director/Alloc 全部 0/0/0/0
 
 **踩坑（第十二个，代价最大）**：给 `AIDefense` 插入 `get_game_time()` 时，用了「`func _init(...)` + 下一行」当锚点做替换，结果把 `_init` 后面**剩下的整个函数体**（`_clock` 初始化 + 4 个子对象构造）挤进了新方法里、`return` 之后变成死代码。运行期报 `Nonexistent function 'due' in base 'Nil'`（63 条），表现是防守模块完全不工作。
 **教训：给函数插入新方法时，锚点必须包含函数结束边界**（下一个 `func ` 之前），不能只匹配函数头两行。
+
+---
+
+## 27. 架构门禁 + 8 分钟基线（2026-10-31 09:05）
+
+### 27.1 一条命令守住四条规则
+
+新增 `tools/ai_check_gate.ps1`：内部调用 `ai_arch_check.ps1 -Strict`，**有违规返回退出码 1，全绿返回 0**，可直接当提交前门禁或接进 CI。检查脚本同时加固：快照写入遇到文件占用会重试 5 次（之前和 git 抢文件导致快照没落盘）。
+
+已在 `CLAUDE.md` 写入规则：**改过 `scripts/ai/` 执行层代码、提交前必须跑一次 gate**。这样"架构不退化"从口头约定变成可执行动作。
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File tools/ai_check_gate.ps1
+# [OK] 架构约束全部通过（R1/R2/R3/R4 均为 0）  退出码 0
+```
+
+### 27.2 8 分钟多轮基线
+
+短局（1~3 分钟）的 `front/idle` 样本区间是 41%~80%，完全没有统计意义。改用 **8 分钟 × 3 个种子（24680 / 13579 / 97531）、HELL 3v3、time-scale 8** 建立基线，取中位数作为后续行为改动的对照锚点。
+
+命令：
+
+```powershell
+<godot> --headless --path . res://tools/ai_selfplay.tscn --   --seeds=24680,13579,97531 --minutes=8 --sample=60 --mode=3v3 --diff=HELL   --time-scale=8 --immortal=1 --out=res://docs/ai-analysis/selfplay/baseline8
+```
+
+
+### 27.3 基线数值（v4.0.55，2026-10-31）
+
+3 个种子 × 8 分钟，HELL 3v3，time-scale 8，immortal=1，脚本错误 **0**。
+
+| 种子 | front | idle | engage | workers | land |
+|---|---|---|---|---|---|
+| 24680 | 57.6% | 21.1% | 28.9% | 12.32 | 6.88 |
+| 13579 | 61.6% | 14.1% | 41.8% | 12.35 | 9.28 |
+| 97531 | 61.8% | 18.7% | 27.7% | 12.53 | 8.97 |
+| **中位数** | **61.6%** | **18.7%** | **28.9%** | **12.35** | **8.97** |
+
+**后续行为改动的判定口径**：同一命令跑同样 3 个种子，比较中位数。
+- front 掉超过 3 个百分点 → 视为退化，回滚；
+- idle 涨超过 3 个百分点 → 视为退化，回滚；
+- 三个种子里有两个以上同向变差 → 即使中位数没超阈值也视为可疑，需要复查。
+
+基线快照已存档：`docs/ai-analysis/selfplay/baseline8/summary.json`。**以后任何"行为变好/变差"的结论都必须和这组中位数比，不允许拿单次短局说事。**

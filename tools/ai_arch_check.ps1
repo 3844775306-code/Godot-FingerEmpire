@@ -13,7 +13,7 @@
 # 说明：R1 会把"包装函数里的回落分支"也算进来——那是迁移期的过渡代码，
 # 因此额外统计"回落后备"数量，用来区分"还没迁"和"已迁但保留兜底"。
 
-param([switch]$Json)
+param([switch]$Json, [switch]$Strict, [switch]$Quiet)
 
 [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 $ErrorActionPreference = 'Stop'
@@ -87,5 +87,24 @@ $outDir = Join-Path $root 'docs/ai-analysis'
 if (-not (Test-Path $outDir)) { New-Item -ItemType Directory -Path $outDir | Out-Null }
 $stamp = (Get-Date).ToString('yyyy-MM-dd HH:mm:ss')
 $snapshot = [ordered]@{ time = $stamp; version = (Select-String -Path (Join-Path $root 'scripts/core/AppVersion.gd') -Pattern 'const VERSION' | ForEach-Object { $_.Line.Trim() }); detail = $result }
-$snapshot | ConvertTo-Json -Depth 5 | Set-Content -Path (Join-Path $outDir 'arch_check.json') -Encoding UTF8
-Write-Output ('已写入 docs/ai-analysis/arch_check.json (' + $stamp + ')')
+$snapPath = Join-Path $outDir 'arch_check.json'
+$snapText = $snapshot | ConvertTo-Json -Depth 5
+for ($i = 0; $i -lt 5; $i++) {
+	try {
+		Set-Content -Path $snapPath -Value $snapText -Encoding UTF8
+		break
+	} catch {
+		Start-Sleep -Milliseconds 120
+	}
+}
+if (-not $Quiet) { Write-Output ('已写入 docs/ai-analysis/arch_check.json (' + $stamp + ')') }
+
+$violations = [int]$total.r1 + [int]$total.r2 + [int]$total.r3 + [int]$total.r4
+if ($Strict) {
+	if ($violations -gt 0) {
+		Write-Output ('[FAIL] 架构约束违规 ' + $violations + ' 处')
+		exit 1
+	}
+	Write-Output '[OK] 架构约束全部通过（R1/R2/R3/R4 均为 0）'
+	exit 0
+}
