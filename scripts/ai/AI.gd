@@ -1500,7 +1500,7 @@ func build_building(building_id: int, pos: Vector3, facing: Vector3 = Vector3.ZE
 		_water_crossing.plan_bridge_to(pos, builder.global_position)
 		return false
 	var cost = cfg.get("cost", {})
-	if _research_age_reserve_active() and not (building_id == 22 and _resource_overflow()) \
+	if _research_age_reserve_active() and building_id != 28 and not (building_id == 22 and _resource_overflow()) \
 			and not _can_pay_with_reserve(cost, _research_age_reserve_cost()):
 		return false
 	if not _deduct_resources(cost): return false
@@ -4538,7 +4538,41 @@ func _process_line_3():
 		var castle = get_peer_castle(my_peer_id)
 		if castle:
 			var hp2 = find_valid_build_position(castle.global_position, 28)
-			if hp2 != Vector3.ZERO: build_building(28, hp2)
+			if hp2 != Vector3.ZERO:
+				_force_house_builder(hp2)
+				build_building(28, hp2)
+
+# 人口满时房屋是解锁兵营/登陆兵的唯一出路。找不到空闲农民时，
+# 从采集/运输里的农民临时抽一个出来建房，避免"没房→人口满→没兵→永远没房"。
+func _force_house_builder(pos: Vector3) -> void:
+	if battle == null or not battle.has_method("find_nearest_idle_builder"):
+		return
+	var existing = battle.find_nearest_idle_builder(my_team, my_peer_id, pos, 60.0)
+	if existing != null:
+		return
+	var best = null
+	var best_d: float = INF
+	for e in _cached_armies():
+		if not is_instance_valid(e) or not (e is Army) or e.health <= 0:
+			continue
+		if e.entity_id != 10 or not entity_belongs_to_me(e) or not e.can_move:
+			continue
+		if e.has_meta("ai_transporting") or e.has_meta("ai_home_guard") or e.has_meta("ai_wall_guard"):
+			continue
+		if String(e.current_order) == "build" or int(e._work_target_id) != -1:
+			continue
+		var d: float = e.global_position.distance_squared_to(pos)
+		if d < best_d:
+			best_d = d
+			best = e
+	if best == null:
+		return
+	if best.has_method("_detach_from_building"):
+		best._detach_from_building()
+	if best.has_method("stop_movement"):
+		best.stop_movement()
+	best.current_order = ""
+	best._work_target_id = -1
 
 # 第 X 分钟至少 X 座民居，8 座封顶；提前一分钟开工，给建造时间留出余量。
 func _required_house_count() -> int:
@@ -4566,6 +4600,7 @@ func _ensure_house_quota() -> void:
 		return
 	var hp: Vector3 = find_valid_build_position(castle.global_position, 28)
 	if hp != Vector3.ZERO:
+		_force_house_builder(hp)
 		build_building(28, hp)
 
 func _process_line_4():
