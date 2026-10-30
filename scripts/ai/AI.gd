@@ -3155,7 +3155,10 @@ func _is_local_defense_active(u) -> bool:
 func _unit_has_claim(u) -> bool:
 	if u == null or not is_instance_valid(u):
 		return true
-	if _roles.has(u.get_instance_id()):
+	if USE_LEDGER_READS and _ledger != null:
+		if _ledger.has(u.get_instance_id()):
+			return true
+	elif _roles.has(u.get_instance_id()):
 		return true
 	return u.has_meta("ai_home_guard") or u.has_meta("ai_resource_guard") or u.has_meta("ai_wall_guard") \
 		or u.has_meta("ai_harass") or u.has_meta("ai_transporting") or u.has_meta("ai_escorting") \
@@ -5066,6 +5069,8 @@ func _director_release(uid: int) -> void:
 		_ledger.release(uid)
 
 func _director_role_count(role: int) -> int:
+	if USE_LEDGER_READS and _ledger != null:
+		return _ledger.count(role)
 	var n: int = 0
 	for uid in _roles.keys():
 		var ent: Dictionary = _roles[uid]
@@ -5128,10 +5133,13 @@ func _director_dispatch(idle: Array, now: float) -> void:
 func get_role_summary() -> String:
 	var names: Array = ["IDLE", "侦察", "驻军", "守墙", "守家", "资源守", "回防", "骚扰", "突袭", "主攻", "攻城", "运输", "护航", "撤退", "待命"]
 	var counts: Dictionary = {}
-	for uid in _roles.keys():
-		var ent: Dictionary = _roles[uid]
-		var k: int = int(ent.get("role", 0))
-		counts[k] = int(counts.get(k, 0)) + 1
+	if USE_LEDGER_READS and _ledger != null:
+		counts = _ledger.counts()
+	else:
+		for uid in _roles.keys():
+			var ent: Dictionary = _roles[uid]
+			var k: int = int(ent.get("role", 0))
+			counts[k] = int(counts.get(k, 0)) + 1
 	var parts: Array = []
 	for k in counts.keys():
 		var idx: int = clampi(int(k), 0, names.size() - 1)
@@ -6297,6 +6305,8 @@ const USE_TRUE_ROUND_ELAPSED: bool = true
 # 默认 false：AISituation 已通过影子对账（0 不一致），但切换后还没在无并发实例的环境跑过基线，
 # 先保持旧路径；verify 通过后再置 true。
 const USE_SITUATION_COUNTS: bool = false
+# P3.1 第二步开关：true=读取点走统一账本，false=读旧 _roles（默认 false，验证后再打开）。
+const USE_LEDGER_READS: bool = false
 
 func _situation_shadow_tick() -> void:
 	if _situation == null or battle == null:

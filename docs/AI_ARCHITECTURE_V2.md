@@ -503,3 +503,16 @@ AIClock.fast (4Hz)
 - **同种子方差很大**（A 组 front 40~65%），原因是 AI 决策依赖帧 delta；单次运行不足以判断，必须成组比较——这一点也写进自对弈脚本的使用说明。
 
 **已知副作用**：C 打开后 AI 计时器按真实秒数触发（补派 2s、守墙 10s 等），HELL 难度会比之前更"勤快"，属于预期内的行为变化；如需回调，把 `USE_TRUE_ROUND_ELAPSED` 置回 false 即可一键回退。
+
+### 12.3.4 P3.1 第二步：读取点切换已实现（开关默认关闭）
+
+| 读取点 | 切换后实现 | 回退 |
+|---|---|---|
+| `_unit_has_claim(u)` | `_ledger.has(uid)` | 开关 false 读 `_roles` |
+| `_director_role_count(role)` | `_ledger.count(role)` | 同上 |
+| `get_role_summary()` | `_ledger.counts()` | 同上 |
+
+开关 `USE_LEDGER_READS`（默认 false）。写入路径仍是 `_roles` 主写 + 账本镜像，读取切过去之后两本账互为校验：
+`[LEDGER] MISMATCH` 若仍为 0，说明账本可以完全替代 `_roles`。
+
+**验证待办**：8 分钟对弈各 3 次（开关 false / true），要求 front/idle 中位数差异 < 2%、`rejected` = 0；通过后打开开关并删除 `_roles` 主写（P3.1 第三步）。
