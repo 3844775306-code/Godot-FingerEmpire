@@ -377,3 +377,28 @@ naval.cross_water           组织渡海
 **立刻暴露了一个真问题**：`assault_recruit` 有 **84%（75/89）的尝试被拒**——主攻集结时反复尝试造兵、反复失败。这正是做可追溯性的价值：以前这类"静默失败"只会拖慢节奏，没人能看见。
 
 **下一步（A0 收尾）**：给 `RecruitPort` 补细粒度拒绝原因（`no_gold` / `pop_full` / `queue_busy` / `no_building` / `locked`），把现在笼统的 `rejected` 拆开；再据此修 assault 集结的重复失败。
+
+### 13.9 A0 收尾：拒绝原因细化 + 追踪抓出的第一个真 bug（2026-10-31 02:40）
+
+**1. 拒绝原因细化**：`produce_unit` 不再只报 "rejected"，区分五种：
+
+| 原因 | 含义 |
+|---|---|
+| `locked` | 研究/时代未解锁 |
+| `no_cost` | 资源真的不够 |
+| `reserved` | 资源够，但被升级预算预留锁住 |
+| `cap` / `no_merchant` | 数量上限 / 没有商人可跟 |
+| `no_queue` | 所有生产建筑队列都忙（正常节流，不是错误） |
+
+**2. 追踪立刻抓出的问题**：`military.assault_recruit` 有 **111/226 次（49%）被 `locked` 拒绝**——两个位置在反复尝试生产**没解锁**的单位：
+
+- `_train_overflow_units()` 的克制单位循环（51/44/45）；
+- `_try_produce_merchants_or_officials()` 的 `[51, 44, 45, 43]` 循环。
+
+两处都在 `can_afford` 通过后直接调 `produce_unit`，而"是否解锁"只在漏斗内部才检查，于是每轮白试一次。
+
+**3. 修复**：两处循环在尝试前先过 `battle.is_unit_unlocked(...)`，未解锁直接 `continue`。
+
+**4. 修复后同配置实测**：`locked` 从 111 → **0**，总指令 226 → 145（少了 36% 的无用动作），`unattributed` 保持 0；剩下的拒绝全是 `no_queue`（队列忙，属正常节流）。行为指标 front 62.5% / idle 16.0%，与基线一致。
+
+**结论**：这一步验证了"可追溯性不只是好看"——两个隐藏多年的空转，是靠 `rule + reject_reason` 两列一排序就看见的。

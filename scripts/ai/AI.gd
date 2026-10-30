@@ -227,6 +227,8 @@ var _worker_claim_skips: int = 0
 var _director_defend_actions: int = 0
 # A0：决策轮序号，用于把同一条指令的意图/规则/结果串起来。
 var _decide_seq_no: int = 0
+# A0 收尾：上一次生产被拒的具体原因（no_cost/locked/cap/no_merchant/no_queue），供追踪与调试面板读取。
+var _last_produce_reject: String = ""
 var _situation_checks: int = 0
 var _situation_mismatch_total: int = 0
 # 防御建筑驻军：AI 会把部分闲置士兵/农民送进箭塔、炮塔和城堡，
@@ -1327,22 +1329,40 @@ func can_afford_upgrade(building_id: int) -> bool:
 # ═══ Production ═══
 func produce_unit(unit_id: int, trace_rule: String = "") -> bool:
 	var _trace_seq: int = AITraceScript.command("recruit", "produce_unit", {"unit": unit_id, "rule": trace_rule})
+	_last_produce_reject = ""
 	var _trace_ok: bool = _produce_unit_impl(unit_id)
-	AITraceScript.result(_trace_seq, _trace_ok, "" if _trace_ok else "rejected", {"unit": unit_id})
+	AITraceScript.result(_trace_seq, _trace_ok, _last_produce_reject if not _trace_ok else "", {"unit": unit_id})
 	return _trace_ok
+
+
+# 区分"资源不够"和"资源够但被升级预算预留"：can_afford 会计入预留，这里只看裸资源。
+func _can_afford_any(unit_id: int) -> bool:
+	var cfg = EntityDatabase.get_config(unit_id)
+	if not cfg:
+		return true
+	var cost: Dictionary = cfg.get("cost", {})
+	var res: Dictionary = _get_resources()
+	for k in cost.keys():
+		if int(res.get(k, 0)) < int(cost[k]):
+			return false
+	return true
 
 # produce_unit 的实际实现（A0 起由带追踪的外层包住，所有生产入口仍然只走这一个漏斗）。
 func _produce_unit_impl(unit_id: int) -> bool:
 	if battle != null and battle.has_method("is_research_mode") and battle.is_research_mode():
 		if battle.has_method("is_unit_unlocked") and not battle.is_unit_unlocked(unit_id, my_peer_id, my_team):
+			_last_produce_reject = "locked"
 			return false
 	# 所有生产入口都统一走 can_afford，确保升时代攒预算不会被某个直接调用绕过。
 	if not can_afford(unit_id):
+		_last_produce_reject = "no_cost" if not _can_afford_any(unit_id) else "reserved"
 		return false
 	# 贸易车没有商人可跟就是废单位；生产时严格保证“车 < 商人”
 	if unit_id == 33 and count_unit(33) >= 2:
+		_last_produce_reject = "cap"
 		return false
 	if unit_id == TRADE_CART_ID and count_unit(TRADE_CART_ID) >= _count_merchants():
+		_last_produce_reject = "no_merchant"
 		return false
 
 	var produced = 0
@@ -1352,6 +1372,8 @@ func _produce_unit_impl(unit_id: int) -> bool:
 			if not entity_belongs_to_me(entity): continue
 			if entity.try_produce(unit_id):
 				produced += 1
+	if produced == 0:
+		_last_produce_reject = "no_queue"
 	return produced > 0
 
 # 建造前安全检查：10 单位内存在敌方作战军队时不允许落建筑，
@@ -4761,6 +4783,11 @@ func _train_overflow_units() -> void:
 			return
 		if u_id in SUPPORT_UNIT_IDS:
 			continue
+		# 追踪暴露：溢出泄压原本会反复尝试未解锁的克制单位（51/44/45），
+		# 每次都被 produce_unit 以 locked 拒绝，白耗一轮调度。这里提前跳过。
+		if battle != null and battle.has_method("is_unit_unlocked") \
+				and not battle.is_unit_unlocked(u_id, my_peer_id, my_team):
+			continue
 		if u_id == TRADE_CART_ID and count_unit(TRADE_CART_ID) >= _count_merchants():
 			continue
 		var cap: int = _effective_army_target()
@@ -4813,6 +4840,10 @@ func _upgrade_any_affordable_building() -> bool:
 
 func _try_produce_merchants_or_officials() -> bool:
 	for mid in [51, 44, 45, 43]:
+		# 追踪暴露：这些商人/官员单位多数还没解锁，原逻辑每轮都尝试生产并被 locked 拒绝。
+		if battle != null and battle.has_method("is_unit_unlocked") \
+				and not battle.is_unit_unlocked(mid, my_peer_id, my_team):
+			continue
 		if count_unit(mid) < 1 and can_afford(mid) and _can_train_unit():
 			if produce_unit(mid, "military.assault_recruit"): return true
 	if count_building(42) > 0:
