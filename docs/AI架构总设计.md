@@ -265,3 +265,89 @@ class Intent:
 ## 12. 一句话总结
 
 **现在的 AI 是"一个大控制器 + 五个能反过来指挥控制器的模块"；目标形态是"一个薄编排器 + 一个只读世界 + 一个意图层 + 一组只能通过端口动手的专业执行者"。** 数据流向是单向的：世界 → 意图 → 执行 → 账本，任何写操作都能溯源到唯一的端口调用点。
+
+---
+
+## 13. 可追溯性（回答"任意一条 AI 指令能否精准找到底层逻辑"）
+
+**先说结论：只靠 §3~§8 的分层和端口，不够。** 分层解决的是"这条指令属于哪个模块"（能从 27~30 个 `ai.*` 方法收敛到 1 个端口），但回答不了三个更细的问题：
+
+1. **是哪条规则决定的？** —— "生产步兵"在现有代码里有 **8 个调用点**（`AI.gd:1242/2201/2219/2857/3830/4755/4801/4813`、`AIWorkerDirector.gd:121`），分属补员、扩军、主攻准备、紧急翻盘等完全不同的规则；
+2. **为什么是这一轮、这个数量？** —— 依赖当轮快照与账本，跨轮不可复现；
+3. **为什么没生产出来？** —— 可能被资源、人口、队列、`_can_train_unit` 中任意一关拒绝，现在全靠 `print`，且大量分支根本没日志。
+
+所以必须在架构里加**第 6 条原则（P6 可追溯）**和一个 L0 设施 `AITrace`。
+
+### 13.1 五跳原则
+
+任何一条会改变对局状态的动作，都必须能回答五个问题，缺一个就算架构缺陷：
+
+| 跳 | 问题 | 载体 |
+|---|---|---|
+| 1 意图 | 这一轮 AI 总体想干什么 | `Intent.id` + `kind`（Director 产出） |
+| 2 规则 | 哪条规则决定动手 | 稳定规则 ID，如 `military.reinforce_gap` |
+| 3 指令 | 具体调用了什么、参数是什么 | Port 调用：`RecruitPort.request_train(14, 1)` |
+| 4 落地 | 最终落到引擎/战斗管理器的哪一步 | `battle.produce_unit` / 建筑队列 |
+| 5 结果 | 成功还是被谁拒绝 | `ok` / `reject_reason`（`no_gold` / `queue_full` / `no_building`） |
+
+### 13.2 机制：规则上下文 + 端口强制带来源
+
+```gdscript
+# L0：AITrace。关闭时零分配（只判一个 bool）。
+AITrace.begin_round(round_no, elapsed)
+AITrace.intent(id, kind, payload)                  # 由 Director 调用
+AITrace.rule("military.reinforce_gap", {"gap": 3}) # 进入某条规则的上下文（栈）
+AITrace.command("recruit.request_train", {"unit": 14, "n": 1})
+AITrace.result(ok, "no_gold")                      # 失败必须带原因
+AITrace.end_round()                                # 落盘/入环形缓冲
+```
+
+关键约束：**Port 的写方法在内部自动读"当前规则上下文"并记录**，模块忘了写日志也不会丢来源；反过来，**没有规则上下文的 Port 调用直接记 `rule=<unattributed>` 并在自检里报错**——这样"偷偷改状态"在结构上不可能。
+
+### 13.3 稳定规则 ID（不是文件行号）
+
+行号会随重构漂移，规则 ID 必须是人起的名字：
+
+```text
+military.reinforce_gap      补员：可出击兵力 < 门槛
+military.assault_ready      主攻准备完成，开始集结
+worker.food_crisis          食物告急，强制改派农民
+worker.build_request        有建造请求待分配建造者
+defense.guard_refill        守军快速补员
+defense.wall_ring           城墙补圈
+naval.cross_water           组织渡海
+```
+
+代码里每个决策分支入口写一行 `AITrace.rule("...")`，规则清单统一登记在 `AIConfig.RULES`（便于检查"定义了但没用到/用到了但没定义"）。
+
+### 13.4 一条指令的完整链路（以"生产一个步兵"为例）
+
+```text
+[1 意图]  director: intent defender#3  kind=reinforce  want=12 have=9
+[2 规则]  military.reinforce_gap {"gap":3, "phase":"DEVELOPMENT", "gold":420, "pop":38/50}
+[3 指令]  RecruitPort.request_train(unit=14, n=1)   ← 由 AIMilitary 发起
+[4 落地]  AI.gd → battle.produce_unit(14) → Building(21).queue.append(14)
+[5 结果]  ok=true  cost={gold:60,food:40}  queue_depth=1
+```
+
+**反向查询**（给定一个刚出生的步兵实体）：实体 → `RoleLedger` 记录（source=director, kind=SIEGE, trace=#8123）→ trace#8123 → 上面五跳。**这就是"从下往上找到底层逻辑"和"从上往下找到落地"的双向可查。**
+
+### 13.5 落地工具
+
+| 工具 | 用途 |
+|---|---|
+| `--trace=1` 自对弈参数 | 每轮把 trace 写成 `trace.jsonl`（一行一条 JSON，可 grep/jq） |
+| `tools/ai_trace.gd` 查询脚本 | `--rule=military.reinforce_gap` / `--entity=14` / `--round=120` 打印链路 |
+| 调试面板「调度」页 | 点一个兵 → 显示它的 trace 链与当前占用来源 |
+| `[TRACE]` 日志 | 只打印被拒绝的动作、`unattributed` 调用、意图无人消费 |
+
+### 13.6 验收（可执行）
+
+1. 从 `trace.jsonl` 任取一条 `produce_unit`，**5 跳内**能回到 intent 与规则 ID；
+2. 从任一实体 id 能反查到最近一次改变它角色的规则 ID；
+3. 关掉 trace 时性能开销为 0（只多一个 `if not enabled: return`）；
+4. 打开 R1~R4 + `unattributed` 检查后，`scripts/ai/` 里**不存在**无法归因的状态写入。
+
+### 13.7 迁移插入点
+
+在 §9 的 A1 之前加 **A0：加 AITrace + 只覆盖"生产"这一条竖切路径**（`military.reinforce_gap` → `RecruitPort` → `battle.produce_unit`），跑通 13.4 的端到端链路，再按模块逐个接规则 ID。**先做一条能看的链路，比先做全量框架有效。**
