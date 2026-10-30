@@ -10,6 +10,8 @@
 #
 # 本模块保持无 class_name，由 AI.gd 通过 preload 加载，避免全局类缓存不同步。
 extends RefCounted
+const DefenseContextScript = preload("res://scripts/ai/defense/DefenseContext.gd")
+const DefenseThreatModelScript = preload("res://scripts/ai/defense/DefenseThreatModel.gd")
 
 const THREAT_RADIUS: float = 15.0
 # 威胁的外圈：15~26 米内的可见敌军按低权重计入，避免“敌人已经压到墙下但威胁仍为 0”
@@ -117,6 +119,12 @@ const WATCHTOWER_SAMPLE_STEP: int = 2
 
 var ai = null
 
+# ── 新架构第 1 阶段：只读上下文 + 威胁模型 ──
+# AIDefense 暂时保留旧公开字段做镜像，后续模块逐步改读 _threat_model.snapshot。
+var _defense_context = null
+var _threat_model = null
+var _last_threat_snapshot: Dictionary = {}
+
 # ── 威胁状态 ──
 var threat_level: int = 0             # 0 平静 / 1 警戒 / 2 防守 / 3 危急
 var threat_score: float = 0.0
@@ -193,6 +201,8 @@ var _resource_guard_hold_until: float = -999.0
 
 func _init(owner_ai) -> void:
 	ai = owner_ai
+	_defense_context = DefenseContextScript.new(ai)
+	_threat_model = DefenseThreatModelScript.new(_defense_context)
 
 # ═══════════════════════════════════════════════════════════════
 # 主入口
@@ -209,6 +219,9 @@ func tick(delta: float) -> void:
 	var castle = ai.get_peer_castle(ai.my_peer_id)
 	if castle == null or not is_instance_valid(castle):
 		# 没有主城时不能保留上一场战斗的高威胁分数，否则调试面板会显示“敌军 0 却高度警戒”
+		if _threat_model != null:
+			_threat_model.reset()
+			_last_threat_snapshot = _threat_model.get_snapshot()
 		threat_level = 0
 		threat_score = 0.0
 		_threat_smoothed = 0.0
@@ -281,83 +294,32 @@ func get_status_text() -> String:
 # ═══════════════════════════════════════════════════════════════
 
 func _evaluate_threat(castle) -> void:
-	var now: float = float(ai.battle.game_time)
-	var raw: float = 0.0
-	var count: int = 0
-	var dir_sum: Vector3 = Vector3.ZERO
-	var center_sum: Vector3 = Vector3.ZERO
-	var weight_sum: float = 0.0
+	# 第 1 阶段：评估逻辑搬到 DefenseThreatModel，本函数只做旧接口镜像。
+	# threat_level / threat_score / threat_dir / threat_center 的数值和更新节奏保持不变，
+	# 其他模块可以先继续读旧字段；需要扇区/轨迹时调用 get_threat_snapshot()。
+	if _threat_model == null:
+		return
+	_last_threat_snapshot = _threat_model.evaluate(castle)
+	threat_level = _threat_model.threat_level
+	threat_score = _threat_model.threat_score
+	threat_enemy_count = _threat_model.threat_enemy_count
+	threat_dir = _threat_model.threat_dir
+	threat_center = _threat_model.threat_center
+	_threat_smoothed = _threat_model.smoothed
+	_castle_damage_until = _threat_model.castle_damage_until
+	_last_castle_id = _threat_model.last_castle_id
+	_last_castle_health = _threat_model.last_castle_health
 
-	# 威胁只来自 AI 当前视野内、确实能看到的敌军；不做全图侦测
-	for e in ai._visible_enemies:
-		if not is_instance_valid(e) or not (e is Army) or e.health <= 0:
-			continue
-		# _visible_enemies 已经过视野筛选，不再重复扫描己方全部实体
-		if not _is_combat_enemy(e):
-			continue
-		var d: float = e.global_position.distance_to(castle.global_position)
-		# 威胁不能只看主城 15 米：实测有 AI 视野里 32 个敌人逼近，威胁仍是“平静(敌0)”，
-		# 于是警戒/防守/危急三级永远不触发，守军不扩编、应急塔不建。
-		# 现在 15 米内算全权重，15~26 米的逼近部队按 45% 权重计入。
-		if d > THREAT_OUTER_RADIUS:
-			continue
-		count += 1
-		var prox: float = clampf(1.0 - d / THREAT_OUTER_RADIUS, 0.0, 1.0)
-		var s: float = 1.0 + prox * 3.5
-		if d > THREAT_RADIUS:
-			s *= 0.45
-		if float(e.attack) >= 30.0:
-			s += 0.6
-		if int(e.entity_id) in SIEGE_IDS:
-			s += 0.8
-		if d < 18.0:
-			s += 1.0
-		raw += s
-		var w: float = 0.25 + prox
-		dir_sum += (e.global_position - castle.global_position).normalized() * w
-		center_sum += e.global_position * w
-		weight_sum += w
+# 给调试面板/后续守军分配模块读取的威胁快照（含 tracks 与 8 扇区热度）。
+func get_threat_snapshot() -> Dictionary:
+	if _threat_model == null:
+		return {}
+	return _threat_model.get_snapshot()
 
-	# 主城掉血只作为“已有可见近敌”的严重度加成，不再单独触发威胁；
-	# 威胁只来自主城 15 单位内、确实可见的敌方军队。
-	if _last_castle_id != castle.get_instance_id():
-		_last_castle_id = castle.get_instance_id()
-		_last_castle_health = castle.health
-	if castle.health < _last_castle_health - 0.5:
-		_castle_damage_until = now + 8.0
-	_last_castle_health = castle.health
-	if count > 0 and now < _castle_damage_until:
-		raw += 4.0
-
-	# 没有任何可见近敌时直接清零，避免之前战斗的高分继续残留。
-	if count == 0:
-		_threat_smoothed = 0.0
-
-	threat_enemy_count = count
-	if raw > _threat_smoothed:
-		_threat_smoothed = lerpf(_threat_smoothed, raw, 0.7)
-	else:
-		_threat_smoothed = lerpf(_threat_smoothed, raw, 0.45)
-	threat_score = _threat_smoothed
-
-	# 只有成建制敌军逼近/攻城才进入防守，单个远处侦察兵不应让 AI 全员回防
-	if threat_score >= 12.0:
-		threat_level = 3
-	elif threat_score >= 6.0:
-		threat_level = 2
-	elif threat_score >= 2.0:
-		threat_level = 1
-	else:
-		threat_level = 0
-
-	if weight_sum > 0.01 and dir_sum.length_squared() > 0.01:
-		threat_dir = (dir_sum / weight_sum).normalized()
-		threat_center = center_sum / weight_sum
-	else:
-		threat_dir = _enemy_castle_dir(castle)
-		threat_center = castle.global_position + threat_dir * 18.0
-	if threat_dir.length_squared() < 0.001:
-		threat_dir = Vector3.FORWARD
+func get_primary_threat_sector() -> int:
+	if _threat_model == null:
+		return -1
+	return _threat_model.get_primary_sector()
 
 func _enemy_castle_dir(castle) -> Vector3:
 	var enemy_team: int = ai._primary_enemy_team()
