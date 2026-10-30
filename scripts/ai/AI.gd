@@ -14,6 +14,7 @@ const AIWorkerDirectorScript = preload("res://scripts/ai/AIWorkerDirector.gd")
 const AIConfigScript = preload("res://scripts/ai/core/AIConfig.gd")
 const AIClockScript = preload("res://scripts/ai/core/AIClock.gd")
 const AISituationScript = preload("res://scripts/ai/world/AISituation.gd")
+const RoleLedgerScript = preload("res://scripts/ai/core/RoleLedger.gd")
 
 enum Phase { PRODUCTION, DEVELOPMENT, ASSAULT }
 enum LateTactic { NONE, HARASS, OVERWHELM, RAID, DEFEND }
@@ -218,6 +219,10 @@ var _ai_clock = null
 var _situation = null
 var _situation_usec_ema: float = 0.0
 var _situation_last_t: float = -1.0
+# P3.1：统一角色账本的影子副本（_roles 仍是唯一事实来源，这里只镜像 + 对账）。
+var _ledger = null
+var _ledger_checks: int = 0
+var _ledger_mismatch_total: int = 0
 var _situation_checks: int = 0
 var _situation_mismatch_total: int = 0
 # 防御建筑驻军：AI 会把部分闲置士兵/农民送进箭塔、炮塔和城堡，
@@ -1902,6 +1907,7 @@ func _ready():
 	_ai_clock.add("wall_deploy", WALL_DEPLOY_INTERVAL)
 	_ai_clock.add("garrison", GARRISON_CHECK_INTERVAL)
 	_situation = AISituationScript.new()
+	_ledger = RoleLedgerScript.new()
 
 # 后期实体数越多，AI 的周期性全量扫描越贵；返回统一的降频倍率。
 func _late_game_scale() -> float:
@@ -5035,10 +5041,15 @@ func _director_prune(now: float) -> void:
 			drop.append(uid)
 	for uid in drop:
 		_director_release_role(int(uid))
+	if _ledger != null:
+		_ledger.sweep(now)
 
 func _director_set_role(u, role: int, lease: float, now: float) -> void:
 	_roles[u.get_instance_id()] = {"role": role, "since": now, "until": now + lease}
 	u.set_meta("ai_role", role)
+	# P3.1 影子镜像：同一份占用同步登记到统一账本（来源暂记为 director）。
+	if _ledger != null:
+		_ledger.claim(u.get_instance_id(), role, "director", now, lease)
 
 # 统一认领接口：旧的 4 个防务调度器（守家/守墙/驻军/资源守卫）改走这里登记角色，
 # director 的兜底派单因此不会再碰它们，租约到期也能自动回收（后续步骤会把挑选逻辑也收进来）。
@@ -5049,6 +5060,8 @@ func _director_claim(u, role: int, lease: float) -> void:
 
 func _director_release(uid: int) -> void:
 	_roles.erase(uid)
+	if _ledger != null:
+		_ledger.release(uid)
 
 func _director_role_count(role: int) -> int:
 	var n: int = 0
@@ -5079,6 +5092,8 @@ func _director_release_role(uid: int) -> void:
 			UnitRole.RESOURCE_GUARD:
 				u.remove_meta("ai_resource_guard")
 	_roles.erase(uid)
+	if _ledger != null:
+		_ledger.release(uid)
 
 func _director_dispatch(idle: Array, now: float) -> void:
 	var threatened: bool = _defense != null and int(_defense.threat_level) >= 2
@@ -6311,6 +6326,28 @@ func _situation_shadow_tick() -> void:
 			float(battle.game_time), int(_situation.own_land_count), int(_situation.own_worker_count),
 			_situation.count_building(20), _situation.visible_enemies.size(),
 			_situation_usec_ema / 1000.0, float(_situation.visibility_usec) / 1000.0])
+	_ledger_check()
+
+# P3.1 影子对账：统一账本必须与 _roles 完全一致（键集合 + 每个单位的角色号）。
+func _ledger_check() -> void:
+	if _ledger == null:
+		return
+	_ledger_checks += 1
+	var diff: int = 0
+	if _roles.size() != _ledger.size():
+		diff = absi(_roles.size() - _ledger.size())
+	else:
+		for uid in _roles.keys():
+			if int(_roles[uid].get("role", -1)) != _ledger.kind_of(int(uid)):
+				diff += 1
+	if diff == 0:
+		if _ledger_checks <= 3 or _ledger_checks % 20 == 0:
+			print("[LEDGER] ok t=%.0f roles=%d rejected=%d expired=%d" % [
+				float(battle.game_time), _roles.size(), int(_ledger.rejected), int(_ledger.expired)])
+	else:
+		_ledger_mismatch_total += 1
+		print("[LEDGER] MISMATCH t=%.0f roles=%d ledger=%d diff=%d" % [
+			float(battle.game_time), _roles.size(), _ledger.size(), diff])
 
 func get_situation_summary() -> Dictionary:
 	if _situation == null:
@@ -6323,4 +6360,7 @@ func get_situation_summary() -> Dictionary:
 	d["round_delta"] = _last_delta
 	d["elapsed_since_round"] = _elapsed_since_round
 	d["clock"] = _ai_clock.snapshot() if _ai_clock != null else {}
+	d["ledger"] = _ledger.snapshot() if _ledger != null else {}
+	d["ledger_checks"] = _ledger_checks
+	d["ledger_mismatch"] = _ledger_mismatch_total
 	return d

@@ -471,3 +471,19 @@ AIClock.fast (4Hz)
 1. 同种子 12 分钟跑两次（开关 false / true），对比 `summary.json` 的 front/idle/engage/land 与 p95 帧耗时；
 2. 看 `[SITUATION]` 日志的检查间隔：false 时明显大于 5 秒，true 时贴近 5 秒（游戏时间）；
 3. 若性能超标，把模块计时器先减半再打开，而不要直接回退整个开关。
+
+### 12.3.2 P3.1 第一步已实现：影子角色账本（2026-10-30 20:42）
+
+| 项 | 内容 |
+|---|---|
+| 新增 `scripts/ai/core/RoleLedger.gd` | 通用 claim/release/sweep/holders/counts 接口；一个单位同时最多一条 claim；不同来源重复认领会被拒绝并计数 |
+| 镜像写入 | `AI._director_set_role` / `_director_release` / `_director_release_role` / `_director_prune` 同步登记/释放/回收 |
+| 对账 | 每 5 秒（与 Situation 同节拍）比较 `_roles` 与账本的键集合 + 角色号，输出 `[LEDGER] ok` / `[LEDGER] MISMATCH` |
+| 可观测 | `get_situation_summary()` 增加 `ledger`（claims/releases/rejected/expired）、`ledger_checks`、`ledger_mismatch` |
+| 行为影响 | **零**：`_roles` 仍是唯一事实来源，账本只读镜像；无开关，删除即回退 |
+
+**第一步验收条件**：12 分钟对弈 `[LEDGER] MISMATCH` = 0，`rejected` = 0。
+
+**第二步（待第一步验收后）**：把读取点切到账本（`_unit_has_claim` / `_role_of` / `get_role_summary` / `_director_role_count`），
+`AIWorkerDirector._workers`、`AIDefense` 的守军预留改登记到同一账本（source 分别为 `worker` / `defense`），
+届时 `rejected > 0` 就是真实的"两个模块抢同一单位"，正好暴露现在靠互相查询掩盖的冲突。
