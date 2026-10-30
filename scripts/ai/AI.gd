@@ -2358,6 +2358,111 @@ func _state_development(_delta):
 	update_tactic(_delta)
 
 # -- ASSAULT: execute tactical attacks --
+# ═══ 陆军跨水可达性（防「卡在岸边发呆」）═══
+# 陆军 attack_move 到河对岸目标时寻路会在岸边停下，随后被判定为空闲又派一次，
+# 表现为在岸边反复发呆。这里在派单前先做一次陆地连通性检查（复用渡水模块的
+# BFS：陆地 + 已建成的桥），走不过去就不派，交给渡水模块规划桥/船。
+const LAND_REACH_TTL: float = 20.0
+var _land_reach_cache: Dictionary = {}
+var _shore_stuck_fixes: int = 0
+var _shore_diag_done: bool = false
+var _land_blocked_moves: int = 0
+
+func _game_now() -> float:
+	return SimTime.now_ms() / 1000.0
+
+func _land_reachable(from_pos: Vector3, to_pos: Vector3) -> bool:
+	if _water_crossing == null or _context == null:
+		return true
+	# 近距离不查：身边敌人一定在同一块陆地上，直接打
+	if from_pos.distance_squared_to(to_pos) < 576.0:
+		return true
+	var b: Vector2i = _context.world_to_grid(to_pos)
+	var key: String = "%d,%d" % [b.x, b.y]
+	var now: float = _game_now()
+	var hit = _land_reach_cache.get(key)
+	if hit is Dictionary and now - float(hit.get("t", -1000.0)) < LAND_REACH_TTL:
+		return bool(hit.get("ok", true))
+	# 只查渡水模块已算好的己方连通集（O(1)），不做逐对 BFS——否则单位一多会卡主线程。
+	var ok: bool = bool(_water_crossing.is_land_reachable(to_pos))
+	_land_reach_cache[key] = {"t": now, "ok": ok}
+	if _land_reach_cache.size() > 512:
+		_land_reach_cache.clear()
+	return ok
+
+# 只有«陆军走得过去»才下发攻击移动；返回是否真的派了单。
+func _try_land_move(u, target_pos: Vector3) -> bool:
+	if u == null or not is_instance_valid(u) or u.health <= 0:
+		return false
+	if not _land_reachable(u.global_position, target_pos):
+		_land_blocked_moves += 1
+		if _land_blocked_moves <= 5:
+			print("[SHORE] block pid=%d from=%s to=%s" % [my_peer_id, str(u.global_position), str(target_pos)])
+		return false
+	u.attack_move_to(target_pos)
+	return true
+
+# 已经卡在岸边的单位：目标不可达 + 连续 5 秒几乎没位移 → 撤销命令、回主城集结点。
+# 走不到目标时的落脚点：主城后方，方便随时回防。
+func _fallback_standby_pos() -> Vector3:
+	var castle = get_peer_castle(my_peer_id)
+	if castle != null and is_instance_valid(castle):
+		return castle.global_position + Vector3(0, 0, -6)
+	return Vector3.ZERO
+
+func _recover_shore_stuck_units() -> void:
+	if _water_crossing == null or battle == null:
+		return
+	if not _shore_diag_done:
+		_shore_diag_done = true
+		var _ec = _get_attack_target_castle()
+		if _ec != null and is_instance_valid(_ec):
+			print("[SHORE] diag pid=%d enemy_castle=%s land_reachable=%s" % [
+				my_peer_id, str(_ec.global_position),
+				str(_water_crossing.is_land_reachable(_ec.global_position))])
+	var now: float = _game_now()
+	var castle = get_peer_castle(my_peer_id)
+	if castle == null or not is_instance_valid(castle):
+		return
+	var back: Vector3 = castle.global_position + Vector3(0, 0, -6)
+	var fixed: int = 0
+	for u in _cached_armies():
+		if fixed >= 8:
+			break
+		if not is_instance_valid(u) or u.health <= 0 or not entity_belongs_to_me(u):
+			continue
+		if int(u.entity_id) == 10 or int(u.attack) <= 0 or bool(u.water_capable):
+			continue
+		var pos: Vector3 = u.global_position
+		if not bool(u.is_attack_moving):
+			u.set_meta("ai_shore_pos", pos)
+			u.set_meta("ai_shore_t", now)
+			continue
+		var tgt: Vector3 = u.attack_move_target
+		if tgt == Vector3.ZERO:
+			continue
+		if _land_reachable(pos, tgt):
+			continue
+		var prev = u.get_meta("ai_shore_pos", pos)
+		var pt: float = float(u.get_meta("ai_shore_t", now))
+		if typeof(prev) == TYPE_VECTOR3 and pos.distance_to(prev) > 2.0:
+			u.set_meta("ai_shore_pos", pos)
+			u.set_meta("ai_shore_t", now)
+			continue
+		if now - pt < 5.0:
+			continue
+		# 站着不动 + 目标在河对岸：判定为卡岸边，撤销命令并回防
+		u.cancel_combat_orders()
+		u.attack_move_to(back)
+		_shore_stuck_fixes += 1
+		if _shore_stuck_fixes <= 5:
+			print("[SHORE] unstick pid=%d uid=%d pos=%s tgt=%s" % [my_peer_id, u.get_instance_id(), str(pos), str(tgt)])
+		u.set_meta("ai_shore_pos", pos)
+		u.set_meta("ai_shore_t", now)
+		fixed += 1
+	if fixed > 0:
+		_land_reach_cache.clear()
+
 func _state_assault(_delta):
 	# 进攻阶段也要先把资源投到建筑升级上，不能只无限补兵
 	if not _priority_upgrade():
@@ -2579,6 +2684,7 @@ func _decide_stage_13() -> void:
 	# 这些单位就长期待命。实测待命兵 45% 停在离家 25 米内、身边全有敌人。
 	# 计时已迁到 AIClock（P1），行为与旧的 _retask_timer 一致。
 	if _ai_clock != null and _ai_clock.due("retask"):
+		_recover_shore_stuck_units()
 		_retask_idle_front_units()
 
 
@@ -3809,7 +3915,7 @@ func execute_harass():
 			continue
 		u.set_meta("ai_harass", true)
 		_director_claim(u, UnitRole.HARASS, 32.0)
-		u.attack_move_to(target.global_position)
+		_try_land_move(u, target.global_position)
 		_harass_ids[u.get_instance_id()] = true
 	_harass_until = battle.game_time + 32.0
 
@@ -3934,7 +4040,7 @@ func execute_overwhelm():
 			if entity.water_capable: continue
 			if entity.current_target != null or entity.current_order != "" or entity.is_attack_moving: continue
 			if not enemy_castle or not is_instance_valid(enemy_castle): continue
-			entity.attack_move_to(enemy_castle.global_position)
+			_try_land_move(entity, enemy_castle.global_position)
 
 func execute_raid():
 	var self_castle = get_peer_castle(my_peer_id)
@@ -3991,7 +4097,7 @@ func execute_raid():
 	if _defense != null and int(_defense.threat_level) >= 2:
 		return
 	for u in raid_army:
-		if is_instance_valid(u) and is_instance_valid(enemy_castle): u.attack_move_to(enemy_castle.global_position)
+		if is_instance_valid(u) and is_instance_valid(enemy_castle): _try_land_move(u, enemy_castle.global_position)
 
 func _get_enemy_army_direction(center: Vector3) -> Vector3:
 	var enemy_team = _primary_enemy_team()
@@ -5091,8 +5197,15 @@ func _retask_idle_front_units() -> void:
 			var ed: float = u.global_position.distance_to(enemy.global_position)
 			if ed <= 25.0:
 				u.attack_target(enemy)
-			else:
-				u.attack_move_to(enemy.global_position)
+			elif not _try_land_move(u, enemy.global_position):
+				# 敌人在河对岸且还没有桥：别派陆军去岸边发呆——先请渡水模块规划，
+				# 同时把兵收回主城待命，等桥通了再派（否则会一直在岸边空转）。
+				if _water_crossing != null:
+					_water_crossing.plan_bridge_to(enemy.global_position, u.global_position)
+				var home: Vector3 = _fallback_standby_pos()
+				if home != Vector3.ZERO:
+					u.attack_move_to(home)
+				continue
 			sent += 1
 			continue
 		if u.has_meta("ai_stalled_attack") \
@@ -5101,7 +5214,8 @@ func _retask_idle_front_units() -> void:
 			if castle_target == null:
 				castle_target = _get_attack_target_castle()
 			if castle_target != null and is_instance_valid(castle_target):
-				u.attack_move_to(castle_target.global_position)
+				if not _try_land_move(u, castle_target.global_position):
+					continue
 				sent += 1
 
 # ═══ ArmyDirector（第 1 步：安全网）═══
@@ -5252,12 +5366,21 @@ func _director_dispatch(idle: Array, now: float) -> void:
 		if enemy != null and is_instance_valid(enemy):
 			if u.global_position.distance_to(enemy.global_position) <= 25.0:
 				u.attack_target(enemy)
-			else:
-				u.attack_move_to(enemy.global_position)
+			elif not _try_land_move(u, enemy.global_position):
+				# 河对岸的敌人：陆军走不过去，收回主城待命而不是在岸边卡死
+				if rally != Vector3.ZERO and u.global_position.distance_to(rally) > DIRECTOR_STANDBY_MIN_DIST:
+					u.attack_move_to(rally)
+				_director_set_role(u, UnitRole.STANDBY, DIRECTOR_STANDBY_LEASE, now)
+				continue
 			_director_set_role(u, UnitRole.FIELD, DIRECTOR_FIELD_LEASE, now)
 			continue
 		if can_field:
-			u.attack_move_to(field_target.global_position)
+			if not _try_land_move(u, field_target.global_position):
+				# 敌方城堡在河对岸：先回主城待命，等渡水模块把桥/船准备好
+				if rally != Vector3.ZERO and u.global_position.distance_to(rally) > DIRECTOR_STANDBY_MIN_DIST:
+					u.attack_move_to(rally)
+				_director_set_role(u, UnitRole.STANDBY, DIRECTOR_STANDBY_LEASE, now)
+				continue
 			_director_set_role(u, UnitRole.FIELD, DIRECTOR_FIELD_LEASE, now)
 			continue
 		# 兜底：回主城集结点待命。离得近就不重复下命令，只登记租约。
@@ -6607,4 +6730,5 @@ func get_situation_summary() -> Dictionary:
 	d["director_defend_actions"] = _director_defend_actions
 	d["context"] = _context.debug_snapshot() if _context != null else {}
 	d["pipeline"] = _pipeline.debug_snapshot()
+	d["shore"] = {"blocked_moves": _land_blocked_moves, "unstick": _shore_stuck_fixes}
 	return d

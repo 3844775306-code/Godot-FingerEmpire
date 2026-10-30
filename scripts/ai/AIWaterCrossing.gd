@@ -392,6 +392,20 @@ func can_builder_reach(from_pos: Vector3, target_pos: Vector3) -> bool:
 		return true
 	return _bfs_reach(start, goal, bridges)
 
+# 目标点是否在我方陆地连通集内（跨河/跨海即为 false）。
+# 与 can_builder_reach 的区别：这里只查已算好的连通集，不做 BFS，
+# 可以每轮被大量陆军查询而不会卡主线程。
+func is_land_reachable(target_pos: Vector3) -> bool:
+	if battle == null:
+		return true
+	var cell: Vector2i = _ctx.world_to_grid(target_pos)
+	if _reachable_land.is_empty():
+		var c = _castle()
+		if not is_instance_valid(c):
+			return true
+		_reachable_land = _bfs_land(_ctx.world_to_grid(c.global_position), _collect_bridges())
+	return _reachable_land.has(cell)
+
 func _bfs_reach(start: Vector2i, goal: Vector2i, bridges: Dictionary) -> bool:
 	if not _land_passable(start, bridges) or not _land_passable(goal, bridges):
 		return false
@@ -1754,4 +1768,3 @@ func _afford_upg(id: int) -> bool:
 	return _ctx.can_afford_upgrade(id)
 func _now() -> float:
 	return _ctx.game_time() if _ctx != null else float(_ctx.game_time())
-
