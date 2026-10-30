@@ -38,6 +38,9 @@ var production_step: int = 0
 var wanted_buildings: Array = [20, 21, 29, 23, 42, 54, 24, 52, 53]
 var wanted_units: Array = [11,12,15,16,17,18,35,36,37,38,39,40,13,43,44,45,46,47,48,49,50,58,59,5,6,9]
 var target_army_count: int = 7
+# 旧逻辑用「每个兵种 7 个」当军队目标；可生产兵种少时总兵力只能到 7~28。
+# 这里额外给一个总野战军目标，按当前可生产兵种均分，保证 3 倍速 5 分钟能到 50 左右。
+const TARGET_FIELD_ARMY_TOTAL: int = 50
 # 贸易车只跟随这四种商人；AI 生产贸易车时数量必须小于商人数量，避免刷出一堆闲置车
 const TRADE_CART_ID: int = 6
 # 官员/商人由各自的生产逻辑管理（官员一栋建筑只能一个），
@@ -348,6 +351,14 @@ func _resource_critical() -> bool:
 	return _resource_pressure_time >= RESOURCE_PRESSURE_GRACE \
 			and _resource_pressure_ratio() >= RESOURCE_CRITICAL_RATIO
 
+# 食物是唯一同时卡农民和战斗兵的资源：农民 50 食物，步兵 70、骑兵 90。
+# 只按总资源压力判断时，木/石满仓会掩盖食物见底，AI 会一直补农民/建筑却不出兵。
+func _food_emergency() -> bool:
+	if battle == null:
+		return false
+	var food: int = int(_get_resources().get("food", 0))
+	return food < 120 and _resource_ratio("food") < 0.25
+
 # 开局 AI 的金/木/粮就是满的（500/500），但这是给建造序列用的启动资金。
 # 连续高水位一小段时间仍花不出去，才说明真的在浪费收入，此时再泄压。
 func _update_resource_pressure(delta: float) -> void:
@@ -377,6 +388,33 @@ func _effective_army_target() -> int:
 		# 有资源、有人口时至少把一半人口转成军队，避免只造到固定 17 个就停手。
 		target = maxi(target, int(float(pop.get("max", 0)) * 0.5))
 	return target
+
+# 陆战兵种：排除农民、手推车、侦察兵、运载船/战船和辅助单位。
+func _is_land_combat_unit(u_id: int) -> bool:
+	if u_id in [10, 5, 6, 9, 13, 19, 39, 40] or u_id in SUPPORT_UNIT_IDS:
+		return false
+	var cfg = EntityDatabase.get_config(u_id)
+	if cfg.is_empty():
+		return false
+	if bool(cfg.get("water_capable", false)):
+		return false
+	return int(cfg.get("target_type", 0)) > 0
+
+func _land_combat_type_count() -> int:
+	var n: int = 0
+	for u_id in get_counter_priority():
+		if _is_land_combat_unit(int(u_id)):
+			n += 1
+	return maxi(1, n)
+
+# 单个兵种的数量目标：普通兵种继续按 7 个补，但总野战军要能到 50。
+# 只有 1 种兵可用时步兵目标就是 50；有 4 种兵时每种约 13 个。
+func _field_army_target_for(u_id: int) -> int:
+	var base: int = _effective_army_target()
+	if not _is_land_combat_unit(u_id):
+		return base
+	var types: int = _land_combat_type_count()
+	return maxi(base, int(ceil(float(TARGET_FIELD_ARMY_TOTAL) / float(types))))
 
 # 人口已满而资源还多时，先补额外民居，否则多出来的资源无处转化为军队。
 # 不一定非要“溢出”：人口接近上限且资源已经超过 60% 时就应继续补房，
@@ -2573,9 +2611,13 @@ func allocate_workers():
 	# 先救急：石油/石头已经满仓、但金/木/食物见底时，把正在采满仓资源的
 	# 农民强行拉去采稀缺资源。旧的 97% 阈值要等资源几乎完全满仓才动，
 	# 而 85% 泄压又早就开始了，中间这段收入会一直堆在不能造兵的资源上。
+	_force_food_workers(workers)
 	_emergency_rebalance_workers(workers)
 
-	if workers.size() < desired_worker_count and not _all_gather_resources_full():
+	# 食物见底时先不要再补农民：一个农民 50 食物，会把本来就凑不齐的
+	# 步兵 70 食物继续吃掉，形成“农民越多、兵越造不出”的死循环。
+	var can_add_worker: bool = not (_food_emergency() and workers.size() >= 8)
+	if workers.size() < desired_worker_count and can_add_worker and not _all_gather_resources_full():
 		if can_afford(10) and _can_train_unit(): produce_unit(10)
 		var train_weights: Dictionary = _worker_resource_weights()
 		if not train_weights.is_empty():
@@ -2666,6 +2708,45 @@ func allocate_workers():
 				if target: w.gather_at(target); current[best_rk] = current.get(best_rk, 0) + 1
 
 # 满仓资源与见底资源同时存在时，优先救急改派农民。
+# 食物低于 120 时，把一半左右的农民尽快拉去采食物。
+# 普通 _emergency_rebalance_workers 最多只改 2~4 人，15 个农民时救不回食物。
+func _force_food_workers(workers: Array) -> void:
+	if battle == null or workers.is_empty() or not _food_emergency():
+		return
+	if battle.game_time - _last_emergency_rebalance_time < 4.0:
+		return
+	var on_food: int = 0
+	var candidates: Array = []
+	for w in workers:
+		if not is_instance_valid(w) or w.health <= 0 or _worker_is_fleeing(w) or w.current_order == "deliver":
+			continue
+		var tgt = w.current_target
+		if is_instance_valid(tgt) and tgt is WorldResource:
+			if String(tgt.resource_type) == "food":
+				on_food += 1
+			elif String(tgt.resource_type) in ["gold", "wood", "stone"]:
+				candidates.append(w)
+	var want: int = clampi(int(workers.size() * 0.5), 4, 8)
+	if on_food >= want:
+		return
+	var moved: int = 0
+	for w in candidates:
+		var target = find_best_resource_for_worker(w, {"food": 100})
+		if target == null:
+			break
+		if String(target.resource_type) != "food":
+			continue
+		w.gather_at(target)
+		moved += 1
+		if on_food + moved >= want:
+			break
+	_last_emergency_rebalance_time = battle.game_time
+	if moved > 0:
+		_last_spend_block = "food_rebalanced"
+	else:
+		_last_spend_block = "no_food_target"
+	_last_spend_block_time = battle.game_time
+
 # 实战出现过：石油 700/700、金 12/800、木 0、食物 4，12 个农民仍在采油/石，
 # 泄压一直在跑但所有兵都买不起。这里不等 97% 满仓，85% 就开始把采集满仓
 # 资源的人拉去采最缺的那种资源；如果地图上找不到对应矿，只记录原因。
@@ -2750,6 +2831,13 @@ func _get_phase_weights() -> Dictionary:
 			w = {"gold": 4.0, "wood": 2.0, "stone": 5.0, "food": 3.0}
 	# 石油只能由采集船采集，农民的可采列表里没有 oil。
 	# 这里不能再把 oil 加进农民权重，否则 AI 会把农民派到油井边空站。
+	if _food_emergency():
+		var food_ratio: float = _resource_ratio("food")
+		var food_weight: float = 10.0 if food_ratio <= 0.10 else 7.0
+		w["food"] = maxf(float(w.get("food", 1.0)), food_weight)
+		# 食物见底时不要再让木/石把农民全吸走。
+		w["wood"] = float(w.get("wood", 1.0)) * 0.45
+		w["stone"] = float(w.get("stone", 1.0)) * 0.45
 	return w
 
 # 农民不再去采已经接近上限的资源；否则交资源时会被 add_resource 截断。
@@ -4540,17 +4628,18 @@ func _process_line_military():
 	if _try_produce_scout():
 		return
 	var priority = get_counter_priority()
-	var army_target: int = _effective_army_target()
 	var train_budget: int = RESOURCE_PRESSURE_TRAIN_BURST if _resource_critical() else 1
 	for u_id in priority:
 		if u_id in SUPPORT_UNIT_IDS:
 			continue
-		if u_id == TRADE_CART_ID and count_unit(TRADE_CART_ID) >= _count_merchants():
+		# 手推车/贸易车是商人系统的单位，不能算进野战军；旧逻辑会把军费/人口全拿去买车。
+		if u_id in [5, TRADE_CART_ID]:
 			continue
-		if count_unit(u_id) < army_target and can_afford(u_id) and _can_train_unit_with_queue():
+		var unit_target: int = _field_army_target_for(int(u_id))
+		if count_unit(u_id) < unit_target and can_afford(u_id) and _can_train_unit_with_queue():
 			# 普通情况每轮补 1 个；资源临界满仓时一次多排几个，尽快把收入转成兵力。
 			var trained: int = 0
-			while trained < train_budget and count_unit(u_id) < army_target \
+			while trained < train_budget and count_unit(u_id) < unit_target \
 					and _can_train_unit_with_queue() and can_afford(u_id) and produce_unit(u_id):
 				trained += 1
 
