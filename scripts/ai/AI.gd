@@ -3339,6 +3339,7 @@ func _ai_garrison_soldiers() -> void:
 			if not is_instance_valid(u):
 				continue
 			u._garrison_target_id = bid
+			_director_claim(u, UnitRole.GARRISON, 20.0)
 			u.move_to(b.global_position)
 			candidates.erase(u)
 			assigned_total += 1
@@ -4891,11 +4892,51 @@ func _director_prune(now: float) -> void:
 		if u == null or not is_instance_valid(u) or not entity_belongs_to_me(u) or float(ent.get("until", 0.0)) <= now:
 			drop.append(uid)
 	for uid in drop:
-		_roles.erase(uid)
+		_director_release_role(int(uid))
 
 func _director_set_role(u, role: int, lease: float, now: float) -> void:
 	_roles[u.get_instance_id()] = {"role": role, "since": now, "until": now + lease}
 	u.set_meta("ai_role", role)
+
+# 统一认领接口：旧的 4 个防务调度器（守家/守墙/驻军/资源守卫）改走这里登记角色，
+# director 的兜底派单因此不会再碰它们，租约到期也能自动回收（后续步骤会把挑选逻辑也收进来）。
+func _director_claim(u, role: int, lease: float) -> void:
+	if u == null or not is_instance_valid(u) or battle == null:
+		return
+	_director_set_role(u, role, lease, float(battle.game_time))
+
+func _director_release(uid: int) -> void:
+	_roles.erase(uid)
+
+func _director_role_count(role: int) -> int:
+	var n: int = 0
+	for uid in _roles.keys():
+		var ent: Dictionary = _roles[uid]
+		if int(ent.get("role", -1)) == role:
+			n += 1
+	return n
+
+func _director_release_role(uid: int) -> void:
+	var ent = _roles.get(uid)
+	if ent == null:
+		return
+	var u = instance_from_id(uid)
+	if u != null and is_instance_valid(u):
+		var role: int = int(ent.get("role", 0))
+		match role:
+			UnitRole.WALL:
+				u.remove_meta("ai_wall_guard")
+				u.remove_meta(WALL_GUARD_SLOT_META)
+				u.remove_meta(WALL_GUARD_POS_META)
+				u.hold_position = false
+			UnitRole.HOME_GUARD:
+				u.remove_meta("ai_home_guard")
+				u.garrison_point = Vector3.ZERO
+			UnitRole.GARRISON:
+				u._garrison_target_id = -1
+			UnitRole.RESOURCE_GUARD:
+				u.remove_meta("ai_resource_guard")
+	_roles.erase(uid)
 
 func _director_dispatch(idle: Array, now: float) -> void:
 	var threatened: bool = _defense != null and int(_defense.threat_level) >= 2
@@ -5030,7 +5071,9 @@ func _process_line_4():
 	var want_attack_gate: bool = an_attack()
 	# 解锁守军的时机提前：原来它排在"家被打就 return"之后，导致守军永远解锁不了，
 	# 每个 AI 都有约 1/3 的兵被 ai_home_guard 永久锁在主城（实测 27 兵里锁 5 个）。
-	if want_attack_gate and _defense != null and count_field_military(my_key_gate) < 12:
+	# 解除守军不再绑"野战兵 < 12"这个条件：那个条件用的指标本身排除了守军，
+	# 兵越多守军越多、野战兵越少，反而永远不解锁（自锁）。现在每次主攻都解锁。
+	if want_attack_gate and _defense != null:
 		_defense.release_guards_for_attack()
 	# 压制姿态必须持续给实际部队下主攻命令：不要求先满 12 人，也不等 120 秒，
 	# 否则队列里的兵会让“压制”提前亮起，但场上实际部队一直不出门。
@@ -5216,6 +5259,7 @@ func _is_ranged_wall_candidate(e) -> bool:
 	return true
 
 func _assign_wall_guard(unit, wall, slot: int = 0, count: int = 1) -> void:
+	_director_claim(unit, UnitRole.WALL, 600.0)
 	unit.set_meta("ai_wall_guard", wall.get_instance_id())
 	unit.set_meta(WALL_GUARD_SLOT_META, slot)
 	unit.set_meta(WALL_GUARD_POS_META, _wall_guard_slot_position(wall, slot, count))
@@ -5268,6 +5312,7 @@ func _wall_guard_neighbor_axis(wall) -> Vector3:
 func _release_wall_guard(unit) -> void:
 	if not is_instance_valid(unit):
 		return
+	_director_release(unit.get_instance_id())
 	unit.remove_meta("ai_wall_guard")
 	unit.remove_meta(WALL_GUARD_SLOT_META)
 	unit.remove_meta(WALL_GUARD_POS_META)

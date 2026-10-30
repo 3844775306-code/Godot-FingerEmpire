@@ -175,6 +175,8 @@ var _guard_timer: float = 0.0
 var _guard_refill_timer: float = 0.0
 var _building_alert_timer: float = 0.0
 var _force_guard_until: float = -999.0
+# 主攻前解除守军后的静默期：期间不再抢人，避免刚放出去又被守军抓回
+var _guard_block_until: float = -999.0
 
 # ── 建筑被攻击追踪 ──
 var _building_health: Dictionary = {}
@@ -3126,7 +3128,9 @@ func _manage_home_guard(castle, delta: float) -> void:
 	var is_defending: bool = _defense_mode_active()
 	var walls_exist: bool = _has_valid_walls()
 	var desired: int = 0
-	if now < _force_guard_until:
+	if not is_defending and now < _guard_block_until:
+		desired = 0
+	elif now < _force_guard_until:
 		desired = own.size()
 	else:
 		match threat_level:
@@ -3217,6 +3221,8 @@ func _quick_fill_home_guard(castle, delta: float) -> void:
 		_manage_home_guard(castle, 0.0)
 		return
 	_prune_guard_ids()
+	if threat_level < 2 and float(ai.battle.game_time) < _guard_block_until:
+		return
 	if _home_guard_ids.size() >= HOME_GUARD_COUNT:
 		return
 	var own: Array = _land_combat_units()
@@ -3254,6 +3260,9 @@ func _quick_fill_home_guard(castle, delta: float) -> void:
 func release_guards_for_attack() -> void:
 	_force_guard_until = -999.0
 	_guard_timer = 0.0
+	# 解除后 20 秒内不再抓人：否则 2 秒一次的守军快补马上又把同一批兵抓回主城，
+	# 主攻刚放出去的人又被 garrison_point 卡住，等于没解锁。
+	_guard_block_until = float(ai.battle.game_time) + 20.0
 	for uid in _home_guard_ids.keys():
 		_release_guard(int(uid))
 	_home_guard_ids.clear()
@@ -3318,6 +3327,7 @@ func _assign_guard(unit, rally: Vector3) -> void:
 	var is_new: bool = not unit.has_meta("ai_home_guard")
 	_home_guard_ids[uid] = true
 	unit.set_meta("ai_home_guard", true)
+	ai._director_claim(unit, ai.UnitRole.HOME_GUARD, 60.0)
 	# 驻军点只为“新守军/换了集结点”更新，避免每 0.8 秒重建一次旗帜标记
 	if is_new or unit.garrison_point.distance_to(rally) > 1.0:
 		unit.set_garrison(rally)
@@ -3326,6 +3336,7 @@ func _assign_guard(unit, rally: Vector3) -> void:
 
 func _release_guard(uid: int) -> void:
 	_home_guard_ids.erase(uid)
+	ai._director_release(uid)
 	var u = instance_from_id(uid)
 	if u == null or not is_instance_valid(u):
 		return
@@ -3545,6 +3556,7 @@ func _defend_resources(castle) -> void:
 				var u = item["u"]
 				_resource_guard_ids[u.get_instance_id()] = true
 				u.set_meta("ai_resource_guard", true)
+				ai._director_claim(u, ai.UnitRole.RESOURCE_GUARD, 45.0)
 				u.set_garrison(hot_zone["center"])
 				if u.global_position.distance_to(hot_zone["center"]) > 5.0:
 					u.move_to(hot_zone["center"])
