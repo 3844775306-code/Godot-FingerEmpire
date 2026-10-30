@@ -63,6 +63,25 @@ class BuildPort:
 	func castle_lv() -> int:
 		return int(_ai.get_peer_castle(_ai.my_peer_id).upgrade_level) if _ai != null and _ai.get_peer_castle(_ai.my_peer_id) != null else 0
 
+# ───────────────────────── WorkerPort ─────────────────────────
+class WorkerPort:
+	var _ai = null
+
+	func _init(ai) -> void:
+		_ai = ai
+
+	func force_food_workers(workers) -> void:
+		if _ai != null:
+			_ai._force_food_workers(workers)
+
+	func emergency_rebalance(workers) -> void:
+		if _ai != null:
+			_ai._emergency_rebalance_workers(workers)
+
+	func consider_warehouse_near_farmer() -> void:
+		if _ai != null:
+			_ai.consider_warehouse_near_farmer()
+
 # ───────────────────────── RecruitPort ─────────────────────────
 class RecruitPort:
 	var _ai = null
@@ -118,12 +137,14 @@ var economy = null
 var build = null
 var command = null
 var recruit = null
+var worker = null
 
 func bind(ai) -> void:
 	economy = EconomyPort.new(ai)
 	build = BuildPort.new(ai)
 	command = CommandPort.new(ai)
 	recruit = RecruitPort.new(ai)
+	worker = WorkerPort.new(ai)
 
 func debug_snapshot() -> Dictionary:
 	return {"bound": economy != null}

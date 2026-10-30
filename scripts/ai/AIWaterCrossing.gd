@@ -158,7 +158,7 @@ func _refresh_plan():
 			return
 		# 到点：继续走下面的重算流程，用新的登陆/停泊岸点替换（船队状态不变）
 	var my_castle = _castle()
-	var enemy_castle = ai._get_attack_target_castle()
+	var enemy_castle = _ctx.attack_target_castle()
 	if not is_instance_valid(my_castle) or not is_instance_valid(enemy_castle):
 		_stop_all()
 		return
@@ -537,11 +537,11 @@ func _find_resource_bridge_plan(own_set: Dictionary, bridges: Dictionary, own_gr
 			if goal_tile.x < 0:
 				continue
 			var first_world: Vector3 = _ctx.grid_to_world(line[0].x, line[0].y)
-			if battle.has_method("is_valid_bridge_position") and not _ctx.is_valid_bridge_position(first_world):
+			if not _ctx.is_valid_bridge_position(first_world):
 				continue
 			var weight: float = 1.0
-			if ai != null and ai.has_method("_get_phase_weights"):
-				weight = maxf(0.3, float(ai._get_phase_weights().get(goal_type, 1.0)))
+			if true:
+				weight = maxf(0.3, float(_ctx.phase_weights().get(goal_type, 1.0)))
 			# 桥越短越优先；资源越紧缺、离己方主城越近越优先
 			var score: float = float(line.size()) * 10.0
 			score += Vector2(line[0]).distance_to(Vector2(own_grid)) * 0.8
@@ -598,7 +598,7 @@ func _find_transport_shores(own_set: Dictionary, enemy_set: Dictionary, bridges:
 	if own_shores.is_empty() or enemy_shores.is_empty():
 		return {}
 	var my_castle = _castle()
-	var enemy_castle = ai._get_attack_target_castle()
+	var enemy_castle = _ctx.attack_target_castle()
 	if not is_instance_valid(my_castle) or not is_instance_valid(enemy_castle):
 		return {}
 	var own_grid: Vector2i = _ctx.world_to_grid(my_castle.global_position)
@@ -724,7 +724,7 @@ func _find_transport_shores(own_set: Dictionary, enemy_set: Dictionary, bridges:
 # 农民/商人/官员以及资源点不参与，避免把普通村庄误判成重兵把守。
 func _collect_landing_defenses() -> Array:
 	var out: Array = []
-	for e in ai._cached_armies():
+	for e in _ctx.cached_armies():
 		if not is_instance_valid(e) or e.health <= 0:
 			continue
 		if int(e.team) == RTSConfig.Team.NEUTRAL:
@@ -740,7 +740,7 @@ func _collect_landing_defenses() -> Array:
 			"pos": e.global_position,
 			"score": 1.0 + maxf(0.0, float(e.attack)) * 0.06 + maxf(0.0, float(e.target_type)) * 0.18
 		})
-	for b in ai._cached_buildings():
+	for b in _ctx.cached_buildings():
 		if not is_instance_valid(b) or b.health <= 0:
 			continue
 		if int(b.team) == RTSConfig.Team.NEUTRAL or b.build_timer > 0.0:
@@ -856,7 +856,7 @@ func _recalculate_army_paths():
 				e.recalculate_path()
 	# 新桥会让对岸资源变得可达；立刻重分配一次农民，
 	# 否则他们可能还停在修桥前的旧目标/闲置状态里。
-	if ai != null and ai.has_method("allocate_workers"):
+	if _ports.command != null:
 		_ports.command.request_worker_rebalance()
 
 # ═══════════════════════ 运载船 ═══════════════════════
@@ -945,7 +945,7 @@ func _usable_transport_count() -> int:
 func _tick_transport(delta: float):
 	if not _transport_shores_valid:
 		return
-	if ai._is_defending():
+	if _ctx.is_defending():
 		# 防守时释放护航舰/运载船；不要把海军锁在渡水任务里
 		_abort_transport()
 		return
@@ -1108,7 +1108,7 @@ func _tick_fleet_idle(delta: float):
 			u.remove_meta("ai_home_guard")
 			u.remove_meta("ai_resource_guard")
 			if u.has_meta("ai_wall_guard"):
-				if ai != null and ai.has_method("_release_wall_guard"):
+				if _ports.command != null:
 					_ports.command.release_wall_guard(u)
 				else:
 					u.remove_meta("ai_wall_guard")
@@ -1265,7 +1265,7 @@ func _tick_fleet_sail(delta: float):
 			_stall_transport()
 		return
 	_fleet_sail_timer = 0.0
-	var enemy_castle = ai._get_attack_target_castle()
+	var enemy_castle = _ctx.attack_target_castle()
 	for u in _transport_units:
 		if is_instance_valid(u) and u is Army:
 			u.remove_meta("ai_transporting")
@@ -1622,7 +1622,7 @@ func _find_shore_shipyard_pos() -> Vector3:
 				if not has_water:
 					continue
 				var pos: Vector3 = _ctx.grid_to_world(gx, gz)
-				if ai.has_method("_can_place_ai_building") and not ai._can_place_ai_building(SHIPYARD_ID, pos):
+				if not _ports.build.can_place(SHIPYARD_ID, pos):
 					continue
 				return pos
 	return Vector3.ZERO
@@ -1683,7 +1683,7 @@ func _ensure_transport_fleet():
 	if not has_transport:
 		# 船坞升级时正常会补全生产列表；这里兜底，避免升级完成事件的边缘情况
 		sy.production_list.append({"unit_id": TRANSPORT_ID, "cooldown": 15.0, "queue_limit": 3})
-	if not ai._can_train_unit():
+	if not _ports.recruit.can_train():
 		return
 	if _afford(TRANSPORT_ID):
 		if sy.try_produce(TRANSPORT_ID):
@@ -1712,7 +1712,7 @@ func _ensure_escort_ships():
 			break
 	if not has_warship:
 		sy.production_list.append({"unit_id": 13, "cooldown": 7.0, "queue_limit": 5})
-	if not ai._can_train_unit():
+	if not _ports.recruit.can_train():
 		return
 	if _afford(13):
 		sy.try_produce(13)
@@ -1727,49 +1727,31 @@ func set_ports(p) -> void:
 	_ports = p
 
 func _belongs(e) -> bool:
-	if _ctx != null:
-		return _ctx.belongs_to_me(e)
-	return ai.entity_belongs_to_me(e) if ai != null else false
+	return _ctx.belongs_to_me(e)
 
 func _castle():
-	if _ctx != null:
-		return _ctx.castle()
-	return ai.get_peer_castle(ai.my_peer_id) if ai != null else null
+	return _ctx.castle()
 
 func _castle_of(team: int):
-	if _ctx != null:
-		return _ctx.team_castle_of(team)
-	return ai.get_team_castle(team) if ai != null else null
+	return _ctx.team_castle_of(team)
 
 func _count_unit(unit_id: int, include_queue: bool = true) -> int:
-	if _ctx != null:
-		return _ctx.count_unit(unit_id, include_queue)
-	return int(ai.count_unit(unit_id, include_queue)) if ai != null else 0
+	return _ctx.count_unit(unit_id, include_queue)
 
 func _count_bld(building_id: int) -> int:
-	if _ctx != null:
-		return _ctx.count_building(building_id)
-	return int(ai.count_building(building_id)) if ai != null else 0
+	return _ctx.count_building(building_id)
 
 func _is_enemy_ent(e) -> bool:
-	if _ctx != null:
-		return _ctx.is_enemy(e)
-	return ai._entity_is_enemy(e) if ai != null else false
+	return _ctx.is_enemy(e)
 
 func _afford(id: int) -> bool:
-	if _ctx != null:
-		return _ctx.can_afford(id)
-	return ai.can_afford(id) if ai != null else false
+	return _ctx.can_afford(id)
 
 func _afford_bld(id: int) -> bool:
-	if _ctx != null:
-		return _ctx.can_afford_building(id)
-	return ai.can_afford_building(id) if ai != null else false
+	return _ctx.can_afford_building(id)
 
 func _afford_upg(id: int) -> bool:
-	if _ctx != null:
-		return _ctx.can_afford_upgrade(id)
-	return ai.can_afford_upgrade(id) if ai != null else false
+	return _ctx.can_afford_upgrade(id)
 func _now() -> float:
 	return _ctx.game_time() if _ctx != null else float(ai.battle.game_time)
 

@@ -213,19 +213,13 @@ func set_context(c) -> void:
 	_ctx = c
 
 func _belongs(e) -> bool:
-	if _ctx != null:
-		return _ctx.belongs_to_me(e)
-	return ai.entity_belongs_to_me(e) if ai != null else false
+	return _ctx.belongs_to_me(e)
 
 func _count_bld(building_id: int) -> int:
-	if _ctx != null:
-		return _ctx.count_building(building_id)
-	return int(ai.count_building(building_id)) if ai != null else 0
+	return _ctx.count_building(building_id)
 
 func _is_enemy_ent(e) -> bool:
-	if _ctx != null:
-		return _ctx.is_enemy(e)
-	return ai._entity_is_enemy(e) if ai != null else false
+	return _ctx.is_enemy(e)
 
 # A3：写操作只经端口（BuildPort/CommandPort），不再直接调控制器。
 var _build_port = null
@@ -3840,41 +3834,41 @@ func _count_enemy_combat_near(pos: Vector3, radius: float) -> int:
 
 # ── A2 收尾：剩余读取的上下文包装（未绑定时回落控制器，A3 之后删除回落）──
 func _castle():
-	return _ctx.castle() if _ctx != null else (ai.get_peer_castle(ai.my_peer_id) if ai != null else null)
+	return _ctx.castle()
 
 func _team_castle(team: int):
-	return _ctx.team_castle_of(team) if _ctx != null else (ai.get_team_castle(team) if ai != null else null)
+	return _ctx.team_castle_of(team)
 
 func _res() -> Dictionary:
-	return _ctx.resources() if _ctx != null else (ai._get_resources() if ai != null else {})
+	return _ctx.resources()
 
 func _limits() -> Dictionary:
-	return _ctx.limits() if _ctx != null else (ai._get_limits() if ai != null else {})
+	return _ctx.limits()
 
 func _is_defending_v() -> bool:
-	return _ctx.is_defending() if _ctx != null else (ai._is_defending() if ai != null else false)
+	return _ctx.is_defending()
 
 func _primary_team() -> int:
-	return _ctx.primary_enemy_team() if _ctx != null else (int(ai._primary_enemy_team()) if ai != null else -1)
+	return _ctx.primary_enemy_team()
 
 func _ranged_wall_ok(unit) -> bool:
-	return _ctx.is_ranged_wall_candidate(unit) if _ctx != null else (ai._is_ranged_wall_candidate(unit) if ai != null else false)
+	return _ctx.is_ranged_wall_candidate(unit)
 
 func _enemy_army_near(pos: Vector3, radius: float = -1.0) -> bool:
 	if radius < 0.0:
 		if _ctx != null:
 			return _ctx.enemy_army_within(pos, 10.0)
 		return ai._enemy_army_within(pos) if ai != null else false
-	return _ctx.enemy_army_within(pos, radius) if _ctx != null else (ai._enemy_army_within(pos, radius) if ai != null else false)
+	return _ctx.enemy_army_within(pos, radius)
 
 func _afford(id: int) -> bool:
-	return _ctx.can_afford(id) if _ctx != null else (ai.can_afford(id) if ai != null else false)
+	return _ctx.can_afford(id)
 
 func _afford_bld(id: int) -> bool:
-	return _ctx.can_afford_building(id) if _ctx != null else (ai.can_afford_building(id) if ai != null else false)
+	return _ctx.can_afford_building(id)
 
 func _afford_upg(id: int) -> bool:
-	return _ctx.can_afford_upgrade(id) if _ctx != null else (ai.can_afford_upgrade(id) if ai != null else false)
+	return _ctx.can_afford_upgrade(id)
 func _now() -> float:
 	return _ctx.game_time() if _ctx != null else float(ai.battle.game_time)
 

@@ -561,3 +561,31 @@ R4 从约 170 降到 92，主要是 AIDefense（121→44）。
 **踩坑（第五个）**：`BuildPort.build` 起初只接受 2 个参数，但原 `build_building` 有第三个 `facing` 参数，且部分调用点只传 1 个参数。端口的签名必须**兼容原方法的全部重载形态**，否则运行期才发现 `Expected 2 argument(s)`。最终改为 `build(id, pos = null, facing = null)` 三态分发。
 
 **剩余**：R1 75 处集中在 AIDefense（22，含 11 处包装兜底）、AIWaterCrossing（22）、AIWorkerDirector（20）——多为策略查询（`_get_phase_weights` / `_food_emergency` / `_resource_ratio` / `find_best_resource_for_worker`）与专项九动作（`_get_attack_target_castle` / `build_ladder`），需要 A5 第三步按"纯查询进上下文、动作进端口"继续拆。
+
+---
+
+## 20. A5 第三步：兜底分支清零，R1 从 75 降到 19（2026-10-31 05:15）
+
+**做法**：
+1. 策略查询进 `AIContext`：新增 `food_emergency` / `all_gather_resources_full` / `worker_is_fleeing` / `resource_ratio` / `pressure_threshold` / `worker_resource_weights` / `find_best_resource_for_worker` / `attack_target_castle` 八个只读查询；
+2. 动作进端口：新增 `WorkerPort`（`force_food_workers` / `emergency_rebalance` / `consider_warehouse_near_farmer`）；
+3. **删除全部兜底分支**：三个模块里 `if _ctx != null ... return ai.xxx` 的过渡代码共 **25 处**（AIDefense 14、WaterCrossing 9、WorkerDirector 2）全部移除，包装函数变成纯 `_ctx` 转发。前提是上下文在 `_ready` 内创建、任何 tick 之前完成绑定，已验证。
+
+**检查结果**：
+
+| 模块 | A5 第二步 | A5 第三步 |
+|---|---|---|
+| AIDefense | 22（11 兜底） | **8**（无兜底）|
+| AIWorkerDirector | 20 | **0** |
+| AIWaterCrossing | 22 | **0** |
+| AILadderSiege | 7 | 7 |
+| AIWallPlanner | 4 | 4 |
+| **合计 R1** | **75** | **19** |
+
+`AIWorkerDirector` 与 `AIWaterCrossing` 对控制器的直接调用**已归零**。
+
+**验证**：2 分钟 3v3 HELL → `front 64.7% / idle 20.6% / engage 35.3% / 农民 11.6`，脚本错误 0。
+
+**踩坑（第六个）**：删除 `if ai.has_method("_get_phase_weights"):` 这类守卫行时，**留下了缩进更深的子行**，形成非法缩进块（`var weight: float = 1.0` 后面直接跟三层 Tab 的赋值）。GDScript 解析报错。修法是保留一个 `if true:` 或整体降一级缩进——批量删守卫必须连带处理其子块缩进。
+
+**剩余**：R1 19 处（AIDefense 8、LadderSiege 7、WallPlanner 4）+ R2 5 处（WallPlanner 引用 AIDefense/AIWaterCrossing 类型）。R4 仍有 91 处 `battle.`（AIDefense 44、LadderSiege 20、WaterCrossing 19），这部分多与实体遍历相关，需要 AISituation 提供更完整的实体视图后再动。

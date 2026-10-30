@@ -162,3 +162,32 @@ func can_train_unit_with_queue() -> bool:
 
 func phase_weights() -> Dictionary:
 	return _ai._get_phase_weights() if _ai != null else {}
+
+# ── 策略查询（只读，转发给控制器；A6 之后改为由 Director 提供）──
+func food_emergency() -> bool:
+	return bool(_ai._food_emergency()) if _ai != null else false
+
+func all_gather_resources_full() -> bool:
+	return bool(_ai._all_gather_resources_full()) if _ai != null else false
+
+func worker_is_fleeing(w) -> bool:
+	return bool(_ai._worker_is_fleeing(w)) if _ai != null else false
+
+func resource_ratio(kind) -> float:
+	return float(_ai._resource_ratio(kind)) if _ai != null else 0.0
+
+func pressure_threshold() -> float:
+	return float(_ai._pressure_threshold()) if _ai != null else 0.0
+
+func worker_resource_weights() -> Dictionary:
+	return _ai._worker_resource_weights() if _ai != null else {}
+
+func find_best_resource_for_worker(w, weights = null) -> Variant:
+	if _ai == null:
+		return null
+	if weights == null:
+		return _ai.find_best_resource_for_worker(w)
+	return _ai.find_best_resource_for_worker(w, weights)
+
+func attack_target_castle():
+	return _ai._get_attack_target_castle() if _ai != null else null

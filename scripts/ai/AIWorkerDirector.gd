@@ -68,8 +68,8 @@ func allocate() -> void:
 	ai.desired_worker_count = _worker_target_count()
 
 	# 食物/稀缺资源救急仍然复用旧实现，第 3 阶段再收编。
-	ai._force_food_workers(workers)
-	ai._emergency_rebalance_workers(workers)
+	_ports.worker.force_food_workers(workers)
+	_ports.worker.emergency_rebalance(workers)
 
 	ensure_worker_count(workers)
 	_assign_idle(workers)
@@ -97,10 +97,10 @@ func ensure_worker_count(workers: Array = []) -> bool:
 	if total < floor_count:
 		# 保底优先：不受食物告急、资源满仓、建造预留限制。
 		return _try_train_worker("floor")
-	if ai._food_emergency():
+	if _ctx.food_emergency():
 		_last_train_block = "food_crisis"
 		return false
-	if ai._all_gather_resources_full():
+	if _ctx.all_gather_resources_full():
 		_last_train_block = "all_full"
 		return false
 	return _try_train_worker("target")
@@ -143,7 +143,7 @@ func acquire_builder(pos: Vector3, critical: bool = false, max_dist: float = 60.
 		var w = rec.get("unit")
 		if w == null or not is_instance_valid(w) or w.health <= 0 or not w.can_move:
 			continue
-		if ai._worker_is_fleeing(w) or _is_garrisoned(w):
+		if _ctx.worker_is_fleeing(w) or _is_garrisoned(w):
 			continue
 		if String(w.current_order) == "build":
 			continue
@@ -204,7 +204,7 @@ func has_available_builder(pos: Vector3, critical: bool = false, max_dist: float
 		var w = _workers[uid].get("unit")
 		if w == null or not is_instance_valid(w) or w.health <= 0 or not w.can_move:
 			continue
-		if ai._worker_is_fleeing(w) or _is_garrisoned(w):
+		if _ctx.worker_is_fleeing(w) or _is_garrisoned(w):
 			continue
 		var order: String = String(w.current_order)
 		if order == "build":
@@ -410,7 +410,7 @@ func _update_flee() -> void:
 			var resume = _flee_resume.get(uid)
 			if is_instance_valid(resume) and resume is WorldResource:
 				var rk: String = String(resume.resource_type)
-				if ai._resource_ratio(rk) < ai._pressure_threshold():
+				if _ctx.resource_ratio(rk) < _ctx.pressure_threshold():
 					w.gather_at(resume)
 			_flee_resume.erase(uid)
 
@@ -482,15 +482,15 @@ func _assign_idle(workers: Array) -> void:
 	for w in workers:
 		if not is_instance_valid(w) or w.health <= 0:
 			continue
-		if ai._worker_is_fleeing(w):
+		if _ctx.worker_is_fleeing(w):
 			continue
 		if w.has_meta("ai_flee_until"):
 			w.remove_meta("ai_flee_until")
 		if w.current_target == null and w.current_order == "":
-			var weights: Dictionary = ai._worker_resource_weights()
+			var weights: Dictionary = _ctx.worker_resource_weights()
 			if weights.is_empty():
 				continue
-			var target = ai.find_best_resource_for_worker(w, weights)
+			var target = _ctx.find_best_resource_for_worker(w, weights)
 			if target != null:
 				w.gather_at(target)
 
@@ -498,24 +498,24 @@ func _assign_idle(workers: Array) -> void:
 func _reassign_full(workers: Array) -> void:
 	var full_types: Array = []
 	for rk in ["gold", "wood", "stone", "food"]:
-		if ai._resource_ratio(rk) >= ai._pressure_threshold():
+		if _ctx.resource_ratio(rk) >= _ctx.pressure_threshold():
 			full_types.append(rk)
 	if full_types.is_empty():
 		return
-	var alt_weights: Dictionary = ai._worker_resource_weights()
+	var alt_weights: Dictionary = _ctx.worker_resource_weights()
 	if alt_weights.is_empty():
 		return
 	for w in workers:
 		if not is_instance_valid(w) or w.health <= 0:
 			continue
-		if ai._worker_is_fleeing(w) or String(w.current_order) == "deliver":
+		if _ctx.worker_is_fleeing(w) or String(w.current_order) == "deliver":
 			continue
 		var tgt = w.current_target
 		if not (is_instance_valid(tgt) and tgt is WorldResource):
 			continue
 		if not (String(tgt.resource_type) in full_types):
 			continue
-		var alt = ai.find_best_resource_for_worker(w, alt_weights)
+		var alt = _ctx.find_best_resource_for_worker(w, alt_weights)
 		if alt != null and not (String(alt.resource_type) in full_types):
 			w.gather_at(alt)
 
@@ -524,11 +524,11 @@ func _periodic_rebalance(workers: Array) -> void:
 	ai.allocate_timers += 1
 	if ai.allocate_timers <= 10:
 		return
-	ai.consider_warehouse_near_farmer()
+	_ports.worker.consider_warehouse_near_farmer()
 	ai.allocate_timers = 0
 	var res: Dictionary = _ctx.resources()
 	var limits: Dictionary = _ctx.limits()
-	var phase_weights: Dictionary = ai._worker_resource_weights()
+	var phase_weights: Dictionary = _ctx.worker_resource_weights()
 	var scarcity: Dictionary = {}
 	var total_weight: float = 0.0
 	for rk in ["gold", "wood", "stone", "food"]:
@@ -557,7 +557,7 @@ func _periodic_rebalance(workers: Array) -> void:
 		else:
 			idle.append(w)
 	for w in workers:
-		if not is_instance_valid(w) or w.health <= 0 or ai._worker_is_fleeing(w):
+		if not is_instance_valid(w) or w.health <= 0 or _ctx.worker_is_fleeing(w):
 			continue
 		if String(w.current_order) != "deliver":
 			continue
@@ -568,7 +568,7 @@ func _periodic_rebalance(workers: Array) -> void:
 					idle.append(w)
 				break
 	for w in idle:
-		if not is_instance_valid(w) or w.health <= 0 or ai._worker_is_fleeing(w):
+		if not is_instance_valid(w) or w.health <= 0 or _ctx.worker_is_fleeing(w):
 			continue
 		var best_rk: String = ""
 		var best_gap: float = -1.0
@@ -579,7 +579,7 @@ func _periodic_rebalance(workers: Array) -> void:
 				best_rk = String(rk)
 		if best_rk == "":
 			continue
-		var target = ai.find_best_resource_for_worker(w, {best_rk: 100})
+		var target = _ctx.find_best_resource_for_worker(w, {best_rk: 100})
 		if target != null:
 			w.gather_at(target)
 			current[best_rk] = int(current.get(best_rk, 0)) + 1
@@ -615,7 +615,7 @@ func _log_metrics() -> void:
 	var mode: String = "NORMAL"
 	if live + queued <= _worker_floor_count():
 		mode = "WORKER_CRISIS"
-	elif ai._food_emergency():
+	elif _ctx.food_emergency():
 		mode = "FOOD_CRISIS"
 	elif _threat_level() >= 2:
 		mode = "BASE_ALERT"
@@ -654,19 +654,13 @@ func set_context(c) -> void:
 	_ctx = c
 
 func _belongs(e) -> bool:
-	if _ctx != null:
-		return _ctx.belongs_to_me(e)
-	return _belongs(e) if ai != null else false
+	return _ctx.belongs_to_me(e)
 
 func _phase_v() -> int:
-	if _ctx != null:
-		return _ctx.phase()
-	return int(ai.phase) if ai != null else 0
+	return _ctx.phase()
 
 func _threat_level() -> int:
-	if _ctx != null:
-		return _ctx.defense_threat_level()
-	return int(ai._defense.threat_level) if ai != null and ai._defense != null else 0
+	return _ctx.defense_threat_level()
 func _now() -> float:
 	return _ctx.game_time() if _ctx != null else float(ai.battle.game_time)
 
