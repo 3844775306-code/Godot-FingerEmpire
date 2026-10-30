@@ -70,7 +70,6 @@ var _last_spend_block: String = ""
 var _last_spend_block_time: float = -999.0
 var _last_emergency_rebalance_time: float = -999.0
 var _last_wall_sink_time: float = -999.0
-var _stone_share_timer: float = 0.0
 
 # ═══ 资源溢出治理 ═══
 # 旧逻辑里军队/建筑都有固定上限（每兵种 7 个、民居 8 座、兵营 3 座…），
@@ -86,7 +85,6 @@ const RESOURCE_PRESSURE_TRAIN_BURST: int = 2     # 最紧张时一次决策最�
 
 var cached_shipyard_pos: Vector3 = Vector3.ZERO
 var defense_line_built: bool = false
-var defense_check_timer: float = 0.0
 var defense_initialized: bool = false   # 防线位置已规划（进入分批建造阶段）
 var _defense_queue: Array = []          # 待建防线队列：[{"id": 建筑id, "pos": 位置}]
 const DEFENSE_CHECK_INTERVAL: float = 120.0
@@ -98,7 +96,6 @@ var _ladder_siege = null                 # AILadderSiege 模块：造梯子翻�
 var _worker_director = null              # WorkerDirector 模块：农民只读账本（第 1 阶段）
 var _harass_ids: Dictionary = {}         # 当前骚扰小队 instance_id -> true
 var _harass_until: float = -999.0        # 骚扰小队回收时间
-var _upgrade_cycle_timer: float = 20.0   # 每20秒切换
 var _in_upgrade_cycle: bool = true     # 前20秒为升级周期
 var _castle_rush_done: Array = [false, false, false]  # 3/6/10min castle rush
 var wall_positions: Array = []
@@ -108,7 +105,6 @@ const TACTIC_COOLDOWN: float = 25.0
 var last_tactic_time: float = -999.0
 var nation = -1
 
-var _ai_income_timer: float = 10.0
 var _last_delta: float = 2.0
 # P3.0：自上一轮决策开始以来经过的真实时间（每帧累加，决策开始时取出并清零）。
 # _last_delta 只等于「本轮所在单帧的 delta」，按轮次递减的计时器会严重低估经过时间。
@@ -117,7 +113,6 @@ var _ai_res_snapshot: Dictionary = {}
 var _ai_res_income: Dictionary = {}
 var _ai_income_rate: Dictionary = {"gold":0,"wood":0,"stone":0,"food":0,"oil":0}
 var _territory_timer: float = 120.0
-var _hunt_timer: float = 0.0
 var _hunt_target = null
 var _hunt_target_id: int = -1
 var _visible_enemies: Array = []  # enemies visible to AI (refreshed each think cycle)
@@ -1911,6 +1906,12 @@ func _ready():
 	_ai_clock.add("age_build", AGE_BUILDING_CHECK_INTERVAL, 1.0)
 	_ai_clock.add("wall_deploy", WALL_DEPLOY_INTERVAL)
 	_ai_clock.add("garrison", GARRISON_CHECK_INTERVAL)
+	# P3.3：固定周期计时器统一交给 AIClock（时钟按帧推进，精度与逐帧自减一致）。
+	_ai_clock.add("income", 10.0)
+	_ai_clock.add("stone_share", 5.0)
+	_ai_clock.add("hunt", 8.0)
+	_ai_clock.add("upgrade_cycle", 20.0)
+	_ai_clock.add("defense_gap", DEFENSE_CHECK_INTERVAL)
 	_situation = AISituationScript.new()
 	_ledger = RoleLedgerScript.new()
 	_director_v2 = AIDirectorScript.new()
@@ -1940,6 +1941,10 @@ func _ai_simulation_tick(delta):
 		return
 	# P3.0：真实轮间时间累积（两种时钟模式都累加，切换开关时无需改这里）。
 	_elapsed_since_round += delta
+	# P3.3（重做第一步）：时钟按帧推进，due() 才能拿到帧级精度；
+	# 之前只在决策轮 step 0 推进一次，短周期计时器会被压成"每轮一触发"。
+	if _ai_clock != null:
+		_ai_clock.advance(delta)
 	# Set think interval based on difficulty (once) + 错开各 AI 的计时器。
 	# 多 AI 同时开局时，timer/worker/naval 都为 0，会在同一帧集中做全实体扫描和寻路，
 	# 造成明显的周期性卡顿；按 peer/instance id 相位错开可把峰值摊到不同帧。
@@ -1962,7 +1967,6 @@ func _ai_simulation_tick(delta):
 		# 进贡也错开：第一个 AI 不会在开局第 0 秒就送资源
 		_tribute_to_human_timer = TRIBUTE_ALLY_INTERVAL * phase + 5.0
 	timer -= delta
-	_ai_income_timer -= delta
 	if _ai_res_snapshot.is_empty():
 		_ai_res_snapshot = _get_resources().duplicate()
 	else:
@@ -1972,8 +1976,7 @@ func _ai_simulation_tick(delta):
 			var pv = _ai_res_snapshot.get(rk, cv)
 			if cv > pv: _ai_res_income[rk] = _ai_res_income.get(rk, 0) + (cv - pv)
 			_ai_res_snapshot[rk] = cv
-	if _ai_income_timer <= 0:
-		_ai_income_timer = 10.0
+	if _ai_clock != null and _ai_clock.due("income"):
 		for rk in ["gold","wood","stone","food","oil"]:
 			_ai_income_rate[rk] = _ai_res_income.get(rk, 0) / 10.0
 			_ai_res_income[rk] = 0
@@ -2037,9 +2040,7 @@ func _ai_simulation_tick(delta):
 		_tick_building_repair()
 	# 2v2/3v3 的石头共享独立节流：不依赖当前 phase 是否调用 _process_line_1，
 	# 否则生产卡住的 AI 会一直满仓、队友却缺石头造墙。
-	_stone_share_timer -= delta
-	if _stone_share_timer <= 0.0:
-		_stone_share_timer = 5.0
+	if _ai_clock != null and _ai_clock.due("stone_share"):
 		_spend_surplus_stone_on_walls()
 		_share_surplus_stone_with_ally()
 	# AI 队友向真人玩家进贡：2v2/3v3 才存在同队真人，1v1/FFA 找不到目标会自动跳过。
@@ -2384,8 +2385,7 @@ func _run_decide_step(step: int) -> void:
 		return
 	match step:
 		0:
-			if _ai_clock != null:
-				_ai_clock.advance(_last_delta)
+			# 时钟已在 _ai_simulation_tick 逐帧推进，这里不再重复累加。
 			if my_peer_id != -1 and battle.has_method("update_player_limits"):
 				battle.update_player_limits(my_peer_id)
 				battle.update_player_population(my_peer_id)
@@ -3514,9 +3514,9 @@ func _is_hunting_heavy_map() -> bool:
 	return false
 
 func _ai_hunt_animals(delta):
-	_hunt_timer -= delta
-	if _hunt_timer > 0: return
-	_hunt_timer = 8.0   # 持续狩猎：每 8 秒补齐一次猎手，动物死了能自动换目标
+	# 持续狩猎：每 8 秒补齐一次猎手，动物死了能自动换目标（节拍交给 AIClock）。
+	if _ai_clock == null or not _ai_clock.due("hunt"):
+		return
 
 	# 只派农民；农民总数超过 15 才分人出去，前期不打断采集
 	var peasants: Array = []
@@ -3594,8 +3594,9 @@ func _check_hunt_cleanup():
 				if e.entity_id == 10: e._find_nearest_resource()
 		_hunt_target = null
 		# 猎杀完成后快速寻找新目标（若猎人不足3）
-		if active_hunters >= 3:
-			_hunt_timer = 5.0
+		if active_hunters >= 3 and _ai_clock != null:
+			# 猎手够了：把下一次补手往回拉，不必等满 8 秒。
+			_ai_clock.reset("hunt", 0.35)
 
 # ═══ Tactics ═══
 func update_tactic(_delta):
@@ -3955,9 +3956,7 @@ func _manage_defense(_delta):
 	if castle.upgrade_level < 2:
 		return
 	# 周期补建：防线建筑被摧毁/拆除后重新加入待建队列
-	defense_check_timer -= _delta
-	if defense_check_timer <= 0.0:
-		defense_check_timer = DEFENSE_CHECK_INTERVAL
+	if _ai_clock != null and _ai_clock.due("defense_gap"):
 		_queue_defense_gaps()
 	# 首次规划防线位置（不做一次性批量建造）
 	if not defense_initialized:
@@ -4427,9 +4426,7 @@ func _find_most_officiated_s() -> Building:
 # 升级周期：development阶段每20秒切换一次
 func _should_skip_for_upgrade_cycle(delta) -> bool:
 	if phase != Phase.DEVELOPMENT: return false
-	_upgrade_cycle_timer -= delta
-	if _upgrade_cycle_timer <= 0:
-		_upgrade_cycle_timer = 20.0
+	if _ai_clock != null and _ai_clock.due("upgrade_cycle"):
 		_in_upgrade_cycle = not _in_upgrade_cycle
 	return _in_upgrade_cycle and _any_building_can_upgrade()
 
@@ -5916,7 +5913,7 @@ func update_debug_label():
 		if cnt > 0: bld_lines.append("[color=#b6ad9f]%s【%d】%s[/color]:[color=white]%d[/color]" % [UITheme.entity_emoji(b[0], 1), max_lv, b[1], cnt])
 	_bld_rtl.text = "[color=#a39a8e](无建筑)[/color]" if bld_lines.is_empty() else " ".join(bld_lines)
 	if _bld_title: _bld_title.text = "[color=#7cc4ff]▸ 🏰 建筑 %d[/color]" % bld_total
-	var hunt_info = "[color=#ffd27a]🏹 狩猎: %.0fs[/color]" % max(0, _hunt_timer)
+	var hunt_info = "[color=#ffd27a]🏹 狩猎: %.0fs[/color]" % (_ai_clock.remaining("hunt") if _ai_clock != null else 0.0)
 	if _hunt_target and is_instance_valid(_hunt_target):
 		hunt_info += " [color=#ff9a8a]目标:%s 猎人:%d/5[/color]" % [_hunt_target.get("_animal_type"), hunt_count]
 	else: hunt_info += " [color=#a39a8e](待命)[/color]"

@@ -35,6 +35,10 @@ func remove(key: String) -> void:
 func has(key: String) -> bool:
 	return _entries.has(key)
 
+func remaining(key: String) -> float:
+	var e = _entries.get(key)
+	return float(e["timer"]) if e != null else 0.0
+
 func interval_of(key: String) -> float:
 	var e = _entries.get(key)
 	return float(e["interval"]) if e != null else 0.0
