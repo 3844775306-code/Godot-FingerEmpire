@@ -2,9 +2,11 @@
 extends Node
 
 const SFX_POOL_SIZE = 20
+const ALERT_COOLDOWN_MS: int = 15000
 var _music_player: AudioStreamPlayer
 var _sfx_pool: Array[AudioStreamPlayer] = []
 var _sfx_index: int = 0
+var _last_alert_msec: int = -ALERT_COOLDOWN_MS
 	# Network audio sync
 var _cooldowns: Dictionary = {}  # per-key frame cooldown
 var _sfx_cache: Dictionary = {}   # key -> AudioStream，避免每次播放都做 exists/load
@@ -86,6 +88,16 @@ func play_sfx(key: String, volume_scale: float = 1.0):
 	p.volume_db = linear_to_db(_sfx_volume * clampf(volume_scale, 0.0, 1.0))
 	p.pitch_scale = 1.0
 	p.play()
+
+# 战事警报单独限流：15 秒内最多播放一次。
+# 单机、联机主机和联机客户端都走这里，避免建筑/单位连续受击时警报声刷屏。
+func play_alert() -> bool:
+	var now := Time.get_ticks_msec()
+	if now - _last_alert_msec < ALERT_COOLDOWN_MS:
+		return false
+	_last_alert_msec = now
+	play_sfx("alert", 0.72)
+	return true
 
 # 音效资源按 key 懒缓存。后期混战时 play_sfx_3d 每秒会被调用很多次，
 # 每次都 ResourceLoader.exists + load 会造成不必要的资源系统开销。
