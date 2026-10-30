@@ -240,14 +240,13 @@ static func _play_sword_attack(sword: Node3D, swing_duration: float = 0.0) -> vo
 	var k := _period_scale(swing_duration, 0.35)
 	var tw := sword.create_tween()
 	sword.set_meta("_wa_tween", tw)
-	# 蓄力：剑向右后方抬起；随后沿正前方斜劈下去。
-	# 只绕 Z 轴左右摆会变成横向平移，必须叠加 X 轴的前倾/下劈和向前的位移。
-	# 近战停止距离约等于双方半径 + 攻击距离，剑还要再向前探一段才够得着敌方，
-	# 所以劈砍段把剑压到接近水平并向前送，让剑尖真正扫到目标身上。
+	# 剑只能绕握把旋转，不能靠平移把整把剑“送”出去；否则补间一开始
+	# 剑就会离开手心。向前够的距离由手臂攻击动作负责，这里只做手腕的
+	# 小幅前压和剑身旋转，保证握把始终贴着骨骼挂点。
 	tw.tween_property(sword, "rotation", base_rot + Vector3(-0.24, 0.0, -0.58), 0.07 * k)
-	tw.parallel().tween_property(sword, "position", base_pos + Vector3(0.0, 0.03, -0.05), 0.07 * k)
+	tw.parallel().tween_property(sword, "position", base_pos + Vector3(0.0, 0.02, 0.0), 0.07 * k)
 	tw.tween_property(sword, "rotation", base_rot + Vector3(1.35, 0.0, 0.18), 0.10 * k)
-	tw.parallel().tween_property(sword, "position", base_pos + Vector3(0.02, -0.02, 0.60), 0.10 * k)
+	tw.parallel().tween_property(sword, "position", base_pos + Vector3(0.0, -0.01, 0.02), 0.10 * k)
 	tw.tween_property(sword, "rotation", base_rot, 0.18 * k)
 	tw.parallel().tween_property(sword, "position", base_pos, 0.18 * k)
 
