@@ -912,6 +912,7 @@ func _update_single_entity(info):
 	_refresh_client_damage_visual(node, info)
 	_refresh_client_garrison_visual(node, info)
 	_update_cart_link(node, info)
+	_update_cart_cargo(node, info)
 	# Client-side sound effects (detect state transitions, visible entities only)
 	var prev_info = node.get_meta("_prev_info") if node.has_meta("_prev_info") else {}
 	if not prev_info.is_empty() and _is_audible(node.global_position):
@@ -1120,6 +1121,19 @@ func _update_cart_link(node: Node3D, info: Dictionary) -> void:
 			var old_cart = entity_nodes.get(old_cart_id)
 			if old_cart is Node3D and is_instance_valid(old_cart):
 				CartLinkVisual.remove(old_cart)
+
+# 联机车的货物由服务端快照携带；没有配对的农民/商人时自然隐藏。
+func _update_cart_cargo(node: Node3D, info: Dictionary) -> void:
+	if int(info.get("entity_id", -1)) not in [5, 6]:
+		return
+	var resources = info.get("cargo_resources", {})
+	if not (resources is Dictionary):
+		resources = {}
+	CartCargoVisual.update(node, {
+		"cargo_total": int(info.get("cargo_total", 0)),
+		"cargo_max": int(info.get("cargo_max", 0)),
+		"cargo_resources": resources,
+	})
 
 func _update_entity_animation(node: Node3D, info: Dictionary):
 	var ap: AnimationPlayer = null

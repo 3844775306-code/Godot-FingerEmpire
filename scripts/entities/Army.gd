@@ -5240,6 +5240,11 @@ func _process_cart(delta):
 	if owner and not is_instance_valid(owner):
 		_clear_cart_owner()
 		owner = null
+	if NetworkManager.mode == NetworkManager.Mode.NONE:
+		if owner:
+			CartCargoVisual.update_from_owner(self, owner)
+		else:
+			CartCargoVisual.hide_cargo(self)
 
 	match _cart_state:
 		CartState.IDLE:
@@ -5320,6 +5325,14 @@ func get_cart_owner_id() -> int:
 		return 0
 	return owner.get_instance_id()
 
+func get_cart_cargo_payload() -> Dictionary:
+	if _cart_owner == null:
+		return {}
+	var owner = _cart_owner.get_ref()
+	if owner == null or not is_instance_valid(owner):
+		return {}
+	return CartCargoVisual.payload_for_owner(entity_id, owner)
+
 func _find_cart_owner() -> GameEntity:
 	var bm = _get_bm()
 	if not bm: return null
@@ -5356,6 +5369,7 @@ func _apply_cart_buff(owner):
 
 func _clear_cart_owner():
 	CartLinkVisual.remove(self)
+	CartCargoVisual.hide_cargo(self)
 	var owner = _cart_owner.get_ref() if _cart_owner else null
 	if owner and is_instance_valid(owner):
 		if owner.has_meta("_cart_orig_speed"):

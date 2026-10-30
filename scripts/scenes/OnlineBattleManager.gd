@@ -2237,8 +2237,9 @@ func _serialize_entity_compact(entity: GameEntity, snapshot_key: String) -> Arra
 				"cart_id": int(entity.get_meta("_has_cart", 0)),
 			}
 		elif entity.entity_id in [5, 6]:
-			# 车和主人的配对：客户端据此生成牵引杆，避免联机端仍各走各的。
+			# 车和主人的配对 + 车斗货物：客户端据此生成牵引杆和货物。
 			unit_extra = {"cart_owner_id": entity.get_cart_owner_id()}
+			unit_extra.merge(entity.get_cart_cargo_payload(), true)
 	a[E.UNIT_EXTRA] = unit_extra
 	# Building extra
 	if entity is Building:
