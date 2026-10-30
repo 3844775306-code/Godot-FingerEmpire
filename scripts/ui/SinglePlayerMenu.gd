@@ -10,6 +10,7 @@ var mode_select: OptionButton
 var fast_check: CheckBox
 var research_check: CheckBox
 var replay_check: CheckBox
+var record_check: CheckBox
 var _map_button: Button
 var _nation_detail: Label
 var _mode_desc: Label
@@ -272,17 +273,30 @@ func _build_desktop_ui() -> void:
 	research_check.toggled.connect(_on_research_toggled)
 	map_vb.add_child(research_check)
 
-	# 录像方式：默认快照录像；勾选后使用严格指令回放（固定种子+固定步长，文件更小）。
+	# 录像默认关闭，玩家需要手动勾选；勾选后可选快照或严格指令回放。
+	record_check = CheckBox.new()
+	record_check.name = "ReplayRecordCheck"
+	record_check.text = "保存本局录像（手动开启）"
+	record_check.custom_minimum_size = Vector2(0, 38)
+	record_check.add_theme_font_size_override("font_size", 18)
+	record_check.add_theme_color_override("font_color", UITheme.PARCHMENT)
+	record_check.add_theme_color_override("font_hover_color", UITheme.GOLD)
+	record_check.add_theme_color_override("icon_normal_color", UITheme.GOLD)
+	record_check.tooltip_text = "默认不录像。勾选后本局结束或退出时才会写入回放文件。"
+	record_check.button_pressed = GameSettings.replay_enabled
+	record_check.toggled.connect(func(on): GameSettings.replay_enabled = on; _update_replay_mode_availability(); _update_summary())
+	map_vb.add_child(record_check)
+
 	replay_check = CheckBox.new()
 	replay_check.name = "ReplayModeCheck"
-	replay_check.text = "指令回放录像（严格确定性 · 文件更小）"
+	replay_check.text = "使用指令回放（严格确定性 · 仅 1v1）"
 	replay_check.custom_minimum_size = Vector2(0, 38)
 	replay_check.add_theme_font_size_override("font_size", 18)
 	replay_check.add_theme_color_override("font_color", UITheme.PARCHMENT)
 	replay_check.add_theme_color_override("font_hover_color", UITheme.GOLD)
 	replay_check.add_theme_color_override("icon_normal_color", UITheme.GOLD)
-	replay_check.tooltip_text = "不勾选：按快照录像，兼容现有回放；勾选：只记录你的操作与随机种子，回放时重新模拟。"
-	replay_check.button_pressed = GameSettings.replay_mode == "command"
+	replay_check.tooltip_text = "不勾选：保存快照录像；勾选：只记录你的操作与随机种子，回放时重新模拟。"
+	replay_check.button_pressed = GameSettings.replay_enabled and GameSettings.replay_mode == "command"
 	replay_check.toggled.connect(func(on): GameSettings.replay_mode = "command" if on else "snapshot"; _update_summary())
 	map_vb.add_child(replay_check)
 
@@ -481,16 +495,21 @@ func _on_mode_selected(idx: int) -> void:
 func _update_replay_mode_availability() -> void:
 	if replay_check == null:
 		return
+	var recording: bool = record_check != null and record_check.button_pressed
 	# 严格指令回放目前只验证了单机 1v1；团队战/乱斗仍使用快照录像，
 	# 避免录出无法严格重演的文件。
-	var supported: bool = mode_select == null or mode_select.selected == 0
-	replay_check.disabled = not supported
-	if not supported:
+	var mode_supported: bool = mode_select == null or mode_select.selected == 0
+	replay_check.disabled = not (recording and mode_supported)
+	if not recording:
+		replay_check.button_pressed = false
+		GameSettings.replay_mode = "snapshot"
+		replay_check.tooltip_text = "请先勾选“保存本局录像”，再选择录像方式。"
+	elif not mode_supported:
 		replay_check.button_pressed = false
 		GameSettings.replay_mode = "snapshot"
 		replay_check.tooltip_text = "指令回放当前仅支持单机 1v1；团队战和乱斗请使用快照录像。"
 	else:
-		replay_check.tooltip_text = "不勾选：按快照录像，兼容现有回放；勾选：只记录你的操作与随机种子，回放时重新模拟。"
+		replay_check.tooltip_text = "不勾选：保存快照录像，兼容现有回放；勾选：只记录你的操作与随机种子，回放时重新模拟。"
 
 func _on_option_changed(_idx: int) -> void:
 	_update_summary()
@@ -512,7 +531,9 @@ func _update_summary() -> void:
 	var map_name := String(MapPresets.get_info(GameSettings.map_id)["name"])
 	var progression := "科研 · 四时代科技树" if GameSettings.is_research_mode() else "经典 · 升级解锁"
 	var pace := "快速" if (fast_check != null and fast_check.button_pressed) else "标准"
-	var replay := "指令回放" if (replay_check != null and replay_check.button_pressed and not replay_check.disabled) else "快照录像"
+	var replay := "不录像"
+	if record_check != null and record_check.button_pressed:
+		replay = "指令回放" if (replay_check != null and replay_check.button_pressed and not replay_check.disabled) else "快照录像"
 	_summary.text = "文明\n%s\n\n难度\n%s\n\n模式\n%s\n\n地形\n%s\n\n发展\n%s\n\n节奏\n%s\n\n录像\n%s" % [
 		nation_name, diff_name, mode_name, map_name, progression, pace, replay
 	]
@@ -537,7 +558,8 @@ func _start_battle() -> void:
 		GameSettings.ai_mode = mode_idx + 1
 	GameSettings.fast_mode = fast_check.button_pressed if fast_check != null else false
 	GameSettings.progression_mode = GameSettings.ProgressionMode.RESEARCH if (research_check != null and research_check.button_pressed) else GameSettings.ProgressionMode.CLASSIC
-	GameSettings.replay_mode = "command" if (replay_check != null and replay_check.button_pressed and (mode_select == null or mode_select.selected == 0)) else "snapshot"
+	GameSettings.replay_enabled = record_check != null and record_check.button_pressed
+	GameSettings.replay_mode = "command" if (GameSettings.replay_enabled and replay_check != null and replay_check.button_pressed and (mode_select == null or mode_select.selected == 0)) else "snapshot"
 	GameSettings.command_replay = false
 	GameSettings.command_replay_file = ""
 	GameSettings.deterministic_sim = false
@@ -677,12 +699,21 @@ func _build_mobile_ui() -> void:
 	research_check.toggled.connect(_on_research_toggled)
 	vb.add_child(research_check)
 
+	record_check = CheckBox.new()
+	record_check.text = "保存本局录像（手动开启）"
+	record_check.custom_minimum_size = Vector2(0, UILayout.dp(32.0))
+	record_check.add_theme_font_size_override("font_size", UILayout.font_dp(9.0))
+	record_check.add_theme_color_override("font_color", UITheme.PARCHMENT)
+	record_check.button_pressed = GameSettings.replay_enabled
+	record_check.toggled.connect(func(on): GameSettings.replay_enabled = on; _update_replay_mode_availability(); _update_summary())
+	vb.add_child(record_check)
+
 	replay_check = CheckBox.new()
-	replay_check.text = "指令回放录像（严格确定性）"
+	replay_check.text = "使用指令回放（严格确定性 · 仅 1v1）"
 	replay_check.custom_minimum_size = Vector2(0, UILayout.dp(32.0))
 	replay_check.add_theme_font_size_override("font_size", UILayout.font_dp(9.0))
 	replay_check.add_theme_color_override("font_color", UITheme.PARCHMENT)
-	replay_check.button_pressed = GameSettings.replay_mode == "command"
+	replay_check.button_pressed = GameSettings.replay_enabled and GameSettings.replay_mode == "command"
 	replay_check.toggled.connect(func(on): GameSettings.replay_mode = "command" if on else "snapshot"; _update_summary())
 	vb.add_child(replay_check)
 

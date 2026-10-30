@@ -1656,6 +1656,8 @@ func _start_replay_recording() -> void:
 				print("[指令回放] 开始重演: ", path, "  命令 ", command_player.commands.size())
 		return
 	if GameSettings.replay_mode == "command":
+		if not GameSettings.replay_enabled:
+			return
 		if command_recorder == null:
 			command_recorder = CommandRecorderScript.new()
 			command_recorder.name = "CommandRecorder"
@@ -1669,6 +1671,8 @@ func _start_replay_recording() -> void:
 	if GameSettings.campaign_mode or GameSettings.tutorial_mode or GameSettings.training_mode:
 		return
 	if is_online and NetworkManager.mode == NetworkManager.Mode.CLIENT:
+		return
+	if not GameSettings.replay_enabled:
 		return
 	var rec = preload("res://scripts/replay/ReplayRecorder.gd").new()
 	rec.name = "ReplayRecorder"

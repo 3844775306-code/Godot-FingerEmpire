@@ -14,6 +14,7 @@ var ip_input: LineEdit
 var enet_toggle_btn: Button
 var ws_toggle_btn: Button
 var host_btn: Button
+var record_check: CheckBox
 var ip_label: Label
 var map_btn: Button
 var _last_map_id: String = "classic"
@@ -239,6 +240,18 @@ func _build_desktop_ui() -> void:
 	research_check.button_pressed = GameSettings.progression_mode == GameSettings.ProgressionMode.RESEARCH
 	research_check.toggled.connect(func(on): GameSettings.progression_mode = GameSettings.ProgressionMode.RESEARCH if on else GameSettings.ProgressionMode.CLASSIC)
 	c1.add_child(research_check)
+
+	# 录像默认关闭；房主手动勾选后，本机对局结束/退出时保存快照录像。
+	record_check = CheckBox.new()
+	record_check.name = "ReplayRecordCheck"
+	record_check.text = "保存本机录像（房主 · 手动开启）"
+	record_check.custom_minimum_size = Vector2(0, 40)
+	record_check.add_theme_font_size_override("font_size", 18)
+	record_check.add_theme_color_override("font_color", UITheme.PARCHMENT)
+	record_check.add_theme_color_override("font_hover_color", UITheme.GOLD)
+	record_check.add_theme_color_override("icon_normal_color", UITheme.GOLD)
+	record_check.button_pressed = GameSettings.replay_enabled
+	c1.add_child(record_check)
 
 	var c1_spacer = Control.new()
 	c1_spacer.size_flags_vertical = Control.SIZE_EXPAND_FILL
@@ -489,6 +502,16 @@ func _build_mobile_ui() -> void:
 	mobile_research.button_pressed = GameSettings.progression_mode == GameSettings.ProgressionMode.RESEARCH
 	mobile_research.toggled.connect(func(on): GameSettings.progression_mode = GameSettings.ProgressionMode.RESEARCH if on else GameSettings.ProgressionMode.CLASSIC)
 	vb.add_child(mobile_research)
+
+	record_check = CheckBox.new()
+	record_check.text = "保存本机录像（房主 · 手动开启）"
+	record_check.custom_minimum_size = Vector2(0, UILayout.dp(32.0))
+	record_check.add_theme_font_size_override("font_size", fs_body)
+	record_check.add_theme_color_override("font_color", UITheme.PARCHMENT)
+	record_check.add_theme_color_override("font_hover_color", UITheme.GOLD)
+	record_check.add_theme_color_override("icon_normal_color", UITheme.GOLD)
+	record_check.button_pressed = GameSettings.replay_enabled
+	vb.add_child(record_check)
 
 	sec.call("🤖 AI 玩家")
 	red_ai_spin = SpinBox.new()
@@ -866,6 +889,8 @@ func _on_transport_changed(use_ws: bool):
 			status_label.text = "ENet 房使用主机 IP 连接；网页玩家请切换到 WebSocket。\n"
 
 func _on_create_server_pressed():
+	GameSettings.replay_enabled = record_check != null and record_check.button_pressed
+	GameSettings.replay_mode = "snapshot"
 	if OS.has_feature("web"):
 		status_label.text = "浏览器版不能创建服务器；请在 PC/服务器端启动 WebSocket 主机后，打开邀请链接加入。"
 		return
@@ -909,6 +934,7 @@ func _on_create_server_pressed():
 			status_label.add_theme_color_override("font_color", UITheme.ALERT_WARNING)
 
 func _on_join_game_pressed():
+	GameSettings.replay_enabled = false
 	var addr := ip_input.text.strip_edges()
 	if NetworkManager.use_websocket:
 		if addr == "":

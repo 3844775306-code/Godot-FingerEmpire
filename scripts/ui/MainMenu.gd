@@ -467,6 +467,7 @@ func _on_multiplayer_pressed():
 	GameSettings.is_ffa = false
 	GameSettings.map_id = "classic"   # 联机选图在联机大厅里选
 	GameSettings.fast_mode = false
+	GameSettings.replay_enabled = false
 	GameSettings.replay_mode = "snapshot"
 	GameSettings.command_replay = false
 	GameSettings.command_replay_file = ""

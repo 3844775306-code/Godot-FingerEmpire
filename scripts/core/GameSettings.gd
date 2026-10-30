@@ -80,6 +80,8 @@ static func default_camera_zoom_mult() -> float:
 var post_game_data: Dictionary = {}  # {power_history, player_is_blue} for results screen
 
 # ==================== 录像模式 / 确定性模拟 ====================
+# 是否保存本局录像。默认关闭，需要玩家在出征前手动勾选。
+var replay_enabled: bool = false
 # snapshot = 现有快照录像；command = 严格指令回放（固定 60Hz + 种子随机 + 命令重演）
 var replay_mode: String = "snapshot"
 # 指令回放用的模拟种子。0 表示本局开始时自动生成。
