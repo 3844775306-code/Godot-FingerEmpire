@@ -6,6 +6,7 @@ class_name AIController
 
 const AIDefenseScript = preload("res://scripts/ai/AIDefense.gd")
 const AIWaterCrossingScript = preload("res://scripts/ai/AIWaterCrossing.gd")
+const AIWallPlannerScript = preload("res://scripts/ai/AIWallPlanner.gd")
 
 enum Phase { PRODUCTION, DEVELOPMENT, ASSAULT }
 enum LateTactic { NONE, HARASS, OVERWHELM, RAID, DEFEND }
@@ -59,6 +60,7 @@ var _defense_queue: Array = []          # 待建防线队列：[{"id": 建筑id,
 const DEFENSE_CHECK_INTERVAL: float = 120.0
 const DEFENSE_STEP_MAX: int = 3         # 每个 think tick 至多尝试建造的防线建筑数
 var _defense = null                      # AIDefense 模块：威胁/防线/守军/资源区
+var _wall_planner = null                 # AIWallPlanner 模块：城墙施工顺序/墙顶炮选点
 var _water_crossing = null               # AIWaterCrossing 模块：搭桥/运载船渡水
 var _harass_ids: Dictionary = {}         # 当前骚扰小队 instance_id -> true
 var _harass_until: float = -999.0        # 骚扰小队回收时间
@@ -82,6 +84,25 @@ var _hunt_timer: float = 0.0
 var _hunt_target = null
 var _hunt_target_id: int = -1
 var _visible_enemies: Array = []  # enemies visible to AI (refreshed each think cycle)
+
+# ═══ 侦察兵探图 ═══
+# AI 不读取玩家的 explored_grid，而是用自己的可见掩码维护一份“AI 已探索”网格。
+# 探测目标按 4 格步长采样，只在 think 周期执行，避免每帧扫全图。
+const SCOUT_ID: int = 19
+const SCOUT_TARGET_COUNT: int = 1
+const SCOUT_START_DELAY: float = 60.0
+const SCOUT_RETRY_AFTER_DEATH: float = 15.0
+const SCOUT_RETARGET_SEC: float = 14.0
+const SCOUT_ARRIVE_DIST: float = 3.0
+const SCOUT_SCAN_STEP: int = 4
+const SCOUT_FRONTIER_RADIUS: int = 6
+const SCOUT_BLACKLIST_SEC: float = 45.0
+const SCOUT_THREAT_RADIUS: float = 9.0
+const SCOUT_RETREAT_HEALTH_RATIO: float = 0.35
+const SCOUT_RETREAT_SEC: float = 8.0
+var _scout_explored: PackedByteArray = PackedByteArray()
+var _scout_next_produce_at: float = 0.0
+var _scout_blacklist: Dictionary = {}  # Vector2i -> 可再次选中的 game_time
 
 var my_peer_id: int = -1
 var my_team: int = RTSConfig.Team.RED
@@ -129,10 +150,13 @@ const WALL_COUNT: int = 24            # 旧版连续墙线的段数上限
 # AIDefense 的封闭塔圈要绕主城一整圈，旧的 24 段上限会在圆圈上留下缺口，
 # 这里单独放宽城墙/墙顶炮台的实际上限；旧版防线仍只规划 WALL_COUNT 段。
 const WALL_COUNT_MAX: int = 160
+# 主城 3/4/5 级（或封建/城堡/帝国）会各扩建一圈城墙，
+# 单圈上限之外还需要容纳三层圈的总墙数。
+const WALL_BUILD_CAP_AI: int = 420
 const WALL_SPACING: float = 1.3       # 旧版直线防线间距（build_defense_line 仍在用）
 const WALL_STEP: float = 1.5          # 连续墙线的中心距：必须 < 墙直径 2.0，段段重叠才不留缝
 const WALL_MAX_HALF_SPAN: float = 11.0  # 墙线从正中向两侧各延伸的最大距离
-# 远程单位上墙：墙未破时免疫伤害，因此优先把闲置远程兵铺到墙格上；
+# 远程单位上墙：墙未破时只吃远程伤害，近战必须先拆墙，因此优先把闲置远程兵铺到墙格上；
 # 每面城墙独立选择“墙顶炮台”或“远程驻军”，赶路中的单位用 ai_wall_guard 预留墙格。
 const WALL_DEPLOY_INTERVAL: float = 10.0
 const WALL_DEPLOY_MAX_DISTANCE: float = 60.0
@@ -520,6 +544,9 @@ func _cached_buildings() -> Array:
 	_ensure_battle_cache()
 	return battle._buildings
 
+func _is_scout_unit(entity) -> bool:
+	return entity is Army and int(entity.entity_id) == SCOUT_ID
+
 func count_unit(id: int, include_queue: bool = true) -> int:
 	var cnt = 0
 	# Count existing units
@@ -590,6 +617,8 @@ func count_field_military(peer: int) -> int:
 		if my_peer_id == -1 and entity.team != peer: continue
 		if int(entity.target_type) <= 0: continue
 		if entity.entity_id in [10,14,43,44,45,46,47,48,49,50,51]: continue
+		# 侦察兵由探图逻辑单独调度，不能算作可出击主攻兵力。
+		if _is_scout_unit(entity): continue
 		# 海军由 AIWaterCrossing / 船坞逻辑单独调度，不能算作陆地主攻兵力。
 		if entity.water_capable: continue
 		if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass") or entity.has_meta("ai_wall_guard"):
@@ -637,6 +666,7 @@ func _refresh_visibility():
 	_visible_enemies.clear()
 	# 先缓存己方视野源，避免对每个敌人重复全实体扫描和重复计算有效视野
 	var sources: Array = []
+	var scout_sources: Array = []
 	for own in battle.entities.get_children():
 		if not (own is GameEntity) or own.health <= 0:
 			continue
@@ -645,7 +675,12 @@ func _refresh_visibility():
 		var vision: float = float(own.vision_range)
 		if battle.has_method("get_effective_vision"):
 			vision = float(battle.get_effective_vision(own))
-		sources.append([own.global_position, vision])
+		var source: Array = [own.global_position, vision]
+		sources.append(source)
+		# 侦察兵通常孤军深入，不能在后期的视野源抽样里被裁掉，否则探到的敌人
+		# 不会进入 AI 的可见敌军缓存。
+		if _is_scout_unit(own):
+			scout_sources.append(source)
 	if sources.is_empty():
 		return
 	# 后期每个 AI 可能有上百个单位，若每个单位都作为视野源查询一次，
@@ -666,6 +701,15 @@ func _refresh_visibility():
 			for i in 64:
 				sampled.append(sources[int(i * step)])
 			sources = sampled
+	# 抽样后把没有被附近代表覆盖的侦察兵补回来（通常只有 1 个，查询成本可忽略）。
+	for s in scout_sources:
+		var covered: bool = false
+		for t in sources:
+			if (t[0] as Vector3).distance_squared_to(s[0] as Vector3) <= 36.0:
+				covered = true
+				break
+		if not covered:
+			sources.append(s)
 	# 有空间索引时按视野源查询附近敌军并去重，避免“己方单位数 × 全图敌人数”的
 	# 双重循环；没有 battle 空间索引时保留原来的全量扫描兜底。
 	if battle.has_method("get_nearby_enemies"):
@@ -694,6 +738,193 @@ func _refresh_visibility():
 # Check if an entity is in the visible enemies cache
 func _is_visible_enemy(entity: GameEntity) -> bool:
 	return entity in _visible_enemies
+
+# ═══ 侦察兵探图 ═══
+func _ensure_scout_explored() -> void:
+	var need: int = int(RTSConfig.MAP_SIZE) * int(RTSConfig.MAP_SIZE)
+	if _scout_explored.size() != need:
+		_scout_explored.resize(need)
+		_scout_explored.fill(0)
+
+# 只把 AI 自己队伍的可见格写进探索记录；不读取玩家的 explored_grid。
+func _mark_scout_explored() -> void:
+	if battle == null or not battle.has_method("get_team_visible_mask"):
+		return
+	var mask: PackedByteArray = battle.get_team_visible_mask(my_team)
+	if mask.size() != _scout_explored.size():
+		return
+	for i in range(mask.size()):
+		if mask[i] != 0:
+			_scout_explored[i] = 1
+
+func _scout_cell_explored(gx: int, gy: int) -> bool:
+	var ms: int = int(RTSConfig.MAP_SIZE)
+	if gx < 0 or gy < 0 or gx >= ms or gy >= ms:
+		return true
+	var idx: int = gx * ms + gy
+	return idx >= 0 and idx < _scout_explored.size() and _scout_explored[idx] != 0
+
+func _scout_tile_walkable(gx: int, gy: int) -> bool:
+	if battle == null or not battle.has_method("get_terrain_at_grid"):
+		return false
+	var terrain: int = int(battle.get_terrain_at_grid(gx, gy))
+	if terrain < 0 or terrain == 2:
+		return false
+	if terrain == 1:
+		# 普通山壁不可通行；只有缓坡(4)/山顶台地(5)能上陆军。
+		var overlay: int = int(battle.get_overlay_at_grid(gx, gy))
+		if overlay != 4 and overlay != 5:
+			return false
+	return true
+
+func _scout_is_frontier(gx: int, gy: int) -> bool:
+	var r: int = SCOUT_FRONTIER_RADIUS
+	for dx in [-r, 0, r]:
+		for dy in [-r, 0, r]:
+			if dx == 0 and dy == 0:
+				continue
+			if _scout_cell_explored(gx + dx, gy + dy):
+				return true
+	return false
+
+func _scout_blacklisted(gx: int, gy: int) -> bool:
+	if battle == null:
+		return false
+	var key := Vector2i(gx, gy)
+	return _scout_blacklist.has(key) and float(battle.game_time) < float(_scout_blacklist[key])
+
+# 选离侦察兵最近、且处在已探索边缘的未探索陆地格。
+func _pick_scout_target(scout) -> Vector3:
+	if battle == null:
+		return Vector3.ZERO
+	var ms: int = int(RTSConfig.MAP_SIZE)
+	var castle = get_peer_castle(my_peer_id)
+	var base_pos: Vector3 = castle.global_position if castle != null else Vector3.ZERO
+	var best := Vector3.ZERO
+	var best_found: bool = false
+	var best_score: float = INF
+	var step: int = SCOUT_SCAN_STEP
+	var threat_sq: float = (SCOUT_THREAT_RADIUS * 2.0) * (SCOUT_THREAT_RADIUS * 2.0)
+	for gx in range(2, ms - 2, step):
+		for gy in range(2, ms - 2, step):
+			if _scout_cell_explored(gx, gy):
+				continue
+			if _scout_blacklisted(gx, gy):
+				continue
+			if not _scout_tile_walkable(gx, gy):
+				continue
+			if not _scout_is_frontier(gx, gy):
+				continue
+			var pos: Vector3 = battle.grid_to_world(gx, gy)
+			var score: float = scout.global_position.distance_squared_to(pos)
+			if castle != null:
+				score += base_pos.distance_squared_to(pos) * 0.05
+			# 避开当前看得见的敌军，别让侦察兵直接撞上去。
+			for e in _visible_enemies:
+				if not (e is Army) or e.health <= 0:
+					continue
+				if e.global_position.distance_squared_to(pos) <= threat_sq:
+					score += 4000.0
+			if score < best_score:
+				best_score = score
+				best = pos
+				best_found = true
+	if not best_found:
+		return _scout_fallback_target()
+	# 地图中心 (0,0,0) 与“无目标”的哨兵值重合，偏移半米避免被当成未分配。
+	return best if best != Vector3.ZERO else Vector3(0.5, 0.0, 0.0)
+
+# 全图探索完后的巡逻点：停在敌方主城外侧或自家城堡外，继续当移动视野。
+func _scout_fallback_target() -> Vector3:
+	var castle = get_peer_castle(my_peer_id)
+	var enemy = _get_attack_target_castle()
+	if enemy != null and is_instance_valid(enemy) and castle != null:
+		var back: Vector3 = castle.global_position - enemy.global_position
+		if back.length() > 1.0:
+			return enemy.global_position + back.normalized() * 22.0
+		return enemy.global_position + Vector3(22.0, 0, 0)
+	if castle != null:
+		return castle.global_position + Vector3(10.0, 0, 10.0)
+	return Vector3.ZERO
+
+func _scout_enemy_near(pos: Vector3) -> bool:
+	var r_sq: float = SCOUT_THREAT_RADIUS * SCOUT_THREAT_RADIUS
+	for e in _visible_enemies:
+		if not (e is Army) or e.health <= 0:
+			continue
+		if e.global_position.distance_squared_to(pos) <= r_sq:
+			return true
+	return false
+
+# 战役进攻关开局调用：按 AIDefense 的地形塔圈规划，预置一整圈外围城墙与防御塔。
+func prebuild_campaign_defense(castle, threat_dir: Vector3) -> bool:
+	if battle == null or castle == null or not is_instance_valid(castle):
+		return false
+	if _defense == null:
+		_defense = AIDefenseScript.new(self)
+	return _defense.prebuild_campaign_castle_ring(castle, threat_dir)
+
+# 每个 think 周期调用：更新探索记录，并给侦察兵分配下一个前沿目标。
+func _process_scout_recon() -> void:
+	if battle == null:
+		return
+	var scouts: Array = []
+	for entity in _cached_armies():
+		if not is_instance_valid(entity) or entity.health <= 0:
+			continue
+		if not entity_belongs_to_me(entity) or not _is_scout_unit(entity):
+			continue
+		scouts.append(entity)
+	if scouts.is_empty():
+		return
+	_ensure_scout_explored()
+	_mark_scout_explored()
+	var now: float = float(battle.game_time)
+	for key in _scout_blacklist.keys():
+		if now >= float(_scout_blacklist[key]):
+			_scout_blacklist.erase(key)
+	var castle = get_peer_castle(my_peer_id)
+	for entity in scouts:
+		if not is_instance_valid(entity) or entity.health <= 0:
+			continue
+		if not entity.has_meta("ai_scout"):
+			entity.set_meta("ai_scout", true)
+		var retreat_until: float = float(entity.get_meta("ai_scout_retreat_until", -1.0))
+		if now < retreat_until:
+			continue
+		var health_ratio: float = entity.health / maxf(entity.max_health, 1.0)
+		if castle != null and (health_ratio < SCOUT_RETREAT_HEALTH_RATIO or _scout_enemy_near(entity.global_position)):
+			if entity.current_order != "" or entity.current_target != null or entity.is_attack_moving:
+				entity.stop_movement()
+			var away: Vector3 = castle.global_position - entity.global_position
+			if away.length() < 1.0:
+				away = Vector3(1.0, 0.0, 1.0)
+			entity.set_meta("ai_scout_retreat_until", now + SCOUT_RETREAT_SEC)
+			entity.move_to(castle.global_position + away.normalized() * 6.0)
+			continue
+		var target: Vector3 = entity.get_meta("ai_scout_target", Vector3.ZERO)
+		var target_time: float = float(entity.get_meta("ai_scout_target_time", -999.0))
+		var reached: bool = target != Vector3.ZERO \
+			and entity.global_position.distance_to(target) <= SCOUT_ARRIVE_DIST
+		var expired: bool = target == Vector3.ZERO or now - target_time >= SCOUT_RETARGET_SEC
+		var idle: bool = entity.current_order == "" and entity.current_target == null and not entity.is_attack_moving
+		var stuck_idle: bool = idle and target != Vector3.ZERO and now - target_time >= 3.0
+		if not (reached or expired or stuck_idle):
+			continue
+		if target != Vector3.ZERO and not reached and stuck_idle:
+			# 只有真正卡住/走不到的目标才拉黑；单纯“14 秒还没走到”不拉黑，
+			# 否则大地图上距离较远的前沿会被误判成不可达。
+			_scout_blacklist[battle.world_to_grid(target)] = now + SCOUT_BLACKLIST_SEC
+		if entity.current_order != "" or entity.current_target != null or entity.is_attack_moving:
+			entity.stop_movement()
+		var next_target: Vector3 = _pick_scout_target(entity)
+		if next_target == Vector3.ZERO:
+			entity.remove_meta("ai_scout_target")
+			continue
+		entity.set_meta("ai_scout_target", next_target)
+		entity.set_meta("ai_scout_target_time", now)
+		entity.move_to(next_target)
+
 
 # ═══ Economy ═══
 func _ai_can_build(building_id: int) -> bool:
@@ -1034,9 +1265,9 @@ func build_building(building_id: int, pos: Vector3, facing: Vector3 = Vector3.ZE
 			var want_wood: int = int(cfg.get("cost", {}).get("wood", 0))
 			if own_wood - want_wood < bridge_wood:
 				return false
-	# 城墙允许建 WALL_COUNT 面（防线需求），民居最多 HOUSE_TARGET_MAX 座，
-	# 墙顶炮台最多 WALL_COUNT 座；其余建筑上限 10
-	var _cap = WALL_COUNT_MAX if building_id == 27 else (_effective_house_target() if building_id == 28 else 10)
+	# 城墙允许建三层圈（WALL_BUILD_CAP_AI 面），民居最多 HOUSE_TARGET_MAX 座，
+	# 墙顶炮台最多 WALL_COUNT_MAX 座；其余建筑上限 10
+	var _cap = WALL_BUILD_CAP_AI if building_id == 27 else (_effective_house_target() if building_id == 28 else 10)
 	if building_id == WALL_CANNON_ID:
 		_cap = WALL_COUNT_MAX
 	if count_building(building_id) >= _cap: return false
@@ -1080,8 +1311,16 @@ func build_building(building_id: int, pos: Vector3, facing: Vector3 = Vector3.ZE
 			if battle.has_method("find_nearest_idle_builder") else null
 	if builder == null:
 		return false
+	# 农民脚下到建造点没有陆路（被水隔开）时，不要先拍一个永远修不完的地基：
+	# 让渡水模块从农民所在岸边规划短桥，桥修通后 AI 的下一次建造会自然成功。
+	# 桥本身（7）不适用这条规则，它本来就要建在水上。
+	if building_id != 7 and _water_crossing != null \
+			and not _water_crossing.can_builder_reach(builder.global_position, pos):
+		_water_crossing.plan_bridge_to(pos, builder.global_position)
+		return false
 	var cost = cfg.get("cost", {})
-	if _research_age_reserve_active() and not _can_pay_with_reserve(cost, _research_age_reserve_cost()):
+	if _research_age_reserve_active() and not (building_id == 22 and _resource_overflow()) \
+			and not _can_pay_with_reserve(cost, _research_age_reserve_cost()):
 		return false
 	if not _deduct_resources(cost): return false
 	cfg["owner_peer_id"] = my_peer_id
@@ -1169,7 +1408,32 @@ func _tick_building_repair() -> void:
 # 权重决定「同类里更该修的」，已损比例保证残血建筑不会被小修拖后。
 func _repair_score(b: Building) -> float:
 	var w: float = float(REPAIR_WEIGHT.get(int(b.entity_id), 1.0))
+	# 城墙是防线上的“连续墙段”：端头/破口旁的墙先修，否则敌人会从缺口灌进来。
+	# 这里只提高权重，真正能不能修仍由 Building.can_repair() 的附近无敌军规则决定。
+	if int(b.entity_id) == 27:
+		w *= _wall_repair_weight(b)
 	return w * (0.4 + 0.6 * float(b.repair_damage_ratio()))
+
+func _wall_repair_weight(wall: Building) -> float:
+	var neighbors: int = 0
+	for e in _cached_buildings():
+		if not is_instance_valid(e) or not (e is Building) or e == wall:
+			continue
+		if int(e.entity_id) != 27 or e.health <= 0:
+			continue
+		if not entity_belongs_to_me(e):
+			continue
+		var d: Vector3 = e.global_position - wall.global_position
+		d.y = 0.0
+		if d.length_squared() <= 2.35 * 2.35:
+			neighbors += 1
+			if neighbors >= 2:
+				break
+	if neighbors <= 1:
+		return 1.5   # 墙端/破口旁：优先续上
+	if neighbors == 2:
+		return 1.15  # 正常连续墙段
+	return 1.0
 
 # 修理费储备门槛：不同阶段给造兵/升级留的钱不一样。
 # 防守时进一步放宽 —— 前线建筑塌了会直接丢防线，这时修比攒钱重要。
@@ -1314,11 +1578,13 @@ func _process(delta):
 		var interval: float = think_interval
 		var entity_count: int = battle._all_entities.size() if battle else 0
 		if entity_count > 450:
-			interval *= 2.4
+			interval *= 3.4
 		elif entity_count > 360:
-			interval *= 1.9
+			interval *= 2.6
 		elif entity_count > 260:
-			interval *= 1.5
+			interval *= 1.9
+		elif entity_count > 180:
+			interval *= 1.4
 		timer = interval
 		decide(interval)
 		if battle != null and battle.has_method("is_research_mode") and battle.is_research_mode():
@@ -1498,7 +1764,7 @@ func _state_production(_delta):
 					built_shipyard_pos.append(cached_shipyard_pos)
 		if count_building(23) > 0 and count_unit(14) < 3 and can_afford(14) and _can_train_unit():
 			produce_unit(14)
-		if warehouses < WAREHOUSE_MAX_COUNT and not _resource_overflow() and can_afford_building(22):
+		if warehouses < WAREHOUSE_MAX_COUNT and can_afford_building(22):
 			var castle = get_peer_castle(my_peer_id)
 			if castle:
 				var near_count = 0
@@ -1596,6 +1862,7 @@ func decide(_delta):
 		battle.update_population_limits()
 	clear_invalid_targets()
 	_refresh_visibility()
+	_process_scout_recon()
 	_refresh_primary_enemy()
 	_update_resource_pressure(_delta)
 	_ensure_house_quota()
@@ -1634,6 +1901,10 @@ func decide(_delta):
 		var army_count = count_field_military(my_peer_id if my_peer_id != -1 else my_team)
 		if army_count >= 30:
 			phase = Phase.ASSAULT
+	if _defense != null:
+		if _wall_planner == null:
+			_wall_planner = AIWallPlannerScript.new(self, _defense)
+		_wall_planner.tick(_delta)
 	if _water_crossing:
 		_water_crossing.tick(_delta)
 func get_team_castle(tm) -> Building:
@@ -2171,6 +2442,8 @@ func attack_move(target_position: Vector3, max_units: int):
 	for entity in battle.entities.get_children():
 		if sent >= max_units: break
 		if entity is Army and entity.health > 0 and int(entity.entity_id) not in [5,6,9,10,14,43,44,45,46,47,48,49,50,51] and entity_belongs_to_me(entity):
+			if _is_scout_unit(entity):
+				continue
 			if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass") or entity.has_meta("ai_transporting") or entity.has_meta("ai_escorting") or entity.has_meta("ai_wall_guard"):
 				continue
 			# 已有驻扎点的部队不再被主攻调用（防守时由 AIDefense 单独调度）
@@ -2220,49 +2493,65 @@ func _should_build_or_upgrade(b_id: int) -> bool:
 	return false
 
 # ═══ Warehouse ═══
+func _can_afford_warehouse() -> bool:
+	if not _resource_overflow():
+		return can_afford_building(22)
+	var cfg = EntityDatabase.get_config(22)
+	if not cfg: return false
+	var res = _get_resources()
+	for k in cfg.get("cost", {}):
+		if int(res.get(k, 0)) < int(cfg["cost"][k]): return false
+	# 资源已经到上限时，时代预算继续囤也存不进去；仓库抬高上限反而有利于后续攒钱。
+	return true
+
 func consider_warehouse_near_farmer():
-	if _resource_overflow():
-		# 仓库只会抬高上限，不能把资源变成军队；已经接近上限时优先泄压，
-		# 否则 AI 会一边堆满仓、一边继续造仓库，资源仍然没有转化为实力。
+	if count_building(22) >= WAREHOUSE_MAX_COUNT:
 		return
+	var overflow: bool = _resource_overflow()
 	var castle = get_peer_castle(my_peer_id)
 	if not castle: return
-	if count_building(22) >= WAREHOUSE_MAX_COUNT: return
 	var res = _get_resources(); var limits = _get_limits()
 	var farmer_data = []
 	for entity in battle.entities.get_children():
 		if entity is Army and entity.health > 0 and entity.entity_id == 10 and entity_belongs_to_me(entity):
 			var tgt = entity.current_target
 			if is_instance_valid(tgt) and tgt is WorldResource: farmer_data.append({"farmer": entity, "resource": tgt})
-	if farmer_data.is_empty(): return
-	var best_score = -999.0; var best_pos = Vector3.ZERO
-	for item in farmer_data:
-		var rn = item.resource; var rp = rn.global_position; var rt = rn.resource_type
-		var s1 = min(rp.distance_to(castle.global_position) / 30.0, 1.0) * 5.0
-		var s2 = max(0.0, 1.0 - float(res.get(rt,0)) / max(limits.get(rt,500), 1)) * 3.0
-		var nf = 0
-		for other in farmer_data:
-			if other.resource.global_position.distance_to(rp) < 5.0: nf += 1
-		var s3 = min(float(nf)/5.0, 1.0) * 1.0
-		var nr = 0
-		for e in battle.entities.get_children():
-			if e is WorldResource and e.health > 0 and e.global_position.distance_to(rp) < 6.0: nr += 1
-		var s4 = min(float(nr)/5.0, 1.0) * 1.0
-		# Heavily penalize proximity to existing warehouses (<20m → -10 score)
-		var wh_penalty = 0.0
-		for ew in battle.entities.get_children():
-			if ew is Building and ew.entity_id == 22 and ew.team == my_team and ew.health > 0:
-				var wd = ew.global_position.distance_to(rp)
-				if wd < 25.0: wh_penalty += max(0.0, 10.0 - wd * 0.4)  # closer = bigger penalty
-		var score = s1 + s2 + s3 + s4 - wh_penalty
-		if score > best_score:
+	if not farmer_data.is_empty():
+		var best_score = -999.0; var best_pos = Vector3.ZERO
+		for item in farmer_data:
+			var rn = item.resource; var rp = rn.global_position; var rt = rn.resource_type
+			var s1 = min(rp.distance_to(castle.global_position) / 30.0, 1.0) * 5.0
+			var s2 = max(0.0, 1.0 - float(res.get(rt,0)) / max(limits.get(rt,500), 1)) * 3.0
+			var nf = 0
+			for other in farmer_data:
+				if other.resource.global_position.distance_to(rp) < 5.0: nf += 1
+			var s3 = min(float(nf)/5.0, 1.0) * 1.0
+			var nr = 0
+			for e in battle.entities.get_children():
+				if e is WorldResource and e.health > 0 and e.global_position.distance_to(rp) < 6.0: nr += 1
+			var s4 = min(float(nr)/5.0, 1.0) * 1.0
+			# Heavily penalize proximity to existing warehouses (<20m → -10 score)
+			var wh_penalty = 0.0
+			for ew in battle.entities.get_children():
+				if ew is Building and ew.entity_id == 22 and ew.team == my_team and ew.health > 0:
+					var wd = ew.global_position.distance_to(rp)
+					if wd < 25.0: wh_penalty += max(0.0, 10.0 - wd * 0.4)  # closer = bigger penalty
+			var score = s1 + s2 + s3 + s4 - wh_penalty
+			if score > best_score:
 				best_score = score
 				for _t in range(5):
 					var tp = rp + Vector3(randf_range(-2.5,2.5), 0, randf_range(-2.5,2.5))
 					if _is_valid_build_ground(tp): best_pos = tp; break
 				if best_pos == Vector3.ZERO: best_pos = rp + Vector3(randf_range(-2,2), 0, randf_range(-2,2))
-	# Only build if score is acceptable (>= 2.0)
-	if best_pos != Vector3.ZERO and best_score >= 2.0 and can_afford_building(22): build_building(22, best_pos)
+		if best_pos != Vector3.ZERO and (best_score >= 2.0 or overflow) and _can_afford_warehouse():
+			build_building(22, best_pos)
+			return
+	# 资源已经溢出但附近没有可跟随的农民资源点时，也要在城堡附近补仓库抬上限，
+	# 否则采集队继续交资源会被满仓截断，玩家会看到 AI 永远不造仓库。
+	if overflow and _can_afford_warehouse():
+		var wpos: Vector3 = find_valid_build_position(castle.global_position, 22)
+		if wpos != Vector3.ZERO:
+			build_building(22, wpos)
 
 func _is_valid_build_ground(world_pos: Vector3) -> bool:
 	var gx = int(world_pos.x + RTSConfig.MAP_SIZE / 2); var gz = int(world_pos.z + RTSConfig.MAP_SIZE / 2)
@@ -2577,6 +2866,8 @@ func _pick_harass_squad(my_castle) -> Array:
 			continue
 		if int(e.target_type) <= 0 or e.water_capable:
 			continue
+		if _is_scout_unit(e):
+			continue
 		var sgb = e.get("_soldier_garrison_building")
 		if sgb != null and sgb.get_ref() != null:
 			continue
@@ -2628,6 +2919,7 @@ func execute_overwhelm():
 	for entity in battle.entities.get_children():
 		if entity is Army and entity_belongs_to_me(entity) and entity.health > 0:
 			if int(entity.entity_id) in [5,6,10,14,43,44,45,46,47,48,49,50,51]: continue
+			if _is_scout_unit(entity): continue
 			if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass") or entity.has_meta("ai_wall_guard"): continue
 			if _is_held_by_garrison(entity): continue
 			if entity.water_capable: continue
@@ -2642,6 +2934,7 @@ func execute_overwhelm():
 	for entity in battle.entities.get_children():
 		if entity is Army and entity_belongs_to_me(entity) and entity.health > 0:
 			if int(entity.entity_id) in [5,6,10,14,43,44,45,46,47,48,49,50,51]: continue
+			if _is_scout_unit(entity): continue
 			if entity.has_meta("ai_home_guard") or entity.has_meta("ai_resource_guard") or entity.has_meta("ai_harass") or entity.has_meta("ai_wall_guard"): continue
 			if _is_held_by_garrison(entity): continue
 			if entity.water_capable: continue
@@ -2677,6 +2970,8 @@ func execute_raid():
 	var raid_army = []
 	for e in battle.entities.get_children():
 		if e is Army and e.team == my_team and e.health > 0 and (int(e.entity_id) not in [5,6,9,10,14,43,44,45,46,47,48,49,50,51]) and entity_belongs_to_me(e):
+			if _is_scout_unit(e):
+				continue
 			if e.has_meta("ai_home_guard") or e.has_meta("ai_resource_guard") or e.has_meta("ai_harass") or e.has_meta("ai_wall_guard"):
 				continue
 			if _is_held_by_garrison(e):
@@ -3285,6 +3580,13 @@ func _process_line_upgrade():
 func _relieve_resource_pressure() -> void:
 	if not _resource_overflow():
 		return
+	# 第一圈城墙触发后，先保证墙圈建造资金，别把溢出的石头/木材转成升级和兵。
+	if _defense != null and _defense.has_method("first_ring_needs_priority") \
+			and _defense.first_ring_needs_priority():
+		return
+	# 先补仓库：溢出时仓库直接抬高存储上限，比把资源排成兵更能解决“满仓后白采”。
+	# 必须放在泄压支出之前，否则几轮兵/升级花完后资源已低于阈值，又不会造仓库。
+	consider_warehouse_near_farmer()
 	_process_line_3()
 	_upgrade_any_affordable_building()
 	if _resource_critical():
@@ -3302,7 +3604,10 @@ func _train_overflow_units() -> void:
 			continue
 		if u_id == TRADE_CART_ID and count_unit(TRADE_CART_ID) >= _count_merchants():
 			continue
-		while budget > 0 and _can_train_unit_with_queue() and can_afford(u_id) and produce_unit(u_id):
+		var cap: int = _effective_army_target()
+		while budget > 0 and count_unit(u_id) < cap and _can_train_unit_with_queue() and can_afford(u_id):
+			if not produce_unit(u_id):
+				break
 			budget -= 1
 
 func _can_pay_with_reserves(cost: Dictionary, building_id: int = -1) -> bool:
@@ -3330,8 +3635,9 @@ func _upgrade_any_affordable_building() -> bool:
 			continue
 		if not entity_belongs_to_me(entity):
 			continue
-		# 仓库升级只把上限继续抬高，不产生战斗力；泄压时优先军营/民居/塔等。
-		if entity.entity_id == 22:
+		# 仓库升级只把上限继续抬高；平时泄压优先军营/民居/塔，但资源已经溢出时
+		# 升级仓库正是最直接的“把资源转成上限”手段。
+		if entity.entity_id == 22 and not _resource_overflow():
 			continue
 		if not entity.can_upgrade():
 			continue
@@ -3369,6 +3675,28 @@ func _try_produce_monks():
 		if count_unit(mid) < 2 and can_afford(mid) and _can_train_unit():
 			produce_unit(mid); return
 
+func _try_produce_scout() -> bool:
+	if battle == null:
+		return false
+	if battle.game_time < SCOUT_START_DELAY:
+		return false
+	if battle.game_time < _scout_next_produce_at:
+		return false
+	if count_unit(SCOUT_ID) >= SCOUT_TARGET_COUNT:
+		return false
+	if not _can_produce_unit(SCOUT_ID):
+		return false
+	if not _can_train_unit_with_queue():
+		return false
+	if not can_afford(SCOUT_ID):
+		return false
+	if not produce_unit(SCOUT_ID):
+		# 生产队列满/建筑暂时不可用时不要每个 think 都重试。
+		_scout_next_produce_at = battle.game_time + SCOUT_RETRY_AFTER_DEATH
+		return false
+	_scout_next_produce_at = battle.game_time + SCOUT_RETRY_AFTER_DEATH
+	return true
+
 func _process_line_military():
 	# 59优先排产；如果已经解锁但资源不够，进入短暂攒钱模式，避免普通兵种把资源吃干
 	if _try_produce_trebuchet():
@@ -3380,6 +3708,9 @@ func _process_line_military():
 		_process_line_3()
 		if not _can_train_unit_with_queue():
 			return
+	# 主城升到 2 级后补 1 个侦察兵探图；死亡后按冷却补回。
+	if _try_produce_scout():
+		return
 	var priority = get_counter_priority()
 	var army_target: int = _effective_army_target()
 	var train_budget: int = RESOURCE_PRESSURE_TRAIN_BURST if _resource_critical() else 1
@@ -3391,7 +3722,8 @@ func _process_line_military():
 		if count_unit(u_id) < army_target and can_afford(u_id) and _can_train_unit_with_queue():
 			# 普通情况每轮补 1 个；资源临界满仓时一次多排几个，尽快把收入转成兵力。
 			var trained: int = 0
-			while trained < train_budget and _can_train_unit_with_queue() and can_afford(u_id) and produce_unit(u_id):
+			while trained < train_budget and count_unit(u_id) < army_target \
+					and _can_train_unit_with_queue() and can_afford(u_id) and produce_unit(u_id):
 				trained += 1
 
 func _process_line_3():
@@ -3543,6 +3875,7 @@ func _rally_land_army_to_castle():
 		if not entity_belongs_to_me(entity): continue
 		# Skip non-combat / naval units
 		if entity.entity_id in [5, 6, 10, 14, 43, 44, 45, 46, 47, 48, 49, 50, 51]: continue
+		if _is_scout_unit(entity): continue
 		if entity.water_capable: continue
 		# 已集合过的单位不再重复集合
 		if entity.has_meta("ai_rallied"): continue
@@ -3557,7 +3890,7 @@ func _rally_land_army_to_castle():
 		entity.attack_move_to(rally_point)
 
 # ═══ Wall Defense Deployment ═══
-# 把闲置远程单位送上前线城墙。城墙未破时单位免疫伤害，且站得高射界好；
+# 把闲置远程单位送上前线城墙。城墙未破时单位只吃远程伤害，且站得高射界好；
 # 每面墙独立决定炮台/驻军，小型远程单位可派 2~3 个，移动中的单位保留
 # ai_wall_guard 元数据防止重复派人。
 func _is_valid_wall_slot(wall) -> bool:
@@ -3717,8 +4050,9 @@ func _deploy_ranged_units_to_walls() -> void:
 		if occupied.has(battle.world_to_grid(e.global_position)):
 			continue
 		candidates.append(e)
-	# 每面城墙独立抽一次：50% 建炮台，50% 派远程单位驻守。
-	# 抽签结果和驻守目标数记在城墙节点上，城墙存活期间不会每次检查都改主意。
+	# 墙顶炮台不再每面墙 50% 随机：优先拐角、墙端和正对威胁方向的墙段，
+	# 并限制总量，避免把石头/木材全砸在整圈炮台上。
+	var cannon_walls: Dictionary = _pick_wall_cannon_walls(walls)
 	for wall in walls:
 		var wid: int = wall.get_instance_id()
 		var wall_grid: Vector2i = battle.world_to_grid(wall.global_position)
@@ -3736,7 +4070,7 @@ func _deploy_ranged_units_to_walls() -> void:
 			mode = "ranged"
 			wall.set_meta(WALL_GUARD_MODE_META, mode)
 		if mode == "":
-			mode = "cannon" if randf() < 0.5 else "ranged"
+			mode = "cannon" if cannon_walls.has(wid) else "ranged"
 			wall.set_meta(WALL_GUARD_MODE_META, mode)
 		if mode == "cannon":
 			if have > 0:
@@ -3825,6 +4159,79 @@ func _try_build_wall_cannon(wall) -> bool:
 	if not _ai_can_build(WALL_CANNON_ID) or not can_afford_building(WALL_CANNON_ID):
 		return false
 	return build_building(WALL_CANNON_ID, wall.global_position)
+
+# 墙顶炮台只放在“值得放”的墙段：拐角、墙端、正对敌方向。
+# 总量按墙数 30% 封顶（2~24 座），防止 AI 把整圈城墙都改造成炮台。
+func _pick_wall_cannon_walls(walls: Array) -> Dictionary:
+	var existing: int = 0
+	for b in _cached_buildings():
+		if is_instance_valid(b) and b.health > 0 and int(b.entity_id) == WALL_CANNON_ID \
+				and entity_belongs_to_me(b):
+			existing += 1
+	var quota: int = clampi(int(ceil(float(walls.size()) * 0.3)), 2, 24)
+	var need: int = quota - existing
+	if need <= 0:
+		return {}
+	var castle = get_peer_castle(my_peer_id)
+	var enemy_dir: Vector3 = _get_enemy_army_direction(castle.global_position) \
+			if is_instance_valid(castle) else Vector3.FORWARD
+	enemy_dir.y = 0.0
+	if enemy_dir.length_squared() < 0.0001:
+		enemy_dir = Vector3.FORWARD
+	else:
+		enemy_dir = enemy_dir.normalized()
+	var rated: Array = []
+	for w in walls:
+		if not is_instance_valid(w):
+			continue
+		if _wall_has_cannon(w):
+			continue
+		if str(w.get_meta(WALL_GUARD_MODE_META, "")) == "ranged":
+			continue
+		if int(w.get_meta(WALL_GUARD_TARGET_META, 0)) > 0:
+			continue
+		rated.append(w)
+	rated.sort_custom(func(a, b):
+		return _wall_cannon_score(a, walls, castle, enemy_dir) \
+				> _wall_cannon_score(b, walls, castle, enemy_dir)
+	)
+	var out: Dictionary = {}
+	for i in mini(need, rated.size()):
+		out[rated[i].get_instance_id()] = true
+	return out
+
+func _wall_cannon_score(wall: Building, walls: Array, castle, enemy_dir: Vector3) -> float:
+	var score: float = 0.0
+	if is_instance_valid(castle):
+		var to_wall: Vector3 = wall.global_position - castle.global_position
+		to_wall.y = 0.0
+		if to_wall.length_squared() > 0.0001:
+			score += to_wall.normalized().dot(enemy_dir) * 2.0
+	var neighbors: int = 0
+	var dirs: Array = []
+	for other in walls:
+		if other == wall or not is_instance_valid(other):
+			continue
+		var d: Vector3 = other.global_position - wall.global_position
+		d.y = 0.0
+		if d.length_squared() <= 2.35 * 2.35:
+			neighbors += 1
+			dirs.append(d.normalized())
+	if neighbors <= 1:
+		score += 2.2   # 墙端：正对绕后/爆破点，炮台价值最高
+	else:
+		# 拐角：相邻墙方向不是一条直线
+		var corner: bool = false
+		for i in dirs.size():
+			for j in range(i + 1, dirs.size()):
+				if absf(dirs[i].dot(dirs[j])) < 0.55:
+					corner = true
+					break
+			if corner:
+				break
+		if corner:
+			score += 1.4
+	return score
 
 # ═══ Naval Patrol ═══
 func _patrol_navy_around_water():
