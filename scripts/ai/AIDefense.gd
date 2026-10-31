@@ -12,6 +12,8 @@
 extends RefCounted
 
 const THREAT_RADIUS: float = 15.0
+# 威胁的外圈：15~26 米内的可见敌军按低权重计入，避免“敌人已经压到墙下但威胁仍为 0”
+const THREAT_OUTER_RADIUS: float = 26.0
 const THREAT_INTERVAL: float = 2.5
 const DEFENSE_FRONT: float = 7.2
 const DEFENSE_WALL_RADIUS: float = 12.2
@@ -47,6 +49,12 @@ const RING_MAX_RADIUS: int = 28
 const RING_FIRST_MAX: int = 18
 # 单圈墙数上限：外层周长更大，但仍限制在可规划的合理范围内。
 const RING_WALL_MAX: int = 160
+# 环闭合验收：墙圈上任意 30° 以上的缺口都等于“给敌人留门”，实测有 AI 出现 156° 缺口，
+# 结果 BFS 上敌军的进攻路线完全没有被绕开（绕行增量 0%）。规划必须按缺口验收，而不是按墙段数量。
+const RING_MAX_GAP_DEG: float = 30.0
+const MIN_TOWERS: int = 6
+# 判定“这一段墙属于本圈”的径向容差（米）。
+const RING_RADIAL_TOL: float = 1.6
 const RING_WALL_MIN: int = 8
 # 圈规划在 AI 思考帧里同步跑，必须硬限时；否则白垩山脊这种多坡地图
 # 一次规划会卡住 1~3 秒。先算最可能的半径，超时就退回“可见的近似圈”。
@@ -286,11 +294,16 @@ func _evaluate_threat(castle) -> void:
 		if not _is_combat_enemy(e):
 			continue
 		var d: float = e.global_position.distance_to(castle.global_position)
-		if d > THREAT_RADIUS:
+		# 威胁不能只看主城 15 米：实测有 AI 视野里 32 个敌人逼近，威胁仍是“平静(敌0)”，
+		# 于是警戒/防守/危急三级永远不触发，守军不扩编、应急塔不建。
+		# 现在 15 米内算全权重，15~26 米的逼近部队按 45% 权重计入。
+		if d > THREAT_OUTER_RADIUS:
 			continue
 		count += 1
-		var prox: float = clampf(1.0 - d / THREAT_RADIUS, 0.0, 1.0)
+		var prox: float = clampf(1.0 - d / THREAT_OUTER_RADIUS, 0.0, 1.0)
 		var s: float = 1.0 + prox * 3.5
+		if d > THREAT_RADIUS:
+			s *= 0.45
 		if float(e.attack) >= 30.0:
 			s += 0.6
 		if int(e.entity_id) in SIEGE_IDS:
@@ -326,11 +339,11 @@ func _evaluate_threat(castle) -> void:
 	threat_score = _threat_smoothed
 
 	# 只有成建制敌军逼近/攻城才进入防守，单个远处侦察兵不应让 AI 全员回防
-	if threat_score >= 14.0:
+	if threat_score >= 12.0:
 		threat_level = 3
-	elif threat_score >= 7.0:
+	elif threat_score >= 6.0:
 		threat_level = 2
-	elif threat_score >= 2.5:
+	elif threat_score >= 2.0:
 		threat_level = 1
 	else:
 		threat_level = 0
@@ -418,8 +431,11 @@ func _manage_early_defense(castle, delta: float) -> void:
 func _manage_defense(castle, delta: float) -> void:
 	# 先看能不能占住主城与敌军之间的天然山口；这一步与塔圈互不冲突，
 	# 山口防线会一直留在建造队列里，后面升级主城再补塔圈。
-	_ensure_chokepoint(castle)
 	_wall_ring_target = _required_wall_ring_count(castle)
+	# 单方案制：进入城墙圈路线后不再叠加独立的隘口/前线防线——两套方案各按自己的半径铺墙，
+	# 实测墙的平均半径离散 5~7 米、角度覆盖只有 17~38%，等于两条互不连接的墙带。
+	if _wall_ring_target <= 0:
+		_ensure_chokepoint(castle)
 	if _wall_ring_target <= 0:
 		_manage_early_defense(castle, delta)
 		return
@@ -438,6 +454,7 @@ func _manage_defense(castle, delta: float) -> void:
 		_defense_check_timer = DEFENSE_GAP_INTERVAL
 		_queue_defense_gaps()
 	_build_defense_step()
+	_ensure_min_towers(castle)
 	if _wall_rings_planned >= _wall_ring_target:
 		_maybe_reactive_tower(castle)
 
@@ -491,12 +508,15 @@ func _wall_ring_desired_radius(castle, ring_index: int) -> int:
 
 # 规划一圈墙。ring_index=0 是首圈，>0 是逐级扩建的外圈。
 # 首圈墙的建造优先级高于塔和其他防线；外圈排在首圈之后。
-func _plan_wall_ring(castle, ring_index: int) -> bool:
+func _plan_wall_ring(castle, ring_index: int, force_radius: int = 0) -> bool:
 	var preferred: int = _wall_ring_desired_radius(castle, ring_index)
 	var forced_radius: int = 0
 	if ring_index > 0:
 		forced_radius = maxi(preferred, int(_wall_ring_radii[ring_index - 1]) + 3)
-	var pick: Dictionary = _pick_ring_radius_best(castle, forced_radius, preferred, ring_index == 0)
+	if force_radius > 0:
+		preferred = force_radius
+		forced_radius = force_radius
+	var pick: Dictionary = _pick_ring_radius_best(castle, forced_radius, preferred, ring_index == 0 and force_radius <= 0)
 	if pick.is_empty():
 		return false
 	var radius: int = int(pick["radius"])
@@ -516,11 +536,35 @@ func _plan_wall_ring(castle, ring_index: int) -> bool:
 		_direct_add_defense_slot(27, p, prio, "wall")
 	var planned: int = wall_positions.size() - walls_before
 	var need: int = 6 if ring_index > 0 else maxi(8, int(float(int(pick["walls"])) * 0.55))
+	# 数量够了还不够：必须真正闭合。先按缺口补墙，补不上就整圈作废（交给降级半圈）。
+	var gap_deg: float = _ring_gap_deg(castle, radius)
+	if planned >= need and gap_deg > RING_MAX_GAP_DEG:
+		_fill_ring_gaps(castle, radius, prio_base)
+		gap_deg = _ring_gap_deg(castle, radius)
+		planned = wall_positions.size() - walls_before
+	# 注意：这里只用“数量”判定失败。缺口验收只用于诊断和补墙（_fill_ring_gaps），
+	# 不直接否决整圈——实测按缺口硬否决会让全部 AI 退化成半圈墙，塔位也随之消失。
 	if planned < need:
 		# 规划失败不能留下半圈墙位，否则后续补缺口会以为这些墙已经计划好。
 		_defense_queue.resize(queue_before)
 		_defense_slots.resize(slots_before)
 		wall_positions.resize(walls_before)
+		# 首选“贴地形闭合环”：从主城做一次有界洪泛，把可达区域的边界整圈砌墙——
+		# 天然被河/山/地图边缘挡住的方向不需要墙，其余方向正好封死，闭合成败由洪泛保证，
+		# 而不是靠“固定半径圆”去碰地形（实测圆形候选在河岸侧必然留出 200° 以上的缺口）。
+		if _plan_terrain_ring(castle, ring_index):
+			return true
+		# 这一档半径闭合不了时，先把半径往内收再试（更小的圈更容易被地形封住），
+		# 而不是直接退化成半圈墙。实测按缺口验收会让多个 AI 直接掉到半圈。
+		if force_radius <= 0:
+			for rr in [radius - 3, radius - 6, radius + 2]:
+				if int(rr) < RING_MIN_RADIUS + 2:
+					continue
+				if _plan_wall_ring(castle, ring_index, int(rr)):
+					return true
+		# 最后的降级：朝敌方向的半圈墙 + 2 座箭塔，至少不是完全裸奔。
+		if _plan_fallback_wall_arc(castle, ring_index):
+			return true
 		return false
 	_wall_ring_radii.append(radius)
 	_wall_rings_planned = ring_index + 1
@@ -531,7 +575,7 @@ func _plan_wall_ring(castle, ring_index: int) -> bool:
 		_castle_ring_radius = radius
 		_first_ring_wall_start = walls_before
 		_castle_ring_wall_count = planned
-		_ring_gap_count = int(pick.get("gaps", 0))
+		_ring_gap_count = int(ceil(gap_deg))
 		_defense_terrain_text = "塔圈" if not bool(pick.get("open", false)) else "塔圈(待封口)"
 	else:
 		_defense_terrain_text = "城墙%d圈" % _wall_rings_planned
@@ -540,6 +584,339 @@ func _plan_wall_ring(castle, ring_index: int) -> bool:
 	# 队列按优先级从低到高建；首圈墙排在塔和外圈之前。
 	_defense_queue.sort_custom(func(a, b): return float(a["priority"]) < float(b["priority"]))
 	return true
+
+# 从主城出发的“有界洪泛”：只走可通行地形，限制在半径 limit 格内，返回可达格集合。
+func _flood_region(center: Vector2i, limit: int) -> Dictionary:
+	var region: Dictionary = {center: true}
+	var queue: Array = [center]
+	var head: int = 0
+	var lim_sq: int = limit * limit
+	while head < queue.size():
+		var cur: Vector2i = queue[head]
+		head += 1
+		for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var n: Vector2i = cur + d
+			if region.has(n):
+				continue
+			if (n - center).length_squared() > lim_sq:
+				continue
+			# 只穿过“平地格”扩张：坡地/浅滩是单位能走的天然隘口，但墙建不上去。
+			# 若把它们算进可达区域，边界会贴在坡地/浅滩上导致整圈墙 60% 落不下去（实测可用边界格只有 19/84）。
+			if not _terrain_plain_grid(n.x, n.y):
+				continue
+			region[n] = true
+			queue.append(n)
+	return region
+
+# 贴地形闭合环：洪泛可达区域的边界就是天然的“围一圈”，沿边界逐格砌墙。
+# 相比固定半径圆，它会把墙压在河岸/山脚/地图边缘上，闭合成败不依赖半径候选。
+func _plan_terrain_ring(castle, ring_index: int) -> bool:
+	var desired: int = _wall_ring_desired_radius(castle, ring_index)
+	var max_r: int = clampi(desired, RING_MIN_RADIUS + 2,
+			RING_FIRST_MAX if ring_index == 0 else RING_MAX_RADIUS)
+	var center: Vector2i = ai.battle.world_to_grid(castle.global_position)
+	var cpos: Vector3 = castle.global_position
+	# 墙是按 1 米一格摆的，一圈要“真的没有缝”就需要 ≈ 周长米数的墙段（半径 18 米要 113 段）。
+	# 之前的实现只按预算挑了前 N 个边界格，剩下 60% 的周长是空的，判“闭合”却挡不住人。
+	# 所以这里先把半径收到“周长墙数 ≤ 预算”的档位：18 → 14 → 12 → 10。
+	var ring_budget: int = mini(RING_WALL_MAX, 96)
+	var region: Dictionary = {}
+	var pick_r: int = max_r
+	for rr in [max_r, 14, 12, 10, 8]:
+		if int(rr) > max_r:
+			continue
+		var reg_try: Dictionary = _flood_region(center, int(rr))
+		if reg_try.size() < 24:
+			continue
+		var edge_n: int = 0
+		for key in reg_try.keys():
+			var tt: Vector2i = key
+			if Vector2(tt.x - center.x, tt.y - center.y).length() < float(RING_MIN_RADIUS):
+				continue
+			for dd in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+				if not reg_try.has(tt + dd):
+					edge_n += 1
+					break
+		if edge_n <= ring_budget:
+			region = reg_try
+			pick_r = int(rr)
+			break
+	if region.is_empty():
+		return false
+	var threat_ang: float = atan2(_defense_dir.z, _defense_dir.x)
+	var pieces: Array = []
+	var sum_r: float = 0.0
+	for key in region.keys():
+		var t: Vector2i = key
+		var rel := Vector2(t.x - center.x, t.y - center.y)
+		var dd: float = rel.length()
+		if dd < float(RING_MIN_RADIUS):
+			continue
+		var edge: bool = false
+		for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			if region.has(t + d):
+				continue
+			edge = true
+			break
+		if not edge:
+			continue
+		var wp: Vector3 = Vector3(float(t.x) - RTSConfig.MAP_SIZE / 2.0 + 0.5, cpos.y,
+				float(t.y) - RTSConfig.MAP_SIZE / 2.0 + 0.5)
+		var ang: float = atan2(wp.z - cpos.z, wp.x - cpos.x)
+		var diff: float = absf(wrapf(ang - threat_ang, -PI, PI))
+		pieces.append({"pos": wp, "prio": 1.0 + diff * 2.0})
+		sum_r += dd
+	if pieces.size() < 16:
+		return false
+	pieces.sort_custom(func(a, b): return float(a["prio"]) < float(b["prio"]))
+	var queue_before: int = _defense_queue.size()
+	var slots_before: int = _defense_slots.size()
+	var wall_before: int = wall_positions.size()
+	# 逐格处理边界：已有建筑/资源点占住的格本来就是障碍，跳过；地形不是平地建不了墙，算缺口；
+	# 其余平地格必须落墙，落不下就是“能走人的缺口”。
+	var closed_angles: Array = []
+	for it in pieces:
+		var pos: Vector3 = it["pos"]
+		if _cell_obstructed(pos):
+			closed_angles.append(atan2(pos.z - cpos.z, pos.x - cpos.x))
+			continue
+		var gcell: Vector2i = ai.battle.world_to_grid(pos)
+		if not _terrain_plain_grid(gcell.x, gcell.y):
+			continue
+		if _add_defense_slot(27, pos, float(it["prio"]), "wall", true, false, false):
+			closed_angles.append(atan2(pos.z - cpos.z, pos.x - cpos.x))
+	var planned: int = wall_positions.size() - wall_before
+	# 物理闭合判据：相邻两个“已封闭点”（墙或天然障碍）之间的角度空档换算成弧长，
+	# 超过 1.6 米就说明单位（半径 0.5 米）能挤过去 —— 实测用“洪泛封闭”会漏判，
+	# 敌人在 t+11s 就有 8/14 走进了环内。
+	closed_angles.sort()
+	var max_gap_m: float = 0.0
+	if closed_angles.size() >= 2:
+		for i in range(closed_angles.size()):
+			var a1: float = float(closed_angles[i])
+			var a2: float = float(closed_angles[(i + 1) % closed_angles.size()])
+			var da: float = a2 - a1
+			if i == closed_angles.size() - 1:
+				da += TAU
+			max_gap_m = maxf(max_gap_m, da * float(desired))
+	# 落墙覆盖率：边界格里有 20% 以上没落下墙，说明这一圈半径根本摆不满，直接失败去收缩半径。
+	var fill_ratio: float = float(planned) / maxf(float(pieces.size()), 1.0)
+	if planned < 12 or fill_ratio < 0.8 or max_gap_m > 1.6 or not _ring_sealed(castle, desired):
+		_defense_queue.resize(queue_before)
+		_defense_slots.resize(slots_before)
+		wall_positions.resize(wall_before)
+		return false
+	var mean_r: int = maxi(RING_MIN_RADIUS, int(round(sum_r / float(pieces.size()))))
+	_wall_ring_radii.append(mean_r)
+	_wall_rings_planned = ring_index + 1
+	_castle_ring_planned = true
+	_castle_ring_radius = mean_r
+	_castle_ring_wall_count = planned
+	_ring_gap_count = int(ceil(_ring_gap_deg(castle, mean_r)))
+	_defense_terrain_text = "地形环%d段(闭)" % planned
+	if ring_index == 0:
+		_first_ring_planned_at = float(ai.battle.game_time)
+		_first_ring_wall_start = wall_before
+	_plan_ring_towers(castle, mean_r)
+	_defense_queue.sort_custom(func(a, b): return float(a["priority"]) < float(b["priority"]))
+	return true
+
+# 该格是否已经被建筑/资源点的实体本身占住（这种格不需要砌墙，敌人也过不去）。
+func _cell_obstructed(pos: Vector3) -> bool:
+	for e in ai.battle.entities.get_children():
+		if not is_instance_valid(e) or e.health <= 0:
+			continue
+		if not (e is Building) and not (e is WorldResource):
+			continue
+		if e.global_position.distance_to(pos) <= float(e.body_radius) + 0.45:
+			return true
+	return false
+
+# 从主城洪泛，判断“墙 + 建筑 + 资源点 + 地形”是否真的把主城围死。
+# 逃不出去 = 闭合；能走到 radius + 6 格以外 = 有缺口（这个判定直接对应“敌人能不能走进来”）。
+func _ring_sealed(castle, radius: int) -> bool:
+	var b = ai.battle
+	if b == null:
+		return false
+	var center: Vector2i = b.world_to_grid(castle.global_position)
+	var blocked: Dictionary = {}
+	for e in b.entities.get_children():
+		if not is_instance_valid(e) or e.health <= 0:
+			continue
+		if e is Building:
+			var br: float = float(e.body_radius)
+			var cg: Vector2i = b.world_to_grid(e.global_position)
+			var span: int = int(ceil(br)) + 1
+			for dx in range(-span, span + 1):
+				for dz in range(-span, span + 1):
+					var gg: Vector2i = cg + Vector2i(dx, dz)
+					var gp: Vector3 = Vector3(float(gg.x) - RTSConfig.MAP_SIZE / 2.0 + 0.5, 0.0,
+							float(gg.y) - RTSConfig.MAP_SIZE / 2.0 + 0.5)
+					if Vector2(gp.x - e.global_position.x, gp.z - e.global_position.z).length() <= br + 0.4:
+						blocked[gg] = true
+		elif e is WorldResource:
+			var rr: float = float(e.body_radius) + 0.3
+			var rg: Vector2i = b.world_to_grid(e.global_position)
+			var rspan: int = int(ceil(rr)) + 1
+			for dx in range(-rspan, rspan + 1):
+				for dz in range(-rspan, rspan + 1):
+					var gg2: Vector2i = rg + Vector2i(dx, dz)
+					var gp2: Vector3 = Vector3(float(gg2.x) - RTSConfig.MAP_SIZE / 2.0 + 0.5, 0.0,
+							float(gg2.y) - RTSConfig.MAP_SIZE / 2.0 + 0.5)
+					if Vector2(gp2.x - e.global_position.x, gp2.z - e.global_position.z).length() <= rr:
+						blocked[gg2] = true
+	var escaped: bool = false
+	var seen: Dictionary = {center: true}
+	var queue: Array = [center]
+	var head: int = 0
+	var escape_r: int = radius + 6
+	while head < queue.size():
+		var cur: Vector2i = queue[head]
+		head += 1
+		if (cur - center).length() > float(escape_r):
+			escaped = true
+			break
+		for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+			var n: Vector2i = cur + d
+			if seen.has(n) or blocked.has(n):
+				continue
+			if not _terrain_passable_grid(n.x, n.y):
+				continue
+			seen[n] = true
+			queue.append(n)
+	return not escaped
+
+# 统计某一圈（半径 ring_r ± 容差）上的最大角度缺口（度）。
+# 天然屏障（不可通行地形/地图边缘）算作已经封住，不算缺口。
+func _ring_gap_deg(castle, ring_r: int) -> float:
+	var cpos: Vector3 = castle.global_position
+	var bins: PackedByteArray = PackedByteArray()
+	bins.resize(180)
+	bins.fill(0)
+	# 按“弧长覆盖”判定：一段墙（体半径 1 米）在半径 r 上大约封住 ±1.6 米弧长，
+	# 用角度分箱直接比相等会把正常间距 1.5 米的墙误判成缺口。
+	var arm_tol: float = 1.6 / maxf(float(ring_r), 1.0)
+	for p in wall_positions:
+		var d: Vector3 = p - cpos
+		var rr: float = Vector2(d.x, d.z).length()
+		if absf(rr - float(ring_r)) > RING_RADIAL_TOL:
+			continue
+		var ang: float = atan2(d.z, d.x)
+		var span: int = int(ceil(arm_tol / (TAU / 180.0))) + 1
+		var bi: int = int(fposmod(ang, TAU) / TAU * 180.0)
+		for k in range(-span, span + 1):
+			bins[int(fposmod(float(bi + k), 180.0))] = 1
+	# 天然屏障方向标记为已封
+	for i in range(180):
+		if bins[i] == 1:
+			continue
+		var ang2: float = TAU * float(i) / 180.0
+		var px: float = cpos.x + cos(ang2) * float(ring_r)
+		var pz: float = cpos.z + sin(ang2) * float(ring_r)
+		var g: Vector2i = ai.battle.world_to_grid(Vector3(px, 0.0, pz))
+		if not _terrain_passable_grid(g.x, g.y):
+			bins[i] = 1
+	var max_gap: int = 0
+	var run: int = 0
+	for i in range(180):
+		if bins[i] == 1:
+			run = 0
+		else:
+			run += 1
+			max_gap = maxi(max_gap, run)
+	# 首尾相接的缺口
+	var tail: int = 0
+	for i in range(179, -1, -1):
+		if bins[i] == 1:
+			break
+		tail += 1
+	var head: int = 0
+	for i in range(180):
+		if bins[i] == 1:
+			break
+		head += 1
+	max_gap = maxi(max_gap, tail + head)
+	return float(max_gap) * 2.0
+
+func _terrain_plain_grid(gx: int, gz: int) -> bool:
+	if gx < 0 or gz < 0 or gx >= RTSConfig.MAP_SIZE or gz >= RTSConfig.MAP_SIZE:
+		return false
+	return ai.battle.get_terrain_at_grid(gx, gz) == 0
+
+func _terrain_passable_grid(gx: int, gz: int) -> bool:
+	if gx < 0 or gz < 0 or gx >= RTSConfig.MAP_SIZE or gz >= RTSConfig.MAP_SIZE:
+		return false
+	var t: int = ai.battle.get_terrain_at_grid(gx, gz)
+	if t == 2:
+		return ai.battle.get_overlay_at_grid(gx, gz) == 3
+	if t == 1:
+		var ov: int = ai.battle.get_overlay_at_grid(gx, gz)
+		return ov == 4 or ov == 5
+	return true
+
+# 按 2° 步长在圈上补缺口：只补“可通行且当前无墙”的角度，天然屏障方向跳过。
+func _fill_ring_gaps(castle, ring_r: int, prio_base: float) -> void:
+	var cpos: Vector3 = castle.global_position
+	for i in range(180):
+		var ang: float = TAU * float(i) / 180.0
+		var px: float = cpos.x + cos(ang) * float(ring_r)
+		var pz: float = cpos.z + sin(ang) * float(ring_r)
+		var g: Vector2i = ai.battle.world_to_grid(Vector3(px, 0.0, pz))
+		if not _terrain_passable_grid(g.x, g.y):
+			continue
+		var covered: bool = false
+		var arm_tol: float = 1.6 / maxf(float(ring_r), 1.0)
+		for p in wall_positions:
+			var d: Vector3 = p - cpos
+			var rr: float = Vector2(d.x, d.z).length()
+			if absf(rr - float(ring_r)) > RING_RADIAL_TOL:
+				continue
+			if absf(wrapf(atan2(d.z, d.x) - ang, -PI, PI)) <= arm_tol:
+				covered = true
+				break
+		if covered:
+			continue
+		var pos: Vector3 = Vector3(px, cpos.y, pz)
+		_add_defense_slot(27, pos, prio_base + absf(wrapf(ang - atan2(_defense_dir.z, _defense_dir.x), -PI, PI)) * 2.0,
+				"wall", true, false, false)
+
+# 一圈墙的数量预算：按周长算，超了就不再往墙上堆石头（实测有 AI 在“不成环”的墙上堆了 112 段）。
+func _ring_wall_budget(castle, ring_r: int) -> int:
+	return int(ceil(TAU * float(maxi(ring_r, 6)) / 1.1)) + 8
+
+# 整圈墙闭合不了时的降级方案：只在“朝敌方向”铺一段半圆弧墙，再补 2 座箭塔。
+# 半径按档位依次回退，直到能落下至少 8 段墙；落不下就整体回滚并返回 false。
+func _plan_fallback_wall_arc(castle, ring_index: int) -> bool:
+	var base_r: int = _wall_ring_desired_radius(castle, ring_index)
+	var wall_before: int = wall_positions.size()
+	var queue_before: int = _defense_queue.size()
+	var slots_before: int = _defense_slots.size()
+	for r_try in [base_r, base_r - 2, base_r + 2, base_r - 4, 6]:
+		var rr: int = int(r_try)
+		if rr < RING_MIN_RADIUS:
+			continue
+		for i in range(19):
+			var t: float = float(i) / 18.0
+			var wa: float = lerpf(-0.95, 0.95, t)
+			var p: Vector3 = castle.global_position + _defense_dir.rotated(Vector3.UP, wa) * float(rr)
+			_add_defense_slot(27, p, 2.0 + absf(wa) * 2.0, "wall", true, false, false)
+		if wall_positions.size() - wall_before >= 8:
+			_wall_ring_radii.append(rr)
+			_castle_ring_planned = true
+			_castle_ring_radius = rr
+			_castle_ring_wall_count = wall_positions.size() - wall_before
+			_defense_terrain_text = "半圈墙(降级)%d段" % int(_castle_ring_wall_count)
+			# 半圈墙内侧各补一座箭塔，优先级排在墙前面，先立塔再砌墙。
+			for side in [-0.5, 0.5]:
+				var tp: Vector3 = castle.global_position 					+ _defense_dir.rotated(Vector3.UP, float(side)) * maxf(4.0, float(rr) - 2.5)
+				_add_defense_slot(25, tp, 0.45 + absf(float(side)), "tower", true, false, false)
+			_wall_rings_planned = ring_index + 1
+			_defense_queue.sort_custom(func(a, b): return float(a["priority"]) < float(b["priority"]))
+			return true
+		_defense_queue.resize(queue_before)
+		_defense_slots.resize(slots_before)
+		wall_positions.resize(wall_before)
+	return false
 
 # 战役进攻关：开局直接把 AI 基地外围的一圈城墙、箭塔、炮塔和墙顶炮台预置好。
 # 复用塔圈规划器保证墙线沿地形闭合；这里只把规划结果一次性落成建筑，不扣资源、
@@ -1683,28 +2060,28 @@ func _plan_castle_ring(castle, is_outer: bool = false) -> bool:
 		return _plan_wall_ring(castle, _wall_rings_planned)
 	return _plan_wall_ring(castle, 0)
 
-# 圈内塔：四座箭塔均匀分布，炮塔优先朝威胁方向。
+# 圈内塔：箭塔均匀分布，炮塔优先朝威胁方向。
 # 塔放在墙内侧 3 米左右，既不打断墙圈，又能覆盖墙外。
 func _plan_ring_towers(castle, radius: int) -> void:
-	# 外圈半径超过主城 10 米视野时，先在视野内立 4 座瞭望塔（视野 25），
-	# 否则 AI.build_building 会以“不在己方视野内”拒绝外圈施工。
-	# 瞭望塔很便宜（40 木/20 石），比为了视野多建箭塔划算。
+	# 外圈半径超过主城 10 米视野时，先用少量瞭望塔把外圈视野铺出来；
+	# 位置由 _plan_base_watchtowers() 按“新增视野”选，而不是固定撒四座。
 	if radius > 7:
-		for i in range(4):
-			var va: float = TAU * float(i) / 4.0 + PI / 4.0
-			var vp: Vector3 = castle.global_position + Vector3(cos(va), 0.0, sin(va)) * 8.0
-			var vs: Vector3 = _find_anchor_spot(vp, 41, 1.6)
-			if vs != Vector3.ZERO:
-				# 瞭望塔必须先于远端墙段落成，否则墙体超出视野会被建造校验拒绝。
-				_add_defense_slot(41, vs, 2.0 + float(i) * 0.1, "tower")
+		_plan_base_watchtowers(castle, radius)
 	var tower_before: int = tower_positions.size()
-	var tower_r: float = maxf(5.2, float(radius) - 2.8)
-	for i in range(4):
-		var a: float = TAU * float(i) / 4.0
-		var p: Vector3 = castle.global_position + Vector3(cos(a) * tower_r, 0.0, sin(a) * tower_r)
-		var spot: Vector3 = _find_anchor_spot(p, 25, 2.2)
+	# 塔尽量贴在墙外侧 2 米（射程 6~7 米，正好覆盖整段墙线 + 墙外 4 米）。
+	# 外圈被地形占住时依次退回墙线上、墙内侧，保证每圈至少落几座塔。
+	for i in range(8):
+		var a: float = TAU * float(i) / 8.0
+		var spot: Vector3 = Vector3.ZERO
+		for tr in [float(radius) + 2.0, float(radius) + 0.5, float(radius) - 2.8]:
+			var p: Vector3 = castle.global_position + Vector3(cos(a) * tr, 0.0, sin(a) * tr)
+			spot = _find_anchor_spot(p, 25, 2.2)
+			if spot != Vector3.ZERO:
+				break
 		if spot != Vector3.ZERO:
-			_add_defense_slot(25, spot, 9.0 + float(i) * 0.2, "tower")
+			# 塔的优先级必须低于墙（队列按优先级升序建造）：墙一圈几十段，
+			# 塔排在墙后面就永远轮不到它（实测 8 分钟 0 座塔）。
+			_add_defense_slot(25, spot, 0.6 + float(i) * 0.1, "tower")
 	# 小半径时圈内被主城/民居占满，塔位放不进去；改在墙外 3 米补一圈塔，
 	# 不破坏墙体闭合（塔在墙外，不会在墙圈上开口），同时保证有塔圈可用。
 	if tower_positions.size() - tower_before < 3:
@@ -1713,8 +2090,8 @@ func _plan_ring_towers(castle, radius: int) -> void:
 			var op: Vector3 = castle.global_position + Vector3(cos(a2), 0.0, sin(a2)) * (float(radius) + 3.0)
 			var ospot: Vector3 = _find_anchor_spot(op, 25, 2.2)
 			if ospot != Vector3.ZERO:
-				_add_defense_slot(25, ospot, 14.0 + float(i) * 0.2, "tower")
-	var cannon_r: float = maxf(4.8, float(radius) - 4.0)
+				_add_defense_slot(25, ospot, 0.8 + float(i) * 0.1, "tower")
+	var cannon_r: float = float(radius) + 1.0
 	for side in [-1.0, 1.0]:
 		# 墙圈内侧同时有瞭望塔/箭塔，固定角度可能刚好被占；向两侧多试几个角度，
 		# 保证每圈至少落下一座炮塔，而不是“规划成功但只有箭塔”。
@@ -1725,7 +2102,7 @@ func _plan_ring_towers(castle, radius: int) -> void:
 				var cp: Vector3 = castle.global_position + dir * (cannon_r + float(extra))
 				var cspot: Vector3 = _find_anchor_spot(cp, 26, 2.0)
 				if cspot != Vector3.ZERO:
-					_add_defense_slot(26, cspot, 12.0 + absf(float(turn)), "tower")
+					_add_defense_slot(26, cspot, 0.5 + absf(float(turn)), "tower")
 					placed = true
 					break
 			if placed:
@@ -2387,9 +2764,30 @@ func _build_defense_step() -> void:
 		if ai.count_building(b_id) >= cap:
 			_defense_queue.remove_at(i)
 			continue
+		# 墙的石耗按“一圈周长”设预算：超了就不再往墙上堆石头（实测有 AI 堆到 112 段，
+		# 而其中 60% 以上的墙朝的方向本来就没封闭，纯粹浪费石头）。省下的钱给塔和补兵。
+		# 塔没建满之前别把钱全砸在墙上：箭塔要 80 木 50 石，石头低于 80 就先攒着，
+		# 否则队列里 8 个塔位永远缺石头（实测破防时塔只有 1 座，墙却有 21~38 段）。
+		if b_id == 27:
+			var towers_built: int = ai.count_building(25) + ai.count_building(26)
+			if towers_built < MIN_TOWERS:
+				var res_now: Dictionary = ai._get_resources()
+				if float(res_now.get("stone", 0)) < 80.0 or float(res_now.get("wood", 0)) < 110.0:
+					i += 1
+					continue
+		if b_id == 27 and not _wall_ring_radii.is_empty():
+			var max_rr: int = 0
+			for r in _wall_ring_radii:
+				max_rr = maxi(max_rr, int(r))
+			if max_rr > 0 and wall_positions.size() >= _ring_wall_budget(null, max_rr):
+				i += 1
+				continue
 		if not ai._ai_can_build(b_id):
 			break
-		if not _can_spend_building(b_id, _defense_reserve()):
+		# 塔是防守火力支柱，不能因为“给补兵预留”的保留金被卡住：
+		# 实测墙把资源花完后 _can_spend_building(25) 变 false，塔永远等不到钱。
+		var reserve: float = 0.05 if b_id in TOWER_IDS else _defense_reserve()
+		if not _can_spend_building(b_id, reserve):
 			break
 		# 没有空闲农民时不要把队列项当“失败”消耗掉，否则第一圈几十面墙
 		# 会在农民还走在路上时就被全部移出队列，最后只立起三四面墙。
@@ -2459,8 +2857,46 @@ func _pos_has_building(b_id: int, pos: Vector3) -> bool:
 				return true
 	return false
 
+# 不管环规划成不成功，都要保证主城周围至少有几座塔。
+# 实测闭合判据收紧后“环规划失败”的 AI 会掉到 1 座塔，火力等于没有。
+func _ensure_min_towers(castle) -> void:
+	# 只认"已经建成的塔"：以前把队列里排着的也算进去，结果塔位排了 8 个、一块石头没花，
+	# 保底逻辑以为够了就再也不补（实测破防时塔只有 1 座）。
+	var built: int = ai.count_building(25) + ai.count_building(26)
+	var planned: int = _count_planned(25) + _count_planned(26)
+	if built >= MIN_TOWERS or planned > 0:
+		return
+	var now: float = float(ai.battle.game_time)
+	if now < 150.0 or now < _next_reactive_tower:
+		return
+	_next_reactive_tower = now + 22.0
+	var base_dir: Vector3 = _defense_dir
+	if base_dir.length_squared() < 0.01:
+		base_dir = _enemy_castle_dir(castle)
+	base_dir.y = 0.0
+	if base_dir.length_squared() < 0.01:
+		base_dir = Vector3.FORWARD
+	base_dir = base_dir.normalized()
+	# 塔贴墙外侧环形分布：射程覆盖整条墙线，而不是全挤在主城一个点。
+	var ring_r: float = float(_castle_ring_radius)
+	if ring_r < 8.0:
+		ring_r = float(maxi(RING_MIN_RADIUS, 10))
+	for i in range(8):
+		var ang: float = TAU * float(i) / 8.0
+		var dir: Vector3 = base_dir.rotated(Vector3.UP, ang)
+		for off in [2.2, 1.0, 3.6, 5.0, -1.5]:
+			var p: Vector3 = castle.global_position + dir * (ring_r + float(off))
+			var spot: Vector3 = _find_anchor_spot(p, 25, 2.0)
+			if spot == Vector3.ZERO:
+				continue
+			_add_defense_slot(25, spot, 0.35 + float(i) * 0.06, "tower", true, false, false)
+			if _count_planned(25) + built >= MIN_TOWERS:
+				_defense_queue.sort_custom(func(a, b): return float(a["priority"]) < float(b["priority"]))
+				return
+			break
+
 func _maybe_reactive_tower(castle) -> void:
-	if threat_level < 2:
+	if threat_level < 1:
 		return
 	var now: float = float(ai.battle.game_time)
 	if now < _next_reactive_tower:
@@ -2791,8 +3227,11 @@ func _quick_fill_home_guard(castle, delta: float) -> void:
 		return a.global_position.distance_squared_to(castle.global_position) < b.global_position.distance_squared_to(castle.global_position)
 	)
 	var rally: Vector3 = _guard_rally(castle)
+	# 守军规模随威胁扩编：固定 5 个在“32 个敌人压境”时明显不够，
+	# 最多补到 18 个（大约一支满编前排），威胁消退后再自动回落。
+	var guard_cap: int = mini(HOME_GUARD_COUNT + int(threat_enemy_count) * 2, 18)
 	for u in own:
-		if _home_guard_ids.size() >= HOME_GUARD_COUNT:
+		if _home_guard_ids.size() >= guard_cap:
 			break
 		if not is_instance_valid(u) or u.health <= 0:
 			continue

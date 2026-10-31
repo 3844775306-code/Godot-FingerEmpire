@@ -37,13 +37,19 @@ const TROOP_GROWTH_PER_STEP := 8
 const TROOP_GATHER_GRACE := 20.0
 const ESCORT_IDS := [13, 39, 40]
 const BOARD_DISTANCE := 7.0
-const PARK_DISTANCE := 3.0
+const PARK_DISTANCE := 5.5
 const UNLOAD_DISTANCE := 7.0
 const BOARD_WAIT_TIMEOUT := 50.0
 # 集结宽限：船坞被其他船占满、人口封顶或运载船在队列里迟迟不下水时，
 # 不能永远等“4 运载船 + 4 护航舰”齐编。超过这个时间就按现有船先组织登陆，
 # 否则海峡图这种完全无陆路的地图会一直停在 STATE_IDLE，永远不投送陆军。
 const FLEET_ASSEMBLY_TIMEOUT := 45.0
+# 桥计划在“木材不足”状态下不能无限占着通道：超时后放弃本段并计入失败，
+# 连续失败会按既有逻辑改走运载船。
+const BRIDGE_AFFORD_TIMEOUT := 30.0
+# 船队已经集结/出航后，如果个别船被地形或其它船卡住，不能无限等待。
+const FLEET_IDLE_TIMEOUT := 90.0
+const FLEET_SAIL_TIMEOUT := 180.0
 
 const MODE_NONE := 0
 const MODE_BRIDGE := 1
@@ -71,6 +77,9 @@ var own_shore_land: Vector3 = Vector3.ZERO
 var enemy_shore_water: Vector3 = Vector3.ZERO
 var enemy_shore_land: Vector3 = Vector3.ZERO
 var _transport_shores_valid: bool = false
+# 船坞所在水域是否和登陆出发岸连通：船坞旁边可能是内陆油田水塘，
+# 船从这里下水后根本开不到登陆岸，运输波次会一直停在原地。
+var _shipyard_water_cache: Dictionary = {}
 # 上岸点定期更换：固定登陆场容易被对手守死，每分钟重新选一次
 const SHORES_REFRESH_SEC: float = 60.0
 var _shores_set_at_ms: int = 0
@@ -98,6 +107,14 @@ var _wave_escort_target: int = 0
 var _wave_troop_target: int = 0
 var _wave_troop_quota: int = 0
 var _fleet_wait_timer: float = 0.0
+var _bridge_afford_timer: float = 0.0
+# 施工中桥段的进度监视：农民可能被防守逻辑拉走/卡在水里，光看
+# builder_count_cache 会误以为还在干活，桥段一停就是几分钟。
+var _bridge_pending_gid: int = 0
+var _bridge_pending_left: float = -1.0
+var _bridge_pending_stall: float = 0.0
+var _fleet_idle_timer: float = 0.0
+var _fleet_sail_timer: float = 0.0
 
 func _init(owner):
 	ai = owner
@@ -161,6 +178,7 @@ func _refresh_plan():
 		if mode == MODE_TRANSPORT:
 			_abort_transport()
 		bridge_plan = plan
+		_bridge_afford_timer = 0.0
 		_transport_state = STATE_IDLE
 		_transport_units.clear()
 		mode = MODE_BRIDGE
@@ -187,6 +205,7 @@ func _stop_all():
 	_abort_transport()
 	bridge_plan.clear()
 	_bridge_fail_count = 0
+	_bridge_afford_timer = 0.0
 	_transport_shores_valid = false
 	_reachable_land.clear()
 	mode = MODE_NONE
@@ -215,13 +234,28 @@ func _abort_transport():
 	_transport_state = STATE_IDLE
 	_transport_timer = 0.0
 	_fleet_wait_timer = 0.0
+	_fleet_idle_timer = 0.0
+	_fleet_sail_timer = 0.0
 	# 中断后下一次组织登陆按当时时间重新计算波次规模
 	_reset_wave_targets()
+
+# 船队卡住时不只是原地重试：作废当前岸点，让下一轮重新找登陆场。
+func _stall_transport():
+	# 卡在远处水域的运载船（常见于内陆油田水塘、被陆地隔开的另一片海湾）
+	# 永远到不了出发岸。把它们排除出本波舰队，让船坞补造靠岸的船；
+	# 否则每 90 秒重试时还是会选中同一批远端船，登陆永远不开始。
+	for s in _transports:
+		if is_instance_valid(s) and s.global_position.distance_to(own_shore_water) > 15.0:
+			s.set_meta("ai_transport_excluded", true)
+	_transport_shores_valid = false
+	_plan_timer = 0.0
+	_abort_transport()
 
 func _collect_bridges() -> Dictionary:
 	var out: Dictionary = {}
 	for e in battle.entities.get_children():
-		if e is Building and e.entity_id == BRIDGE_ID and e.health > 0:
+		# 只把完工的桥算作可通行；施工中的桥段不能拿来判断两岸已经连通。
+		if e is Building and e.entity_id == BRIDGE_ID and e.health > 0 and e.build_timer <= 0.0:
 			out[battle.world_to_grid(e.global_position)] = true
 	return out
 
@@ -234,6 +268,9 @@ func _land_passable(tile: Vector2i, bridges: Dictionary) -> bool:
 	if terrain == 2:
 		# 浅滩(3)是水格但陆军可通行
 		return battle.get_overlay_at_grid(tile.x, tile.y) == 3
+	# 与陆军 A* 保持一致：山壁、悬崖、无法通过的台地边缘不能算陆地连通。
+	if battle.has_method("is_cliff_tile") and battle.is_cliff_tile(tile.x, tile.y):
+		return false
 	return true
 
 func _bfs_land(start: Vector2i, bridges: Dictionary) -> Dictionary:
@@ -313,6 +350,7 @@ func _try_resource_bridge(own_set: Dictionary, bridges: Dictionary, own_grid: Ve
 		return false
 	_resource_bridges_started += 1
 	bridge_plan = plan
+	_bridge_afford_timer = 0.0
 	_transport_state = STATE_IDLE
 	_transport_units.clear()
 	mode = MODE_BRIDGE
@@ -400,6 +438,7 @@ func plan_bridge_to(target_pos: Vector3, from_pos: Vector3 = Vector3.ZERO) -> bo
 	if plan.is_empty():
 		return false
 	bridge_plan = plan
+	_bridge_afford_timer = 0.0
 	mode = MODE_BRIDGE
 	_transport_state = STATE_IDLE
 	_transport_units.clear()
@@ -723,19 +762,56 @@ func _landing_defense_score(pos: Vector3, defenses: Array) -> float:
 
 # ═══════════════════════ 搭桥 ═══════════════════════
 
-func _tick_bridge(_delta: float):
+func _tick_bridge(delta: float):
 	if bridge_plan.is_empty():
+		_bridge_afford_timer = 0.0
 		_plan_timer = minf(_plan_timer, 1.0)
 		return
 	var pos: Vector3 = bridge_plan[0]
 	var g: Vector2i = battle.world_to_grid(pos)
+	var pending_bridge: Building = null
 	for e in battle.entities.get_children():
 		if e is Building and e.entity_id == BRIDGE_ID and e.health > 0:
 			if battle.world_to_grid(e.global_position) == g:
-				bridge_plan.pop_front()
-				return
-	if not ai.can_afford_building(BRIDGE_ID):
+				# 施工中的桥段不能从计划里弹掉。以前只要桥实体存在就算“已建”，
+				# AI 会把整条计划快速弹空，最后一段却停在等待农民的状态，
+				# 之后重新规划又把这段当成已存在弹掉，桥永远差一格不通。
+				if e.build_timer > 0.0:
+					pending_bridge = e
+				else:
+					_bridge_afford_timer = 0.0
+					bridge_plan.pop_front()
+					return
+	if pending_bridge != null:
+		# 给停工桥段补派农民（农民可能阵亡、被防守逻辑拉走或卡在岸边）。
+		# 光看“有农民”不够：农民可能卡在够不到的岸边，施工计时一直不动，
+		# 这里按施工倒计时是否推进来判断，停 8 秒就重派。
+		var gid: int = pending_bridge.get_instance_id()
+		if gid != _bridge_pending_gid or absf(pending_bridge.build_timer - _bridge_pending_left) > 0.05:
+			_bridge_pending_gid = gid
+			_bridge_pending_left = pending_bridge.build_timer
+			_bridge_pending_stall = 0.0
+		else:
+			_bridge_pending_stall += delta
+		var stalled: bool = _bridge_pending_stall >= 8.0
+		if stalled or int(pending_bridge.get("builder_count_cache")) <= 0 or bool(pending_bridge.get("awaiting_builder")):
+			if battle.has_method("assign_builders"):
+				if stalled and pending_bridge.has_method("_release_builders"):
+					pending_bridge._release_builders()
+				battle.assign_builders(pending_bridge, [])
+			_bridge_pending_stall = 0.0
+		_bridge_afford_timer = 0.0
 		return
+	if not ai.can_afford_building(BRIDGE_ID):
+		_bridge_afford_timer += delta
+		if _bridge_afford_timer >= BRIDGE_AFFORD_TIMEOUT:
+			# 木材长期不够：放弃这条桥，让下一次规划改走运载船或更短的资源桥。
+			bridge_plan.clear()
+			_bridge_afford_timer = 0.0
+			_register_bridge_failure()
+			_plan_timer = 1.0
+		return
+	_bridge_afford_timer = 0.0
 	if battle.has_method("is_valid_bridge_position") and not battle.is_valid_bridge_position(pos):
 		# 这个桥位被单位/建筑挡住或地形已变，下一周期重新找
 		bridge_plan.clear()
@@ -745,6 +821,7 @@ func _tick_bridge(_delta: float):
 	if ai.build_building(BRIDGE_ID, pos):
 		_bridge_fail_count = 0
 		_bridge_retry_at_ms = 0
+		_bridge_afford_timer = 0.0
 		bridge_plan.pop_front()
 		if bridge_plan.is_empty():
 			_plan_timer = 0.0
@@ -799,6 +876,15 @@ func _reset_wave_targets():
 	_wave_troop_quota = 0
 	_fleet_wait_timer = 0.0
 
+# 本波次最低登船人数：既要保证不是“一艘空船跑过去”，也不能因为常规敌情
+# 让 AI 长期只有 20~29 名可抽调的野战兵时，卡在 30 人门槛前永远不出海。
+# 运力越小门槛越低，最多仍按 MIN_TRANSPORT_TROOPS 要求。
+func _min_wave_troops(capacity: int) -> int:
+	# 岛屿图 AI 的野战兵常被守家/守墙占去大半，能抽出的可能只有个位数。
+	# 门槛按运力的 1/8 计算，先送一支小型先遣队上岸，后续船队再补人；
+	# 总比“永远等 30 人、永远不出海”更接近真实渡海行为。
+	return mini(MIN_TRANSPORT_TROOPS, maxi(2, capacity / 8))
+
 func _refresh_fleet():
 	_transports.clear()
 	_escorts.clear()
@@ -808,6 +894,17 @@ func _refresh_fleet():
 		if not ai.entity_belongs_to_me(e):
 			continue
 		if e.entity_id == TRANSPORT_ID:
+			# 在远处油田水塘/另一片海湾/内陆湖建造后永远开不到出发岸的船，
+			# 不能被当成“已拥有运载船”，否则 AI 不再补造，波次永远凑不齐。
+			# 出发岸 20 米以外的运载船一律排除；近岸船坞会补造新的。
+			if own_shore_water != Vector3.ZERO:
+				var far: bool = e.global_position.distance_to(own_shore_water) > 20.0
+				if far:
+					e.set_meta("ai_transport_excluded", true)
+				elif e.has_meta("ai_transport_excluded"):
+					e.remove_meta("ai_transport_excluded")
+			if e.has_meta("ai_transport_excluded"):
+				continue
 			_transports.append(e)
 		elif int(e.entity_id) in ESCORT_IDS:
 			_escorts.append(e)
@@ -824,6 +921,15 @@ func _refresh_fleet():
 		_escorts = _escorts.slice(0, escort_cap)
 	for e in _escorts:
 		e.set_meta("ai_escorting", true)
+
+# 只统计能参与渡水的运载船，排除已判定到不了出发岸的远端船。
+func _usable_transport_count() -> int:
+	var n: int = 0
+	for e in battle.entities.get_children():
+		if e is Army and e.health > 0 and int(e.entity_id) == TRANSPORT_ID \
+				and ai.entity_belongs_to_me(e) and not e.has_meta("ai_transport_excluded"):
+			n += 1
+	return n
 
 func _tick_transport(delta: float):
 	if not _transport_shores_valid:
@@ -914,7 +1020,36 @@ func _tick_fleet_idle(delta: float):
 			# 到岸边后先停船，等陆军走到船边再上船
 			ship.stop_movement()
 	if not all_close:
-		return
+		_fleet_idle_timer += delta
+		# 有一两艘船卡在远处水域时，不能拖住整支船队。20 秒后只保留
+		# 已经靠近出发岸的船先组织登陆，远处的船排除并让船坞补造。
+		if _fleet_idle_timer >= 20.0:
+			var usable: Array = []
+			var excluded_any: bool = false
+			for i in range(_transports.size()):
+				var s = _transports[i]
+				if not is_instance_valid(s):
+					continue
+				if s.global_position.distance_to(own_shore_water) <= 30.0:
+					usable.append(s)
+				else:
+					s.set_meta("ai_transport_excluded", true)
+					excluded_any = true
+			if usable.is_empty():
+				_stall_transport()
+				return
+			if excluded_any:
+				_transports = usable
+				slots = _shore_slots(own_shore_water, _transports.size(), 2.5)
+				_fleet_idle_timer = 0.0
+				return
+			# 船都在 30 米内但还没到停泊点：继续 move_to，不能把 all_close 强行置真。
+			# 旧实现这里直接继续上兵，陆军会走到岸边而船还停在十几米外，
+			# 最后只能等 BOARD_WAIT_TIMEOUT 反复超时，看起来像“AI 永远不登陆”。
+		if not all_close:
+			if _fleet_idle_timer >= FLEET_IDLE_TIMEOUT:
+				_stall_transport()
+			return
 	_transport_slots = slots
 	# 护航舰也先回到出发海域，和运载船一起走，避免船队先冲出去、护航舰还在后面
 	var escort_slots := _fleet_slots(own_shore_water, _escorts.size(), 3.0)
@@ -926,11 +1061,24 @@ func _tick_fleet_idle(delta: float):
 			_escorts[i].move_to(escort_slots[i])
 			escorts_home = false
 	if not escorts_home:
-		return
+		_fleet_idle_timer += delta
+		# 护航舰可能被海战/浅滩卡住，不能为了等它们让整波登陆无限期停摆。
+		# 超过编队集结时限后先让运载船单独出发，下一波再重新组织护航。
+		if _fleet_idle_timer >= FLEET_ASSEMBLY_TIMEOUT:
+			for e in _escorts:
+				if is_instance_valid(e):
+					e.set_meta("ai_escort_released", true)
+			_escorts.clear()
+			_fleet_idle_timer = 0.0
+		else:
+			if _fleet_idle_timer >= FLEET_IDLE_TIMEOUT:
+				_stall_transport()
+			return
+	_fleet_idle_timer = 0.0
 	# 本波次实际目标兵力：不超过本次运载船总容量。
 	# 编队缩水时最低人数也随运力下降，否则 2 艘船永远达不到 30 人。
 	var capacity: int = _transports.size() * TRANSPORT_CAPACITY
-	var min_troops: int = mini(MIN_TRANSPORT_TROOPS, capacity)
+	var min_troops: int = _min_wave_troops(capacity)
 	var desired_troops: int = mini(maxi(_wave_troop_target, min_troops), capacity)
 	var units: Array = _pick_units(desired_troops)
 	if units.size() < desired_troops:
@@ -943,6 +1091,17 @@ func _tick_fleet_idle(delta: float):
 		_transport_timer = 0.0
 	_wave_troop_quota = units.size()
 	_transport_units = units
+	# 被征用的守家/守资源/守墙兵转为登陆部队，避免 AI 防守逻辑下一帧又把它们拉回去。
+	for u in units:
+		if is_instance_valid(u):
+			u.remove_meta("ai_home_guard")
+			u.remove_meta("ai_resource_guard")
+			if u.has_meta("ai_wall_guard"):
+				if ai != null and ai.has_method("_release_wall_guard"):
+					ai._release_wall_guard(u)
+				else:
+					u.remove_meta("ai_wall_guard")
+					u.hold_position = false
 	_unit_ship.clear()
 	# 按“离哪艘船最近 + 该船还有空位”分配，而不是按队列顺序硬塞。
 	# 多艘船沿岸排开时，靠岸单位如果被分到另一端的船，很容易永远走不到
@@ -979,6 +1138,8 @@ func _tick_fleet_idle(delta: float):
 	_order_escorts_to(own_shore_water, 3.0)
 	_transport_state = STATE_GATHER
 	_transport_timer = 0.0
+	_fleet_idle_timer = 0.0
+	_fleet_sail_timer = 0.0
 
 func _tick_fleet_gather(delta: float):
 	_transport_timer += delta
@@ -1033,7 +1194,7 @@ func _tick_fleet_gather(delta: float):
 	# 已经够本波次目标人数时不要为了等最后几个掉队的兵一直拖到 50 秒超时；
 	# 给落单单位一个短暂追赶窗口后直接出发。
 	var capacity: int = _transports.size() * TRANSPORT_CAPACITY
-	var min_troops: int = mini(MIN_TRANSPORT_TROOPS, capacity)
+	var min_troops: int = _min_wave_troops(capacity)
 	var troop_quota: int = maxi(_wave_troop_quota, min_troops)
 	var stop_waiting: bool = _transport_timer > BOARD_WAIT_TIMEOUT or (boarded_now >= troop_quota and _transport_timer > 8.0)
 	for u in _transport_units:
@@ -1048,11 +1209,13 @@ func _tick_fleet_gather(delta: float):
 		return
 	_transport_state = STATE_SAIL
 	_transport_timer = 0.0
+	_fleet_sail_timer = 0.0
 	_escort_advanced = false
 	_order_fleet_sail()
 
 func _tick_fleet_sail(delta: float):
 	_transport_timer += delta
+	_fleet_sail_timer += delta
 	var slots := _shore_slots(enemy_shore_water, _transports.size(), 2.5)
 	var all_unloaded: bool = true
 	var any_ship: bool = false
@@ -1084,9 +1247,13 @@ func _tick_fleet_sail(delta: float):
 	if not _escort_advanced and _transport_timer > 8.0:
 		_escort_advanced = true
 		_order_escorts_to(enemy_shore_water, 3.0)
-	# 没全部靠岸就继续等/继续开，不在深海放人
+	# 没全部靠岸就继续等/继续开，不在深海放人。
+	# 但长时间到不了敌岸时必须放弃当前登陆场，否则整支舰队会在海上永航。
 	if not all_unloaded:
+		if _fleet_sail_timer >= FLEET_SAIL_TIMEOUT:
+			_stall_transport()
 		return
+	_fleet_sail_timer = 0.0
 	var enemy_castle = ai._get_attack_target_castle()
 	for u in _transport_units:
 		if is_instance_valid(u) and u is Army:
@@ -1222,6 +1389,13 @@ func _clean_transport_units():
 			alive.append(u)
 	_transport_units = alive
 
+func _transport_candidate_less(a: Dictionary, b: Dictionary) -> bool:
+	# 渡海征用优先级：空闲兵 > 守家/守资源兵 > 守墙兵。
+	# 只有前两类不够时才抽守墙兵，避免为了登陆把城墙直接抽空。
+	if int(a["priority"]) != int(b["priority"]):
+		return int(a["priority"]) < int(b["priority"])
+	return float(a["dist"]) < float(b["dist"])
+
 func _pick_units(max_count: int) -> Array:
 	var candidates: Array = []
 	var exclusions: Array = [5, 6, 9, 10, 13, 14, 19, 39, 40, 43, 44, 45, 46, 47, 48, 49, 50, 51, 55, 56, 57]
@@ -1245,13 +1419,22 @@ func _pick_units(max_count: int) -> Array:
 		var gb = e.get("_garrison_building")
 		if gb != null and gb.get_ref() != null:
 			continue
-		if e.has_meta("ai_home_guard") or e.has_meta("ai_resource_guard") or e.has_meta("ai_harass") or e.has_meta("ai_transporting") or e.has_meta("ai_wall_guard"):
+		if e.has_meta("ai_harass") or e.has_meta("ai_transporting"):
 			continue
+		# 守墙兵是最后一级可征用兵：岛屿图的 AI 常把全部陆军派去守墙，
+		# 如果这里直接排除，渡海模块就会永远显示 0 个可用士兵。
+		# 仍按“空闲 > 守家/守资源 > 守墙”的顺序抽人，前两类足够时不会动城墙。
+		var is_wall_guard: bool = e.has_meta("ai_wall_guard")
+		var priority: int = 0
+		if is_wall_guard:
+			priority = 2
+		elif e.has_meta("ai_home_guard") or e.has_meta("ai_resource_guard"):
+			priority = 1
 		var dist: float = e.global_position.distance_to(own_shore_land)
-		candidates.append({"unit": e, "dist": dist})
+		candidates.append({"unit": e, "dist": dist, "priority": priority})
 	if candidates.is_empty():
 		return []
-	candidates.sort_custom(func(a, b): return float(a["dist"]) < float(b["dist"]))
+	candidates.sort_custom(_transport_candidate_less)
 	var out: Array = []
 	for item in candidates:
 		out.append(item["unit"])
@@ -1286,18 +1469,95 @@ func _find_land_near(pos: Vector3) -> Vector3:
 
 # ═══════════════════════ 运载船前置科技 ═══════════════════════
 
+# 船坞必须开在“能航行到己方出发岸”的水域里。只按直线距离判断会选中
+# 城堡旁的内陆油田水塘：船虽然造得出来，却永远开不到登陆岸。
+func _shipyard_reaches_own_water(sy: Building) -> bool:
+	if not is_instance_valid(sy) or own_shore_water == Vector3.ZERO:
+		return false
+	var shore_grid: Vector2i = battle.world_to_grid(own_shore_water)
+	var key: String = "%d@%d,%d" % [sy.get_instance_id(), shore_grid.x, shore_grid.y]
+	if _shipyard_water_cache.has(key):
+		return bool(_shipyard_water_cache[key])
+	var start: Vector2i = battle.world_to_grid(sy.global_position)
+	var target: Vector2i = Vector2i(-1, -1)
+	# 船坞在陆地上，找它旁边最近的一格水面作为 BFS 起点。
+	for radius in range(0, 4):
+		for dx in range(-radius, radius + 1):
+			for dz in range(-radius, radius + 1):
+				if maxi(absi(dx), absi(dz)) != radius:
+					continue
+				var gx: int = start.x + dx
+				var gz: int = start.y + dz
+				if gx < 0 or gx >= RTSConfig.MAP_SIZE or gz < 0 or gz >= RTSConfig.MAP_SIZE:
+					continue
+				if battle.get_terrain_at_grid(gx, gz) == 2:
+					target = Vector2i(gx, gz)
+					break
+			if target.x >= 0:
+				break
+		if target.x >= 0:
+			break
+	var reachable: bool = false
+	if target.x >= 0 and battle.get_terrain_at_grid(shore_grid.x, shore_grid.y) == 2:
+		if target == shore_grid:
+			reachable = true
+		else:
+			var visited: Dictionary = {shore_grid: true}
+			var queue: Array = [shore_grid]
+			var head: int = 0
+			while head < queue.size() and visited.size() < 12000:
+				var c: Vector2i = queue[head]
+				head += 1
+				if c == target:
+					reachable = true
+					break
+				for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
+					var n: Vector2i = c + d
+					if visited.has(n):
+						continue
+					if n.x < 0 or n.x >= RTSConfig.MAP_SIZE or n.y < 0 or n.y >= RTSConfig.MAP_SIZE:
+						continue
+					if battle.get_terrain_at_grid(n.x, n.y) != 2:
+						continue
+					visited[n] = true
+					queue.append(n)
+	_shipyard_water_cache[key] = reachable
+	return reachable
+
 # 己方登陆岸边没有船坞时，直接在岸边找一块合法陆地建造。
 # AI 通用的 _manage_shipyards 只会在“临岸且 10 格内有油田”的位置建，
 # 岛屿/无油地图会因此永远凑不出运载船。
 func _ensure_shore_shipyard():
 	if own_shore_water == Vector3.ZERO or own_shore_land == Vector3.ZERO:
 		return
+	# 只保留一座“离出发岸最近”的渡水专用船坞。
+	# 之前只要 16 米内有船坞就标记并返回，岛屿图第二座船坞也容易留下旧标记，
+	# 运载船就会从远处船坞下水，随后又被 _refresh_fleet 以“离岸超过20米”排除。
+	var best: Building = null
+	var best_dist: float = INF
 	for e in battle.entities.get_children():
-		if e is Building and e.entity_id == SHIPYARD_ID and e.health > 0 and ai.entity_belongs_to_me(e):
-			if e.global_position.distance_to(own_shore_water) <= 40.0:
-				# 标记为渡水专用，避免 _manage_shipyards 因“附近无油田”把它拆掉
-				e.set_meta("ai_transport_shipyard", true)
-			return
+		if not (e is Building) or e.entity_id != SHIPYARD_ID or e.health <= 0:
+			continue
+		if not ai.entity_belongs_to_me(e):
+			continue
+		var near: bool = e.global_position.distance_to(own_shore_water) <= 16.0 \
+			and _shipyard_reaches_own_water(e)
+		if not near:
+			if e.has_meta("ai_transport_shipyard"):
+				e.remove_meta("ai_transport_shipyard")
+			continue
+		var d: float = e.global_position.distance_to(own_shore_water)
+		if d < best_dist:
+			best = e
+			best_dist = d
+	if is_instance_valid(best):
+		for e in battle.entities.get_children():
+			if e is Building and e.entity_id == SHIPYARD_ID and e != best:
+				if e.has_meta("ai_transport_shipyard"):
+					e.remove_meta("ai_transport_shipyard")
+		best.set_meta("ai_transport_shipyard", true)
+		_drop_remote_transport_orders(best)
+		return
 	if not ai.can_afford_building(SHIPYARD_ID):
 		return
 	var pos: Vector3 = _find_shore_shipyard_pos()
@@ -1305,10 +1565,26 @@ func _ensure_shore_shipyard():
 		return
 	if not ai.build_building(SHIPYARD_ID, pos):
 		return
+	var built: Building = null
 	for e in battle.entities.get_children():
 		if e is Building and e.entity_id == SHIPYARD_ID and e.health > 0 and ai.entity_belongs_to_me(e):
 			if e.global_position.distance_to(pos) <= 3.0:
-				e.set_meta("ai_transport_shipyard", true)
+				built = e
+				break
+	if is_instance_valid(built):
+		built.set_meta("ai_transport_shipyard", true)
+		_drop_remote_transport_orders(built)
+
+# 运载船只能从渡水专用船坞生产。远处船坞排出的运载船开不到出发岸，
+# 留下来只会白吃木头/金币和人口，所以每次确认专用船坞后清掉这些排队项。
+func _drop_remote_transport_orders(keep: Building) -> void:
+	for e in battle.entities.get_children():
+		if not (e is Building) or e.entity_id != SHIPYARD_ID or e == keep or e.health <= 0:
+			continue
+		if not ai.entity_belongs_to_me(e):
+			continue
+		while e.production_queue.has(TRANSPORT_ID):
+			e.production_queue.erase(TRANSPORT_ID)
 
 func _find_shore_shipyard_pos() -> Vector3:
 	var base: Vector2i = battle.world_to_grid(own_shore_land)
@@ -1340,8 +1616,27 @@ func _find_shore_shipyard_pos() -> Vector3:
 				return pos
 	return Vector3.ZERO
 
+# 优先使用靠近登陆岸的专用船坞；只有没有专用船坞时才退回第一座己方船坞。
+# 否则 AI 可能把运载船科技/生产排到远处只产渔船/战船的油田船坞上。
+func _find_transport_shipyard() -> Building:
+	var fallback: Building = null
+	for e in battle.entities.get_children():
+		if not (e is Building) or e.health <= 0 or e.entity_id != SHIPYARD_ID:
+			continue
+		if not ai.entity_belongs_to_me(e) or not e.has_meta("ai_transport_shipyard"):
+			continue
+		if not _shipyard_reaches_own_water(e):
+			continue
+		if e.build_timer <= 0.0 and e.upgrade_level >= TRANSPORT_SHIPYARD_LEVEL:
+			return e as Building
+		if fallback == null:
+			fallback = e as Building
+	if fallback != null:
+		return fallback
+	return null
+
 func _ensure_transport_tech():
-	var sy = ai._find_own_building(SHIPYARD_ID)
+	var sy = _find_transport_shipyard()
 	if not is_instance_valid(sy):
 		return
 	if sy.build_timer > 0.0:
@@ -1353,15 +1648,18 @@ func _ensure_transport_tech():
 		if ai.can_afford_upgrade(20):
 			ai.upgrade_building(20)
 			return
-	if ai.can_afford_upgrade(SHIPYARD_ID):
-		ai.upgrade_building(SHIPYARD_ID)
+	if sy.can_upgrade() and ai.can_afford_upgrade(SHIPYARD_ID):
+		# 直接升级这座“渡水专用”船坞。ai.upgrade_building(23) 会从所有船坞里
+		# 挑第一个可升级的，经常升级到内陆油田船坞，而登陆岸这座一直停在 2 级，
+		# 运载船科技永远不够。
+		sy.perform_upgrade(battle)
 
 func _ensure_transport_fleet():
 	# 只统计已经下水的运载船。count_unit 默认包含生产队列，若把队列里的船
 	# 当成已拥有，就会出现“实际只有2艘、队列里4艘、AI以为够了不再下单”的卡死。
-	if ai.count_unit(TRANSPORT_ID, false) >= _wave_transport_target:
+	if _usable_transport_count() >= _wave_transport_target:
 		return
-	var sy = ai._find_own_building(SHIPYARD_ID)
+	var sy = _find_transport_shipyard()
 	if not is_instance_valid(sy) or sy.build_timer > 0.0:
 		return
 	if sy.upgrade_level < TRANSPORT_SHIPYARD_LEVEL:
@@ -1391,7 +1689,7 @@ func _ensure_escort_ships():
 	var total: int = ai.count_unit(13, false) + ai.count_unit(39, false) + ai.count_unit(40, false)
 	if total >= _wave_escort_target:
 		return
-	var sy = ai._find_own_building(SHIPYARD_ID)
+	var sy = _find_transport_shipyard()
 	if not is_instance_valid(sy) or sy.build_timer > 0.0:
 		return
 	if sy.upgrade_level < 2:
