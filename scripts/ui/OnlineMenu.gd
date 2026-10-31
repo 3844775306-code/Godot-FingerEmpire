@@ -218,6 +218,8 @@ func _build_desktop_ui() -> void:
 	nation_select.add_item("  西班牙  攻击+10%  铠甲+1  黄金+15%")
 	nation_select.custom_minimum_size = Vector2(0, 54)
 	nation_select.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	nation_select.select(clampi(GameSettings.player_nation, 0, nation_select.item_count - 1))
+	nation_select.item_selected.connect(_on_nation_selected)
 	_style_option(nation_select, 18)
 	c1.add_child(nation_select)
 
@@ -536,6 +538,8 @@ func _build_mobile_ui() -> void:
 			"  波斯    生命+15%  盾甲+1  黄金+15%  人口+5", "  西班牙  攻击+10%  铠甲+1  黄金+15%"]:
 		nation_select.add_item(item)
 	nation_select.custom_minimum_size = Vector2(0, btn_h)
+	nation_select.select(clampi(GameSettings.player_nation, 0, nation_select.item_count - 1))
+	nation_select.item_selected.connect(_on_nation_selected)
 	_style_option(nation_select, fs_body)
 	vb.add_child(nation_select)
 
@@ -891,6 +895,7 @@ func _on_transport_changed(use_ws: bool):
 func _on_create_server_pressed():
 	GameSettings.replay_enabled = record_check != null and record_check.button_pressed
 	GameSettings.replay_mode = "snapshot"
+	_apply_local_nation_choice()
 	if OS.has_feature("web"):
 		status_label.text = "浏览器版不能创建服务器；请在 PC/服务器端启动 WebSocket 主机后，打开邀请链接加入。"
 		return
@@ -1159,7 +1164,30 @@ func _get_local_ip() -> String:
 			return ip
 	return "127.0.0.1"
 
+# 联机菜单里的国家选择必须同步到 GameSettings；房主还要写进 pending_nations[1]，
+# 否则服务器会继续用单机菜单遗留的旧国家开局。
+func _apply_local_nation_choice() -> void:
+	if nation_select == null:
+		return
+	var n: int = nation_select.selected
+	GameSettings.player_nation = n
+	# 创建服务器时 mode 还是 NONE，也必须先把房主选择写入 pending[1]；
+	# 否则会沿用上一局残留的 pending，盖过刚选的国家。
+	if NetworkManager.mode != NetworkManager.Mode.CLIENT:
+		NetworkManager.pending_nations[1] = n
+	elif NetworkManager.multiplayer.multiplayer_peer != null:
+		NetworkManager.send_nation_choice.rpc_id(1, n)
+
+# 玩家在大厅改国家时立即记录；已连接客户端要重新上报，房主写本地缓存。
+func _on_nation_selected(index: int) -> void:
+	GameSettings.player_nation = index
+	if NetworkManager.mode != NetworkManager.Mode.CLIENT:
+		NetworkManager.pending_nations[1] = index
+	elif NetworkManager.multiplayer.multiplayer_peer != null:
+		NetworkManager.send_nation_choice.rpc_id(1, index)
+
 func _on_start_game_pressed():
+	_apply_local_nation_choice()
 	var reason = NetworkManager.start_game()
 	if reason != "":
 		status_label.text = "无法开始: %s" % reason
@@ -1181,6 +1209,7 @@ func _on_player_count_changed():
 		status_label.text = "所有玩家到齐，自动开始..."
 		start_game_btn.disabled = true  # 防止重复点击
 		await get_tree().create_timer(0.5).timeout
+		_apply_local_nation_choice()
 		var start_reason = NetworkManager.start_game()
 		if start_reason != "":
 			status_label.text = "启动失败: %s" % start_reason

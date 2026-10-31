@@ -660,16 +660,24 @@ func _process_snapshot(data: Dictionary):
 	# ---- 国家信息 ----
 	if has_node("UI/HUD"):
 		if data.has("nation"):
-			my_nation = data["nation"] if player_team == RTSConfig.Team.BLUE else data.get("enemy_nation", -1)
-			var enemy_nation = data.get("enemy_nation", -1) if player_team == RTSConfig.Team.BLUE else data["nation"]
+			# 服务器下发的 nation 已按“接收者所在队伍”定制；不要再用 player_team
+			# 二次翻转，否则红方客户端会把自己的国家显示成蓝方国家。
+			my_nation = int(data.get("nation", -1))
+			var enemy_nation = int(data.get("enemy_nation", -1))
 			$UI/HUD.set_nations(my_nation, enemy_nation)
 		elif data.has("team_nations") and my_team != -1:
 			# 存档一份：HUD 的播报需要按队伍查国家名（自己是哪国、敌方是哪国）
 			team_nations = data["team_nations"].duplicate()
-			my_nation = data["team_nations"].get(my_team, -1)
+			# 组队模式允许同队玩家选不同国家；team_nations 只记“该队最后一个
+			# 国家的值”，所以优先从 player_info 取自己的国家，不能再被队友覆盖。
+			my_nation = int(team_nations.get(my_team, -1))
+			if data.has("player_info") and data["player_info"] is Dictionary and my_peer_id != -1:
+				var my_info: Dictionary = data["player_info"].get(my_peer_id, {})
+				if my_info.has("nation"):
+					my_nation = int(my_info.get("nation", my_nation))
 			var my_team_nation = my_nation
 			var enemy_team = RTSConfig.Team.RED if my_team == RTSConfig.Team.BLUE else RTSConfig.Team.BLUE
-			var enemy_nation = data["team_nations"].get(enemy_team, -1)
+			var enemy_nation = int(team_nations.get(enemy_team, -1))
 			$UI/HUD.set_nations(my_team_nation, enemy_nation)
 	if data.has("player_info") and data["player_info"] is Dictionary:
 		player_roster = data["player_info"].duplicate(true)

@@ -410,6 +410,13 @@ func _init_1v1():
 
 	var peers = multiplayer.get_peers()
 	peers.sort()
+	# 1v1 默认 team_nations[RED] 来自单机菜单的 enemy_nation；有远程玩家时
+	# 必须等远程客户端自己的国家选择，不能拿房主的单机设置冒充，否则国家会错位。
+	if peers.is_empty():
+		team_nations[RTSConfig.Team.RED] = GameSettings.enemy_nation
+	else:
+		team_nations[RTSConfig.Team.RED] = -1
+
 	# 房主 (peer_id=1) → BLUE
 	player_teams[1] = RTSConfig.Team.BLUE
 	player_info[1] = {"team": RTSConfig.Team.BLUE, "slot": 0, "alive": true, "is_ai": false}
@@ -543,6 +550,13 @@ func _init_team_mode():
 	if host_team == RTSConfig.Team.RED: red_assigned += 1
 	else: blue_assigned += 1
 	print("[组队] 房主 peer_id=1 队伍", "红" if host_team == RTSConfig.Team.RED else "蓝")
+
+	# 组队模式同样不能先给远程玩家填默认国家：等每个客户端把他选的国家发到
+	# 服务器后再建 player_info / 生成城堡，避免“选中国却出生维京”的错位。
+	for pid in peers:
+		while not NetworkManager.pending_nations.has(pid):
+			await get_tree().process_frame
+		pending_nations[pid] = int(NetworkManager.pending_nations[pid])
 
 	# ---------- 分配远程人类玩家 ----------
 	for i in range(peers.size()):
