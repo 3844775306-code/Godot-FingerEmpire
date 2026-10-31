@@ -2,8 +2,6 @@
 # Extracted from Army.gd — handles all movement, pathfinding, and collision separation
 class_name MovementController
 extends RefCounted
-const SimRandom = preload("res://scripts/core/SimRandom.gd")
-const SimTime = preload("res://scripts/core/SimTime.gd")
 
 var _army: Army  # parent unit reference
 
@@ -26,18 +24,9 @@ const ATTACK_TARGET_MOVE_TOLERANCE: float = 3.0
 # 队列压力阈值：与 RTSBattleManager.ASTAR_BACKLOG_PRESSURE 保持一致。
 # 排队多时进一步降低追击重算频率、放大目标移动容差，先让现有路径继续走。
 const A_STAR_PRESSURE_THRESHOLD: int = 30
-# 单条路径的 CPU 上限。后期 GDScript 里 12k 节点最坏可到 20ms+，
-# 一条长路径就能吃掉整帧；超过软上限且已经找到更接近目标的格子时先返回
-# 部分路径，完全没有进展（例如找桥）才允许继续到硬上限。
-const A_STAR_SOFT_LIMIT_USEC: int = 6000
-const A_STAR_HARD_LIMIT_USEC: int = 10000
 # 路径预览最多采样多少个点。贴地指引带内部会再按 1.1 米加密并逐顶点贴地，
 # 这里只限制单条路径的顶点总量，避免超长路径生成过大的网格。
 const MAX_PATH_PREVIEW_POINTS: int = 200
-# 沿浅滩距离场走的最大步数（100×100 地图对角线 140 格，留足余量）
-const FORD_ROUTE_MAX_STEPS: int = 320
-# 横渡浅滩带的最大步数（河宽 14 格，留足余量）
-const FORD_CROSS_MAX_STEPS: int = 48
 # 路径指引带排头跟随单位的步长：单位每走这么远才重建一次网格，
 # 既保证「走一段收一段」的实时感，又不至于每帧重新贴地。
 const PATH_HEAD_STEP: float = 0.45
@@ -53,18 +42,6 @@ var _pending_since_ms: int = 0
 # 到达该段末端后由 Army 重新寻路。否则大部队攻击移动会停在原地。
 var path_partial: bool = false
 var _last_path_partial: bool = false
-# 航点绕圈检测：单位满速度却长时间接近不了当前航点（常见于航点落在
-# 建筑/资源碰撞体边缘）时，跳过这个中间航点，避免原地绕十几秒。
-const WAYPOINT_STUCK_TIMEOUT: float = 1.6
-const WAYPOINT_APPROACH_EPS: float = 0.2
-var _waypoint_track_pos: Vector3 = Vector3.ZERO
-var _waypoint_best_dist: float = INF
-var _waypoint_stuck_time: float = 0.0
-# 目标确实不可达（整块可达区域都已展开）时为 true：此时返回的是“最近可达格”的路径，
-# 单位走到那里就算本次移动完成，不再出现“走到岸边/山脚后丢命令发呆”。
-var _last_path_closest: bool = false
-# 同一路径被逐帧坡度检查连续否掉的次数，用于打破“清路径↔重算”死循环
-var _cliff_block_streak: int = 0
 # 大量单位同时移动/攻击移动时 A* 预算可能连续多帧排不到某个单位。
 # 以前等 4~8 秒后直接判“无路”再重发，结果队尾单位反复经历
 # “排队→超时失败→换目标/重发→继续排队”，永远拿不到路径。
@@ -81,7 +58,7 @@ const DIRECT_CHECK_CACHE_MS: int = 250
 var _direct_check_result: bool = true
 var _direct_check_ms: int = 0
 
-# 路径预览：一条贴地流动的指引带（替代原来那一串青色小球），每支选中军队各一条。
+# 路径预览：一条贴地流动的指引带（替代原来那一串青色小球），只给第一个选中单位画。
 var _path_guide: GroundPathGuide = null
 var _path_preview_points: Array = []  # 当前指引带使用的路径点，用来判断是否需要重建
 var _path_preview_tail: Array = []    # 除排头之外还剩的路径点（用来判断路径是否被消费掉）
@@ -100,11 +77,6 @@ const COLLISION_INTERVAL: float = 0.15
 # 缓坡/台地基础成本高于平原，避免部队为了抄近路随意翻山。
 const SLOPE_BASE_COST: float = 1.35
 const PLATEAU_BASE_COST: float = 1.1
-# 山体边缘惩罚：格子中心离普通山壁只有 0.5~0.7 米，刚好等于/小于大多数
-# 单位的碰撞半径。A* 若沿山脚直线抄近路，单位会擦着山体拐角卡住。
-# 给紧贴普通山壁的格子加高成本（不封死，缓坡/窄道仍可走），让 A* 优先
-# 从至少一格开外绕过去。
-const MOUNTAIN_EDGE_COST: float = 6.0
 var _last_recalc_frame: int = -99  # prevent recalc spam
 # A* 预算按“渲染帧”计数，但一个渲染帧里可能补跑多个物理步。低帧率时如果每个
 # 物理步都重试 pending 请求，几百个单位会把直路检测和预算查询重复做 4~8 次，
@@ -115,15 +87,6 @@ var _path_cache: Dictionary = {}  # Vector2i(world_x, world_z) -> path_array, cl
 # 同时展开上千节点把 A* 预算吃光。单位从最近航点并入缓存路线。
 const GROUP_PATH_MERGE_RADIUS: float = 7.0
 const GROUP_PATH_CACHE_CELL: float = 2.0
-# 追击时新路径还在排队、旧路径已走完，且目标已接近攻击距离，允许最后几米
-# 直接朝目标走。否则每一次目标移动触发重新寻路都会让单位停一帧甚至更久，
-# 表现为“追着追着突然站住”。
-const CHASE_DIRECT_APPROACH_MARGIN: float = 6.0
-# 部分路径（A* 节点预算耗尽/终点暂时不可达）走完一段后立即续算下一段。
-# 以前要等 Army 的 0.5 秒重试计时器，单位每走完一小段就会站住半秒，
-# 大部队长途行军时表现为走走停停。
-const PARTIAL_PATH_CONTINUE_MS: int = 80
-var _next_partial_continue_ms: int = 0
 var _blacklist: Dictionary = {}  # Vector2i -> 过期时间戳，暂时跳过不可达目标
 # 普通移动失败只临时拉黑：如果永久记住，玩家一次失败后同一位置就再也点不动，
 # 只有建筑布局变化触发 recalculate() 才会恢复，表现为“单位不听移动命令”。
@@ -132,7 +95,7 @@ const MOVE_BLACKLIST_TTL_MS: int = 4000
 func _init(army: Army):
 	_army = army
 	# 错开各单位首次碰撞分离的帧，避免几百个单位在同一物理帧集中做近邻查询
-	collision_timer = SimRandom.randf_range(0.0, COLLISION_INTERVAL)
+	collision_timer = randf_range(0.0, COLLISION_INTERVAL)
 	# 单位死亡/离场时清理挂在 battle_manager 下的路径指引带。不能用
 	# MovementController 的 PREDELETE 通知里再调方法，RefCounted 析构阶段方法表已不可用。
 	if army != null and not army.tree_exiting.is_connected(_hide_path):
@@ -165,7 +128,7 @@ func set_move_target(pos: Vector3, stop_range: float = 0.0):
 	# 否则目标站在曾经寻路失败过的格子上时，单位会连攻击路径都不再计算。
 	if not is_attack_move and _blacklist.has(key):
 		var blacklist_until: int = int(_blacklist[key])
-		if SimTime.now_ms() < blacklist_until:
+		if Time.get_ticks_msec() < blacklist_until:
 			_pending_path = false
 			move_path_failed = true
 			path_partial = false
@@ -185,12 +148,11 @@ func set_move_target(pos: Vector3, stop_range: float = 0.0):
 		# 已经有一个请求在排队时不要重复占预算；process_move 会按重试配额继续处理
 		if _pending_path and astar_path.is_empty():
 			return
-		var now_ms := SimTime.now_ms()
+		var now_ms := Time.get_ticks_msec()
 		# 首次追击按 unit id 分 16 个相位错峰，避免全军在同一帧集中跑 A*；
 		# 后续只加少量抖动，保证追击路径不会滞后太久。
-		var sim_phase := int(_army.get_meta("_sim_phase", 0)) if GameSettings.deterministic_sim else int(_army.get_instance_id() % 16)
-		var phase_ms := int(sim_phase % 16) * 30
-		var cooldown_ms := ATTACK_PATH_COOLDOWN_MS + int(sim_phase % 5) * 15
+		var phase_ms := int(_army.get_instance_id() % 16) * 30
+		var cooldown_ms := ATTACK_PATH_COOLDOWN_MS + int(_army.get_instance_id() % 5) * 15
 		# 队列已经排长时，追击路径降频到约 2.2 秒一次；路径为空时下面的
 		# 冷却分支会放行补发请求，不会让单位因为降频而永久站着。
 		if pressure:
@@ -219,7 +181,7 @@ func set_move_target(pos: Vector3, stop_range: float = 0.0):
 	if not _try_compute_path(pos, stop_range):
 		var was_pending: bool = _pending_path
 		if not was_pending or _pending_target.distance_to(pos) > 2.0:
-			_pending_since_ms = SimTime.now_ms()
+			_pending_since_ms = Time.get_ticks_msec()
 		_pending_path = true
 		_pending_target = pos
 		_pending_stop_range = stop_range
@@ -242,7 +204,7 @@ func _try_compute_path(pos: Vector3, stop_range: float, bm: RTSBattleManager = n
 	# 开阔地直走不消耗 A* 预算：这是后期队列增长的主要来源。
 	# 必须放在 reserve 之前，否则“直走”虽然不跑 A*，仍会占掉其他单位的寻路名额。
 	if bm != null:
-		var now_ms := SimTime.now_ms()
+		var now_ms := Time.get_ticks_msec()
 		# 只在同一目标近期判定为“不能直走”时跳过采样，避免待处理请求
 		# 每一帧都把整条长路径重新扫一遍；A* 失败/排队仍会正常处理。
 		var cached_blocked: bool = not _direct_check_result \
@@ -275,15 +237,7 @@ func _apply_path(pos: Vector3, path: Array, stop_range: float) -> void:
 	var is_attack_move := stop_range > 0.0
 	astar_target = pos
 	astar_path = path
-	_reset_waypoint_track()
 	path_partial = _last_path_partial
-	# 不可达目标：把目的地点改写为“最近可达格”，走到那里命令即视为完成，
-	# 不会再出现“走到一半路径变空、命令被清掉、单位原地发呆”。
-	if _last_path_closest and astar_path.size() > 0 and not is_attack_move \
-			and _army != null and String(_army.current_order) == "move":
-		var last_wp: Vector3 = astar_path[astar_path.size() - 1]
-		astar_target = Vector3(last_wp.x, pos.y, last_wp.z)
-		_last_path_closest = false
 	var key = Vector2i(int(pos.x), int(pos.z))
 	if astar_path.size() > 0:
 		attack_path_failed = false
@@ -304,7 +258,7 @@ func _apply_path(pos: Vector3, path: Array, stop_range: float) -> void:
 	else:
 		attack_path_failed = false
 		move_path_failed = true
-		_blacklist[key] = SimTime.now_ms() + MOVE_BLACKLIST_TTL_MS
+		_blacklist[key] = Time.get_ticks_msec() + MOVE_BLACKLIST_TTL_MS
 	if _is_selected: _show_path()
 
 func _try_compute_pending_path(bm: RTSBattleManager, force: bool = false) -> bool:
@@ -319,53 +273,6 @@ func _try_compute_pending_path(bm: RTSBattleManager, force: bool = false) -> boo
 func cancel_pending_path() -> void:
 	_pending_path = false
 	_pending_since_ms = 0
-
-# 供 AI/调试面板判断“单位到底排队多久”，避免把新命令误判成长时间寻路。
-func pending_path_age_ms() -> int:
-	if not _pending_path:
-		return 0
-	return maxi(0, SimTime.now_ms() - _pending_since_ms)
-
-# 移动卡死诊断：给出“下一步航点、还差多远、是否被坡度/失败标记拦住”，
-# 避免只看到“有路径但不移动”却不知道卡在路径点还是碰撞。
-func debug_motion_snapshot() -> Dictionary:
-	var next_pos: Vector3 = astar_path[0] if not astar_path.is_empty() else Vector3.ZERO
-	return {
-		"path_left": astar_path.size(),
-		"next": next_pos,
-		"next_dist": _army.global_position.distance_to(next_pos) if next_pos != Vector3.ZERO else -1.0,
-		"dest": astar_target,
-		"target": get_current_target(),
-		"pending": _pending_path,
-		"age_ms": pending_path_age_ms(),
-		"path_failed": move_path_failed or attack_path_failed,
-		"partial": path_partial,
-		"cliff_block": _cliff_block_streak,
-		"waypoint_stuck": _waypoint_stuck_time,
-	}
-
-func _reset_waypoint_track() -> void:
-	_waypoint_track_pos = Vector3.ZERO
-	_waypoint_best_dist = INF
-	_waypoint_stuck_time = 0.0
-
-# 记录对当前航点的最佳接近距离；满速但持续无法更近时跳过一个中间航点。
-# 只跳中间点，最后一个航点仍交给最终接近/重新寻路，不直接穿进目标碰撞体。
-func _track_waypoint_progress(waypoint: Vector3, delta: float) -> void:
-	if _waypoint_track_pos.distance_squared_to(waypoint) > 0.04:
-		_waypoint_track_pos = waypoint
-		_waypoint_best_dist = INF
-		_waypoint_stuck_time = 0.0
-	var h_dist: float = Vector2(waypoint.x - _army.global_position.x,
-			waypoint.z - _army.global_position.z).length()
-	if h_dist < _waypoint_best_dist - WAYPOINT_APPROACH_EPS:
-		_waypoint_best_dist = h_dist
-		_waypoint_stuck_time = 0.0
-		return
-	_waypoint_stuck_time += delta
-	if _waypoint_stuck_time >= WAYPOINT_STUCK_TIMEOUT and astar_path.size() > 1:
-		astar_path.pop_front()
-		_reset_waypoint_track()
 
 func _get_bm() -> RTSBattleManager:
 	if _army == null or not is_instance_valid(_army) or not _army.is_inside_tree():
@@ -385,9 +292,8 @@ func recalculate():
 	move_path_failed = false
 	_last_attack_path_ms = -100000  # 建筑变化后允许立即重算追击路径
 	# building recalc - cached paths cleared
-	# 采集/交付/攻击移动也属于「有固定终点」的状态，卡住时必须能重算路径；
-	# 施工中的农民同样有固定施工位，建筑布局变化后旧路径可能穿进新建筑。
-	if astar_target != Vector3.ZERO and _army.current_order in ["move", "deliver", "gather", "attack_move", "build"]:
+	# 采集/交付/攻击移动也属于「有固定终点」的状态，卡住时必须能重算路径
+	if astar_target != Vector3.ZERO and _army.current_order in ["move", "deliver", "gather", "attack_move"]:
 		var key = Vector2i(int(astar_target.x), int(astar_target.z))
 		_path_cache.erase(key)
 		astar_path = _calculate_astar_path(astar_target)
@@ -424,11 +330,7 @@ func stop():
 	_pending_path = false
 	_pending_since_ms = 0
 	_next_no_path_reissue_ms = 0
-	_next_partial_continue_ms = 0
 	_stop_velocity()
-	# 命令结束/单位停下后不要把最后一段路径留在屏幕上。
-	if _is_selected:
-		_hide_path()
 
 # 只处理“移动逻辑还在要路径，但既没排队也没有失败标记”的漏网状态。
 # 失败的路径交给 Army 的换目标/拆墙超时，不能在这里反复重算。
@@ -437,7 +339,7 @@ func _try_reissue_missing_path(target_pos: Vector3) -> bool:
 		return false
 	if move_path_failed or attack_path_failed or path_partial:
 		return false
-	var now_ms := SimTime.now_ms()
+	var now_ms := Time.get_ticks_msec()
 	if now_ms < _next_no_path_reissue_ms:
 		return false
 	_next_no_path_reissue_ms = now_ms + NO_PATH_REISSUE_INTERVAL_MS
@@ -448,59 +350,6 @@ func _try_reissue_missing_path(target_pos: Vector3) -> bool:
 		stop_range = _army.attack_range
 	clear_blacklist_at(target_pos)
 	set_move_target(target_pos, stop_range)
-	return true
-
-# 当前是否在追击一个“锁定了但还没进入射程”的目标。
-func _is_chasing_locked_target() -> bool:
-	if _army == null or _army.current_target == null \
-			or not is_instance_valid(_army.current_target):
-		return false
-	if not _army._order_is(_army.UnitState.ATTACKING):
-		return false
-	return _army._combat_edge_distance(_army.current_target) > _army.attack_range
-
-# 追击路径暂时中断时，是否允许直接朝目标走最后几米。
-# 只对已接近攻击距离、中间无悬崖、且没有被建筑实际挡住的目标放行；
-# 远距离/隔墙目标仍然等 A*，不能靠直线硬挤。
-func _can_direct_chase(bm: RTSBattleManager) -> bool:
-	if bm == null or not _is_chasing_locked_target():
-		return false
-	if blocking_building != null and is_instance_valid(blocking_building):
-		return false
-	var edge: float = _army._combat_edge_distance(_army.current_target)
-	if edge > _army.attack_range + CHASE_DIRECT_APPROACH_MARGIN:
-		return false
-	if _is_cliff_between_positions(bm, _army.global_position, _army.current_target.global_position):
-		return false
-	# 追击的最后几米也不能直接跨墙：隔墙目标等 A* 绕路，不能靠直线硬挤。
-	var direct: Array = _try_direct_path(bm, _army.current_target.global_position, 0.0)
-	return not direct.is_empty()
-
-# 当前移动命令使用的寻路 stop_range：追击目标用攻击距离，其它命令用 0。
-func _current_move_stop_range() -> float:
-	if _army != null and _army.current_target != null \
-			and is_instance_valid(_army.current_target) \
-			and _army._order_is(_army.UnitState.ATTACKING):
-		return _army.attack_range
-	return 0.0
-
-# 部分路径即将/已经走完时，立刻从当前位置续算下一段，避免每段之间停顿。
-# allow_empty=false 只在还剩 1 个航点时预取；allow_empty=true 用于路径已空。
-func _try_continue_partial_path(target_pos: Vector3, allow_empty: bool) -> bool:
-	if not path_partial or target_pos == Vector3.ZERO:
-		return false
-	if not allow_empty and astar_path.size() > 1:
-		return false
-	if not allow_empty and astar_path.is_empty():
-		return false
-	var now_ms := SimTime.now_ms()
-	if now_ms < _next_partial_continue_ms:
-		return false
-	_next_partial_continue_ms = now_ms + PARTIAL_PATH_CONTINUE_MS
-	path_partial = false
-	_last_path_partial = false
-	clear_blacklist_at(target_pos)
-	set_move_target(target_pos, _current_move_stop_range())
 	return true
 
 # 单位停止/进入攻击距离后必须把残留速度清零，否则 Army 的 simple_idle 永远不成立，
@@ -522,15 +371,9 @@ func process_move(delta, bm: RTSBattleManager):
 	# 攻击追目标时旧路径通常仍指向同一目标，可以边沿旧路径推进边等新路径。
 	if _pending_path:
 		if not _army.is_attack_moving and not _army._order_is(_army.UnitState.MOVING) \
-				and not _army._order_is(_army.UnitState.ATTACKING) \
-				and not _army._order_is(_army.UnitState.BUILDING) \
-				and not _army._order_is(_army.UnitState.GATHERING) \
-				and not _army._order_is(_army.UnitState.DELIVERING):
-			# 只有真正不需要寻路的命令才丢弃待处理请求；施工、采集、交付和攻击索敌
-			# 一样必须有终点，A* 预算连续几帧排不到时不能把请求丢掉，否则农民
-			# 会在半路彻底失去路径，表现为原地卡住。
-			# 实测：原先采集/交付不在放行名单里，请求每帧被丢一次，农民永远拿不到路径
-			# （静止样本 100% 是「路径0 待处理true」）。
+				and not _army._order_is(_army.UnitState.ATTACKING):
+			# 只有真正不需要寻路的命令才丢弃待处理请求；攻击索敌必须保留，
+			# 否则 A* 预算连续几帧排不到时会表现为“锁着目标却一步不走”。
 			_pending_path = false
 			_pending_since_ms = 0
 		else:
@@ -539,7 +382,7 @@ func process_move(delta, bm: RTSBattleManager):
 			# 是每渲染帧重置的；重复重试只会在预算耗尽后反复做直路扫描。
 			if frame != _last_pending_frame:
 				_last_pending_frame = frame
-				var pending_age_ms: int = SimTime.now_ms() - _pending_since_ms
+				var pending_age_ms: int = Time.get_ticks_msec() - _pending_since_ms
 				if pending_age_ms >= PENDING_PATH_URGENT_MS:
 					# 排队过久：强制放行一次（每帧限额），不能再等普通配额。
 					# 这样即使队列一直被新请求插队，队尾单位也一定能拿到一次真正的寻路结果：
@@ -548,12 +391,9 @@ func process_move(delta, bm: RTSBattleManager):
 				else:
 					_try_compute_pending_path(bm)
 			if _pending_path:
-				# 攻击移动/追击即使新路径还没算完，也可以先沿现有路径继续推进；
-				# 若旧路径已走完但目标就在几米内，允许直接朝目标接近。
-				# 普通移动没有可用新路径时先停住，等下一帧重试。
-				var keep_moving: bool = astar_path.size() > 0 \
-					and (_army.is_attack_moving or _is_chasing_locked_target())
-				if not keep_moving and not _can_direct_chase(bm):
+				# 攻击移动即使新路径还没算完，也可以先沿现有路径继续推进；
+				# 普通攻击/普通移动没有可用新路径时先停住，等下一帧重试。
+				if not (_army.is_attack_moving and astar_path.size() > 0):
 					_stop_velocity()
 					return
 	if not _army.can_move or _army.speed <= 0:
@@ -576,9 +416,7 @@ func process_move(delta, bm: RTSBattleManager):
 		if _army.current_target is WorldResource and h_dist <= Army.GATHER_STANDOFF_GAP:
 			_stop_velocity()
 			return
-		elif _army.current_target is GameEntity and h_dist <= _army.attack_range \
-				and not _army._shot_blocked_by_wall(_army.current_target):
-			# 射程够了但城墙挡住弹道：不要停在这里干等，继续沿路线绕到有射界的位置。
+		elif _army.current_target is GameEntity and h_dist <= _army.attack_range:
 			_stop_velocity()
 			return
 
@@ -586,22 +424,12 @@ func process_move(delta, bm: RTSBattleManager):
 	if target_pos == Vector3.ZERO:
 		_stop_velocity()
 		return
-	# 部分路径只剩最后 1 个航点（或刚走空）时先续算，不等 Army 的 0.5 秒重试。
-	if path_partial:
-		if astar_path.is_empty():
-			# 路径已经走空：不允许冷却把单位晾在路中间，立即续算。
-			_next_partial_continue_ms = 0
-		_try_continue_partial_path(target_pos, astar_path.is_empty())
 
 	# Follow A* path
 	var move_target = target_pos
 	# No A* path = no movement, unless close to target (final approach)
 	if astar_path.size() == 0:
-		if _can_direct_chase(bm):
-			# 追击目标已进入最后几米：旧路径在等待新路径时走完也不要站住，
-			# 直接朝目标推进，交由 Army 的攻击距离判定停下。
-			move_target = target_pos
-		elif astar_target.distance_squared_to(_army.global_position) > 3.0:
+		if astar_target.distance_squared_to(_army.global_position) > 3.0:
 			# 采集目标所在的格子本身是 A* 阻挡格，寻路终点常常停在离资源 1~3 米处。
 			# 普通移动在 1.7 米外就原地等待重算，农民于是站在远处“假采集”（资源血量不掉）。
 			# 对采集目标放行最后几米的直线接近，终点取资源边缘外 0.5 米的站位点，
@@ -623,56 +451,29 @@ func process_move(delta, bm: RTSBattleManager):
 	if astar_path.size() > 0:
 		move_target = astar_path[0]
 		var h_dist = Vector2(move_target.x - _army.global_position.x, move_target.z - _army.global_position.z)
-		# 航点到达半径按单位体积放宽：大型单位/被碰撞体挤住的单位不需要严格贴到
-		# 航点中心 0.5 米内，否则会在航点边缘满速度绕圈，路径索引永远不前进。
-		var arrive_dist: float = maxf(0.5, float(_army.body_radius) + 0.25)
-		if h_dist.length() < arrive_dist:
+		if h_dist.length() < 0.5:
 			astar_path.pop_front()
-			_reset_waypoint_track()
 			# 走过一个航点后让指引带跟着收一段（_show_path 内部按 0.45 米步长节流，
-			# 不会每帧重建网格）。路径走空时不要立刻收起：单位可能还在做最后几米接近，
-			# 由 _show_path 用当前位置到目的地补一条短线。
-			if _is_selected:
+			# 不会每帧重建网格）。路径走完则收起预览。
+			if astar_path.is_empty() and _is_selected:
+				_hide_path()
+			elif _is_selected:
 				_show_path()
 			if astar_path.size() > 0:
 				move_target = astar_path[0]
-		else:
-			_track_waypoint_progress(move_target, delta)
 	# 沿着长直路段前进时不会经过航点，这里按位移节流地刷新一次排头，
 	# 让线一直贴着脚下走，而不是等到下一个航点才跳一段。
-	# 路径走空但单位仍在最终接近/直追时，也要补建这条短线；停下后收起。
-	if _is_selected:
-		if _path_guide == null or not is_instance_valid(_path_guide):
-			if astar_path.is_empty() and _preview_motion_active():
-				_show_path()
-		else:
-			var head_now: Vector3 = _army.global_position
-			if _path_built_head.distance_to(head_now) > PATH_HEAD_STEP:
-				_show_path()
-			elif astar_path.is_empty() and not _preview_motion_active():
-				_hide_path()
+	if _is_selected and _path_guide != null and not astar_path.is_empty():
+		var head_now: Vector3 = _army.global_position
+		if _path_built_head.distance_to(head_now) > PATH_HEAD_STEP:
+			_show_path()
 	# 兜底：路径可能因建筑变化/单位被挤动而临期，实际行走前再检查一次下一段坡度。
-	# 尤其禁止从高地/台地边缘直接走下悬崖；发现后立即重算，而不是停下等 Army 的
-	# 0.75~1.2 秒重试计时器（那会表现为行军途中突然站住一两秒）。
+	# 尤其禁止从高地/台地边缘直接走下悬崖；发现后停止并按寻路失败处理，等待重算。
 	if bm != null and astar_path.size() > 0 and _is_cliff_between_positions(bm, _army.global_position, move_target):
-		# 同一条路径被逐帧坡度检查连续否掉时不要无限“清路径→重算”：
-		# A* 展开时用的是同一套判定，重算通常得到完全相同的路径，于是单位
-		# 原地冻住（实测桥头堡单兵 70 秒不动、路径长度一直不变）。
-		# 连续 3 次就放行，让坡度减速与地面高度吸附兜底，宁可走慢也不能站死。
-		_cliff_block_streak += 1
-		if _cliff_block_streak > 3:
-			_cliff_block_streak = 0
-		else:
-			_stop_velocity()
-			astar_path.clear()
-			clear_blacklist_at(target_pos)
-			var stop_range: float = _current_move_stop_range()
-			set_move_target(target_pos, stop_range)
-			if astar_path.is_empty() and not _pending_path:
-				move_path_failed = true
-			return
-	else:
-		_cliff_block_streak = 0
+		_stop_velocity()
+		astar_path.clear()
+		move_path_failed = true
+		return
 	# Build horizontal direction
 	var horizontal_target = Vector3(move_target.x, _army.global_position.y, move_target.z)
 	var move_dir = (horizontal_target - _army.global_position).normalized()
@@ -700,32 +501,8 @@ func process_move(delta, bm: RTSBattleManager):
 	var slope_mult: float = _get_slope_speed_multiplier(bm, _army.global_position, move_target)
 	_slope_speed_mult = lerpf(_slope_speed_mult, slope_mult, clampf(delta * 8.0, 0.0, 1.0))
 	var effective_speed: float = _army.speed * _slope_speed_mult
-	# 海军不能越过岸线：A* 会绕开陆地，但追击/采集的最后几米是直线接近，
-	# 目标点可能落在岸上；这里按实际地形再拦一次，船停在岸边而不是开上岸。
-	if _army.water_capable and bm != null:
-		var lookahead: float = maxf(effective_speed * delta * 2.0, 0.8)
-		var next_water_pos: Vector3 = _army.global_position + Vector3(move_dir.x, 0.0, move_dir.z) * lookahead
-		if not _can_push_to(next_water_pos, bm):
-			_stop_velocity()
-			return
-	var prev_pos: Vector3 = _army.global_position
 	_army.velocity = Vector3(move_dir.x, 0, move_dir.z) * effective_speed
 	_army.move_and_slide()
-	# 碰撞/滑动也可能把船体挤出岸线；移动后按实际落点再校验一次并回退。
-	if _army.water_capable and bm != null and not _can_push_to(_army.global_position, bm):
-		_army.global_position = prev_pos
-		_stop_velocity()
-		return
-	# 陆地单位的最终安全网：A* 路径本应完全避开深水/普通山壁，但单位被挤动、
-	# 路径缓存过期或地图边界格子换算异常时，仍可能把格心带进障碍。这里在实际
-	# 落点再校验一次，发现越界立即退回上一帧位置并丢弃路径，等下一次寻路绕行，
-	# 避免“走进山体/水面后停住并丢失移动命令”。
-	if bm != null and not _army.water_capable \
-			and _is_land_terrain_blocked(bm, _army.global_position):
-		_army.global_position = prev_pos
-		_stop_velocity()
-		astar_path.clear()
-		return
 	# 陆地单位的脚步音由 Army._play_step_sfx 按实际落脚点触发；
 	# 这里只保留船只的持续航行音，避免和脚步音重复。
 	if _army.speed > 0.1 and Engine.get_process_frames() % 40 == 0:
@@ -788,25 +565,7 @@ func _is_cliff_between_positions(bm: RTSBattleManager, from_pos: Vector3, to_pos
 		return false
 	return _is_cliff_between_tiles(bm, from_tile, to_tile)
 
-# 墙/建筑/桥/梯子缓存是“当前队伍”视角。别的队伍刚寻路后，
-# process_move 里的逐帧坡度/拐角检查仍会读这份全局缓存；如果不切回
-# 本单位队伍，斜向拐角检查会把“敌方眼中的我方城墙/建筑”误判成障碍，
-# 表现为追击单位有路径却每帧清路径、原地不动。
-func _ensure_current_team_static_caches(bm: RTSBattleManager) -> void:
-	if bm == null:
-		return
-	if _wall_bm_id != bm.get_instance_id() \
-			or _wall_ver != bm._wall_cache_version \
-			or _wall_team != _army.team:
-		_ensure_static_caches(bm)
-
 func _is_cliff_between_tiles(bm: RTSBattleManager, from_tile: Vector2i, to_tile: Vector2i) -> bool:
-	_ensure_current_team_static_caches(bm)
-	# 斜向跨格不能从两格障碍的角尖上抄近路：A* 的 8 方向邻居和直线采样
-	# 以前只检查终点格，山体拐角处会出现“起点和终点都是平地，但中间擦着
-	# 山角过去”的路径；单位实际碰撞半径过不去，就会顶着山角原地踏步。
-	if _is_diagonal_corner_blocked(bm, from_tile, to_tile, _wall_set):
-		return true
 	# 普通山壁整格封闭：哪怕高差看起来不大，也不允许直接踏上山体。
 	if _is_blocked_mountain_tile(bm, from_tile) or _is_blocked_mountain_tile(bm, to_tile):
 		return true
@@ -818,12 +577,6 @@ func _is_cliff_between_tiles(bm: RTSBattleManager, from_tile: Vector2i, to_tile:
 	if step_len < 0.001:
 		return false
 	var dh: float = _get_tile_height(to_tile, bm) - _get_tile_height(from_tile, bm)
-	# 只挡“往上爬绝壁”，不挡“往下走”。主城台基/城堡地基边缘通常有 2~4 米高差，
-	# 原来上下都判悬崖，于是单位在家门口就被逐帧拦下：清路径 → 重算 → 又判悬崖，
-	# 470 次/分钟的 _stop_velocity 全部来自这一条，全军永远出不了基地（实测桥头堡
-	# 地图单兵 35 秒原地不动、路径长度一直 47~48 不变）。下坡只按坡度扣速度。
-	if dh <= 0.0:
-		return false
 	return RTSConfig.is_cliff_slope(dh, step_len)
 
 # terrain=1 且没有缓坡(4)/台地(5)标记的格子就是不可通行的山壁。
@@ -847,49 +600,7 @@ func _is_plateau_transition_blocked(bm: RTSBattleManager, from_tile: Vector2i, t
 	var to_high := to_ov == 4 or to_ov == 5
 	return not from_high or not to_high
 
-# 斜向跨格时检查两侧正交格。两格宽度里只要有一侧不可站人，从格心到格心
-# 的直线就会擦过山体/建筑/城墙的凸角；单位半径约 0.4~0.9 米，正好卡在角上。
-# 要求两侧都可通行，相当于给斜向路线留出至少一格净宽，A* 会改成绕角走。
-func _is_diagonal_corner_blocked(bm: RTSBattleManager, from_tile: Vector2i,
-		to_tile: Vector2i, wall_cache: Dictionary) -> bool:
-	var dx: int = to_tile.x - from_tile.x
-	var dy: int = to_tile.y - from_tile.y
-	if dx == 0 or dy == 0:
-		return false
-	# 只处理相邻两格。process_move 也会用“当前位置→远处目标”调用这里，
-	# 远距离的端点格虽然对角，但实际路线并不经过这两个侧格；旧写法会把
-	# 远处目标旁边的建筑/山体误判成挡路，导致追击单位有路径却反复停下。
-	if absi(dx) > 1 or absi(dy) > 1:
-		return false
-	var side_a := Vector2i(from_tile.x + dx, from_tile.y)
-	var side_b := Vector2i(from_tile.x, from_tile.y + dy)
-	if _is_corner_side_blocked(bm, side_a, wall_cache):
-		return true
-	if _is_corner_side_blocked(bm, side_b, wall_cache):
-		return true
-	return false
-
-func _is_corner_side_blocked(bm: RTSBattleManager, tile: Vector2i, wall_cache: Dictionary) -> bool:
-	if tile.x < 0 or tile.y < 0 or tile.x >= RTSConfig.MAP_SIZE or tile.y >= RTSConfig.MAP_SIZE:
-		return true
-	# 注意：不能把“城墙/建筑占格”当成拐角障碍。_get_terrain_cost 对它们在
-	# 1798 行返回的是 5.0（可走但很贵），A* 会正常穿过基地内部；这里若按
-	# 5.0 判成“挡拐角”，主城里每一格斜向移动都会被否掉，单位就在自家基地
-	# 里反复“清路径→重算”，A* 永远给出同一条被拒的路径 —— 全军出不了门。
-	if _get_terrain_cost(tile, bm, wall_cache) >= 999.0:
-		# 陆军斜向进出浅滩时，水里的侧格不构成“实体拐角”：水是规则禁行而不是
-		# 碰撞体，斜着从岸上踏进浅滩是安全的。若不放开，单位在渡口边缘会卡死：
-		# 逐帧判悬崖 → 清路径 → 重算 → 又判悬崖，永远下不了水（实测桥头堡
-		# 单兵在 (64,14) 对着浅滩 (63,13) 站了 35 秒没动）。
-		if not _army.water_capable and bm.get_terrain_at_grid(tile.x, tile.y) == 2:
-			return false
-		return true
-	return false
-
 # ==================== Collision separation ====================
-
-# 每个物理步最多处理多少个邻居单位（见 apply_collision 注释）。
-const MAX_SEPARATION_CHECKS: int = 12
 
 func apply_collision(delta):
 	blocking_building = null
@@ -908,16 +619,10 @@ func apply_collision(delta):
 		buildings_nearby = bm.get_nearby_buildings(_army.global_position, _army.body_radius + 5.0)
 	else:
 		buildings_nearby = bm._buildings
-	# 密集混战时一小片区域能有 30~40 个单位同时在推挤半径内，逐个推挤会让
-	# 该物理步的实体开销爆炸（实测 600 实体攻城时单步 30~50ms）。分离只负责
-	# 视觉上去重叠，每步处理最近的 12 个足够，剩下的下一步再处理。
-	var _checks: int = 0
 	for entity in entities_nearby:
 		if entity == _army or not is_instance_valid(entity): continue
 		if not (entity is GameEntity) or entity.health <= 0: continue
 		if entity is Building or entity is WorldResource: continue
-		if _checks >= MAX_SEPARATION_CHECKS: break
-		_checks += 1
 		_separate_from(entity, delta, bm)
 	for entity in buildings_nearby:
 		if entity == _army or not is_instance_valid(entity): continue
@@ -946,17 +651,6 @@ func _can_push_to(pos: Vector3, bm: RTSBattleManager) -> bool:
 	if bm == null:
 		return true
 	var g: Vector2i = bm.world_to_grid(pos)
-	_ensure_current_team_static_caches(bm)
-	# 快速通道：绝大多数分离位移只有几厘米，落点和当前格完全相同；只要当前格
-	# 是普通平地且不在墙/建筑占格里，就不可能越过任何地形边界，直接放行。
-	# 密集人群里每个单位每步要调用十几次这里，省下的网格/悬崖查询很可观。
-	if g == bm.world_to_grid(_army.global_position) \
-			and not _wall_set.has(g) and not _footprint_set.has(g) \
-			and not _bridge_set.has(g) and bm.get_terrain_at_grid(g.x, g.y) == 0:
-		return true
-	# 推挤/分离也不能把单位挤进敌方城墙或建筑；梯子格放行。
-	if (_wall_set.has(g) or _footprint_set.has(g)) and not _ladder_set.has(g):
-		return false
 	var terrain: int = bm.get_terrain_at_grid(g.x, g.y)
 	if _army.water_capable:
 		# 海军只能待在可航行水域；桥面虽然是水格，但船不能开上去。
@@ -971,24 +665,8 @@ func _can_push_to(pos: Vector3, bm: RTSBattleManager) -> bool:
 		if _is_cliff_between_positions(bm, _army.global_position, pos):
 			return false
 		return true
-	# 陆军允许浅滩和桥面，河流/海面等深水一律拒绝；只有正在登船的单位才用运载船水域。
-	return bm.get_overlay_at_grid(g.x, g.y) == 3 or _bridge_set.has(g) \
-			or (_transport_water.has(g) and _boarding_intent())
-
-# 陆地单位落点是否压在深水/普通山壁上（只看地形，不看建筑/单位）。
-# 用于移动后的最后一道安全校验，避免实际位置被挤进不可通行地形。
-func _is_land_terrain_blocked(bm: RTSBattleManager, pos: Vector3) -> bool:
-	var g: Vector2i = bm.world_to_grid(pos)
-	var terrain: int = bm.get_terrain_at_grid(g.x, g.y)
-	var ov: int = bm.get_overlay_at_grid(g.x, g.y)
-	if terrain == 2:
-		# 只有踩到水格时才需要桥/运载船缓存；平地单位每帧不必重建队伍缓存。
-		_ensure_current_team_static_caches(bm)
-		return ov != 3 and not _bridge_set.has(g) \
-				and not (_transport_water.has(g) and _boarding_intent())
-	if terrain == 1:
-		return ov != 4 and ov != 5
-	return terrain != 0
+	# 陆军允许浅滩和桥面，河流/海面等深水一律拒绝。
+	return bm.get_overlay_at_grid(g.x, g.y) == 3 or _bridge_set.has(g)
 
 # 尝试推挤；整段落水/上岸时退化为单轴滑动，避免贴着岸线完全卡死。
 func _try_push_position(step: Vector3, bm: RTSBattleManager) -> bool:
@@ -1024,7 +702,7 @@ func _unit_slide_dir(push_dir: Vector3, velocity: Vector3) -> Vector3:
 	if side_dot < -0.0001:
 		tangent = -tangent
 	elif absf(side_dot) <= 0.0001:
-		if (int(_army.get_meta("_sim_phase", 0)) if GameSettings.deterministic_sim else _army.get_instance_id()) % 2 == 0:
+		if _army.get_instance_id() % 2 == 0:
 			tangent = -tangent
 	return (radial * 0.55 + tangent * 0.85).normalized()
 
@@ -1047,7 +725,7 @@ func _building_slide_dir(push_dir: Vector3, velocity: Vector3) -> Vector3:
 		tangent = -tangent
 	elif absf(side_dot) <= 0.0001:
 		# 正面顶住建筑时固定往一侧滑，避免两侧来回切换导致抖动
-		if (int(_army.get_meta("_sim_phase", 0)) if GameSettings.deterministic_sim else _army.get_instance_id()) % 2 == 0:
+		if _army.get_instance_id() % 2 == 0:
 			tangent = -tangent
 	return (radial * 0.55 + tangent * 0.85).normalized()
 
@@ -1087,20 +765,33 @@ func _separate_from(entity: GameEntity, delta: float, bm: RTSBattleManager) -> v
 
 # 路径预览：用一条贴地流动的指引带代替原来那一串青色小球。
 # 指引带内部逐顶点贴地，并自带「起点淡出 + 末端呼吸落点环」，所以不再需要绿球标终点。
-# 每支被选中的军队各画自己的路径；路径点没变就沿用现有节点，不重复生成网格。
+# 只有「第一个被选中的单位」才画；路径点没变就沿用现有节点，不重复生成网格。
 func _show_path():
+	if astar_path.size() < 2:
+		_hide_path()
+		return
 	var bm = _get_bm()
 	if bm == null:
 		_hide_path()
 		return
+	# 框选大部队时只为第一个选中单位绘制路径，避免几十/上百条路径同时生成。
+	if bm.selection != null and bm.selection.selected_entities.size() > 1:
+		if bm.selection.selected_entities[0] != _army:
+			# 多选状态下不该有路径带：顺手收掉可能残留的那一条
+			_hide_path()
+			return
 	# 单条长路径也不逐格取点，按固定上限抽样；尾点始终保留。
 	# 排头用单位当前位置，这样线始终从脚下开始，走一段收一段（实时缩短）。
 	var head: Vector3 = _army.global_position
 	head.y = 0.0
-	var tail: Array = _preview_tail_points()
-	if tail.is_empty():
-		_hide_path()
-		return
+	var tail: Array = []
+	if astar_path.size() <= MAX_PATH_PREVIEW_POINTS:
+		# 必须复制：astar_path 会被 process_move 逐个 pop_front，共享引用会让缓存对比失真
+		tail = astar_path.duplicate()
+	else:
+		var step: float = float(astar_path.size() - 1) / float(MAX_PATH_PREVIEW_POINTS - 1)
+		for i in range(MAX_PATH_PREVIEW_POINTS):
+			tail.append(astar_path[int(round(float(i) * step))])
 	# 单位在原地小幅晃动、或者只走了一点点时不必重建网格：
 	# 路径点没变、排头位移不到 PATH_HEAD_STEP 就沿用现有的指引带。
 	var head_moved: bool = _path_built_head.distance_to(head) > PATH_HEAD_STEP
@@ -1119,69 +810,6 @@ func _show_path():
 	# 高度采样交给 GroundStripMesh.height_fn_for()，拿不到地形时退回路径点的原始 y。
 	_path_guide = GroundPathGuide.create(points, GroundStripMesh.height_fn_for(bm))
 	bm.add_child(_path_guide)
-
-# 路径预览的剩余路径点。
-# A* 路径可能只剩 1 个航点，甚至在最后几米被清空；此时单位仍在走（最终接近/直追），
-# 如果只按 astar_path.size() >= 2 判断，就会表现为“正在行走却没有路径”。
-# 两点之间是否一路都能走（0.5 米采样）。指引带最后一段直连目的地时，
-# 必须先用它确认不跨山/不跨水，否则指引带会“穿过河流/高山”，
-# 而单位走到岸边就被地形挡住，看起来像寻路规划错了。
-func _straight_terrain_ok(from: Vector3, to: Vector3) -> bool:
-	var bm = _get_bm()
-	if bm == null:
-		return true
-	var dist: float = Vector2(to.x - from.x, to.z - from.z).length()
-	if dist < 0.01:
-		return true
-	var goal_tile: Vector2i = bm.world_to_grid(to)
-	var steps: int = int(ceil(dist / 0.5))
-	var prev_tile := Vector2i(-9999, -9999)
-	for i in range(1, steps + 1):
-		var t: float = float(i) / float(steps)
-		var p: Vector3 = from.lerp(to, t)
-		var tile: Vector2i = bm.world_to_grid(p)
-		if tile == prev_tile:
-			continue
-		prev_tile = tile
-		if tile == goal_tile:
-			continue
-		if _get_terrain_cost(tile, bm, _wall_set) >= 999.0:
-			return false
-	return true
-
-func _preview_tail_points() -> Array:
-	var tail: Array = []
-	if astar_path.is_empty():
-		if not _preview_motion_active():
-			return tail
-		var dest: Vector3 = get_current_target()
-		if dest != Vector3.ZERO and _straight_terrain_ok(_army.global_position, dest):
-			tail.append(dest)
-		return tail
-	if astar_path.size() <= MAX_PATH_PREVIEW_POINTS:
-		# 必须复制：astar_path 会被 process_move 逐个 pop_front，共享引用会让缓存对比失真
-		tail = astar_path.duplicate()
-	else:
-		var step: float = float(astar_path.size() - 1) / float(MAX_PATH_PREVIEW_POINTS - 1)
-		for i in range(MAX_PATH_PREVIEW_POINTS):
-			tail.append(astar_path[int(round(float(i) * step))])
-	# A* 终点常停在资源/建筑边缘外，最后一段由 process_move 直线接近；
-	# 把真正的目的地接到尾点，路径才不会提前断掉。
-	# 部分路径（预算中断）尚未验证到终点，不能把目的地点接上去，否则指引带
-	# 会从山脚/岸边直接连到障碍另一侧，看起来像“寻路穿山/穿水”。
-	var dest2: Vector3 = get_current_target()
-	if dest2 != Vector3.ZERO and not tail.is_empty() and not path_partial:
-		var last: Vector3 = tail[tail.size() - 1]
-		if Vector2(last.x - dest2.x, last.z - dest2.z).length() > 0.8 \
-				and _straight_terrain_ok(last, dest2):
-			tail.append(dest2)
-	return tail
-
-# 没有 A* 路径时，只有确实还在移动才补画最终接近/追击线；站桩攻击或采集不画假路径。
-func _preview_motion_active() -> bool:
-	if _army == null:
-		return false
-	return _army.velocity.length_squared() > 0.04 or _army.is_attack_moving
 
 func _hide_path():
 	_path_preview_points.clear()
@@ -1255,8 +883,6 @@ static var _transport_frame: int = -1
 static var _transport_team: int = -1
 # 每个队伍、每一帧的运载船水域缓存；避免双方交替时反复扫描运载船。
 static var _team_transport: Dictionary = {}  # team -> {frame, water}
-static var _mountain_edge: Dictionary = {}   # 紧贴普通山壁的格子，见 MOUNTAIN_EDGE_COST
-static var _mountain_edge_bm_id: int = -1
 
 # 静态障碍缓存：建筑/资源/墙/桥/梯子只在布局变化时重建；
 # 运载船周围可通行水域因为船会移动，按帧缓存。
@@ -1270,9 +896,6 @@ func _ensure_static_caches(bm: RTSBattleManager) -> void:
 		_team_transport.clear()
 		_wall_bm_id = bm_id
 		_wall_ver = bm._wall_cache_version
-	if _mountain_edge_bm_id != bm_id:
-		_rebuild_mountain_edge(bm)
-		_mountain_edge_bm_id = bm_id
 	var team: int = _army.team
 	var pack = _team_static.get(team)
 	if pack == null:
@@ -1280,25 +903,16 @@ func _ensure_static_caches(bm: RTSBattleManager) -> void:
 		_footprint_set = {}
 		_bridge_set = {}
 		_ladder_set = {}
-		var wall_centers: Array = []
-		var ladder_centers: Array = []
 		for e in bm.entities.get_children():
 			if not (e is GameEntity) or e.health <= 0: continue
 			if not (e is Building or e is WorldResource): continue
 			var eg = bm.world_to_grid(e.global_position)
-			# 桥不阻挡通行，单独记录；施工中的桥不算可通行（和梯子一致），
-			# 否则部队会沿施工中的桥过河，踩进底下仍是深水的河面淹死。
+			# 桥不阻挡通行，单独记录
 			if e is Building and e.entity_id == 7:
-				if float(e.build_timer) > 0.0:
-					continue
 				_bridge_set[eg] = true
 				continue
-			# 梯子不阻挡通行，且使其相邻敌方城墙可通行；施工中的梯子不能翻墙
+			# 梯子不阻挡通行，且使其相邻敌方城墙可通行
 			if e is Building and e.entity_id == 8:
-				if e.build_timer > 0.0:
-					continue
-				ladder_centers.append(eg)
-				_ladder_set[eg] = true
 				for dx in range(-1, 2):
 					for dy in range(-1, 2):
 						if dx == 0 and dy == 0: continue
@@ -1309,41 +923,10 @@ func _ensure_static_caches(bm: RTSBattleManager) -> void:
 			if e is Building and e.entity_id == 27:
 				if e.team == team: continue
 				_wall_set[eg] = true
-				# 城墙也加入 footprint：终点落在墙格时先调整到墙外，
-				# 近战在攻击距离内拆墙，远程停在墙脚，不再把墙当可穿过的地面。
-				_footprint_set[eg] = true
-				wall_centers.append(eg)
 			elif e is Building:
 				_add_blocked_footprint(eg, e.body_radius)
 			else:
 				_wall_set[eg] = true
-		# 墙段中心距 1.5~2 米，中心格之间可能隔着一格“缝”；把两段墙的
-		# 中点补成墙，A* 才不会从接缝钻过去。只查周围 2 格，避免 O(n²)。
-		for wc in wall_centers:
-			for dx in range(-2, 3):
-				for dy in range(-2, 3):
-					if dx == 0 and dy == 0:
-						continue
-					if dx < 0 or (dx == 0 and dy < 0):
-						continue
-					var other_wall = bm._wall_entity_grid.get(Vector2i(wc.x + dx, wc.y + dy))
-					if other_wall == null or other_wall.team == team:
-						continue
-					var gap := Vector2i(
-						roundi(float(wc.x) + float(dx) * 0.5),
-						roundi(float(wc.y) + float(dy) * 0.5)
-					)
-					_wall_set[gap] = true
-					_footprint_set[gap] = true
-		# 梯子通道：梯子自身格以及它周围被补成墙的接缝格都要放行，
-		# 否则补缝后敌墙虽然“能爬”却走不到梯子脚下。
-		for lg in ladder_centers:
-			for dx in range(-1, 2):
-				for dy in range(-1, 2):
-					var lt := Vector2i(lg.x + dx, lg.y + dy)
-					_wall_set.erase(lt)
-					_footprint_set.erase(lt)
-					_ladder_set[lt] = true
 		pack = {
 			"wall": _wall_set,
 			"footprint": _footprint_set,
@@ -1375,26 +958,6 @@ func _ensure_static_caches(bm: RTSBattleManager) -> void:
 	_transport_frame = frame
 	_transport_team = team
 
-# 标记普通山壁周围一圈格子。山体格子本身在 A* 里已经不可通行，这里主要
-# 标记“山脚平地”：这些格子离山壁只有半格，单位沿格心走会擦到山角。
-# 只加成本不封死，保证缓坡/山顶台地/窄道仍然可通行。
-func _rebuild_mountain_edge(bm: RTSBattleManager) -> void:
-	_mountain_edge.clear()
-	var size: int = RTSConfig.MAP_SIZE
-	for y in range(size):
-		for x in range(size):
-			if bm.get_terrain_at_grid(x, y) != 1:
-				continue
-			var ov: int = bm.get_overlay_at_grid(x, y)
-			if ov == 4 or ov == 5:
-				continue  # 缓坡/台地本身可走，不算封闭山壁
-			for dx in range(-1, 2):
-				for dy in range(-1, 2):
-					var tx: int = x + dx
-					var ty: int = y + dy
-					if tx >= 0 and ty >= 0 and tx < size and ty < size:
-						_mountain_edge[Vector2i(tx, ty)] = true
-
 # 直线可达时直接返回目标点，不跑 A*。
 # 后期大规模交战时绝大多数单位都在开阔地追击，真正需要绕墙/绕水的只是少数；
 # 如果每个单位都跑 A*，固定预算很快被填满，后面的请求只能无限排队。
@@ -1406,7 +969,7 @@ func _try_direct_path(bm: RTSBattleManager, target_pos: Vector3, stop_range: flo
 	var path_goal_pos := target_pos
 	# 建筑中心格在 footprint 内：直接走到中心会卡进建筑。
 	# 改成走向建筑外沿最近的可走格，最后一段交给 process_move 的最终接近/攻击距离判定。
-	if _footprint_set.has(goal_tile) and not _ladder_set.has(goal_tile):
+	if _footprint_set.has(goal_tile):
 		var approach_tile := _find_approach_tile(goal_tile, bm, _wall_set)
 		if approach_tile == goal_tile:
 			return []
@@ -1428,9 +991,6 @@ func _try_direct_path(bm: RTSBattleManager, target_pos: Vector3, stop_range: flo
 		if tile == prev_tile:
 			continue
 		if _is_cliff_between_tiles(bm, prev_tile, tile):
-			return []
-		# 中间格若紧贴山壁，直线走过去会擦山角；交给 A* 按山脚成本绕开。
-		if tile != goal_tile and _mountain_edge.has(tile):
 			return []
 		# 终点格允许是墙/资源中心（近战会在攻击距离停下）；中间格必须可通行。
 		if tile != goal_tile:
@@ -1500,7 +1060,6 @@ func _try_merge_group_path(target_pos: Vector3, bm: RTSBattleManager) -> bool:
 
 func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Array:
 	_last_path_partial = false
-	_last_path_closest = false
 	var bm = _army._get_bm() as RTSBattleManager
 	if not bm: return []
 	bm.note_astar_path_call()
@@ -1522,40 +1081,11 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 	# 做最终接近/攻击，不会因此丢失目标。
 	var goal_tile: Vector2i = end_tile
 	var goal_adjusted := false
-	if _footprint_set.has(goal_tile) and not _ladder_set.has(goal_tile):
+	if _footprint_set.has(goal_tile):
 		var approach_tile := _find_approach_tile(goal_tile, bm, wall_cache)
 		if approach_tile != goal_tile:
 			goal_tile = approach_tile
 			goal_adjusted = true
-
-	# 起终点之间隔着深水、且脚下不是浅滩：先沿“浅滩距离场”走到最近的浅滩。
-	# 以前是把 A* 目标改成浅滩格，但浅滩常在南北边缘，动辄 40~60 格；
-	# 6ms 软预算根本展开不完，A* 只返回一段贴着河岸的部分路径，
-	# 单位走到岸边又重算、又贴回岸边，于是全军堵在河岸过不去。
-	# 距离场是一张多源 BFS 梯度图（每张地图只算一次），沿梯度走不消耗 A* 预算，
-	# 任何数量的部队都能稳定走到渡口。
-	# 注意：这里必须用原始目标 end_tile 判定，不能用 goal_tile。
-	# AI 的主攻目标是敌方城堡，城堡中心落在 _footprint_set 里，
-	# 先一步把 goal_adjusted 置成 true；若这里再判断 goal_adjusted，
-	# 过河重定向就永远不会触发——AI 全军只会贴着河岸拿到一段局部路径。
-	if not _is_ford_tile(start_tile, bm) \
-			and _path_crosses_deep_water(start_tile, end_tile, bm):
-		var ford_route: Array = _ford_gradient_path(start_tile, end_tile, bm)
-		if ford_route.size() > 0:
-			_last_path_partial = false
-			_last_path_closest = false
-			return ford_route
-		# 距离场里没有起点（例如卡在封闭洼地）：退回“目标改成浅滩格”的老做法。
-		var ford_cell: Vector2i = _pick_ford_cell(start_tile, end_tile, bm)
-		if ford_cell.x >= 0:
-			goal_tile = ford_cell
-			goal_adjusted = true
-
-	# 终点本身就在深水/普通山壁里时，A* 永远到不了。必须在展开前直接判死：
-	# 否则搜索会沿着河岸/山脚展开到节点上限，然后返回一段“最近可达”的部分
-	# 路径，单位走过去才失败，正是“走到水边/山边停下并丢命令”的成因。
-	if not goal_adjusted and _get_terrain_cost(goal_tile, bm, wall_cache) >= 999.0:
-		return []
 
 	# 单位已经站在建筑外沿时，目标格可能就落在脚下。返回一个起点航点，
 	# 避免空路径被当成“不可达”写进黑名单，后续攻击/最终接近仍可正常工作。
@@ -1584,32 +1114,13 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 	# 150×150 的 2v2/3v3 河图上，双河/海湾类地图的绕行更远（实测最坏约 12k 节点），
 	# 因此预算与上限相应上调；普通短距离寻路命中节点数不变，不影响常规性能。
 	var tile_span: int = absi(start_tile.x - goal_tile.x) + absi(start_tile.y - goal_tile.y)
-	# 最低预算要足够展开整块“被河/山隔开的可达区域”（100×100 河图单侧约 5k 格），
-	# 否则真正不可达的目标会在预算用尽时被误返回部分路径，单位走到岸边才失败。
-	max_nodes = clampi(6000 + tile_span * 80, 6000, 14000)
+	max_nodes = clampi(2000 + tile_span * 80, 2000, 12000)
 	var nodes_explored := 0
-	var path_start_usec: int = Time.get_ticks_usec()
 	var from_height := _get_tile_height(start_tile, bm)
 	var best_partial_tile: Vector2i = start_tile
 	var best_partial_h: float = _heuristic(start_tile, goal_tile)
-	# 只有“预算/耗时上限”中断才允许返回部分路径。若开放列表自然耗尽，
-	# 说明目标根本不可达；这时再返回“最近可达格”，单位会先走到山脚/岸边，
-	# 随后下一次 A* 返回空并丢失移动命令，表现为“寻路穿过山地/水面后发呆”。
-	var budget_exhausted := false
 
 	while not open_list.is_empty() and nodes_explored < max_nodes:
-		# 单条 A* 不能无限展开：12k 节点在 GDScript 里最坏要 20ms+，一帧只要
-		# 混进一条这种长路径就会直接掉帧。展开到软上限后，只要已经找到“更接近
-		# 目标的可达格”就先返回这段部分路径，单位继续走、下一段再算；真的还没
-		# 有进展（例如正在找桥）则允许最多跑到硬上限，避免把可绕行的目标误判死。
-		if nodes_explored % 32 == 0 and nodes_explored > 0:
-			var path_elapsed: int = Time.get_ticks_usec() - path_start_usec
-			if path_elapsed >= A_STAR_HARD_LIMIT_USEC:
-				budget_exhausted = true
-				break
-			if path_elapsed >= A_STAR_SOFT_LIMIT_USEC and best_partial_tile != start_tile:
-				budget_exhausted = true
-				break
 		var current_entry = open_list.pop()
 		if current_entry.is_empty(): break
 		var cur_tile: Vector2i = current_entry.tile
@@ -1648,10 +1159,6 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 				# Single terrain cost lookup (merged passability + cost, was 2-3 calls)
 				var terrain_cost = _get_terrain_cost(neighbor, bm, wall_cache)
 				if terrain_cost >= 999.0: continue
-				# 斜向不能贴着一侧山体/建筑/城墙的角切过去，否则实际移动会被
-				# CharacterBody 的碰撞半径卡在拐角。
-				if dx != 0 and dy != 0 and _is_diagonal_corner_blocked(bm, cur_tile, neighbor, wall_cache):
-					continue
 				# 台地边缘必须接缓坡/台地；平地不能直接斜着踏上台地。
 				if _is_plateau_transition_blocked(bm, cur_tile, neighbor): continue
 
@@ -1674,218 +1181,25 @@ func _calculate_astar_path(target_pos: Vector3, stop_range: float = 0.0) -> Arra
 					g_score[neighbor] = tentative_g
 					open_list.push(neighbor, tentative_g + _heuristic(neighbor, goal_tile) * heuristic_weight)
 
-	# 节点数达到硬上限也属于预算耗尽；自然搜索完整个可达区域则不是。
-	if nodes_explored >= max_nodes:
-		budget_exhausted = true
 	# 节点预算耗尽（而不是终点真的不可达）时，返回走到离目标最近的可达格的路径，
 	# 让单位先推进一段；Army 会在该段走完后从新位置继续寻路。
-	# 目标不可达时直接返回空，交给命令层处理，不能假装还有“部分路径”。
-	if budget_exhausted and best_partial_tile != start_tile:
+	if best_partial_tile != start_tile:
 		var partial := _reconstruct_path(came_from, best_partial_tile)
 		if partial.size() > 1:
 			partial.pop_front()
 		if partial.size() > 0:
 			_last_path_partial = true
 			return partial
-	# 整个可达区域都展开过、终点仍然进不来：目标确实不可达（隔山/隔水/隔墙）。
-	# 直接返回空会让上层把命令丢掉，单位停在岸边/山脚“发呆”，看起来像丢了任务。
-	# 普通移动命令改成走到“离目标最近的可达格”即算到达：能走就尽量走，走不到就
-	# 在最近可到处正常结束命令，不会出现“路径中途变空、命令被清、原地站桩”。
-	if stop_range <= 0.0 and _army != null and String(_army.current_order) == "move":
-		if best_partial_tile != start_tile:
-			var closest := _reconstruct_path(came_from, best_partial_tile)
-			if closest.size() > 1:
-				closest.pop_front()
-			if closest.size() > 0:
-				_last_path_partial = false
-				_last_path_closest = true
-				return closest
-		# 已经站在最近可达点：给一个“原地”航点，让移动命令正常到点结束。
-		var half_map_c:= RTSConfig.MAP_SIZE / 2.0
-		_last_path_partial = false
-		_last_path_closest = true
-		return [Vector3(start_tile.x - half_map_c, 0.0, start_tile.y - half_map_c)]
 	return []
-
-# 浅滩距离场：以所有浅滩格为源做一次多源 BFS，得到“每个陆地格到最近浅滩的距离”。
-# 结果缓存在 battle 的 meta 上，每张地图只算一次。沿值递减的邻格走即可到渡口。
-func _ford_field(bm: RTSBattleManager) -> Dictionary:
-	var field: Dictionary = bm.get_meta("_ford_field", {})
-	if not field.is_empty():
-		return field
-	var queue: Array = []
-	var size: int = RTSConfig.MAP_SIZE
-	for x in range(size):
-		for y in range(size):
-			if bm.get_terrain_at_grid(x, y) == 2 and bm.get_overlay_at_grid(x, y) == 3:
-				var c := Vector2i(x, y)
-				field[c] = 0
-				queue.append(c)
-	var head: int = 0
-	while head < queue.size():
-		var cur: Vector2i = queue[head]
-		head += 1
-		var d: int = int(field[cur])
-		for dx in range(-1, 2):
-			for dy in range(-1, 2):
-				if dx == 0 and dy == 0:
-					continue
-				var nb := Vector2i(cur.x + dx, cur.y + dy)
-				if nb.x < 0 or nb.y < 0 or nb.x >= size or nb.y >= size:
-					continue
-				if field.has(nb):
-					continue
-				# 距离场只按地形算，不掺建筑/城墙：它们会被拆建，
-				# 掺进去会让缓存失效；实际走路时再逐格用 _get_terrain_cost 校验。
-				# 缓坡/台地(terrain=1 + ov4/5)、浅滩都算可走，否则站在台地上的
-				# 单位会被判成“不在距离场里”，一条路都拿不到。
-				if _get_terrain_cost(nb, bm, {}) >= 999.0:
-					continue
-				field[nb] = d + 1
-				queue.append(nb)
-	bm.set_meta("_ford_field", field)
-	return field
-
-# 沿浅滩距离场下坡生成一条到渡口的路线（不跑 A*，不受 6ms 预算限制）。
-func _ford_gradient_path(start_tile: Vector2i, goal_tile: Vector2i, bm: RTSBattleManager) -> Array:
-	var field: Dictionary = _ford_field(bm)
-	if not field.has(start_tile):
-		return []
-	var out: Array = []
-	var half: float = RTSConfig.MAP_SIZE / 2.0
-	var cur: Vector2i = start_tile
-	var cur_d: int = int(field[cur])
-	var wall_cache = {}
-	_ensure_static_caches(bm)
-	wall_cache = _wall_set
-	for _i in range(FORD_ROUTE_MAX_STEPS):
-		if cur_d <= 0:
-			break
-		var best: Vector2i = Vector2i(-1, -1)
-		var best_d: int = cur_d
-		for dx in range(-1, 2):
-			for dy in range(-1, 2):
-				if dx == 0 and dy == 0:
-					continue
-				var nb := Vector2i(cur.x + dx, cur.y + dy)
-				if not field.has(nb):
-					continue
-				var nd: int = int(field[nb])
-				if nd >= best_d:
-					continue
-				if nd > 0 and _get_terrain_cost(nb, bm, wall_cache) >= 999.0:
-					continue
-				best_d = nd
-				best = nb
-		if best.x < 0:
-			return []
-		cur = best
-		cur_d = best_d
-		out.append(Vector3(cur.x - half, 0.0, cur.y - half))
-	if out.is_empty():
-		return []
-	# 到达浅滩后必须继续横渡整条浅滩带：只走到渡口边上就返回的话，
-	# 单位会停在浅滩带入口，下一次 A* 又只在浅滩带上展开一小段，
-	# 表现为“到了渡口又开始沿河岸绕”。这里沿目标方向贪心穿过水上浅滩，
-	# 直到重新踩上对岸陆地（最多 48 格）。
-	var crossed: Array = _ford_crossing(cur, goal_tile, bm)
-	out.append_array(crossed)
-	return out
-
-# 从浅滩带入口沿“朝目标”的方向穿过整条浅滩（浅滩格可走，深水不可走）。
-func _ford_crossing(entry: Vector2i, goal_tile: Vector2i, bm: RTSBattleManager) -> Array:
-	var out: Array = []
-	var half: float = RTSConfig.MAP_SIZE / 2.0
-	var cur: Vector2i = entry
-	var cur_h: float = _heuristic(cur, goal_tile)
-	var touched_ford: bool = false
-	for _i in range(FORD_CROSS_MAX_STEPS):
-		var best: Vector2i = Vector2i(-1, -1)
-		var best_h: float = cur_h
-		for dx in range(-1, 2):
-			for dy in range(-1, 2):
-				if dx == 0 and dy == 0:
-					continue
-				var nb := Vector2i(cur.x + dx, cur.y + dy)
-				if nb.x < 0 or nb.y < 0 or nb.x >= RTSConfig.MAP_SIZE or nb.y >= RTSConfig.MAP_SIZE:
-					continue
-				var h: float = _heuristic(nb, goal_tile)
-				if h >= best_h:
-					continue
-				if _get_terrain_cost(nb, bm, {}) >= 999.0:
-					continue
-				best_h = h
-				best = nb
-		if best.x < 0:
-			break
-		cur = best
-		cur_h = best_h
-		out.append(Vector3(cur.x - half, 0.0, cur.y - half))
-		if _is_ford_tile(cur, bm):
-			touched_ford = true
-			continue
-		# 踩过浅滩、又回到陆地：横渡完成
-		if touched_ford and bm.get_terrain_at_grid(cur.x, cur.y) != 2:
-			break
-	return out
-
-func _is_ford_tile(cell: Vector2i, bm: RTSBattleManager) -> bool:
-	if bm == null:
-		return false
-	return bm.get_terrain_at_grid(cell.x, cell.y) == 2 \
-		and bm.get_overlay_at_grid(cell.x, cell.y) == 3
-
-# 粗略判断起终点连线是否被深水截断；桥面按可通行处理。
-func _path_crosses_deep_water(start: Vector2i, goal: Vector2i, bm: RTSBattleManager) -> bool:
-	if bm == null:
-		return false
-	for i in range(1, 48):
-		var t: float = float(i) / 48.0
-		var gx: int = int(round(lerpf(float(start.x), float(goal.x), t)))
-		var gz: int = int(round(lerpf(float(start.y), float(goal.y), t)))
-		if gx < 0 or gx >= RTSConfig.MAP_SIZE or gz < 0 or gz >= RTSConfig.MAP_SIZE:
-			continue
-		if bm.get_terrain_at_grid(gx, gz) != 2 or bm.get_overlay_at_grid(gx, gz) == 3:
-			continue
-		if bm.has_method("is_bridge_at") and bm.is_bridge_at(bm.grid_to_world(gx, gz)):
-			continue
-		return true
-	return false
-
-# 选一条绕行代价最小的浅滩格。结果缓存在 battle 上，避免每个单位重复扫全图。
-func _pick_ford_cell(start: Vector2i, goal: Vector2i, bm: RTSBattleManager) -> Vector2i:
-	var cells: Array = bm.get_meta("_ford_cells_cache", [])
-	if cells.is_empty():
-		for gx in range(RTSConfig.MAP_SIZE):
-			for gz in range(RTSConfig.MAP_SIZE):
-				if bm.get_terrain_at_grid(gx, gz) == 2 and bm.get_overlay_at_grid(gx, gz) == 3:
-					cells.append(Vector2i(gx, gz))
-		bm.set_meta("_ford_cells_cache", cells)
-	var best := Vector2i(-1, -1)
-	var best_score: float = INF
-	for cell in cells:
-		var score: float = float(_heuristic(start, cell)) + float(_heuristic(cell, goal)) * 1.15
-		if score < best_score:
-			best_score = score
-			best = cell
-	return best
 
 func _heuristic(a: Vector2i, b: Vector2i) -> float:
 	return abs(a.x - b.x) + abs(a.y - b.y)
-
-# 单位是否正在执行"上运载船"命令（只有这种单位才允许踩运载船周围的水格）
-func _boarding_intent() -> bool:
-	return _army != null and is_instance_valid(_army) and _army.has_meta("_auto_board_ship")
 
 func _get_terrain_cost(tile: Vector2i, bm: RTSBattleManager, wall_cache: Dictionary) -> float:
 	# 梯子使敌方城墙可通行
 	if _ladder_set.has(tile): return 3.0
 	# 普通建筑/资源阻挡
-	# 敌方城墙必须判为“不可通行”：这里返回 5.0 会让 _straight_terrain_ok 认为直线可走，
-	# 单位就会直接穿过墙皮走到主城脚下（实测破防：14 个敌人 11 秒内穿墙到 13.7 米，墙一段没掉血）。
-	# A* 那边本来就用 wall_cache.has() 显式跳过墙格，改成 999 不影响寻路，只堵住“直走穿墙”。
-	# 梯子（_ladder_set）在上面已经 3.0 放行；己方城墙根本不进 wall_cache。
-	if wall_cache.has(tile): return 999.0
+	if wall_cache.has(tile): return 5.0
 	var terrain = bm.get_terrain_at_grid(tile.x, tile.y)
 	var ov := bm.get_overlay_at_grid(tile.x, tile.y)
 	var cost: float
@@ -1909,13 +1223,8 @@ func _get_terrain_cost(tile: Vector2i, bm: RTSBattleManager, wall_cache: Diction
 			match terrain:
 				0: cost = 1.0
 				1: cost = 999.0
-				# 运载船周围的水格只对“正在登船”的单位放行；否则陆军会把水路当陆路，
-				# 走进去每秒掉 20% 最大生命（实测 attack_move 的步兵在船边 2.5~3.2 米处淹死）。
-				2: cost = 1.5 if _bridge_set.has(tile) or (_transport_water.has(tile) and _boarding_intent()) else 999.0
+				2: cost = 1.5 if _bridge_set.has(tile) or _transport_water.has(tile) else 999.0
 				_: cost = 999.0
-	# 山脚平地加高成本，避免格心路线贴着山壁擦角；缓坡/台地仍能通过。
-	if not _army.water_capable and cost < 999.0 and _mountain_edge.has(tile):
-		cost += MOUNTAIN_EDGE_COST
 	return cost
 
 func _get_tile_height(tile: Vector2i, bm: RTSBattleManager) -> float:
@@ -1995,7 +1304,7 @@ func _has_adjacent_ladder(bm: RTSBattleManager, wall_tile: Vector2i, my_team: in
 		for dy in range(-1, 2):
 			if dx == 0 and dy == 0: continue
 			var ladder_b = bm._ladder_entity_grid.get(Vector2i(wall_tile.x + dx, wall_tile.y + dy))
-			if ladder_b and ladder_b.health > 0 and ladder_b.build_timer <= 0.0 and ladder_b.team == my_team:
+			if ladder_b and ladder_b.health > 0 and ladder_b.team == my_team:
 				return true
 	return false
 
