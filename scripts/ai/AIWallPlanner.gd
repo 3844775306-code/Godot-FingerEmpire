@@ -18,7 +18,6 @@ var _anchor_cache: Dictionary = {}
 var _built_walls: Array = []
 var _built_grid: Dictionary = {}
 var _castle_pos: Vector3 = Vector3.ZERO
-var _ctx = null
 var _enemy_dir: Vector3 = Vector3.FORWARD
 
 func _init(ai_ref, defense_ref) -> void:
@@ -34,11 +33,11 @@ func tick(delta: float) -> void:
 	_timer = RANK_INTERVAL
 	if not bool(defense.defense_initialized):
 		return
-	var castle = _ctx.castle()
+	var castle = ai.get_peer_castle(ai.my_peer_id)
 	if not is_instance_valid(castle):
 		return
 	_castle_pos = castle.global_position
-	_enemy_dir = _ctx.enemy_army_direction(_castle_pos)
+	_enemy_dir = ai._get_enemy_army_direction(_castle_pos)
 	_enemy_dir.y = 0.0
 	if _enemy_dir.length_squared() < 0.0001:
 		_enemy_dir = Vector3.FORWARD
@@ -83,22 +82,22 @@ func tick(delta: float) -> void:
 func _refresh_built_walls() -> void:
 	_built_walls.clear()
 	_built_grid.clear()
-	for b in _ctx.cached_buildings():
+	for b in ai._cached_buildings():
 		if not is_instance_valid(b) or not (b is Building):
 			continue
 		if int(b.entity_id) != 27 or b.health <= 0:
 			continue
-		if not _ctx.belongs_to_me(b):
+		if not ai.entity_belongs_to_me(b):
 			continue
 		_built_walls.append(b)
-		_built_grid[_ctx.world_to_grid(b.global_position)] = true
+		_built_grid[ai.battle.world_to_grid(b.global_position)] = true
 
 func _pos_key(p: Vector3) -> String:
 	return "%.2f:%.2f" % [p.x, p.z]
 
 # 墙端是否顶在水/山/地图边缘上。浅滩(overlay 3)是陆军可通行的，不算屏障。
 func _is_anchor(p: Vector3) -> bool:
-	var cell: Vector2i = _ctx.world_to_grid(p)
+	var cell: Vector2i = ai.battle.world_to_grid(p)
 	var key: String = "%d:%d" % [cell.x, cell.y]
 	if _anchor_cache.has(key):
 		return bool(_anchor_cache[key])
@@ -114,18 +113,18 @@ func _is_anchor(p: Vector3) -> bool:
 		if n.x <= 0 or n.y <= 0 or n.x >= RTSConfig.MAP_SIZE - 1 or n.y >= RTSConfig.MAP_SIZE - 1:
 			found = true
 			break
-		if _ctx.is_cliff_tile(n.x, n.y):
+		if ai.battle.is_cliff_tile(n.x, n.y):
 			found = true
 			break
-		if _ctx.terrain_at_grid(n.x, n.y) == 2 \
-				and _ctx.overlay_at_grid(n.x, n.y) != 3:
+		if ai.battle.get_terrain_at_grid(n.x, n.y) == 2 \
+				and ai.battle.get_overlay_at_grid(n.x, n.y) != 3:
 			found = true
 			break
 	_anchor_cache[key] = found
 	return found
 
 func _has_built_neighbor(p: Vector3) -> bool:
-	var cell: Vector2i = _ctx.world_to_grid(p)
+	var cell: Vector2i = ai.battle.world_to_grid(p)
 	var r: int = int(ceil(LINK_RADIUS))
 	for dx in range(-r, r + 1):
 		for dz in range(-r, r + 1):
@@ -142,6 +141,3 @@ func _front_score(p: Vector3) -> float:
 	if to_p.length_squared() < 0.0001:
 		return 0.0
 	return clampf(to_p.normalized().dot(_enemy_dir), -1.0, 1.0)
-
-func set_context(c) -> void:
-	_ctx = c

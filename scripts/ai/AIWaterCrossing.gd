@@ -1,7 +1,5 @@
 class_name AIWaterCrossing
 extends RefCounted
-const AIClockScript = preload("res://scripts/ai/core/AIClock.gd")
-const SimTime = preload("res://scripts/core/SimTime.gd")
 
 # AI 渡水行为：
 # 1) 如果敌方城堡与己方城堡在陆地上不连通，先尝试在较窄的水面搭桥；
@@ -39,19 +37,13 @@ const TROOP_GROWTH_PER_STEP := 8
 const TROOP_GATHER_GRACE := 20.0
 const ESCORT_IDS := [13, 39, 40]
 const BOARD_DISTANCE := 7.0
-const PARK_DISTANCE := 5.5
+const PARK_DISTANCE := 3.0
 const UNLOAD_DISTANCE := 7.0
 const BOARD_WAIT_TIMEOUT := 50.0
 # 集结宽限：船坞被其他船占满、人口封顶或运载船在队列里迟迟不下水时，
 # 不能永远等“4 运载船 + 4 护航舰”齐编。超过这个时间就按现有船先组织登陆，
 # 否则海峡图这种完全无陆路的地图会一直停在 STATE_IDLE，永远不投送陆军。
 const FLEET_ASSEMBLY_TIMEOUT := 45.0
-# 桥计划在“木材不足”状态下不能无限占着通道：超时后放弃本段并计入失败，
-# 连续失败会按既有逻辑改走运载船。
-const BRIDGE_AFFORD_TIMEOUT := 30.0
-# 船队已经集结/出航后，如果个别船被地形或其它船卡住，不能无限等待。
-const FLEET_IDLE_TIMEOUT := 90.0
-const FLEET_SAIL_TIMEOUT := 180.0
 
 const MODE_NONE := 0
 const MODE_BRIDGE := 1
@@ -71,6 +63,7 @@ var _resource_bridges_started: int = 0
 # 只有目标不在同一块陆地时才启动小范围 BFS，避免每次 AI 造建筑都扫全图。
 var _reachable_land: Dictionary = {}
 
+var _plan_timer: float = 2.0
 var _bridge_fail_count: int = 0
 var _bridge_retry_at_ms: int = 0
 var own_shore_water: Vector3 = Vector3.ZERO
@@ -78,9 +71,6 @@ var own_shore_land: Vector3 = Vector3.ZERO
 var enemy_shore_water: Vector3 = Vector3.ZERO
 var enemy_shore_land: Vector3 = Vector3.ZERO
 var _transport_shores_valid: bool = false
-# 船坞所在水域是否和登陆出发岸连通：船坞旁边可能是内陆油田水塘，
-# 船从这里下水后根本开不到登陆岸，运输波次会一直停在原地。
-var _shipyard_water_cache: Dictionary = {}
 # 上岸点定期更换：固定登陆场容易被对手守死，每分钟重新选一次
 const SHORES_REFRESH_SEC: float = 60.0
 var _shores_set_at_ms: int = 0
@@ -108,36 +98,18 @@ var _wave_escort_target: int = 0
 var _wave_troop_target: int = 0
 var _wave_troop_quota: int = 0
 var _fleet_wait_timer: float = 0.0
-var _bridge_afford_timer: float = 0.0
-# 施工中桥段的进度监视：农民可能被防守逻辑拉走/卡在水里，光看
-# builder_count_cache 会误以为还在干活，桥段一停就是几分钟。
-var _bridge_pending_gid: int = 0
-var _bridge_pending_left: float = -1.0
-var _bridge_pending_stall: float = 0.0
-var _fleet_idle_timer: float = 0.0
-var _fleet_sail_timer: float = 0.0
-var _clock = null
 
 func _init(owner):
 	ai = owner
 	battle = ai.battle
-	_clock = AIClockScript.new()
-	# 首轮延迟 2 秒（原 _plan_timer 初始值），之后每 PLAN_INTERVAL 一次。
-	_clock.add("plan", PLAN_INTERVAL, 1.0 - 2.0 / PLAN_INTERVAL)
-
-# P3.3：把"若干秒后重新规划"的旧写法收敛成一个入口（旧代码直接改 _plan_timer 字段）。
-func _request_plan_in(seconds: float) -> void:
-	if _clock == null:
-		return
-	_clock.reset("plan", clampf(seconds / PLAN_INTERVAL, 0.0, 1.0))
 
 func tick(delta: float):
 	if battle == null or not is_instance_valid(battle):
 		return
-	if _clock != null:
-		_clock.advance(delta)
-		if _clock.due("plan"):
-			_refresh_plan()
+	_plan_timer -= delta
+	if _plan_timer <= 0.0:
+		_plan_timer = PLAN_INTERVAL
+		_refresh_plan()
 	if mode == MODE_BRIDGE:
 		_tick_bridge(delta)
 	elif mode == MODE_TRANSPORT:
@@ -154,16 +126,16 @@ func _refresh_plan():
 	# 岸点可能在几处候选之间来回跳，运载船永远开不到停泊点，也就不会上船。
 	# 例外：上岸点每分钟强制换一次，避免固定登陆场被对手守死。
 	if mode == MODE_TRANSPORT and _transport_shores_valid and (not _transports.is_empty() or _transport_state != STATE_IDLE):
-		if SimTime.now_ms() - _shores_set_at_ms < int(SHORES_REFRESH_SEC * 1000.0):
+		if Time.get_ticks_msec() - _shores_set_at_ms < int(SHORES_REFRESH_SEC * 1000.0):
 			return
 		# 到点：继续走下面的重算流程，用新的登陆/停泊岸点替换（船队状态不变）
-	var my_castle = _castle()
-	var enemy_castle = _ctx.attack_target_castle()
+	var my_castle = ai.get_peer_castle(ai.my_peer_id)
+	var enemy_castle = ai._get_attack_target_castle()
 	if not is_instance_valid(my_castle) or not is_instance_valid(enemy_castle):
 		_stop_all()
 		return
-	var start: Vector2i = _ctx.world_to_grid(my_castle.global_position)
-	var target: Vector2i = _ctx.world_to_grid(enemy_castle.global_position)
+	var start: Vector2i = battle.world_to_grid(my_castle.global_position)
+	var target: Vector2i = battle.world_to_grid(enemy_castle.global_position)
 	var bridges: Dictionary = _collect_bridges()
 	var own_set: Dictionary = _bfs_land(start, bridges)
 	_reachable_land = own_set
@@ -179,7 +151,7 @@ func _refresh_plan():
 	# 连续失败 3 次后暂时走运载船，但不要永久放弃搭桥：
 	# 敌人退走、资源恢复或桥位空出来后，AI 仍应重新尝试。
 	if _bridge_fail_count >= 3:
-		if SimTime.now_ms() >= _bridge_retry_at_ms:
+		if Time.get_ticks_msec() >= _bridge_retry_at_ms:
 			_bridge_fail_count = 0
 		else:
 			plan = []
@@ -189,7 +161,6 @@ func _refresh_plan():
 		if mode == MODE_TRANSPORT:
 			_abort_transport()
 		bridge_plan = plan
-		_bridge_afford_timer = 0.0
 		_transport_state = STATE_IDLE
 		_transport_units.clear()
 		mode = MODE_BRIDGE
@@ -207,7 +178,7 @@ func _refresh_plan():
 		enemy_shore_water = shores["enemy_water"]
 		enemy_shore_land = shores["enemy_land"]
 		_transport_shores_valid = true
-		_shores_set_at_ms = SimTime.now_ms()
+		_shores_set_at_ms = Time.get_ticks_msec()
 		mode = MODE_TRANSPORT
 	else:
 		_stop_all()
@@ -216,7 +187,6 @@ func _stop_all():
 	_abort_transport()
 	bridge_plan.clear()
 	_bridge_fail_count = 0
-	_bridge_afford_timer = 0.0
 	_transport_shores_valid = false
 	_reachable_land.clear()
 	mode = MODE_NONE
@@ -245,29 +215,14 @@ func _abort_transport():
 	_transport_state = STATE_IDLE
 	_transport_timer = 0.0
 	_fleet_wait_timer = 0.0
-	_fleet_idle_timer = 0.0
-	_fleet_sail_timer = 0.0
 	# 中断后下一次组织登陆按当时时间重新计算波次规模
 	_reset_wave_targets()
 
-# 船队卡住时不只是原地重试：作废当前岸点，让下一轮重新找登陆场。
-func _stall_transport():
-	# 卡在远处水域的运载船（常见于内陆油田水塘、被陆地隔开的另一片海湾）
-	# 永远到不了出发岸。把它们排除出本波舰队，让船坞补造靠岸的船；
-	# 否则每 90 秒重试时还是会选中同一批远端船，登陆永远不开始。
-	for s in _transports:
-		if is_instance_valid(s) and s.global_position.distance_to(own_shore_water) > 15.0:
-			s.set_meta("ai_transport_excluded", true)
-	_transport_shores_valid = false
-	_request_plan_in(0.0)
-	_abort_transport()
-
 func _collect_bridges() -> Dictionary:
 	var out: Dictionary = {}
-	for e in _ctx.entities_children():
-		# 只把完工的桥算作可通行；施工中的桥段不能拿来判断两岸已经连通。
-		if e is Building and e.entity_id == BRIDGE_ID and e.health > 0 and e.build_timer <= 0.0:
-			out[_ctx.world_to_grid(e.global_position)] = true
+	for e in battle.entities.get_children():
+		if e is Building and e.entity_id == BRIDGE_ID and e.health > 0:
+			out[battle.world_to_grid(e.global_position)] = true
 	return out
 
 func _land_passable(tile: Vector2i, bridges: Dictionary) -> bool:
@@ -275,13 +230,10 @@ func _land_passable(tile: Vector2i, bridges: Dictionary) -> bool:
 		return false
 	if bridges.has(tile):
 		return true
-	var terrain = _ctx.terrain_at_grid(tile.x, tile.y)
+	var terrain = battle.get_terrain_at_grid(tile.x, tile.y)
 	if terrain == 2:
 		# 浅滩(3)是水格但陆军可通行
-		return _ctx.overlay_at_grid(tile.x, tile.y) == 3
-	# 与陆军 A* 保持一致：山壁、悬崖、无法通过的台地边缘不能算陆地连通。
-	if _ctx.battle_has_method("is_cliff_tile") and _ctx.is_cliff_tile(tile.x, tile.y):
-		return false
+		return battle.get_overlay_at_grid(tile.x, tile.y) == 3
 	return true
 
 func _bfs_land(start: Vector2i, bridges: Dictionary) -> Dictionary:
@@ -309,13 +261,13 @@ func _find_bridge_plan(own_set: Dictionary, enemy_set: Dictionary, bridges: Dict
 	var best_line: Array = []
 	var best_score: float = INF
 	var dirs: Array = [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
-	var existing_bridges: int = _count_bld(BRIDGE_ID)
+	var existing_bridges: int = ai.count_building(BRIDGE_ID)
 	for c in own_set.keys():
 		for d in dirs:
 			var line: Array = []
 			var n: Vector2i = c + d
 			while n.x >= 0 and n.x < RTSConfig.MAP_SIZE and n.y >= 0 and n.y < RTSConfig.MAP_SIZE:
-				if _ctx.terrain_at_grid(n.x, n.y) != 2:
+				if battle.get_terrain_at_grid(n.x, n.y) != 2:
 					break
 				if bridges.has(n):
 					break
@@ -329,10 +281,10 @@ func _find_bridge_plan(own_set: Dictionary, enemy_set: Dictionary, bridges: Dict
 				continue
 			if not enemy_set.has(n):
 				continue
-			var first_world: Vector3 = _ctx.grid_to_world(line[0].x, line[0].y)
-			if not _ctx.battle_has_method("is_valid_bridge_position"):
+			var first_world: Vector3 = battle.grid_to_world(line[0].x, line[0].y)
+			if not battle.has_method("is_valid_bridge_position"):
 				continue
-			if not _ctx.is_valid_bridge_position(first_world):
+			if not battle.is_valid_bridge_position(first_world):
 				continue
 			var mid: Vector2 = Vector2(
 				(float(line[0].x) + float(line[line.size() - 1].x)) * 0.5,
@@ -348,7 +300,7 @@ func _find_bridge_plan(own_set: Dictionary, enemy_set: Dictionary, bridges: Dict
 		return []
 	var out: Array = []
 	for t in best_line:
-		out.append(_ctx.grid_to_world(t.x, t.y))
+		out.append(battle.grid_to_world(t.x, t.y))
 	return out
 
 # 给农民找一座“经济桥”：从己方岸边跨过一段窄水，落到对岸资源点附近。
@@ -361,7 +313,6 @@ func _try_resource_bridge(own_set: Dictionary, bridges: Dictionary, own_grid: Ve
 		return false
 	_resource_bridges_started += 1
 	bridge_plan = plan
-	_bridge_afford_timer = 0.0
 	_transport_state = STATE_IDLE
 	_transport_units.clear()
 	mode = MODE_BRIDGE
@@ -377,34 +328,20 @@ func has_pending_bridge() -> bool:
 func can_builder_reach(from_pos: Vector3, target_pos: Vector3) -> bool:
 	if battle == null:
 		return true
-	var start: Vector2i = _ctx.world_to_grid(from_pos)
-	var goal: Vector2i = _ctx.world_to_grid(target_pos)
+	var start: Vector2i = battle.world_to_grid(from_pos)
+	var goal: Vector2i = battle.world_to_grid(target_pos)
 	if start == goal:
 		return true
 	var bridges: Dictionary = _collect_bridges()
 	if _reachable_land.is_empty():
 		# 渡水规划还没跑过（刚开局/防守关没有敌方城堡）时，用己方主城补一次
 		# 连通集，避免 AI 每造一座建筑都做一次全图 BFS。
-		var castle = _castle()
+		var castle = ai.get_peer_castle(ai.my_peer_id)
 		if is_instance_valid(castle):
-			_reachable_land = _bfs_land(_ctx.world_to_grid(castle.global_position), bridges)
+			_reachable_land = _bfs_land(battle.world_to_grid(castle.global_position), bridges)
 	if _reachable_land.has(start) and _reachable_land.has(goal):
 		return true
 	return _bfs_reach(start, goal, bridges)
-
-# 目标点是否在我方陆地连通集内（跨河/跨海即为 false）。
-# 与 can_builder_reach 的区别：这里只查已算好的连通集，不做 BFS，
-# 可以每轮被大量陆军查询而不会卡主线程。
-func is_land_reachable(target_pos: Vector3) -> bool:
-	if battle == null:
-		return true
-	var cell: Vector2i = _ctx.world_to_grid(target_pos)
-	if _reachable_land.is_empty():
-		var c = _castle()
-		if not is_instance_valid(c):
-			return true
-		_reachable_land = _bfs_land(_ctx.world_to_grid(c.global_position), _collect_bridges())
-	return _reachable_land.has(cell)
 
 func _bfs_reach(start: Vector2i, goal: Vector2i, bridges: Dictionary) -> bool:
 	if not _land_passable(start, bridges) or not _land_passable(goal, bridges):
@@ -440,16 +377,16 @@ func plan_bridge_to(target_pos: Vector3, from_pos: Vector3 = Vector3.ZERO) -> bo
 	# 正在组织登陆船队时不强行改道；等这波登陆结束再考虑为建造搭桥。
 	if mode == MODE_TRANSPORT:
 		return false
-	if _bridge_fail_count >= 3 and SimTime.now_ms() < _bridge_retry_at_ms:
+	if _bridge_fail_count >= 3 and Time.get_ticks_msec() < _bridge_retry_at_ms:
 		return false
 	var start_pos: Vector3 = from_pos if not from_pos.is_zero_approx() else Vector3.ZERO
 	if start_pos == Vector3.ZERO:
-		var castle = _castle()
+		var castle = ai.get_peer_castle(ai.my_peer_id)
 		if not is_instance_valid(castle):
 			return false
 		start_pos = castle.global_position
-	var start: Vector2i = _ctx.world_to_grid(start_pos)
-	var goal: Vector2i = _ctx.world_to_grid(target_pos)
+	var start: Vector2i = battle.world_to_grid(start_pos)
+	var goal: Vector2i = battle.world_to_grid(target_pos)
 	if start == goal:
 		return false
 	var bridges: Dictionary = _collect_bridges()
@@ -463,7 +400,6 @@ func plan_bridge_to(target_pos: Vector3, from_pos: Vector3 = Vector3.ZERO) -> bo
 	if plan.is_empty():
 		return false
 	bridge_plan = plan
-	_bridge_afford_timer = 0.0
 	mode = MODE_BRIDGE
 	_transport_state = STATE_IDLE
 	_transport_units.clear()
@@ -479,26 +415,26 @@ func plan_bridge_to(target_pos: Vector3, from_pos: Vector3 = Vector3.ZERO) -> bo
 func is_planned_bridge_position(pos: Vector3) -> bool:
 	if bridge_plan.is_empty():
 		return false
-	return _ctx.world_to_grid(pos) == _ctx.world_to_grid(bridge_plan[0])
+	return battle.world_to_grid(pos) == battle.world_to_grid(bridge_plan[0])
 
 func _find_resource_bridge_plan(own_set: Dictionary, bridges: Dictionary, own_grid: Vector2i) -> Array:
 	var resource_tiles: Dictionary = {}
-	for e in _ctx.entities_children():
+	for e in battle.entities.get_children():
 		if not (e is WorldResource) or e.health <= 0:
 			continue
-		var rt: Vector2i = _ctx.world_to_grid(e.global_position)
+		var rt: Vector2i = battle.world_to_grid(e.global_position)
 		if rt.x < 0 or rt.y < 0 or rt.x >= RTSConfig.MAP_SIZE or rt.y >= RTSConfig.MAP_SIZE:
 			continue
 		if own_set.has(rt):
 			continue
-		if _ctx.terrain_at_grid(rt.x, rt.y) != 0:
+		if battle.get_terrain_at_grid(rt.x, rt.y) != 0:
 			continue
 		resource_tiles[rt] = String(e.resource_type)
 	if resource_tiles.is_empty():
 		return []
 
 	var dirs: Array = [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]
-	var existing_bridges: int = _count_bld(BRIDGE_ID)
+	var existing_bridges: int = ai.count_building(BRIDGE_ID)
 	var best_score: float = INF
 	var best_line: Array = []
 	for c in own_set.keys():
@@ -509,7 +445,7 @@ func _find_resource_bridge_plan(own_set: Dictionary, bridges: Dictionary, own_gr
 			var w: Vector2i = cell + d
 			if w.x < 0 or w.y < 0 or w.x >= RTSConfig.MAP_SIZE or w.y >= RTSConfig.MAP_SIZE:
 				continue
-			if _ctx.terrain_at_grid(w.x, w.y) == 2:
+			if battle.get_terrain_at_grid(w.x, w.y) == 2:
 				near_water = true
 				break
 		if not near_water:
@@ -518,7 +454,7 @@ func _find_resource_bridge_plan(own_set: Dictionary, bridges: Dictionary, own_gr
 			var line: Array = []
 			var n: Vector2i = cell + d
 			while n.x >= 0 and n.x < RTSConfig.MAP_SIZE and n.y >= 0 and n.y < RTSConfig.MAP_SIZE:
-				if _ctx.terrain_at_grid(n.x, n.y) != 2:
+				if battle.get_terrain_at_grid(n.x, n.y) != 2:
 					break
 				if bridges.has(n):
 					break
@@ -533,7 +469,7 @@ func _find_resource_bridge_plan(own_set: Dictionary, bridges: Dictionary, own_gr
 			if n.x < 0 or n.y < 0 or n.x >= RTSConfig.MAP_SIZE or n.y >= RTSConfig.MAP_SIZE:
 				continue
 			# 桥头必须落在可走的平地上，不能把桥修到山壁/水里
-			if _ctx.terrain_at_grid(n.x, n.y) != 0:
+			if battle.get_terrain_at_grid(n.x, n.y) != 0:
 				continue
 			var goal_tile := Vector2i(-1, -1)
 			var goal_dist: float = INF
@@ -550,12 +486,12 @@ func _find_resource_bridge_plan(own_set: Dictionary, bridges: Dictionary, own_gr
 						goal_type = String(resource_tiles[g])
 			if goal_tile.x < 0:
 				continue
-			var first_world: Vector3 = _ctx.grid_to_world(line[0].x, line[0].y)
-			if not _ctx.is_valid_bridge_position(first_world):
+			var first_world: Vector3 = battle.grid_to_world(line[0].x, line[0].y)
+			if battle.has_method("is_valid_bridge_position") and not battle.is_valid_bridge_position(first_world):
 				continue
 			var weight: float = 1.0
-			if true:
-				weight = maxf(0.3, float(_ctx.phase_weights().get(goal_type, 1.0)))
+			if ai != null and ai.has_method("_get_phase_weights"):
+				weight = maxf(0.3, float(ai._get_phase_weights().get(goal_type, 1.0)))
 			# 桥越短越优先；资源越紧缺、离己方主城越近越优先
 			var score: float = float(line.size()) * 10.0
 			score += Vector2(line[0]).distance_to(Vector2(own_grid)) * 0.8
@@ -568,7 +504,7 @@ func _find_resource_bridge_plan(own_set: Dictionary, bridges: Dictionary, own_gr
 		return []
 	var out: Array = []
 	for t in best_line:
-		out.append(_ctx.grid_to_world(t.x, t.y))
+		out.append(battle.grid_to_world(t.x, t.y))
 	return out
 
 func _point_segment_distance(p: Vector2, a: Vector2, b: Vector2) -> float:
@@ -592,7 +528,7 @@ func _find_transport_shores(own_set: Dictionary, enemy_set: Dictionary, bridges:
 			var n: Vector2i = c + d
 			if n.x < 0 or n.x >= RTSConfig.MAP_SIZE or n.y < 0 or n.y >= RTSConfig.MAP_SIZE:
 				continue
-			if _ctx.terrain_at_grid(n.x, n.y) != 2:
+			if battle.get_terrain_at_grid(n.x, n.y) != 2:
 				continue
 			if bridges.has(n):
 				continue
@@ -603,7 +539,7 @@ func _find_transport_shores(own_set: Dictionary, enemy_set: Dictionary, bridges:
 			var n: Vector2i = c + d
 			if n.x < 0 or n.x >= RTSConfig.MAP_SIZE or n.y < 0 or n.y >= RTSConfig.MAP_SIZE:
 				continue
-			if _ctx.terrain_at_grid(n.x, n.y) != 2:
+			if battle.get_terrain_at_grid(n.x, n.y) != 2:
 				continue
 			if bridges.has(n):
 				continue
@@ -611,12 +547,12 @@ func _find_transport_shores(own_set: Dictionary, enemy_set: Dictionary, bridges:
 			enemy_land[n] = c
 	if own_shores.is_empty() or enemy_shores.is_empty():
 		return {}
-	var my_castle = _castle()
-	var enemy_castle = _ctx.attack_target_castle()
+	var my_castle = ai.get_peer_castle(ai.my_peer_id)
+	var enemy_castle = ai._get_attack_target_castle()
 	if not is_instance_valid(my_castle) or not is_instance_valid(enemy_castle):
 		return {}
-	var own_grid: Vector2i = _ctx.world_to_grid(my_castle.global_position)
-	var enemy_grid: Vector2i = _ctx.world_to_grid(enemy_castle.global_position)
+	var own_grid: Vector2i = battle.world_to_grid(my_castle.global_position)
+	var enemy_grid: Vector2i = battle.world_to_grid(enemy_castle.global_position)
 	var visited: Dictionary = {}
 	var source: Dictionary = {}
 	var sea_dist: Dictionary = {}
@@ -650,7 +586,7 @@ func _find_transport_shores(own_set: Dictionary, enemy_set: Dictionary, bridges:
 				continue
 			if visited.has(n):
 				continue
-			if _ctx.terrain_at_grid(n.x, n.y) != 2:
+			if battle.get_terrain_at_grid(n.x, n.y) != 2:
 				continue
 			# 运载船不能从桥下/桥上通过
 			if bridges.has(n):
@@ -664,7 +600,7 @@ func _find_transport_shores(own_set: Dictionary, enemy_set: Dictionary, bridges:
 	# 一次收集敌岸附近的守军/防御塔，避免为每个候选岸点重复全实体扫描。
 	var defenses: Array = _collect_landing_defenses()
 	for cd in cands:
-		var land_world: Vector3 = _ctx.grid_to_world(cd["enemy_land"].x, cd["enemy_land"].y)
+		var land_world: Vector3 = battle.grid_to_world(cd["enemy_land"].x, cd["enemy_land"].y)
 		cd["defense"] = _landing_defense_score(land_world, defenses)
 		# 先比较“从己方主城到登陆点”的实际接近距离（陆路到己岸 + 最短海路），
 		# 再比较登陆后到敌方主城的陆路距离；距离最近的上岸点优先。
@@ -681,14 +617,14 @@ func _find_transport_shores(own_set: Dictionary, enemy_set: Dictionary, bridges:
 	# 最近上岸点敌军过强：只在这片岸线附近找替代点，保证运载船仍然就近登陆。
 	if float(nearest["defense"]) > defense_limit:
 		var nearby: Array = []
-		var nearest_land: Vector3 = _ctx.grid_to_world(nearest["enemy_land"].x, nearest["enemy_land"].y)
+		var nearest_land: Vector3 = battle.grid_to_world(nearest["enemy_land"].x, nearest["enemy_land"].y)
 		for cd in cands:
 			if cd == nearest:
 				continue
 			# 只考虑防御确实更低的附近岸点；否则换过去反而更危险，不如保持最近点。
 			if float(cd["defense"]) >= float(nearest["defense"]) - 0.5:
 				continue
-			var near_land: Vector3 = _ctx.grid_to_world(cd["enemy_land"].x, cd["enemy_land"].y)
+			var near_land: Vector3 = battle.grid_to_world(cd["enemy_land"].x, cd["enemy_land"].y)
 			if _flat_distance(near_land, nearest_land) <= LANDING_ALTERNATIVE_RADIUS \
 					or absf(float(cd["sea_dist"]) - float(nearest["sea_dist"])) <= LANDING_ALTERNATIVE_SEA_GAP:
 				nearby.append(cd)
@@ -702,8 +638,8 @@ func _find_transport_shores(own_set: Dictionary, enemy_set: Dictionary, bridges:
 			if not a_safe:
 				if not is_equal_approx(float(a["defense"]), float(b["defense"])):
 					return float(a["defense"]) < float(b["defense"])
-			var a_land: Vector3 = _ctx.grid_to_world(a["enemy_land"].x, a["enemy_land"].y)
-			var b_land: Vector3 = _ctx.grid_to_world(b["enemy_land"].x, b["enemy_land"].y)
+			var a_land: Vector3 = battle.grid_to_world(a["enemy_land"].x, a["enemy_land"].y)
+			var b_land: Vector3 = battle.grid_to_world(b["enemy_land"].x, b["enemy_land"].y)
 			var a_d: float = _flat_distance(a_land, nearest_land)
 			var b_d: float = _flat_distance(b_land, nearest_land)
 			if not is_equal_approx(a_d, b_d):
@@ -719,7 +655,7 @@ func _find_transport_shores(own_set: Dictionary, enemy_set: Dictionary, bridges:
 				continue
 			if float(cd["approach"]) > float(nearest["approach"]) + LANDING_AVOID_MAX_DETOUR:
 				continue
-			var cd_land: Vector3 = _ctx.grid_to_world(cd["enemy_land"].x, cd["enemy_land"].y)
+			var cd_land: Vector3 = battle.grid_to_world(cd["enemy_land"].x, cd["enemy_land"].y)
 			if _flat_distance(cd_land, avoid_pos) > 6.0:
 				pick = cd
 				break
@@ -728,22 +664,22 @@ func _find_transport_shores(own_set: Dictionary, enemy_set: Dictionary, bridges:
 	var own_land_cell2: Vector2i = own_land.get(best_src2, best_src2)
 	var enemy_land_cell2: Vector2i = enemy_land.get(best_enemy2, best_enemy2)
 	return {
-		"own_water": _ctx.grid_to_world(best_src2.x, best_src2.y),
-		"own_land": _ctx.grid_to_world(own_land_cell2.x, own_land_cell2.y),
-		"enemy_water": _ctx.grid_to_world(best_enemy2.x, best_enemy2.y),
-		"enemy_land": _ctx.grid_to_world(enemy_land_cell2.x, enemy_land_cell2.y)
+		"own_water": battle.grid_to_world(best_src2.x, best_src2.y),
+		"own_land": battle.grid_to_world(own_land_cell2.x, own_land_cell2.y),
+		"enemy_water": battle.grid_to_world(best_enemy2.x, best_enemy2.y),
+		"enemy_land": battle.grid_to_world(enemy_land_cell2.x, enemy_land_cell2.y)
 	}
 
 # 统计登陆点附近的敌方防御强度。只算能反击的陆军、战船与防御建筑；
 # 农民/商人/官员以及资源点不参与，避免把普通村庄误判成重兵把守。
 func _collect_landing_defenses() -> Array:
 	var out: Array = []
-	for e in _ctx.cached_armies():
+	for e in ai._cached_armies():
 		if not is_instance_valid(e) or e.health <= 0:
 			continue
 		if int(e.team) == RTSConfig.Team.NEUTRAL:
 			continue
-		if not _is_enemy_ent(e):
+		if not ai._entity_is_enemy(e):
 			continue
 		var uid: int = int(e.entity_id)
 		if uid == 10 or uid == 14 or uid in [43, 44, 45, 46, 47, 48, 49, 50, 51]:
@@ -754,12 +690,12 @@ func _collect_landing_defenses() -> Array:
 			"pos": e.global_position,
 			"score": 1.0 + maxf(0.0, float(e.attack)) * 0.06 + maxf(0.0, float(e.target_type)) * 0.18
 		})
-	for b in _ctx.cached_buildings():
+	for b in ai._cached_buildings():
 		if not is_instance_valid(b) or b.health <= 0:
 			continue
 		if int(b.team) == RTSConfig.Team.NEUTRAL or b.build_timer > 0.0:
 			continue
-		if not _is_enemy_ent(b):
+		if not ai._entity_is_enemy(b):
 			continue
 		var bid: int = int(b.entity_id)
 		var bscore: float = 0.0
@@ -787,91 +723,53 @@ func _landing_defense_score(pos: Vector3, defenses: Array) -> float:
 
 # ═══════════════════════ 搭桥 ═══════════════════════
 
-func _tick_bridge(delta: float):
+func _tick_bridge(_delta: float):
 	if bridge_plan.is_empty():
-		_bridge_afford_timer = 0.0
-		_request_plan_in(1.0)
+		_plan_timer = minf(_plan_timer, 1.0)
 		return
 	var pos: Vector3 = bridge_plan[0]
-	var g: Vector2i = _ctx.world_to_grid(pos)
-	var pending_bridge: Building = null
-	for e in _ctx.entities_children():
+	var g: Vector2i = battle.world_to_grid(pos)
+	for e in battle.entities.get_children():
 		if e is Building and e.entity_id == BRIDGE_ID and e.health > 0:
-			if _ctx.world_to_grid(e.global_position) == g:
-				# 施工中的桥段不能从计划里弹掉。以前只要桥实体存在就算“已建”，
-				# AI 会把整条计划快速弹空，最后一段却停在等待农民的状态，
-				# 之后重新规划又把这段当成已存在弹掉，桥永远差一格不通。
-				if e.build_timer > 0.0:
-					pending_bridge = e
-				else:
-					_bridge_afford_timer = 0.0
-					bridge_plan.pop_front()
-					return
-	if pending_bridge != null:
-		# 给停工桥段补派农民（农民可能阵亡、被防守逻辑拉走或卡在岸边）。
-		# 光看“有农民”不够：农民可能卡在够不到的岸边，施工计时一直不动，
-		# 这里按施工倒计时是否推进来判断，停 8 秒就重派。
-		var gid: int = pending_bridge.get_instance_id()
-		if gid != _bridge_pending_gid or absf(pending_bridge.build_timer - _bridge_pending_left) > 0.05:
-			_bridge_pending_gid = gid
-			_bridge_pending_left = pending_bridge.build_timer
-			_bridge_pending_stall = 0.0
-		else:
-			_bridge_pending_stall += delta
-		var stalled: bool = _bridge_pending_stall >= 8.0
-		if stalled or int(pending_bridge.get("builder_count_cache")) <= 0 or bool(pending_bridge.get("awaiting_builder")):
-			if _ctx.battle_has_method("assign_builders"):
-				if stalled and pending_bridge.has_method("_release_builders"):
-					pending_bridge._release_builders()
-				_ctx.assign_builders(pending_bridge, [])
-			_bridge_pending_stall = 0.0
-		_bridge_afford_timer = 0.0
+			if battle.world_to_grid(e.global_position) == g:
+				bridge_plan.pop_front()
+				return
+	if not ai.can_afford_building(BRIDGE_ID):
 		return
-	if not _afford_bld(BRIDGE_ID):
-		_bridge_afford_timer += delta
-		if _bridge_afford_timer >= BRIDGE_AFFORD_TIMEOUT:
-			# 木材长期不够：放弃这条桥，让下一次规划改走运载船或更短的资源桥。
-			bridge_plan.clear()
-			_bridge_afford_timer = 0.0
-			_register_bridge_failure()
-			_request_plan_in(1.0)
-		return
-	_bridge_afford_timer = 0.0
-	if _ctx.battle_has_method("is_valid_bridge_position") and not _ctx.is_valid_bridge_position(pos):
+	if battle.has_method("is_valid_bridge_position") and not battle.is_valid_bridge_position(pos):
 		# 这个桥位被单位/建筑挡住或地形已变，下一周期重新找
 		bridge_plan.clear()
 		_register_bridge_failure()
-		_request_plan_in(1.0)
+		_plan_timer = 1.0
 		return
-	if _ports.build.build(BRIDGE_ID, pos):
+	if ai.build_building(BRIDGE_ID, pos):
 		_bridge_fail_count = 0
 		_bridge_retry_at_ms = 0
-		_bridge_afford_timer = 0.0
 		bridge_plan.pop_front()
 		if bridge_plan.is_empty():
-			_request_plan_in(0.0)
+			_plan_timer = 0.0
 			_recalculate_army_paths()
 	else:
 		# 附近有敌军或位置被占：放弃本段，下一周期重新找线
 		bridge_plan.clear()
 		_register_bridge_failure()
-		_request_plan_in(1.0)
+		_plan_timer = 1.0
 
 func _register_bridge_failure():
 	_bridge_fail_count += 1
 	if _bridge_fail_count >= 3:
 		# 45 秒后允许再次尝试，避免一次临时失败就让 AI 永远只会坐船
-		_bridge_retry_at_ms = SimTime.now_ms() + 45000
+		_bridge_retry_at_ms = Time.get_ticks_msec() + 45000
 
 func _recalculate_army_paths():
-	for e in _ctx.entities_children():
-		if e is Army and e.health > 0 and _belongs(e):
+	for e in battle.entities.get_children():
+		if e is Army and e.health > 0 and ai.entity_belongs_to_me(e):
 			if e.has_method("recalculate_path"):
 				e.recalculate_path()
 	# 新桥会让对岸资源变得可达；立刻重分配一次农民，
 	# 否则他们可能还停在修桥前的旧目标/闲置状态里。
-	if _ports.command != null:
-		_ports.command.request_worker_rebalance()
+	if ai != null and ai.has_method("allocate_workers"):
+		ai.allocate_workers()
 
 # ═══════════════════════ 运载船 ═══════════════════════
 
@@ -879,7 +777,7 @@ func _recalculate_army_paths():
 func _wave_step() -> int:
 	if battle == null:
 		return 0
-	return int(maxf(0.0, float(_ctx.game_time())) / FLEET_GROWTH_INTERVAL)
+	return int(maxf(0.0, float(battle.game_time)) / FLEET_GROWTH_INTERVAL)
 
 # 在“开始组织新一轮登陆”时固定本波规模，避免舰队出航途中目标继续膨胀。
 func _prepare_wave_targets():
@@ -901,42 +799,22 @@ func _reset_wave_targets():
 	_wave_troop_quota = 0
 	_fleet_wait_timer = 0.0
 
-# 本波次最低登船人数：既要保证不是“一艘空船跑过去”，也不能因为常规敌情
-# 让 AI 长期只有 20~29 名可抽调的野战兵时，卡在 30 人门槛前永远不出海。
-# 运力越小门槛越低，最多仍按 MIN_TRANSPORT_TROOPS 要求。
-func _min_wave_troops(capacity: int) -> int:
-	# 岛屿图 AI 的野战兵常被守家/守墙占去大半，能抽出的可能只有个位数。
-	# 门槛按运力的 1/8 计算，先送一支小型先遣队上岸，后续船队再补人；
-	# 总比“永远等 30 人、永远不出海”更接近真实渡海行为。
-	return mini(MIN_TRANSPORT_TROOPS, maxi(2, capacity / 8))
-
 func _refresh_fleet():
 	_transports.clear()
 	_escorts.clear()
-	for e in _ctx.entities_children():
+	for e in battle.entities.get_children():
 		if not (e is Army) or e.health <= 0:
 			continue
-		if not _belongs(e):
+		if not ai.entity_belongs_to_me(e):
 			continue
 		if e.entity_id == TRANSPORT_ID:
-			# 在远处油田水塘/另一片海湾/内陆湖建造后永远开不到出发岸的船，
-			# 不能被当成“已拥有运载船”，否则 AI 不再补造，波次永远凑不齐。
-			# 出发岸 20 米以外的运载船一律排除；近岸船坞会补造新的。
-			if own_shore_water != Vector3.ZERO:
-				var far: bool = e.global_position.distance_to(own_shore_water) > 20.0
-				if far:
-					e.set_meta("ai_transport_excluded", true)
-				elif e.has_meta("ai_transport_excluded"):
-					e.remove_meta("ai_transport_excluded")
-			if e.has_meta("ai_transport_excluded"):
-				continue
 			_transports.append(e)
 		elif int(e.entity_id) in ESCORT_IDS:
 			_escorts.append(e)
 	# 先清掉上一轮的护航标记，再把当前选中的护航舰重新标记，
 	# 防止海军巡逻/总攻把护航舰队拉去别处。
-	for e in _ctx.entities_children():
-		if e is Army and int(e.entity_id) in ESCORT_IDS and _belongs(e):
+	for e in battle.entities.get_children():
+		if e is Army and int(e.entity_id) in ESCORT_IDS and ai.entity_belongs_to_me(e):
 			e.remove_meta("ai_escorting")
 	var transport_cap: int = maxi(1, _wave_transport_target)
 	var escort_cap: int = maxi(1, _wave_escort_target)
@@ -947,19 +825,10 @@ func _refresh_fleet():
 	for e in _escorts:
 		e.set_meta("ai_escorting", true)
 
-# 只统计能参与渡水的运载船，排除已判定到不了出发岸的远端船。
-func _usable_transport_count() -> int:
-	var n: int = 0
-	for e in _ctx.entities_children():
-		if e is Army and e.health > 0 and int(e.entity_id) == TRANSPORT_ID \
-				and _belongs(e) and not e.has_meta("ai_transport_excluded"):
-			n += 1
-	return n
-
 func _tick_transport(delta: float):
 	if not _transport_shores_valid:
 		return
-	if _ctx.is_defending():
+	if ai._is_defending():
 		# 防守时释放护航舰/运载船；不要把海军锁在渡水任务里
 		_abort_transport()
 		return
@@ -1045,36 +914,7 @@ func _tick_fleet_idle(delta: float):
 			# 到岸边后先停船，等陆军走到船边再上船
 			ship.stop_movement()
 	if not all_close:
-		_fleet_idle_timer += delta
-		# 有一两艘船卡在远处水域时，不能拖住整支船队。20 秒后只保留
-		# 已经靠近出发岸的船先组织登陆，远处的船排除并让船坞补造。
-		if _fleet_idle_timer >= 20.0:
-			var usable: Array = []
-			var excluded_any: bool = false
-			for i in range(_transports.size()):
-				var s = _transports[i]
-				if not is_instance_valid(s):
-					continue
-				if s.global_position.distance_to(own_shore_water) <= 30.0:
-					usable.append(s)
-				else:
-					s.set_meta("ai_transport_excluded", true)
-					excluded_any = true
-			if usable.is_empty():
-				_stall_transport()
-				return
-			if excluded_any:
-				_transports = usable
-				slots = _shore_slots(own_shore_water, _transports.size(), 2.5)
-				_fleet_idle_timer = 0.0
-				return
-			# 船都在 30 米内但还没到停泊点：继续 move_to，不能把 all_close 强行置真。
-			# 旧实现这里直接继续上兵，陆军会走到岸边而船还停在十几米外，
-			# 最后只能等 BOARD_WAIT_TIMEOUT 反复超时，看起来像“AI 永远不登陆”。
-		if not all_close:
-			if _fleet_idle_timer >= FLEET_IDLE_TIMEOUT:
-				_stall_transport()
-			return
+		return
 	_transport_slots = slots
 	# 护航舰也先回到出发海域，和运载船一起走，避免船队先冲出去、护航舰还在后面
 	var escort_slots := _fleet_slots(own_shore_water, _escorts.size(), 3.0)
@@ -1086,24 +926,11 @@ func _tick_fleet_idle(delta: float):
 			_escorts[i].move_to(escort_slots[i])
 			escorts_home = false
 	if not escorts_home:
-		_fleet_idle_timer += delta
-		# 护航舰可能被海战/浅滩卡住，不能为了等它们让整波登陆无限期停摆。
-		# 超过编队集结时限后先让运载船单独出发，下一波再重新组织护航。
-		if _fleet_idle_timer >= FLEET_ASSEMBLY_TIMEOUT:
-			for e in _escorts:
-				if is_instance_valid(e):
-					e.set_meta("ai_escort_released", true)
-			_escorts.clear()
-			_fleet_idle_timer = 0.0
-		else:
-			if _fleet_idle_timer >= FLEET_IDLE_TIMEOUT:
-				_stall_transport()
-			return
-	_fleet_idle_timer = 0.0
+		return
 	# 本波次实际目标兵力：不超过本次运载船总容量。
 	# 编队缩水时最低人数也随运力下降，否则 2 艘船永远达不到 30 人。
 	var capacity: int = _transports.size() * TRANSPORT_CAPACITY
-	var min_troops: int = _min_wave_troops(capacity)
+	var min_troops: int = mini(MIN_TRANSPORT_TROOPS, capacity)
 	var desired_troops: int = mini(maxi(_wave_troop_target, min_troops), capacity)
 	var units: Array = _pick_units(desired_troops)
 	if units.size() < desired_troops:
@@ -1116,17 +943,6 @@ func _tick_fleet_idle(delta: float):
 		_transport_timer = 0.0
 	_wave_troop_quota = units.size()
 	_transport_units = units
-	# 被征用的守家/守资源/守墙兵转为登陆部队，避免 AI 防守逻辑下一帧又把它们拉回去。
-	for u in units:
-		if is_instance_valid(u):
-			u.remove_meta("ai_home_guard")
-			u.remove_meta("ai_resource_guard")
-			if u.has_meta("ai_wall_guard"):
-				if _ports.command != null:
-					_ports.command.release_wall_guard(u)
-				else:
-					u.remove_meta("ai_wall_guard")
-					u.hold_position = false
 	_unit_ship.clear()
 	# 按“离哪艘船最近 + 该船还有空位”分配，而不是按队列顺序硬塞。
 	# 多艘船沿岸排开时，靠岸单位如果被分到另一端的船，很容易永远走不到
@@ -1163,8 +979,6 @@ func _tick_fleet_idle(delta: float):
 	_order_escorts_to(own_shore_water, 3.0)
 	_transport_state = STATE_GATHER
 	_transport_timer = 0.0
-	_fleet_idle_timer = 0.0
-	_fleet_sail_timer = 0.0
 
 func _tick_fleet_gather(delta: float):
 	_transport_timer += delta
@@ -1219,7 +1033,7 @@ func _tick_fleet_gather(delta: float):
 	# 已经够本波次目标人数时不要为了等最后几个掉队的兵一直拖到 50 秒超时；
 	# 给落单单位一个短暂追赶窗口后直接出发。
 	var capacity: int = _transports.size() * TRANSPORT_CAPACITY
-	var min_troops: int = _min_wave_troops(capacity)
+	var min_troops: int = mini(MIN_TRANSPORT_TROOPS, capacity)
 	var troop_quota: int = maxi(_wave_troop_quota, min_troops)
 	var stop_waiting: bool = _transport_timer > BOARD_WAIT_TIMEOUT or (boarded_now >= troop_quota and _transport_timer > 8.0)
 	for u in _transport_units:
@@ -1234,13 +1048,11 @@ func _tick_fleet_gather(delta: float):
 		return
 	_transport_state = STATE_SAIL
 	_transport_timer = 0.0
-	_fleet_sail_timer = 0.0
 	_escort_advanced = false
 	_order_fleet_sail()
 
 func _tick_fleet_sail(delta: float):
 	_transport_timer += delta
-	_fleet_sail_timer += delta
 	var slots := _shore_slots(enemy_shore_water, _transports.size(), 2.5)
 	var all_unloaded: bool = true
 	var any_ship: bool = false
@@ -1272,14 +1084,10 @@ func _tick_fleet_sail(delta: float):
 	if not _escort_advanced and _transport_timer > 8.0:
 		_escort_advanced = true
 		_order_escorts_to(enemy_shore_water, 3.0)
-	# 没全部靠岸就继续等/继续开，不在深海放人。
-	# 但长时间到不了敌岸时必须放弃当前登陆场，否则整支舰队会在海上永航。
+	# 没全部靠岸就继续等/继续开，不在深海放人
 	if not all_unloaded:
-		if _fleet_sail_timer >= FLEET_SAIL_TIMEOUT:
-			_stall_transport()
 		return
-	_fleet_sail_timer = 0.0
-	var enemy_castle = _ctx.attack_target_castle()
+	var enemy_castle = ai._get_attack_target_castle()
 	for u in _transport_units:
 		if is_instance_valid(u) and u is Army:
 			u.remove_meta("ai_transporting")
@@ -1339,10 +1147,10 @@ func _fleet_slots(base: Vector3, count: int, spacing: float) -> Array:
 	return out
 
 func _is_water_point(pos: Vector3) -> bool:
-	var g: Vector2i = _ctx.world_to_grid(pos)
+	var g: Vector2i = battle.world_to_grid(pos)
 	if g.x < 0 or g.x >= RTSConfig.MAP_SIZE or g.y < 0 or g.y >= RTSConfig.MAP_SIZE:
 		return false
-	return _ctx.terrain_at_grid(g.x, g.y) == 2
+	return battle.get_terrain_at_grid(g.x, g.y) == 2
 
 func _flat_distance(a: Vector3, b: Vector3) -> float:
 	return Vector2(a.x - b.x, a.z - b.z).length()
@@ -1350,14 +1158,14 @@ func _flat_distance(a: Vector3, b: Vector3) -> float:
 func _is_shore_water_point(pos: Vector3) -> bool:
 	if not _is_water_point(pos):
 		return false
-	var g: Vector2i = _ctx.world_to_grid(pos)
+	var g: Vector2i = battle.world_to_grid(pos)
 	for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
 		var nx: int = g.x + d.x
 		var ny: int = g.y + d.y
 		if nx < 0 or nx >= RTSConfig.MAP_SIZE or ny < 0 or ny >= RTSConfig.MAP_SIZE:
 			continue
 		# 浅滩（overlay==3）陆军可以走，也算能靠岸
-		if _ctx.terrain_at_grid(nx, ny) != 2 or _ctx.overlay_at_grid(nx, ny) == 3:
+		if battle.get_terrain_at_grid(nx, ny) != 2 or battle.get_overlay_at_grid(nx, ny) == 3:
 			return true
 	return false
 
@@ -1373,7 +1181,7 @@ func _shore_slots(base: Vector3, count: int, spacing: float) -> Array:
 			break
 	if all_shore:
 		return generic
-	var center: Vector2i = _ctx.world_to_grid(base)
+	var center: Vector2i = battle.world_to_grid(base)
 	var radius: int = int(ceil(spacing * float(count))) + 8
 	var candidates: Array = []
 	for dx in range(-radius, radius + 1):
@@ -1382,9 +1190,9 @@ func _shore_slots(base: Vector3, count: int, spacing: float) -> Array:
 			var gy: int = center.y + dy
 			if gx < 0 or gx >= RTSConfig.MAP_SIZE or gy < 0 or gy >= RTSConfig.MAP_SIZE:
 				continue
-			if not _is_shore_water_point(_ctx.grid_to_world(gx, gy)):
+			if not _is_shore_water_point(battle.grid_to_world(gx, gy)):
 				continue
-			var p: Vector3 = _ctx.grid_to_world(gx, gy)
+			var p: Vector3 = battle.grid_to_world(gx, gy)
 			candidates.append({"p": p, "d": p.distance_to(base)})
 	candidates.sort_custom(func(a, b): return float(a["d"]) < float(b["d"]))
 	var out: Array = []
@@ -1414,20 +1222,13 @@ func _clean_transport_units():
 			alive.append(u)
 	_transport_units = alive
 
-func _transport_candidate_less(a: Dictionary, b: Dictionary) -> bool:
-	# 渡海征用优先级：空闲兵 > 守家/守资源兵 > 守墙兵。
-	# 只有前两类不够时才抽守墙兵，避免为了登陆把城墙直接抽空。
-	if int(a["priority"]) != int(b["priority"]):
-		return int(a["priority"]) < int(b["priority"])
-	return float(a["dist"]) < float(b["dist"])
-
 func _pick_units(max_count: int) -> Array:
 	var candidates: Array = []
 	var exclusions: Array = [5, 6, 9, 10, 13, 14, 19, 39, 40, 43, 44, 45, 46, 47, 48, 49, 50, 51, 55, 56, 57]
-	for e in _ctx.entities_children():
+	for e in battle.entities.get_children():
 		if not (e is Army) or e.health <= 0:
 			continue
-		if not _belongs(e):
+		if not ai.entity_belongs_to_me(e):
 			continue
 		if int(e.entity_id) in exclusions:
 			continue
@@ -1444,22 +1245,13 @@ func _pick_units(max_count: int) -> Array:
 		var gb = e.get("_garrison_building")
 		if gb != null and gb.get_ref() != null:
 			continue
-		if e.has_meta("ai_harass") or e.has_meta("ai_transporting"):
+		if e.has_meta("ai_home_guard") or e.has_meta("ai_resource_guard") or e.has_meta("ai_harass") or e.has_meta("ai_transporting") or e.has_meta("ai_wall_guard"):
 			continue
-		# 守墙兵是最后一级可征用兵：岛屿图的 AI 常把全部陆军派去守墙，
-		# 如果这里直接排除，渡海模块就会永远显示 0 个可用士兵。
-		# 仍按“空闲 > 守家/守资源 > 守墙”的顺序抽人，前两类足够时不会动城墙。
-		var is_wall_guard: bool = e.has_meta("ai_wall_guard")
-		var priority: int = 0
-		if is_wall_guard:
-			priority = 2
-		elif e.has_meta("ai_home_guard") or e.has_meta("ai_resource_guard"):
-			priority = 1
 		var dist: float = e.global_position.distance_to(own_shore_land)
-		candidates.append({"unit": e, "dist": dist, "priority": priority})
+		candidates.append({"unit": e, "dist": dist})
 	if candidates.is_empty():
 		return []
-	candidates.sort_custom(_transport_candidate_less)
+	candidates.sort_custom(func(a, b): return float(a["dist"]) < float(b["dist"]))
 	var out: Array = []
 	for item in candidates:
 		out.append(item["unit"])
@@ -1468,7 +1260,7 @@ func _pick_units(max_count: int) -> Array:
 	return out
 
 func _find_land_near(pos: Vector3) -> Vector3:
-	var center: Vector2i = _ctx.world_to_grid(pos)
+	var center: Vector2i = battle.world_to_grid(pos)
 	# 搜索半径放大到 11 格：原来的 8 格在宽阔水域里常常找不到岸，
 	# 单位就被一直留在船里下不来。
 	for radius in range(0, 11):
@@ -1482,72 +1274,17 @@ func _find_land_near(pos: Vector3) -> Vector3:
 					continue
 				# 普通山地不可登陆；只有缓坡/台地(4/5)能让陆军上岸。
 				# 浅滩（overlay==3）陆军能走，算合格。
-				var terrain: int = int(_ctx.terrain_at_grid(gx, gy))
+				var terrain: int = int(battle.get_terrain_at_grid(gx, gy))
 				if terrain < 0:
 					continue
-				if terrain != 2 and _ctx.is_cliff_tile(gx, gy):
+				if terrain != 2 and battle.is_cliff_tile(gx, gy):
 					continue
-				if terrain == 2 and int(_ctx.overlay_at_grid(gx, gy)) != 3:
+				if terrain == 2 and int(battle.get_overlay_at_grid(gx, gy)) != 3:
 					continue
-				return _ctx.grid_to_world(gx, gy)
+				return battle.grid_to_world(gx, gy)
 	return Vector3.ZERO
 
 # ═══════════════════════ 运载船前置科技 ═══════════════════════
-
-# 船坞必须开在“能航行到己方出发岸”的水域里。只按直线距离判断会选中
-# 城堡旁的内陆油田水塘：船虽然造得出来，却永远开不到登陆岸。
-func _shipyard_reaches_own_water(sy: Building) -> bool:
-	if not is_instance_valid(sy) or own_shore_water == Vector3.ZERO:
-		return false
-	var shore_grid: Vector2i = _ctx.world_to_grid(own_shore_water)
-	var key: String = "%d@%d,%d" % [sy.get_instance_id(), shore_grid.x, shore_grid.y]
-	if _shipyard_water_cache.has(key):
-		return bool(_shipyard_water_cache[key])
-	var start: Vector2i = _ctx.world_to_grid(sy.global_position)
-	var target: Vector2i = Vector2i(-1, -1)
-	# 船坞在陆地上，找它旁边最近的一格水面作为 BFS 起点。
-	for radius in range(0, 4):
-		for dx in range(-radius, radius + 1):
-			for dz in range(-radius, radius + 1):
-				if maxi(absi(dx), absi(dz)) != radius:
-					continue
-				var gx: int = start.x + dx
-				var gz: int = start.y + dz
-				if gx < 0 or gx >= RTSConfig.MAP_SIZE or gz < 0 or gz >= RTSConfig.MAP_SIZE:
-					continue
-				if _ctx.terrain_at_grid(gx, gz) == 2:
-					target = Vector2i(gx, gz)
-					break
-			if target.x >= 0:
-				break
-		if target.x >= 0:
-			break
-	var reachable: bool = false
-	if target.x >= 0 and _ctx.terrain_at_grid(shore_grid.x, shore_grid.y) == 2:
-		if target == shore_grid:
-			reachable = true
-		else:
-			var visited: Dictionary = {shore_grid: true}
-			var queue: Array = [shore_grid]
-			var head: int = 0
-			while head < queue.size() and visited.size() < 12000:
-				var c: Vector2i = queue[head]
-				head += 1
-				if c == target:
-					reachable = true
-					break
-				for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
-					var n: Vector2i = c + d
-					if visited.has(n):
-						continue
-					if n.x < 0 or n.x >= RTSConfig.MAP_SIZE or n.y < 0 or n.y >= RTSConfig.MAP_SIZE:
-						continue
-					if _ctx.terrain_at_grid(n.x, n.y) != 2:
-						continue
-					visited[n] = true
-					queue.append(n)
-	_shipyard_water_cache[key] = reachable
-	return reachable
 
 # 己方登陆岸边没有船坞时，直接在岸边找一块合法陆地建造。
 # AI 通用的 _manage_shipyards 只会在“临岸且 10 格内有油田”的位置建，
@@ -1555,64 +1292,26 @@ func _shipyard_reaches_own_water(sy: Building) -> bool:
 func _ensure_shore_shipyard():
 	if own_shore_water == Vector3.ZERO or own_shore_land == Vector3.ZERO:
 		return
-	# 只保留一座“离出发岸最近”的渡水专用船坞。
-	# 之前只要 16 米内有船坞就标记并返回，岛屿图第二座船坞也容易留下旧标记，
-	# 运载船就会从远处船坞下水，随后又被 _refresh_fleet 以“离岸超过20米”排除。
-	var best: Building = null
-	var best_dist: float = INF
-	for e in _ctx.entities_children():
-		if not (e is Building) or e.entity_id != SHIPYARD_ID or e.health <= 0:
-			continue
-		if not _belongs(e):
-			continue
-		var near: bool = e.global_position.distance_to(own_shore_water) <= 16.0 \
-			and _shipyard_reaches_own_water(e)
-		if not near:
-			if e.has_meta("ai_transport_shipyard"):
-				e.remove_meta("ai_transport_shipyard")
-			continue
-		var d: float = e.global_position.distance_to(own_shore_water)
-		if d < best_dist:
-			best = e
-			best_dist = d
-	if is_instance_valid(best):
-		for e in _ctx.entities_children():
-			if e is Building and e.entity_id == SHIPYARD_ID and e != best:
-				if e.has_meta("ai_transport_shipyard"):
-					e.remove_meta("ai_transport_shipyard")
-		best.set_meta("ai_transport_shipyard", true)
-		_drop_remote_transport_orders(best)
-		return
-	if not _afford_bld(SHIPYARD_ID):
+	for e in battle.entities.get_children():
+		if e is Building and e.entity_id == SHIPYARD_ID and e.health > 0 and ai.entity_belongs_to_me(e):
+			if e.global_position.distance_to(own_shore_water) <= 40.0:
+				# 标记为渡水专用，避免 _manage_shipyards 因“附近无油田”把它拆掉
+				e.set_meta("ai_transport_shipyard", true)
+			return
+	if not ai.can_afford_building(SHIPYARD_ID):
 		return
 	var pos: Vector3 = _find_shore_shipyard_pos()
 	if pos == Vector3.ZERO:
 		return
-	if not _ports.build.build(SHIPYARD_ID, pos):
+	if not ai.build_building(SHIPYARD_ID, pos):
 		return
-	var built: Building = null
-	for e in _ctx.entities_children():
-		if e is Building and e.entity_id == SHIPYARD_ID and e.health > 0 and _belongs(e):
+	for e in battle.entities.get_children():
+		if e is Building and e.entity_id == SHIPYARD_ID and e.health > 0 and ai.entity_belongs_to_me(e):
 			if e.global_position.distance_to(pos) <= 3.0:
-				built = e
-				break
-	if is_instance_valid(built):
-		built.set_meta("ai_transport_shipyard", true)
-		_drop_remote_transport_orders(built)
-
-# 运载船只能从渡水专用船坞生产。远处船坞排出的运载船开不到出发岸，
-# 留下来只会白吃木头/金币和人口，所以每次确认专用船坞后清掉这些排队项。
-func _drop_remote_transport_orders(keep: Building) -> void:
-	for e in _ctx.entities_children():
-		if not (e is Building) or e.entity_id != SHIPYARD_ID or e == keep or e.health <= 0:
-			continue
-		if not _belongs(e):
-			continue
-		while e.production_queue.has(TRANSPORT_ID):
-			e.production_queue.erase(TRANSPORT_ID)
+				e.set_meta("ai_transport_shipyard", true)
 
 func _find_shore_shipyard_pos() -> Vector3:
-	var base: Vector2i = _ctx.world_to_grid(own_shore_land)
+	var base: Vector2i = battle.world_to_grid(own_shore_land)
 	for radius in range(1, 13):
 		for dx in range(-radius, radius + 1):
 			for dz in range(-radius, radius + 1):
@@ -1622,7 +1321,7 @@ func _find_shore_shipyard_pos() -> Vector3:
 				var gz: int = base.y + dz
 				if gx < 0 or gx >= RTSConfig.MAP_SIZE or gz < 0 or gz >= RTSConfig.MAP_SIZE:
 					continue
-				if _ctx.terrain_at_grid(gx, gz) != 0:
+				if battle.get_terrain_at_grid(gx, gz) != 0:
 					continue
 				var has_water: bool = false
 				for d in [Vector2i(1, 0), Vector2i(-1, 0), Vector2i(0, 1), Vector2i(0, -1)]:
@@ -1630,61 +1329,39 @@ func _find_shore_shipyard_pos() -> Vector3:
 					var nz: int = gz + d.y
 					if nx < 0 or nx >= RTSConfig.MAP_SIZE or nz < 0 or nz >= RTSConfig.MAP_SIZE:
 						continue
-					if _ctx.terrain_at_grid(nx, nz) == 2:
+					if battle.get_terrain_at_grid(nx, nz) == 2:
 						has_water = true
 						break
 				if not has_water:
 					continue
-				var pos: Vector3 = _ctx.grid_to_world(gx, gz)
-				if not _ports.build.can_place(SHIPYARD_ID, pos):
+				var pos: Vector3 = battle.grid_to_world(gx, gz)
+				if ai.has_method("_can_place_ai_building") and not ai._can_place_ai_building(SHIPYARD_ID, pos):
 					continue
 				return pos
 	return Vector3.ZERO
 
-# 优先使用靠近登陆岸的专用船坞；只有没有专用船坞时才退回第一座己方船坞。
-# 否则 AI 可能把运载船科技/生产排到远处只产渔船/战船的油田船坞上。
-func _find_transport_shipyard() -> Building:
-	var fallback: Building = null
-	for e in _ctx.entities_children():
-		if not (e is Building) or e.health <= 0 or e.entity_id != SHIPYARD_ID:
-			continue
-		if not _belongs(e) or not e.has_meta("ai_transport_shipyard"):
-			continue
-		if not _shipyard_reaches_own_water(e):
-			continue
-		if e.build_timer <= 0.0 and e.upgrade_level >= TRANSPORT_SHIPYARD_LEVEL:
-			return e as Building
-		if fallback == null:
-			fallback = e as Building
-	if fallback != null:
-		return fallback
-	return null
-
 func _ensure_transport_tech():
-	var sy = _find_transport_shipyard()
+	var sy = ai._find_own_building(SHIPYARD_ID)
 	if not is_instance_valid(sy):
 		return
 	if sy.build_timer > 0.0:
 		return
 	if sy.upgrade_level >= TRANSPORT_SHIPYARD_LEVEL:
 		return
-	var castle = _castle()
+	var castle = ai.get_peer_castle(ai.my_peer_id)
 	if is_instance_valid(castle) and castle.upgrade_level <= sy.upgrade_level:
-		if _afford_upg(20):
-			_ports.build.upgrade(20)
+		if ai.can_afford_upgrade(20):
+			ai.upgrade_building(20)
 			return
-	if sy.can_upgrade() and _afford_upg(SHIPYARD_ID):
-		# 直接升级这座“渡水专用”船坞。upgrade_building(23) 会从所有船坞里
-		# 挑第一个可升级的，经常升级到内陆油田船坞，而登陆岸这座一直停在 2 级，
-		# 运载船科技永远不够。
-		sy.perform_upgrade(battle)
+	if ai.can_afford_upgrade(SHIPYARD_ID):
+		ai.upgrade_building(SHIPYARD_ID)
 
 func _ensure_transport_fleet():
 	# 只统计已经下水的运载船。count_unit 默认包含生产队列，若把队列里的船
 	# 当成已拥有，就会出现“实际只有2艘、队列里4艘、AI以为够了不再下单”的卡死。
-	if _usable_transport_count() >= _wave_transport_target:
+	if ai.count_unit(TRANSPORT_ID, false) >= _wave_transport_target:
 		return
-	var sy = _find_transport_shipyard()
+	var sy = ai._find_own_building(SHIPYARD_ID)
 	if not is_instance_valid(sy) or sy.build_timer > 0.0:
 		return
 	if sy.upgrade_level < TRANSPORT_SHIPYARD_LEVEL:
@@ -1697,9 +1374,9 @@ func _ensure_transport_fleet():
 	if not has_transport:
 		# 船坞升级时正常会补全生产列表；这里兜底，避免升级完成事件的边缘情况
 		sy.production_list.append({"unit_id": TRANSPORT_ID, "cooldown": 15.0, "queue_limit": 3})
-	if not _ports.recruit.can_train():
+	if not ai._can_train_unit():
 		return
-	if _afford(TRANSPORT_ID):
+	if ai.can_afford(TRANSPORT_ID):
 		if sy.try_produce(TRANSPORT_ID):
 			# 船坞平时会被战船/渔船排满；运载船如果排在十几艘船后面，
 			# AI 可能几分钟都凑不齐本波次的运载船。把运载船插到当前生产项之后，
@@ -1711,10 +1388,10 @@ func _ensure_transport_fleet():
 
 func _ensure_escort_ships():
 	# 同上：只算已经下水的护航舰，队列里的不计入“已具备”。
-	var total: int = _count_unit(13, false) + _count_unit(39, false) + _count_unit(40, false)
+	var total: int = ai.count_unit(13, false) + ai.count_unit(39, false) + ai.count_unit(40, false)
 	if total >= _wave_escort_target:
 		return
-	var sy = _find_transport_shipyard()
+	var sy = ai._find_own_building(SHIPYARD_ID)
 	if not is_instance_valid(sy) or sy.build_timer > 0.0:
 		return
 	if sy.upgrade_level < 2:
@@ -1726,45 +1403,7 @@ func _ensure_escort_ships():
 			break
 	if not has_warship:
 		sy.production_list.append({"unit_id": 13, "cooldown": 7.0, "queue_limit": 5})
-	if not _ports.recruit.can_train():
+	if not ai._can_train_unit():
 		return
-	if _afford(13):
+	if ai.can_afford(13):
 		sy.try_produce(13)
-# A4：只读上下文 + 写端口（未绑定时回落控制器）。
-var _ctx = null
-var _ports = null
-
-func set_context(c) -> void:
-	_ctx = c
-
-func set_ports(p) -> void:
-	_ports = p
-
-func _belongs(e) -> bool:
-	return _ctx.belongs_to_me(e)
-
-func _castle():
-	return _ctx.castle()
-
-func _castle_of(team: int):
-	return _ctx.team_castle_of(team)
-
-func _count_unit(unit_id: int, include_queue: bool = true) -> int:
-	return _ctx.count_unit(unit_id, include_queue)
-
-func _count_bld(building_id: int) -> int:
-	return _ctx.count_building(building_id)
-
-func _is_enemy_ent(e) -> bool:
-	return _ctx.is_enemy(e)
-
-func _afford(id: int) -> bool:
-	return _ctx.can_afford(id)
-
-func _afford_bld(id: int) -> bool:
-	return _ctx.can_afford_building(id)
-
-func _afford_upg(id: int) -> bool:
-	return _ctx.can_afford_upgrade(id)
-func _now() -> float:
-	return _ctx.game_time() if _ctx != null else float(_ctx.game_time())
