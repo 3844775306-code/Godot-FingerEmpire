@@ -10,6 +10,8 @@ const CLIFF_SKIRT_DEPTH: float = 3.5
 
 # 强制覆盖地图尺寸（0表示使用全局常量）
 var map_size_override: int = 0
+# 只生成数据，不创建地形网格/水面/碰撞：地图编辑器用它读取预设生成结果。
+var data_only: bool = false
 
 # 内部获取实际地图尺寸
 func _get_map_size() -> int:
@@ -106,6 +108,8 @@ func _has_remote_peer() -> bool:
 	return peer.get_connection_status() == MultiplayerPeer.CONNECTION_CONNECTED
 
 func _ready():
+	if data_only:
+		return
 	# 联机客户端：不自动生成，等待服务器地图数据
 	if NetworkManager.mode == NetworkManager.Mode.CLIENT:
 		# 先上报"战斗场景已就绪"，主机据此再发地图；同时兜底处理早到/丢失的数据
@@ -117,6 +121,9 @@ func _ready():
 	if map_generated:
 		return
 	_resolve_preset()
+	if not GameSettings.custom_map.is_empty() and GameSettings.map_id == "custom":
+		apply_custom_map(GameSettings.custom_map)
+		return
 	_generate_terrain()
 	_place_castles()
 	_place_resources()
@@ -176,8 +183,81 @@ func apply_received_map(p_terrain: Array, p_height: Array, p_resources: Array, p
 	_create_chunked_collisions()
 	print("[地图] 已应用服务器地图，尺寸:", size)
 
+# 玩家自定义地图：地形/高度/覆盖层/资源/双城堡锚点直接覆盖生成结果。
+# 城堡仍走原有布局算法，因此 1V1/2V2/3V3 都能从两个锚点展开。
+func apply_custom_map(data: Dictionary) -> void:
+	var size := clampi(int(data.get("size", RTSConfig.MAP_SIZE)), 16, 200)
+	map_size_override = size
+	var preset_id := String(data.get("preset", "classic"))
+	map_preset = MapPresets.get_preset(preset_id)
+	var castles = data.get("castles", [])
+	if castles is Array and castles.size() >= 2:
+		var anchors: Array = []
+		for i in range(mini(castles.size(), 2)):
+			var c = castles[i]
+			if c is Array and c.size() >= 2:
+				anchors.append([
+					clampf(float(c[0]) / float(size), 0.06, 0.94),
+					clampf(float(c[1]) / float(size), 0.06, 0.94),
+				])
+		if anchors.size() == 2:
+			map_preset["castle_layout"] = {
+				"type": "mirror_x",
+				"flat_radius": 5,
+				"anchors": anchors,
+			}
+	terrain_grid = _custom_int_grid(data.get("terrain", []), size, 0)
+	height_grid = _custom_float_grid(data.get("height", []), size, terrain_grid)
+	overlay_grid = _custom_int_grid(data.get("overlay", []), size, 0)
+	VisionSystem.invalidate_terrain_cache()
+	_place_castles()
+	_place_resources()
+	# 编辑器保存了完整资源表时以它为准；旧地图没有 resources 字段则保留自动生成。
+	var saved_res = data.get("resources", [])
+	if saved_res is Array and not saved_res.is_empty():
+		resource_positions.clear()
+		for r in saved_res:
+			if r is Dictionary:
+				var gx := int(r.get("x", -1))
+				var gy := int(r.get("y", -1))
+				if gx < 0 or gy < 0 or gx >= size or gy >= size:
+					continue
+				resource_positions.append({"pos": grid_to_world(gx, gy), "type": int(r.get("type", 0))})
+	_create_visual_and_texture()
+	_create_chunked_collisions()
+	_add_water_box()
+	map_generated = true
+	print("[地图] 已应用自定义地图:", String(data.get("name", "未命名")), " 尺寸:", size)
+
+func _custom_int_grid(src, size: int, fallback: int) -> Array:
+	var out: Array = []
+	for x in range(size):
+		var row: Array = []
+		row.resize(size)
+		for y in range(size):
+			var v := fallback
+			if src is Array and x < src.size() and src[x] is Array and y < src[x].size():
+				v = int(src[x][y])
+			row[y] = v
+		out.append(row)
+	return out
+
+func _custom_float_grid(src, size: int, terrain: Array) -> Array:
+	var out: Array = []
+	for x in range(size):
+		var row: Array = []
+		row.resize(size)
+		for y in range(size):
+			var v := -1.0 if int(terrain[x][y]) == 2 else 0.0
+			if src is Array and x < src.size() and src[x] is Array and y < src[x].size():
+				v = float(src[x][y])
+			row[y] = v
+		out.append(row)
+	return out
+
 func _resolve_preset() -> void:
-	map_preset = MapPresets.get_preset(GameSettings.map_id)
+	if map_preset.is_empty():
+		map_preset = MapPresets.get_preset(GameSettings.map_id)
 	if custom_seed == 0 and GameSettings.map_seed != 0:
 		custom_seed = GameSettings.map_seed
 

@@ -797,10 +797,19 @@ func _open_map_dialog() -> void:
 
 func _on_map_selected(id: String) -> void:
 	GameSettings.map_id = id
+	if id != "custom":
+		GameSettings.custom_map.clear()
+		GameSettings.custom_map_name = ""
 	_refresh_map_button()
 
 func _refresh_map_button() -> void:
 	if not map_btn:
+		return
+	if GameSettings.map_id == "custom" and not GameSettings.custom_map.is_empty():
+		var cname := GameSettings.custom_map_name
+		if cname == "":
+			cname = "自定义地图"
+		map_btn.text = "  %s · 自定义 ▸" % cname
 		return
 	var info := MapPresets.get_info(GameSettings.map_id)
 	var suffix := ""

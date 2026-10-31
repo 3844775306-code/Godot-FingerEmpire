@@ -205,11 +205,12 @@ func _build_desktop_layout() -> void:
 		["📘", "操作指南", "鼠标键盘与进阶技巧", "book", Callable(self, "_on_guide_pressed")],
 		["🎓", "新兵训练营", "26 关渐进教学 · 经典模式", "muted", Callable(self, "_on_tutorial_pressed")],
 		["📜", "科技总览", "四时代科技树", "book", Callable(self, "_on_tech_overview_pressed")],
+		["🗺️", "地图编辑器", "绘制地形 · 保存/分享自定义地图", "book", Callable(self, "_on_map_editor_pressed")],
 		["🎬", "录像回放", "回看单机/联机对局录像", "book", Callable(self, "_on_replays_pressed")],
 		["📜", "更新日志", "版本改动一览", "muted", Callable(self, "_on_changelog_pressed")],
 	]
 	for data in secondary_data:
-		var card = _make_tile_button(data[0], data[1], data[2], data[3], Vector2(0, 170))
+		var card = _make_tile_button(data[0], data[1], data[2], data[3], Vector2(0, 140))
 		card.pressed.connect(data[4])
 		card.size_flags_vertical = Control.SIZE_EXPAND_FILL
 		side_area.add_child(card)
@@ -441,6 +442,9 @@ func _open_map_dialog() -> void:
 
 func _select_map(id: String) -> void:
 	GameSettings.map_id = id
+	if id != "custom":
+		GameSettings.custom_map.clear()
+		GameSettings.custom_map_name = ""
 	_refresh_map_button()
 	_on_mode_selected(_last_mode_idx)
 
@@ -454,15 +458,20 @@ func _find_ui(node_name: String) -> Node:
 
 func _on_play_pressed():
 	# 单机配置改到专属界面，主菜单只负责入口。
+	GameSettings.clear_custom_map()
 	get_tree().change_scene_to_file("res://scenes/single_player_menu.tscn")
 
 func _on_replays_pressed():
 	get_tree().change_scene_to_file("res://scenes/replay_menu.tscn")
 
+func _on_map_editor_pressed() -> void:
+	get_tree().change_scene_to_file("res://scenes/map_editor.tscn")
+
 func _on_multiplayer_pressed():
 	GameSettings.tutorial_mode = false
 	GameSettings.campaign_mode = false
 	GameSettings.campaign_level_id = ""
+	GameSettings.clear_custom_map()
 	GameSettings.ai_mode = 1   # 联机模式不使用单机模式
 	GameSettings.is_ffa = false
 	GameSettings.map_id = "classic"   # 联机选图在联机大厅里选
@@ -499,6 +508,7 @@ func _on_tutorial_pressed() -> void:
 	GameSettings.training_mode = false
 	GameSettings.training_level_id = ""
 	GameSettings.campaign_mode = false
+	GameSettings.clear_custom_map()
 	get_tree().change_scene_to_file("res://scenes/training_menu.tscn")
 
 func _start_tutorial_battle() -> void:
@@ -877,6 +887,7 @@ func _build_mobile_layout() -> void:
 		["🏰", "战役闯关", _on_campaign_pressed, "primary"],
 		["📖", "单位图鉴", _on_units_pressed, "book"],
 		["📜", "科技总览", _on_tech_overview_pressed, "book"],
+		["🗺️", "地图编辑", _on_map_editor_pressed, "book"],
 		["📘", "操作指南", _on_guide_pressed, "book"],
 		["🎓", "新兵训练", _on_tutorial_pressed, "muted"],
 		["🎬", "录像回放", _on_replays_pressed, "book"],

@@ -42,6 +42,22 @@ var training_nation: int = 0         # 第 24 关国家试炼选择的国度
 var training_prev_progression: int = ProgressionMode.CLASSIC
 var map_id: String = "classic"     # 地图预设（见 scripts/map/MapPresets.gd）
 var map_seed: int = 0              # 0 = 随机；非 0 可复现同一张图
+# 自定义地图：非空时 Ground 会直接使用这份地形/资源数据，而不是按 map_id 生成。
+# map_id 同时设为 "custom"，离开自定义地图选择内置地图时必须清空。
+var custom_map: Dictionary = {}
+var custom_map_name: String = ""
+
+func set_custom_map(data: Dictionary, map_name: String = "") -> void:
+	custom_map = data.duplicate(true)
+	custom_map_name = map_name if map_name != "" else String(data.get("name", "自定义地图"))
+	map_id = "custom"
+	map_seed = 0
+
+func clear_custom_map() -> void:
+	custom_map.clear()
+	custom_map_name = ""
+	if map_id == "custom":
+		map_id = "classic"
 enum CommandMode { SINGLE = 0, CONTINUOUS = 1 }
 var command_mode: int = CommandMode.CONTINUOUS  # 单次/连续命令模式（_ready 中按平台设定）
 

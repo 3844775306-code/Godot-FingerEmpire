@@ -449,6 +449,13 @@ func _add_tip(box: VBoxContainer, text: String, font_size: int, color: Color) ->
 func _refresh_map_button() -> void:
 	if _map_button == null:
 		return
+	if GameSettings.map_id == "custom" and not GameSettings.custom_map.is_empty():
+		var cname := GameSettings.custom_map_name
+		if cname == "":
+			cname = "自定义地图"
+		_map_button.text = "  %s · 自定义 ▸" % cname
+		_update_summary()
+		return
 	var info := MapPresets.get_info(GameSettings.map_id)
 	var suffix := ""
 	if String(info["battle"]) != "":
@@ -468,6 +475,9 @@ func _open_map_dialog() -> void:
 
 func _select_map(id: String) -> void:
 	GameSettings.map_id = id
+	if id != "custom":
+		GameSettings.custom_map.clear()
+		GameSettings.custom_map_name = ""
 	_refresh_map_button()
 
 func _on_nation_selected(idx: int) -> void:
@@ -529,6 +539,8 @@ func _update_summary() -> void:
 	var diff_name: String = diff_names[clampi(diff_select.selected if diff_select else 0, 0, 3)]
 	var mode_name: String = mode_names[clampi(mode_select.selected if mode_select else 0, 0, 5)]
 	var map_name := String(MapPresets.get_info(GameSettings.map_id)["name"])
+	if GameSettings.map_id == "custom" and not GameSettings.custom_map.is_empty():
+		map_name = GameSettings.custom_map_name if GameSettings.custom_map_name != "" else "自定义地图"
 	var progression := "科研 · 四时代科技树" if GameSettings.is_research_mode() else "经典 · 升级解锁"
 	var pace := "快速" if (fast_check != null and fast_check.button_pressed) else "标准"
 	var replay := "不录像"
