@@ -1,7 +1,7 @@
 {
-  "version": "v4.0.25",
-  "date": "2026-10-29",
-  "notes": "FingerEmpire v4.0.25 已发布，详情见游戏内更新日志。",
+  "version": "v4.0.58",
+  "date": "2026-10-31",
+  "notes": "FingerEmpire v4.0.58 已发布，详情见游戏内更新日志。",
   "downloads": {
     "windows": "https://github.com/3844775306-code/Godot-FingerEmpire/releases/latest/download/FingerEmpire-win.zip",
     "android": "https://github.com/3844775306-code/Godot-FingerEmpire/releases/latest/download/FingerEmpire.apk",
