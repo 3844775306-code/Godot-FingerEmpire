@@ -3926,7 +3926,9 @@ func _resolve_melee_hit(target_id: int, aoe: bool, power: float) -> void:
 		for entity in all_entities:
 			if entity == self or not (entity is GameEntity) or entity.health <= 0:
 				continue
-			if not _is_hostile_to(entity):
+			# 中立动物不是“敌对阵营”，但可以被狩猎；不能只用 _is_hostile_to
+			# 过滤，否则农民会挥空、动物永远不掉血。
+			if not _is_hostile_to(entity) and not _is_animal_unit(entity):
 				continue
 			var dist = global_position.distance_to(entity.global_position) - body_radius - entity.body_radius
 			if dist > damage_radius:
@@ -3942,7 +3944,8 @@ func _resolve_melee_hit(target_id: int, aoe: bool, power: float) -> void:
 	var target = instance_from_id(target_id)
 	if target == null or not is_instance_valid(target) or not (target is GameEntity) or target.health <= 0:
 		return
-	if not _is_hostile_to(target):
+	# 中立动物可以被狩猎；敌对阵营校验不能把动物挡掉。
+	if not _is_hostile_to(target) and not _is_animal_unit(target):
 		return
 	var dmg_single: float = power
 	# 农民对动物伤害+900%
