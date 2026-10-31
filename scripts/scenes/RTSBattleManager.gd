@@ -2916,13 +2916,18 @@ func _init_entities_deferred():
 	# 获取国家
 	var player_nation = GameSettings.player_nation
 	var enemy_nation = GameSettings.enemy_nation
-	if enemy_nation < 0 or enemy_nation >= RTSConfig.Nation.size():
-		enemy_nation = SimRandom.randi() % RTSConfig.Nation.size()
-
-	team_nations = {
-		get_host_team(): player_nation,
-		get_enemy_team(): enemy_nation
-	}
+	if is_online:
+		# 联机的国家已由 OnlineBattleManager 在大厅握手阶段确定，这里绝不能
+		# 再用房主的单机设置覆盖，否则远程玩家会拿到房主敌人的国家。
+		player_nation = int(team_nations.get(get_host_team(), player_nation))
+		enemy_nation = int(team_nations.get(get_enemy_team(), enemy_nation))
+	else:
+		if enemy_nation < 0 or enemy_nation >= RTSConfig.Nation.size():
+			enemy_nation = SimRandom.randi() % RTSConfig.Nation.size()
+		team_nations = {
+			get_host_team(): player_nation,
+			get_enemy_team(): enemy_nation
+		}
 
 	# 生成玩家城堡
 	var castle_cfg = EntityDatabase.get_config(20)

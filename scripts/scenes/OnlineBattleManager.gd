@@ -462,6 +462,8 @@ func _init_1v1():
 		var team = player_teams[pid]
 		var castle = get_castle_by_team(team)
 		if castle: castle.owner_peer_id = pid
+		# 登记每个玩家的国家，实体颜色/战报按 owner 查国家时才能拿到正确值。
+		_owner_nations[int(pid)] = int(team_nations.get(team, -1))
 	_player_colors.clear()
 	for pid in player_teams.keys():
 		_player_colors[pid] = RTSConfig.COLOR_POOL[player_teams[pid]]
@@ -842,6 +844,10 @@ func _init_all_castles_team():
 	_init_fog_grid()
 	
 func _create_player_castle(peer_id: int, team: int, pos: Vector3):
+	# 组队模式同一队可以有不同国家；按 owner 登记，避免城堡/初始单位
+	# 颜色和科技按 team_nations（队里最后一个国家）取错。
+	var info: Dictionary = player_info.get(peer_id, {})
+	_owner_nations[int(peer_id)] = int(info.get("nation", team_nations.get(team, -1)))
 	var cfg = EntityDatabase.get_config(20)
 	cfg["team"] = team
 	cfg["produces"] = [{"unit_id": 10, "cooldown": 3.0, "queue_limit": 10}, {"unit_id": 19, "cooldown": 4.0, "queue_limit": 5}]
