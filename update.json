@@ -1,7 +1,7 @@
 {
-  "version": "v4.0.58",
+  "version": "v4.0.59",
   "date": "2026-11-01",
-  "notes": "v4.0.58 新增自定义地图编辑器：绘制地形、保存地图、分享码导入，并可用于单机/联机对战",
+  "notes": "v4.0.59 新增自定义地图编辑器：绘制地形、保存地图、分享码导入，并可用于单机/联机对战",
   "downloads": {
     "windows": "https://github.com/3844775306-code/Godot-FingerEmpire/releases/latest/download/FingerEmpire-win.zip",
     "android": "https://github.com/3844775306-code/Godot-FingerEmpire/releases/latest/download/FingerEmpire.apk",
